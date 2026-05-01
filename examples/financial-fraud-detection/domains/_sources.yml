@@ -1,0 +1,173 @@
+# Data product contract — fraud_analytics.transactions
+#
+# Authoritative interface for the Fraud Analytics domain's transaction
+# data product. Declares sources, schema, and quality rules for
+# fraud detection and BSA/AML compliance reporting.
+
+version: 2
+
+sources:
+  - name: fraud_raw
+    description: >
+      Raw transaction and account data ingested from Event Hubs and
+      core banking batch extracts into ADLS Gen2 Bronze layer.
+    schema: bronze
+    tables:
+      - name: raw_transactions
+        description: Raw payment transactions from all channels (POS, online, ATM, wire, mobile)
+        columns:
+          - name: transaction_id
+            description: Unique transaction identifier
+            tests:
+              - unique
+              - not_null
+          - name: account_id
+            description: Account identifier (tokenized)
+            tests:
+              - not_null
+          - name: amount
+            description: Transaction amount in the specified currency
+            tests:
+              - not_null
+          - name: currency
+            description: ISO 4217 currency code
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['USD', 'EUR', 'GBP', 'CAD', 'MXN']
+          - name: merchant_name
+            description: Merchant display name
+          - name: merchant_category_code
+            description: ISO 18245 Merchant Category Code (MCC)
+            tests:
+              - not_null
+          - name: channel
+            description: Transaction channel
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['pos', 'online', 'atm', 'mobile', 'wire']
+          - name: transaction_type
+            description: Transaction type (purchase, withdrawal, transfer, refund)
+            tests:
+              - not_null
+          - name: card_present
+            description: Whether the physical card was present at the terminal
+            tests:
+              - not_null
+          - name: transaction_ts
+            description: UTC timestamp of the transaction authorization
+            tests:
+              - not_null
+          - name: country_code
+            description: ISO 3166-1 alpha-2 country code of the transaction location
+          - name: response_code
+            description: Authorization response code (00 = approved)
+
+      - name: raw_accounts
+        description: Customer account master data from core banking system
+        columns:
+          - name: account_id
+            description: Unique account identifier
+            tests:
+              - unique
+              - not_null
+          - name: customer_id
+            description: Customer identifier (tokenized)
+            tests:
+              - not_null
+          - name: account_type
+            description: Account type (checking, savings, credit, prepaid)
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['checking', 'savings', 'credit', 'prepaid']
+          - name: open_date
+            description: Date the account was opened
+            tests:
+              - not_null
+          - name: status
+            description: Account status
+            tests:
+              - accepted_values:
+                  values: ['active', 'closed', 'suspended', 'frozen']
+          - name: credit_limit
+            description: Credit limit (null for non-credit accounts)
+          - name: billing_country
+            description: ISO 3166-1 alpha-2 country of the billing address
+
+models:
+  - name: stg_transactions
+    description: Staged raw transactions with type casting and ingestion metadata
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: amount
+        tests:
+          - not_null
+
+  - name: stg_accounts
+    description: Staged raw accounts with type casting and ingestion metadata
+    columns:
+      - name: account_id
+        tests:
+          - unique
+          - not_null
+
+  - name: fct_transactions
+    description: >
+      Enriched transactions with velocity features, amount z-scores,
+      merchant risk, and channel risk indicators
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: amount
+        tests:
+          - not_null
+      - name: velocity_1h
+        description: Number of transactions by the same account in the prior 60 minutes
+      - name: amount_zscore
+        description: Standard deviations from the account mean transaction amount
+
+  - name: rpt_fraud_scores
+    description: >
+      Per-transaction fraud probability score with all ML feature columns.
+      Fraud probability is a composite of velocity, amount anomaly,
+      merchant risk, channel risk, and account tenure factors.
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: fraud_probability
+        description: "Fraud probability between 0.0 and 1.0"
+        tests:
+          - not_null
+      - name: risk_tier
+        tests:
+          - accepted_values:
+              values: ['low', 'medium', 'high', 'critical']
+
+  - name: rpt_suspicious_activity
+    description: >
+      SAR-ready aggregation of suspicious account activity over 30-day
+      windows, aligned with FinCEN e-filing requirements
+    columns:
+      - name: account_id
+        tests:
+          - not_null
+      - name: filing_reason
+        tests:
+          - not_null
+
+  - name: rpt_daily_fraud_summary
+    description: Daily fraud operations metrics for dashboard consumption
+    columns:
+      - name: report_date
+        tests:
+          - unique
+          - not_null

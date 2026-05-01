@@ -403,16 +403,16 @@ Published applications, published desktops, profile management, application deli
 
 For each identified gap, this section provides a recommended mitigation approach:
 
-| Gap | Citrix capability | Recommended mitigation | Risk level |
-| --- | --- | --- | --- |
-| **Anti-keylogging** | App Protection blocks keylogger software at the client | Deploy Microsoft Defender for Endpoint on session hosts for keylogger detection. Use Intune security baselines to enforce application allow-listing. Screen capture protection blocks the most common data exfiltration vector. For most organizations, the remaining risk is acceptable. | Low |
-| **Session recording** | Director records user sessions for compliance/audit | Deploy third-party session recording (Ekran System, Observit, or CyberArk PSM). Alternatively, use Azure Monitor activity logs + screen capture protection + Defender for Endpoint telemetry for equivalent forensic coverage. | Medium |
-| **Session pre-launch** | Sessions start before user connects, reducing perceived login time | Configure AVD "Start VM on Connect" to power on session hosts when users connect. With FSLogix 2--5 second profile load, total login time is already low enough that pre-launch is unnecessary for most workloads. | Low |
-| **Client-side rendering** | Browser and video content rendered on client device | Use Microsoft Edge browser content redirection for specific URLs. For video content, Teams and Zoom media offload already provides client-side processing. The remaining gap affects only scenarios with heavy browser-based video outside of Teams/Zoom. | Low |
-| **Cross-platform profiles** | UPM supports Windows and Linux profiles | For Linux desktop workloads, consider Azure DevBox (cloud-based development workstations). For mixed Windows/Linux environments, maintain separate profile strategies. This gap only affects organizations running Linux VDI, which is rare in enterprise. | Low |
-| **CPU spike management** | WEM CPU Clamping and CPU Spike Protection | Right-size session host VMs using Azure Monitor CPU telemetry. Use Azure VM performance data to identify users with excessive CPU consumption. Implement per-user CPU affinity via Group Policy. Deploy Azure autoscale to add capacity under load. | Low |
-| **Broader thin client support** | Workspace app optimized for IGEL, 10ZiG, Dell Wyse, HP thin clients | Most thin client vendors (IGEL, 10ZiG, HP, Dell Wyse) now support the Microsoft Remote Desktop client. IGEL OS supports AVD natively. Windows 365 Thin Client provides a purpose-built Microsoft device. The gap is narrowing rapidly. | Low |
-| **Scanner redirection** | HDX scanner-specific optimization | Use TWAIN redirection for basic scanning. For high-volume or specialized scanners, use network-attached scanning (scan to email or scan to folder) rather than session-redirected scanning. | Low |
+| Gap                             | Citrix capability                                                   | Recommended mitigation                                                                                                                                                                                                                                                                    | Risk level |
+| ------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| **Anti-keylogging**             | App Protection blocks keylogger software at the client              | Deploy Microsoft Defender for Endpoint on session hosts for keylogger detection. Use Intune security baselines to enforce application allow-listing. Screen capture protection blocks the most common data exfiltration vector. For most organizations, the remaining risk is acceptable. | Low        |
+| **Session recording**           | Director records user sessions for compliance/audit                 | Deploy third-party session recording (Ekran System, Observit, or CyberArk PSM). Alternatively, use Azure Monitor activity logs + screen capture protection + Defender for Endpoint telemetry for equivalent forensic coverage.                                                            | Medium     |
+| **Session pre-launch**          | Sessions start before user connects, reducing perceived login time  | Configure AVD "Start VM on Connect" to power on session hosts when users connect. With FSLogix 2--5 second profile load, total login time is already low enough that pre-launch is unnecessary for most workloads.                                                                        | Low        |
+| **Client-side rendering**       | Browser and video content rendered on client device                 | Use Microsoft Edge browser content redirection for specific URLs. For video content, Teams and Zoom media offload already provides client-side processing. The remaining gap affects only scenarios with heavy browser-based video outside of Teams/Zoom.                                 | Low        |
+| **Cross-platform profiles**     | UPM supports Windows and Linux profiles                             | For Linux desktop workloads, consider Azure DevBox (cloud-based development workstations). For mixed Windows/Linux environments, maintain separate profile strategies. This gap only affects organizations running Linux VDI, which is rare in enterprise.                                | Low        |
+| **CPU spike management**        | WEM CPU Clamping and CPU Spike Protection                           | Right-size session host VMs using Azure Monitor CPU telemetry. Use Azure VM performance data to identify users with excessive CPU consumption. Implement per-user CPU affinity via Group Policy. Deploy Azure autoscale to add capacity under load.                                       | Low        |
+| **Broader thin client support** | Workspace app optimized for IGEL, 10ZiG, Dell Wyse, HP thin clients | Most thin client vendors (IGEL, 10ZiG, HP, Dell Wyse) now support the Microsoft Remote Desktop client. IGEL OS supports AVD natively. Windows 365 Thin Client provides a purpose-built Microsoft device. The gap is narrowing rapidly.                                                    | Low        |
+| **Scanner redirection**         | HDX scanner-specific optimization                                   | Use TWAIN redirection for basic scanning. For high-volume or specialized scanners, use network-attached scanning (scan to email or scan to folder) rather than session-redirected scanning.                                                                                               | Low        |
 
 ### Overall gap assessment
 
@@ -426,72 +426,72 @@ Different user workloads require different feature subsets. This section assesse
 
 ### Knowledge worker (Office, email, web browsing)
 
-| Feature category | Readiness | Notes |
-| --- | --- | --- |
-| Desktop delivery | Ready | Windows 11 multi-session (superior to Citrix Server OS) |
-| Profile management | Ready | FSLogix (superior login time) |
-| Office integration | Ready | Full Microsoft 365 integration |
-| Teams optimization | Ready | Native WebRTC media offload |
-| Printing | Ready | Universal Print or redirected printers |
-| Security | Ready | Conditional Access, Defender, screen capture protection |
-| Monitoring | Ready | AVD Insights provides Director-equivalent visibility |
-| **Overall** | **Ready** | **Recommended: migrate immediately** |
+| Feature category   | Readiness | Notes                                                   |
+| ------------------ | --------- | ------------------------------------------------------- |
+| Desktop delivery   | Ready     | Windows 11 multi-session (superior to Citrix Server OS) |
+| Profile management | Ready     | FSLogix (superior login time)                           |
+| Office integration | Ready     | Full Microsoft 365 integration                          |
+| Teams optimization | Ready     | Native WebRTC media offload                             |
+| Printing           | Ready     | Universal Print or redirected printers                  |
+| Security           | Ready     | Conditional Access, Defender, screen capture protection |
+| Monitoring         | Ready     | AVD Insights provides Director-equivalent visibility    |
+| **Overall**        | **Ready** | **Recommended: migrate immediately**                    |
 
 ### Data analyst (CSA-in-a-Box pattern)
 
-| Feature category | Readiness | Notes |
-| --- | --- | --- |
-| Desktop delivery | Ready | Windows 11 multi-session with Power BI, Azure Data Studio, Python |
-| Data connectivity | Ready | Private Link to Fabric, Databricks, ADLS from AVD subnet |
-| Profile management | Ready | FSLogix preserves Jupyter notebooks, conda envs, VS Code settings |
-| GPU acceleration | Ready | NVadsA10_v5 for GPU-accelerated notebooks and Power BI visuals |
-| Security/governance | Ready | Conditional Access restricts data access to AVD sessions only |
-| Monitoring | Ready | AVD Insights + per-user resource consumption tracking |
-| **Overall** | **Ready** | **Recommended: CSA-in-a-Box data analyst desktop pattern** |
+| Feature category    | Readiness | Notes                                                             |
+| ------------------- | --------- | ----------------------------------------------------------------- |
+| Desktop delivery    | Ready     | Windows 11 multi-session with Power BI, Azure Data Studio, Python |
+| Data connectivity   | Ready     | Private Link to Fabric, Databricks, ADLS from AVD subnet          |
+| Profile management  | Ready     | FSLogix preserves Jupyter notebooks, conda envs, VS Code settings |
+| GPU acceleration    | Ready     | NVadsA10_v5 for GPU-accelerated notebooks and Power BI visuals    |
+| Security/governance | Ready     | Conditional Access restricts data access to AVD sessions only     |
+| Monitoring          | Ready     | AVD Insights + per-user resource consumption tracking             |
+| **Overall**         | **Ready** | **Recommended: CSA-in-a-Box data analyst desktop pattern**        |
 
 ### Power user (CAD, GIS, engineering)
 
-| Feature category | Readiness | Notes |
-| --- | --- | --- |
-| Desktop delivery | Ready | Personal or pooled with GPU VMs |
-| GPU performance | Ready (minor gap) | AVD GPU performance is 10--15% below HDX 3D Pro for some workloads |
-| Protocol quality | Ready (minor gap) | RDP Shortpath is adequate; HDX retains edge for lossless graphics |
-| USB device support | Ready (minor gap) | Basic USB redirect works; specialized USB devices may need testing |
-| Printing (large format) | Ready | Network printer or Universal Print |
-| **Overall** | **Ready with testing** | **Recommended: pilot with representative users before full migration** |
+| Feature category        | Readiness              | Notes                                                                  |
+| ----------------------- | ---------------------- | ---------------------------------------------------------------------- |
+| Desktop delivery        | Ready                  | Personal or pooled with GPU VMs                                        |
+| GPU performance         | Ready (minor gap)      | AVD GPU performance is 10--15% below HDX 3D Pro for some workloads     |
+| Protocol quality        | Ready (minor gap)      | RDP Shortpath is adequate; HDX retains edge for lossless graphics      |
+| USB device support      | Ready (minor gap)      | Basic USB redirect works; specialized USB devices may need testing     |
+| Printing (large format) | Ready                  | Network printer or Universal Print                                     |
+| **Overall**             | **Ready with testing** | **Recommended: pilot with representative users before full migration** |
 
 ### Call center / task worker
 
-| Feature category | Readiness | Notes |
-| --- | --- | --- |
-| Application delivery | Ready | RemoteApp for single-app delivery |
-| Thin client support | Ready (minor gap) | Most thin clients supported; verify specific hardware |
-| Session density | Ready | 20--26 task workers per D8s_v5 |
-| Audio quality | Ready | RDP audio redirection meets call center quality |
-| **Overall** | **Ready** | **Recommended: migrate immediately** |
+| Feature category     | Readiness         | Notes                                                 |
+| -------------------- | ----------------- | ----------------------------------------------------- |
+| Application delivery | Ready             | RemoteApp for single-app delivery                     |
+| Thin client support  | Ready (minor gap) | Most thin clients supported; verify specific hardware |
+| Session density      | Ready             | 20--26 task workers per D8s_v5                        |
+| Audio quality        | Ready             | RDP audio redirection meets call center quality       |
+| **Overall**          | **Ready**         | **Recommended: migrate immediately**                  |
 
 ### Developer / DevOps
 
-| Feature category | Readiness | Notes |
-| --- | --- | --- |
-| Desktop delivery | Ready | Personal desktops or Azure DevBox |
-| Development tools | Ready | VS Code, Visual Studio, Docker, WSL2 on session hosts |
-| Git integration | Ready | FSLogix preserves Git credentials and repository state |
-| Container support | Ready | Docker Desktop on personal session hosts |
-| Remote debugging | Ready | VS Code Remote Development works natively |
-| **Overall** | **Ready** | **Consider Azure DevBox for development-specific workloads** |
+| Feature category  | Readiness | Notes                                                        |
+| ----------------- | --------- | ------------------------------------------------------------ |
+| Desktop delivery  | Ready     | Personal desktops or Azure DevBox                            |
+| Development tools | Ready     | VS Code, Visual Studio, Docker, WSL2 on session hosts        |
+| Git integration   | Ready     | FSLogix preserves Git credentials and repository state       |
+| Container support | Ready     | Docker Desktop on personal session hosts                     |
+| Remote debugging  | Ready     | VS Code Remote Development works natively                    |
+| **Overall**       | **Ready** | **Consider Azure DevBox for development-specific workloads** |
 
 ### Healthcare (clinical workstations)
 
-| Feature category | Readiness | Notes |
-| --- | --- | --- |
-| Desktop delivery | Ready | Windows 11 multi-session or personal for clinical apps |
-| DICOM/medical imaging | Conditional | HDX lossless mode is superior for diagnostic-quality imaging. AVD supports GPU VMs with RDP for review-quality imaging. Validate with radiologists. |
-| Smart card (PIV/badge-tap) | Ready | Entra ID CBA supports clinical badge-tap workflows |
-| Session recording | Conditional | Requires third-party solution for compliance |
-| USB (medical devices) | Conditional | Test specific medical devices; USB redirect covers most devices |
-| Printing (labels, wristbands) | Ready | Redirected printer + native driver |
-| **Overall** | **Ready for most clinical** | **Pilot required for DICOM and specialized medical devices** |
+| Feature category              | Readiness                   | Notes                                                                                                                                               |
+| ----------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Desktop delivery              | Ready                       | Windows 11 multi-session or personal for clinical apps                                                                                              |
+| DICOM/medical imaging         | Conditional                 | HDX lossless mode is superior for diagnostic-quality imaging. AVD supports GPU VMs with RDP for review-quality imaging. Validate with radiologists. |
+| Smart card (PIV/badge-tap)    | Ready                       | Entra ID CBA supports clinical badge-tap workflows                                                                                                  |
+| Session recording             | Conditional                 | Requires third-party solution for compliance                                                                                                        |
+| USB (medical devices)         | Conditional                 | Test specific medical devices; USB redirect covers most devices                                                                                     |
+| Printing (labels, wristbands) | Ready                       | Redirected printer + native driver                                                                                                                  |
+| **Overall**                   | **Ready for most clinical** | **Pilot required for DICOM and specialized medical devices**                                                                                        |
 
 ---
 
@@ -556,24 +556,24 @@ After all users are migrated:
 
 For organizations deploying CSA-in-a-Box data analyst desktops, this matrix identifies the specific features required and their AVD readiness:
 
-| CSA-in-a-Box requirement | Citrix feature used | AVD equivalent | Readiness |
-| --- | --- | --- | --- |
-| Multi-user data analyst desktops | SBC on Server OS | Windows 11 multi-session host pools | Superior |
-| Power BI Desktop access | Published desktop | Desktop application group | Full parity |
-| Azure Data Studio + Jupyter | Published desktop | Desktop application group | Full parity |
-| Python/R environment persistence | UPM (partial -- often breaks) | FSLogix Profile Container (full state) | Superior |
-| Private network to Fabric | NetScaler + firewall rules | Private Link + NSG | Superior |
-| Private network to Databricks | NetScaler + firewall rules | Private Endpoint + NSG | Superior |
-| Conditional data access | SmartAccess (limited) | Conditional Access (comprehensive) | Superior |
-| Data exfiltration prevention | App Protection (add-on) | Screen capture protection + CA session controls | Full parity |
-| User activity monitoring | Citrix Analytics (add-on) | AVD Insights + Defender + Sentinel | Superior |
-| Profile backup and recovery | UPM backup (file-level) | FSLogix VHDx snapshot + Azure Backup | Superior |
-| Autoscale for variable demand | Citrix Autoscale | AVD scaling plans | Full parity |
-| GPU for notebook acceleration | GPU VMs + HDX 3D Pro | GPU VMs (NVadsA10_v5) + RDP | Full parity |
-| Teams collaboration | HDX Teams optimization | AVD Teams media optimization | Full parity |
-| Golden image management | MCS/PVS | Azure Compute Gallery + Bicep CI/CD | Full parity |
-| Federal compliance (IL4/IL5) | Citrix on Azure Government | AVD on Azure Government | Full parity |
-| Smart card (PIV/CAC) | NetScaler smart card passthrough | Entra ID CBA | Full parity |
+| CSA-in-a-Box requirement         | Citrix feature used              | AVD equivalent                                  | Readiness   |
+| -------------------------------- | -------------------------------- | ----------------------------------------------- | ----------- |
+| Multi-user data analyst desktops | SBC on Server OS                 | Windows 11 multi-session host pools             | Superior    |
+| Power BI Desktop access          | Published desktop                | Desktop application group                       | Full parity |
+| Azure Data Studio + Jupyter      | Published desktop                | Desktop application group                       | Full parity |
+| Python/R environment persistence | UPM (partial -- often breaks)    | FSLogix Profile Container (full state)          | Superior    |
+| Private network to Fabric        | NetScaler + firewall rules       | Private Link + NSG                              | Superior    |
+| Private network to Databricks    | NetScaler + firewall rules       | Private Endpoint + NSG                          | Superior    |
+| Conditional data access          | SmartAccess (limited)            | Conditional Access (comprehensive)              | Superior    |
+| Data exfiltration prevention     | App Protection (add-on)          | Screen capture protection + CA session controls | Full parity |
+| User activity monitoring         | Citrix Analytics (add-on)        | AVD Insights + Defender + Sentinel              | Superior    |
+| Profile backup and recovery      | UPM backup (file-level)          | FSLogix VHDx snapshot + Azure Backup            | Superior    |
+| Autoscale for variable demand    | Citrix Autoscale                 | AVD scaling plans                               | Full parity |
+| GPU for notebook acceleration    | GPU VMs + HDX 3D Pro             | GPU VMs (NVadsA10_v5) + RDP                     | Full parity |
+| Teams collaboration              | HDX Teams optimization           | AVD Teams media optimization                    | Full parity |
+| Golden image management          | MCS/PVS                          | Azure Compute Gallery + Bicep CI/CD             | Full parity |
+| Federal compliance (IL4/IL5)     | Citrix on Azure Government       | AVD on Azure Government                         | Full parity |
+| Smart card (PIV/CAC)             | NetScaler smart card passthrough | Entra ID CBA                                    | Full parity |
 
 **CSA-in-a-Box assessment:** AVD meets or exceeds every feature requirement for the data analyst desktop pattern. No gaps or mitigations are needed for this workload.
 

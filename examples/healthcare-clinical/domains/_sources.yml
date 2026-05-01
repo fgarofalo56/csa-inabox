@@ -1,0 +1,232 @@
+# Data product contract — healthcare_clinical
+#
+# Defines sources, models, and quality tests for the clinical analytics
+# pipeline. All data is synthetic and fully de-identified (HIPAA Safe
+# Harbor). No real PHI is included.
+
+version: 2
+
+sources:
+  - name: clinical_raw
+    description: >
+      Raw clinical data from EHR/FHIR exports. All records are synthetic
+      and de-identified under HIPAA Safe Harbor (45 CFR 164.514(b)(2)).
+    schema: bronze
+    tables:
+      - name: raw_encounters
+        description: Raw encounter/visit records from EHR ADT feeds
+        columns:
+          - name: encounter_id
+            description: Unique encounter identifier
+            tests:
+              - not_null
+              - unique
+          - name: patient_id
+            description: De-identified patient identifier
+            tests:
+              - not_null
+          - name: admit_date
+            description: Admission date (month/year granularity)
+            tests:
+              - not_null
+          - name: discharge_date
+            description: Discharge date (month/year granularity)
+            tests:
+              - not_null
+          - name: facility
+            description: Facility name
+          - name: department
+            description: Clinical department
+          - name: encounter_type
+            description: "Encounter classification: Inpatient, Emergency, Observation"
+            tests:
+              - accepted_values:
+                  values: ['Inpatient', 'Emergency', 'Observation', 'Outpatient']
+          - name: discharge_disposition
+            description: Discharge destination
+          - name: payer
+            description: Insurance type
+          - name: drg_code
+            description: Diagnosis-Related Group code
+
+      - name: raw_patients
+        description: >
+          De-identified patient demographics. No direct identifiers are
+          stored. Age is represented as age_group; ZIP is truncated to
+          3-digit prefix.
+        columns:
+          - name: patient_id
+            description: De-identified patient identifier
+            tests:
+              - not_null
+              - unique
+          - name: age_group
+            description: "Age band (e.g., 18-34, 35-49, 50-64, 65-74, 75-84, 85+)"
+            tests:
+              - not_null
+          - name: gender
+            description: Patient gender
+            tests:
+              - not_null
+          - name: zip_3
+            description: 3-digit ZIP prefix (Safe Harbor compliant)
+
+      - name: raw_diagnoses
+        description: ICD-10 diagnosis codes linked to encounters
+        columns:
+          - name: encounter_id
+            description: Foreign key to encounters
+            tests:
+              - not_null
+              - relationships:
+                  to: source('clinical_raw', 'raw_encounters')
+                  field: encounter_id
+          - name: icd10_code
+            description: ICD-10-CM diagnosis code
+            tests:
+              - not_null
+          - name: diagnosis_type
+            description: "Admitting, Principal, or Secondary"
+            tests:
+              - accepted_values:
+                  values: ['Admitting', 'Principal', 'Secondary']
+          - name: sequence
+            description: Diagnosis sequence number (1 = primary)
+            tests:
+              - not_null
+
+models:
+  # -- Bronze ---------------------------------------------------------------
+  - name: stg_encounters
+    description: Staged encounter records with standardized types
+    columns:
+      - name: encounter_id
+        tests:
+          - not_null
+          - unique
+      - name: patient_id
+        tests:
+          - not_null
+      - name: admit_date
+        tests:
+          - not_null
+      - name: discharge_date
+        tests:
+          - not_null
+
+  - name: stg_patients
+    description: Staged patient demographics (de-identified)
+    columns:
+      - name: patient_id
+        tests:
+          - not_null
+          - unique
+      - name: age_group
+        tests:
+          - not_null
+
+  - name: stg_diagnoses
+    description: Staged diagnosis codes with validated ICD-10 format
+    columns:
+      - name: encounter_id
+        tests:
+          - not_null
+      - name: icd10_code
+        tests:
+          - not_null
+
+  # -- Silver ---------------------------------------------------------------
+  - name: fct_encounters
+    description: >
+      Enriched encounters with length-of-stay calculation and 30-day
+      readmission flags.
+    columns:
+      - name: encounter_id
+        tests:
+          - not_null
+          - unique
+      - name: length_of_stay_days
+        description: Days between admit and discharge
+        tests:
+          - not_null
+      - name: is_30day_readmission
+        description: TRUE if patient was readmitted within 30 days
+
+  - name: dim_patients
+    description: >
+      Patient dimension with age risk tier and chronic complexity flag.
+      All attributes are de-identified.
+    columns:
+      - name: patient_id
+        tests:
+          - not_null
+          - unique
+      - name: age_risk_tier
+        tests:
+          - accepted_values:
+              values: ['Critical', 'High', 'Elevated', 'Moderate', 'Standard']
+
+  - name: dim_diagnoses
+    description: >
+      Diagnosis dimension with ICD-10 chapter mapping and CCS category
+      groupings for quality reporting.
+    columns:
+      - name: encounter_id
+        tests:
+          - not_null
+      - name: icd10_code
+        tests:
+          - not_null
+      - name: clinical_domain
+        tests:
+          - not_null
+
+  # -- Gold -----------------------------------------------------------------
+  - name: rpt_readmission_risk
+    description: >
+      30-day readmission risk scores per patient encounter with composite
+      scoring and risk tier classification.
+    columns:
+      - name: encounter_id
+        tests:
+          - not_null
+      - name: readmission_risk_score
+        description: Composite risk score on 0-100 scale
+        tests:
+          - not_null
+      - name: risk_tier
+        tests:
+          - accepted_values:
+              values: ['Critical', 'High', 'Moderate', 'Low']
+
+  - name: rpt_quality_measures
+    description: >
+      CMS quality measure calculations including 30-day readmission
+      rates by condition category with national benchmark comparison.
+    columns:
+      - name: condition_category
+        tests:
+          - not_null
+      - name: readmission_rate
+        tests:
+          - not_null
+      - name: benchmark_status
+        tests:
+          - accepted_values:
+              values: ['Worse Than Expected', 'Better Than Expected', 'No Different Than Expected']
+
+  - name: rpt_los_analysis
+    description: >
+      Length-of-stay analysis by DRG and facility with actual vs. expected
+      comparison and variance classification.
+    columns:
+      - name: drg_code
+        tests:
+          - not_null
+      - name: avg_los_days
+        tests:
+          - not_null
+      - name: los_status
+        tests:
+          - accepted_values:
+              values: ['Above Expected', 'Below Expected', 'Within Expected']

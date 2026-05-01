@@ -1,0 +1,103 @@
+# Data product contract — manufacturing.equipment_health
+#
+# Authoritative interface for the Manufacturing IoT data product.
+# Declares schema, SLAs, and quality rules for equipment health
+# scoring, OEE metrics, and predictive maintenance recommendations.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: manufacturing.equipment_health
+  domain: manufacturing
+  owner: manufacturing-analytics-team@contoso.com
+  version: "1.0.0"
+  description: >
+    Per-equipment health scores combining sensor anomaly detection,
+    OEE (Overall Equipment Effectiveness) metrics, and failure
+    prediction probabilities. Used for predictive maintenance
+    scheduling, capacity planning, and quality analytics.
+
+schema:
+  primary_key: [equipment_id, snapshot_date]
+  columns:
+    - name: equipment_id
+      type: string
+      nullable: false
+      description: Unique equipment identifier
+    - name: equipment_type
+      type: string
+      nullable: false
+      description: Equipment classification (CNC, PRESS, CONVEYOR, etc.)
+    - name: line_id
+      type: string
+      nullable: false
+      description: Production line identifier
+    - name: plant_id
+      type: string
+      nullable: false
+      description: Plant identifier
+    - name: snapshot_date
+      type: date
+      nullable: false
+      description: Date of health snapshot
+    - name: oee_score
+      type: decimal
+      nullable: false
+      description: Overall Equipment Effectiveness (0.0 to 1.0)
+    - name: availability
+      type: decimal
+      nullable: false
+      description: Availability component of OEE
+    - name: performance
+      type: decimal
+      nullable: false
+      description: Performance component of OEE
+    - name: quality
+      type: decimal
+      nullable: false
+      description: Quality component of OEE
+    - name: failure_probability
+      type: decimal
+      nullable: false
+      description: 7-day failure probability score (0.0 to 1.0)
+    - name: risk_tier
+      type: string
+      nullable: false
+      description: Maintenance risk tier (LOW, MEDIUM, HIGH, CRITICAL)
+    - name: anomaly_count_24h
+      type: integer
+      nullable: false
+      description: Number of sensor anomalies in last 24 hours
+    - name: scored_at
+      type: timestamp
+      nullable: false
+      description: Timestamp when scores were computed
+
+quality_rules:
+  - column: oee_score
+    rule: range
+    min: 0.0
+    max: 1.0
+    description: OEE must be valid percentage (0-1)
+  - column: failure_probability
+    rule: range
+    min: 0.0
+    max: 1.0
+    description: Failure probability must be valid (0-1)
+  - column: risk_tier
+    rule: allowed_values
+    values: [LOW, MEDIUM, HIGH, CRITICAL]
+    description: Risk tier must be one of four classifications
+  - column: anomaly_count_24h
+    rule: range
+    min: 0
+    description: Anomaly count must be non-negative
+
+sla:
+  freshness:
+    target: PT1H
+    description: Scores updated hourly
+  availability:
+    target: 99.9
+    description: Data product availability target (99.9%)

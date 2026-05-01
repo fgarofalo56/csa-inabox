@@ -1,0 +1,87 @@
+# Data product contract — clinical_analytics.readmission_risk
+#
+# Authoritative interface for the Healthcare Clinical Analytics data
+# product. Declares schema, SLAs, and quality rules for 30-day
+# readmission risk scoring per encounter, used by care management
+# teams and CMS quality measure reporting.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: clinical_analytics.readmission_risk
+  domain: life-sciences
+  owner: clinical-analytics-team@contoso.com
+  version: "1.0.0"
+  description: >
+    Per-encounter 30-day readmission risk scores with risk tier
+    classification and contributing factor analysis. Computed from
+    de-identified encounter, patient, and diagnosis data following
+    HIPAA Safe Harbor de-identification standards.
+
+schema:
+  primary_key: [encounter_id]
+  columns:
+    - name: encounter_id
+      type: string
+      nullable: false
+      description: Unique encounter identifier
+    - name: patient_id
+      type: string
+      nullable: false
+      description: De-identified patient identifier
+    - name: facility_id
+      type: string
+      nullable: false
+      description: Facility where encounter occurred
+    - name: discharge_date
+      type: date
+      nullable: false
+      description: Discharge date (month-only granularity per HIPAA)
+    - name: drg_code
+      type: string
+      nullable: false
+      description: Diagnosis Related Group code
+    - name: length_of_stay_days
+      type: integer
+      nullable: false
+      description: Length of stay in days
+    - name: readmission_risk_score
+      type: decimal
+      nullable: false
+      description: Composite readmission risk score (0-100)
+    - name: risk_tier
+      type: string
+      nullable: false
+      description: Risk classification (LOW, MODERATE, HIGH, VERY_HIGH)
+    - name: top_risk_factors
+      type: string
+      nullable: true
+      description: Comma-separated list of top contributing risk factors
+    - name: scored_at
+      type: timestamp
+      nullable: false
+      description: Timestamp when score was computed
+
+quality_rules:
+  - column: readmission_risk_score
+    rule: range
+    min: 0
+    max: 100
+    description: Risk score must be 0-100
+  - column: risk_tier
+    rule: allowed_values
+    values: [LOW, MODERATE, HIGH, VERY_HIGH]
+    description: Risk tier must be one of four classifications
+  - column: length_of_stay_days
+    rule: range
+    min: 0
+    description: Length of stay must be non-negative
+
+sla:
+  freshness:
+    target: PT24H
+    description: Scores available within 24 hours of discharge
+  availability:
+    target: 99.5
+    description: Data product availability target (99.5%)

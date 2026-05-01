@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "East US 2"
+    },
+    "environment": {
+      "value": "dev"
+    },
+    "prefix": {
+      "value": "retail"
+    },
+    "workloadName": {
+      "value": "retail-demand-forecasting"
+    },
+    "deployModules": {
+      "value": {
+        "storageZones": true,
+        "synapse": true,
+        "fabric": true,
+        "appInsights": true,
+        "privateEndpoints": true,
+        "mlWorkspace": true,
+        "powerBiEmbedded": true
+      }
+    }
+  }
+}

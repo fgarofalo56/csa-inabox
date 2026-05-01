@@ -4,9 +4,11 @@ Long-form research notes, white papers, and platform direction documents.
 
 ## Available
 
-| Document                                                    | Length      | Purpose                                                                                                                                         |
-| ----------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Platform Research Report](CSA-Platform-Research-Report.md) | 1,269 lines | Strategic snapshot — service comparisons, market positioning, roadmap analysis, competitive landscape (Databricks, Snowflake, Palantir, Fabric) |
+| Document                                                       | Length      | Purpose                                                                                                                                         |
+| -------------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Platform Research Report](CSA-Platform-Research-Report.md)    | 1,269 lines | Strategic snapshot — service comparisons, market positioning, roadmap analysis, competitive landscape (Databricks, Snowflake, Palantir, Fabric) |
+| [AI Readiness Assessment Framework](ai-readiness-framework.md) | ~410 lines  | Organizational maturity model for AI adoption — 8 dimensions scored 1--5, action plans, Azure platform mapping                                  |
+| [Data Mesh Maturity Model](data-mesh-maturity-model.md)        | ~500 lines  | Maturity model for data mesh adoption — domain ownership, data products, federated governance, anti-patterns, migration paths                   |
 
 ## Related
 

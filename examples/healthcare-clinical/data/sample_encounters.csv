@@ -1,0 +1,28 @@
+encounter_id,patient_id,admit_date,discharge_date,facility,department,encounter_type,discharge_disposition,payer,drg_code,age_group,gender,zip_3,icd10_code,diagnosis_type,sequence,description
+ENC-0001,PAT-1001,2025-01,2025-01,General Hospital A,Cardiology,Inpatient,Home,Medicare,291,75-84,Male,200,I50.9,Admitting,1,Heart failure unspecified
+ENC-0001,PAT-1001,2025-01,2025-01,General Hospital A,Cardiology,Inpatient,Home,Medicare,291,75-84,Male,200,E11.9,Secondary,2,Type 2 diabetes without complications
+ENC-0002,PAT-1002,2025-01,2025-01,General Hospital A,Pulmonology,Inpatient,Home,Medicaid,190,65-74,Female,201,J44.1,Admitting,1,COPD with acute exacerbation
+ENC-0003,PAT-1003,2025-02,2025-02,Regional Medical Center,General Medicine,Inpatient,SNF,Medicare,194,85+,Female,220,J18.9,Admitting,1,Pneumonia unspecified organism
+ENC-0003,PAT-1003,2025-02,2025-02,Regional Medical Center,General Medicine,Inpatient,SNF,Medicare,194,85+,Female,220,N18.3,Secondary,2,Chronic kidney disease stage 3
+ENC-0004,PAT-1001,2025-02,2025-02,General Hospital A,Cardiology,Inpatient,Home,Medicare,291,75-84,Male,200,I50.9,Admitting,1,Heart failure unspecified
+ENC-0005,PAT-1004,2025-02,2025-02,General Hospital A,Orthopedics,Inpatient,Rehab,Commercial,470,50-64,Male,210,M17.11,Admitting,1,Primary osteoarthritis right knee
+ENC-0006,PAT-1005,2025-03,2025-03,Community Hospital B,Emergency,Emergency,Home,Uninsured,999,18-34,Male,203,R10.9,Admitting,1,Unspecified abdominal pain
+ENC-0007,PAT-1006,2025-03,2025-03,Regional Medical Center,Neurology,Inpatient,Home,Medicare,065,65-74,Male,215,I63.9,Admitting,1,Cerebral infarction unspecified
+ENC-0007,PAT-1006,2025-03,2025-03,Regional Medical Center,Neurology,Inpatient,Home,Medicare,065,65-74,Male,215,I10,Secondary,2,Essential hypertension
+ENC-0008,PAT-1007,2025-03,2025-03,General Hospital A,General Medicine,Inpatient,Home,Medicaid,683,50-64,Female,207,N17.9,Admitting,1,Acute kidney failure unspecified
+ENC-0009,PAT-1008,2025-04,2025-04,Community Hospital B,Cardiology,Inpatient,Home,Medicare,291,75-84,Female,218,I50.9,Admitting,1,Heart failure unspecified
+ENC-0009,PAT-1008,2025-04,2025-04,Community Hospital B,Cardiology,Inpatient,Home,Medicare,291,75-84,Female,218,J44.9,Secondary,2,COPD unspecified
+ENC-0009,PAT-1008,2025-04,2025-04,Community Hospital B,Cardiology,Inpatient,Home,Medicare,291,75-84,Female,218,E11.65,Secondary,3,Type 2 diabetes with hyperglycemia
+ENC-0010,PAT-1009,2025-04,2025-04,General Hospital A,Pulmonology,Inpatient,Home,Commercial,190,35-49,Female,205,J44.1,Admitting,1,COPD with acute exacerbation
+ENC-0011,PAT-1003,2025-03,2025-03,Regional Medical Center,General Medicine,Inpatient,Home,Medicare,194,85+,Female,220,J18.1,Admitting,1,Lobar pneumonia unspecified organism
+ENC-0012,PAT-1010,2025-04,2025-04,General Hospital A,General Surgery,Inpatient,Home,Commercial,999,18-34,Female,209,K35.80,Admitting,1,Unspecified acute appendicitis
+ENC-0013,PAT-1011,2025-05,2025-05,Regional Medical Center,Orthopedics,Inpatient,Rehab,Medicare,536,85+,Female,212,S72.001A,Admitting,1,Fracture of unspecified intracapsular section of right femur
+ENC-0014,PAT-1008,2025-05,2025-05,Community Hospital B,Cardiology,Inpatient,Home,Medicare,291,75-84,Female,218,I50.9,Admitting,1,Heart failure unspecified
+ENC-0015,PAT-1012,2025-05,2025-05,General Hospital A,General Medicine,Inpatient,Home,Medicaid,999,50-64,Male,211,R06.00,Admitting,1,Dyspnea unspecified
+ENC-0016,PAT-1006,2025-04,2025-04,Regional Medical Center,Neurology,Inpatient,Home,Medicare,065,65-74,Male,215,I63.9,Admitting,1,Cerebral infarction unspecified
+ENC-0017,PAT-1013,2025-05,2025-06,Community Hospital B,Cardiology,Observation,Home,Commercial,999,50-64,Female,204,I48.91,Admitting,1,Unspecified atrial fibrillation
+ENC-0018,PAT-1014,2025-06,2025-06,General Hospital A,General Medicine,Inpatient,Home,Medicare,195,65-74,Male,216,J15.9,Admitting,1,Unspecified bacterial pneumonia
+ENC-0018,PAT-1014,2025-06,2025-06,General Hospital A,General Medicine,Inpatient,Home,Medicare,195,65-74,Male,216,E11.9,Secondary,2,Type 2 diabetes without complications
+ENC-0019,PAT-1015,2025-06,2025-06,Regional Medical Center,Cardiology,Inpatient,Transfer,Medicare,291,75-84,Male,219,I50.23,Admitting,1,Acute on chronic systolic heart failure
+ENC-0019,PAT-1015,2025-06,2025-06,Regional Medical Center,Cardiology,Inpatient,Transfer,Medicare,291,75-84,Male,219,N18.4,Secondary,2,Chronic kidney disease stage 4
+ENC-0020,PAT-1007,2025-05,2025-05,General Hospital A,General Medicine,Inpatient,Home,Medicaid,683,50-64,Female,207,N18.3,Admitting,1,Chronic kidney disease stage 3

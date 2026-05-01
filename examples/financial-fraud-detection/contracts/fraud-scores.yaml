@@ -1,0 +1,95 @@
+# Data product contract — fraud_analytics.fraud_scores
+#
+# Authoritative interface for the Financial Fraud Detection data product.
+# Declares schema, SLAs, and quality rules for transaction-level fraud
+# probability scoring used by BSA/AML compliance and PCI-DSS reporting.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: fraud_analytics.fraud_scores
+  domain: financial-services
+  owner: fraud-analytics-team@contoso.com
+  version: "1.0.0"
+  description: >
+    Per-transaction composite fraud probability scores with risk tier
+    classification, derived from velocity features, amount anomalies,
+    merchant risk categories, and channel risk. Primary data product
+    for fraud detection investigations and SAR (Suspicious Activity
+    Report) preparation.
+
+schema:
+  primary_key: [transaction_id]
+  columns:
+    - name: transaction_id
+      type: string
+      nullable: false
+      description: Unique transaction identifier (UUID format)
+    - name: account_id
+      type: string
+      nullable: false
+      description: Tokenized account identifier
+    - name: transaction_timestamp
+      type: timestamp
+      nullable: false
+      description: Transaction timestamp in UTC
+    - name: amount
+      type: decimal
+      nullable: false
+      description: Transaction amount in account currency
+    - name: currency_code
+      type: string
+      nullable: false
+      description: ISO 4217 currency code
+    - name: merchant_id
+      type: string
+      nullable: true
+      description: Merchant identifier (null for non-merchant transactions)
+    - name: channel
+      type: string
+      nullable: false
+      description: Transaction channel (POS, ONLINE, ATM, WIRE, MOBILE)
+    - name: fraud_probability
+      type: decimal
+      nullable: false
+      description: Composite fraud probability score (0.0 to 1.0)
+    - name: risk_tier
+      type: string
+      nullable: false
+      description: Risk classification (LOW, MEDIUM, HIGH, CRITICAL)
+    - name: ctr_flag
+      type: boolean
+      nullable: false
+      description: Currency Transaction Report threshold flag (>= $10,000)
+    - name: scored_at
+      type: timestamp
+      nullable: false
+      description: Timestamp when score was computed
+
+quality_rules:
+  - column: fraud_probability
+    rule: range
+    min: 0.0
+    max: 1.0
+    description: Fraud probability must be a valid probability (0-1)
+  - column: risk_tier
+    rule: allowed_values
+    values: [LOW, MEDIUM, HIGH, CRITICAL]
+    description: Risk tier must be one of the four defined classifications
+  - column: channel
+    rule: allowed_values
+    values: [POS, ONLINE, ATM, WIRE, MOBILE]
+    description: Channel must be a recognized transaction channel
+  - column: amount
+    rule: range
+    min: 0.0
+    description: Transaction amounts must be non-negative
+
+sla:
+  freshness:
+    target: PT15M
+    description: Scores available within 15 minutes of transaction
+  availability:
+    target: 99.9
+    description: Data product availability target (99.9%)

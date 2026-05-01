@@ -1,0 +1,107 @@
+# Data product contract — retail.demand_forecast
+#
+# Authoritative interface for the Retail Demand Forecasting data
+# product. Declares schema, SLAs, and quality rules for SKU-level
+# demand forecasts used by inventory planning, stockout prevention,
+# and markdown optimization.
+
+apiVersion: csa.microsoft.com/v1
+kind: DataProductContract
+
+metadata:
+  name: retail.demand_forecast
+  domain: retail-cpg
+  owner: retail-analytics-team@contoso.com
+  version: "1.0.0"
+  description: >
+    Per-store, per-SKU 14-day demand forecasts with stockout risk
+    scores, seasonal indices, and trend direction. Computed from
+    POS transactions, inventory snapshots, and product catalog data
+    using blended trailing averages with seasonal adjustment.
+
+schema:
+  primary_key: [store_id, sku, forecast_date]
+  columns:
+    - name: store_id
+      type: string
+      nullable: false
+      description: Unique store identifier
+    - name: store_region
+      type: string
+      nullable: false
+      description: Store region for aggregation
+    - name: sku
+      type: string
+      nullable: false
+      description: Stock Keeping Unit identifier
+    - name: product_category
+      type: string
+      nullable: false
+      description: Product category classification
+    - name: forecast_date
+      type: date
+      nullable: false
+      description: Date being forecasted (D+1 through D+14)
+    - name: forecast_units
+      type: integer
+      nullable: false
+      description: Forecasted units to be sold
+    - name: trailing_7d_avg
+      type: decimal
+      nullable: false
+      description: 7-day trailing average sales
+    - name: trailing_28d_avg
+      type: decimal
+      nullable: false
+      description: 28-day trailing average sales
+    - name: seasonal_index
+      type: decimal
+      nullable: false
+      description: Day-of-week seasonal adjustment factor
+    - name: trend_direction
+      type: string
+      nullable: false
+      description: Trend classification (UP, FLAT, DOWN)
+    - name: stockout_risk_score
+      type: decimal
+      nullable: false
+      description: Stockout probability (0.0 to 1.0)
+    - name: risk_tier
+      type: string
+      nullable: false
+      description: Stockout risk tier (LOW, MEDIUM, HIGH)
+    - name: forecast_generated_at
+      type: timestamp
+      nullable: false
+      description: Timestamp when forecast was generated
+
+quality_rules:
+  - column: forecast_units
+    rule: range
+    min: 0
+    description: Forecast units must be non-negative
+  - column: stockout_risk_score
+    rule: range
+    min: 0.0
+    max: 1.0
+    description: Stockout risk must be valid probability (0-1)
+  - column: trend_direction
+    rule: allowed_values
+    values: [UP, FLAT, DOWN]
+    description: Trend direction must be one of three classifications
+  - column: risk_tier
+    rule: allowed_values
+    values: [LOW, MEDIUM, HIGH]
+    description: Risk tier must be one of three classifications
+  - column: seasonal_index
+    rule: range
+    min: 0.0
+    description: Seasonal index must be non-negative
+
+sla:
+  freshness:
+    target: P1D
+    description: Forecasts refreshed daily after business close
+  availability:
+    target: 99.5
+    description: Data product availability target (99.5%)

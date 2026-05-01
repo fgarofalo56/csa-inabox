@@ -1,0 +1,123 @@
+version: 2
+
+sources:
+  - name: pos_raw
+    description: >
+      Raw point-of-sale data landing in the Bronze layer from store POS
+      systems, ERP product master, and inventory management exports.
+      All data is synthetic for demonstration purposes.
+    schema: bronze
+    tables:
+      - name: raw_pos_transactions
+        description: Line-item POS transactions from store registers.
+        columns:
+          - name: transaction_id
+            description: Unique transaction line identifier
+            tests:
+              - not_null
+              - unique
+          - name: store_id
+            description: Store location identifier
+            tests:
+              - not_null
+          - name: sku
+            description: Stock-keeping unit code
+            tests:
+              - not_null
+          - name: quantity
+            description: Units sold in this line item
+            tests:
+              - not_null
+          - name: unit_price
+            description: Selling price per unit (USD)
+            tests:
+              - not_null
+          - name: discount_amount
+            description: Line-level discount applied (USD)
+          - name: transaction_timestamp
+            description: UTC timestamp of the transaction
+            tests:
+              - not_null
+
+      - name: raw_products
+        description: Product catalog from ERP with category hierarchy.
+        columns:
+          - name: sku
+            description: Stock-keeping unit code (primary key)
+            tests:
+              - not_null
+              - unique
+          - name: category
+            description: Top-level product category
+            tests:
+              - not_null
+          - name: subcategory
+            description: Second-level category
+          - name: brand
+            description: Manufacturer or brand name
+
+      - name: raw_inventory
+        description: Daily inventory position snapshots by store and SKU.
+        columns:
+          - name: store_id
+            description: Store location identifier
+            tests:
+              - not_null
+          - name: sku
+            description: Stock-keeping unit code
+            tests:
+              - not_null
+          - name: on_hand_qty
+            description: Quantity currently on hand at the store
+            tests:
+              - not_null
+          - name: snapshot_date
+            description: Date of the inventory snapshot
+            tests:
+              - not_null
+
+models:
+  - name: fct_daily_sales
+    description: >
+      Daily sales aggregation at store/SKU grain. One row per store, SKU,
+      and calendar date with units sold, revenue, and estimated days of supply.
+    columns:
+      - name: daily_sales_key
+        description: Composite key (store_id|sku|sale_date)
+        tests:
+          - not_null
+          - unique
+      - name: store_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_stores')
+              field: store_id
+      - name: sku
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_products')
+              field: sku
+      - name: sale_date
+        tests:
+          - not_null
+      - name: units_sold
+        tests:
+          - not_null
+
+  - name: dim_products
+    description: Product dimension with category hierarchy, cost, and MSRP.
+    columns:
+      - name: sku
+        tests:
+          - not_null
+          - unique
+
+  - name: dim_stores
+    description: Store dimension with region, format, and square footage.
+    columns:
+      - name: store_id
+        tests:
+          - not_null
+          - unique
