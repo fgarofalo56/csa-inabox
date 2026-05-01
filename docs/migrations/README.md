@@ -2,37 +2,124 @@
 
 Field-tested migration playbooks from common on-prem and other-cloud platforms onto the CSA-in-a-Box Azure stack. Each playbook covers **assessment → design → migration → cutover → decommission** with realistic timelines and pitfalls.
 
-## Available playbooks
+Playbooks are organized into two groups:
 
-### From other clouds
+- **Data, AI & Analytics Migrations** — directly aligned with the CSA-in-a-Box mission of cloud-scale analytics, data fabric, data mesh, lakehouse, and AI/ML.
+- **Enterprise Modernization (Beyond Analytics)** — adjacent migrations (compute, identity, productivity, DevOps) that customers commonly bundle with cloud / data migrations at the enterprise level. Included for big-picture decision-making, not because they're part of the analytics platform itself.
+
+## Data, AI & Analytics Migrations
+
+Core CSA-aligned playbooks for cloud-scale analytics, data platforms, AI/ML, and the operational data stores that feed them.
+
+### Hyperscaler & cloud platforms (analytics workloads)
 
 | Source                        | Target                         | Playbook                           |
 | ----------------------------- | ------------------------------ | ---------------------------------- |
 | AWS (Redshift, S3, Glue, EMR) | Synapse, ADLS, ADF, Databricks | [aws-to-azure.md](aws-to-azure.md) |
 | GCP (BigQuery, GCS, Dataflow) | Synapse/Fabric, ADLS, ADF      | [gcp-to-azure.md](gcp-to-azure.md) |
 
-### From competitor productivity suites
+### Data warehouses & lakehouses
+
+| Source                           | Target                                        | Playbook                                           |
+| -------------------------------- | --------------------------------------------- | -------------------------------------------------- |
+| Snowflake                        | Fabric / Synapse + Databricks                 | [snowflake.md](snowflake.md)                       |
+| Databricks (other clouds or AWS) | Microsoft Fabric                              | [databricks-to-fabric.md](databricks-to-fabric.md) |
+| Teradata                         | Synapse Dedicated SQL Pool / Fabric Warehouse | [teradata.md](teradata.md)                         |
+| Palantir Foundry                 | Azure data mesh + Purview                     | [palantir-foundry.md](palantir-foundry.md)         |
+
+### Big data ecosystems
+
+| Source                                       | Target                                   | Playbook                                       |
+| -------------------------------------------- | ---------------------------------------- | ---------------------------------------------- |
+| Hadoop / Hive (Cloudera, HDInsight, on-prem) | Synapse Spark + Delta / Fabric Lakehouse | [hadoop-hive.md](hadoop-hive.md)               |
+| Cloudera / CDH (Impala, NiFi, CDP)           | Synapse + Databricks + ADF               | [cloudera-to-azure.md](cloudera-to-azure.md)   |
+
+### ETL & data integration
+
+| Source                         | Target                                     | Playbook                         |
+| ------------------------------ | ------------------------------------------ | -------------------------------- |
+| Informatica PowerCenter / IICS | Azure Data Factory / Fabric Data Pipelines | [informatica.md](informatica.md) |
+
+### Business intelligence
+
+| Source  | Target   | Playbook                                                 |
+| ------- | -------- | -------------------------------------------------------- |
+| Tableau | Power BI | [tableau-to-powerbi.md](tableau-to-powerbi.md)           |
+| Qlik    | Power BI | [qlik-to-powerbi.md](qlik-to-powerbi.md)                 |
+
+### Analytics & statistical computing
+
+| Source             | Target              | Playbook                             |
+| ------------------ | ------------------- | ------------------------------------ |
+| SAS (9.4 / Viya)   | Azure ML / Fabric   | [sas-to-azure.md](sas-to-azure.md)   |
+
+### Operational databases (analytics sources)
+
+| Source                  | Target                              | Playbook                                             |
+| ----------------------- | ----------------------------------- | ---------------------------------------------------- |
+| SQL Server (on-prem)    | Azure SQL DB / MI / VM              | [sql-server-to-azure.md](sql-server-to-azure.md)     |
+| Oracle Database         | Azure SQL MI / PostgreSQL / Oracle@Azure | [oracle-to-azure.md](oracle-to-azure.md)         |
+| IBM Db2 (z/OS, LUW, i)  | Azure SQL                           | [db2-to-azure-sql.md](db2-to-azure-sql.md)           |
+| MongoDB                 | Cosmos DB (vCore / RU)              | [mongodb-to-cosmosdb.md](mongodb-to-cosmosdb.md)     |
+| MySQL (on-prem / cloud) | Azure Database for MySQL / PostgreSQL | [mysql-to-azure.md](mysql-to-azure.md)             |
+
+### Streaming & IoT
+
+| Source                | Target                            | Playbook                             |
+| --------------------- | --------------------------------- | ------------------------------------ |
+| IoT Hub + ADAL/X.509  | Entra ID + Event Grid + Functions | [iot-hub-entra.md](iot-hub-entra.md) |
+
+## Enterprise Modernization (Beyond Analytics)
+
+These migrations are not part of the core analytics platform but often accompany cloud / data migrations at the enterprise level. Included so architects and customers can see the bigger picture when planning multi-year cloud transformations.
+
+### Compute & infrastructure
+
+| Source       | Target              | Playbook                                       |
+| ------------ | ------------------- | ---------------------------------------------- |
+| VMware       | Azure VMware Solution / Azure IaaS | [vmware-to-azure.md](vmware-to-azure.md)       |
+| Kubernetes (self-managed / EKS / GKE) | AKS    | [kubernetes-to-aks.md](kubernetes-to-aks.md)   |
+
+### End-user computing
+
+| Source         | Target                  | Playbook                                   |
+| -------------- | ----------------------- | ------------------------------------------ |
+| Citrix         | Azure Virtual Desktop   | [citrix-to-avd.md](citrix-to-avd.md)       |
+
+### Enterprise applications
+
+| Source            | Target                                | Playbook                             |
+| ----------------- | ------------------------------------- | ------------------------------------ |
+| SAP (ECC, S/4HANA)| SAP on Azure / S/4HANA Cloud          | [sap-to-azure.md](sap-to-azure.md)   |
+
+### Identity & access
+
+| Source                | Target              | Playbook                                           |
+| --------------------- | ------------------- | -------------------------------------------------- |
+| Active Directory      | Entra ID            | [ad-to-entra-id.md](ad-to-entra-id.md)             |
+| Okta                  | Entra ID            | [okta-to-entra-id.md](okta-to-entra-id.md)         |
+| HashiCorp Vault       | Azure Key Vault     | [vault-to-key-vault.md](vault-to-key-vault.md)     |
+
+### Productivity & collaboration
 
 | Source                                | Target                                                | Playbook                                                   |
 | ------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
+| Exchange (on-prem)                    | Exchange Online                                       | [exchange-to-online.md](exchange-to-online.md)             |
 | Google Workspace (Gmail, Drive, Docs) | Microsoft 365 (Exchange, OneDrive, SharePoint, Teams) | [google-workspace-to-m365.md](google-workspace-to-m365.md) |
+| SharePoint Server (on-prem)           | SharePoint Online                                     | [sharepoint-to-online.md](sharepoint-to-online.md)         |
 
-### From specialty platforms
+### DevOps tooling
 
-| Source                           | Target                        | Playbook                                           |
-| -------------------------------- | ----------------------------- | -------------------------------------------------- |
-| Snowflake                        | Fabric / Synapse + Databricks | [snowflake.md](snowflake.md)                       |
-| Databricks (other clouds or AWS) | Microsoft Fabric              | [databricks-to-fabric.md](databricks-to-fabric.md) |
-| Palantir Foundry                 | Azure data mesh + Purview     | [palantir-foundry.md](palantir-foundry.md)         |
+| Source   | Target                              | Playbook                                                       |
+| -------- | ----------------------------------- | -------------------------------------------------------------- |
+| Jenkins  | GitHub Actions / Azure DevOps       | [jenkins-to-github-actions.md](jenkins-to-github-actions.md)   |
 
-### From legacy / on-prem
+### Security operations & observability
 
-| Source                                       | Target                                        | Playbook                             |
-| -------------------------------------------- | --------------------------------------------- | ------------------------------------ |
-| Teradata                                     | Synapse Dedicated SQL Pool / Fabric Warehouse | [teradata.md](teradata.md)           |
-| Hadoop / Hive (Cloudera, HDInsight, on-prem) | Synapse Spark + Delta / Fabric Lakehouse      | [hadoop-hive.md](hadoop-hive.md)     |
-| Informatica PowerCenter / IICS               | Azure Data Factory / Fabric Data Pipelines    | [informatica.md](informatica.md)     |
-| IoT Hub + ADAL → Entra                       | Entra ID + Event Grid + Functions             | [iot-hub-entra.md](iot-hub-entra.md) |
+| Source                          | Target                  | Playbook                                                                     |
+| ------------------------------- | ----------------------- | ---------------------------------------------------------------------------- |
+| Splunk (SIEM)                   | Microsoft Sentinel      | [splunk-to-sentinel.md](splunk-to-sentinel.md)                               |
+| Datadog / New Relic / Dynatrace | Azure Monitor + AppInsights | [observability-to-azure-monitor.md](observability-to-azure-monitor.md)   |
 
 ## What every migration has in common
 
