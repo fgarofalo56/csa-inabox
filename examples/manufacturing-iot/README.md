@@ -304,7 +304,36 @@ ORDER BY failure_probability DESC
 
 ## Data Contract
 
-The `contracts/telemetry.yml` data contract defines the schema, quality thresholds, and SLAs for the core sensor telemetry data product. Key guarantees: readings available in Silver within 5 minutes, >= 99.0% ingestion completeness, and 99.9% Gold layer uptime.
+The `contracts/equipment-health.yaml` data contract defines the schema, quality thresholds, and SLAs for the core equipment health data product. Key guarantees: scores updated hourly, OEE/failure probability within 0-1 range, and 99.9% data product availability.
+
+---
+
+## Directory Structure
+
+```
+manufacturing-iot/
+├── README.md                          # This file
+├── contracts/
+│   └── equipment-health.yaml          # CSA data product contract
+├── data/
+│   └── sample_telemetry.csv           # 20 rows of synthetic sensor data
+├── deploy/
+│   └── params.dev.json                # Deployment parameters (dev)
+└── domains/
+    ├── _sources.yml                   # dbt source definitions
+    ├── bronze/
+    │   ├── stg_sensor_telemetry.sql   # Raw sensor staging
+    │   ├── stg_equipment.sql          # Equipment master staging
+    │   └── stg_maintenance_logs.sql   # Maintenance history staging
+    ├── silver/
+    │   ├── fct_sensor_readings.sql    # Enriched sensor facts with anomaly flags
+    │   ├── dim_equipment.sql          # Equipment dimension with risk tiers
+    │   └── fct_maintenance_events.sql # Maintenance event facts
+    └── gold/
+        ├── rpt_oee_metrics.sql        # OEE per equipment per day
+        ├── rpt_failure_predictions.sql # 7-day failure probability scores
+        └── rpt_maintenance_schedule.sql # Recommended maintenance schedule
+```
 
 ---
 

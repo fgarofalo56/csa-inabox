@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "East US 2"
+    },
+    "environment": {
+      "value": "dev"
+    },
+    "prefix": {
+      "value": "clin"
+    },
+    "workloadName": {
+      "value": "healthcare-clinical-analytics"
+    },
+    "deployModules": {
+      "value": {
+        "storageZones": true,
+        "synapse": true,
+        "appInsights": true,
+        "privateEndpoints": true,
+        "mlWorkspace": true,
+        "keyVault": true,
+        "purviewIntegration": true
+      }
+    }
+  }
+}

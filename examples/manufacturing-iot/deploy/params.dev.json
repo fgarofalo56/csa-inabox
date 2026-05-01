@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "East US 2"
+    },
+    "environment": {
+      "value": "dev"
+    },
+    "prefix": {
+      "value": "mfg"
+    },
+    "workloadName": {
+      "value": "manufacturing-iot-analytics"
+    },
+    "deployModules": {
+      "value": {
+        "storageZones": true,
+        "iotHub": true,
+        "eventHubs": true,
+        "streamAnalytics": true,
+        "synapse": true,
+        "appInsights": true,
+        "privateEndpoints": true,
+        "mlWorkspace": true,
+        "dataExplorer": true
+      }
+    }
+  }
+}
