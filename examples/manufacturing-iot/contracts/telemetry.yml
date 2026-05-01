@@ -1,0 +1,174 @@
+version: 2
+
+sources:
+  - name: iot_raw
+    description: Raw sensor and operational data from IoT Hub and CMMS exports.
+    schema: bronze
+    tables:
+      - name: raw_sensor_telemetry
+        description: >
+          Raw sensor readings ingested from OPC-UA and MQTT devices via
+          Azure IoT Hub and Event Hubs. All data is synthetic.
+        columns:
+          - name: reading_id
+            description: Unique identifier for each sensor reading
+            tests:
+              - unique
+              - not_null
+          - name: device_id
+            description: IoT device identifier
+            tests:
+              - not_null
+          - name: equipment_id
+            description: Equipment identifier from the asset registry
+            tests:
+              - not_null
+          - name: sensor_type
+            description: "Type of sensor (temperature_c, vibration_mm_s, pressure_bar)"
+            tests:
+              - not_null
+              - accepted_values:
+                  values:
+                    - temperature_c
+                    - vibration_mm_s
+                    - pressure_bar
+                    - humidity_pct
+                    - flow_rate_lpm
+          - name: reading_value
+            description: Numeric sensor reading value
+            tests:
+              - not_null
+          - name: unit
+            description: Unit of measurement
+            tests:
+              - not_null
+          - name: reading_timestamp
+            description: UTC timestamp when the reading was captured
+            tests:
+              - not_null
+          - name: quality_flag
+            description: "OPC-UA quality indicator (GOOD, UNCERTAIN, BAD)"
+            tests:
+              - accepted_values:
+                  values:
+                    - GOOD
+                    - UNCERTAIN
+                    - BAD
+
+      - name: raw_equipment
+        description: Equipment master data from ERP/CMMS system.
+        columns:
+          - name: equipment_id
+            description: Unique equipment identifier
+            tests:
+              - unique
+              - not_null
+          - name: equipment_type
+            description: "Equipment category (CNC, Press, Conveyor, Packaging)"
+            tests:
+              - not_null
+          - name: line_id
+            description: Production line identifier
+            tests:
+              - not_null
+          - name: install_date
+            description: Date the equipment was installed
+            tests:
+              - not_null
+
+      - name: raw_maintenance_logs
+        description: Maintenance work orders and event records from CMMS.
+        columns:
+          - name: work_order_id
+            description: Unique work order identifier
+            tests:
+              - unique
+              - not_null
+          - name: equipment_id
+            description: Equipment that was serviced
+            tests:
+              - not_null
+          - name: maintenance_type
+            description: "Maintenance category (planned, unplanned)"
+            tests:
+              - not_null
+              - accepted_values:
+                  values:
+                    - planned
+                    - unplanned
+          - name: start_time
+            description: Maintenance start timestamp
+            tests:
+              - not_null
+
+models:
+  - name: stg_sensor_telemetry
+    description: Staged sensor telemetry with type-cast columns and ingestion metadata.
+    columns:
+      - name: reading_id
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_equipment
+    description: Staged equipment master data with standardized types.
+    columns:
+      - name: equipment_id
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_maintenance_logs
+    description: Staged maintenance logs with standardized types.
+    columns:
+      - name: work_order_id
+        tests:
+          - unique
+          - not_null
+
+  - name: fct_sensor_readings
+    description: >
+      Cleansed sensor readings enriched with rolling statistics (1h and 24h
+      averages), z-scores, and anomaly flags. Joined with equipment dimension.
+    columns:
+      - name: reading_id
+        tests:
+          - unique
+          - not_null
+      - name: z_score
+        description: "Z-score relative to 1-hour rolling window; |z| > 3 flags anomalies."
+
+  - name: dim_equipment
+    description: >
+      Equipment dimension with age calculations, risk tier classification,
+      and latest maintenance summary.
+    columns:
+      - name: equipment_id
+        tests:
+          - unique
+          - not_null
+
+  - name: fct_maintenance_events
+    description: >
+      Structured maintenance events with duration, category (preventive,
+      corrective, breakdown), and equipment context.
+    columns:
+      - name: work_order_id
+        tests:
+          - unique
+          - not_null
+
+  - name: rpt_oee_metrics
+    description: >
+      Overall Equipment Effectiveness report. Computes Availability,
+      Performance, and Quality factors per equipment per day.
+
+  - name: rpt_failure_predictions
+    description: >
+      Failure probability scores per equipment based on sensor statistics
+      and maintenance history. Risk tier: Critical / High / Medium / Low.
+
+  - name: rpt_maintenance_schedule
+    description: >
+      Optimized maintenance scheduling recommendations based on failure
+      predictions, equipment age, and production impact.

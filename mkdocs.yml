@@ -109,6 +109,13 @@ nav:
       - Developer Pathways: DEVELOPER_PATHWAYS.md
       - Production Checklist: PRODUCTION_CHECKLIST.md
       - AI Copilot (chat with the docs): chat.md
+      - Role-Based Quickstarts:
+          - Overview: quickstarts/index.md
+          - Data Engineer: quickstarts/data-engineer.md
+          - Data Scientist: quickstarts/data-scientist.md
+          - BI Developer: quickstarts/bi-developer.md
+          - Security Admin: quickstarts/security-admin.md
+          - Platform Admin: quickstarts/platform-admin.md
 
   # ============================================================
   # 2. ARCHITECTURE — how the platform is designed and why
@@ -122,6 +129,8 @@ nav:
           - Data Flow (Medallion): reference-architecture/data-flow-medallion.md
           - Identity & Secrets Flow: reference-architecture/identity-secrets-flow.md
           - Fabric vs Synapse vs Databricks: reference-architecture/fabric-vs-synapse-vs-databricks.md
+          - AI/ML Platform Architecture: reference-architecture/ai-ml-architecture.md
+          - Architecture Diagram Gallery: reference-architecture/diagram-gallery.md
       - Decision Trees:
           - Overview: decisions/README.md
           - Batch vs Streaming: decisions/batch-vs-streaming.md
@@ -132,6 +141,11 @@ nav:
           - Lakehouse vs Warehouse vs Lake: decisions/lakehouse-vs-warehouse-vs-lake.md
           - Materialize vs Virtualize: decisions/materialize-vs-virtualize.md
           - RAG vs Fine-Tune vs Agents: decisions/rag-vs-finetune-vs-agents.md
+          - Azure SQL vs Cosmos vs Postgres: decisions/azure-sql-vs-cosmos-vs-postgres.md
+          - Power BI vs Custom Dashboards: decisions/power-bi-vs-custom-dashboards.md
+          - ADF vs Databricks vs Fabric Pipelines: decisions/adf-vs-databricks-vs-fabric-pipelines.md
+          - Managed Identity vs Service Principal: decisions/managed-identity-vs-service-principal.md
+          - Azure OpenAI vs Open-Source Models: decisions/azure-openai-vs-open-source-models.md
       - Best Practices:
           - Overview: best-practices/index.md
           - Medallion Architecture: best-practices/medallion-architecture.md
@@ -188,6 +202,12 @@ nav:
           - "09 – GraphRAG Knowledge Graphs": tutorials/09-graphrag-knowledge/README.md
           - "10 – Data Marketplace": tutorials/10-data-marketplace/README.md
           - "11 – Data API Builder": tutorials/11-data-api-builder/README.md
+          - "12 – Monitoring & Observability": tutorials/12-monitoring-observability/README.md
+          - "13 – Security Zero Trust": tutorials/13-security-zero-trust/README.md
+          - "14 – Cost Optimization": tutorials/14-cost-optimization/README.md
+          - "15 – Multi-Tenant Onboarding": tutorials/15-multi-tenant-onboarding/README.md
+          - "16 – dbt Development Workflow": tutorials/16-dbt-development-workflow/README.md
+          - "17 – Copilot Integration": tutorials/17-copilot-integration/README.md
           - "Great Expectations (legacy)": tutorials/great-expectations.md
       - End-to-End Examples:
           - Overview: examples/index.md
@@ -200,11 +220,15 @@ nav:
           - "EPA Environmental": examples/epa.md
           - "Fabric Data Agent": examples/fabric-data-agent.md
           - "Fabric E2E (Retail Sales)": examples/fabric-e2e.md
+          - "Financial Fraud Detection": examples/financial-fraud-detection.md
           - "GeoAnalytics": examples/geoanalytics.md
+          - "Healthcare Clinical Analytics": examples/healthcare-clinical.md
           - "Interior Natural Resources": examples/interior.md
           - "IoT Streaming": examples/iot-streaming.md
+          - "Manufacturing IoT": examples/manufacturing-iot.md
           - "ML Lifecycle (Loan Default)": examples/ml-lifecycle.md
           - "NOAA Climate & Ocean": examples/noaa.md
+          - "Retail Demand Forecasting": examples/retail-demand-forecasting.md
           - "Streaming": examples/streaming.md
           - "Tribal Health": examples/tribal-health.md
           - "USDA Agriculture": examples/usda.md
@@ -224,6 +248,7 @@ nav:
               - Databricks Best Practices: guides/databricks-best-practices.md
               - Unity Catalog: guides/databricks-unity-catalog.md
               - Azure Synapse: guides/azure-synapse.md
+              - Microsoft Fabric: guides/microsoft-fabric.md
               - ADLS Gen2: guides/azure-data-lake.md
               - Azure SQL: guides/azure-sql.md
               - SQL Server Integration: guides/sql-server-integration.md
@@ -239,6 +264,9 @@ nav:
               - Event Hubs: guides/event-hubs.md
               - Microsoft Purview: guides/purview.md
               - APIM Data-Mesh Gateway: guides/apim-data-mesh-gateway.md
+          - Quality & Performance:
+              - Data Quality Playbook: guides/data-quality-playbook.md
+              - Performance Testing: guides/performance-testing.md
           - Infrastructure & OSS:
               - IaC & CI/CD: IaC-CICD-Best-Practices.md
               - OSS Ecosystem: guides/oss-ecosystem.md
@@ -286,7 +314,12 @@ nav:
           - Unified Analytics on Fabric: use-cases/fabric-unified-analytics.md
       - Multi-Cloud:
           - Data Virtualization with Azure: use-cases/multi-cloud-data-virtualization.md
-      - Research Index: research/index.md
+      - Research:
+          - Index: research/index.md
+          - Enterprise Data Platforms 2026: research/enterprise-data-platforms-2026.md
+          - AI Readiness Framework: research/ai-readiness-framework.md
+          - Data Mesh Maturity Model: research/data-mesh-maturity-model.md
+          - Federal Cloud Adoption Trends: research/federal-cloud-adoption-trends.md
 
   # ============================================================
   # 5. OPERATE — Day-2 ops, runbooks, compliance, migrations
@@ -301,6 +334,12 @@ nav:
           - Key Rotation: runbooks/key-rotation.md
           - Security Incident: runbooks/security-incident.md
           - Tenant Onboarding: runbooks/tenant-onboarding.md
+          - Fabric Capacity Management: runbooks/fabric-capacity-management.md
+          - Databricks Cost Runaway: runbooks/databricks-cost-runaway.md
+          - Azure OpenAI Throttling: runbooks/openai-throttling.md
+          - Cost Alert Response: runbooks/cost-alert-response.md
+          - Certificate Expiration: runbooks/certificate-expiration.md
+          - Purview Scan Failure: runbooks/purview-scan-failure.md
       - Compliance:
           - Overview: compliance/README.md
           - NIST 800-53 Rev 5: compliance/nist-800-53-rev5.md
@@ -310,6 +349,16 @@ nav:
           - SOC 2 Type II: compliance/soc2-type2.md
           - PCI-DSS v4.0: compliance/pci-dss-v4.md
           - GDPR & EU Data Boundary: compliance/gdpr-privacy.md
+          - StateRAMP: compliance/stateramp.md
+          - CJIS Security Policy: compliance/cjis.md
+          - ITAR: compliance/itar.md
+          - DoD IL4/IL5: compliance/dod-il4-il5.md
+          - Section 508 / WCAG: compliance/section-508.md
+      - Assessments:
+          - Overview: assessments/index.md
+          - Migration Readiness: assessments/migration-readiness.md
+          - Platform Maturity: assessments/platform-maturity.md
+          - Compliance Gap Analysis: assessments/compliance-gap-analysis.md
       - Migrations:
           - Overview: migrations/README.md
           - AWS to Azure:

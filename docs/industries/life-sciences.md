@@ -90,7 +90,268 @@ Key points:
     - **Clinical analytics**: adapt [Example — Tribal Health](../examples/tribal-health.md) (HIPAA patterns + dbt clinical model)
     - **Genomics**: adapt [Example — GeoAnalytics](../examples/geoanalytics.md) (Spark patterns) + add bioinformatics containers via AKS
     - **Medical affairs GenAI**: walk [Tutorial 08 — RAG](../tutorials/08-rag-vector-search/README.md) end-to-end
-6. **Before** any HCP- or patient-facing GenAI: review [Patterns — LLMOps & Evaluation](../patterns/llmops-evaluation.md) and design your eval set with clinical SMEs
+6. **Before** any HCP- or patient-facing GenAI: review [Patterns -- LLMOps & Evaluation](../patterns/llmops-evaluation.md) and design your eval set with clinical SMEs
+
+## Clinical trial analytics reference architecture
+
+The following diagram shows the data flow from Electronic Data Capture (EDC) systems and Clinical Data Management Systems (CDMS) through the medallion lakehouse to trial dashboards and safety signal detection.
+
+```mermaid
+flowchart TB
+    subgraph Sources5[Source Systems]
+        EDC[EDC Systems<br/>Medidata Rave, Veeva, Oracle]
+        CDMS[CDMS<br/>clinical data management]
+        CTMS[CTMS<br/>trial management /<br/>site tracking]
+        Labs[Central Labs<br/>lab results]
+        ePRO[ePRO / eCOA<br/>patient-reported outcomes]
+    end
+
+    subgraph Ingest5[Ingestion]
+        ADF5[ADF / Fabric Pipeline<br/>scheduled + event-driven]
+        API5[REST APIs<br/>real-time safety events]
+    end
+
+    subgraph Medallion5[Medallion Lakehouse]
+        Bronze5[(Bronze<br/>raw CDASH / ODM-XML)]
+        Silver5[(Silver<br/>SDTM domains<br/>DM, AE, LB, VS, EX)]
+        Gold5[(Gold<br/>ADaM datasets<br/>ADSL, ADAE, ADLB)]
+    end
+
+    subgraph Analytics5[Analytics & Safety]
+        dbt5[dbt<br/>SDTM → ADaM<br/>transformations]
+        Safety[Safety Signal Detection<br/>disproportionality<br/>analysis]
+        Dashboards[Trial Dashboards<br/>enrollment, safety,<br/>efficacy]
+        TLF[TLF Generation<br/>tables, listings, figures<br/>for submission]
+    end
+
+    EDC --> ADF5
+    CDMS --> ADF5
+    CTMS --> ADF5
+    Labs --> API5
+    ePRO --> API5
+    ADF5 --> Bronze5
+    API5 --> Bronze5
+    Bronze5 --> Silver5
+    Silver5 --> dbt5
+    dbt5 --> Gold5
+    Gold5 --> Safety
+    Gold5 --> Dashboards
+    Gold5 --> TLF
+
+    style Sources5 fill:#f5f5f5
+    style Ingest5 fill:#fff4cc
+    style Medallion5 fill:#cce4ff
+    style Analytics5 fill:#ccffe4
+```
+
+!!! note
+SDTM (Study Data Tabulation Model) maps naturally to the silver layer, and ADaM (Analysis Data Model) maps to gold. This is not a coincidence -- both the medallion pattern and CDISC standards are designed around progressive refinement from raw to analysis-ready.
+
+### CDISC standards in the medallion model
+
+| CDISC Standard              | Medallion Layer | Implementation                                                                                                       |
+| --------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **CDASH** (data collection) | Bronze          | Raw CRF data as captured by EDC; preserve original field names                                                       |
+| **SDTM** (tabulation)       | Silver          | Standardized domains (DM, AE, LB, VS, EX, etc.); controlled terminology applied                                      |
+| **ADaM** (analysis)         | Gold            | Analysis-ready datasets (ADSL for subject level, ADAE for adverse events, ADLB for labs); derived variables computed |
+| **Define.xml**              | Metadata        | Generated from dbt model metadata + Purview classifications; describes the submission package                        |
+
+Implement SDTM-to-ADaM transformations as dbt models. Each ADaM variable derivation is a version-controlled SQL transformation with tests validating CDISC conformance rules. Use Pinnacle 21 (or OpenCST) as a validation step in your CI pipeline to catch CDISC violations before they reach regulatory submission.
+
+## Pharmacovigilance
+
+### Adverse event detection pipeline
+
+Pharmacovigilance (PV) monitors drug safety after approval. The platform supports PV through automated signal detection from multiple data sources.
+
+**Data sources:**
+
+- **Spontaneous reports** — Individual Case Safety Reports (ICSRs) from MedWatch (FDA), EudraVigilance (EMA), VigiBase (WHO)
+- **Clinical trial AE data** — adverse events from ongoing and completed trials
+- **Real-world data** — insurance claims, EHR data, patient registries
+- **Literature** — published case reports and safety studies (amenable to RAG + NLP extraction)
+- **Social media / patient forums** — emerging signal detection (use with caution; high noise)
+
+### FAERS reporting pipeline
+
+The FDA Adverse Event Reporting System (FAERS) requires structured reporting. Build the pipeline as:
+
+1. **Bronze** — ingest FAERS quarterly data extracts (publicly available for signal detection) and internal ICSR data
+2. **Silver** — standardize drug names (map to RxNorm), medical terms (map to MedDRA preferred terms), and de-duplicate cases
+3. **Gold** — compute disproportionality metrics per drug-event combination:
+    - **PRR** (Proportional Reporting Ratio)
+    - **ROR** (Reporting Odds Ratio)
+    - **EBGM** (Empirical Bayesian Geometric Mean) — the FDA's preferred metric
+    - **IC** (Information Component) — WHO's Bayesian metric
+4. **Alerting** — flag drug-event pairs where EBGM > 2 and case count > 3 (standard thresholds) for medical review
+
+### Signal detection
+
+Signal detection is the statistical process of identifying potential safety issues from adverse event databases. Key considerations:
+
+- **Masking** — a high-frequency event can mask signals for co-reported events. Use stratified analysis (by age, gender, indication) to unmask hidden signals.
+- **Confounding by indication** — the disease being treated can cause the same adverse events attributed to the drug. Adjust for indication using logistic regression or case-control studies.
+- **Temporal patterns** — time-to-onset analysis distinguishes acute reactions (days) from chronic effects (months/years). Implement Weibull shape parameter analysis in your gold layer.
+
+!!! warning
+Automated signal detection complements but does not replace medical review. Every statistical signal must be evaluated by a qualified pharmacovigilance professional before regulatory action. The platform provides the analytics; humans make the safety decisions.
+
+## Genomics pipeline
+
+### FASTQ to VCF processing
+
+The genomics secondary analysis pipeline transforms raw sequencing output into clinically interpretable variant calls. The platform supports this at cohort scale.
+
+**Pipeline stages:**
+
+| Stage                | Input           | Output                   | Tool                                  | Compute                           |
+| -------------------- | --------------- | ------------------------ | ------------------------------------- | --------------------------------- |
+| **QC**               | FASTQ           | QC report                | FastQC, MultiQC                       | Azure Batch (low CPU)             |
+| **Alignment**        | FASTQ           | BAM/CRAM                 | BWA-MEM2, DRAGEN                      | Azure Batch (high CPU, 32+ cores) |
+| **Sorting + dedup**  | BAM             | Sorted, deduplicated BAM | Samtools, GATK MarkDuplicates         | Azure Batch                       |
+| **Variant calling**  | BAM + reference | gVCF                     | GATK HaplotypeCaller, DeepVariant     | Azure Batch (GPU for DeepVariant) |
+| **Joint genotyping** | gVCFs (cohort)  | Multi-sample VCF         | GATK GenomicsDBImport + GenotypeGVCFs | Spark on Databricks               |
+| **Annotation**       | VCF             | Annotated VCF            | VEP, SnpEff, ClinVar                  | Azure Batch                       |
+| **Filtering**        | Annotated VCF   | Filtered variants        | GATK VQSR or hard filters             | Spark                             |
+
+### Variant calling with Cromwell/WDL on Azure Batch
+
+Cromwell is the most widely used workflow engine for genomics pipelines. WDL (Workflow Description Language) defines the pipeline steps declaratively.
+
+Deployment pattern on Azure:
+
+1. **Cromwell server** — deploy on Azure Container Apps or AKS; connects to Azure Batch as the backend compute
+2. **Azure Batch pools** — auto-scaling pools with genomics-optimized VM SKUs (HBv3 for CPU-intensive alignment, NCv3 for GPU-based DeepVariant)
+3. **Storage** — FASTQ and intermediate files on ADLS; use lifecycle policies to move FASTQs to cool/archive after processing (they are rarely re-accessed)
+4. **Workflow submission** — submit WDL workflows via Cromwell API; track progress in Cromwell metadata database (Azure SQL or Cosmos)
+5. **Results to lakehouse** — final VCFs and QC metrics land in bronze; dbt transforms to silver (annotated variants) and gold (cohort-level variant tables)
+
+!!! tip
+Microsoft Genomics (now part of Azure HPC) provides a managed Cromwell-on-Azure deployment. If you prefer managed infrastructure, start there. If you need full control over the pipeline and custom tools, deploy Cromwell on AKS with the Azure Batch backend.
+
+### Data volumes and cost management
+
+Genomic data is large and grows fast. Plan storage and compute costs carefully:
+
+| Data type          | Size per sample     | Retention              | Storage tier                 |
+| ------------------ | ------------------- | ---------------------- | ---------------------------- |
+| FASTQ (raw reads)  | 50-100 GB (WGS)     | Permanent (regulatory) | Cool → Archive after 90 days |
+| BAM/CRAM (aligned) | 30-50 GB / 10-15 GB | Permanent              | Cool storage                 |
+| VCF (variants)     | 0.5-1 GB            | Permanent              | Hot (frequently queried)     |
+| QC metrics         | < 1 MB              | Permanent              | Hot                          |
+
+At cohort scale (10,000+ samples), storage costs dominate compute costs. Use CRAM format (50-70% smaller than BAM) for aligned reads. Implement ADLS lifecycle management policies aggressively.
+
+## Real-world evidence
+
+### Claims data integration
+
+Real-world evidence (RWE) uses non-clinical-trial data to evaluate treatment effectiveness and safety. Insurance claims data is the most accessible RWE source.
+
+**Key data elements:**
+
+- **Medical claims** — diagnosis codes (ICD-10), procedure codes (CPT), provider, dates, facility type
+- **Pharmacy claims** — NDC codes, fill dates, days supply, quantity, prescriber
+- **Enrollment** — coverage periods, plan type, demographics
+
+Build claims data as a medallion pipeline: bronze preserves raw claims extracts, silver conforms to the OMOP Common Data Model (CDM) for standardization across data sources, gold produces analysis-ready cohorts.
+
+### Patient journey mapping
+
+Patient journey analysis traces a patient's healthcare interactions over time to understand treatment patterns, care gaps, and disease progression.
+
+Implementation in dbt:
+
+1. **`stg_claims_medical`** + **`stg_claims_pharmacy`** (silver) — standardized claims with OMOP concept IDs
+2. **`int_patient_episodes`** — group related claims into care episodes using temporal clustering
+3. **`fct_patient_journey`** (gold) — sequence of episodes per patient: diagnosis → first treatment → line of therapy changes → outcomes
+4. **`rpt_treatment_pathways`** (gold) — Sankey-diagram-ready data showing the most common treatment sequences and where patients deviate from guidelines
+
+### Treatment pathway analysis
+
+Compare real-world treatment patterns against clinical guidelines to identify:
+
+- **Guideline adherence** — what percentage of patients receive first-line therapy as recommended?
+- **Line of therapy transitions** — when and why patients switch treatments
+- **Time to treatment** — interval from diagnosis to first treatment (a quality metric)
+- **Outcomes by pathway** — do patients on guideline-concordant pathways have better outcomes?
+
+Use the OMOP CDM's drug-era and condition-era constructs to standardize treatment pathway definitions across data sources.
+
+!!! note
+RWE studies require careful attention to confounding. Patients who receive different treatments differ systematically (confounding by indication). Use propensity score matching, inverse probability weighting, or instrumental variables to adjust. Document your causal inference methodology rigorously — regulatory submissions (e.g., FDA's RWE Framework) scrutinize these methods.
+
+## 21 CFR Part 11 compliance
+
+### Electronic records and electronic signatures
+
+21 CFR Part 11 establishes the FDA's criteria for accepting electronic records and electronic signatures as equivalent to paper records and handwritten signatures. This is relevant for any system that creates, modifies, maintains, archives, retrieves, or transmits records required by FDA regulations.
+
+### Audit trail requirements
+
+The platform must maintain a computer-generated, time-stamped audit trail that independently records the date and time of operator entries and actions. In CSA-in-a-Box:
+
+| Part 11 Requirement               | Platform Implementation                                                                                                |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Audit trail of record changes** | Bronze layer immutability (append-only Delta tables) + Purview scan history + git commit history for dbt model changes |
+| **Operator identification**       | Entra ID authentication; all data access logged with user principal name                                               |
+| **Time-stamped entries**          | UTC timestamps from Azure platform; NTP-synchronized across services                                                   |
+| **Reason for change**             | Git commit messages for code/config changes; PR review comments for approval rationale                                 |
+| **Record retention**              | ADLS lifecycle policies; regulatory retention typically 2 years after approval or investigation closure                |
+| **Record availability**           | Data accessible throughout retention period; archive tier with documented retrieval procedures                         |
+
+### Validation requirements
+
+Systems subject to 21 CFR Part 11 must be validated to ensure accuracy, reliability, consistent intended performance, and the ability to discern invalid or altered records. The validation approach for CSA-in-a-Box:
+
+- **IQ (Installation Qualification)** — IaC deployment produces a documented, reproducible environment; infrastructure tests validate that resources are provisioned correctly
+- **OQ (Operational Qualification)** — dbt tests + integration tests validate that the system operates correctly under expected conditions
+- **PQ (Performance Qualification)** — end-to-end test scenarios with known data validate that the system produces correct results for its intended use
+
+!!! tip
+Use the CSA (Computer Software Assurance) approach from FDA's 2022 guidance rather than the older CSV (Computer System Validation) approach. CSA emphasizes critical thinking and risk-based testing over exhaustive scripted testing, which aligns well with modern CI/CD practices. Your IaC + dbt tests + automated CI pipelines provide most of the validation evidence CSA requires.
+
+### Electronic signatures
+
+If the platform is used for regulatory submissions or GxP record approvals, implement electronic signatures using:
+
+- **Entra ID** as the identity provider (unique user identification per Part 11.100)
+- **Multi-factor authentication** for signature events (something you know + something you have)
+- **Signature meaning** — capture the meaning of the signature (author, reviewer, approver) as metadata
+- **Signature binding** — link the signature to the specific record version (git commit hash or Delta table version)
+
+## De-identification patterns
+
+Life sciences data frequently requires de-identification before analytics or sharing. HIPAA defines two methods; choose based on your use case.
+
+### Safe Harbor vs Expert Determination
+
+| Method                                   | What it requires                                                                                                      | When to use                                                          |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| **Safe Harbor** (164.514(b)(2))          | Remove 18 specified identifiers (name, SSN, dates, ZIP, etc.); no actual knowledge that residual info can re-identify | Lower-risk analytics, internal research, data sets with many records |
+| **Expert Determination** (164.514(b)(1)) | Statistical expert certifies that risk of re-identification is "very small"                                           | Higher-risk sharing, small populations, rare diseases, genomic data  |
+
+### Implementation in the medallion pipeline
+
+Implement de-identification as a code-driven transformation in your silver layer:
+
+1. **Bronze** — raw PHI, access restricted to data stewards under BAA
+2. **Silver-PHI** — cleansed data with PHI intact; heavily access-controlled; used only for linkage and identity resolution
+3. **Silver-deidentified** — Safe Harbor or Expert Determination applied; dates shifted, ZIP truncated to 3-digit, free-text fields NLP-scrubbed
+4. **Gold** — analysis-ready data derived from de-identified silver; broadly accessible to researchers
+
+!!! warning
+Date shifting must be consistent per patient (same random offset applied to all dates for a given patient) to preserve temporal relationships. Store the offset mapping in a separate, access-controlled table. Destroy the mapping if you need to achieve true anonymization rather than pseudonymization.
+
+## Trade-offs
+
+| Give                                              | Get                                                                                           |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| GxP validation of the platform (IQ/OQ/PQ)         | Regulatory acceptance for clinical use but significant upfront effort and ongoing maintenance |
+| Expert Determination for de-identification        | More data utility preserved but cost of statistical expert and ongoing re-certification       |
+| CRAM format for aligned reads (smaller files)     | 50-70% storage savings but slightly slower random access than BAM                             |
+| OMOP CDM for RWE (standardized data model)        | Cross-study comparability but ETL effort to map proprietary data sources                      |
+| On-premises sequencer gateway (air-gapped upload) | Stronger biosecurity for novel pathogens but slower data transfer to cloud                    |
 
 ## Related
 

@@ -323,9 +323,9 @@ Use Azure Dev/Test subscriptions for non-production AVD environments:
 ```markdown
 ## AVD Pilot Feedback Form
 
-**User name:** ******\_\_\_******
-**Department:** ******\_\_\_******
-**Pilot dates:** ******\_\_\_******
+**User name:** **\*\***\_\_\_**\*\***
+**Department:** **\*\***\_\_\_**\*\***
+**Pilot dates:** **\*\***\_\_\_**\*\***
 
 **Rate your experience (1-5, 5 being best):**
 

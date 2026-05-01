@@ -1,0 +1,23 @@
+transaction_id,account_id,amount,currency,merchant_name,merchant_category_code,channel,transaction_type,card_present,transaction_ts,country_code,response_code
+TXN-001,ACCT-1001,42.50,USD,Corner Grocery,5411,pos,purchase,true,2026-04-28T08:15:22Z,US,00
+TXN-002,ACCT-1001,18.75,USD,Downtown Cafe,5812,pos,purchase,true,2026-04-28T09:30:10Z,US,00
+TXN-003,ACCT-1002,1250.00,USD,ElectroMart,5732,online,purchase,false,2026-04-28T10:05:44Z,US,00
+TXN-004,ACCT-1003,9800.00,USD,QuickCash ATM,4829,atm,withdrawal,true,2026-04-28T10:12:00Z,US,00
+TXN-005,ACCT-1003,9700.00,USD,CityBank Wire,4829,wire,transfer,false,2026-04-28T10:18:30Z,US,00
+TXN-006,ACCT-1003,9500.00,USD,QuickCash ATM,4829,atm,withdrawal,true,2026-04-28T10:45:15Z,US,00
+TXN-007,ACCT-1004,67.30,USD,GasStop,5541,pos,purchase,true,2026-04-28T11:00:02Z,US,00
+TXN-008,ACCT-1004,23.10,USD,Pharmacy Plus,5912,pos,purchase,true,2026-04-28T11:25:18Z,US,00
+TXN-009,ACCT-1005,4500.00,USD,LuxeJewelers,5944,online,purchase,false,2026-04-28T11:32:05Z,GB,00
+TXN-010,ACCT-1005,3200.00,USD,CryptoXchange,6051,online,purchase,false,2026-04-28T11:35:42Z,RO,00
+TXN-011,ACCT-1005,2800.00,USD,OnlineBet365,7801,online,purchase,false,2026-04-28T11:38:10Z,CW,00
+TXN-012,ACCT-1005,5100.00,USD,GoldPawn,5933,pos,purchase,true,2026-04-28T11:55:30Z,US,00
+TXN-013,ACCT-1006,89.99,USD,DeptStore,5311,pos,purchase,true,2026-04-28T12:10:00Z,US,00
+TXN-014,ACCT-1006,155.00,USD,MiscRetail,5999,online,purchase,false,2026-04-28T12:45:20Z,US,00
+TXN-015,ACCT-1007,12000.00,USD,BankWire National,4829,wire,transfer,false,2026-04-28T13:00:00Z,US,00
+TXN-016,ACCT-1008,35.20,USD,Corner Grocery,5411,pos,purchase,true,2026-04-28T14:15:10Z,US,00
+TXN-017,ACCT-1008,52.80,USD,Downtown Cafe,5812,pos,purchase,true,2026-04-28T15:30:45Z,US,00
+TXN-018,ACCT-1008,28.40,USD,GasStop,5541,pos,purchase,true,2026-04-28T16:05:30Z,US,00
+TXN-019,ACCT-1009,8900.00,USD,QuickCash ATM,4829,atm,withdrawal,true,2026-04-28T16:20:00Z,MX,00
+TXN-020,ACCT-1009,8750.00,USD,CityBank Wire,4829,wire,transfer,false,2026-04-28T16:28:15Z,MX,00
+TXN-021,ACCT-1010,110.00,USD,Pharmacy Plus,5912,mobile,purchase,false,2026-04-28T17:00:22Z,US,00
+TXN-022,ACCT-1010,45.60,USD,Corner Grocery,5411,pos,purchase,true,2026-04-28T17:30:40Z,US,00
