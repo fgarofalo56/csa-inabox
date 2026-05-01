@@ -78,7 +78,7 @@ quality_rules:
     min: 0
     description: Length of stay must be non-negative
 
-slas:
+sla:
   freshness:
     target: PT24H
     description: Scores available within 24 hours of discharge

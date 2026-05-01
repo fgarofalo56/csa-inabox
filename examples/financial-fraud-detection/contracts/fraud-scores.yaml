@@ -86,7 +86,7 @@ quality_rules:
     min: 0.0
     description: Transaction amounts must be non-negative
 
-slas:
+sla:
   freshness:
     target: PT15M
     description: Scores available within 15 minutes of transaction

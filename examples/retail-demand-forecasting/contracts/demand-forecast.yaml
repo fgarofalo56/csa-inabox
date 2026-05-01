@@ -98,7 +98,7 @@ quality_rules:
     min: 0.0
     description: Seasonal index must be non-negative
 
-slas:
+sla:
   freshness:
     target: P1D
     description: Forecasts refreshed daily after business close

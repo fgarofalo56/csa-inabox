@@ -94,7 +94,7 @@ quality_rules:
     min: 0
     description: Anomaly count must be non-negative
 
-slas:
+sla:
   freshness:
     target: PT1H
     description: Scores updated hourly
