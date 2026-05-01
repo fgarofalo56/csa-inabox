@@ -10,6 +10,29 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.4.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.3.1...csa-inabox-v0.4.0) (2026-05-01)
+
+
+### Features
+
+* **docs:** add 14 Azure service guides, 2 migration paths, and hierarchical nav ([#125](https://github.com/fgarofalo56/csa-inabox/issues/125)) ([d915939](https://github.com/fgarofalo56/csa-inabox/commit/d915939f019cc589838a91afbc994968fe4b367e))
+* **docs:** add 20 comprehensive migration packages with 300+ guides ([#132](https://github.com/fgarofalo56/csa-inabox/issues/132)) ([06fe293](https://github.com/fgarofalo56/csa-inabox/commit/06fe293264f2cb03da2593e56df4436f81762e10))
+* **docs:** add comprehensive Palantir Foundry to Azure migration package ([#130](https://github.com/fgarofalo56/csa-inabox/issues/130)) ([36fec9a](https://github.com/fgarofalo56/csa-inabox/commit/36fec9a77e38d9224ef7607504af043e69a4bf73))
+* **docs:** comprehensive enhancement — 50+ docs across architecture, examples, runbooks, compliance, tutorials, research ([#133](https://github.com/fgarofalo56/csa-inabox/issues/133)) ([ee67bc3](https://github.com/fgarofalo56/csa-inabox/commit/ee67bc351a72c41f26c4b877f85690b31cb94557))
+* **docs:** expand all 10 migration paths to comprehensive packages ([#131](https://github.com/fgarofalo56/csa-inabox/issues/131)) ([07e0a96](https://github.com/fgarofalo56/csa-inabox/commit/07e0a96644ed57abf540477ff0984f47f6baff99))
+* **docs:** rewrite GitHub Pages homepage with full platform overview ([#128](https://github.com/fgarofalo56/csa-inabox/issues/128)) ([96e66a3](https://github.com/fgarofalo56/csa-inabox/commit/96e66a3a5fd3385fd331ac946406cba47994572d))
+
+
+### Bug Fixes
+
+* **docs:** enable collapsible sidebar sections for better navigation ([#129](https://github.com/fgarofalo56/csa-inabox/issues/129)) ([e181584](https://github.com/fgarofalo56/csa-inabox/commit/e181584b04bbcaf31744d45dca6e0bf50d305126))
+* **use-cases:** repair 2 broken external source links ([#135](https://github.com/fgarofalo56/csa-inabox/issues/135)) ([88c2900](https://github.com/fgarofalo56/csa-inabox/commit/88c2900cadd6453d2879cd00f7a2738aca9ed1b5))
+
+
+### Documentation
+
+* **migrations:** organize 31 migrations into Analytics vs Enterprise groups ([#134](https://github.com/fgarofalo56/csa-inabox/issues/134)) ([f502bf4](https://github.com/fgarofalo56/csa-inabox/commit/f502bf4413e8efa796e71e83c635be61fdcb2c7e))
+
 ## [0.3.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.3.0...csa-inabox-v0.3.1) (2026-04-27)
 
 
