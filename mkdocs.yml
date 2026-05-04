@@ -355,6 +355,8 @@ nav:
           - ITAR: compliance/itar.md
           - DoD IL4/IL5: compliance/dod-il4-il5.md
           - Section 508 / WCAG: compliance/section-508.md
+          - CIPSEA (federal statistical): compliance/cipsea.md
+          - "CIPSEA Operational Playbook": compliance/cipsea-playbook.md
       - Assessments:
           - Overview: assessments/index.md
           - Migration Readiness: assessments/migration-readiness.md

@@ -111,6 +111,14 @@ This directory is the human-readable companion to the machine-readable manifests
 
     [:octicons-arrow-right-24: StateRAMP](stateramp.md)
 
+- :material-chart-bar:{ .lg .middle } **CIPSEA**
+
+    ***
+
+    Confidential Information Protection and Statistical Efficiency Act — federal statistical data confidentiality, with [operational playbook](cipsea-playbook.md).
+
+    [:octicons-arrow-right-24: CIPSEA](cipsea.md)
+
 </div>
 
 ---
