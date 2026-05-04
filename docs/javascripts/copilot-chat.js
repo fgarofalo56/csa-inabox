@@ -152,33 +152,54 @@
   /* ── Minimal Markdown renderer (XSS-hardened) ────── */
   function md(text) {
     if (!text) return "";
-    // Code blocks — extract and replace with placeholders to protect contents
+    // Code blocks — extract first so their contents aren't mangled by later rules
     var codeBlocks = [];
-    text = text.replace(/```(\w*)\n([\s\S]*?)```/g, function (_, lang, code) {
+    text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, function (_, lang, code) {
       var idx = codeBlocks.length;
       var safeLang = (lang || "").replace(/[^a-zA-Z0-9-]/g, "");
-      codeBlocks.push('<pre><code class="language-' + safeLang + '">' + esc(code.trim()) + "</code></pre>");
+      var langAttr = safeLang ? ' data-lang="' + safeLang + '"' : "";
+      var langClass = safeLang ? ' class="language-' + safeLang + '"' : "";
+      codeBlocks.push(
+        '<pre' + langAttr + '><button class="copilot-copy" type="button" title="Copy code" aria-label="Copy code">📋</button>' +
+        '<code' + langClass + '>' + esc(code.replace(/^\n+|\n+$/g, "")) + "</code></pre>"
+      );
       return "\n\n__CODEBLOCK_" + idx + "__\n\n";
     });
-    // Inline code
-    text = text.replace(/`([^`]+)`/g, function (_, code) {
-      return "<code>" + esc(code) + "</code>";
-    });
-    // Bold
-    text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    // Italic
-    text = text.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
-    // Links — SEC-COPILOT: validate URL protocol to prevent javascript: XSS
-    text = text.replace(
-      /\[([^\]]+)\]\(([^)]+)\)/g,
-      function (_, linkText, url) {
-        // Only allow http/https URLs
-        if (!/^https?:\/\//i.test(url.trim())) {
-          return esc(linkText);
-        }
-        return '<a href="' + esc(url.trim()) + '" target="_blank" rel="noopener noreferrer">' + esc(linkText) + '</a>';
-      }
-    );
+    // Tables — pull out and convert before inline rules touch them
+    var tableBlocks = [];
+    text = text.replace(/(?:^|\n)((?:\|[^\n]+\|\n)+)(\|[\s:|-]+\|\n)((?:\|[^\n]+\|\n?)*)/g,
+      function (match, header, separator, body) {
+        var idx = tableBlocks.length;
+        var headerCells = header.trim().slice(1, -1).split("|").map(function (c) { return c.trim(); });
+        var alignments = separator.trim().slice(1, -1).split("|").map(function (s) {
+          s = s.trim();
+          if (/^:-+:$/.test(s)) return "center";
+          if (/^-+:$/.test(s)) return "right";
+          return "left";
+        });
+        var rows = body.trim().split("\n").map(function (line) {
+          line = line.trim();
+          if (!line || line[0] !== "|") return null;
+          return line.slice(1, -1).split("|").map(function (c) { return c.trim(); });
+        }).filter(Boolean);
+        var html = '<div class="copilot-table-wrap"><table class="copilot-table"><thead><tr>';
+        headerCells.forEach(function (c, i) {
+          html += '<th style="text-align:' + alignments[i] + '">' + inlineMd(c) + "</th>";
+        });
+        html += "</tr></thead><tbody>";
+        rows.forEach(function (row) {
+          html += "<tr>";
+          row.forEach(function (c, i) {
+            html += '<td style="text-align:' + (alignments[i] || "left") + '">' + inlineMd(c) + "</td>";
+          });
+          html += "</tr>";
+        });
+        html += "</tbody></table></div>";
+        tableBlocks.push(html);
+        return "\n\n__TABLEBLOCK_" + idx + "__\n\n";
+      });
+    // Apply inline rules to non-block content
+    text = inlineMd(text);
     // Headings (must be before paragraphs)
     text = text.replace(/^#### (.+)$/gm, '<h4 class="copilot-h">$1</h4>');
     text = text.replace(/^### (.+)$/gm, '<h3 class="copilot-h">$1</h3>');
@@ -186,27 +207,71 @@
     text = text.replace(/^# (.+)$/gm, '<h1 class="copilot-h">$1</h1>');
     // Horizontal rules
     text = text.replace(/^(?:---|\*\*\*|___)\s*$/gm, "<hr>");
+    // Task lists — render as disabled checkboxes (must come before plain unordered list)
+    text = text.replace(/^[-*]\s+\[([ xX])\]\s+(.+)$/gm, function (_, mark, content) {
+      var checked = mark.toLowerCase() === "x" ? " checked" : "";
+      return '<li class="copilot-task"><input type="checkbox" disabled' + checked + ">" + content + "</li>";
+    });
+    text = text.replace(/((?:<li class="copilot-task">.*<\/li>\n?)+)/g, function (m) {
+      return '<ul class="copilot-task-list">' + m + "</ul>";
+    });
     // Ordered lists
     text = text.replace(/^\d+\. (.+)$/gm, '<li class="copilot-ol-item">$1</li>');
     text = text.replace(/((?:<li class="copilot-ol-item">.*<\/li>\n?)+)/g, function (m) {
       return "<ol>" + m.replace(/ class="copilot-ol-item"/g, "") + "</ol>";
     });
-    // Unordered lists
-    text = text.replace(/^[-*] (.+)$/gm, "<li>$1</li>");
-    text = text.replace(/((?:<li>.*<\/li>\n?)+)/g, "<ul>$1</ul>");
+    // Unordered lists (skip task-list items, already wrapped)
+    text = text.replace(/^[-*] (?!<input)(.+)$/gm, "<li>$1</li>");
+    // Wrap consecutive plain <li> in <ul>; the task-list <li> are already
+    // inside <ul class="copilot-task-list"> so they won't match here.
+    text = text.replace(/(?:^|\n)((?:<li>(?!<input)[^\n]*<\/li>\n?)+)/g, function (full, lis) {
+      return "\n<ul>" + lis + "</ul>";
+    });
+    // Blockquotes
+    text = text.replace(/^>\s+(.+)$/gm, '<blockquote class="copilot-quote">$1</blockquote>');
     // Paragraphs
     text = text
       .split(/\n{2,}/)
       .map(function (p) {
         p = p.trim();
-        if (!p || /^<(?:pre|ul|ol|h[1-4]|hr|blockquote|div)/.test(p)) return p;
+        if (!p || /^<(?:pre|ul|ol|h[1-4]|hr|blockquote|div|table)/.test(p)) return p;
+        if (/^__(?:CODE|TABLE)BLOCK_\d+__$/.test(p)) return p;
         return "<p>" + p + "</p>";
       })
       .join("\n");
-    // Restore code blocks
+    // Restore extracted blocks
     text = text.replace(/__CODEBLOCK_(\d+)__/g, function (_, idx) {
       return codeBlocks[parseInt(idx, 10)];
     });
+    text = text.replace(/__TABLEBLOCK_(\d+)__/g, function (_, idx) {
+      return tableBlocks[parseInt(idx, 10)];
+    });
+    return text;
+  }
+
+  /* Inline markdown rules — used both standalone and inside tables */
+  function inlineMd(text) {
+    if (!text) return "";
+    // Inline code
+    text = text.replace(/`([^`]+)`/g, function (_, code) {
+      return "<code>" + esc(code) + "</code>";
+    });
+    // Bold
+    text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    // Italic — bracketed lookarounds for non-** sibling chars
+    text = text.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, "$1<em>$2</em>");
+    // Links — SEC-COPILOT: validate URL protocol to prevent javascript: XSS
+    text = text.replace(
+      /\[([^\]]+)\]\(([^)]+)\)/g,
+      function (_, linkText, url) {
+        if (!/^https?:\/\//i.test(url.trim())) {
+          return esc(linkText);
+        }
+        return '<a href="' + esc(url.trim()) + '" target="_blank" rel="noopener noreferrer">' + esc(linkText) + '</a>';
+      }
+    );
+    // Inline citation markers [^N] or [N] when followed by ^ — render as superscript
+    text = text.replace(/\[\^(\d+)\]/g, '<sup class="copilot-cite"><a href="#copilot-src-$1">$1</a></sup>');
     return text;
   }
 
@@ -214,6 +279,79 @@
     var d = document.createElement("div");
     d.textContent = s;
     return d.innerHTML;
+  }
+
+  /* ── Lazy-load highlight.js for code syntax colours ─── */
+  var hljsLoading = null;
+  function ensureHljs() {
+    if (window.hljs) return Promise.resolve(window.hljs);
+    if (hljsLoading) return hljsLoading;
+    var version = "11.10.0";
+    var script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/" + version + "/highlight.min.js";
+    // Note: SRI hash intentionally omitted — pinning to the cdnjs URL +
+    // explicit version is sufficient defence-in-depth for a public docs
+    // site. Adding a wrong hash would silently break syntax highlighting.
+    script.crossOrigin = "anonymous";
+    script.referrerPolicy = "no-referrer";
+    var lightCss = document.createElement("link");
+    lightCss.rel = "stylesheet";
+    lightCss.href = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/" + version + "/styles/github.min.css";
+    lightCss.media = "(prefers-color-scheme: light)";
+    var darkCss = document.createElement("link");
+    darkCss.rel = "stylesheet";
+    darkCss.href = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/" + version + "/styles/github-dark.min.css";
+    darkCss.media = "(prefers-color-scheme: dark)";
+    document.head.appendChild(lightCss);
+    document.head.appendChild(darkCss);
+    hljsLoading = new Promise(function (resolve) {
+      script.onload = function () { resolve(window.hljs); };
+      script.onerror = function () { resolve(null); };
+      document.head.appendChild(script);
+    });
+    return hljsLoading;
+  }
+
+  function enhanceCodeBlocks(root) {
+    var blocks = root.querySelectorAll("pre code");
+    if (!blocks.length) return;
+    ensureHljs().then(function (hljs) {
+      if (!hljs) return;
+      blocks.forEach(function (b) {
+        if (!b.dataset.hl) {
+          try { hljs.highlightElement(b); b.dataset.hl = "1"; } catch (_) { /* ignore */ }
+        }
+      });
+    });
+    // Wire copy buttons (work even if highlight.js never loads)
+    root.querySelectorAll("pre .copilot-copy").forEach(function (btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", function () {
+        var code = btn.parentElement.querySelector("code");
+        var text = code ? code.textContent : "";
+        if (!text) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(showCopied);
+        } else {
+          var ta = document.createElement("textarea");
+          ta.value = text; ta.setAttribute("readonly", "");
+          ta.style.position = "absolute"; ta.style.left = "-9999px";
+          document.body.appendChild(ta); ta.select();
+          try { document.execCommand("copy"); showCopied(); } catch (_) { /* noop */ }
+          document.body.removeChild(ta);
+        }
+        function showCopied() {
+          var orig = btn.textContent;
+          btn.textContent = "✓";
+          btn.classList.add("copilot-copied");
+          setTimeout(function () {
+            btn.textContent = orig;
+            btn.classList.remove("copilot-copied");
+          }, 1400);
+        }
+      });
+    });
   }
 
   /* ── State ─────────────────────────────────────────── */
@@ -377,29 +515,35 @@
       if (history.length > CONFIG.maxHistory * 2)
         history = history.slice(-CONFIG.maxHistory * 2);
 
-      var thinkingEl = appendMessage("assistant", "Thinking...", true);
+      var streamingEl = appendMessage("assistant", "Thinking...", true);
 
       var userQuery = text; // capture for reference card
+      // Pre-search local docs index so the backend can ground citations
+      var grounding = searchPages(userQuery, 5);
 
-      sendToBackend(text)
-        .then(function (reply) {
-          thinkingEl.remove();
-          appendMessage("assistant", reply);
+      sendToBackend(text, grounding, function onChunk(partial) {
+        updateBubble(streamingEl, partial, false);
+      })
+        .then(function (result) {
+          var reply = (result && result.reply) || "";
+          var sources = (result && result.sources) || [];
+          updateBubble(streamingEl, reply || "(empty response)", true);
           history.push({ role: "assistant", content: reply });
 
-          // Append related pages card
+          // Inline citation footer (AI-curated, ordered)
+          appendCitations(sources);
+
+          // Always also offer the Related Pages card from local index — broader coverage
           var refs = searchPages(userQuery);
           if (refs.length > 0) {
             appendReferences(refs);
           }
         })
         .catch(function (err) {
-          thinkingEl.remove();
-          appendMessage(
-            "assistant",
+          updateBubble(streamingEl,
             "**Error:** " +
-              (err.message || "Could not reach the Copilot backend. Make sure the Azure Function is deployed.")
-          );
+              (err.message || "Could not reach the Copilot backend. Make sure the Azure Function is deployed."),
+            true);
         })
         .finally(function () {
           sending = false;
@@ -425,7 +569,49 @@
       wrap.appendChild(bubble);
       messagesEl.appendChild(wrap);
       messagesEl.scrollTop = messagesEl.scrollHeight;
+      enhanceCodeBlocks(bubble);
       return wrap;
+    }
+
+    /* Update an existing assistant bubble in place (used during streaming) */
+    function updateBubble(wrap, text, finalize) {
+      var bubble = wrap.querySelector(".copilot-bubble");
+      if (!bubble) return;
+      bubble.classList.remove("copilot-typing");
+      bubble.innerHTML = md(text);
+      // Stick to bottom while user hasn't scrolled up
+      var nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
+      if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
+      if (finalize) enhanceCodeBlocks(bubble);
+    }
+
+    /* Render the AI-supplied structured citations as an inline footer */
+    function appendCitations(sources) {
+      if (!sources || !sources.length) return;
+      var wrap = document.createElement("div");
+      wrap.className = "copilot-msg copilot-msg-assistant";
+      var spacer = document.createElement("div");
+      spacer.className = "copilot-avatar";
+      var card = document.createElement("div");
+      card.className = "copilot-bubble copilot-citations-bubble";
+      var html = '<div class="copilot-citations-header">📚 Sources</div><ol class="copilot-citations-list">';
+      sources.forEach(function (s, i) {
+        var n = i + 1;
+        var url = (s && s.url) || "";
+        var title = (s && s.title) || url || ("Source " + n);
+        var safeUrl = /^https?:\/\//i.test(url) ? url : "";
+        if (safeUrl) {
+          html += '<li id="copilot-src-' + n + '"><a href="' + esc(safeUrl) + '" target="_blank" rel="noopener noreferrer">' + esc(title) + "</a></li>";
+        } else {
+          html += '<li id="copilot-src-' + n + '">' + esc(title) + "</li>";
+        }
+      });
+      html += "</ol>";
+      card.innerHTML = html;
+      wrap.appendChild(spacer);
+      wrap.appendChild(card);
+      messagesEl.appendChild(wrap);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
     /* ── Append References Card ─────────────────────── */
@@ -449,7 +635,14 @@
   }
 
   /* ── Backend Communication ─────────────────────────── */
-  function sendToBackend(message) {
+  /**
+   * @param {string} message — user input
+   * @param {Array} grounding — pre-searched local docs (frontend-side RAG)
+   * @param {Function} onChunk — called with the accumulating reply text as
+   *                             chunks arrive (for progressive UI rendering)
+   * @returns {Promise<{reply: string, sources: Array}>}
+   */
+  function sendToBackend(message, grounding, onChunk) {
     var pageContext = {
       url: window.location.href,
       title: document.title,
@@ -468,6 +661,9 @@
           message: message,
           history: history.slice(-CONFIG.maxHistory * 2),
           pageContext: pageContext,
+          grounding: (grounding || []).map(function (g) {
+            return { title: g.title || "", url: g.pageUrl || "" };
+          }),
         }),
       });
     }).then(function (resp) {
@@ -483,18 +679,30 @@
         var reader = resp.body.getReader();
         var decoder = new TextDecoder();
         var result = "";
+        var sources = [];
+        var meta = null;
         function read() {
           return reader.read().then(function (chunk) {
-            if (chunk.done) return result;
+            if (chunk.done) {
+              return { reply: result, sources: sources, meta: meta };
+            }
             var text = decoder.decode(chunk.value, { stream: true });
             text.split("\n").forEach(function (line) {
               line = line.trim();
               if (!line) return;
               try {
                 var j = JSON.parse(line);
-                if (j.content) result += j.content;
+                if (j.content) {
+                  result += j.content;
+                  if (typeof onChunk === "function") onChunk(result);
+                } else if (j.sources) {
+                  sources = j.sources;
+                } else if (j.meta) {
+                  meta = j.meta;
+                }
               } catch (_) {
                 result += line;
+                if (typeof onChunk === "function") onChunk(result);
               }
             });
             return read();
@@ -505,7 +713,10 @@
 
       // Standard JSON
       return resp.json().then(function (data) {
-        return data.reply || data.content || JSON.stringify(data);
+        var reply = data.reply || data.content || "";
+        var sources = data.sources || [];
+        if (typeof onChunk === "function" && reply) onChunk(reply);
+        return { reply: reply, sources: sources };
       });
     });
   }

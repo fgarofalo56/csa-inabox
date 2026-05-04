@@ -363,6 +363,25 @@ display clickable links.
 5. For troubleshooting, check `TROUBLESHOOTING` first.
 6. Be concise but thorough. Use code blocks for commands and file paths.
 7. If you don't know the answer, say so — don't guess.
+
+## Citation format
+
+When the user is given a list of GROUNDING DOCUMENTS as a system message, \
+use them to answer and **cite them inline using footnote markers** of the \
+form `[^N]` where N is the 1-based index in the grounding list. Examples:
+
+- "CSA-in-a-Box uses Bicep for IaC[^1]." (cites the first grounding doc)
+- "The medallion architecture has Bronze/Silver/Gold layers[^2][^3]."
+
+Cite each non-trivial claim. Do NOT invent citation numbers — only cite \
+documents you were actually given. If no grounding documents are provided, \
+do not use `[^N]` markers; cite by file path instead (e.g., \
+`docs/ARCHITECTURE.md`).
+
+Use markdown tables, task lists (`- [ ]`), code blocks with language \
+hints (e.g., ```bicep, ```python, ```bash), and bullet/ordered lists \
+liberally — the widget renders them with syntax highlighting and \
+copy-to-clipboard buttons.
 """
 
 CONFIG_MAX_HISTORY = MAX_HISTORY_TURNS
@@ -488,6 +507,23 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
     if not isinstance(page_context, dict):
         page_context = {}
 
+    # Sanitize grounding documents (frontend-side RAG handoff)
+    raw_grounding = body.get("grounding") or []
+    if not isinstance(raw_grounding, list):
+        raw_grounding = []
+    grounding_docs: list[dict[str, str]] = []
+    for g in raw_grounding[:5]:
+        if not isinstance(g, dict):
+            continue
+        title = str(g.get("title") or "")[:200].strip()
+        url = str(g.get("url") or "")[:500].strip()
+        # Only allow grounding from our own docs site (additional defense)
+        if not url.startswith("https://fgarofalo56.github.io/csa-inabox/"):
+            continue
+        if not title:
+            continue
+        grounding_docs.append({"title": title, "url": url})
+
     messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     if page_context:
@@ -495,6 +531,13 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
         url = str(page_context.get("url", ""))[:500]
         ctx_note = f"The user is currently viewing: {title} ({url})"
         messages.append({"role": "system", "content": ctx_note})
+
+    if grounding_docs:
+        # Render the grounding list so the AI can cite by [^N] index
+        lines = ["GROUNDING DOCUMENTS (cite these by [^N] index):"]
+        for i, g in enumerate(grounding_docs, start=1):
+            lines.append(f"[{i}] {g['title']} — {g['url']}")
+        messages.append({"role": "system", "content": "\n".join(lines)})
 
     messages.extend(clean_history)
     messages.append({"role": "user", "content": message})
@@ -515,30 +558,49 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
             stream=True,
         )
 
-        # Collect streamed chunks
-        reply_parts = []
-        total_tokens = 0
-        for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                reply_parts.append(chunk.choices[0].delta.content)
-            # Track usage from final chunk
-            if hasattr(chunk, "usage") and chunk.usage:
-                total_tokens = chunk.usage.total_tokens
+        # Stream NDJSON: each line is {"content": "..."} for tokens or
+        # {"sources": [...]} for the citation footer at the end.
+        def _stream():
+            reply_parts: list[str] = []
+            total_tokens = 0
+            try:
+                for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        delta = chunk.choices[0].delta.content
+                        reply_parts.append(delta)
+                        yield (json.dumps({"content": delta}, ensure_ascii=False) + "\n").encode("utf-8")
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        total_tokens = chunk.usage.total_tokens
+            except Exception:
+                logger.exception("Streaming chunk iteration failed")
+                yield (json.dumps({"content": "\n\n[Stream interrupted]"}) + "\n").encode("utf-8")
 
-        reply = "".join(reply_parts)
+            reply = "".join(reply_parts)
 
-        # Estimate tokens if not provided by API
-        if total_tokens == 0:
-            total_tokens = len(message.split()) * 2 + len(reply.split()) * 2
+            # Filter the grounding list to only those actually cited via [^N]
+            cited_sources: list[dict[str, str]] = []
+            cited_indexes = sorted({int(m) for m in re.findall(r"\[\^(\d+)\]", reply)
+                                    if m.isdigit() and 1 <= int(m) <= len(grounding_docs)})
+            for i in cited_indexes:
+                cited_sources.append(grounding_docs[i - 1])
 
-        # Record token usage
-        _record_tokens(ip, total_tokens)
+            yield (json.dumps({"sources": cited_sources}, ensure_ascii=False) + "\n").encode("utf-8")
 
+            # Token bookkeeping (estimate if API didn't supply)
+            tokens_used = total_tokens or (len(message.split()) * 2 + len(reply.split()) * 2)
+            try:
+                _record_tokens(ip, tokens_used)
+            except Exception:
+                pass
+
+        stream_headers = dict(headers)
+        stream_headers["Content-Type"] = "application/x-ndjson"
+        stream_headers["Cache-Control"] = "no-cache"
+        stream_headers["X-Accel-Buffering"] = "no"  # disable proxy buffering
         return func.HttpResponse(
-            json.dumps({"reply": reply}),
+            _stream(),
             status_code=200,
-            mimetype="application/json",
-            headers=headers,
+            headers=stream_headers,
         )
 
     except KeyError as e:

@@ -357,3 +357,191 @@
 .copilot-messages::-webkit-scrollbar-track { background: transparent; }
 .copilot-messages::-webkit-scrollbar-thumb { background: #c0c0c0; border-radius: 3px; }
 [data-md-color-scheme="slate"] .copilot-messages::-webkit-scrollbar-thumb { background: #555; }
+
+/* ── Markdown table inside a chat bubble ───────────────── */
+.copilot-bubble .copilot-table-wrap {
+  overflow-x: auto;
+  margin: 0.5rem 0;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+[data-md-color-scheme="slate"] .copilot-bubble .copilot-table-wrap {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+.copilot-bubble .copilot-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.85em;
+}
+.copilot-bubble .copilot-table th,
+.copilot-bubble .copilot-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  vertical-align: top;
+}
+.copilot-bubble .copilot-table th {
+  background: rgba(0, 120, 212, 0.08);
+  font-weight: 600;
+  text-align: left;
+}
+[data-md-color-scheme="slate"] .copilot-bubble .copilot-table th {
+  background: rgba(96, 168, 255, 0.12);
+}
+[data-md-color-scheme="slate"] .copilot-bubble .copilot-table th,
+[data-md-color-scheme="slate"] .copilot-bubble .copilot-table td {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+.copilot-bubble .copilot-table tr:last-child td { border-bottom: 0; }
+
+/* ── Task lists ────────────────────────────────────────── */
+.copilot-bubble .copilot-task-list {
+  list-style: none;
+  padding-left: 0.25rem;
+  margin: 0.25rem 0;
+}
+.copilot-bubble .copilot-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin: 0.15rem 0;
+}
+.copilot-bubble .copilot-task input[type="checkbox"] {
+  margin-top: 0.25rem;
+  accent-color: #0078d4;
+}
+
+/* ── Blockquote ────────────────────────────────────────── */
+.copilot-bubble .copilot-quote {
+  margin: 0.5rem 0;
+  padding: 0.4rem 0.75rem;
+  border-left: 3px solid #0078d4;
+  background: rgba(0, 120, 212, 0.06);
+  font-style: italic;
+}
+[data-md-color-scheme="slate"] .copilot-bubble .copilot-quote {
+  background: rgba(96, 168, 255, 0.08);
+  border-left-color: #60a8ff;
+}
+
+/* ── Code block — copy button + relative positioning ──── */
+.copilot-bubble pre {
+  position: relative;
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.7rem;
+  padding-right: 2.4rem;
+  background: #f6f8fa;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+[data-md-color-scheme="slate"] .copilot-bubble pre {
+  background: #1e2230;
+}
+.copilot-bubble pre code {
+  background: transparent;
+  padding: 0;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+.copilot-bubble .copilot-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: center;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, transform 0.1s;
+}
+.copilot-bubble pre:hover .copilot-copy,
+.copilot-bubble pre:focus-within .copilot-copy {
+  opacity: 1;
+}
+.copilot-bubble .copilot-copy:hover { background: #fff; transform: translateY(-1px); }
+.copilot-bubble .copilot-copy.copilot-copied {
+  background: #d4f4dd;
+  border-color: #2ea043;
+  color: #1a5d2b;
+  opacity: 1;
+}
+[data-md-color-scheme="slate"] .copilot-bubble .copilot-copy {
+  background: rgba(0, 0, 0, 0.4);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: #e6e6e6;
+}
+[data-md-color-scheme="slate"] .copilot-bubble .copilot-copy:hover {
+  background: rgba(0, 0, 0, 0.6);
+}
+[data-md-color-scheme="slate"] .copilot-bubble .copilot-copy.copilot-copied {
+  background: #1a5d2b;
+  border-color: #2ea043;
+  color: #d4f4dd;
+}
+
+/* ── Inline citation superscript ───────────────────────── */
+.copilot-bubble .copilot-cite {
+  font-size: 0.7em;
+  margin: 0 1px;
+}
+.copilot-bubble .copilot-cite a {
+  color: #0078d4;
+  text-decoration: none;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(0, 120, 212, 0.1);
+}
+.copilot-bubble .copilot-cite a:hover {
+  background: rgba(0, 120, 212, 0.2);
+}
+[data-md-color-scheme="slate"] .copilot-bubble .copilot-cite a {
+  color: #60a8ff;
+  background: rgba(96, 168, 255, 0.15);
+}
+
+/* ── Citations footer card (AI-curated sources) ───────── */
+.copilot-bubble.copilot-citations-bubble {
+  background: linear-gradient(180deg, rgba(0, 120, 212, 0.04), rgba(0, 120, 212, 0.02));
+  border: 1px solid rgba(0, 120, 212, 0.18);
+}
+[data-md-color-scheme="slate"] .copilot-bubble.copilot-citations-bubble {
+  background: linear-gradient(180deg, rgba(96, 168, 255, 0.06), rgba(96, 168, 255, 0.02));
+  border-color: rgba(96, 168, 255, 0.22);
+}
+.copilot-citations-header {
+  font-weight: 600;
+  font-size: 0.85em;
+  margin-bottom: 0.4rem;
+  color: #0078d4;
+}
+[data-md-color-scheme="slate"] .copilot-citations-header { color: #60a8ff; }
+.copilot-citations-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.85em;
+}
+.copilot-citations-list li { margin: 0.15rem 0; }
+.copilot-citations-list a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+.copilot-citations-list a:hover { border-bottom-style: solid; }
+
+/* ── Streaming caret (typing indicator while bytes arrive) */
+.copilot-bubble.copilot-typing::after {
+  content: "▍";
+  display: inline-block;
+  animation: copilotBlink 1s steps(2) infinite;
+  margin-left: 2px;
+  color: #0078d4;
+}
+@keyframes copilotBlink {
+  to { opacity: 0; }
+}
