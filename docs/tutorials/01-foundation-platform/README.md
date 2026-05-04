@@ -5,6 +5,8 @@
 
 Deploy the complete CSA-in-a-Box foundation: Azure Landing Zone (ALZ), Data Management Landing Zone (DMLZ), and Data Landing Zone (DLZ). By the end, you will have a fully functional data platform with storage, Databricks, Synapse, and Data Factory — and you will run a real end-to-end dbt pipeline using USDA open data through Bronze → Silver → Gold.
 
+![Azure Data Factory Studio Authoring view — Factory Resources sidebar showing Pipelines, Change Data Capture, Datasets, Data Flows, and Power Query, with the empty canvas on the right, after a successful CSA-in-a-Box foundation deploy](../../assets/images/azure/data-factory-studio.png){ .architecture-hero loading="lazy" }
+
 ---
 
 ## Prerequisites
