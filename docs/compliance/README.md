@@ -5,6 +5,8 @@ description: NIST 800-53, FedRAMP, CMMC 2.0 L2, HIPAA, SOC 2, PCI-DSS, GDPR, CJI
 
 # Compliance
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 > Compliance control mappings for **federal, healthcare, and commercial** customer ATO / audit / procurement conversations.
 
 This directory is the human-readable companion to the machine-readable manifests in [`governance/compliance/`](../../csa_platform/governance/compliance/).

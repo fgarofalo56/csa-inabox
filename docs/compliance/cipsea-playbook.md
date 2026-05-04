@@ -5,6 +5,10 @@ description: 14-step operational checklist for hosting CIPSEA-protected federal 
 
 # CIPSEA Operational Playbook for Azure
 
+--8<-- "_includes/cipsea-draft-banner.md"
+
+--8<-- "_includes/compliance-disclaimer.md"
+
 > **Audience:** Azure architects and federal data platform teams hosting workloads governed by [CIPSEA](cipsea.md) (44 U.S.C. §§ 3561–3583).
 > **Companion:** [CIPSEA narrative + control crosswalk](cipsea.md) — read that first if you haven't.
 > **Premise:** roughly 70% of CIPSEA technical requirements are inherited from FedRAMP Moderate (which CSA-in-a-Box implements). The remaining 30% is governance: agent designation, SDL review, CIPSEA-flavored incident response, OMB annual reporting. This playbook is the 30%.
@@ -89,6 +93,16 @@ For every contract, BAA, or interagency agreement covering work with identifiabl
 ---
 
 ## 7. Build the technical control set on the FedRAMP baseline
+
+> **Authoritative Microsoft references** for the underlying FedRAMP authorization that CSA-in-a-Box layers CIPSEA governance on top of:
+>
+> - [Microsoft Azure FedRAMP compliance offering](https://learn.microsoft.com/azure/compliance/offerings/offering-fedramp) — Azure Commercial FedRAMP High authorization
+> - [Microsoft Azure Government FedRAMP](https://learn.microsoft.com/azure/azure-government/documentation-government-overview) — Azure Government FedRAMP High + DoD IL authorizations
+> - [Microsoft Service Trust Portal](https://servicetrust.microsoft.com/) — per-Azure-service FedRAMP scope tables and audit reports
+> - [Microsoft Azure Key Vault Managed HSM compliance](https://learn.microsoft.com/azure/key-vault/managed-hsm/managed-hsm-technical-details) — FIPS 140-2 L3 attestation
+> - [Microsoft Azure Confidential Computing](https://learn.microsoft.com/azure/confidential-computing/overview) — TEE attestation documentation
+>
+> Cite the specific Azure service's entry in the Service Trust Portal in your SSP for any per-service control inheritance argument.
 
 These controls go beyond stock NIST 800-53 r5 Moderate to satisfy CIPSEA's per-individual auditability requirement:
 

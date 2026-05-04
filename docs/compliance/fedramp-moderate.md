@@ -1,5 +1,7 @@
 # Compliance — FedRAMP Moderate
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 > **Status:** Implementation guidance and control crosswalk for **FedRAMP Moderate** baseline. This is **not** a 3PAO assessment package — it is a starting point for an Authorization Boundary Document and SSP that uses CSA-in-a-Box as the platform layer.
 
 ## What is FedRAMP Moderate?

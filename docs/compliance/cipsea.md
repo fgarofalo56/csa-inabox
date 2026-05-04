@@ -5,6 +5,10 @@ description: How CSA-in-a-Box composes existing FedRAMP / NIST 800-53 controls w
 
 # CIPSEA — Confidential Information Protection and Statistical Efficiency Act
 
+--8<-- "_includes/cipsea-draft-banner.md"
+
+--8<-- "_includes/compliance-disclaimer.md"
+
 > **Statute:** 44 U.S.C. §§ 3561–3583 (CIPSEA 2018, as amended by Title III of the Foundations for Evidence-Based Policymaking Act, Pub. L. 115-435; original enactment Title V of the E-Government Act of 2002, Pub. L. 107-347)
 > **Operative interpretive guidance:** [72 Fed. Reg. 33362 (June 15, 2007) — OMB Implementation Guidance for CIPSEA, FR Doc. E7-11542](https://www.federalregister.gov/documents/2007/06/15/E7-11542/implementation-guidance-for-title-v-of-the-e-government-act-confidential-information-protection-and)
 > **Default categorization:** FIPS-199 Moderate (per OMB 2007 guidance § V) → FedRAMP Moderate floor on Azure
@@ -113,7 +117,7 @@ CIPSEA operates alongside several other confidentiality regimes. **The more rest
 **There is no statute or OMB guidance that mandates Azure Government for CIPSEA workloads.** What constrains the choice in practice:
 
 - The OMB 2007 guidance does not explicitly require US-only data residency, but the agent-personnel restrictions effectively impose a US-residency posture on any system the agents touch. NCHS, for example, [restricts agent telework to the 50 states + DC](https://www.cdc.gov/nchs/policy/OMB-CIPSEA-Report-2025-508.pdf).
-- The recommended FIPS-199 Moderate categorization is satisfied by both Azure Commercial (FedRAMP Moderate / High authorized) and Azure Government (FedRAMP High plus DoD IL2 / IL4 / IL5).
+- The recommended FIPS-199 Moderate categorization is satisfied by both Azure Commercial and Azure Government per Microsoft's formal FedRAMP authorizations: see [Microsoft Azure FedRAMP compliance offering](https://learn.microsoft.com/azure/compliance/offerings/offering-fedramp) (FedRAMP High authorization for Azure and Azure Government) and the per-service FedRAMP scope tables in [Microsoft Service Trust Portal](https://servicetrust.microsoft.com/). DoD IL2 / IL4 / IL5 authorizations for Azure Government are documented at [Microsoft Azure DoD compliance offering](https://learn.microsoft.com/azure/compliance/offerings/offering-dod-il5).
 - **In practice** every PSA cloud strategy publicly documented uses a government-cloud or FedRAMP High posture for CIPSEA data, even though the statute permits Moderate. Reasons: cohabitation with FTI workloads (which require IL5 / FedRAMP High); personnel screening and citizenship requirements that Azure Government can satisfy via screened-US-persons-only operations; reduced supply-chain risk under EO 14028 / EO 14110.
 
 **CSA-in-a-Box recommendation:** default the reference architecture to **Azure Government** for CIPSEA workloads. Document that **Azure Commercial (US regions only)** is statutorily permissible for pure CIPSEA-only data with no FTI commingling and where the agency's risk acceptance allows it. Pin all storage and compute to US regions via Azure Policy `allowed-locations`.

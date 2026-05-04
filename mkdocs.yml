@@ -42,6 +42,7 @@ theme:
 
 exclude_docs: |
   tutorials/_template/
+  _includes/
 
 plugins:
   - search
@@ -81,7 +82,9 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.arithmatex:
       generic: true
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      base_path:
+        - docs
   - pymdownx.inlinehilite
   - pymdownx.keys
   - pymdownx.mark

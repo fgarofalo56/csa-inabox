@@ -1,5 +1,7 @@
 # Compliance — CJIS Security Policy
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 > **Scope:** Criminal Justice Information Services (CJIS) Security Policy compliance for organizations handling Criminal Justice Information (CJI) on the CSA-in-a-Box platform. This document maps platform controls to CJIS policy areas and provides implementation guidance for law enforcement and public safety workloads.
 
 ## What is CJIS?
