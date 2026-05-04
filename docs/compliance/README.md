@@ -1,10 +1,117 @@
-# CSA-in-a-Box Compliance Documentation
+---
+title: Compliance
+description: NIST 800-53, FedRAMP, CMMC 2.0 L2, HIPAA, SOC 2, PCI-DSS, GDPR, CJIS, ITAR, DoD IL4/IL5, Section 508, and StateRAMP — control mappings with Azure-native implementations.
+---
 
-> Phase 1 compliance control mappings: **federal + healthcare + commercial**
-> foundation for customer ATO / audit / procurement conversations.
+# Compliance
 
-This directory is the human-readable companion to the machine-readable
-manifests in [`governance/compliance/`](../../csa_platform/governance/compliance/).
+> Compliance control mappings for **federal, healthcare, and commercial** customer ATO / audit / procurement conversations.
+
+This directory is the human-readable companion to the machine-readable manifests in [`governance/compliance/`](../../csa_platform/governance/compliance/).
+
+---
+
+## Pick your framework
+
+<div class="grid cards" markdown>
+
+- :material-shield-star:{ .lg .middle } **NIST 800-53 Rev 5**
+
+    ***
+
+    Moderate + High baselines (federal ATO).
+
+    [:octicons-arrow-right-24: NIST 800-53 r5](nist-800-53-rev5.md)
+
+- :material-shield-account:{ .lg .middle } **FedRAMP Moderate**
+
+    ***
+
+    Federal cloud authorization baseline.
+
+    [:octicons-arrow-right-24: FedRAMP Moderate](fedramp-moderate.md)
+
+- :material-shield-lock:{ .lg .middle } **CMMC 2.0 Level 2**
+
+    ***
+
+    110 practices for DoD contractors handling CUI.
+
+    [:octicons-arrow-right-24: CMMC 2.0 L2](cmmc-2.0-l2.md)
+
+- :material-medical-bag:{ .lg .middle } **HIPAA Security Rule**
+
+    ***
+
+    §164.308 / 310 / 312 / 314 / 316.
+
+    [:octicons-arrow-right-24: HIPAA](hipaa-security-rule.md)
+
+- :material-clipboard-check:{ .lg .middle } **SOC 2 Type II**
+
+    ***
+
+    Trust Services Criteria for service organizations.
+
+    [:octicons-arrow-right-24: SOC 2 Type II](soc2-type2.md)
+
+- :material-credit-card-lock:{ .lg .middle } **PCI-DSS v4**
+
+    ***
+
+    Payment card industry data security standard.
+
+    [:octicons-arrow-right-24: PCI-DSS v4](pci-dss-v4.md)
+
+- :material-earth-box:{ .lg .middle } **GDPR / Privacy**
+
+    ***
+
+    EU privacy controls and data-subject rights.
+
+    [:octicons-arrow-right-24: GDPR](gdpr-privacy.md)
+
+- :material-police-badge:{ .lg .middle } **CJIS**
+
+    ***
+
+    FBI Criminal Justice Information Services security policy.
+
+    [:octicons-arrow-right-24: CJIS](cjis.md)
+
+- :material-airplane:{ .lg .middle } **ITAR**
+
+    ***
+
+    Defense-related controlled technical data.
+
+    [:octicons-arrow-right-24: ITAR](itar.md)
+
+- :material-flag:{ .lg .middle } **DoD IL4 / IL5**
+
+    ***
+
+    DoD Impact Level 4 (CUI) and IL5 (NSS CUI).
+
+    [:octicons-arrow-right-24: DoD IL4/IL5](dod-il4-il5.md)
+
+- :material-eye:{ .lg .middle } **Section 508**
+
+    ***
+
+    Accessibility for federal information technology.
+
+    [:octicons-arrow-right-24: Section 508](section-508.md)
+
+- :material-map-marker:{ .lg .middle } **StateRAMP**
+
+    ***
+
+    State and local government cloud authorization.
+
+    [:octicons-arrow-right-24: StateRAMP](stateramp.md)
+
+</div>
 
 ---
 

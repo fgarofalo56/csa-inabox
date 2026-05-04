@@ -1,0 +1,38 @@
+/* Hero diagrams / Azure screenshots — fill the content column, no
+   breakout (Material's side nav + right TOC make breakout unsafe at
+   wide viewports). Capped to keep mile-wide displays sane. */
+.md-typeset .architecture-hero {
+  display: block;
+  width: 100%;
+  max-width: 1100px;
+  margin: 1.5rem auto 2rem;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 0.75rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .architecture-hero {
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* Hover affordance on the linked hero */
+.md-typeset a:has(> .architecture-hero) {
+  display: block;
+  text-decoration: none;
+  transition: opacity 0.15s ease;
+}
+.md-typeset a:has(> .architecture-hero):hover {
+  opacity: 0.92;
+}
+
+/* Tighten the hero CTA button row */
+.md-typeset .md-button + .md-button {
+  margin-left: 0.5rem;
+}
+
+/* Card grids: slightly tighter gap so dense pages (compliance, examples) feel less sparse */
+.md-typeset .grid.cards {
+  gap: 0.75rem;
+}

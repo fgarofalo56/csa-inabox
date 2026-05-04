@@ -1,35 +1,70 @@
-[Home](../README.md) > [Docs](./) > **Quick Start**
+---
+title: Quickstart
+description: Deploy a working CSA-in-a-Box platform end-to-end in 60–90 minutes — infrastructure, seed data, dbt medallion pipeline, streaming, Purview, portal, and vertical examples.
+---
 
-# CSA-in-a-Box: Quick Start Guide
+# Quickstart
 
-!!! note
-**Quick Summary**: Get a working Cloud-Scale Analytics platform deployed and flowing data in 60-90 minutes — deploy infrastructure (ALZ → DMLZ → DLZ), load seed data, run the dbt medallion pipeline across 4 domains, set up streaming, bootstrap Purview, deploy the portal, and try vertical examples (USDA, Gov).
+Get a working Cloud-Scale Analytics platform deployed and flowing data in **60–90 minutes** (prerequisites met). The main path below deploys the platform end-to-end. Pick a sub-quickstart from the cards below to dive into a specific scenario.
 
-Get a working Cloud-Scale Analytics platform deployed and flowing data in
-about 60-90 minutes (assuming all prerequisites are met).
+<div class="grid cards" markdown>
 
-## 📑 Table of Contents
+- :material-rocket-launch:{ .lg .middle } **Full platform deploy**
 
-- [📎 Prerequisites](#-prerequisites)
-- [📦 Step 1: Deploy Infrastructure](#-step-1-deploy-infrastructure)
-- [📊 Step 2: Load Sample Data](#-step-2-load-sample-data)
-- [🔄 Step 3: Run the dbt Pipeline](#-step-3-run-the-dbt-pipeline)
-    - [Expected Row Counts](#expected-row-counts)
-- [⚙️ Step 4: Run ADF Orchestration (Optional)](#️-step-4-run-adf-orchestration-optional)
-- [🔍 Step 5: Explore the Data](#-step-5-explore-the-data)
-- [📡 Step 6: Start Streaming (Optional)](#-step-6-start-streaming-optional)
-- [📋 Step 7: Bootstrap Purview Catalog (Optional)](#-step-7-bootstrap-purview-catalog-optional)
-- [📁 Project Structure](#-project-structure)
-- [🌾 Quick Start: Run a Vertical Example (USDA)](#-quick-start-run-a-vertical-example-usda)
-- [🌐 Quick Start: Deploy the Portal](#-quick-start-deploy-the-portal)
-- [🏗️ Quick Start: Platform Services](#️-quick-start-platform-services)
-- [🏛️ Quick Start: Azure Government](#️-quick-start-azure-government)
-- [🧹 Teardown](#-teardown)
-- [➡️ Next Steps](#️-next-steps)
+    ***
+
+    Infrastructure → seed data → dbt medallion → streaming → Purview. The 7-step main path.
+
+    [:octicons-arrow-down-24: Start with prerequisites](#prerequisites)
+
+- :material-tractor:{ .lg .middle } **Vertical example (USDA)**
+
+    ***
+
+    Run the USDA agriculture vertical end-to-end without full infra (local Databricks or DuckDB).
+
+    [:octicons-arrow-down-24: USDA quickstart](#quick-start-run-a-vertical-example-usda)
+
+- :material-monitor-dashboard:{ .lg .middle } **Portal (FastAPI + React)**
+
+    ***
+
+    Run the data-onboarding portal locally with the shared backend and React frontend.
+
+    [:octicons-arrow-down-24: Portal quickstart](#quick-start-deploy-the-portal)
+
+- :material-cog-box:{ .lg .middle } **Platform services**
+
+    ***
+
+    Deploy the Functions-based platform services (validation, marketplace, AI integration).
+
+    [:octicons-arrow-down-24: Platform services](#quick-start-platform-services)
+
+- :material-flag:{ .lg .middle } **Azure Government**
+
+    ***
+
+    Deploy with FedRAMP-compliant configuration to USGov regions.
+
+    [:octicons-arrow-down-24: Government quickstart](#quick-start-azure-government)
+
+- :material-delete-outline:{ .lg .middle } **Teardown**
+
+    ***
+
+    Tear down a deployed environment safely (with cost-safety guards).
+
+    [:octicons-arrow-down-24: Teardown](#teardown)
+
+</div>
+
+!!! warning "Cost safety"
+    CSA-in-a-Box provisions Synapse, Databricks, ADX, Event Hub, and other billable services. **A forgotten demo environment can accrue $1,000+/day.** Always run [Teardown](#teardown) when you're done.
 
 ---
 
-## 📎 Prerequisites
+## Prerequisites
 
 | Tool      | Minimum Version | Check              |
 | --------- | --------------- | ------------------ |
@@ -46,7 +81,7 @@ bash scripts/deploy/validate-prerequisites.sh
 
 ---
 
-## 📦 Step 1: Deploy Infrastructure
+## Step 1: Deploy infrastructure
 
 ```bash
 # Clone the repo
@@ -71,7 +106,7 @@ The deployment script deploys three landing zones in order:
 
 ---
 
-## 📊 Step 2: Load Sample Data
+## Step 2: Load sample data
 
 CSA-in-a-Box ships with realistic seed data:
 
@@ -99,7 +134,9 @@ dbt seed --profiles-dir .
 
 ---
 
-## 🔄 Step 3: Run the dbt Pipeline
+## Step 3: Run the dbt pipeline
+
+![Bronze → Silver → Gold medallion flow with Great Expectations quality gates between each layer, dbt-driven transformations, and Purview lineage end-to-end](assets/images/medallion-flow.svg){ .architecture-hero loading="lazy" }
 
 Each domain has its own dbt project. Run them in order:
 
@@ -206,7 +243,7 @@ dbt test
 
 ---
 
-## ⚙️ Step 4: Run ADF Orchestration (Optional)
+## Step 4: Run ADF orchestration (optional)
 
 If ADF is deployed, trigger the master pipeline:
 
@@ -228,7 +265,7 @@ The orchestration pipeline:
 
 ---
 
-## 🔍 Step 5: Explore the Data
+## Step 5: Explore the data
 
 ### Query Silver (validation results)
 
@@ -265,7 +302,7 @@ GROUP BY reconciliation_status;
 
 ---
 
-## 📡 Step 6: Start Streaming (Optional)
+## Step 6: Start streaming (optional)
 
 ```bash
 # Produce sample events to Event Hub
@@ -289,7 +326,7 @@ RawEvents
 
 ---
 
-## 📋 Step 7: Bootstrap Purview Catalog (Optional)
+## Step 7: Bootstrap Purview catalog (optional)
 
 ```bash
 python scripts/purview/bootstrap_catalog.py \
@@ -305,7 +342,7 @@ This creates:
 
 ---
 
-## 📁 Project Structure
+## Project structure
 
 ```text
 csa-inabox/
@@ -341,7 +378,7 @@ csa-inabox/
 
 ---
 
-## 🌾 Quick Start: Run a Vertical Example (USDA)
+## Quick start: Run a vertical example (USDA)
 
 Run the USDA agriculture analytics vertical end-to-end without deploying full
 infrastructure (uses local Databricks or DuckDB adapter).
@@ -390,7 +427,7 @@ LIMIT 20;
 
 ---
 
-## 🌐 Quick Start: Deploy the Portal
+## Quick start: Deploy the portal
 
 Run the data onboarding portal locally with the shared backend and React
 frontend.
@@ -452,7 +489,7 @@ python -m cli --format json stats overview   # JSON output for CI pipelines
 
 ---
 
-## 🏗️ Quick Start: Platform Services
+## Quick start: Platform services
 
 Deploy shared platform services that provide Fabric-equivalent capabilities.
 
@@ -513,7 +550,7 @@ See [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) for the full deployment guide.
 
 ---
 
-## 🏛️ Quick Start: Azure Government
+## Quick start: Azure Government
 
 Deploy CSA-in-a-Box to Azure Government with FedRAMP-compliant configuration.
 
@@ -566,7 +603,7 @@ az storage account show \
 
 ---
 
-## 🧹 Teardown
+## Teardown
 
 !!! warning
 **Cost-safety.** CSA-in-a-Box provisions Synapse, Databricks, ADX, Event Hub, and other billable services. A forgotten demo environment can accrue **$1,000+/day**. Always tear down when you are done.
@@ -628,7 +665,7 @@ Each example README has its own **Prerequisites / Cost / Teardown** section with
 
 ---
 
-## ➡️ Next Steps
+## Next steps
 
 - [ ] **Add a new domain**: Copy `domains/finance/` as a template, update `dbt_project.yml`
 - [ ] **Add a data product**: Create `contract.yaml` under `data-products/`
@@ -641,7 +678,7 @@ Each example README has its own **Prerequisites / Cost / Teardown** section with
 
 ---
 
-## 🔗 Related Documentation
+## Related documentation
 
 - [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
 - [Architecture](ARCHITECTURE.md) — Comprehensive architecture reference

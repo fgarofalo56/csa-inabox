@@ -92,6 +92,7 @@ markdown_extensions:
 
 extra_css:
   - stylesheets/copilot-chat.css
+  - stylesheets/docs.css
 
 extra_javascript:
   - javascripts/copilot-chat.js
