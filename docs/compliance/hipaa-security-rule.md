@@ -1,5 +1,7 @@
 # HIPAA Security Rule — CSA-in-a-Box Safeguard Coverage
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 **Manifest:** [`governance/compliance/hipaa-security-rule.yaml`](../../csa_platform/governance/compliance/hipaa-security-rule.yaml)
 **Scope:** 45 CFR Part 164 Subpart C — §164.308 / 310 / 312 / 314 / 316
 **Last reviewed:** 2026-04-18

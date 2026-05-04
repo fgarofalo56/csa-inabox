@@ -1,5 +1,7 @@
 # Compliance — DoD Impact Level 4 / Impact Level 5
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 > **Scope:** Department of Defense cloud deployments at **Impact Level 4** (Controlled Unclassified Information) and **Impact Level 5** (CUI + mission-critical / National Security Systems). This guide covers the DISA Cloud Computing SRG requirements and how CSA-in-a-Box maps to them on Azure Government.
 
 ---

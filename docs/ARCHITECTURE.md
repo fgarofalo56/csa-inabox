@@ -1,6 +1,6 @@
-[Home](../README.md) > [Docs](./) > **Architecture**
-
 # CSA-in-a-Box Architecture
+
+![Four-subscription landing-zone overview: Management, Connectivity, Data Management LZ, Data Landing Zone, and Bronze/Silver/Gold medallion data flow with Purview governance](assets/images/architecture-hero.svg){ .architecture-hero loading="eager" }
 
 !!! note
 **Quick Summary**: Architecture reference for CSA-in-a-Box — the Azure-native reference implementation of the Microsoft "Unify your data platform" CAF guidance, built on Azure PaaS and open-source tooling. Positions Fabric as the primary control plane where GA, and CSA-in-a-Box as the Azure Government gap-filler (Fabric is forecast, not GA), the post-deprecation CAF CSA reference, and an incremental on-ramp to Fabric. Covers the DMLZ/DLZ landing zone pattern, medallion data flow (Bronze/Silver/Gold), streaming via Event Hubs + ADX, AI/ML integration, 9 vertical examples, and Azure Government compatibility.
@@ -383,6 +383,10 @@ Each vertical includes seed data generators, dbt models, deployment templates,
 and domain-specific documentation.
 
 ---
+
+## What this looks like once deployed
+
+![Azure resource group Overview — the deployed CSA-in-a-Box stack inside a single resource group: Databricks workspace, Data Factory, Application Insights, Azure AI hub + project, SQL database, AI Search, two storage accounts, Cosmos DB, Key Vault. This is the canonical "platform in a box" view.](assets/images/azure/resource-group-overview.png){ .architecture-hero loading="lazy" }
 
 ## 📁 Repository Structure
 

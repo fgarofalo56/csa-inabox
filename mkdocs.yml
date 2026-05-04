@@ -42,6 +42,7 @@ theme:
 
 exclude_docs: |
   tutorials/_template/
+  _includes/
 
 plugins:
   - search
@@ -81,7 +82,9 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.arithmatex:
       generic: true
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      base_path:
+        - docs
   - pymdownx.inlinehilite
   - pymdownx.keys
   - pymdownx.mark
@@ -92,6 +95,7 @@ markdown_extensions:
 
 extra_css:
   - stylesheets/copilot-chat.css
+  - stylesheets/docs.css
 
 extra_javascript:
   - javascripts/copilot-chat.js
@@ -354,6 +358,8 @@ nav:
           - ITAR: compliance/itar.md
           - DoD IL4/IL5: compliance/dod-il4-il5.md
           - Section 508 / WCAG: compliance/section-508.md
+          - CIPSEA (federal statistical): compliance/cipsea.md
+          - "CIPSEA Operational Playbook": compliance/cipsea-playbook.md
       - Assessments:
           - Overview: assessments/index.md
           - Migration Readiness: assessments/migration-readiness.md

@@ -1,5 +1,7 @@
 # Compliance — PCI-DSS v4.0
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 > **Status:** Implementation guidance for **PCI-DSS v4.0** (mandatory March 2025) for analytics workloads that store, process, or transmit cardholder data (CHD). The strongest pattern is **never bring CHD into the analytics platform** — but if you must, this is how.
 
 ## What is PCI-DSS v4.0?
