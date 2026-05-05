@@ -80,11 +80,34 @@
       .catch(function () { /* search unavailable — widget still works */ });
   }
 
+  // Common English stop-words — dropped from search queries so "how the X works"
+  // ranks pages by X, not by which page happens to use "the" the most.
+  var STOP_WORDS = {
+    a:1, an:1, and:1, are:1, as:1, at:1, be:1, been:1, but:1, by:1, can:1,
+    could:1, did:1, do:1, does:1, doing:1, done:1, for:1, from:1, had:1,
+    has:1, have:1, how:1, if:1, in:1, into:1, is:1, it:1, its:1, just:1,
+    may:1, might:1, more:1, most:1, must:1, my:1, no:1, not:1, of:1, on:1,
+    only:1, or:1, our:1, out:1, over:1, own:1, see:1, should:1, so:1, some:1,
+    such:1, than:1, that:1, the:1, their:1, them:1, then:1, there:1,
+    these:1, they:1, this:1, those:1, to:1, under:1, up:1, use:1, used:1,
+    using:1, very:1, was:1, way:1, we:1, were:1, what:1, when:1, where:1,
+    which:1, while:1, who:1, whom:1, whose:1, why:1, will:1, with:1,
+    within:1, would:1, you:1, your:1
+  };
+
   function searchPages(query, maxResults) {
     if (!searchReady || !query) return [];
     maxResults = maxResults || 5;
 
-    var terms = query.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(function (t) { return t.length > 2; });
+    var rawTerms = query.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/);
+    var terms = rawTerms.filter(function (t) {
+      return t.length > 2 && !STOP_WORDS[t];
+    });
+    // If everything was stop-worded out, fall back to non-stop-word terms of
+    // any length so a "what is X" query still finds X.
+    if (!terms.length) {
+      terms = rawTerms.filter(function (t) { return t.length > 1 && !STOP_WORDS[t]; });
+    }
     if (!terms.length) return [];
 
     var scored = [];
@@ -92,19 +115,33 @@
       var titleLower = doc.title.toLowerCase();
       var textLower = (doc.text || "").toLowerCase().substring(0, 3000);
       var score = 0;
+      var titleHits = 0;
 
       terms.forEach(function (term) {
-        // Title matches weighted 5x
-        if (titleLower.indexOf(term) !== -1) score += 5;
-        // Text matches
+        // Word-boundary title match weighted 15x — strong signal
+        var wordRe = new RegExp("\\b" + term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b");
+        if (wordRe.test(titleLower)) {
+          score += 15;
+          titleHits++;
+        } else if (titleLower.indexOf(term) !== -1) {
+          // Substring fallback (less weight)
+          score += 6;
+          titleHits++;
+        }
+        // Body matches — weighted 1x, capped at 5 per term to avoid keyword stuffing
         var idx = 0;
         var count = 0;
-        while ((idx = textLower.indexOf(term, idx)) !== -1 && count < 10) {
+        while ((idx = textLower.indexOf(term, idx)) !== -1 && count < 5) {
           score += 1;
           idx += term.length;
           count++;
         }
       });
+
+      // Bonus for matching multiple distinct terms in the title — helps
+      // multi-word queries like "medallion architecture" prefer pages where
+      // BOTH terms appear in the title over pages where each appears alone.
+      if (titleHits > 1) score += titleHits * 5;
 
       if (score > 0) {
         scored.push({ doc: doc, score: score });
