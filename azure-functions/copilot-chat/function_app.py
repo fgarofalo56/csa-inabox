@@ -558,49 +558,37 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
             stream=True,
         )
 
-        # Stream NDJSON: each line is {"content": "..."} for tokens or
-        # {"sources": [...]} for the citation footer at the end.
-        def _stream():
-            reply_parts: list[str] = []
-            total_tokens = 0
-            try:
-                for chunk in response:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        delta = chunk.choices[0].delta.content
-                        reply_parts.append(delta)
-                        yield (json.dumps({"content": delta}, ensure_ascii=False) + "\n").encode("utf-8")
-                    if hasattr(chunk, "usage") and chunk.usage:
-                        total_tokens = chunk.usage.total_tokens
-            except Exception:
-                logger.exception("Streaming chunk iteration failed")
-                yield (json.dumps({"content": "\n\n[Stream interrupted]"}) + "\n").encode("utf-8")
+        # Collect streamed chunks — Azure Functions Python v2 wants bytes/str
+        # response bodies, not generators, so we buffer here and return JSON
+        # with both the reply and the curated sources.
+        reply_parts: list[str] = []
+        total_tokens = 0
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                reply_parts.append(chunk.choices[0].delta.content)
+            if hasattr(chunk, "usage") and chunk.usage:
+                total_tokens = chunk.usage.total_tokens
 
-            reply = "".join(reply_parts)
+        reply = "".join(reply_parts)
 
-            # Filter the grounding list to only those actually cited via [^N]
-            cited_sources: list[dict[str, str]] = []
-            cited_indexes = sorted({int(m) for m in re.findall(r"\[\^(\d+)\]", reply)
-                                    if m.isdigit() and 1 <= int(m) <= len(grounding_docs)})
-            for i in cited_indexes:
-                cited_sources.append(grounding_docs[i - 1])
+        # Filter the grounding list to only those actually cited via [^N]
+        cited_sources: list[dict[str, str]] = []
+        cited_indexes = sorted({
+            int(m) for m in re.findall(r"\[\^(\d+)\]", reply)
+            if m.isdigit() and 1 <= int(m) <= len(grounding_docs)
+        })
+        for i in cited_indexes:
+            cited_sources.append(grounding_docs[i - 1])
 
-            yield (json.dumps({"sources": cited_sources}, ensure_ascii=False) + "\n").encode("utf-8")
+        # Token bookkeeping (estimate if API didn't supply)
+        tokens_used = total_tokens or (len(message.split()) * 2 + len(reply.split()) * 2)
+        _record_tokens(ip, tokens_used)
 
-            # Token bookkeeping (estimate if API didn't supply)
-            tokens_used = total_tokens or (len(message.split()) * 2 + len(reply.split()) * 2)
-            try:
-                _record_tokens(ip, tokens_used)
-            except Exception:
-                pass
-
-        stream_headers = dict(headers)
-        stream_headers["Content-Type"] = "application/x-ndjson"
-        stream_headers["Cache-Control"] = "no-cache"
-        stream_headers["X-Accel-Buffering"] = "no"  # disable proxy buffering
         return func.HttpResponse(
-            _stream(),
+            json.dumps({"reply": reply, "sources": cited_sources}, ensure_ascii=False),
             status_code=200,
-            headers=stream_headers,
+            mimetype="application/json",
+            headers=headers,
         )
 
     except KeyError as e:
