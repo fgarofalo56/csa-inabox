@@ -493,6 +493,10 @@ All deployments enforce:
   Palantir migration playbook in [`migrations/`](migrations/) for guidance on
   when to stay on CSA-in-a-Box, when to adopt Microsoft Fabric, and how
   components compose into a Fabric migration.
+- **Supercharge Microsoft Fabric** — For hands-on Fabric tutorials, feature guides,
+  best practices, and POC materials, see the
+  [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/)
+  companion site.
 
 ---
 
@@ -502,3 +506,5 @@ All deployments enforce:
 - [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
 - [Multi-Region DR](DR.md) — Multi-region disaster recovery runbook
 - [Quick Start](QUICKSTART.md) — 60-minute hands-on tutorial
+- [Microsoft Fabric Guide](guides/microsoft-fabric.md) — Full Fabric platform guide with CSA mapping
+- [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) — Companion site: 37 tutorials, 30+ feature guides, POC agendas, notebooks

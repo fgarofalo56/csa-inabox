@@ -33,6 +33,9 @@ Field-tested migration playbooks from common on-prem and other-cloud platforms o
 
 Core CSA-aligned playbooks for cloud-scale analytics, data platforms, AI/ML, and the operational data stores that feed them.
 
+!!! tip "Migrating to Microsoft Fabric?"
+    Several playbooks below target Microsoft Fabric directly. For additional Fabric-specific migration guides, planning worksheets, and tutorials, see the [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) companion site — including the [Migration Planning Tutorial](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/tutorials/13-migration-planning/) and [Migration Patterns](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/best-practices/migration-patterns/).
+
 ### Hyperscaler & cloud platforms (analytics workloads)
 
 | Source                        | Target                         | Playbook                           |

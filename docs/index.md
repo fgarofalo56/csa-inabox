@@ -81,7 +81,7 @@ Four pages cover the full path from "what is this?" to "deployed in production."
 
     ***
 
-    Every capability maps to a Fabric equivalent. Teams that start here migrate one workload at a time into Fabric as Gov availability lands or Commercial procurement fits.
+    Every capability maps to a Fabric equivalent. Teams that start here migrate one workload at a time into Fabric as Gov availability lands or Commercial procurement fits. See the [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) companion site for hands-on Fabric tutorials and best practices.
 
 </div>
 
@@ -185,5 +185,7 @@ CSA-in-a-Box is **not** a blanket substitute for Microsoft Fabric. For most Azur
 For the full decision logic — including Fabric vs. Databricks vs. Synapse — see the [Fabric vs. Databricks vs. Synapse decision tree](decisions/fabric-vs-databricks-vs-synapse.md) and [ADR-0010: Fabric Strategic Target](adr/0010-fabric-strategic-target.md).
 
 For the full capability matrix and Fabric-equivalent mapping, see [Architecture → What's Included](ARCHITECTURE.md#whats-included).
+
+For deep-dive Fabric content — tutorials, feature guides, best practices, POC agendas, and ready-to-run notebooks — see the [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) companion site.
 
 <!-- release v0.3.0 -->
