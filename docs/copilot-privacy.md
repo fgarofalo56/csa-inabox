@@ -53,12 +53,17 @@ how long we keep it, and how to opt out.
 | Feedback | Azure Cosmos DB (`copilot/feedback`) | Indefinite (delete on request) |
 | Backlog submissions | Azure Cosmos DB (`copilot/backlog`) → GitHub Issues | Indefinite (filed publicly on issue creation) |
 
-All resources are in:
+All telemetry, chat content, and feedback are stored in **Microsoft
+Azure Commercial — US East 2 region**, in tenant infrastructure operated
+by the project owner. Specific resource identifiers (tenant ID,
+subscription name, resource-group name, resource names) are intentionally
+omitted from this notice — they're operational details documented
+internally in [`azure-functions/copilot-chat/DEPLOYMENT.md`](https://github.com/fgarofalo56/csa-inabox/blob/main/azure-functions/copilot-chat/DEPLOYMENT.md)
+for project maintainers, not user-facing privacy disclosures.
 
-- **Tenant:** `limitlessdata.ai`
-- **Subscription:** `FedCiv ATU FFL - DLZ`
-- **Resource group:** `rg-dlz-aiml-stack-dev`
-- **Region:** East US
+If you require the specific Azure resource details for a compliance or
+data-residency audit, file an Issue with the `privacy` label and we'll
+share them through an authenticated channel.
 
 ## How redaction works
 
