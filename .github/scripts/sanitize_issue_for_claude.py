@@ -66,8 +66,11 @@ _AUTOFIX_RED_FLAGS = [
     # Egress / exfiltration patterns
     r"(?:send|post|exfiltrate|upload)\s+(?:.+\s+)?to\s+https?://",
     r"\bcurl\b.+(?:\.com|\.net|\.io|\.xyz)\/",
-    # Direct shell injection
-    r"\$\(.*\)|`[^`]*`",  # shell command substitution
+    # Direct shell command substitution. ``$(cmd)`` is the only safe
+    # signature to match — backtick-delimited substrings collide with
+    # ordinary markdown inline-code (``\`docs/foo.md\```) which is
+    # ubiquitous in legitimate bug reports.
+    r"\$\(\s*[a-zA-Z_/]",
     # Encoded payloads
     r"base64\s*(?:-d|--decode)",
     r"\beval\s*\(",
