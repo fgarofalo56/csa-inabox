@@ -602,17 +602,8 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                 "session_id": session_id,
             },
         )
-        # Capture as backlog/uncovered so we can study what users try
-        if not _opt_out(req) and storage.is_enabled():
-            storage.write_backlog(
-                kind="uncovered",
-                title="Blocked: prompt injection",
-                description="(content withheld — injection pattern matched)",
-                session_id=session_id,
-                conversation_id=conversation_id,
-                actor=ip_hashed,
-                source="chat-injection",
-            )
+        # Note: injection attempts surface in App Insights via the
+        # ``chat.rejected`` event (reason=injection); no backlog row.
         return _error_response(
             "I can only help with CSA-in-a-Box and Azure data platform topics.",
             400, headers,
@@ -752,21 +743,14 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                     uncovered=is_uncovered,
                 )
 
-                if is_uncovered:
-                    storage.write_backlog(
-                        kind="uncovered",
-                        title=redaction.redact(message)[:200],
-                        description=(
-                            "Auto-detected uncovered question. The Copilot returned "
-                            "either an off-topic refusal or had zero grounding hits. "
-                            "Triage to decide whether the docs should cover this."
-                        ),
-                        session_id=session_id,
-                        conversation_id=conversation_id,
-                        actor=ip_hashed,
-                        source="chat-uncovered",
-                        page_url=str(page_context.get("url", ""))[:500],
-                    )
+                # Note: auto-backlog rows for uncovered questions removed
+                # 2026-05-07. The ``uncovered`` dimension on the
+                # ``chat.request`` App Insights event already gives us
+                # the analytics signal; the backlog should hold only
+                # user-curated entries (so the GitHub Issues drain
+                # doesn't fire on every off-topic question and so a
+                # user clicking "Add to backlog" doesn't create a
+                # duplicate row).
 
         return _json_response(
             {

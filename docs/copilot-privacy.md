@@ -24,6 +24,8 @@ how long we keep it, and how to opt out.
 
 ## What we collect
 
+### Chat widget (only when you actively use it)
+
 | Field | Source | Why |
 |-------|--------|-----|
 | User message (redacted) | What you type into the widget | Identify uncovered topics; improve answers |
@@ -34,6 +36,29 @@ how long we keep it, and how to opt out.
 | Session + conversation IDs | UUIDs generated client-side | Stitch a multi-turn conversation together |
 | Thumbs-up/down + improvement text (redacted) | What you submit via the feedback strip | Triage poor answers |
 | Backlog submissions | Use-case requests, bug reports, doc-gap reports | Filed as GitHub Issues for triage |
+
+### Docs site (page-load analytics)
+
+When you visit any page on the docs site, anonymised page-load
+telemetry is sent to the same Application Insights resource:
+
+| Field | Source | Why |
+|-------|--------|-----|
+| Page path (no query string) | `window.location.pathname` | See which docs pages get traffic |
+| Coarse geographic info | Azure Monitor's IP-derived approximation (city/country) | Understand global usage |
+| Browser + OS family | User agent | Compatibility decisions |
+| Page load duration | Browser perf API | Site-performance monitoring |
+| Anonymous session ID | App Insights generates per-tab | Group consecutive page views from the same visit |
+
+**No cookies are set** by the analytics. The Application Insights JS
+SDK is configured with `disableCookiesUsage: true`. We do not assign a
+persistent identifier — every browser tab is a fresh session.
+
+**Honors `Do Not Track` automatically.** If your browser sends the
+`DNT: 1` header (Firefox: Settings → Privacy → "Send websites a Do
+Not Track signal"), the analytics SDK doesn't load. You also opt out
+implicitly when you opt out of chat tracking — the same
+`localStorage` flag covers both.
 
 ## What we do **not** collect
 
