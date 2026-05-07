@@ -123,8 +123,10 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           mode: agent
           # Sanitized title + body via step outputs — the raw values
-          # never reach the prompt template directly.
-          prompt: |
+          # never reach the prompt template directly. Use ``direct_prompt``
+          # (the action's actual input name) — ``prompt`` is invalid and
+          # gets a runtime error from the action loader.
+          direct_prompt: |
             You are responding to a GitHub issue in this repository. Your
             goal is to investigate the bug, produce the smallest possible
             fix, and open a PR.
