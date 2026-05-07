@@ -1,0 +1,108 @@
+# Triggered by maintainers adding the `auto-fix` label to a `csa-bug`
+# issue. Runs the Claude Code GitHub Action against the issue body and
+# the repo, asking Claude to investigate and produce a PR.
+#
+# How it stays safe:
+#
+# - Only fires for issues that already have the `csa-bug` label
+#   (filed via the .github/ISSUE_TEMPLATE/csa-bug.yml template).
+# - The label gate means a maintainer has to manually opt-in per issue.
+# - Claude opens a PR; copilot-auto-merge.yml only enables auto-merge
+#   if the diff is contained within a safelisted set of paths.
+# - The Anthropic key is supplied via the repo secret ANTHROPIC_API_KEY.
+#
+# To enable: set the `ANTHROPIC_API_KEY` repo secret. The action runs
+# under the default GITHUB_TOKEN, which has only repo-scoped write
+# permissions on the bot's branch.
+name: Copilot Auto-fix
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: copilot-auto-fix-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    if: |
+      github.event.label.name == 'auto-fix' &&
+      contains(github.event.issue.labels.*.name, 'csa-bug')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Comment on the issue
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const body = `🤖 Copilot Auto-fix is taking a look. ` +
+              `If a PR appears in the next ~10 min, follow it for status. ` +
+              `If not, the run probably failed — check the workflow log.`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Run Claude Code Action
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          mode: agent
+          # Hand Claude the full issue body + a strong instruction to
+          # produce a minimal, scoped diff.
+          prompt: |
+            You are responding to a GitHub issue in this repository. Your
+            goal is to investigate the bug, produce the smallest possible
+            fix, and open a PR.
+
+            Constraints:
+
+            1. Read the issue title and body carefully. If the issue is
+               ambiguous, post a comment asking for clarification and
+               STOP — do NOT open a PR with a guess.
+            2. The fix must be MINIMAL — change only what's needed to
+               address the reported defect. Do not refactor adjacent
+               code. Do not add features. Do not "improve" surrounding
+               style.
+            3. Add or update tests covering the fix when feasible.
+            4. PR title format: ``fix: <issue title> (auto-fix #<issue_number>)``
+            5. PR body must include:
+               - A one-paragraph summary of the root cause.
+               - The specific change you made.
+               - How you tested it (or what gates you expect to run).
+               - ``Closes #<issue_number>``
+            6. If your diff touches anything outside ``docs/**``,
+               ``examples/**``, or ``.github/ISSUE_TEMPLATE/**``, the
+               auto-merge workflow WILL NOT auto-merge — a maintainer
+               will have to review. That's fine. Don't artificially
+               constrain the fix to fit the safelist.
+
+            Issue title: ${{ github.event.issue.title }}
+            Issue number: ${{ github.event.issue.number }}
+            Issue body:
+
+            ---
+            ${{ github.event.issue.body }}
+            ---
+          allowed_tools: |
+            Read
+            Write
+            Edit
+            Glob
+            Grep
+            Bash(git:*)
+            Bash(npm:*)
+            Bash(pytest:*)
+            Bash(python:*)
