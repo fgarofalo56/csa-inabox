@@ -1,6 +1,6 @@
 # Copilot Privacy Notice
 
-_Last updated: 2026-05-06_
+_Last updated: 2026-05-07_
 
 This page explains what the **CSA-in-a-Box Copilot** widget collects, why,
 how long we keep it, and how to opt out.
