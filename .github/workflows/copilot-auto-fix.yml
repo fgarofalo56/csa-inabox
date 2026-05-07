@@ -126,10 +126,12 @@ jobs:
           # direct API auth (still works, separately billed).
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          mode: agent
-          # Match our gate label so the action accepts the trigger.
-          # Without this, ``label_trigger`` defaults to ``claude`` and
-          # the action skips the run with "No trigger found".
+          # ``mode: tag`` (the default) is what the action uses for
+          # label-driven runs. ``mode: agent`` is for non-trigger
+          # workflow_dispatch use; combined with a label-triggered
+          # event it produces "No trigger found" because the
+          # action's tag-trigger loop is skipped.
+          mode: tag
           label_trigger: auto-fix
           # Sanitized title + body via step outputs — the raw values
           # never reach the prompt template directly. Use ``direct_prompt``
