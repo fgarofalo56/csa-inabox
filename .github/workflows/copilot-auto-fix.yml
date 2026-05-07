@@ -9,11 +9,15 @@
 # - The label gate means a maintainer has to manually opt-in per issue.
 # - Claude opens a PR; copilot-auto-merge.yml only enables auto-merge
 #   if the diff is contained within a safelisted set of paths.
-# - The Anthropic key is supplied via the repo secret ANTHROPIC_API_KEY.
+# - Auth uses **`CLAUDE_CODE_OAUTH_TOKEN`** when set (preferred — bills
+#   against your Claude Max/Pro subscription rather than the API).
+#   Mint via the Claude Code CLI: ``claude setup-token``. Falls back to
+#   ``ANTHROPIC_API_KEY`` if the OAuth token is missing.
+# - The action runs under the default ``GITHUB_TOKEN`` (repo-scoped
+#   write permissions only).
 #
-# To enable: set the `ANTHROPIC_API_KEY` repo secret. The action runs
-# under the default GITHUB_TOKEN, which has only repo-scoped write
-# permissions on the bot's branch.
+# To enable: ``gh secret set CLAUDE_CODE_OAUTH_TOKEN --body <token>``
+# (or ``ANTHROPIC_API_KEY`` if you prefer API billing).
 name: Copilot Auto-fix
 
 on:
@@ -58,6 +62,18 @@ jobs:
       - name: Run Claude Code Action
         uses: anthropics/claude-code-action@beta
         with:
+          # Authentication: prefer the long-lived OAuth token tied to your
+          # Claude Max / Pro subscription so usage counts against your
+          # plan instead of being separately API-billed. Mint via the
+          # Claude Code CLI:
+          #
+          #     claude setup-token
+          #
+          # Then: gh secret set CLAUDE_CODE_OAUTH_TOKEN --body <token>
+          #
+          # If only ANTHROPIC_API_KEY is set, the action falls back to
+          # direct API auth (still works, separately billed).
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           mode: agent
           # Hand Claude the full issue body + a strong instruction to
