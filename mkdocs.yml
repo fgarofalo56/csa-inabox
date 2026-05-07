@@ -98,6 +98,7 @@ extra_css:
   - stylesheets/docs.css
 
 extra_javascript:
+  - javascripts/app-insights.js
   - javascripts/copilot-chat.js
 
 nav:
@@ -114,6 +115,7 @@ nav:
       - Production Checklist: PRODUCTION_CHECKLIST.md
       - AI Copilot (chat with the docs): chat.md
       - Copilot privacy notice: copilot-privacy.md
+      - Copilot analytics (operator runbook): copilot-analytics.md
       - Role-Based Quickstarts:
           - Overview: quickstarts/index.md
           - Data Engineer: quickstarts/data-engineer.md
