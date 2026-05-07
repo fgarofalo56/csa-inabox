@@ -1,0 +1,69 @@
+name: "Copilot Chat: Bug"
+description: Report a defect in the Copilot chat widget, the docs site,
+  the Function backend, or anything else under csa-inabox.
+title: "bug: <short summary>"
+labels: ["csa-bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. If the bug is small and well-scoped (a typo,
+        a broken link, a missing field, a small logic fix), add the
+        `auto-fix` label after submitting and the Copilot auto-fix workflow
+        will open a PR for it. Maintainers still review before merge unless
+        the change lands in a path on the safelist (`docs/**`,
+        `examples/**`, `.github/ISSUE_TEMPLATE/**`).
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences — what's broken?
+      placeholder: "The Copilot widget renders <code> tags as text instead of code blocks on Firefox."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered list. Include the URL of the docs page if relevant.
+      placeholder: |
+        1. Open https://fgarofalo56.github.io/csa-inabox/
+        2. Click the Copilot button
+        3. Ask "show me the Bicep for the Cosmos container"
+        4. Observe …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      placeholder: "I expected the response's code block to render with syntax highlighting."
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      placeholder: "The code is shown inline as plain text without highlighting."
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser / OS
+      placeholder: "Firefox 132.0 on Windows 11"
+
+  - type: input
+    id: conversation_id
+    attributes:
+      label: Conversation ID (optional)
+      description: If the widget gave you a conversation ID, paste it here.
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        **Privacy:** issues are public. Don't paste secrets, internal URLs,
+        or PII. The Copilot backend redacts common patterns server-side, but
+        anything you write *here* is not redacted before publication.

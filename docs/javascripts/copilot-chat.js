@@ -1,4 +1,22 @@
-/* CSA-in-a-Box Copilot Chat Widget — Vanilla JS (Security-Hardened) */
+/* CSA-in-a-Box Copilot Chat Widget — Vanilla JS (Security-Hardened)
+ *
+ * Architecture notes:
+ *
+ * - All HTML produced by ``md()`` is now safe-by-construction: the input
+ *   text is HTML-escaped *before* any markdown rule runs, so capture
+ *   groups carry only escaped content. Every output sink that calls
+ *   ``bubble.innerHTML = md(text)`` is therefore safe from LLM-emitted
+ *   or LLM-relayed HTML payloads.  See SEC-COPILOT C-1 (audit
+ *   2026-05-06) for the original sink and the chained-stored-XSS
+ *   risk that motivated this fix.
+ *
+ * - Telemetry: every chat / feedback / backlog request carries a
+ *   ``session_id`` (per-tab) and ``conversation_id`` (per turn). The
+ *   backend uses these to stitch records in Cosmos DB and App Insights.
+ *
+ * - Privacy: a one-time banner asks for opt-in. Opting out is sticky
+ *   (localStorage) and surfaces as the ``X-Copilot-Opt-Out: 1`` header.
+ */
 (function () {
   "use strict";
 
@@ -13,27 +31,60 @@
   //   region : eastus
   // See azure-functions/copilot-chat/DEPLOYMENT.md for full provenance.
   var CONFIG = {
-    apiEndpoint:
-      "https://func-csa-inabox-copilot-fg.azurewebsites.net/api/chat",
+    apiBase: "https://func-csa-inabox-copilot-fg.azurewebsites.net/api",
     maxHistory: 10,
     rateLimitMs: 3000,
     maxMessageLength: 2000,
+    maxImprovementLength: 1000,
+    maxBacklogTitleLength: 200,
+    maxBacklogDescriptionLength: 4000,
     welcomeMessage:
       "Hi! I'm the **CSA-in-a-Box Copilot**. Ask me anything about the codebase, architecture, deployment, or troubleshooting.",
+    privacyDocUrl: "https://fgarofalo56.github.io/csa-inabox/copilot-privacy/",
   };
+
+  /* ── Storage keys (localStorage) ─────────────────────────── */
+  var LS_PRIVACY_DECISION = "csa.copilot.privacy.v1";  // "accepted" | "opted_out"
+  var LS_SESSION_ID = "csa.copilot.session.v1";
+
+  /* ── Privacy state ───────────────────────────────────────── */
+  function getPrivacyDecision() {
+    try { return localStorage.getItem(LS_PRIVACY_DECISION) || ""; }
+    catch (_) { return ""; }
+  }
+  function setPrivacyDecision(value) {
+    try { localStorage.setItem(LS_PRIVACY_DECISION, value); } catch (_) { /* noop */ }
+  }
+  function isOptedOut() { return getPrivacyDecision() === "opted_out"; }
+
+  /* ── Session / conversation IDs ──────────────────────────── */
+  function uuid() {
+    if (window.crypto && window.crypto.randomUUID) {
+      try { return window.crypto.randomUUID(); }
+      catch (_) { /* fall through */ }
+    }
+    var chars = "0123456789abcdef";
+    var s = "";
+    for (var i = 0; i < 32; i++) {
+      var c = chars.charAt(Math.floor(Math.random() * 16));
+      s += (i === 12) ? "4" : (i === 16 ? chars.charAt(8 + Math.floor(Math.random() * 4)) : c);
+    }
+    return s.substring(0, 8) + "-" + s.substring(8, 12) + "-" + s.substring(12, 16) + "-" + s.substring(16, 20) + "-" + s.substring(20);
+  }
+  function getSessionId() {
+    var v = "";
+    try { v = sessionStorage.getItem(LS_SESSION_ID) || ""; } catch (_) { v = ""; }
+    if (!v) {
+      v = uuid();
+      try { sessionStorage.setItem(LS_SESSION_ID, v); } catch (_) { /* noop */ }
+    }
+    return v;
+  }
 
   /* ── Request Token Generation (SEC-COPILOT) ──────── */
   function generateRequestToken() {
     var ts = Math.floor(Date.now() / 30000); // 30-second windows
     var payload = ts + ":csa-copilot-2024";
-    // Simple hash — not cryptographically secure but raises the bar
-    var hash = 0;
-    for (var i = 0; i < payload.length; i++) {
-      var ch = payload.charCodeAt(i);
-      hash = ((hash << 5) - hash) + ch;
-      hash = hash & hash; // Convert to 32-bit integer
-    }
-    // Match backend SHA-256 — use SubtleCrypto if available
     if (window.crypto && window.crypto.subtle) {
       return window.crypto.subtle.digest(
         "SHA-256",
@@ -44,7 +95,13 @@
         return ts + ":" + hex.substring(0, 16);
       });
     }
-    // Fallback: use timestamp + simple hash (backend will also validate)
+    // Fallback hash (legacy browsers — backend rejects mismatch with 403)
+    var hash = 0;
+    for (var i = 0; i < payload.length; i++) {
+      var ch = payload.charCodeAt(i);
+      hash = ((hash << 5) - hash) + ch;
+      hash = hash & hash;
+    }
     var simpleHash = Math.abs(hash).toString(16).padStart(8, "0").substring(0, 16);
     return Promise.resolve(ts + ":" + simpleHash);
   }
@@ -62,13 +119,11 @@
     fetch(url)
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        // Deduplicate to page-level (drop anchor fragments)
         var seen = {};
         (data.docs || []).forEach(function (doc) {
           var page = (doc.location || "").split("#")[0];
           if (!page && doc.location === "") page = "";
           if (page in seen) {
-            // merge text into existing entry
             seen[page].text += " " + (doc.text || "");
           } else {
             seen[page] = { location: page, title: doc.title || "", text: doc.text || "" };
@@ -80,8 +135,6 @@
       .catch(function () { /* search unavailable — widget still works */ });
   }
 
-  // Common English stop-words — dropped from search queries so "how the X works"
-  // ranks pages by X, not by which page happens to use "the" the most.
   var STOP_WORDS = {
     a:1, an:1, and:1, are:1, as:1, at:1, be:1, been:1, but:1, by:1, can:1,
     could:1, did:1, do:1, does:1, doing:1, done:1, for:1, from:1, had:1,
@@ -103,8 +156,6 @@
     var terms = rawTerms.filter(function (t) {
       return t.length > 2 && !STOP_WORDS[t];
     });
-    // If everything was stop-worded out, fall back to non-stop-word terms of
-    // any length so a "what is X" query still finds X.
     if (!terms.length) {
       terms = rawTerms.filter(function (t) { return t.length > 1 && !STOP_WORDS[t]; });
     }
@@ -118,17 +169,14 @@
       var titleHits = 0;
 
       terms.forEach(function (term) {
-        // Word-boundary title match weighted 15x — strong signal
         var wordRe = new RegExp("\\b" + term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b");
         if (wordRe.test(titleLower)) {
           score += 15;
           titleHits++;
         } else if (titleLower.indexOf(term) !== -1) {
-          // Substring fallback (less weight)
           score += 6;
           titleHits++;
         }
-        // Body matches — weighted 1x, capped at 5 per term to avoid keyword stuffing
         var idx = 0;
         var count = 0;
         while ((idx = textLower.indexOf(term, idx)) !== -1 && count < 5) {
@@ -138,9 +186,6 @@
         }
       });
 
-      // Bonus for matching multiple distinct terms in the title — helps
-      // multi-word queries like "medallion architecture" prefer pages where
-      // BOTH terms appear in the title over pages where each appears alone.
       if (titleHits > 1) score += titleHits * 5;
 
       if (score > 0) {
@@ -152,10 +197,8 @@
 
     return scored.slice(0, maxResults).map(function (s) {
       var loc = s.doc.location;
-      // Build page URL — avoid double slashes
       var locClean = loc ? loc.replace(/\/+$/, "") : "";
       var pageUrl = SITE_URL + (locClean ? locClean + "/" : "");
-      // Build GitHub source URL — map location to docs/ file path
       var ghPath = locClean || "index";
       var ghUrl = REPO_URL + "/blob/main/docs/" + ghPath + ".md";
 
@@ -170,6 +213,8 @@
 
   function buildReferencesCard(results) {
     if (!results || !results.length) return "";
+    // Each component runs through esc() — this card never injects raw user
+    // text into HTML.
     var html = '<div class="copilot-refs">';
     html += '<div class="copilot-refs-header">📄 Related Pages</div>';
 
@@ -186,10 +231,28 @@
     return html;
   }
 
-  /* ── Minimal Markdown renderer (XSS-hardened) ────── */
+  /* ── Markdown renderer (XSS-hardened — see SEC-COPILOT C-1) ──
+   *
+   * The escape happens FIRST. Every subsequent rule operates on escaped
+   * text, so capture-group interpolation cannot reintroduce HTML. The
+   * inner esc() calls that used to live in the inline-code, link, and
+   * code-block paths have been removed: re-escaping already-escaped
+   * text would render `<` literally as the 4-character string `&lt;`.
+   *
+   * The only HTML we splice in ourselves is the surrounding tag scaffold
+   * (e.g. `<strong>...</strong>`), which is constant — so it can never
+   * be subverted by attacker input.
+   */
   function md(text) {
     if (!text) return "";
-    // Code blocks — extract first so their contents aren't mangled by later rules
+
+    // Step 1: Escape the entire input. From this point on, capture groups
+    // returned by regex callbacks are already HTML-safe.
+    text = esc(text);
+
+    // Step 2: Extract code blocks. Their interior is the original
+    // (escaped) text — we already escaped it once above, so DO NOT call
+    // esc() again here.
     var codeBlocks = [];
     text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, function (_, lang, code) {
       var idx = codeBlocks.length;
@@ -198,11 +261,12 @@
       var langClass = safeLang ? ' class="language-' + safeLang + '"' : "";
       codeBlocks.push(
         '<pre' + langAttr + '><button class="copilot-copy" type="button" title="Copy code" aria-label="Copy code">📋</button>' +
-        '<code' + langClass + '>' + esc(code.replace(/^\n+|\n+$/g, "")) + "</code></pre>"
+        '<code' + langClass + '>' + code.replace(/^\n+|\n+$/g, "") + "</code></pre>"
       );
       return "\n\n__CODEBLOCK_" + idx + "__\n\n";
     });
-    // Tables — pull out and convert before inline rules touch them
+
+    // Step 3: Tables — pull out and convert before inline rules touch them
     var tableBlocks = [];
     text = text.replace(/(?:^|\n)((?:\|[^\n]+\|\n)+)(\|[\s:|-]+\|\n)((?:\|[^\n]+\|\n?)*)/g,
       function (match, header, separator, body) {
@@ -235,16 +299,16 @@
         tableBlocks.push(html);
         return "\n\n__TABLEBLOCK_" + idx + "__\n\n";
       });
-    // Apply inline rules to non-block content
+
+    // Step 4: Apply inline rules to the rest of the (already-escaped) text
     text = inlineMd(text);
-    // Headings (must be before paragraphs)
+
+    // Step 5: Block rules — capture groups are escaped, splicing is safe
     text = text.replace(/^#### (.+)$/gm, '<h4 class="copilot-h">$1</h4>');
     text = text.replace(/^### (.+)$/gm, '<h3 class="copilot-h">$1</h3>');
     text = text.replace(/^## (.+)$/gm, '<h2 class="copilot-h">$1</h2>');
     text = text.replace(/^# (.+)$/gm, '<h1 class="copilot-h">$1</h1>');
-    // Horizontal rules
     text = text.replace(/^(?:---|\*\*\*|___)\s*$/gm, "<hr>");
-    // Task lists — render as disabled checkboxes (must come before plain unordered list)
     text = text.replace(/^[-*]\s+\[([ xX])\]\s+(.+)$/gm, function (_, mark, content) {
       var checked = mark.toLowerCase() === "x" ? " checked" : "";
       return '<li class="copilot-task"><input type="checkbox" disabled' + checked + ">" + content + "</li>";
@@ -252,21 +316,15 @@
     text = text.replace(/((?:<li class="copilot-task">.*<\/li>\n?)+)/g, function (m) {
       return '<ul class="copilot-task-list">' + m + "</ul>";
     });
-    // Ordered lists
     text = text.replace(/^\d+\. (.+)$/gm, '<li class="copilot-ol-item">$1</li>');
     text = text.replace(/((?:<li class="copilot-ol-item">.*<\/li>\n?)+)/g, function (m) {
       return "<ol>" + m.replace(/ class="copilot-ol-item"/g, "") + "</ol>";
     });
-    // Unordered lists (skip task-list items, already wrapped)
     text = text.replace(/^[-*] (?!<input)(.+)$/gm, "<li>$1</li>");
-    // Wrap consecutive plain <li> in <ul>; the task-list <li> are already
-    // inside <ul class="copilot-task-list"> so they won't match here.
     text = text.replace(/(?:^|\n)((?:<li>(?!<input)[^\n]*<\/li>\n?)+)/g, function (full, lis) {
       return "\n<ul>" + lis + "</ul>";
     });
-    // Blockquotes
     text = text.replace(/^>\s+(.+)$/gm, '<blockquote class="copilot-quote">$1</blockquote>');
-    // Paragraphs
     text = text
       .split(/\n{2,}/)
       .map(function (p) {
@@ -276,7 +334,7 @@
         return "<p>" + p + "</p>";
       })
       .join("\n");
-    // Restore extracted blocks
+
     text = text.replace(/__CODEBLOCK_(\d+)__/g, function (_, idx) {
       return codeBlocks[parseInt(idx, 10)];
     });
@@ -286,28 +344,28 @@
     return text;
   }
 
-  /* Inline markdown rules — used both standalone and inside tables */
+  /* Inline markdown rules — operate on already-escaped text. */
   function inlineMd(text) {
     if (!text) return "";
-    // Inline code
-    text = text.replace(/`([^`]+)`/g, function (_, code) {
-      return "<code>" + esc(code) + "</code>";
-    });
+    // Inline code — `code` is already escaped, no need to re-escape
+    text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
     // Bold
     text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    // Italic — bracketed lookarounds for non-** sibling chars
+    // Italic
     text = text.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, "$1<em>$2</em>");
-    // Links — SEC-COPILOT: validate URL protocol to prevent javascript: XSS
+    // Links — URL & link text are already escaped; protocol check still
+    // applies because escape doesn't touch ASCII letters / colons.
     text = text.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
       function (_, linkText, url) {
-        if (!/^https?:\/\//i.test(url.trim())) {
-          return esc(linkText);
+        var u = url.trim();
+        if (!/^https?:\/\//i.test(u)) {
+          return linkText;
         }
-        return '<a href="' + esc(url.trim()) + '" target="_blank" rel="noopener noreferrer">' + esc(linkText) + '</a>';
+        return '<a href="' + u + '" target="_blank" rel="noopener noreferrer">' + linkText + '</a>';
       }
     );
-    // Inline citation markers [^N] or [N] when followed by ^ — render as superscript
+    // Inline citation markers [^N] — render as superscript
     text = text.replace(/\[\^(\d+)\]/g, '<sup class="copilot-cite"><a href="#copilot-src-$1">$1</a></sup>');
     return text;
   }
@@ -326,9 +384,6 @@
     var version = "11.10.0";
     var script = document.createElement("script");
     script.src = "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/" + version + "/highlight.min.js";
-    // Note: SRI hash intentionally omitted — pinning to the cdnjs URL +
-    // explicit version is sufficient defence-in-depth for a public docs
-    // site. Adding a wrong hash would silently break syntax highlighting.
     script.crossOrigin = "anonymous";
     script.referrerPolicy = "no-referrer";
     var lightCss = document.createElement("link");
@@ -360,7 +415,6 @@
         }
       });
     });
-    // Wire copy buttons (work even if highlight.js never loads)
     root.querySelectorAll("pre .copilot-copy").forEach(function (btn) {
       if (btn.dataset.bound) return;
       btn.dataset.bound = "1";
@@ -397,10 +451,22 @@
   var sending = false;
   var isOpen = false;
   var isFullPage = false;
+  var lastConversationId = null;
+  var lastQuery = "";
+
+  /* ── Auth + opt-out headers for API calls ─────────────── */
+  function buildHeaders(token) {
+    var h = {
+      "Content-Type": "application/json",
+      "X-Copilot-Token": token,
+      "X-Copilot-Session": getSessionId(),
+    };
+    if (isOptedOut()) h["X-Copilot-Opt-Out"] = "1";
+    return h;
+  }
 
   /* ── DOM Creation ──────────────────────────────────── */
   function createWidget() {
-    // Load search index for page references
     loadSearchIndex();
 
     var fullPageEl = document.getElementById("copilot-fullpage");
@@ -422,10 +488,18 @@
       '<div class="copilot-header">' +
       "  <span>🤖 CSA-in-a-Box Copilot</span>" +
       '  <div class="copilot-header-actions">' +
+      '    <button class="copilot-request" title="Request a use case or report an issue">💡</button>' +
       '    <button class="copilot-clear" title="Clear chat">↻</button>' +
       '    <button class="copilot-fullscreen" title="Full-page chat">⛶</button>' +
       "  </div>" +
       "</div>" +
+      '<div class="copilot-banner copilot-hidden" role="status">' +
+      '  <div class="copilot-banner-text">Help us make this Copilot better — we log questions and answers (with secrets redacted) to improve coverage. <a href="' + esc(CONFIG.privacyDocUrl) + '" target="_blank" rel="noopener">Read the privacy notice</a>.</div>' +
+      '  <div class="copilot-banner-actions">' +
+      '    <button class="copilot-banner-accept">Accept</button>' +
+      '    <button class="copilot-banner-out">Opt out</button>' +
+      '  </div>' +
+      '</div>' +
       '<div class="copilot-messages"></div>' +
       '<div class="copilot-input-area">' +
       '  <textarea class="copilot-input" placeholder="Ask about CSA-in-a-Box..." rows="1" maxlength="' + CONFIG.maxMessageLength + '"></textarea>' +
@@ -445,9 +519,25 @@
     var messagesEl = panel.querySelector(".copilot-messages");
     var inputEl = panel.querySelector(".copilot-input");
     var sendBtn = panel.querySelector(".copilot-send");
+    var bannerEl = panel.querySelector(".copilot-banner");
 
     // Welcome message
     appendMessage("assistant", CONFIG.welcomeMessage);
+
+    // Privacy banner — show on first open
+    if (!getPrivacyDecision()) {
+      bannerEl.classList.remove("copilot-hidden");
+    }
+    bannerEl.querySelector(".copilot-banner-accept").addEventListener("click", function () {
+      setPrivacyDecision("accepted");
+      bannerEl.classList.add("copilot-hidden");
+    });
+    bannerEl.querySelector(".copilot-banner-out").addEventListener("click", function () {
+      setPrivacyDecision("opted_out");
+      bannerEl.classList.add("copilot-hidden");
+      var msg = appendMessage("assistant", "✓ You're opted out — your chats won't be logged. You can change this any time by clearing browser storage.");
+      msg.classList.add("copilot-system");
+    });
 
     // Toggle panel
     fab.addEventListener("click", function () {
@@ -460,6 +550,8 @@
     // Clear
     panel.querySelector(".copilot-clear").addEventListener("click", function () {
       history = [];
+      lastConversationId = null;
+      lastQuery = "";
       messagesEl.innerHTML = "";
       appendMessage("assistant", CONFIG.welcomeMessage);
     });
@@ -467,6 +559,11 @@
     // Fullscreen
     panel.querySelector(".copilot-fullscreen").addEventListener("click", function () {
       window.location.href = (window.__md_scope || "") + "chat/";
+    });
+
+    // Use-case / bug request modal
+    panel.querySelector(".copilot-request").addEventListener("click", function () {
+      openRequestModal();
     });
 
     // Send
@@ -478,7 +575,6 @@
       }
     });
 
-    // Auto-resize textarea
     inputEl.addEventListener("input", function () {
       this.style.height = "auto";
       this.style.height = Math.min(this.scrollHeight, 100) + "px";
@@ -509,7 +605,6 @@
 
       function onResizeMove(e) {
         var ev = e.touches ? e.touches[0] : e;
-        // Panel is anchored bottom-right, so dragging top-left outward = larger
         var dw = startX - ev.clientX;
         var dh = startY - ev.clientY;
         var newW = Math.max(300, Math.min(startW + dw, window.innerWidth - 32));
@@ -532,12 +627,10 @@
       var text = inputEl.value.trim();
       if (!text || sending) return;
 
-      // SEC-COPILOT: Client-side message length enforcement
       if (text.length > CONFIG.maxMessageLength) {
         text = text.substring(0, CONFIG.maxMessageLength);
       }
 
-      // SEC-COPILOT: Rate limiting (3 seconds between sends)
       var now = Date.now();
       if (now - lastSendTime < CONFIG.rateLimitMs) return;
       lastSendTime = now;
@@ -553,27 +646,36 @@
         history = history.slice(-CONFIG.maxHistory * 2);
 
       var streamingEl = appendMessage("assistant", "Thinking...", true);
+      var conversationId = uuid();
+      lastConversationId = conversationId;
+      lastQuery = text;
 
-      var userQuery = text; // capture for reference card
-      // Pre-search local docs index so the backend can ground citations
-      var grounding = searchPages(userQuery, 5);
+      var grounding = searchPages(text, 5);
 
-      sendToBackend(text, grounding, function onChunk(partial) {
+      sendToBackend(text, grounding, conversationId, function onChunk(partial) {
         updateBubble(streamingEl, partial, false);
       })
         .then(function (result) {
           var reply = (result && result.reply) || "";
           var sources = (result && result.sources) || [];
+          var meta = (result && result.meta) || {};
           updateBubble(streamingEl, reply || "(empty response)", true);
           history.push({ role: "assistant", content: reply });
 
-          // Inline citation footer (AI-curated, ordered)
           appendCitations(sources);
 
-          // Always also offer the Related Pages card from local index — broader coverage
-          var refs = searchPages(userQuery);
+          var refs = searchPages(text);
           if (refs.length > 0) {
             appendReferences(refs);
+          }
+
+          // Feedback strip on every assistant reply
+          appendFeedbackStrip(conversationId);
+
+          // If the backend flagged this as uncovered, offer a one-click
+          // "add to backlog" promotion below the reply.
+          if (meta.uncovered) {
+            appendUncoveredPrompt(conversationId, text);
           }
         })
         .catch(function (err) {
@@ -610,19 +712,16 @@
       return wrap;
     }
 
-    /* Update an existing assistant bubble in place (used during streaming) */
     function updateBubble(wrap, text, finalize) {
       var bubble = wrap.querySelector(".copilot-bubble");
       if (!bubble) return;
       bubble.classList.remove("copilot-typing");
       bubble.innerHTML = md(text);
-      // Stick to bottom while user hasn't scrolled up
       var nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
       if (nearBottom) messagesEl.scrollTop = messagesEl.scrollHeight;
       if (finalize) enhanceCodeBlocks(bubble);
     }
 
-    /* Render the AI-supplied structured citations as an inline footer */
     function appendCitations(sources) {
       if (!sources || !sources.length) return;
       var wrap = document.createElement("div");
@@ -651,49 +750,216 @@
       messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
-    /* ── Append References Card ─────────────────────── */
     function appendReferences(results) {
       var wrap = document.createElement("div");
       wrap.className = "copilot-msg copilot-msg-assistant";
-
       var spacer = document.createElement("div");
       spacer.className = "copilot-avatar";
-      // empty spacer to align with bubbles
-
       var card = document.createElement("div");
       card.className = "copilot-bubble copilot-refs-bubble";
       card.innerHTML = buildReferencesCard(results);
-
       wrap.appendChild(spacer);
       wrap.appendChild(card);
       messagesEl.appendChild(wrap);
       messagesEl.scrollTop = messagesEl.scrollHeight;
     }
+
+    /* ── Feedback strip (👍 / 👎 + improvement modal) ─────── */
+    function appendFeedbackStrip(conversationId) {
+      var strip = document.createElement("div");
+      strip.className = "copilot-feedback";
+      strip.innerHTML =
+        '<span class="copilot-feedback-label">Was this helpful?</span>' +
+        '<button class="copilot-thumb copilot-thumb-up" title="Yes, this was helpful" aria-label="Mark as helpful">👍</button>' +
+        '<button class="copilot-thumb copilot-thumb-down" title="No, this missed the mark" aria-label="Mark as unhelpful">👎</button>';
+      messagesEl.appendChild(strip);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+
+      var up = strip.querySelector(".copilot-thumb-up");
+      var down = strip.querySelector(".copilot-thumb-down");
+
+      function lock(rating) {
+        up.disabled = true;
+        down.disabled = true;
+        strip.classList.add("copilot-feedback-locked");
+        var pill = document.createElement("span");
+        pill.className = "copilot-feedback-pill";
+        pill.textContent = rating === "up" ? "Thanks for the signal." : "Thanks — we'll dig into this.";
+        strip.appendChild(pill);
+      }
+
+      up.addEventListener("click", function () {
+        submitFeedback(conversationId, "up", "");
+        lock("up");
+      });
+
+      down.addEventListener("click", function () {
+        openImprovementModal(conversationId, function (improvement) {
+          submitFeedback(conversationId, "down", improvement);
+          lock("down");
+        });
+      });
+    }
+
+    /* ── Uncovered-question prompt ─────────────────────── */
+    function appendUncoveredPrompt(conversationId, originalQuery) {
+      var prompt = document.createElement("div");
+      prompt.className = "copilot-uncovered";
+      prompt.innerHTML =
+        '<div class="copilot-uncovered-text">Looks like the docs don\'t cover this well yet. Want to add it to the backlog so we can write something up?</div>' +
+        '<div class="copilot-uncovered-actions">' +
+        '  <button class="copilot-uncovered-add">Add to backlog</button>' +
+        '  <button class="copilot-uncovered-skip">Not now</button>' +
+        '</div>';
+      messagesEl.appendChild(prompt);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+
+      function dismiss(text) {
+        prompt.innerHTML = '<div class="copilot-uncovered-thanks">' + esc(text) + '</div>';
+      }
+
+      prompt.querySelector(".copilot-uncovered-add").addEventListener("click", function () {
+        submitBacklog({
+          kind: "uncovered",
+          title: originalQuery.substring(0, CONFIG.maxBacklogTitleLength),
+          description:
+            "Reported via the docs Copilot when it could not give a good answer.\n\n" +
+            "Original question:\n\n" + originalQuery,
+          conversation_id: conversationId,
+        }).then(function () {
+          dismiss("✓ Added to the backlog. Thanks!");
+        }).catch(function () {
+          dismiss("Couldn't reach the backlog endpoint — please report via GitHub Issues instead.");
+        });
+      });
+      prompt.querySelector(".copilot-uncovered-skip").addEventListener("click", function () {
+        prompt.remove();
+      });
+    }
+
+    /* ── Modals (improvement + use-case request) ─────────── */
+    function openImprovementModal(conversationId, onSubmit) {
+      var modal = createModal({
+        title: "What was wrong with that answer?",
+        bodyHtml:
+          '<p class="copilot-modal-help">Optional, but helps us improve the docs.</p>' +
+          '<textarea class="copilot-modal-textarea" maxlength="' + CONFIG.maxImprovementLength + '" placeholder="What was missing, wrong, or unclear?"></textarea>',
+        primaryLabel: "Submit",
+        primaryHandler: function (modalEl) {
+          var ta = modalEl.querySelector(".copilot-modal-textarea");
+          var text = (ta.value || "").trim();
+          onSubmit(text);
+          closeModal(modalEl);
+        },
+        secondaryLabel: "Skip",
+        secondaryHandler: function (modalEl) {
+          onSubmit("");
+          closeModal(modalEl);
+        },
+      });
+    }
+
+    function openRequestModal() {
+      var initialKind = "feature";
+      var modal = createModal({
+        title: "Request a use case or report an issue",
+        bodyHtml:
+          '<div class="copilot-modal-tabs" role="tablist">' +
+          '  <button class="copilot-modal-tab copilot-modal-tab-active" data-kind="feature">Use case</button>' +
+          '  <button class="copilot-modal-tab" data-kind="bug">Bug</button>' +
+          '  <button class="copilot-modal-tab" data-kind="uncovered">Doc gap</button>' +
+          '</div>' +
+          '<input class="copilot-modal-input" placeholder="Title" maxlength="' + CONFIG.maxBacklogTitleLength + '">' +
+          '<textarea class="copilot-modal-textarea" maxlength="' + CONFIG.maxBacklogDescriptionLength + '" placeholder="What use case / bug / doc gap should we address?"></textarea>' +
+          '<p class="copilot-modal-help">This is filed publicly on GitHub Issues after you submit. Don\'t paste secrets — we redact common patterns server-side, but please double-check.</p>',
+        primaryLabel: "Submit",
+        primaryHandler: function (modalEl) {
+          var titleEl = modalEl.querySelector(".copilot-modal-input");
+          var descEl = modalEl.querySelector(".copilot-modal-textarea");
+          var title = (titleEl.value || "").trim();
+          var description = (descEl.value || "").trim();
+          if (!title || !description) {
+            titleEl.classList.toggle("copilot-modal-error", !title);
+            descEl.classList.toggle("copilot-modal-error", !description);
+            return;
+          }
+          submitBacklog({
+            kind: initialKind,
+            title: title,
+            description: description,
+            conversation_id: lastConversationId || undefined,
+          }).then(function () {
+            closeModal(modalEl);
+            var msg = appendMessage("assistant", "✓ Thanks — your submission is on the way. We'll review it on GitHub.");
+            msg.classList.add("copilot-system");
+          }).catch(function (err) {
+            var help = modalEl.querySelector(".copilot-modal-help");
+            help.textContent = "Submission failed — " + (err.message || "please try again later.");
+            help.classList.add("copilot-modal-error");
+          });
+        },
+        secondaryLabel: "Cancel",
+        secondaryHandler: function (modalEl) { closeModal(modalEl); },
+      });
+      modal.querySelectorAll(".copilot-modal-tab").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          modal.querySelectorAll(".copilot-modal-tab").forEach(function (b) {
+            b.classList.remove("copilot-modal-tab-active");
+          });
+          btn.classList.add("copilot-modal-tab-active");
+          initialKind = btn.dataset.kind || "feature";
+        });
+      });
+    }
+
+    function createModal(opts) {
+      var overlay = document.createElement("div");
+      overlay.className = "copilot-modal-overlay";
+      var modal = document.createElement("div");
+      modal.className = "copilot-modal";
+      modal.innerHTML =
+        '<div class="copilot-modal-header">' + esc(opts.title) + '</div>' +
+        '<div class="copilot-modal-body">' + opts.bodyHtml + '</div>' +
+        '<div class="copilot-modal-actions">' +
+        '  <button class="copilot-modal-secondary">' + esc(opts.secondaryLabel || "Cancel") + '</button>' +
+        '  <button class="copilot-modal-primary">' + esc(opts.primaryLabel || "OK") + '</button>' +
+        '</div>';
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      modal.querySelector(".copilot-modal-primary").addEventListener("click", function () {
+        opts.primaryHandler(modal);
+      });
+      modal.querySelector(".copilot-modal-secondary").addEventListener("click", function () {
+        if (opts.secondaryHandler) opts.secondaryHandler(modal);
+        else closeModal(modal);
+      });
+      overlay.addEventListener("click", function (e) {
+        if (e.target === overlay) closeModal(modal);
+      });
+      var ta = modal.querySelector(".copilot-modal-textarea");
+      if (ta) setTimeout(function () { ta.focus(); }, 50);
+      return modal;
+    }
+
+    function closeModal(modalEl) {
+      var overlay = modalEl.parentElement;
+      if (overlay && overlay.parentElement) overlay.parentElement.removeChild(overlay);
+    }
   }
 
   /* ── Backend Communication ─────────────────────────── */
-  /**
-   * @param {string} message — user input
-   * @param {Array} grounding — pre-searched local docs (frontend-side RAG)
-   * @param {Function} onChunk — called with the accumulating reply text as
-   *                             chunks arrive (for progressive UI rendering)
-   * @returns {Promise<{reply: string, sources: Array}>}
-   */
-  function sendToBackend(message, grounding, onChunk) {
+  function sendToBackend(message, grounding, conversationId, onChunk) {
     var pageContext = {
       url: window.location.href,
       title: document.title,
       path: window.location.pathname,
     };
 
-    // SEC-COPILOT: Generate time-based request token
     return generateRequestToken().then(function (token) {
-      return fetch(CONFIG.apiEndpoint, {
+      return fetch(CONFIG.apiBase + "/chat", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Copilot-Token": token,
-        },
+        headers: buildHeaders(token),
         body: JSON.stringify({
           message: message,
           history: history.slice(-CONFIG.maxHistory * 2),
@@ -701,6 +967,8 @@
           grounding: (grounding || []).map(function (g) {
             return { title: g.title || "", url: g.pageUrl || "" };
           }),
+          session_id: getSessionId(),
+          conversation_id: conversationId,
         }),
       });
     }).then(function (resp) {
@@ -711,7 +979,6 @@
 
       var ct = resp.headers.get("content-type") || "";
 
-      // Streaming (ndjson)
       if (ct.includes("ndjson") || ct.includes("stream")) {
         var reader = resp.body.getReader();
         var decoder = new TextDecoder();
@@ -748,12 +1015,50 @@
         return read();
       }
 
-      // Standard JSON
       return resp.json().then(function (data) {
         var reply = data.reply || data.content || "";
         var sources = data.sources || [];
+        var meta = data.meta || null;
         if (typeof onChunk === "function" && reply) onChunk(reply);
-        return { reply: reply, sources: sources };
+        return { reply: reply, sources: sources, meta: meta };
+      });
+    });
+  }
+
+  function submitFeedback(conversationId, rating, improvement) {
+    if (isOptedOut()) return Promise.resolve();
+    return generateRequestToken().then(function (token) {
+      return fetch(CONFIG.apiBase + "/feedback", {
+        method: "POST",
+        headers: buildHeaders(token),
+        body: JSON.stringify({
+          session_id: getSessionId(),
+          conversation_id: conversationId,
+          rating: rating,
+          improvement: improvement || "",
+        }),
+      });
+    }).catch(function () { /* feedback is best-effort */ });
+  }
+
+  function submitBacklog(payload) {
+    return generateRequestToken().then(function (token) {
+      return fetch(CONFIG.apiBase + "/backlog", {
+        method: "POST",
+        headers: buildHeaders(token),
+        body: JSON.stringify({
+          kind: payload.kind,
+          title: (payload.title || "").substring(0, CONFIG.maxBacklogTitleLength),
+          description: (payload.description || "").substring(0, CONFIG.maxBacklogDescriptionLength),
+          session_id: getSessionId(),
+          conversation_id: payload.conversation_id || undefined,
+          page_url: window.location.href,
+        }),
+      }).then(function (resp) {
+        if (!resp.ok) return resp.json().then(function (e) {
+          throw new Error(e.error || "Submission failed (" + resp.status + ")");
+        });
+        return resp.json();
       });
     });
   }

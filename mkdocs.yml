@@ -113,6 +113,7 @@ nav:
       - Developer Pathways: DEVELOPER_PATHWAYS.md
       - Production Checklist: PRODUCTION_CHECKLIST.md
       - AI Copilot (chat with the docs): chat.md
+      - Copilot privacy notice: copilot-privacy.md
       - Role-Based Quickstarts:
           - Overview: quickstarts/index.md
           - Data Engineer: quickstarts/data-engineer.md

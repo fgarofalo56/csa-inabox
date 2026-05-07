@@ -1,0 +1,159 @@
+# Watches PRs that look like Copilot auto-fix output. If the PR is from
+# the bot AND the diff is contained within a configurable safelist of
+# paths AND all required checks pass, enable GitHub auto-merge so the
+# PR lands without human intervention.
+#
+# Anything outside the safelist is held for maintainer review (the
+# workflow simply doesn't enable auto-merge). The user explicitly
+# opted in to autonomous merge for in-scope diffs only.
+#
+# Safelist defaults: docs/**, examples/**, .github/ISSUE_TEMPLATE/**.
+# Override per-repo by editing AUTO_MERGE_SAFELIST_PATTERNS.
+name: Copilot Auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  check_suite:
+    types: [completed]
+  status: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: copilot-auto-merge-${{ github.event.pull_request.number || github.event.check_suite.pull_requests[0].number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    if: |
+      github.event.pull_request != null ||
+      github.event.check_suite != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      AUTO_MERGE_SAFELIST_PATTERNS: |
+        docs/**
+        examples/**
+        .github/ISSUE_TEMPLATE/**
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Identify candidate PR
+        id: pr
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const pr = context.payload.pull_request
+              || (context.payload.check_suite?.pull_requests?.[0]);
+            if (!pr) { core.setOutput("skip", "true"); return; }
+
+            // Pull current state — payload is sometimes stale on check_suite
+            const { data: full } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+            });
+
+            // Restrict to PRs from the auto-fix bot. Title prefix is the
+            // simplest discriminator; if you'd rather use an actor login,
+            // swap this to `full.user.login === 'claude[bot]'` or similar.
+            const isAutoFix =
+              /\(auto-fix #\d+\)/.test(full.title)
+              || full.head.ref.startsWith("claude/auto-fix/")
+              || full.labels.some(l => l.name === "auto-fix");
+            if (!isAutoFix) { core.setOutput("skip", "true"); return; }
+
+            core.setOutput("number", String(full.number));
+            core.setOutput("head_sha", full.head.sha);
+            core.setOutput("draft", String(full.draft));
+            core.setOutput("mergeable_state", full.mergeable_state || "");
+            core.setOutput("skip", "false");
+
+      - name: Compute changed files
+        if: steps.pr.outputs.skip == 'false'
+        id: diff
+        run: |
+          set -e
+          PR=${{ steps.pr.outputs.number }}
+          gh pr diff "$PR" --name-only > /tmp/changed.txt
+          echo "Changed files:"
+          cat /tmp/changed.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate safelist containment
+        if: steps.pr.outputs.skip == 'false'
+        id: safelist
+        run: |
+          set -e
+          patterns=$(echo "$AUTO_MERGE_SAFELIST_PATTERNS" | tr -d ' ' | grep -v '^$')
+          all_ok=1
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            ok=0
+            while IFS= read -r p; do
+              [ -z "$p" ] && continue
+              # Simple glob containment via bash extglob
+              shopt -s globstar nullglob
+              for match in $p; do
+                if [ "$match" = "$f" ]; then ok=1; break; fi
+              done
+              shopt -u globstar nullglob
+            done <<< "$patterns"
+            if [ "$ok" -ne 1 ]; then
+              echo "Out of safelist: $f"
+              all_ok=0
+            fi
+          done < /tmp/changed.txt
+          echo "in_safelist=$all_ok" >> "$GITHUB_OUTPUT"
+
+      - name: Comment outcome
+        if: steps.pr.outputs.skip == 'false'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const inSafelist = "${{ steps.safelist.outputs.in_safelist }}" === "1";
+            const number = Number("${{ steps.pr.outputs.number }}");
+            if (!inSafelist) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                body:
+                  "🤖 Copilot Auto-merge: this PR touches files outside " +
+                  "the auto-merge safelist (`docs/**`, `examples/**`, " +
+                  "`.github/ISSUE_TEMPLATE/**`). A maintainer will need to " +
+                  "review and merge manually.",
+              });
+              return;
+            }
+            // Enable GitHub's native auto-merge — it will only fire when
+            // all required checks pass, so this is the natural gate.
+            try {
+              await github.graphql(`
+                mutation($id: ID!) {
+                  enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: SQUASH }) {
+                    pullRequest { number }
+                  }
+                }
+              `, { id: context.payload.pull_request?.node_id || (await github.rest.pulls.get({
+                owner: context.repo.owner, repo: context.repo.repo, pull_number: number,
+              })).data.node_id });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                body:
+                  "🤖 Copilot Auto-merge: enabled. The PR will land " +
+                  "automatically once all required checks pass.",
+              });
+            } catch (e) {
+              core.warning(`auto-merge enable failed: ${e.message}`);
+            }
