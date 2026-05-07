@@ -228,13 +228,63 @@ def _detect_injection(text: str) -> bool:
     return bool(_INJECTION_RE.search(text))
 
 
-# ── Off-topic refusal detection ───────────────────────────────────────────
+# ── Topic-class extraction (SEC-COPILOT 2026-05-07) ───────────────────────
 
-# Matches the canned refusal we ask the LLM to emit for off-topic requests.
-# Used to flag conversations as "uncovered" for backlog triage.
+# Sentinel emitted by the LLM at the start of every reply per the system
+# prompt: ``<topic-class>on_topic|off_topic|ambiguous</topic-class>``.
+# Tolerates leading whitespace, surrounding code-fence markers, and
+# extra newlines. Anchored near the start (first 200 chars) so a stray
+# match later in the body doesn't poison classification.
+_TOPIC_CLASS_RE = re.compile(
+    r"<topic-class>\s*(on_topic|off_topic|ambiguous)\s*</topic-class>",
+    re.IGNORECASE,
+)
+_TOPIC_CLASS_VALUES = {"on_topic", "off_topic", "ambiguous"}
+
+# Legacy refusal phrasing — used as a fallback classifier if the model
+# forgets to emit the structured tag. Most replies will have the tag;
+# this is just a safety net.
 _OFFTOPIC_REFUSAL_RE = re.compile(
     r"(?i)i can only help with (?:csa[- ]in[- ]a[- ]box|csa[- ]inabox|the cs[as][- ]in[- ]a[- ]box)",
 )
+
+
+def _extract_topic_class(reply: str) -> tuple[str, str]:
+    """Return ``(topic_class, reply_with_sentinel_stripped)``.
+
+    Defaults to ``"on_topic"`` when neither the structured tag nor the
+    legacy refusal phrase is present. Off-topic detection only takes
+    effect when the model affirmatively says so — being permissive at
+    classification time avoids treating real coverage gaps as
+    off-topic.
+    """
+    if not reply:
+        return "on_topic", reply
+
+    # Anchor at the start of the reply (allowing leading whitespace and
+    # an optional code-fence). Protects against a stray ``<topic-class>``
+    # token that the model might emit later inside a code block as part
+    # of a Python regex example.
+    head = reply.lstrip()[:100]
+    if head.startswith("```"):
+        # Strip an opening fence so models that wrap the whole reply
+        # in markdown still get classified.
+        head = head.split("\n", 1)[-1] if "\n" in head else head
+    m = _TOPIC_CLASS_RE.match(head)
+    if m:
+        cls = m.group(1).lower()
+        if cls not in _TOPIC_CLASS_VALUES:
+            cls = "on_topic"
+        # Strip the sentinel out of the reply (also drop the trailing
+        # newline so we don't leave an awkward empty line at the top).
+        cleaned = _TOPIC_CLASS_RE.sub("", reply, count=1).lstrip("\n").lstrip()
+        return cls, cleaned
+
+    # Fallback: legacy refusal phrase indicates off-topic.
+    if _OFFTOPIC_REFUSAL_RE.search(reply):
+        return "off_topic", reply
+
+    return "on_topic", reply
 
 
 # ── Request Token Validation ──────────────────────────────────────────────
@@ -493,6 +543,99 @@ Use markdown tables, task lists (`- [ ]`), code blocks with language \
 hints (e.g., ```bicep, ```python, ```bash), and bullet/ordered lists \
 liberally — the widget renders them with syntax highlighting and \
 copy-to-clipboard buttons.
+
+## Topic classification (REQUIRED — emit on EVERY response)
+
+At the very start of every response, output ONE of these three lines on \
+its own line, immediately followed by a blank line, then your actual \
+answer. The widget strips the tag before rendering.
+
+```
+<topic-class>on_topic</topic-class>
+<topic-class>off_topic</topic-class>
+<topic-class>ambiguous</topic-class>
+```
+
+### Classification rules
+
+**on_topic** — the question is about CSA-in-a-Box specifically OR about \
+Microsoft Azure data analytics platforms / products / architectures \
+(Synapse, Fabric, ADLS, ADF, Databricks, Purview, dbt, IaC for those \
+services, governance/compliance for data platforms, etc.).
+
+**off_topic** — has nothing to do with CSA-in-a-Box or Azure data \
+platforms. Includes: weather, sports, news, jokes, "write me a song / \
+poem / story", personal-life advice, generic LLM tasks (translate this \
+text, summarize this article, role-play as someone), and Azure topics \
+that aren't data-platform-related (App Service tuning, Logic Apps for \
+non-data flows, etc.).
+
+**ambiguous** — could go either way (general programming, broad Azure \
+questions that *might* connect to data). Default to a best-effort \
+answer with a polite "this is outside my main scope" caveat.
+
+### Off-topic responses — be helpfully snarky
+
+When you classify as `off_topic`, your response should:
+
+1. Politely but humorously decline.
+2. Tie the refusal back to a CSA-in-a-Box / Azure-data theme so it \
+   stays in-character.
+3. Suggest the user contact their Microsoft account team about Azure \
+   AI Foundry to build a custom agent for that purpose.
+4. End with an offer to help with an actual CSA-in-a-Box topic.
+
+Keep it short (3-4 sentences). Be warm-snarky, not contemptuous. Don't \
+lecture. Don't refuse rudely. Don't be preachy about scope.
+
+### Off-topic examples
+
+User: "What's the weather today?"
+You:
+```
+<topic-class>off_topic</topic-class>
+
+You're asking the wrong copilot — I can't predict the weather, but I \
+can predict your data lake will need partitioning if you don't tier it \
+properly. If you'd like a weather-aware agent for your data ops, your \
+Microsoft account team can help you stand one up on Azure AI Foundry. \
+Meanwhile, want to chat about the medallion pattern?
+```
+
+User: "Write me a song about Mondays"
+You:
+```
+<topic-class>off_topic</topic-class>
+
+I'm flattered you think I have rhythm, but my talents max out at \
+well-formed Bicep templates. Your Microsoft rep would love to help you \
+build a custom songwriter agent on Azure AI Foundry. I can sing the \
+praises of Purview lineage instead — interested?
+```
+
+User: "Who's your favorite football team?"
+You:
+```
+<topic-class>off_topic</topic-class>
+
+I root for whichever team has the cleanest data pipeline — call me \
+biased. For an AI that actually keeps up with sports, talk to your \
+Microsoft account team about Azure AI Foundry. Now, can I interest you \
+in something more in my lane, like ADF triggers or dbt incremental \
+models?
+```
+
+User: "Help me debug this Rust generic"
+You:
+```
+<topic-class>off_topic</topic-class>
+
+Borrow checker disputes are above my pay grade — I'm wired for the \
+Azure data analytics stack. Your Microsoft rep can connect you with a \
+custom code-help agent on Azure AI Foundry if that's a recurring \
+need. Otherwise, hit me with a Python-on-Databricks question or a \
+Bicep snag and I'm there.
+```
 """
 
 CONFIG_MAX_HISTORY = MAX_HISTORY_TURNS
@@ -695,6 +838,15 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
 
         reply = "".join(reply_parts)
 
+        # ── Topic-class extraction (SEC-COPILOT 2026-05-07) ─────────
+        # The system prompt asks the model to emit
+        # ``<topic-class>{on_topic|off_topic|ambiguous}</topic-class>``
+        # at the very start of every reply. Strip it out before the
+        # widget renders; surface it as a structured ``meta`` field so
+        # the UI can gate the "Add to backlog" prompt and the backend
+        # can split analytics by topic class.
+        topic_class, reply = _extract_topic_class(reply)
+
         cited_sources: list[dict[str, str]] = []
         cited_indexes = sorted({
             int(m) for m in re.findall(r"\[\^(\d+)\]", reply)
@@ -707,7 +859,16 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
         _record_tokens(ip, tokens_used)
 
         latency_ms = int((time.time() - started) * 1000)
-        is_uncovered = bool(_OFFTOPIC_REFUSAL_RE.search(reply)) or len(grounding_docs) == 0
+
+        # Uncovered = "this is a docs gap we should fix" → only fires
+        # for on-topic questions where we found no grounding hits.
+        # Off-topic questions are never "uncovered" (they're outside
+        # the scope of the docs entirely). Ambiguous = trust the
+        # grounding-hit signal.
+        is_uncovered = (
+            topic_class != "off_topic"
+            and len(grounding_docs) == 0
+        )
 
         # ── Telemetry + persistence (best-effort, never blocks the response) ─
         if not _opt_out(req):
@@ -721,6 +882,7 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                     "tokens_used": tokens_used,
                     "grounding_count": len(grounding_docs),
                     "citation_count": len(cited_sources),
+                    "topic_class": topic_class,
                     "uncovered": is_uncovered,
                     "page_url": str(page_context.get("url", ""))[:500],
                     "page_title": str(page_context.get("title", ""))[:200],
@@ -740,6 +902,7 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                     citations=[{"title": s["title"], "url": s["url"]} for s in cited_sources],
                     latency_ms=latency_ms,
                     tokens_used=tokens_used,
+                    topic_class=topic_class,
                     uncovered=is_uncovered,
                 )
 
@@ -759,6 +922,7 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                 "meta": {
                     "session_id": session_id,
                     "conversation_id": conversation_id,
+                    "topic_class": topic_class,
                     "uncovered": is_uncovered,
                     "latency_ms": latency_ms,
                 },

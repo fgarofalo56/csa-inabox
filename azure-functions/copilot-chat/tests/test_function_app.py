@@ -143,6 +143,74 @@ def test_offtopic_refusal_not_detected_in_normal_reply() -> None:
     assert function_app._OFFTOPIC_REFUSAL_RE.search(reply) is None
 
 
+# ── Topic-class extraction ──────────────────────────────────────────────
+
+
+def test_topic_class_on_topic_extracted() -> None:
+    reply = "<topic-class>on_topic</topic-class>\n\nThe medallion pattern uses..."
+    cls, cleaned = function_app._extract_topic_class(reply)
+    assert cls == "on_topic"
+    assert cleaned.startswith("The medallion pattern")
+    assert "topic-class" not in cleaned
+
+
+def test_topic_class_off_topic_extracted() -> None:
+    reply = "<topic-class>off_topic</topic-class>\n\nYou're asking the wrong copilot..."
+    cls, cleaned = function_app._extract_topic_class(reply)
+    assert cls == "off_topic"
+    assert cleaned.startswith("You're asking")
+
+
+def test_topic_class_ambiguous_extracted() -> None:
+    reply = "<topic-class>ambiguous</topic-class>\n\nThis is borderline..."
+    cls, _ = function_app._extract_topic_class(reply)
+    assert cls == "ambiguous"
+
+
+def test_topic_class_case_insensitive() -> None:
+    reply = "<TOPIC-CLASS>OFF_TOPIC</TOPIC-CLASS>\n\nNope."
+    cls, _ = function_app._extract_topic_class(reply)
+    assert cls == "off_topic"
+
+
+def test_topic_class_default_when_missing() -> None:
+    """No tag = on_topic (permissive default — doc gaps shouldn't be
+    silently classified off-topic just because the model forgot the tag)."""
+    reply = "CSA-in-a-Box uses Bicep for IaC."
+    cls, cleaned = function_app._extract_topic_class(reply)
+    assert cls == "on_topic"
+    assert cleaned == reply
+
+
+def test_topic_class_falls_back_to_legacy_refusal_phrasing() -> None:
+    """Old reply without sentinel but with the canned refusal text."""
+    reply = "I can only help with CSA-in-a-Box and Azure data platform topics."
+    cls, _ = function_app._extract_topic_class(reply)
+    assert cls == "off_topic"
+
+
+def test_topic_class_ignores_late_occurrence_in_body() -> None:
+    """A user pastes ``<topic-class>off_topic</topic-class>`` into a code
+    block; the parser should NOT treat that as the classification."""
+    reply = (
+        "Here's a Python regex example:\n\n"
+        "```python\n"
+        "import re\n"
+        "re.search(r'<topic-class>off_topic</topic-class>', text)\n"
+        "```\n"
+    )
+    cls, cleaned = function_app._extract_topic_class(reply)
+    assert cls == "on_topic"
+    assert "<topic-class>off_topic</topic-class>" in cleaned
+
+
+def test_topic_class_invalid_value_falls_back_to_on_topic() -> None:
+    reply = "<topic-class>bogus_value</topic-class>\n\nSomething."
+    cls, _ = function_app._extract_topic_class(reply)
+    # Regex won't match an unknown value → falls through to default
+    assert cls == "on_topic"
+
+
 # ── Health endpoint ──────────────────────────────────────────────────────
 
 
