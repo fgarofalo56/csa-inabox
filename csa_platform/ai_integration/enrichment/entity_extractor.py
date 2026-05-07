@@ -124,6 +124,12 @@ class EntityExtractor:
 
         Automatically batches requests to respect the API batch limit.
 
+        .. note::
+           **Batch-only; do not use from FastAPI request handlers.** This
+           method calls the synchronous ``TextAnalyticsClient`` and will
+           block the event loop. Use :meth:`extract_entities_async` from
+           request paths.
+
         Args:
             texts: List of text strings to analyse.
 
@@ -233,6 +239,12 @@ class EntityExtractor:
     ) -> dict[str, int]:
         """Read records from Bronze storage, extract entities, write to Silver.
 
+        .. note::
+           **Batch-only; do not use from FastAPI request handlers.** This
+           method does blocking I/O (file reads/writes plus synchronous NER
+           API calls) and is intended to be called from a batch job, dbt
+           hook, or background worker — not from a request path.
+
         Reads JSON-lines from *bronze_path*, enriches with NER, and writes
         enriched records to *silver_path*.
 
@@ -282,3 +294,34 @@ class EntityExtractor:
             errors=stats["errors"],
         )
         return stats
+
+    # ------------------------------------------------------------------
+    # Async variants (CSA-0117) — request-path safe.
+    # ------------------------------------------------------------------
+
+    async def extract_entities_async(self, texts: list[str]) -> list[ExtractionResult]:
+        """Async variant of :meth:`extract_entities` — safe for FastAPI handlers.
+
+        Off-loads the synchronous ``TextAnalyticsClient`` calls onto a
+        worker thread via :func:`asyncio.to_thread` so the event loop is
+        not blocked. No new dependencies are introduced.
+        """
+        import asyncio as _asyncio
+
+        return await _asyncio.to_thread(self.extract_entities, texts)
+
+    async def extract_entities_from_records_async(
+        self,
+        records: Sequence[dict[str, Any]],
+        text_field: str = "text",
+        id_field: str = "id",
+    ) -> list[dict[str, Any]]:
+        """Async variant of :meth:`extract_entities_from_records`."""
+        import asyncio as _asyncio
+
+        return await _asyncio.to_thread(
+            self.extract_entities_from_records,
+            records,
+            text_field,
+            id_field,
+        )

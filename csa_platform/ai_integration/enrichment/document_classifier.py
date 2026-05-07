@@ -328,6 +328,13 @@ class DocumentClassifier:
     def classify_single(self, text: str) -> ClassificationResult:
         """Classify a single text document.
 
+        .. note::
+           **Batch-only; do not use from FastAPI request handlers.** This
+           method calls the synchronous Azure OpenAI SDK and a blocking
+           ``time.sleep`` rate limiter, so it will stall the event loop if
+           invoked from within an async request. For request-path use, call
+           :meth:`classify_single_async` instead.
+
         Args:
             text: The document text to classify.
 
@@ -358,6 +365,12 @@ class DocumentClassifier:
     def classify(self, texts: list[str]) -> list[ClassificationResult]:
         """Classify a batch of texts with rate limiting.
 
+        .. note::
+           **Batch-only; do not use from FastAPI request handlers.** Use
+           :meth:`classify_async` for request-path callers — that path uses
+           the async Azure OpenAI SDK and ``asyncio.sleep`` so it never
+           blocks the event loop.
+
         Args:
             texts: List of document texts to classify.
 
@@ -368,6 +381,84 @@ class DocumentClassifier:
         for idx, text in enumerate(texts):
             logger.info("classifying_document", index=idx + 1, total=len(texts))
             result = self.classify_single(text)
+            results.append(result)
+        return results
+
+    # ------------------------------------------------------------------
+    # Async variants (CSA-0117) — request-path safe.
+    # ------------------------------------------------------------------
+
+    async def _classify_api_call_async(self, text: str, system_prompt: str) -> dict[str, Any]:
+        """Async variant of :meth:`_classify_api_call` for FastAPI handlers.
+
+        Uses the synchronous Azure OpenAI SDK off-loaded to a worker thread
+        via :func:`asyncio.to_thread`. This avoids introducing a new
+        dependency on the (currently optional) ``openai`` async client while
+        still letting callers ``await`` the call without blocking the event
+        loop.
+        """
+        await self._rate_limit_async()
+
+        def _call() -> dict[str, Any]:
+            client = self._get_client()
+            response = client.chat.completions.create(
+                model=self.deployment,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Classify this text:\n\n{text}"},
+                ],
+                max_tokens=256,
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+            raw_content = response.choices[0].message.content or "{}"
+            parsed: dict[str, Any] = json.loads(raw_content)
+            return parsed
+
+        return await asyncio.to_thread(_call)
+
+    async def classify_single_async(self, text: str) -> ClassificationResult:
+        """Async variant of :meth:`classify_single` — safe for FastAPI handlers.
+
+        Args:
+            text: The document text to classify.
+
+        Returns:
+            A :class:`ClassificationResult`.
+        """
+        system_prompt = self._build_system_prompt()
+        preview = text[:200] + "..." if len(text) > 200 else text
+        try:
+            parsed = await self._classify_api_call_async(text, system_prompt)
+            return ClassificationResult(
+                text_preview=preview,
+                category=parsed.get("category", "other"),
+                subcategory=parsed.get("subcategory"),
+                confidence=float(parsed.get("confidence", 0.0)),
+                reasoning=parsed.get("reasoning", ""),
+            )
+        except Exception as exc:
+            logger.exception("classification.failed", error=str(exc))
+            return ClassificationResult(
+                text_preview=preview,
+                category="other",
+                is_error=True,
+                error_message=str(exc),
+            )
+
+    async def classify_async(self, texts: list[str]) -> list[ClassificationResult]:
+        """Async variant of :meth:`classify` — safe for FastAPI handlers.
+
+        Args:
+            texts: List of document texts to classify.
+
+        Returns:
+            List of :class:`ClassificationResult`, one per input text.
+        """
+        results: list[ClassificationResult] = []
+        for idx, text in enumerate(texts):
+            logger.info("classifying_document_async", index=idx + 1, total=len(texts))
+            result = await self.classify_single_async(text)
             results.append(result)
         return results
 

@@ -1,0 +1,143 @@
+# ============================================================================
+# Argo Rollouts example for the CSA-in-a-Box portal backend.
+#
+# Drop-in canary replacement for the built-in Helm `Deployment` rendered from
+# portal/kubernetes/helm/csa-portal/templates/backend.yaml. Use this when you
+# want progressive traffic shifting, automated analysis, or instant abort on
+# SLO violations — capabilities the native `Deployment.strategy` field cannot
+# express.
+#
+# Prerequisites:
+#   1. Argo Rollouts installed in the cluster:
+#         kubectl create namespace argo-rollouts
+#         kubectl apply -n argo-rollouts -f \
+#           https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+#   2. The `argo-rollouts` controller has CRD permissions for `Rollout`,
+#      `AnalysisTemplate`, and (optionally) the traffic-router of your choice
+#      (Istio / NGINX Ingress / Service-only weighted).
+#   3. The Helm chart's built-in `Deployment` for `csa-portal-backend` is
+#      either disabled (set `backend.deployBuiltIn: false` in values when
+#      that flag exists) OR removed before applying this CRD; the controller
+#      will refuse to manage two objects with the same name.
+#
+# Apply with:
+#   kubectl apply -f portal/kubernetes/argo-rollouts.example.yaml
+#
+# References:
+#   - https://argo-rollouts.readthedocs.io/en/stable/features/canary/
+#   - https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy
+#   - docs/runbooks/portal-rollout-strategy.md (in-repo runbook)
+# ============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: csa-portal-backend
+  labels:
+    app.kubernetes.io/name: csa-portal-backend
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: csa-portal
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: csa-portal-backend
+  strategy:
+    canary:
+      # Pause for 60s at 20% traffic, then 5m at 50%, then promote to 100%.
+      steps:
+        - setWeight: 20
+        - pause: { duration: 60s }
+        - setWeight: 50
+        - pause: { duration: 5m }
+        - setWeight: 80
+        - pause: { duration: 2m }
+      # Optional: gate promotion on a metrics-based AnalysisTemplate.
+      # analysis:
+      #   templates:
+      #     - templateName: success-rate-and-latency
+      #   startingStep: 1
+      #   args:
+      #     - name: service-name
+      #       value: csa-portal-backend
+      canaryService: csa-portal-backend-canary
+      stableService: csa-portal-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: csa-portal-backend
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: csa-portal
+    spec:
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: ghcr.io/fgarofalo56/csa-portal-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /api/health/live
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+# Stable service (receives 100% of traffic until a canary step shifts weight)
+apiVersion: v1
+kind: Service
+metadata:
+  name: csa-portal-backend
+  labels:
+    app.kubernetes.io/name: csa-portal-backend
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: csa-portal-backend
+---
+# Canary service (receives the weighted slice during canary steps)
+apiVersion: v1
+kind: Service
+metadata:
+  name: csa-portal-backend-canary
+  labels:
+    app.kubernetes.io/name: csa-portal-backend
+    app.kubernetes.io/role: canary
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: csa-portal-backend

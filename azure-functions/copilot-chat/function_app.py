@@ -324,6 +324,51 @@ def _safe_id(value: str | None, fallback_prefix: str) -> str:
     return cleaned or f"{fallback_prefix}-{int(time.time() * 1000)}"
 
 
+# ── Azure OpenAI client (SEC-COPILOT H-3 — MI preferred, key fallback) ───
+#
+# Prefers managed-identity auth via DefaultAzureCredential. The Function
+# App's system-assigned MI must hold ``Cognitive Services OpenAI User``
+# on the AOAI account (granted 2026-05-06).
+#
+# If ``AZURE_OPENAI_KEY`` is set, falls back to key auth — keeps local
+# dev (``func start``) working without an Azure session, and keeps the
+# old setting working as a defence-in-depth backstop while the MI role
+# binding propagates.
+
+_token_provider = None
+
+
+def _get_aad_token_provider():
+    """Lazy-init a bearer-token provider for AOAI. Cached at module scope."""
+    global _token_provider
+    if _token_provider is not None:
+        return _token_provider
+    from azure.identity import DefaultAzureCredential, get_bearer_token_provider  # type: ignore
+    cred = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+    _token_provider = get_bearer_token_provider(
+        cred, "https://cognitiveservices.azure.com/.default"
+    )
+    return _token_provider
+
+
+def _make_openai_client() -> AzureOpenAI:
+    """Build an AzureOpenAI client. MI-first, key-fallback."""
+    endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
+    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
+    api_key = os.environ.get("AZURE_OPENAI_KEY")
+    if api_key:
+        return AzureOpenAI(
+            azure_endpoint=endpoint,
+            api_key=api_key,
+            api_version=api_version,
+        )
+    return AzureOpenAI(
+        azure_endpoint=endpoint,
+        azure_ad_token_provider=_get_aad_token_provider(),
+        api_version=api_version,
+    )
+
+
 # ── System Prompt ─────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """\
@@ -639,11 +684,7 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
     messages.append({"role": "user", "content": message})
 
     try:
-        client = AzureOpenAI(
-            azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.environ["AZURE_OPENAI_KEY"],
-            api_version="2025-04-01-preview",
-        )
+        client = _make_openai_client()
 
         response = client.chat.completions.create(
             model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),

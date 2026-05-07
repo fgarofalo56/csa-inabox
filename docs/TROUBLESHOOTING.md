@@ -386,9 +386,8 @@ Check which files are below threshold and add tests.
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
-- [Rollback](ROLLBACK.md) — Deployment rollback runbook
-- [Disaster Recovery](DR.md) — Multi-region failover runbook
-- [Log Schema](LOG_SCHEMA.md) — Structured logging schema reference
+- ← Previous: [Rollback](ROLLBACK.md)
+- → Next: [Supply Chain Security](SUPPLY_CHAIN.md)
+- ⌂ Index: [Documentation home](index.md)

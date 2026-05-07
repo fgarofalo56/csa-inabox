@@ -34,6 +34,35 @@ deployed once regardless of tenant count.
 
 ---
 
+## 📦 Starter parameter file
+
+A starter parameter template lives at `deploy/bicep/DLZ/params.multi-tenant.json`
+— copy it per tenant (e.g. `params.tenant-contoso.json`), replace the prefix
+and contact metadata, and deploy. Snippet (truncated):
+
+```json
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location":    { "value": "East US 2" },
+    "environment": { "value": "prod" },
+    "prefix": {
+      "value": "ctso-dlz",
+      "_comment": "Tenant prefix 'ctso' prepended to the standard 'dlz' prefix."
+    },
+    "primaryContact": { "value": "platform-team@contoso.com" },
+    "costCenter":     { "value": "CONTOSO-TENANT-001" }
+  }
+}
+```
+
+See the file for the full set of services (storage zones, Cosmos DB,
+Databricks, Data Factory, Event Hubs, App Insights) and the per-tenant
+tags/RBAC scaffolding the templates emit.
+
+---
+
 ## 🏗️ 1. Architecture Overview
 
 CSA-in-a-Box uses a **stamped deployment model** for multi-tenancy. Each
@@ -547,8 +576,8 @@ account before decommissioning the tenant stamp.
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [MULTI_REGION.md](MULTI_REGION.md) — Multi-region deployment for high availability
-- [COST_MANAGEMENT.md](COST_MANAGEMENT.md) — Cost estimation, budgets, and FinOps practices
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Platform architecture overview
+- ← Previous: [Multi-Region](MULTI_REGION.md)
+- → Next: [Disaster Recovery](DR.md)
+- ⌂ Index: [Documentation home](index.md)

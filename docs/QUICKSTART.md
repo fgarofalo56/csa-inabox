@@ -678,9 +678,8 @@ Each example README has its own **Prerequisites / Cost / Teardown** section with
 
 ---
 
-## Related documentation
+**See also:**
 
-- [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
-- [Architecture](ARCHITECTURE.md) — Comprehensive architecture reference
-- [Troubleshooting](TROUBLESHOOTING.md) — Common issues and fixes
-- [ADF Setup](../scripts/deploy/deploy-adf.sh) — ADF deployment helper script
+- ← Previous: [Getting Started (30-min tour)](GETTING_STARTED.md)
+- → Next: [Developer Pathways](DEVELOPER_PATHWAYS.md)
+- ⌂ Index: [Documentation home](index.md)

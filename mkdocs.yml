@@ -345,6 +345,7 @@ nav:
           - Cost Alert Response: runbooks/cost-alert-response.md
           - Certificate Expiration: runbooks/certificate-expiration.md
           - Purview Scan Failure: runbooks/purview-scan-failure.md
+          - Portal Rollout Strategy: runbooks/portal-rollout-strategy.md
       - Compliance:
           - Overview: compliance/README.md
           - NIST 800-53 Rev 5: compliance/nist-800-53-rev5.md

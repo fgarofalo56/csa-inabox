@@ -340,9 +340,8 @@ disasterRecoveryConfigs` is not yet wired into the Bicep modules.
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Rollback](ROLLBACK.md) — Deployment rollback runbook
-- [Multi-Region Deployment](MULTI_REGION.md) — Multi-region deployment guide
-- [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist
-- [Platform Services](PLATFORM_SERVICES.md) — Platform component deep-dive
+- ← Previous: [Multi-Tenant](MULTI_TENANT.md)
+- → Next: [Documentation home](index.md)
+- ⌂ Index: [Documentation home](index.md)

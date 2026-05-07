@@ -189,3 +189,10 @@ For the full capability matrix and Fabric-equivalent mapping, see [Architecture 
 For deep-dive Fabric content — tutorials, feature guides, best practices, POC agendas, and ready-to-run notebooks — see the [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) companion site.
 
 <!-- release v0.3.0 -->
+
+---
+
+**See also:**
+
+- → Next: [Getting Started (30-min tour)](GETTING_STARTED.md)
+- ⌂ Index: [Documentation home](index.md)

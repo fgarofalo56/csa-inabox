@@ -20,7 +20,7 @@ CSA-in-a-Box (Cloud-Scale Analytics in a Box) is a **reference implementation** 
 | **Governance**         | Microsoft Purview sync, data product contracts (YAML), Great Expectations, Unity Catalog pattern                            |
 | **APIs / data apps**   | Data API Builder over Lakehouse, FastAPI BFF + React portal, MSAL auth, Power Apps starter                                  |
 | **Compliance**         | NIST 800-53 r5, FedRAMP Moderate, CMMC 2.0 L2, HIPAA, SOC 2, PCI-DSS, GDPR crosswalks                                       |
-| **Examples**           | 16 e2e vertical implementations (federal agencies, tribal, casino, ML lifecycle, IoT, AI agents)                            |
+| **Examples**           | 10 examples (9 verticals + iot-streaming cross-cutting pattern) spanning federal agencies, tribal, casino, ML lifecycle, IoT, AI agents |
 | **Operations**         | 8 production runbooks, DR drill automation, supply-chain security (SBOM + signing)                                          |
 
 **It is _not_** a turnkey SaaS — it is opinionated open-source IaC + reference code you fork into your tenant.
@@ -178,7 +178,7 @@ The repo is actively maintained against Azure GA features. Preview-only services
 | If you want to...                 | Go to                                                                                                      |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | **See it running**                | [Quickstart](QUICKSTART.md) (5 min) → [Tutorial 01](tutorials/01-foundation-platform/README.md) (45 min)   |
-| **Pick a vertical**               | [End-to-End Examples](examples/index.md) — 16 industries                                                   |
+| **Pick a vertical**               | [End-to-End Examples](examples/index.md) — 10 examples (9 verticals + iot-streaming cross-cutting pattern) |
 | **Understand the design**         | [Architecture](ARCHITECTURE.md) → [ADRs](adr/README.md)                                                    |
 | **Deploy to production**          | [Production Checklist](PRODUCTION_CHECKLIST.md) → [IaC & CI/CD Best Practices](IaC-CICD-Best-Practices.md) |
 | **Migrate from another platform** | [Migrations](migrations/README.md)                                                                         |
@@ -192,3 +192,11 @@ The repo is actively maintained against Azure GA features. Preview-only services
 - **GitHub Discussions**: https://github.com/fgarofalo56/csa-inabox/discussions (Q&A + feature requests)
 - **Docs Copilot**: in-page chat widget on every docs page (powered by Azure OpenAI in our DLZ — see [ADR 0022](adr/0022-copilot-surfaces-vs-docs-widget.md))
 - **Security issues**: see [SECURITY.md](https://github.com/fgarofalo56/csa-inabox/blob/main/SECURITY.md) (private disclosure)
+
+---
+
+**See also:**
+
+- ← Previous: [Documentation home](index.md)
+- → Next: [Quickstart](QUICKSTART.md)
+- ⌂ Index: [Documentation home](index.md)

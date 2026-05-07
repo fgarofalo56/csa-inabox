@@ -333,6 +333,8 @@ graph LR
     dbtG --> Consumer["Power BI / API<br/>Data Product"]
 ```
 
+> Each step is `dbt run --select tag:<layer>` from a single dbt project.
+
 ### Streaming Data Flow
 
 ```mermaid
@@ -363,7 +365,7 @@ graph LR
 
 ## 💡 Vertical Examples
 
-CSA-in-a-Box includes 9 vertical-specific implementations that demonstrate
+CSA-in-a-Box includes 10 examples (9 verticals + iot-streaming cross-cutting pattern) that demonstrate
 end-to-end patterns for real agencies and industries:
 
 | Vertical                | Directory                    | Key Patterns                                 |
@@ -500,11 +502,8 @@ All deployments enforce:
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Platform Services](PLATFORM_SERVICES.md) — Platform component deep-dive
-- [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
-- [Multi-Region DR](DR.md) — Multi-region disaster recovery runbook
-- [Quick Start](QUICKSTART.md) — 60-minute hands-on tutorial
-- [Microsoft Fabric Guide](guides/microsoft-fabric.md) — Full Fabric platform guide with CSA mapping
-- [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) — Companion site: 37 tutorials, 30+ feature guides, POC agendas, notebooks
+- ← Previous: [Production Checklist](PRODUCTION_CHECKLIST.md)
+- → Next: [Platform Services](PLATFORM_SERVICES.md)
+- ⌂ Index: [Documentation home](index.md)

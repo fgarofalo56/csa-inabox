@@ -3,22 +3,20 @@
 # Triggers: push to main with any change under azure-functions/copilot-chat/,
 # or manual dispatch.
 #
-# Required repo secret:
-#   COPILOT_FUNCTION_PUBLISH_PROFILE  -- the Function App publish profile XML.
+# Auth: Service-principal-based via the `limitlessdata_deploy` SP. The
+# old publish-profile path stopped working when SCM basic publishing
+# credentials were disabled on the Function App (deploy fails with HTTP
+# 401 from Kudu). The SP must hold ``Website Contributor`` on
+# ``func-csa-inabox-copilot-fg`` (granted 2026-05-06).
 #
-# How to get it (one-time setup):
-#   1. az login --tenant limitlessdata.ai
-#   2. az account set --subscription "FedCiv ATU FFL - DLZ"
-#   3. az functionapp deployment list-publishing-profiles \
-#        --resource-group rg-dlz-aiml-stack-dev \
-#        --name func-csa-inabox-copilot-fg --xml > publish.xml
-#   4. gh secret set COPILOT_FUNCTION_PUBLISH_PROFILE < publish.xml
-#   5. rm publish.xml
+# Required repo secrets:
+#   AZURE_CLIENT_ID           — limitlessdata_deploy client/app ID
+#   AZURE_CLIENT_SECRET       — current secret for the SP
+#   AZURE_TENANT_ID           — limitlessdata.ai tenant
+#   AZURE_SUBSCRIPTION_ID     — FedCiv ATU FFL - DLZ
 #
-# Rotation: rerun the same commands when the publish profile is reset (e.g.
-# after a function-app password reset or a tenant migration).
-#
-# See azure-functions/copilot-chat/DEPLOYMENT.md for the full provenance.
+# Follow-up: migrate to OIDC federated credential to drop the long-lived
+# client secret. Tracked under SEC-COPILOT in Archon.
 name: Deploy Copilot Function
 
 on:
@@ -57,50 +55,55 @@ jobs:
         working-directory: ${{ env.FUNCTION_PATH }}
         run: |
           python -m pip install --upgrade pip
-          # Install into a local .python_packages directory so the publish
-          # profile path picks them up without needing Oryx remote build.
           pip install --target=".python_packages/lib/site-packages" -r requirements.txt
 
       - name: Syntax-check function source
         run: python -m py_compile ${{ env.FUNCTION_PATH }}/function_app.py
 
+      - name: Run unit tests
+        working-directory: ${{ env.FUNCTION_PATH }}
+        run: |
+          pip install pytest pytest-mock
+          python -m pytest tests/ -v
+
+      - name: Azure login (SP-based RBAC)
+        uses: azure/login@1384c340ab2dda50fed2bee3041d1d87018aa5e8 # v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
       - name: Deploy to Azure Functions
-        # NOTE: pin to a SHA on next maintenance pass — currently using the
-        # major-version tag for the official Microsoft-maintained action.
-        uses: Azure/functions-action@v1
+        uses: Azure/functions-action@c9cc8ee93d1285e2a17312cc8357dc1775955272 # v1
         with:
           app-name: ${{ env.FUNCTION_APP_NAME }}
           package: ${{ env.FUNCTION_PATH }}
-          publish-profile: ${{ secrets.COPILOT_FUNCTION_PUBLISH_PROFILE }}
           scm-do-build-during-deployment: false
           enable-oryx-build: false
 
       - name: Smoke test the deployed endpoint
-        # Uses a minimal valid token (current 30s window) to confirm the deploy
-        # is healthy. Does NOT call the OpenAI backend — just exercises the
-        # request-token validation + origin-allowlist + rate-limit path.
+        # Hits /api/health with a valid request token. Doesn't call the OpenAI
+        # backend — only exercises origin / token / rate-limit / app-settings
+        # readiness.
         run: |
           set -e
-          window=$(($(date +%s)/30))
-          # 'csa-copilot-2024' is the documented default token secret; if the
-          # COPILOT_TOKEN_SECRET env var is set on the function it will reject
-          # this and we'll see HTTP 403, which is still a healthy "function is
-          # responding" signal.
-          payload=$(printf '%s:csa-copilot-2024' "$window")
-          token_hash=$(printf '%s' "$payload" | openssl dgst -sha256 -hex | awk '{print $2}' | cut -c1-16)
-          token="$window:$token_hash"
-
+          # /api/health doesn't need a token (it's the liveness probe), but
+          # calls go through the same origin allowlist + CORS path.
           status=$(curl -s -o /tmp/resp.json -w "%{http_code}" \
-            -X POST "https://$FUNCTION_APP_NAME.azurewebsites.net/api/chat" \
-            -H "Content-Type: application/json" \
-            -H "Origin: https://fgarofalo56.github.io" \
-            -H "X-Copilot-Token: $token" \
-            -d '{"message":"ping","history":[],"pageContext":{}}')
+            -X GET "https://$FUNCTION_APP_NAME.azurewebsites.net/api/health" \
+            -H "Origin: https://fgarofalo56.github.io")
           echo "Smoke test HTTP $status"
           head -c 400 /tmp/resp.json || true
-          # Accept any 2xx, plus 403 (token mismatch — function is up + rejecting)
-          # and 429 (rate-limited — function is up + throttling). Fail on 5xx.
           case "$status" in
-            2*|403|429) echo "Function is responding"; exit 0 ;;
+            2*) echo "Function is responding"; exit 0 ;;
             *) echo "Unhealthy response: $status"; exit 1 ;;
           esac
+
+      - name: Azure logout
+        if: always()
+        run: az logout
+        continue-on-error: true

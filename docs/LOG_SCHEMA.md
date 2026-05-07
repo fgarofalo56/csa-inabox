@@ -192,8 +192,8 @@ only the serialisation changes.
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Troubleshooting](TROUBLESHOOTING.md) — Common issues and fixes
-- [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist
-- [Platform Services](PLATFORM_SERVICES.md) — Platform component deep-dive
+- ← Previous: [Documentation home](index.md)
+- → Next: [Environment Protection](ENVIRONMENT_PROTECTION.md)
+- ⌂ Index: [Documentation home](index.md)

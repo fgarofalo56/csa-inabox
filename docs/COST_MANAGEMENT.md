@@ -412,8 +412,8 @@ Quick reference for the CSA services tracked by `estimate-costs.sh`:
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Production Checklist](PRODUCTION_CHECKLIST.md) — Pre-production readiness checklist
-- [Platform Services](PLATFORM_SERVICES.md) — Platform services reference and SKU details
-- [Multi-Tenant](MULTI_TENANT.md) — Multi-tenant deployment with per-tenant cost attribution
+- ← Previous: [Documentation home](index.md)
+- → Next: [Rollback](ROLLBACK.md)
+- ⌂ Index: [Documentation home](index.md)
