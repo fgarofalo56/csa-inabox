@@ -127,6 +127,10 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           mode: agent
+          # Match our gate label so the action accepts the trigger.
+          # Without this, ``label_trigger`` defaults to ``claude`` and
+          # the action skips the run with "No trigger found".
+          label_trigger: auto-fix
           # Sanitized title + body via step outputs — the raw values
           # never reach the prompt template directly. Use ``direct_prompt``
           # (the action's actual input name) — ``prompt`` is invalid and
