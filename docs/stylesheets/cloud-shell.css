@@ -1,0 +1,103 @@
+/* Cloud Shell + Deploy-to-Azure styles
+ *
+ * Pairs with docs/javascripts/cloud-shell.js. Hovers over the right
+ * edge of every shell-flavored code block; turns gold-on-success and
+ * pops a toast at the bottom of the screen.
+ */
+
+/* ── "Try in Cloud Shell" button on shell snippets ───────────── */
+.cloud-shell-btn {
+  position: absolute;
+  top: 6px;
+  right: 50px; /* leave room for the existing copy button */
+  font-size: 12px;
+  padding: 3px 8px;
+  background: rgba(0, 120, 212, 0.92);
+  color: #fff;
+  border: 1px solid rgba(0, 120, 212, 0.6);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, transform 0.1s;
+  font-family: inherit;
+  white-space: nowrap;
+  z-index: 1;
+}
+
+pre:hover .cloud-shell-btn,
+pre:focus-within .cloud-shell-btn {
+  opacity: 1;
+}
+
+.cloud-shell-btn:hover {
+  background: #0078d4;
+  transform: translateY(-1px);
+}
+
+.cloud-shell-btn-copied {
+  background: #2ea043 !important;
+  border-color: #2ea043;
+}
+
+[data-md-color-scheme="slate"] .cloud-shell-btn {
+  background: rgba(96, 168, 255, 0.92);
+  color: #0d1117;
+  border-color: rgba(96, 168, 255, 0.6);
+}
+[data-md-color-scheme="slate"] .cloud-shell-btn:hover {
+  background: #60a8ff;
+}
+
+/* Make sure pre is positioned for absolute children */
+.md-typeset pre {
+  position: relative;
+}
+
+/* ── Toast ──────────────────────────────────────────────────── */
+.cloud-shell-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translate(-50%, 60px);
+  background: #1a1a1a;
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s;
+  z-index: 10000;
+  max-width: 90vw;
+  text-align: center;
+}
+.cloud-shell-toast-show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+[data-md-color-scheme="slate"] .cloud-shell-toast {
+  background: #2a2a2a;
+}
+
+/* ── Deploy to Azure button styling ─────────────────────────── */
+/* Authors can either embed the standard MS image themselves or write
+ * a bare anchor; the JS adds the deploy-to-azure-link class to bare
+ * anchors so we can render the official image consistently. */
+.deploy-to-azure-link {
+  display: inline-block;
+  margin: 6px 0;
+}
+.deploy-to-azure-link::before {
+  content: "";
+  display: inline-block;
+  width: 152px;
+  height: 28px;
+  background: url("https://aka.ms/deploytoazurebutton") no-repeat center / contain;
+  vertical-align: middle;
+}
+.deploy-to-azure-link[data-deploy-wired="1"] {
+  /* Hide the bare URL text, replaced by the image */
+  font-size: 0;
+  line-height: 0;
+}
