@@ -1,0 +1,178 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 460" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <title id="title">CSA-in-a-Box four-subscription landing-zone architecture</title>
+  <desc id="desc">Management, Connectivity, Data Management, and Data Landing Zone subscriptions. Hub-and-spoke topology with Purview governance, Delta Lake medallion data flow, and AI integration.</desc>
+
+  <defs>
+    <linearGradient id="mgmt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5B6CFF"/>
+      <stop offset="1" stop-color="#3F4CD8"/>
+    </linearGradient>
+    <linearGradient id="conn" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#34C2A4"/>
+      <stop offset="1" stop-color="#1F9D85"/>
+    </linearGradient>
+    <linearGradient id="dmlz" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#A05BFF"/>
+      <stop offset="1" stop-color="#7B3CD3"/>
+    </linearGradient>
+    <linearGradient id="dlz" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFB454"/>
+      <stop offset="1" stop-color="#E08B1A"/>
+    </linearGradient>
+    <linearGradient id="bronze" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#CD7F32"/>
+      <stop offset="1" stop-color="#B8732C"/>
+    </linearGradient>
+    <linearGradient id="silver" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#B8C2CC"/>
+      <stop offset="1" stop-color="#8E99A4"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#F1C232"/>
+      <stop offset="1" stop-color="#D4A017"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L0,10 L10,5 z" fill="#94a3b8"/>
+    </marker>
+    <style>
+      .lz-title { font-size: 16px; font-weight: 700; fill: #fff; letter-spacing: 0.04em; text-transform: uppercase; }
+      .lz-sub { font-size: 13px; fill: rgba(255,255,255,0.9); }
+      .svc { font-size: 13px; font-weight: 600; fill: #fff; }
+      .layer { font-size: 15px; font-weight: 700; fill: #fff; letter-spacing: 0.06em; text-transform: uppercase; }
+      .layer-sub { font-size: 12px; fill: rgba(255,255,255,0.9); }
+      .flow { font-size: 13px; fill: #475569; font-weight: 500; }
+      .legend { font-size: 13px; fill: #64748b; }
+      .h1 { font-size: 22px; font-weight: 700; fill: #1e293b; }
+    </style>
+  </defs>
+
+  <!-- Management subscription -->
+  <g transform="translate(20,30)">
+    <rect width="270" height="195" rx="10" fill="url(#mgmt)"/>
+    <text x="16" y="26" class="lz-title">Management</text>
+    <text x="16" y="44" class="lz-sub">Logging · Policy · Monitor</text>
+    <g transform="translate(14,60)">
+      <rect width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="20" class="svc">Log Analytics</text>
+      <rect x="125" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="137" y="20" class="svc">Azure Policy</text>
+      <rect y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="62" class="svc">Azure Monitor</text>
+      <rect x="125" y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="137" y="62" class="svc">Sentinel</text>
+      <rect y="84" width="240" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="104" class="svc">Cost Management · Defender for Cloud</text>
+    </g>
+  </g>
+
+  <!-- Connectivity subscription -->
+  <g transform="translate(310,30)">
+    <rect width="270" height="195" rx="10" fill="url(#conn)"/>
+    <text x="16" y="26" class="lz-title">Connectivity</text>
+    <text x="16" y="44" class="lz-sub">Hub VNet · Firewall · Private DNS</text>
+    <g transform="translate(14,60)">
+      <rect width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="20" class="svc">Hub VNet</text>
+      <rect x="125" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="137" y="20" class="svc">Azure Firewall</text>
+      <rect y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="62" class="svc">Private DNS</text>
+      <rect x="125" y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="137" y="62" class="svc">ExpressRoute</text>
+      <rect y="84" width="240" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="104" class="svc">Application Gateway · Front Door · WAF</text>
+    </g>
+  </g>
+
+  <!-- Data Management LZ -->
+  <g transform="translate(600,30)">
+    <rect width="270" height="195" rx="10" fill="url(#dmlz)"/>
+    <text x="16" y="26" class="lz-title">Data Management LZ</text>
+    <text x="16" y="44" class="lz-sub">Catalog · Secrets · Shared services</text>
+    <g transform="translate(14,60)">
+      <rect width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="20" class="svc">Microsoft Purview</text>
+      <rect x="125" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="137" y="20" class="svc">Key Vault</text>
+      <rect y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="62" class="svc">Container Registry</text>
+      <rect x="125" y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="137" y="62" class="svc">AI Foundry</text>
+      <rect y="84" width="240" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="104" class="svc">Data Marketplace · Contracts · Lineage</text>
+    </g>
+  </g>
+
+  <!-- Data Landing Zone -->
+  <g transform="translate(890,30)">
+    <rect width="290" height="195" rx="10" fill="url(#dlz)"/>
+    <text x="16" y="26" class="lz-title">Data Landing Zone</text>
+    <text x="16" y="44" class="lz-sub">Per domain · ADLS Gen2 + compute</text>
+    <g transform="translate(14,60)">
+      <rect width="125" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="20" class="svc">ADLS Gen2 + Delta</text>
+      <rect x="135" width="125" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="147" y="20" class="svc">Databricks</text>
+      <rect y="42" width="125" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="62" class="svc">Synapse + dbt</text>
+      <rect x="135" y="42" width="125" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="147" y="62" class="svc">Data Factory</text>
+      <rect y="84" width="260" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="104" class="svc">Event Hubs · ADX · Cosmos DB · Azure SQL</text>
+    </g>
+  </g>
+
+  <!-- Connectors between LZs -->
+  <line x1="290" y1="128" x2="310" y2="128" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="580" y1="128" x2="600" y2="128" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="870" y1="128" x2="890" y2="128" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Medallion data flow band -->
+  <g transform="translate(20,260)">
+    <g transform="translate(0,0)">
+      <rect width="370" height="100" rx="10" fill="url(#bronze)"/>
+      <text x="20" y="32" class="layer">Bronze</text>
+      <text x="20" y="50" class="layer-sub">Raw ingest, schema-on-read</text>
+      <g transform="translate(20,62)">
+        <rect width="150" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
+        <text x="10" y="18" class="svc">CDC · API · file drop</text>
+        <rect x="160" width="180" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
+        <text x="170" y="18" class="svc">ADF · Event Hubs · Kafka</text>
+      </g>
+    </g>
+
+    <g transform="translate(395,0)">
+      <rect width="370" height="100" rx="10" fill="url(#silver)"/>
+      <text x="20" y="32" class="layer">Silver</text>
+      <text x="20" y="50" class="layer-sub">Cleaned, conformed, validated</text>
+      <g transform="translate(20,62)">
+        <rect width="150" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
+        <text x="10" y="18" class="svc">dbt models · GE checks</text>
+        <rect x="160" width="180" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
+        <text x="170" y="18" class="svc">Spark · Synapse Serverless</text>
+      </g>
+    </g>
+
+    <g transform="translate(770,0)">
+      <rect width="410" height="100" rx="10" fill="url(#gold)"/>
+      <text x="20" y="32" class="layer">Gold</text>
+      <text x="20" y="50" class="layer-sub">Business-ready facts &amp; dimensions</text>
+      <g transform="translate(20,62)">
+        <rect width="180" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
+        <text x="10" y="18" class="svc">Power BI · Direct Lake</text>
+        <rect x="190" width="200" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
+        <text x="200" y="18" class="svc">Data API Builder · OpenAI RAG</text>
+      </g>
+    </g>
+
+    <line x1="370" y1="50" x2="395" y2="50" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+    <line x1="765" y1="50" x2="790" y2="50" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- Footer band: Purview spans all -->
+  <g transform="translate(20,400)">
+    <rect width="1160" height="40" rx="8" fill="#1e293b"/>
+    <text x="20" y="26" font-size="12" font-weight="700" fill="#fff" letter-spacing="0.04em">PURVIEW · UNIFIED CATALOG · LINEAGE · CLASSIFICATION</text>
+    <text x="660" y="26" font-size="11" fill="#cbd5e1">spans every subscription · every Bronze/Silver/Gold table · enforces sensitivity labels</text>
+  </g>
+</svg>

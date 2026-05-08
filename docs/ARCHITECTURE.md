@@ -1,6 +1,6 @@
-[Home](../README.md) > [Docs](./) > **Architecture**
-
 # CSA-in-a-Box Architecture
+
+![Four-subscription landing-zone overview: Management, Connectivity, Data Management LZ, Data Landing Zone, and Bronze/Silver/Gold medallion data flow with Purview governance](assets/images/architecture-hero.svg){ .architecture-hero loading="eager" }
 
 !!! note
 **Quick Summary**: Architecture reference for CSA-in-a-Box — the Azure-native reference implementation of the Microsoft "Unify your data platform" CAF guidance, built on Azure PaaS and open-source tooling. Positions Fabric as the primary control plane where GA, and CSA-in-a-Box as the Azure Government gap-filler (Fabric is forecast, not GA), the post-deprecation CAF CSA reference, and an incremental on-ramp to Fabric. Covers the DMLZ/DLZ landing zone pattern, medallion data flow (Bronze/Silver/Gold), streaming via Event Hubs + ADX, AI/ML integration, 9 vertical examples, and Azure Government compatibility.
@@ -333,6 +333,8 @@ graph LR
     dbtG --> Consumer["Power BI / API<br/>Data Product"]
 ```
 
+> Each step is `dbt run --select tag:<layer>` from a single dbt project.
+
 ### Streaming Data Flow
 
 ```mermaid
@@ -363,7 +365,7 @@ graph LR
 
 ## 💡 Vertical Examples
 
-CSA-in-a-Box includes 9 vertical-specific implementations that demonstrate
+CSA-in-a-Box includes 10 examples (9 verticals + iot-streaming cross-cutting pattern) that demonstrate
 end-to-end patterns for real agencies and industries:
 
 | Vertical                | Directory                    | Key Patterns                                 |
@@ -383,6 +385,10 @@ Each vertical includes seed data generators, dbt models, deployment templates,
 and domain-specific documentation.
 
 ---
+
+## What this looks like once deployed
+
+![Azure resource group Overview — the deployed CSA-in-a-Box stack inside a single resource group: Databricks workspace, Data Factory, Application Insights, Azure AI hub + project, SQL database, AI Search, two storage accounts, Cosmos DB, Key Vault. This is the canonical "platform in a box" view.](assets/images/azure/resource-group-overview.png){ .architecture-hero loading="lazy" }
 
 ## 📁 Repository Structure
 
@@ -489,12 +495,15 @@ All deployments enforce:
   Palantir migration playbook in [`migrations/`](migrations/) for guidance on
   when to stay on CSA-in-a-Box, when to adopt Microsoft Fabric, and how
   components compose into a Fabric migration.
+- **Supercharge Microsoft Fabric** — For hands-on Fabric tutorials, feature guides,
+  best practices, and POC materials, see the
+  [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/)
+  companion site.
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Platform Services](PLATFORM_SERVICES.md) — Platform component deep-dive
-- [Getting Started](GETTING_STARTED.md) — Prerequisites and deployment walkthrough
-- [Multi-Region DR](DR.md) — Multi-region disaster recovery runbook
-- [Quick Start](QUICKSTART.md) — 60-minute hands-on tutorial
+- ← Previous: [Production Checklist](PRODUCTION_CHECKLIST.md)
+- → Next: [Platform Services](PLATFORM_SERVICES.md)
+- ⌂ Index: [Documentation home](index.md)

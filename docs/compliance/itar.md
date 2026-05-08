@@ -1,5 +1,7 @@
 # Compliance — ITAR (International Traffic in Arms Regulations)
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 > **Scope:** ITAR compliance guidance for organizations handling defense articles, technical data, or defense services on the CSA-in-a-Box platform deployed to Azure Government. ITAR violations carry severe civil and criminal penalties — treat every requirement as mandatory.
 
 ## What is ITAR?

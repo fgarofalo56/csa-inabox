@@ -289,3 +289,11 @@ If you believe you have found a vulnerability in CSA-in-a-Box itself
 
 **Last updated:** CSA-0032 closure.
 **Owners:** Platform Security — `@CODEOWNERS:.github/workflows/`
+
+---
+
+**See also:**
+
+- ← Previous: [Troubleshooting](TROUBLESHOOTING.md)
+- → Next: [Documentation home](index.md)
+- ⌂ Index: [Documentation home](index.md)

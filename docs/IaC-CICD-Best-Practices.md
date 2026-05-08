@@ -1799,9 +1799,6 @@ Environment: prod
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Terraform Deployment](../deploy/terraform/README.md) — Terraform deployment path for CSA-in-a-Box
-- [Bicep Gov Deployment](../deploy/bicep/gov/README.md) — Government cloud Bicep deployment
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Platform architecture overview
-- [SELF_HOSTED_IR.md](SELF_HOSTED_IR.md) — Self-Hosted Integration Runtime setup and operations
+- ⌂ Index: [Documentation home](index.md)

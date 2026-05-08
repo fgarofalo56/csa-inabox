@@ -1,5 +1,7 @@
 # NIST SP 800-53 Rev 5 — CSA-in-a-Box Control Coverage
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 **Manifest:** [`governance/compliance/nist-800-53-rev5.yaml`](../../csa_platform/governance/compliance/nist-800-53-rev5.yaml)
 **Baseline target:** Moderate (with High-baseline controls enumerated)
 **Last reviewed:** 2026-04-18

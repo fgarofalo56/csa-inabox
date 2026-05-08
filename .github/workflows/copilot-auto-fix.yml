@@ -1,0 +1,247 @@
+# Triggered by maintainers adding the `auto-fix` label to a `csa-bug`
+# issue. Runs the Claude Code GitHub Action against the issue body and
+# the repo, asking Claude to investigate and produce a PR.
+#
+# Defense in depth (in order of execution):
+#
+# 1. Label gate — only fires when a maintainer adds the `auto-fix`
+#    label, and only on issues already tagged `csa-bug`.
+# 2. Body sanitizer — `.github/scripts/sanitize_issue_for_claude.py`
+#    runs BEFORE Claude sees the issue. It rejects known prompt-
+#    injection patterns + auto-fix-specific red flags (asks to modify
+#    workflows / requirements / auth, exfiltration patterns, encoded
+#    payloads, etc.) with a workflow-summary explanation.
+# 3. Untrusted input never goes into a shell. Issue body / title flow
+#    through env vars per GitHub's hardening guidance, and the
+#    sanitized text is passed to the action via a step output.
+# 4. Tool allowlist on the Claude Code action — Read / Write / Edit /
+#    Glob / Grep, plus a narrow shell allowlist (no `git push`, no
+#    `curl`, no `wget`, no `gh` writes).
+# 5. The action opens a PR; auto-merge is gated by
+#    `copilot-auto-merge.yml` which enforces a path safelist + a
+#    high-risk path denylist BEFORE enabling auto-merge.
+# 6. All standard repo CI gates (gitleaks, CodeQL, Trivy, Checkov,
+#    pytest, mkdocs --strict) must pass before the PR can merge.
+#
+# Auth (preferred order):
+# - `CLAUDE_CODE_OAUTH_TOKEN` — bills against your Claude Max/Pro
+#   subscription. Mint via `claude setup-token`, then
+#   `gh secret set CLAUDE_CODE_OAUTH_TOKEN --body <token>`.
+# - `ANTHROPIC_API_KEY` — direct API auth. Falls back here if OAuth
+#   is unset.
+name: Copilot Auto-fix
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  # Required by anthropics/claude-code-action — the action calls
+  # GitHub's OIDC endpoint to mint a short-lived installation token.
+  # Without this it exits with "Could not fetch an OIDC token. Did
+  # you remember to add id-token: write to your workflow permissions?"
+  id-token: write
+
+concurrency:
+  group: copilot-auto-fix-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    if: |
+      github.event.label.name == 'auto-fix' &&
+      contains(github.event.issue.labels.*.name, 'csa-bug')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Sanitize issue body for prompt injection
+        id: sanitize
+        env:
+          # Untrusted issue content flows through env vars, NEVER through
+          # shell interpolation (per GitHub's security-hardening guide).
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: python .github/scripts/sanitize_issue_for_claude.py
+
+      - name: Comment on the issue
+        if: success()
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const body = `🤖 Copilot Auto-fix is taking a look. ` +
+              `If a PR appears in the next ~10 min, follow it for status. ` +
+              `If not, the run probably failed — check the workflow log.`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Comment on the issue (sanitizer rejection)
+        if: failure()
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const body = `🛑 Copilot Auto-fix declined this issue at the ` +
+              `pre-flight sanitizer. The body or title contained a ` +
+              `pattern that's high-risk for autonomous code changes ` +
+              `(prompt injection, exfiltration, or out-of-scope ` +
+              `modifications). See the workflow run summary for details.\n\n` +
+              `If this is a real bug report, remove the \`auto-fix\` ` +
+              `label, edit the issue to remove the flagged content, and ` +
+              `re-add the label.`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Run Claude Code Action
+        if: success()
+        uses: anthropics/claude-code-action@beta
+        with:
+          # Authentication: prefer the long-lived OAuth token tied to your
+          # Claude Max / Pro subscription so usage counts against your
+          # plan instead of being separately API-billed. Mint via the
+          # Claude Code CLI:
+          #
+          #     claude setup-token
+          #
+          # Then: gh secret set CLAUDE_CODE_OAUTH_TOKEN --body <token>
+          #
+          # If only ANTHROPIC_API_KEY is set, the action falls back to
+          # direct API auth (still works, separately billed).
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # ``mode: tag`` (the default) is what the action uses for
+          # label-driven runs. ``mode: agent`` is for non-trigger
+          # workflow_dispatch use; combined with a label-triggered
+          # event it produces "No trigger found" because the
+          # action's tag-trigger loop is skipped.
+          mode: tag
+          label_trigger: auto-fix
+          # Sanitized title + body via step outputs — the raw values
+          # never reach the prompt template directly. Use ``direct_prompt``
+          # (the action's actual input name) — ``prompt`` is invalid and
+          # gets a runtime error from the action loader.
+          direct_prompt: |
+            You are responding to a GitHub issue in this repository. Your
+            goal is to investigate the bug, produce the smallest possible
+            fix, and open a PR.
+
+            Hard constraints (NON-NEGOTIABLE):
+
+            1. **Read the issue carefully.** If ambiguous, post a comment
+               asking for clarification and STOP — do NOT open a PR with
+               a guess.
+            2. **Minimal scope.** Change only what's needed to fix the
+               reported defect. No refactoring of adjacent code, no
+               feature additions, no style "improvements".
+            3. **Forbidden modifications.** You MUST NOT touch:
+               - Anything under ``.github/workflows/`` or ``.github/scripts/``
+               - Files matching ``requirements*.txt``, ``pyproject.toml``,
+                 ``package.json``, ``Cargo.toml``, ``go.mod``, ``Gemfile``
+               - Anything matching ``**/auth/**``, ``**/security/**``,
+                 ``**/keyvault/**``, ``**/rbac/**``, ``**/secret*``,
+                 ``**/credential*``, ``**/.env*``
+               - The ``.gitleaks.toml`` allowlist
+               If the bug genuinely requires changes there, post a
+               comment naming the path and STOP.
+            4. **No new dependencies.** If the fix needs a new package,
+               post a comment and STOP.
+            5. **No network egress in code.** Do not add `requests`,
+               `urllib`, `fetch`, or shell `curl`/`wget` calls. If the
+               existing fix path involves an HTTP call, leave the
+               existing client code untouched.
+            6. **Add or update tests** when feasible. Don't disable or
+               skip existing tests to make a fix "pass".
+            7. **PR title format**: ``fix: <concise summary> (auto-fix #<issue_number>)``
+            8. **PR body** must include:
+               - Root cause (one paragraph)
+               - The specific change you made
+               - How you tested it / which gates you expect to run
+               - ``Closes #<issue_number>``
+            9. The auto-merge workflow will refuse to land any PR whose
+               diff exits the ``docs/** | examples/** | .github/ISSUE_TEMPLATE/**``
+               safelist. That's the design — don't shrink the fix to fit
+               the safelist if the real fix needs broader scope; just
+               accept that a maintainer will review.
+
+            Issue title: ${{ steps.sanitize.outputs.title }}
+            Issue number: ${{ github.event.issue.number }}
+            Issue body (sanitized):
+
+            ---
+            ${{ steps.sanitize.outputs.body }}
+            ---
+          allowed_tools: |
+            Read
+            Write
+            Edit
+            Glob
+            Grep
+            Bash(git status:*)
+            Bash(git diff:*)
+            Bash(git add:*)
+            Bash(git commit:*)
+            Bash(git checkout:*)
+            Bash(git branch:*)
+            Bash(npm test:*)
+            Bash(pytest:*)
+            Bash(python -m pytest:*)
+            Bash(python -m py_compile:*)
+            Bash(mkdocs build:*)
+
+      # The Claude action stops at the branch; it doesn't open the PR
+      # itself. Open it here so the auto-merge guardrail workflow has
+      # something to evaluate without manual intervention.
+      - name: Open PR for Claude's branch (if any was pushed)
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ steps.sanitize.outputs.title }}
+        run: |
+          set -e
+          # Find the most recent claude/issue-<N>-* branch on origin.
+          BRANCH=$(git ls-remote --heads origin "claude/issue-${ISSUE_NUMBER}-*" \
+            | awk '{print $2}' \
+            | sed 's|refs/heads/||' \
+            | sort -r \
+            | head -1)
+          if [ -z "$BRANCH" ]; then
+            echo "::warning::No claude/issue-${ISSUE_NUMBER}-* branch found — Claude probably commented without making changes."
+            exit 0
+          fi
+          # Skip if a PR already exists for this branch
+          if gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' | grep -q .; then
+            echo "PR already open for $BRANCH"
+            exit 0
+          fi
+          # Title prefix matches the auto-merge workflow's ``(auto-fix #N)`` regex.
+          PR_TITLE="fix: ${ISSUE_TITLE} (auto-fix #${ISSUE_NUMBER})"
+          # Truncate to 70 chars total — title length cap.
+          if [ ${#PR_TITLE} -gt 240 ]; then PR_TITLE="${PR_TITLE:0:237}..."; fi
+          gh pr create \
+            --base main --head "$BRANCH" \
+            --title "$PR_TITLE" \
+            --body "Auto-fix produced by the Copilot Auto-fix workflow on issue #${ISSUE_NUMBER}.
+
+Branch \`$BRANCH\` was opened by the Claude Code action. The auto-merge workflow will evaluate denylist + safelist + diff content scan; if all checks pass and the diff is contained in safelisted paths, GitHub auto-merge will be enabled.
+
+Closes #${ISSUE_NUMBER}
+
+🤖 Auto-generated by Claude Code GitHub Action"

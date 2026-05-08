@@ -88,5 +88,8 @@ flowchart TD
 
 - Guide: [ADF Setup](../ADF_SETUP.md)
 - Guide: [Databricks Guide](../DATABRICKS_GUIDE.md)
+- Guide: [Microsoft Fabric Platform Guide](../guides/microsoft-fabric.md)
 - Decision: [Fabric vs. Databricks vs. Synapse](fabric-vs-databricks-vs-synapse.md)
 - ADR: [0001 - ADF + dbt over Airflow](../adr/0001-adf-dbt-over-airflow.md)
+- Companion: [Supercharge Microsoft Fabric — Data Pipelines](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/tutorials/06-data-pipelines/) — hands-on Fabric Data Pipelines tutorial
+- Companion: [Supercharge Microsoft Fabric — Metadata-Driven Pipelines](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/best-practices/04_METADATA_DRIVEN_PIPELINES/) — production metadata-driven patterns

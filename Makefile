@@ -1,4 +1,4 @@
-.PHONY: help setup lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform portal-dev portal-dev-stop portal-test portal-lint portal-docker teardown-dev teardown-staging teardown-prod teardown-example sample-up sample-down helm-lint
+.PHONY: help setup setup-all lint test validate deploy-dev deploy-prod deploy-adf prerequisites seed seed-azure clean security typecheck-platform portal-dev portal-dev-stop portal-test portal-lint portal-docker teardown-dev teardown-staging teardown-prod teardown-example sample-up sample-down helm-lint
 
 # Default target
 help: ## Show this help
@@ -17,13 +17,22 @@ help: ## Show this help
 #     make setup EXTRAS=dev,governance,functions,portal,copilot,platform   # everything
 EXTRAS ?= dev,governance,functions
 
-setup: ## Set up development environment (override with EXTRAS=dev,portal,copilot)
+setup: ## Set up lean development environment (override with EXTRAS=dev,portal,copilot)
 	python -m venv .venv && \
 	. .venv/bin/activate && \
 	pip install --upgrade pip && \
 	pip install -e ".[$(EXTRAS)]"
 	@echo ""
 	@echo "Installed with extras: [$(EXTRAS)]"
+	@echo "Activate with: source .venv/bin/activate"
+
+setup-all: ## Full local dev install — installs every extra (dev, governance, functions, portal, platform)
+	python -m venv .venv && \
+	. .venv/bin/activate && \
+	pip install --upgrade pip && \
+	pip install -e ".[dev,governance,functions,portal,platform]"
+	@echo ""
+	@echo "Installed with extras: [dev,governance,functions,portal,platform]"
 	@echo "Activate with: source .venv/bin/activate"
 
 setup-win: ## Set up development environment (Windows; honors EXTRAS)
