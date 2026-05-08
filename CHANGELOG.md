@@ -10,6 +10,20 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.6.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.9...csa-inabox-v0.6.0) (2026-05-08)
+
+
+### Features
+
+* **docs:** build out 4 roadmap items — Fabric-Gov, LLM safety, CSA-vs-Fabric, Cloud Shell runner ([#196](https://github.com/fgarofalo56/csa-inabox/issues/196)) ([eda2e6f](https://github.com/fgarofalo56/csa-inabox/commit/eda2e6fb91ed1c2dabe06231b8dec77a7a11e312)), closes [#165](https://github.com/fgarofalo56/csa-inabox/issues/165) [#167](https://github.com/fgarofalo56/csa-inabox/issues/167) [#177](https://github.com/fgarofalo56/csa-inabox/issues/177) [#178](https://github.com/fgarofalo56/csa-inabox/issues/178)
+
+
+### Bug Fixes
+
+* **ci:** re-post required checks on every open release PR ([#200](https://github.com/fgarofalo56/csa-inabox/issues/200)) ([459b2b3](https://github.com/fgarofalo56/csa-inabox/commit/459b2b3f2306e3ca70d0c981fd98ee4778a7f080))
+* **security:** address GitHub Code/Secret-scanning alerts (CRITICAL + 5 HIGH + 8 MEDIUM) ([#198](https://github.com/fgarofalo56/csa-inabox/issues/198)) ([4192e0e](https://github.com/fgarofalo56/csa-inabox/commit/4192e0e905ce0daf31272eafea74aad1c0e01800))
+* **security:** rewrite safe_for_log with re.sub so CodeQL recognises it ([#199](https://github.com/fgarofalo56/csa-inabox/issues/199)) ([0f0de4c](https://github.com/fgarofalo56/csa-inabox/commit/0f0de4c830b87c5c5ee015bc86d68d492cd54e5a))
+
 ## [0.5.9](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.8...csa-inabox-v0.5.9) (2026-05-08)
 
 
