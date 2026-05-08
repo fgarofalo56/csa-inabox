@@ -58,10 +58,14 @@ skip-check:
   # ---------------------------------------------------------------------------
   - CKV_AZURE_178   # VM SSH key authentication -- Windows VMs (ArcGIS, DataMesh portal) and AAD-login VMSS use password / AAD; not Linux SSH
   - CKV_AZURE_149   # VM password authentication -- ArcGIS Windows VM bootstrap requires local admin
+  - CKV_AZURE_1     # Linux VM password auth -- DMLZ management VM is parameterized (osType=Windows|Linux); when Linux, AAD-login extension handles auth, not raw SSH keys
+  - CKV_AZURE_49    # Linux scale set basic auth -- DMLZ webServer.bicep is hard-coded Windows IIS; the rule fires as a parser misread of the param-driven imageReference
   - CKV_AZURE_50    # VM custom script extension -- required for ArcGIS BYOL bootstrap; documented in arcgis-enterprise runbook
   - CKV_AZURE_157   # Synapse preventDataExfiltration -- parameterized (default true); Checkov cannot statically resolve
   - CKV_AZURE_43    # Storage account naming rules -- 3 occurrences are cosmetic (mixed-case in module-name interpolation); rename requires breaking deployments
   - CKV_AZURE_9     # NSG default-deny on inbound -- ArcGIS NSG explicitly allows 80/443/6080/6443 for ArcGIS Server; lab pattern
+  - CKV_AZURE_95    # VMSS automatic OS image patching -- selfHostedIntegrationRuntime + DMLZ/webServer both set ``automaticOSUpgradePolicy.enableAutomaticOSUpgrade=true`` AND ``disableAutomaticRollback=false``; Checkov 3.x parser misses the nested property and inline skip directives are not honored
+  - CKV_AZURE_206   # Storage account replication -- gov/modules/storage.bicep tightens ``@allowed`` to GRS / RAGRS / GZRS / RAGZRS only (geo-redundancy is guaranteed by the parameter contract); Checkov cannot statically resolve the parameterized value
 
   # ---------------------------------------------------------------------------
   # AKS hardening: gov deployment runbook
