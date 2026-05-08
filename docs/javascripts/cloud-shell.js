@@ -34,22 +34,36 @@
   var TRY_LABEL = "💻 Try in Cloud Shell";
   var COPYING_LABEL = "📋 Copied — paste in Cloud Shell";
 
+  // Languages we treat as runnable in Cloud Shell.
+  var RUNNABLE_LANGS = ["bash", "shell", "sh", "azurecli", "powershell", "pwsh"];
+
   function findRunnableBlocks() {
-    // Code blocks with explicit opt-in via data-cloudshell="" attribute
-    // OR language hints that imply a runnable shell snippet.
+    // Three render shapes to handle:
+    //   1. Plain HTML / raw markdown:  <pre data-cloudshell> or
+    //      <pre data-lang="bash">…</pre>
+    //   2. mkdocs-material with codehilite: <pre><code class="language-bash">…
+    //   3. mkdocs-material with pymdownx.highlight (the actual config on this
+    //      site): <div class="language-bash highlight"><pre>…</pre></div> —
+    //      neither <pre> nor <code> carry a language hint, only the wrapper
+    //      <div> does. The previous selectors all missed this case so the
+    //      button silently never attached on the live docs site.
     var hits = [];
-    document.querySelectorAll("pre[data-cloudshell]").forEach(function (el) { hits.push(el); });
-    document.querySelectorAll("pre[data-lang='bash'], pre[data-lang='shell'], pre[data-lang='sh'], pre[data-lang='azurecli'], pre[data-lang='powershell'], pre[data-lang='pwsh']").forEach(function (el) {
-      // Don't double-count if already opted in
-      if (!el.hasAttribute("data-cloudshell")) hits.push(el);
+
+    function add(pre) {
+      if (pre && pre.tagName === "PRE" && hits.indexOf(pre) === -1) hits.push(pre);
+    }
+
+    document.querySelectorAll("pre[data-cloudshell]").forEach(add);
+
+    RUNNABLE_LANGS.forEach(function (lang) {
+      document.querySelectorAll("pre[data-lang='" + lang + "']").forEach(add);
+      document.querySelectorAll("pre code.language-" + lang).forEach(function (codeEl) {
+        add(codeEl.parentElement);
+      });
+      // pymdownx.highlight wrapper div — find any <pre> nested inside.
+      document.querySelectorAll("div.language-" + lang + " pre").forEach(add);
     });
-    // mkdocs-material's pymdownx.highlight emits <code class="language-bash">...
-    document.querySelectorAll("pre code.language-bash, pre code.language-shell, pre code.language-azurecli, pre code.language-powershell, pre code.language-pwsh").forEach(function (codeEl) {
-      var pre = codeEl.parentElement;
-      if (pre && pre.tagName === "PRE" && hits.indexOf(pre) === -1) {
-        hits.push(pre);
-      }
-    });
+
     return hits;
   }
 

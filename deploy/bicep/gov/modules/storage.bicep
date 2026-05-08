@@ -10,8 +10,13 @@ param location string
 @description('Resource tags.')
 param tags object = {}
 
-@allowed(['Standard_LRS', 'Standard_GRS', 'Standard_RAGRS', 'Standard_ZRS'])
-@description('Storage SKU.')
+// FedRAMP / IL5 require geo-redundant replication for primary data
+// stores. Restrict the parameter to GRS variants only so Checkov can
+// statically resolve compliance with CKV_AZURE_206 ("Storage Accounts
+// use replication") — locally-redundant and zone-redundant SKUs would
+// fail the gov baseline anyway.
+@allowed(['Standard_GRS', 'Standard_RAGRS', 'Standard_GZRS', 'Standard_RAGZRS'])
+@description('Storage SKU. Geo-redundant variants only — gov baseline requires multi-region durability.')
 param sku string = 'Standard_GRS'
 
 @description('Storage account kind.')

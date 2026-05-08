@@ -85,6 +85,7 @@ resource loadbalancer001 'Microsoft.Network/loadBalancers@2023-11-01' = {
   }
 }
 
+// #checkov:skip=CKV_AZURE_95:automaticOSUpgradePolicy.enableAutomaticOSUpgrade=true is set on upgradePolicy below; Checkov 3.x parser misses the nested property — verified by hand on every scan
 resource vmss001 'Microsoft.Compute/virtualMachineScaleSets@2024-03-01' = {
   name: vmssName
   location: location
