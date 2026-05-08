@@ -566,3 +566,18 @@ bash examples/iot-streaming/deploy/teardown.sh --yes
 ```
 
 See [`docs/QUICKSTART.md#teardown`](../../docs/QUICKSTART.md#teardown) for the platform-wide teardown flow.
+
+## Expected Results
+
+After running the medallion pipeline against the bundled seed data,
+the Gold layer should populate the following tables. Row counts vary
+with the seed-data generator parameters; the figures below are the
+approximate scale you should see on a default run.
+
+| Gold Table | Approximate Rows | Notes |
+| ---------- | ---------------- | ----- |
+| `gld_anomaly_heatmap` | TODO: capture after first run | Populated from Silver via dbt `--select tag:gold` |
+| `gld_device_health_daily` | TODO: capture after first run | Populated from Silver via dbt `--select tag:gold` |
+| `gld_sla_breach_summary` | TODO: capture after first run | Populated from Silver via dbt `--select tag:gold` |
+
+> TODO: capture exact counts after the next end-to-end seed run. These are bounded by the seed-data generator parameters in `data/generators/`.

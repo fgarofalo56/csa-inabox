@@ -12,6 +12,8 @@ tags:
 
 # Security & Compliance Best Practices
 
+![Azure Key Vault Overview blade — Essentials panel showing East US region, Standard pricing tier, Soft-delete enabled, Vault URI, and the Access policies / Objects / Settings left-nav. Key Vault is the canonical secrets/keys/certificates store for every CSA-in-a-Box deployment.](../assets/images/azure/key-vault-overview.png){ .architecture-hero loading="eager" }
+
 ## Overview
 
 CSA-in-a-Box deploys analytics platforms that handle sensitive data across federal, healthcare, and enterprise environments. Security is not an afterthought — it is embedded into every layer of the architecture through **defense-in-depth** and **Zero Trust** principles.

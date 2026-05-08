@@ -224,8 +224,8 @@ deployable on AKS:
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Environment Protection](ENVIRONMENT_PROTECTION.md) — GitHub Environment protection rules
-- [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist
-- [Gov Bicep Templates](../deploy/bicep/gov/README.md) — Azure Government deployment templates
+- ← Previous: [Environment Protection](ENVIRONMENT_PROTECTION.md)
+- → Next: [Documentation home](index.md)
+- ⌂ Index: [Documentation home](index.md)

@@ -20,7 +20,7 @@ CSA-in-a-Box (Cloud-Scale Analytics in a Box) is a **reference implementation** 
 | **Governance**         | Microsoft Purview sync, data product contracts (YAML), Great Expectations, Unity Catalog pattern                            |
 | **APIs / data apps**   | Data API Builder over Lakehouse, FastAPI BFF + React portal, MSAL auth, Power Apps starter                                  |
 | **Compliance**         | NIST 800-53 r5, FedRAMP Moderate, CMMC 2.0 L2, HIPAA, SOC 2, PCI-DSS, GDPR crosswalks                                       |
-| **Examples**           | 16 e2e vertical implementations (federal agencies, tribal, casino, ML lifecycle, IoT, AI agents)                            |
+| **Examples**           | 10 examples (9 verticals + iot-streaming cross-cutting pattern) spanning federal agencies, tribal, casino, ML lifecycle, IoT, AI agents |
 | **Operations**         | 8 production runbooks, DR drill automation, supply-chain security (SBOM + signing)                                          |
 
 **It is _not_** a turnkey SaaS — it is opinionated open-source IaC + reference code you fork into your tenant.
@@ -90,51 +90,61 @@ az login --tenant <YOUR_GOV_TENANT_ID>
 
 ---
 
-## 4. The five paths through the docs
+## 4. Pick your path through the docs
 
-Pick whichever matches your role:
+<div class="grid cards" markdown>
 
-### Path A — Architect / Evaluator
+- :material-drafting-compass:{ .lg .middle } **Architect / Evaluator**
 
-1. [Architecture Overview](ARCHITECTURE.md)
-2. [Reference Architectures](reference-architecture/index.md) — diagrams of hub-spoke, data flow, identity, Fabric/Synapse/Databricks decision
-3. [ADRs](adr/README.md) — 22 decisions, each ~1 page
-4. [Best Practices](best-practices/index.md) — 9 guides averaging 565 lines
-5. [Use Cases & White Papers](use-cases/index.md) — by sector
+    ***
 
-### Path B — Data Engineer
+    1. [Architecture Overview](ARCHITECTURE.md)
+    2. [Reference Architectures](reference-architecture/index.md)
+    3. [ADRs](adr/README.md) — 22 decisions, ~1 page each
+    4. [Best Practices](best-practices/index.md) — 9 guides
+    5. [Use Cases & White Papers](use-cases/index.md)
 
-1. [Tutorial 01 — Foundation Platform](tutorials/01-foundation-platform/README.md)
-2. [Tutorial 05 — Real-Time Streaming (Lambda)](tutorials/05-streaming-lambda/README.md)
-3. [Best Practices — Medallion](best-practices/medallion-architecture.md), [Data Engineering](best-practices/data-engineering.md), [Performance Tuning](best-practices/performance-tuning.md)
-4. [Patterns — Cosmos DB](patterns/cosmos-db-patterns.md), [Streaming & CDC](patterns/streaming-cdc.md)
-5. [Examples](examples/index.md) — pick a vertical close to yours
+- :material-database:{ .lg .middle } **Data Engineer**
 
-### Path C — AI / GenAI Engineer
+    ***
 
-1. [Tutorial 06 — AI Analytics with Azure AI Foundry](tutorials/06-ai-analytics-foundry/README.md)
-2. [Tutorial 07 — AI Agents with Semantic Kernel](tutorials/07-agents-foundry-sk/README.md)
-3. [Tutorial 08 — RAG with AI Search](tutorials/08-rag-vector-search/README.md)
-4. [Tutorial 09 — GraphRAG Knowledge Graphs](tutorials/09-graphrag-knowledge/README.md)
-5. [Patterns — LLMOps & Evaluation](patterns/llmops-evaluation.md)
-6. [ADR 0017 — RAG Service Layer](adr/0017-rag-service-layer.md), [ADR 0007 — Azure OpenAI choice](adr/0007-azure-openai-over-self-hosted-llm.md)
+    1. [Tutorial 01 — Foundation Platform](tutorials/01-foundation-platform/README.md)
+    2. [Tutorial 05 — Streaming (Lambda)](tutorials/05-streaming-lambda/README.md)
+    3. Best Practices: [Medallion](best-practices/medallion-architecture.md), [Data Engineering](best-practices/data-engineering.md), [Performance](best-practices/performance-tuning.md)
+    4. Patterns: [Cosmos DB](patterns/cosmos-db-patterns.md), [Streaming & CDC](patterns/streaming-cdc.md)
+    5. [Examples](examples/index.md) — pick a vertical close to yours
 
-### Path D — Platform / DevOps Engineer
+- :material-robot:{ .lg .middle } **AI / GenAI Engineer**
 
-1. [IaC & CI/CD Best Practices](IaC-CICD-Best-Practices.md)
-2. [Production Checklist](PRODUCTION_CHECKLIST.md)
-3. [Multi-Region](MULTI_REGION.md), [Multi-Tenant](MULTI_TENANT.md), [Disaster Recovery](DR.md)
-4. [Runbooks](runbooks/data-pipeline-failure.md) — all 8
-5. [Supply Chain Security](SUPPLY_CHAIN.md), [Key Rotation](runbooks/key-rotation.md)
-6. [Patterns — Networking & DNS Strategy](patterns/networking-dns-strategy.md), [Observability with OTel](patterns/observability-otel.md)
+    ***
 
-### Path E — Compliance / Security
+    1. [Tutorial 06 — AI Analytics (Foundry)](tutorials/06-ai-analytics-foundry/README.md)
+    2. [Tutorial 07 — AI Agents (Semantic Kernel)](tutorials/07-agents-foundry-sk/README.md)
+    3. [Tutorial 08 — RAG with AI Search](tutorials/08-rag-vector-search/README.md)
+    4. [Tutorial 09 — GraphRAG Knowledge Graphs](tutorials/09-graphrag-knowledge/README.md)
+    5. [Patterns — LLMOps](patterns/llmops-evaluation.md), [ADR 0017](adr/0017-rag-service-layer.md), [ADR 0007](adr/0007-azure-openai-over-self-hosted-llm.md)
 
-1. [Compliance Overview](compliance/README.md)
-2. Pick your framework: [NIST 800-53 r5](compliance/nist-800-53-rev5.md), [FedRAMP Moderate](compliance/fedramp-moderate.md), [CMMC 2.0 L2](compliance/cmmc-2.0-l2.md), [HIPAA](compliance/hipaa-security-rule.md), [SOC 2](compliance/soc2-type2.md), [PCI-DSS](compliance/pci-dss-v4.md), [GDPR](compliance/gdpr-privacy.md)
-3. [Best Practices — Security & Compliance](best-practices/security-compliance.md)
-4. [Runbook — Security Incident](runbooks/security-incident.md), [Break-Glass Access](runbooks/break-glass-access.md)
-5. [Government Service Matrix](GOV_SERVICE_MATRIX.md)
+- :material-server-network:{ .lg .middle } **Platform / DevOps Engineer**
+
+    ***
+
+    1. [IaC & CI/CD Best Practices](IaC-CICD-Best-Practices.md)
+    2. [Production Checklist](PRODUCTION_CHECKLIST.md)
+    3. [Multi-Region](MULTI_REGION.md), [Multi-Tenant](MULTI_TENANT.md), [DR](DR.md)
+    4. [Runbooks](runbooks/data-pipeline-failure.md) — all 8
+    5. [Supply Chain](SUPPLY_CHAIN.md), [Key Rotation](runbooks/key-rotation.md), [Networking](patterns/networking-dns-strategy.md), [OTel](patterns/observability-otel.md)
+
+- :material-shield-check:{ .lg .middle } **Compliance / Security**
+
+    ***
+
+    1. [Compliance Overview](compliance/README.md)
+    2. Pick your framework: [NIST 800-53 r5](compliance/nist-800-53-rev5.md), [FedRAMP](compliance/fedramp-moderate.md), [CMMC 2.0 L2](compliance/cmmc-2.0-l2.md), [HIPAA](compliance/hipaa-security-rule.md), [SOC 2](compliance/soc2-type2.md), [PCI-DSS](compliance/pci-dss-v4.md), [GDPR](compliance/gdpr-privacy.md)
+    3. [Best Practices — Security & Compliance](best-practices/security-compliance.md)
+    4. Runbooks: [Security Incident](runbooks/security-incident.md), [Break-Glass](runbooks/break-glass-access.md)
+    5. [Government Service Matrix](GOV_SERVICE_MATRIX.md)
+
+</div>
 
 ---
 
@@ -168,7 +178,7 @@ The repo is actively maintained against Azure GA features. Preview-only services
 | If you want to...                 | Go to                                                                                                      |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | **See it running**                | [Quickstart](QUICKSTART.md) (5 min) → [Tutorial 01](tutorials/01-foundation-platform/README.md) (45 min)   |
-| **Pick a vertical**               | [End-to-End Examples](examples/index.md) — 16 industries                                                   |
+| **Pick a vertical**               | [End-to-End Examples](examples/index.md) — 10 examples (9 verticals + iot-streaming cross-cutting pattern) |
 | **Understand the design**         | [Architecture](ARCHITECTURE.md) → [ADRs](adr/README.md)                                                    |
 | **Deploy to production**          | [Production Checklist](PRODUCTION_CHECKLIST.md) → [IaC & CI/CD Best Practices](IaC-CICD-Best-Practices.md) |
 | **Migrate from another platform** | [Migrations](migrations/README.md)                                                                         |
@@ -182,3 +192,11 @@ The repo is actively maintained against Azure GA features. Preview-only services
 - **GitHub Discussions**: https://github.com/fgarofalo56/csa-inabox/discussions (Q&A + feature requests)
 - **Docs Copilot**: in-page chat widget on every docs page (powered by Azure OpenAI in our DLZ — see [ADR 0022](adr/0022-copilot-surfaces-vs-docs-widget.md))
 - **Security issues**: see [SECURITY.md](https://github.com/fgarofalo56/csa-inabox/blob/main/SECURITY.md) (private disclosure)
+
+---
+
+**See also:**
+
+- ← Previous: [Documentation home](index.md)
+- → Next: [Quickstart](QUICKSTART.md)
+- ⌂ Index: [Documentation home](index.md)

@@ -1,15 +1,40 @@
+---
+title: Migrations to Azure
+description: Field-tested migration playbooks from on-prem, AWS, GCP, Snowflake, Databricks, Teradata, Hadoop, and more onto the CSA-in-a-Box Azure stack.
+---
+
 # Migrations to Azure
 
 Field-tested migration playbooks from common on-prem and other-cloud platforms onto the CSA-in-a-Box Azure stack. Each playbook covers **assessment → design → migration → cutover → decommission** with realistic timelines and pitfalls.
 
-Playbooks are organized into two groups:
+<div class="grid cards" markdown>
 
-- **Data, AI & Analytics Migrations** — directly aligned with the CSA-in-a-Box mission of cloud-scale analytics, data fabric, data mesh, lakehouse, and AI/ML.
-- **Enterprise Modernization (Beyond Analytics)** — adjacent migrations (compute, identity, productivity, DevOps) that customers commonly bundle with cloud / data migrations at the enterprise level. Included for big-picture decision-making, not because they're part of the analytics platform itself.
+- :material-database-arrow-right:{ .lg .middle } **Data, AI & Analytics**
 
-## Data, AI & Analytics Migrations
+    ***
+
+    Core CSA-aligned playbooks for cloud-scale analytics, data platforms, AI/ML, and the operational data stores that feed them. Hyperscalers, warehouses, lakehouses, BI, ETL, and operational DBs.
+
+    [:octicons-arrow-down-24: Jump to playbooks](#data-ai-analytics-migrations)
+
+- :material-domain:{ .lg .middle } **Enterprise modernization**
+
+    ***
+
+    Adjacent migrations (compute, identity, productivity, DevOps, SecOps) that customers commonly bundle with cloud / data migrations at enterprise scale. Included for big-picture planning, not because they're part of the analytics platform itself.
+
+    [:octicons-arrow-down-24: Jump to playbooks](#enterprise-modernization-beyond-analytics)
+
+</div>
+
+---
+
+## Data, AI & Analytics migrations
 
 Core CSA-aligned playbooks for cloud-scale analytics, data platforms, AI/ML, and the operational data stores that feed them.
+
+!!! tip "Migrating to Microsoft Fabric?"
+    Several playbooks below target Microsoft Fabric directly. For additional Fabric-specific migration guides, planning worksheets, and tutorials, see the [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) companion site — including the [Migration Planning Tutorial](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/tutorials/13-migration-planning/) and [Migration Patterns](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/best-practices/migration-patterns/).
 
 ### Hyperscaler & cloud platforms (analytics workloads)
 
@@ -69,7 +94,7 @@ Core CSA-aligned playbooks for cloud-scale analytics, data platforms, AI/ML, and
 | --------------------- | --------------------------------- | ------------------------------------ |
 | IoT Hub + ADAL/X.509  | Entra ID + Event Grid + Functions | [iot-hub-entra.md](iot-hub-entra.md) |
 
-## Enterprise Modernization (Beyond Analytics)
+## Enterprise modernization (beyond analytics)
 
 These migrations are not part of the core analytics platform but often accompany cloud / data migrations at the enterprise level. Included so architects and customers can see the bigger picture when planning multi-year cloud transformations.
 

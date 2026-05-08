@@ -5,6 +5,130 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-05-06 — Copilot analytics pipeline + autonomous bug-fix flow + security audit
+
+**Archon project:** `145c8d71-7e54-4135-8ec9-d6300caf4517` (feature
+label `COPILOT-ANALYTICS-2026-05-06`).
+
+End-to-end addition of telemetry, feedback, backlog, autonomous bug-fix,
+privacy, and security hardening to the live Copilot chat surface
+(GitHub Pages widget + `func-csa-inabox-copilot-fg` Function backend).
+
+### Context
+
+User asked, in a single instruction, to: (a) wire usage tracking so
+analytics on chat success can be built; (b) add 👍/👎 with
+"how can we improve?" capture on thumbs-down; (c) accept use-case
+requests and capture uncovered questions as backlog items; (d) wire
+autonomous bug-fix via a Claude Code GitHub App that auto-merges on
+green; (e) ensure no security vulnerabilities in the chat widget,
+backend, or repo. Decisions delegated to me where pragmatic.
+
+### Architectural decisions
+
+- **Storage split:** App Insights (already provisioned at
+  `appi-csa-inabox-copilot-fg`) for ops/perf metrics + Cosmos DB
+  (new resource) for chat content / feedback / backlog. Cosmos chosen
+  over Storage Tables for the JSON-document fit and built-in TTL.
+- **Privacy:** opt-out default with first-open dismissible banner.
+  Server-side redaction (emails, JWTs, prefixed creds, bearer, Azure
+  connection strings, IPs, long opaque tokens). Salted SHA-256 IP
+  hash. 90-day TTL on raw chat content, indefinite on aggregated
+  metrics + feedback. `X-Copilot-Opt-Out: 1` propagates from widget
+  to backend; backend skips all persistence + telemetry on opt-out.
+- **Backlog destination:** Cosmos DB → GitHub Issues via hourly
+  drain workflow. Backend writes are best-effort; drain is
+  idempotent (only processes `status=open`, transitions to
+  `promoted` with the GitHub issue number stamped).
+- **Autonomous bug-fix:** maintainer-gated via `auto-fix` label on
+  issues already tagged `csa-bug`. Workflow invokes
+  `anthropics/claude-code-action@beta` with a tight prompt + tool
+  allowlist. Sibling auto-merge workflow enables GitHub native
+  auto-merge ONLY when the diff is fully contained within
+  `docs/**` / `examples/**` / `.github/ISSUE_TEMPLATE/**`. Anything
+  else gets a "needs human review" comment.
+
+### Security audit (parallel background agent)
+
+Report: `temp/security-audit-2026-05-06.md`. 1 CRITICAL + 5 HIGH:
+
+- **C-1 fixed in this PR** — XSS in `md()` renderer
+  (`docs/javascripts/copilot-chat.js`). Markdown rules interpolated
+  raw `$1` capture groups into HTML and the result was assigned via
+  `bubble.innerHTML`. Fix: escape input upfront, drop redundant
+  inner `esc()` calls (would double-escape).
+- **H-4 fixed in this PR** — `_client_ip` was reading the
+  *leftmost* XFF entry which is user-spoofable on Functions
+  Consumption with no trusted gateway in front. Switched to the
+  rightmost entry (the App Service front-end's appended client IP).
+- **H-1 / H-2 / H-3 / H-5 tracked as Archon follow-ups.** In-memory
+  rate-limit per-instance reset; regex injection list trivially
+  bypassable; OpenAI key still env var (MI migration prepped in the
+  Bicep); `Azure/functions-action@v1` mutable major tag.
+
+Confirmed clean by audit: no committed secrets in working tree or
+git history; `.gitignore` is comprehensive; `mkdocs.yml` has no
+external CDN analytics; `requirements.txt` deps are current.
+
+### Files changed
+
+**Modified:**
+- `azure-functions/copilot-chat/function_app.py`
+- `azure-functions/copilot-chat/requirements.txt`
+- `azure-functions/copilot-chat/DEPLOYMENT.md`
+- `docs/javascripts/copilot-chat.js`
+- `docs/stylesheets/copilot-chat.css`
+- `mkdocs.yml`
+
+**Added:**
+- `azure-functions/copilot-chat/redaction.py`
+- `azure-functions/copilot-chat/telemetry.py`
+- `azure-functions/copilot-chat/storage.py`
+- `azure-functions/copilot-chat/deploy/main.bicep`
+- `azure-functions/copilot-chat/tests/__init__.py`
+- `azure-functions/copilot-chat/tests/test_redaction.py`
+- `azure-functions/copilot-chat/tests/test_function_app.py`
+- `docs/copilot-privacy.md`
+- `.github/ISSUE_TEMPLATE/csa-bug.yml`
+- `.github/ISSUE_TEMPLATE/csa-feature-request.yml`
+- `.github/ISSUE_TEMPLATE/csa-uncovered.yml`
+- `.github/scripts/copilot_backlog_drain.py`
+- `.github/workflows/copilot-auto-fix.yml`
+- `.github/workflows/copilot-auto-merge.yml`
+- `.github/workflows/copilot-backlog-drain.yml`
+
+### Validation
+
+- `pytest azure-functions/copilot-chat/tests/` — **39 / 39 green**
+- `node --check docs/javascripts/copilot-chat.js` — clean
+- `mkdocs build --strict` — clean
+- Smoke import: all four endpoints resolve from `function_app`
+- Test coverage: redaction (every pattern + truncation + IP hash),
+  origin/token gates, XFF rightmost parsing, injection detection,
+  off-topic detection, feedback opt-out skipping persistence,
+  thumbs-down → backlog mirror, backlog kind validation,
+  injection-in-backlog rejection, health.
+
+### Archon delta
+
+- 7 new tasks under `COPILOT-ANALYTICS-2026-05-06`, all flipped to
+  `review` at session close.
+- 4 SEC-COPILOT follow-up tasks (H-1, H-2, H-3, H-5) seeded as
+  `todo` for next session.
+
+### Required follow-up before live
+
+1. Apply Bicep — provisions Cosmos + RBAC.
+2. Set `COSMOS_ENDPOINT`, `COSMOS_DATABASE=copilot`,
+   `COPILOT_IP_HASH_SALT` on the Function App.
+3. Configure `ANTHROPIC_API_KEY`, `COPILOT_COSMOS_ENDPOINT`,
+   `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`
+   secrets for the GitHub workflows.
+4. Push to `main` — `deploy-copilot-function.yml` redeploys the
+   backend; `docs.yml` rebuilds the docs site / GitHub Pages.
+
+---
+
 ## 2026-04-20 (cont.) — Phase-3 Wave 4.8: release pipeline + 2 architectural ADRs
 
 Sixth parallel round of the day. Release automation + 2 architectural

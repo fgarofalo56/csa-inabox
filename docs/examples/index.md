@@ -1,28 +1,187 @@
+---
+title: End-to-End Examples
+description: 18 industry-vertical implementations of CSA-in-a-Box — federal agencies, tribal organizations, healthcare, financial services, AI, IoT, and more.
+---
+
 # End-to-End Examples
 
-> **Industry vertical implementations of CSA-in-a-Box.** Each example is a self-contained, working deployment for a specific federal agency, tribal organization, or commercial sector — with real or synthetic data, dbt medallion models, data product contracts, deployment scripts, and analytics notebooks.
-
-## What's here
-
-| Example                                                   | Domain              | Highlights                                                        |
-| --------------------------------------------------------- | ------------------- | ----------------------------------------------------------------- |
-| [AI Agents](ai-agents.md)                                 | AI / LLMs           | Multi-agent orchestration patterns with Semantic Kernel + Foundry |
-| [Casino Analytics (Tribal)](casino-analytics.md)          | Gaming / Tribal     | Player lifetime value, fraud detection, regulatory reporting      |
-| [Commerce Economic Analytics](commerce.md)                | Federal (DoC)       | BEA/Census macroeconomic indicators, trade-flow analysis          |
-| [Cybersecurity](cybersecurity.md)                         | SecOps              | MITRE ATT&CK alert enrichment, Sentinel + KQL hunting             |
-| [Data API Builder](data-api-builder.md)                   | Mesh enablement     | REST/GraphQL over Lakehouse for federated consumption             |
-| [Financial Fraud Detection](financial-fraud-detection.md) | FinServ / BSA-AML   | Real-time transaction scoring, SAR generation, ML fraud pipeline  |
-| [DOT Transportation](dot.md)                              | Federal (DoT)       | FAA/FRA/FMCSA safety + capacity analytics                         |
-| [EPA Environmental](epa.md)                               | Federal (EPA)       | Real-time AQI streaming, water-safety, EJ scoring                 |
-| [GeoAnalytics](geoanalytics.md)                           | Geospatial          | PostGIS + ArcGIS Enterprise BYOL patterns                         |
-| [Interior Natural Resources](interior.md)                 | Federal (DOI)       | USGS, BLM, FWS land + water + wildlife datasets                   |
-| [IoT Streaming](iot-streaming.md)                         | Streaming           | Event Hubs → ASA → Fabric RTI / Eventhouse                        |
-| [ML Lifecycle (Loan Default)](ml-lifecycle.md)            | MLOps               | End-to-end MLflow + responsible AI scorecard                      |
-| [NOAA Climate & Ocean](noaa.md)                           | Federal (NOAA)      | Climate models, ocean buoy ingestion, severe-weather alerts       |
-| [Streaming](streaming.md)                                 | Streaming           | Lambda + Kappa reference implementations                          |
-| [Tribal Health](tribal-health.md)                         | Healthcare / Tribal | IHS-aligned warehouse, FHIR ingestion, equity dashboards          |
-| [USDA Agriculture](usda.md)                               | Federal (USDA)      | NASS production stats, crop forecasting, drought overlays         |
-| [USPS Postal Operations](usps.md)                         | Federal (USPS)      | Mail volume, facility ops, delivery analytics                     |
+**Industry vertical implementations of CSA-in-a-Box.** Each example is a self-contained, working deployment for a specific federal agency, tribal organization, or commercial sector — with real or synthetic data, dbt medallion models, data product contracts, deployment scripts, and analytics notebooks.
 
 !!! info "How these pages work"
-Each example page below is **rendered live from `examples/<vertical>/README.md`** in the source repo. If you spot something out of date, edit the README directly — the docs site picks it up on the next publish.
+    Each example page is **rendered live from `examples/<vertical>/README.md`** in the source repo. If you spot something out of date, edit the README directly — the docs site picks it up on the next publish.
+
+---
+
+## Federal agencies
+
+<div class="grid cards" markdown>
+
+- :material-bank:{ .lg .middle } **Commerce — Economic Analytics**
+
+    ***
+
+    BEA / Census macroeconomic indicators, trade-flow analysis.
+
+    [:octicons-arrow-right-24: Commerce](commerce.md)
+
+- :material-train:{ .lg .middle } **DOT — Transportation**
+
+    ***
+
+    FAA / FRA / FMCSA safety + capacity analytics.
+
+    [:octicons-arrow-right-24: DOT](dot.md)
+
+- :material-leaf:{ .lg .middle } **EPA — Environmental**
+
+    ***
+
+    Real-time AQI streaming, water-safety, EJ scoring.
+
+    [:octicons-arrow-right-24: EPA](epa.md)
+
+- :material-pine-tree:{ .lg .middle } **Interior — Natural Resources**
+
+    ***
+
+    USGS, BLM, FWS land + water + wildlife datasets.
+
+    [:octicons-arrow-right-24: Interior](interior.md)
+
+- :material-weather-partly-cloudy:{ .lg .middle } **NOAA — Climate & Ocean**
+
+    ***
+
+    Climate models, ocean buoy ingestion, severe-weather alerts.
+
+    [:octicons-arrow-right-24: NOAA](noaa.md)
+
+- :material-tractor:{ .lg .middle } **USDA — Agriculture**
+
+    ***
+
+    NASS production stats, crop forecasting, drought overlays.
+
+    [:octicons-arrow-right-24: USDA](usda.md)
+
+- :material-mailbox:{ .lg .middle } **USPS — Postal Operations**
+
+    ***
+
+    Mail volume, facility ops, delivery analytics.
+
+    [:octicons-arrow-right-24: USPS](usps.md)
+
+</div>
+
+---
+
+## Healthcare & tribal
+
+<div class="grid cards" markdown>
+
+- :material-hospital-box:{ .lg .middle } **Tribal Health**
+
+    ***
+
+    IHS-aligned warehouse, FHIR ingestion, equity dashboards.
+
+    [:octicons-arrow-right-24: Tribal Health](tribal-health.md)
+
+- :material-cards-playing:{ .lg .middle } **Casino Analytics (Tribal)**
+
+    ***
+
+    Player lifetime value, fraud detection, regulatory reporting.
+
+    [:octicons-arrow-right-24: Casino Analytics](casino-analytics.md)
+
+</div>
+
+---
+
+## Financial services & security
+
+<div class="grid cards" markdown>
+
+- :material-finance:{ .lg .middle } **Financial Fraud Detection**
+
+    ***
+
+    Real-time transaction scoring, SAR generation, ML fraud pipeline (BSA-AML).
+
+    [:octicons-arrow-right-24: Fraud Detection](financial-fraud-detection.md)
+
+- :material-shield-bug:{ .lg .middle } **Cybersecurity**
+
+    ***
+
+    MITRE ATT&CK alert enrichment, Sentinel + KQL hunting.
+
+    [:octicons-arrow-right-24: Cybersecurity](cybersecurity.md)
+
+</div>
+
+---
+
+## AI, ML & streaming
+
+<div class="grid cards" markdown>
+
+- :material-robot:{ .lg .middle } **AI Agents**
+
+    ***
+
+    Multi-agent orchestration patterns with Semantic Kernel + Azure AI Foundry.
+
+    [:octicons-arrow-right-24: AI Agents](ai-agents.md)
+
+- :material-brain:{ .lg .middle } **ML Lifecycle (Loan Default)**
+
+    ***
+
+    End-to-end MLflow + responsible-AI scorecard.
+
+    [:octicons-arrow-right-24: ML Lifecycle](ml-lifecycle.md)
+
+- :material-broadcast:{ .lg .middle } **IoT Streaming**
+
+    ***
+
+    Event Hubs → ASA → Fabric RTI / Eventhouse.
+
+    [:octicons-arrow-right-24: IoT Streaming](iot-streaming.md)
+
+- :material-flash:{ .lg .middle } **Streaming (Lambda + Kappa)**
+
+    ***
+
+    Lambda + Kappa reference implementations.
+
+    [:octicons-arrow-right-24: Streaming](streaming.md)
+
+</div>
+
+---
+
+## Geospatial & API enablement
+
+<div class="grid cards" markdown>
+
+- :material-map:{ .lg .middle } **GeoAnalytics**
+
+    ***
+
+    PostGIS + ArcGIS Enterprise BYOL patterns.
+
+    [:octicons-arrow-right-24: GeoAnalytics](geoanalytics.md)
+
+- :material-api:{ .lg .middle } **Data API Builder**
+
+    ***
+
+    REST / GraphQL over Lakehouse for federated consumption.
+
+    [:octicons-arrow-right-24: Data API Builder](data-api-builder.md)
+
+</div>

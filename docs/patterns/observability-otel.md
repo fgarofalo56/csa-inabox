@@ -2,6 +2,8 @@
 
 > **TL;DR:** **OpenTelemetry SDK** in every service, **Application Insights** as the backend, **W3C Trace Context** propagated end-to-end, **structured logs** with correlation IDs everywhere, **dashboards in Azure Workbooks**, **SLI/SLO + error budgets** to drive engineering effort. Don't roll your own.
 
+![Azure Application Insights Overview blade — Essentials panel showing instrumentation key, connection string, retention, and the Performance / Failures / Live Metrics left-nav. App Insights is the OpenTelemetry-compatible backend that every CSA-in-a-Box service ships traces, metrics, and logs to.](../assets/images/azure/application-insights-overview.png){ .architecture-hero loading="lazy" }
+
 ## Problem
 
 A modern data platform spans a dozen services per request — portal → BFF → AI service → vector search → AOAI → response. Without distributed tracing, debugging a "this one request was slow" report means hunting through 6 separate log streams hoping timestamps line up. With OpenTelemetry, every log line and every span carries the same trace ID, and one click in App Insights shows you the full request waterfall.

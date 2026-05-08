@@ -207,9 +207,8 @@ and the [DR](DR.md) / [Rollback](ROLLBACK.md) guides for incident response.
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Environment Protection](ENVIRONMENT_PROTECTION.md) — GitHub Environment protection rules
-- [Disaster Recovery](DR.md) — Multi-region failover runbook
-- [Cost Management](COST_MANAGEMENT.md) — FinOps budget alerts and cost optimization
-- [Gov Service Matrix](GOV_SERVICE_MATRIX.md) — Azure Government service availability
+- ← Previous: [Developer Pathways](DEVELOPER_PATHWAYS.md)
+- → Next: [AI Copilot](chat.md)
+- ⌂ Index: [Documentation home](index.md)

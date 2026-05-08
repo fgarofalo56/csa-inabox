@@ -161,7 +161,8 @@ for 7+ days.
 
 For a deeper breakdown of CU mechanics, burst windows, and smoothing
 behavior, see
-[Fabric Capacity Deep Dive](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/).
+[Capacity Planning & Cost Optimization](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/best-practices/capacity-planning-cost-optimization/)
+on the Supercharge Microsoft Fabric companion site.
 
 ---
 
@@ -328,7 +329,9 @@ Run this runbook in tabletop form quarterly. Add one row per drill.
 
 ## Related Documentation
 
-- [Fabric Capacity Deep Dive](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) — CU mechanics, burst behavior, and optimization patterns
+- [Supercharge Microsoft Fabric — Capacity Planning & Cost Optimization](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/best-practices/capacity-planning-cost-optimization/) — CU mechanics, burst behavior, right-sizing, and FinOps patterns
+- [Supercharge Microsoft Fabric — FinOps & Cost Governance](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/best-practices/finops-cost-governance/) — automated cost controls and alerting
+- [Supercharge Microsoft Fabric — Cost Estimation](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/COST_ESTIMATION/) — calculator and sizing worksheets
 - [Data Pipeline Failure](./data-pipeline-failure.md) — ADF / Synapse pipeline failure triage
 - [Databricks Cost Runaway](./databricks-cost-runaway.md) — Databricks cost management
 - [DR Drill](./dr-drill.md) — region-level failover procedures

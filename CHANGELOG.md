@@ -10,6 +10,37 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.5.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.4.0...csa-inabox-v0.5.0) (2026-05-07)
+
+
+### Features
+
+* **ci:** auto-create PR from Claude's auto-fix branch ([#186](https://github.com/fgarofalo56/csa-inabox/issues/186)) ([5ee5a40](https://github.com/fgarofalo56/csa-inabox/commit/5ee5a404bbbff57fc0bbfe50b84776911a776d7d))
+* **ci:** prefer Claude Max OAuth token for the auto-fix workflow ([#161](https://github.com/fgarofalo56/csa-inabox/issues/161)) ([7560c42](https://github.com/fgarofalo56/csa-inabox/commit/7560c428ba1fdb672d4a810a547305233210376f))
+* **copilot+audit:** SEC-COPILOT H-3/H-5 + deploy workflow + 9 audit cleanups ([#156](https://github.com/fgarofalo56/csa-inabox/issues/156)) ([5b02242](https://github.com/fgarofalo56/csa-inabox/commit/5b022420756893b217447551e23ed3d8696014d2))
+* **copilot+sec:** topic classification + autonomy guardrails ([#169](https://github.com/fgarofalo56/csa-inabox/issues/169)) ([5715913](https://github.com/fgarofalo56/csa-inabox/commit/57159134298262f28b00ae74442a685aa3101c09))
+* **copilot:** chat analytics + feedback + autonomous bug-fix flow ([#153](https://github.com/fgarofalo56/csa-inabox/issues/153)) ([495919a](https://github.com/fgarofalo56/csa-inabox/commit/495919a330636465e2ee2b92d460afcccb75eb83))
+* **copilot:** page analytics + analytics runbook + flush-on-emit fix ([#162](https://github.com/fgarofalo56/csa-inabox/issues/162)) ([e73ff19](https://github.com/fgarofalo56/csa-inabox/commit/e73ff19173da17cc865d7dc0a2ef09bcbd8fbee3))
+* **copilot:** polish responses + inline citations + frontend-side RAG grounding ([#150](https://github.com/fgarofalo56/csa-inabox/issues/150)) ([aba0225](https://github.com/fgarofalo56/csa-inabox/commit/aba0225b7e6509f98bdbbae5f81fe0468552618f))
+
+
+### Bug Fixes
+
+* **ci:** add id-token: write permission for claude-code-action ([#182](https://github.com/fgarofalo56/csa-inabox/issues/182)) ([d03791c](https://github.com/fgarofalo56/csa-inabox/commit/d03791cc75603374f3a30780caead118a4f3de8b))
+* **ci:** claude-code-action input is direct_prompt not prompt ([#181](https://github.com/fgarofalo56/csa-inabox/issues/181)) ([b4e66a3](https://github.com/fgarofalo56/csa-inabox/commit/b4e66a312682237e5c1c6d97b0d5f423e64025b9))
+* **ci:** install function deps for test step in deploy workflow ([#157](https://github.com/fgarofalo56/csa-inabox/issues/157)) ([2f7f084](https://github.com/fgarofalo56/csa-inabox/commit/2f7f08473c83de3ead2f23c02d09fa7c2d2bb8f7))
+* **ci:** sanitizer false-positive on markdown inline code ([#180](https://github.com/fgarofalo56/csa-inabox/issues/180)) ([89b6b13](https://github.com/fgarofalo56/csa-inabox/commit/89b6b13bb1757e1048b27e67d8477b1a127195de))
+* **ci:** set label_trigger=auto-fix on claude-code-action ([#183](https://github.com/fgarofalo56/csa-inabox/issues/183)) ([d6e1e10](https://github.com/fgarofalo56/csa-inabox/commit/d6e1e105dae17d3b91d202fb3be707e8e675f193))
+* **ci:** use mode=tag (default) so label_trigger is honored ([#184](https://github.com/fgarofalo56/csa-inabox/issues/184)) ([6daaf8e](https://github.com/fgarofalo56/csa-inabox/commit/6daaf8e9b7956c0292eef226121e4c25b20fd80a))
+* **copilot:** repair function 500 + tighten search relevance + auto-deploy workflow ([#151](https://github.com/fgarofalo56/csa-inabox/issues/151)) ([2273bfb](https://github.com/fgarofalo56/csa-inabox/commit/2273bfbd8a2e4ac0a62ea43abe5c815190037218))
+* update copilot-privacy.md date to reflect PR [#169](https://github.com/fgarofalo56/csa-inabox/issues/169) changes (auto-fix [#179](https://github.com/fgarofalo56/csa-inabox/issues/179)) ([#185](https://github.com/fgarofalo56/csa-inabox/issues/185)) ([6d8c975](https://github.com/fgarofalo56/csa-inabox/commit/6d8c975364e74f397f77abf6a0a2a30c13434a4e))
+
+
+### Documentation
+
+* add Supercharge Microsoft Fabric cross-references + link-check workflow ([#152](https://github.com/fgarofalo56/csa-inabox/issues/152)) ([c966845](https://github.com/fgarofalo56/csa-inabox/commit/c966845ba6ff5a95e9492716a190a53925d797df))
+* simplechat-style polish + real Azure portal screenshots ([#148](https://github.com/fgarofalo56/csa-inabox/issues/148)) ([faad54c](https://github.com/fgarofalo56/csa-inabox/commit/faad54c908eef5ba10a07f859fc2af41ca2d2a62))
+
 ## [0.4.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.3.1...csa-inabox-v0.4.0) (2026-05-01)
 
 

@@ -418,8 +418,8 @@ See the root [`.env.example`](../.env.example) for all required environment vari
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Architecture](ARCHITECTURE.md) — Comprehensive architecture reference
-- [Multi-Region DR](DR.md) — Multi-region disaster recovery runbook
-- [Cost Management](COST_MANAGEMENT.md) — FinOps budget alerts and cost optimization
+- ← Previous: [Architecture](ARCHITECTURE.md)
+- → Next: [Multi-Region](MULTI_REGION.md)
+- ⌂ Index: [Documentation home](index.md)

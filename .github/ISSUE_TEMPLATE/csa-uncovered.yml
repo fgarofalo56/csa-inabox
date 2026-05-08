@@ -1,0 +1,40 @@
+name: "Copilot Chat: Doc gap / uncovered question"
+description: The Copilot couldn't help with something the docs probably
+  should cover. Tell us so we can write it up.
+title: "docs: <topic the Copilot couldn't answer>"
+labels: ["csa-uncovered"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for flagging an uncovered topic. The Copilot drains items
+        like this from the analytics backlog hourly — **automated** items
+        will already include the original question. Use this template for
+        things you'd like to flag manually.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: The question or topic the Copilot didn't cover
+      placeholder: "How do I configure private endpoints between the DLZ ADLS account and the DMLZ Synapse workspace when both are in different subscriptions?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: where_you_looked
+    attributes:
+      label: Where you looked first (optional)
+      description: docs page, ADR, runbook — helps us know which page should have answered.
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Did you find an answer elsewhere? (optional)
+      description: |
+        If you eventually solved it, paste the link or summary. Saves us
+        re-doing the research.
+
+  - type: input
+    id: conversation_id
+    attributes:
+      label: Conversation ID (optional)

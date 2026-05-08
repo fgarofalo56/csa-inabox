@@ -70,3 +70,11 @@ For the full deployment posture, see [`azure-functions/copilot-chat/DEPLOYMENT.m
 - [ ] Promote `AZURE_OPENAI_KEY` from app setting to Key Vault reference (system MI is already wired)
 
 Tracked in [`azure-functions/copilot-chat/DEPLOYMENT.md`](https://github.com/fgarofalo56/csa-inabox/blob/main/azure-functions/copilot-chat/DEPLOYMENT.md) §Known follow-ups.
+
+---
+
+**See also:**
+
+- ← Previous: [Production Checklist](PRODUCTION_CHECKLIST.md)
+- → Next: [Copilot privacy notice](copilot-privacy.md)
+- ⌂ Index: [Documentation home](index.md)

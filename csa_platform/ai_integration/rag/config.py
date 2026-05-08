@@ -37,12 +37,18 @@ class AzureOpenAISettings(BaseSettings):
         default="2024-06-01",
         description="Azure OpenAI API version.",
     )
+    # CSA-0109: default upgraded from text-embedding-3-small (1536) to
+    # text-embedding-3-large (3072). This is a 4x dimension increase from
+    # the previous default — downstream Azure AI Search vector indexes
+    # built against the old default must be re-indexed (or the deployment
+    # / dimensions overridden via env vars) before the new default takes
+    # effect.
     embedding_deployment: str = Field(
-        default="text-embedding-3-small",
+        default="text-embedding-3-large",
         description="Deployment name for the embedding model.",
     )
     embedding_dimensions: int = Field(
-        default=1536,
+        default=3072,
         description="Dimensionality of the embedding vectors.",
     )
     chat_deployment: str = Field(

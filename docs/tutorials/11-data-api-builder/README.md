@@ -2,6 +2,8 @@
 
 > **Estimated Time:** 90 minutes | **Path:** F (Platform Operations) | **Prerequisites:** Azure subscription, SQL Server
 
+![Azure SQL Server Overview blade — Essentials panel with server admin, status, location, and the SQL databases / SQL elastic pools / Networking left-nav, the canonical landing point for Data API Builder back-ends](../../assets/images/azure/sql-server-overview.png){ .architecture-hero loading="lazy" }
+
 ```mermaid
 graph LR
     subgraph "Data Layer"

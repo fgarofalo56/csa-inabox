@@ -1,5 +1,7 @@
 # Compliance — Section 508 / WCAG Accessibility
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 > **Scope:** Section 508 of the Rehabilitation Act and **WCAG 2.1 Level AA** compliance for data portals, dashboards, and reporting surfaces built on CSA-in-a-Box. All federal agencies and their contractors must meet these requirements.
 
 ---
