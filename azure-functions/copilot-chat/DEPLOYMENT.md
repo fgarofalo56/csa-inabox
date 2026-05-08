@@ -129,8 +129,113 @@ cd azure-functions/copilot-chat
 func azure functionapp publish $FUNC --python --build remote
 ```
 
-## Known gaps (not addressed in this PR)
+## Analytics pipeline (added 2026-05-06)
 
-- **No IaC**.  Provisioning is documented above but not committed as Bicep.  A future PR could add `azure-functions/copilot-chat/deploy/main.bicep` plus a `.github/workflows/deploy-docs-chat.yml` parameterized on `${{ vars.DOCS_CHAT_SUBSCRIPTION_ID }}` so the next reviewer doesn't have to repeat this archaeology.
-- **OpenAI key in app setting** instead of Key Vault reference.  Acceptable short-term because the Function App's MI was assigned at create-time; promoting to Key Vault is a follow-up.
-- **`fgaro-mdg63bud-eastus2` is a personal-name AI Services account**.  It's in the right tenant and right sub, but the naming suggests it should be re-homed to a `aimlservices-shared-eastus2` (or similar) account before this docs widget gets external dependencies.
+The Function App now writes chat content, feedback, and backlog
+submissions to Cosmos DB and emits custom events to Application
+Insights. See [`docs/copilot-privacy.md`](../../docs/copilot-privacy.md)
+for the user-facing privacy notice.
+
+### Cosmos DB
+
+Provisioned via `azure-functions/copilot-chat/deploy/main.bicep` —
+deployed 2026-05-06 to `cosmos-csa-inabox-copilot-fg` in **eastus2**
+(eastus had AZ-redundant capacity issues; Function App stays in eastus,
+~5ms cross-region latency to Cosmos):
+
+```bash
+az login --tenant limitlessdata.ai
+az account set --subscription "FedCiv ATU FFL - DLZ"
+az deployment group create \
+  -g rg-dlz-aiml-stack-dev \
+  -f azure-functions/copilot-chat/deploy/main.bicep
+```
+
+If Cosmos `eastus2` is full at the time of deploy, override:
+
+```bash
+az deployment group create \
+  -g rg-dlz-aiml-stack-dev \
+  -f azure-functions/copilot-chat/deploy/main.bicep \
+  --parameters location=westus2
+```
+
+After the deployment finishes, set these app settings on the Function App
+(replace the endpoint with the Bicep output value). **Done 2026-05-06.**
+
+```bash
+SALT=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+az functionapp config appsettings set \
+  --subscription 363ef5d1-0e77-4594-a530-f51af23dbf8c \
+  -g rg-dlz-aiml-stack-dev \
+  -n func-csa-inabox-copilot-fg \
+  --settings \
+    "COSMOS_ENDPOINT=https://cosmos-csa-inabox-copilot-fg.documents.azure.com:443/" \
+    "COSMOS_DATABASE=copilot" \
+    "COPILOT_IP_HASH_SALT=$SALT"
+```
+
+The Function App's system-assigned MI is bound to **Cosmos DB Built-in
+Data Contributor** at the account scope by the Bicep, so no Cosmos key
+ever lands in app settings. If `COSMOS_ENDPOINT` is unset or the role
+binding is missing, the analytics calls no-op and the chat path stays
+healthy.
+
+The drain workflow's SP (`limitlessdata_deploy`,
+client `95ca491e-...`, object `b9c3cc65-...`) was granted the same
+Cosmos role separately:
+
+```bash
+MSYS_NO_PATHCONV=1 az cosmosdb sql role assignment create \
+  --account-name cosmos-csa-inabox-copilot-fg \
+  -g rg-dlz-aiml-stack-dev \
+  --scope "/" \
+  --principal-id "b9c3cc65-522e-49c9-ad02-914676aa5a6b" \
+  --role-definition-id "00000000-0000-0000-0000-000000000002"
+```
+
+(``MSYS_NO_PATHCONV=1`` is required when the command is run from Git
+Bash on Windows; otherwise the lone ``/`` scope gets path-translated.)
+
+### Application Insights
+
+Already provisioned at `appi-csa-inabox-copilot-fg`. The
+`APPLICATIONINSIGHTS_CONNECTION_STRING` app setting is set when the
+Function App is created (see Recreate-from-scratch above). Custom
+events:
+
+| Event                   | Emitted from        | Notes                                    |
+|-------------------------|---------------------|------------------------------------------|
+| `chat.request`          | `/api/chat`         | per turn — latency, tokens, citation count |
+| `chat.feedback`         | `/api/feedback`     | per thumbs up/down                       |
+| `chat.backlog_submission` | `/api/backlog`    | per user-submitted backlog item          |
+| `chat.rejected`         | any endpoint        | with `reason` dimension (bad_token, rate_limit, injection, etc.) |
+| `chat.error`            | `/api/chat`         | OpenAI-side failures only                |
+
+### Backlog drain
+
+`.github/workflows/copilot-backlog-drain.yml` runs hourly, reads up to
+25 `status=open` items from `copilot.backlog`, files a GitHub Issue for
+each, and flips the Cosmos row to `status=promoted` with a stamp of the
+issue number. Set the repo variable `COPILOT_COSMOS_ENDPOINT` and the
+secrets `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`
+for the federated identity that has Cosmos data-read on the account.
+
+## Known gaps (still tracked)
+
+These were called out in `temp/security-audit-2026-05-06.md` and have
+Archon tasks under feature `COPILOT-ANALYTICS-2026-05-06`:
+
+- **SEC-COPILOT H-1.** In-memory rate-limit + token budget reset on
+  cold start and don't aggregate across instances on Consumption.
+- **SEC-COPILOT H-2.** The 24-pattern injection regex is bypassable;
+  follow-up moves input filtering to Azure AI Content Safety + adds an
+  output-side HTML strip pass.
+- **SEC-COPILOT H-3.** OpenAI key still in app settings — replace with
+  `azure_ad_token_provider` via DefaultAzureCredential. The Bicep PR
+  prepares the role binding ahead of the code switch.
+- **SEC-COPILOT H-5.** `Azure/functions-action@v1` is still pinned to
+  the major-version mutable tag; pin to SHA + Dependabot.
+- **`fgaro-mdg63bud-eastus2`** is a personal-name AI Services account.
+  Right tenant + sub, but should be re-homed to a shared account before
+  the widget gains external dependencies.

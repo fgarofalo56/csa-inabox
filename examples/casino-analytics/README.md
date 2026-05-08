@@ -823,3 +823,18 @@ casino-analytics/
 ├── ARCHITECTURE.md           # Mermaid + prose architecture diagrams
 └── README.md                 # This file
 ```
+
+## Expected Results
+
+After running the medallion pipeline against the bundled seed data,
+the Gold layer should populate the following tables. Row counts vary
+with the seed-data generator parameters; the figures below are the
+approximate scale you should see on a default run.
+
+| Gold Table | Approximate Rows | Notes |
+| ---------- | ---------------- | ----- |
+| `gld_compliance_monitoring` | TODO: capture after first run | Populated from Silver via dbt `--select tag:gold` |
+| `gld_floor_optimization` | TODO: capture after first run | Populated from Silver via dbt `--select tag:gold` |
+| `gld_player_value` | TODO: capture after first run | Populated from Silver via dbt `--select tag:gold` |
+
+> TODO: capture exact counts after the next end-to-end seed run. These are bounded by the seed-data generator parameters in `data/generators/`.

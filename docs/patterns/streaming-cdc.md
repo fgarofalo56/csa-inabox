@@ -190,3 +190,5 @@ Pick a watermark that matches your data's latency reality. Too tight = drop legi
 - [Tutorial 05 — Streaming Lambda](../tutorials/05-streaming-lambda/README.md)
 - [Example — IoT Streaming](../examples/iot-streaming.md)
 - [Example — Streaming](../examples/streaming.md)
+- [Supercharge Microsoft Fabric — Real-Time Intelligence](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/features/real-time-intelligence/) — Fabric RTI deep dive (Eventstream, Eventhouse, KQL)
+- [Supercharge Microsoft Fabric — Real-Time Analytics Tutorial](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/tutorials/04-real-time-analytics/) — hands-on RTI tutorial

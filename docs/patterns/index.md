@@ -12,6 +12,9 @@ Implementation patterns for cross-cutting scenarios. **Patterns** sit between **
 | [Streaming & CDC](streaming-cdc.md)                             | Choosing between Event Hubs / ASA / RTI / Debezium for change data         |
 | [Power BI & Fabric Roadmap](power-bi-fabric-roadmap.md)         | Sequencing Power BI workloads onto Fabric Direct Lake                      |
 
+!!! tip "Microsoft Fabric deep dives"
+    For hands-on Fabric tutorials, feature guides, and production best practices, see the [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) companion site.
+
 ## Why patterns are separate from Best Practices
 
 | Document type     | Scope                 | Voice                                          |

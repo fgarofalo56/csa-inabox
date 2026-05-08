@@ -6,7 +6,165 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-04-18
+## Current Session — 2026-05-06
+
+**Focus:** Wire production telemetry / feedback / backlog-with-autonomous-fix
+flow into the live Copilot chat surface, fronted by a security audit of the
+existing widget + backend.
+
+**Archon project:** `145c8d71-7e54-4135-8ec9-d6300caf4517` —
+CSA-in-a-Box: Fabric-in-a-Box Vision (new feature label
+`COPILOT-ANALYTICS-2026-05-06`).
+
+### What landed
+
+**Backend (`azure-functions/copilot-chat/`)**
+- `redaction.py` — PII / secret-pattern scrubber (emails, JWTs, provider-
+  prefixed keys, bearer tokens, Azure connection strings, IPs, long opaque
+  tokens). Salted SHA-256 IP hashing helper.
+- `telemetry.py` — Application Insights custom-event emitter via
+  OpenCensus `AzureEventHandler`. No-ops if connection string is unset.
+- `storage.py` — Cosmos DB persistence: `conversations`, `feedback`,
+  `backlog` containers. AAD-only auth via `DefaultAzureCredential`.
+  No-ops if `COSMOS_ENDPOINT` is unset.
+- `function_app.py` — extended `/api/chat` to emit telemetry + persist
+  to Cosmos with redaction; new `/api/feedback`, `/api/backlog`,
+  `/api/health` endpoints with the same origin / token / rate-limit
+  gates. Uncovered-question detection (off-topic refusal regex OR zero
+  grounding hits) auto-files to backlog as `kind=uncovered`.
+- Fix: SEC-COPILOT H-4 — `_client_ip` now uses the rightmost
+  `X-Forwarded-For` entry instead of the spoofable leftmost.
+- `requirements.txt` — `azure-cosmos`, `azure-identity`,
+  `opencensus-ext-azure`.
+- `tests/` — 39 unit tests covering redaction, IP hashing, origin /
+  token gates, injection detection, off-topic detection, and the
+  feedback / backlog / health endpoints. **All green.**
+
+**Frontend (`docs/javascripts/copilot-chat.js`)**
+- **SEC-COPILOT C-1 fix.** XSS in `md()` renderer closed by escaping
+  the input *before* any markdown rule fires; redundant inner `esc()`
+  calls dropped to avoid double-escape. The bubble innerHTML sink is
+  now safe-by-construction.
+- Per-tab session ID (`sessionStorage`); per-turn conversation ID;
+  both flow through to backend on every request.
+- Privacy banner on first open with **Accept** / **Opt out** /
+  **Read details** (linking to `docs/copilot-privacy.md`); decision
+  persisted in `localStorage`. Opt-out propagates as
+  `X-Copilot-Opt-Out: 1` header — backend skips all persistence /
+  telemetry when set.
+- 👍 / 👎 strip after every assistant reply. Thumbs-down opens an
+  improvement-text modal whose contents are persisted as a feedback
+  record AND mirrored to the backlog as a `kind=bug` candidate.
+- "Request a use case / Bug / Doc gap" 💡 button in the header opens
+  a tabbed modal that POSTs to `/api/backlog`.
+- Uncovered detection: when backend `meta.uncovered=true`, widget
+  surfaces an inline "Add to backlog" prompt referencing the original
+  question.
+
+**Frontend styling (`docs/stylesheets/copilot-chat.css`)**
+- ~270 new lines: privacy banner, feedback strip, uncovered prompt,
+  modal, system-message bubble, request button. All themes-aware
+  (light + slate dark + `prefers-color-scheme: dark` fallback).
+
+**Privacy & docs**
+- `docs/copilot-privacy.md` — full notice listing every collected
+  field, retention period, redaction patterns, opt-out instructions,
+  deletion-request workflow, source-code links. Linked from widget
+  banner; added to mkdocs nav.
+
+**GitHub Issue templates**
+- `csa-bug.yml`, `csa-feature-request.yml`, `csa-uncovered.yml` — used
+  by both manual submitters and the automated drain.
+
+**GitHub workflows**
+- `copilot-auto-fix.yml` — triggered when a maintainer adds the
+  `auto-fix` label to a `csa-bug` issue. Invokes the official
+  `anthropics/claude-code-action@beta` with a tightly scoped prompt
+  + tool allowlist; opens a PR titled
+  `fix: <title> (auto-fix #<issue>)`.
+- `copilot-auto-merge.yml` — watches PRs from the auto-fix bot. If
+  the diff is fully contained within `docs/**` / `examples/**` /
+  `.github/ISSUE_TEMPLATE/**`, enables GitHub auto-merge so the PR
+  lands as soon as required checks pass. Anything outside the safelist
+  drops a comment on the PR and waits for a maintainer.
+- `copilot-backlog-drain.yml` + `.github/scripts/copilot_backlog_drain.py`
+  — hourly drain of Cosmos `copilot.backlog` (status=open) into
+  GitHub Issues; flips Cosmos rows to `status=promoted` with the
+  filed issue number stamped.
+
+**IaC**
+- `azure-functions/copilot-chat/deploy/main.bicep` — Cosmos DB
+  account (serverless, AAD-only `disableLocalAuth=true`, continuous
+  backup, TLS 1.2 minimum) + database `copilot` + 3 containers
+  (TTL 90 days on `conversations`, no TTL on `feedback`/`backlog`)
+  + Cosmos DB Built-in Data Contributor role assignment to the
+  Function App's system-assigned MI.
+- `DEPLOYMENT.md` extended with the analytics pipeline runbook,
+  app-setting commands, and a refreshed Known Gaps section.
+
+### Security audit (background agent, 2026-05-06)
+
+Full report: `temp/security-audit-2026-05-06.md`. Headline:
+
+| ID  | Sev      | Status    | Notes                                                |
+|-----|----------|-----------|------------------------------------------------------|
+| C-1 | CRITICAL | **Fixed** | XSS in `md()` renderer (this PR)                     |
+| H-1 | HIGH     | Tracked   | In-memory rate-limit / token budget — Archon `a1e815db` |
+| H-2 | HIGH     | Tracked   | Regex injection list bypassable — Archon `45297419`   |
+| H-3 | HIGH     | Tracked   | OpenAI key in app setting — Archon `66dd7226`         |
+| H-4 | HIGH     | **Fixed** | XFF rightmost-entry parse (this PR)                  |
+| H-5 | HIGH     | Tracked   | `Azure/functions-action@v1` mutable tag — Archon `7ac11b22` |
+
+Confirmed clean: no committed secrets, `.gitignore` is
+comprehensive, `mkdocs.yml` has no analytics/CDN includes,
+`requirements.txt` deps are current.
+
+### Validation at close
+
+- `pytest azure-functions/copilot-chat/tests/` — **39 / 39 green**
+- `node --check docs/javascripts/copilot-chat.js` — syntactically valid
+- `mkdocs build --strict` — clean (privacy page renders into the site
+  as expected)
+- Module import smoke test: all four endpoints
+  (`chat` / `feedback` / `backlog` / `health`) resolve
+
+### Archon delta
+
+- 7 new tasks created under `COPILOT-ANALYTICS-2026-05-06`; all 7 set
+  to `review` at session close (telemetry pipeline, feedback endpoint,
+  backlog + uncovered detection, privacy notice, auto-fix workflow,
+  Cosmos IaC, security audit).
+- 4 follow-up tasks created for the un-fixed audit HIGH findings
+  (H-1 / H-2 / H-3 / H-5), all `todo`, assigned to `Coding Agent`.
+
+### Required deployment steps before this is live
+
+1. **Deploy Cosmos**:
+   `az deployment group create -g rg-dlz-aiml-stack-dev -f azure-functions/copilot-chat/deploy/main.bicep`
+2. **Set Function App settings** (replace endpoint with Bicep output):
+   `COSMOS_ENDPOINT`, `COSMOS_DATABASE=copilot`, `COPILOT_IP_HASH_SALT=<rotate-monthly>`.
+3. **Configure repo** for the auto-fix + drain flows:
+   - secret `ANTHROPIC_API_KEY`
+   - variable `COPILOT_COSMOS_ENDPOINT`
+   - federated identity secrets for the drain (`AZURE_CLIENT_ID`,
+     `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`)
+4. **Push** — the existing
+   `.github/workflows/deploy-copilot-function.yml` autodeploys backend
+   changes; the docs site rebuilds on the same trigger via
+   `docs.yml`.
+
+### Next-session candidates
+
+- Burn down the 4 SEC-COPILOT follow-ups (H-1/2/3/5), ideally as
+  parallel agents on non-overlapping scope.
+- Audit cleanup wave: the 10 visible MEDIUM/LOW audit todos
+  (CSA-0117, 0109, 0084, 0081, 0079, 0077, 0071, 0062, 0060, 0113).
+- Wave 5 strategic builds: Copilot MVP Phase 0-1 (CSA-0008), real
+  Fabric module (CSA-0129), Postgres migration (CSA-0046).
+
+---
+
+## Previous Session — 2026-04-18
 
 **Focus:** Full forensic audit + vision-alignment assessment + first wave of
 remediation for the CSA-in-a-Box codebase, per the "Full Codebase Remediation"

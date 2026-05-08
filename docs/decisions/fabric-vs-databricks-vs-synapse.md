@@ -114,4 +114,6 @@ flowchart TD
 
 - Architecture: [Architecture Layers](../ARCHITECTURE.md#-architecture-layers)
 - Architecture: [Primary Tech Choices](../ARCHITECTURE.md#%EF%B8%8F-primary-tech-choices)
+- Guide: [Microsoft Fabric Platform Guide](../guides/microsoft-fabric.md)
+- Companion: [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) — tutorials, feature guides, best practices, and POC agendas
 - Finding: CSA-0010 (ARCHITECTURE decision matrix lacks branching and scenario axes)

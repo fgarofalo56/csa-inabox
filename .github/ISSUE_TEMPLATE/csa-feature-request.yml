@@ -1,0 +1,50 @@
+name: "Copilot Chat: Feature / use case request"
+description: Ask for a new use case, vertical, integration, or capability
+  in csa-inabox or its Copilot.
+title: "feat: <short summary>"
+labels: ["csa-feature-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for new features, new use cases, new verticals,
+        or new integrations. Bug reports go in the **Copilot Chat: Bug**
+        template.
+
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: What would you (or your team / customer) like to do?
+      placeholder: "I'd like a worked example of ingesting CMS Medicare claims into the medallion pattern with PHI tokenisation in the bronze layer."
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Why this matters
+      description: Who benefits? What problem does it solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: outline
+    attributes:
+      label: Outline of the desired solution (optional)
+      description: |
+        Bullet points or a sketch — Bicep / dbt model layout / portal
+        page / docs page — whatever you can describe.
+
+  - type: input
+    id: similar
+    attributes:
+      label: Similar work elsewhere (optional)
+      description: Link to a blog, sample, or product that does what you'd like.
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        Submissions trigger a maintainer triage. Items accepted into the
+        roadmap will get a `csa-feature-accepted` label and a target wave.

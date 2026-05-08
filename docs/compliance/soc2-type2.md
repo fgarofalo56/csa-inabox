@@ -1,5 +1,7 @@
 # Compliance — SOC 2 Type II
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 > **Status:** Implementation guidance and Trust Services Criteria (TSC) crosswalk for **SOC 2 Type II** reports. This is the most-requested commercial-sector compliance framework and is required for selling to most enterprises.
 
 ## What is SOC 2 Type II?

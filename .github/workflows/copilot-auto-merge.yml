@@ -1,0 +1,330 @@
+# Watches PRs that look like Copilot auto-fix output. Auto-merge is
+# enabled ONLY when EVERY check below passes:
+#
+# 1. **Origin check** — PR title prefix matches ``(auto-fix #N)`` OR
+#    branch name starts with ``claude/auto-fix/`` OR PR has
+#    ``auto-fix`` label. Non-bot PRs are skipped (no comment, no
+#    auto-merge).
+#
+# 2. **Path denylist** — Files matching any of these patterns block
+#    auto-merge regardless of safelist match (defense in depth):
+#       .github/workflows/**
+#       .github/scripts/**
+#       **/requirements*.txt
+#       **/pyproject.toml
+#       **/package*.json
+#       **/Cargo.toml
+#       **/go.mod
+#       **/Gemfile*
+#       **/.env*
+#       **/secret*
+#       **/credential*
+#       **/*password*
+#       **/auth/**
+#       **/security/**
+#       **/keyvault/**
+#       **/rbac/**
+#       .gitleaks.toml
+#       Dockerfile
+#       docker-compose*
+#
+# 3. **Path safelist** — All changed files must match one of:
+#       docs/**
+#       examples/**
+#       .github/ISSUE_TEMPLATE/**
+#
+# 4. **Diff content scan** — A regex sweep over the unified diff for
+#    suspicious additions: hardcoded credentials, eval/exec, network
+#    egress URLs, base64 decode, shell command substitution.
+#
+# Anything that fails any check posts a comment on the PR explaining
+# why and DOES NOT enable auto-merge. The PR remains open for a
+# maintainer to review.
+name: Copilot Auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  check_suite:
+    types: [completed]
+  status: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: copilot-auto-merge-${{ github.event.pull_request.number || github.event.check_suite.pull_requests[0].number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    if: |
+      github.event.pull_request != null ||
+      github.event.check_suite != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      AUTO_MERGE_SAFELIST_PATTERNS: |
+        docs/**
+        examples/**
+        .github/ISSUE_TEMPLATE/**
+      AUTO_MERGE_DENYLIST_PATTERNS: |
+        .github/workflows/**
+        .github/scripts/**
+        **/requirements*.txt
+        **/pyproject.toml
+        **/package*.json
+        **/Cargo.toml
+        **/go.mod
+        **/Gemfile*
+        **/.env*
+        **/secret*
+        **/credential*
+        **/*password*
+        **/auth/**
+        **/security/**
+        **/keyvault/**
+        **/rbac/**
+        .gitleaks.toml
+        Dockerfile
+        docker-compose*
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Identify candidate PR
+        id: pr
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const pr = context.payload.pull_request
+              || (context.payload.check_suite?.pull_requests?.[0]);
+            if (!pr) { core.setOutput("skip", "true"); return; }
+
+            const { data: full } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+            });
+
+            const isAutoFix =
+              /\(auto-fix #\d+\)/.test(full.title)
+              || full.head.ref.startsWith("claude/auto-fix/")
+              || full.labels.some(l => l.name === "auto-fix");
+            if (!isAutoFix) { core.setOutput("skip", "true"); return; }
+
+            core.setOutput("number", String(full.number));
+            core.setOutput("head_sha", full.head.sha);
+            core.setOutput("node_id", full.node_id);
+            core.setOutput("skip", "false");
+
+      - name: Compute changed files
+        if: steps.pr.outputs.skip == 'false'
+        run: |
+          set -e
+          PR=${{ steps.pr.outputs.number }}
+          gh pr diff "$PR" --name-only > /tmp/changed.txt
+          echo "Changed files:"
+          cat /tmp/changed.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check denylist (any hit blocks auto-merge)
+        if: steps.pr.outputs.skip == 'false'
+        id: denylist
+        run: |
+          set -e
+          deny_hit=""
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            while IFS= read -r p; do
+              p=$(echo "$p" | tr -d ' ')
+              [ -z "$p" ] && continue
+              shopt -s globstar nullglob extglob
+              for match in $p; do
+                if [ "$match" = "$f" ]; then
+                  deny_hit="$f (matched ${p})"
+                  break 2
+                fi
+              done
+              shopt -u globstar nullglob extglob
+            done <<< "$AUTO_MERGE_DENYLIST_PATTERNS"
+          done < /tmp/changed.txt
+          if [ -n "$deny_hit" ]; then
+            echo "deny_hit<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$deny_hit" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "denylist hit: $deny_hit"
+          else
+            echo "deny_hit=" >> "$GITHUB_OUTPUT"
+            echo "no denylist hits"
+          fi
+
+      - name: Validate safelist containment
+        if: steps.pr.outputs.skip == 'false' && steps.denylist.outputs.deny_hit == ''
+        id: safelist
+        run: |
+          set -e
+          patterns=$(echo "$AUTO_MERGE_SAFELIST_PATTERNS" | tr -d ' ' | grep -v '^$')
+          all_ok=1
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            ok=0
+            while IFS= read -r p; do
+              [ -z "$p" ] && continue
+              shopt -s globstar nullglob
+              for match in $p; do
+                if [ "$match" = "$f" ]; then ok=1; break; fi
+              done
+              shopt -u globstar nullglob
+            done <<< "$patterns"
+            if [ "$ok" -ne 1 ]; then
+              echo "Out of safelist: $f"
+              all_ok=0
+            fi
+          done < /tmp/changed.txt
+          echo "in_safelist=$all_ok" >> "$GITHUB_OUTPUT"
+
+      - name: Scan diff content for suspicious patterns
+        if: steps.pr.outputs.skip == 'false' && steps.denylist.outputs.deny_hit == '' && steps.safelist.outputs.in_safelist == '1'
+        id: diff_scan
+        run: |
+          set -e
+          PR=${{ steps.pr.outputs.number }}
+          gh pr diff "$PR" > /tmp/diff.patch
+
+          # Only scan ADDED lines (lines starting with '+', excluding +++ headers).
+          ADDED_FILE=/tmp/added.txt
+          grep -E '^\+[^+]' /tmp/diff.patch > "$ADDED_FILE" || true
+
+          PATTERNS=(
+            # Hardcoded credentials (broad)
+            '(?i)(api[_-]?key|secret|password|token)\s*[:=]\s*["\047][A-Za-z0-9+/_=-]{16,}["\047]'
+            # Bearer / OAuth-shaped tokens
+            '(?i)bearer\s+[A-Za-z0-9._-]{20,}'
+            # JWTs
+            '\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+'
+            # Provider-prefixed creds
+            '(?i)\b(sk-|xoxb-|ghp_|gho_|github_pat_|AIzaSy|hf_)[A-Za-z0-9_-]{20,}'
+            # Network egress in code (non-doc files would deny the file
+            # outright via path safelist; this catches a doc/example
+            # that adds an actual call to a sketchy URL)
+            '(?i)(?:requests\.|urllib\.|http\.client|fetch\(|axios\.)\s*\(?\s*["\047]?https?://(?!(?:localhost|127\.0\.0\.1|fgarofalo56\.github\.io|github\.com|microsoft\.com|microsoftonline\.com|azure\.com|azurewebsites\.net))'
+            # eval / exec
+            '\beval\s*\('
+            '\bexec\s*\('
+            '\bsubprocess\.[A-Za-z_]+\s*\([^)]*shell\s*=\s*True'
+            # Base64 decode of presumed payloads
+            '\bbase64\s*\.\s*b64decode\b'
+            # Shell command substitution in shell scripts (and yaml)
+            '\$\([^)]+\)'
+            '`[^`\n]+`'
+          )
+
+          hit=""
+          for pat in "${PATTERNS[@]}"; do
+            match=$(grep -nP "$pat" "$ADDED_FILE" | head -1 || true)
+            if [ -n "$match" ]; then
+              hit="${pat}|${match}"
+              break
+            fi
+          done
+
+          if [ -n "$hit" ]; then
+            echo "hit<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$hit" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "diff scan hit: $hit"
+          else
+            echo "hit=" >> "$GITHUB_OUTPUT"
+            echo "diff scan clean"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment outcome and (maybe) enable auto-merge
+        if: steps.pr.outputs.skip == 'false'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          DENY_HIT: ${{ steps.denylist.outputs.deny_hit }}
+          IN_SAFELIST: ${{ steps.safelist.outputs.in_safelist }}
+          DIFF_HIT: ${{ steps.diff_scan.outputs.hit }}
+        with:
+          script: |
+            const denyHit = process.env.DENY_HIT || "";
+            const inSafelist = process.env.IN_SAFELIST === "1";
+            const diffHit = process.env.DIFF_HIT || "";
+            const number = Number("${{ steps.pr.outputs.number }}");
+            const nodeId = "${{ steps.pr.outputs.node_id }}";
+
+            if (denyHit) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                body:
+                  "🛑 Copilot Auto-merge: **denylist** hit. This PR " +
+                  "modifies a path that requires human review " +
+                  "regardless of safelist scope:\n\n" +
+                  "```\n" + denyHit + "\n```\n\n" +
+                  "Auto-merge will not be enabled. A maintainer must " +
+                  "review and merge.",
+              });
+              return;
+            }
+
+            if (!inSafelist) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                body:
+                  "🤖 Copilot Auto-merge: this PR touches files outside " +
+                  "the auto-merge safelist (`docs/**`, `examples/**`, " +
+                  "`.github/ISSUE_TEMPLATE/**`). A maintainer will need to " +
+                  "review and merge manually.",
+              });
+              return;
+            }
+
+            if (diffHit) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                body:
+                  "🛑 Copilot Auto-merge: **diff content scan** flagged a " +
+                  "suspicious added line (hardcoded credential, eval/exec, " +
+                  "non-allowlisted network egress, or shell substitution):\n\n" +
+                  "```\n" + diffHit.slice(0, 600) + "\n```\n\n" +
+                  "Auto-merge will not be enabled. Review the diff and " +
+                  "decide whether the pattern is legitimate (e.g., a docs " +
+                  "code-example that should remain unchanged).",
+              });
+              return;
+            }
+
+            try {
+              await github.graphql(`
+                mutation($id: ID!) {
+                  enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: SQUASH }) {
+                    pullRequest { number }
+                  }
+                }
+              `, { id: nodeId });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                body:
+                  "✅ Copilot Auto-merge: enabled (denylist clean, " +
+                  "safelist match, diff content clean). The PR will " +
+                  "land automatically once all required checks pass.",
+              });
+            } catch (e) {
+              core.warning(`auto-merge enable failed: ${e.message}`);
+            }

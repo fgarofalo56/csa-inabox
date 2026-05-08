@@ -52,4 +52,14 @@ paths = [
     # that trip the generic-api-key entropy heuristic.  These are
     # illustrative samples in markdown, not real credentials.
     '''docs/migrations/.*\.md''',
+
+    # App Insights browser SDK loader for the docs site.  Contains an
+    # Application Insights connection string + InstrumentationKey GUID
+    # which is *public by design* (Microsoft documents these as
+    # client-side-safe — see
+    # https://learn.microsoft.com/azure/azure-monitor/app/sdk-connection-string).
+    # The ingestion endpoint is rate-limited per resource and a daily
+    # cap bounds cost; if someone abuses the key they pollute our
+    # telemetry, not steal data.
+    '''docs/javascripts/app-insights\.js''',
 ]
