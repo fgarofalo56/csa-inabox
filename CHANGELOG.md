@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.5.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.3...csa-inabox-v0.5.4) (2026-05-08)
+
+
+### Miscellaneous
+
+* **deps:** Bump github/codeql-action from 4.35.2 to 4.35.3 ([#144](https://github.com/fgarofalo56/csa-inabox/issues/144)) ([6e0ead9](https://github.com/fgarofalo56/csa-inabox/commit/6e0ead9554ac1d4d3277d3e08e6fda95b5c29c73))
+
 ## [0.5.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.2...csa-inabox-v0.5.3) (2026-05-08)
 
 
