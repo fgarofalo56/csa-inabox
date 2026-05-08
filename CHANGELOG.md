@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.5.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.4...csa-inabox-v0.5.5) (2026-05-08)
+
+
+### Miscellaneous
+
+* **deps:** Bump @azure/msal-react in /portal/react-webapp ([#140](https://github.com/fgarofalo56/csa-inabox/issues/140)) ([2f9f27d](https://github.com/fgarofalo56/csa-inabox/commit/2f9f27d0648488d5a223217a3cf507cbfef723ef))
+
 ## [0.5.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.3...csa-inabox-v0.5.4) (2026-05-08)
 
 
