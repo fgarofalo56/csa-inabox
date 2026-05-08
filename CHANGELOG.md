@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.5.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.1...csa-inabox-v0.5.2) (2026-05-08)
+
+
+### Miscellaneous
+
+* **deps:** Bump actions/setup-python from 5.6.0 to 6.2.0 ([#147](https://github.com/fgarofalo56/csa-inabox/issues/147)) ([01bf19a](https://github.com/fgarofalo56/csa-inabox/commit/01bf19aacf5fe608fe341dcf22c4a7f28cf58904))
+
 ## [0.5.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.0...csa-inabox-v0.5.1) (2026-05-08)
 
 
