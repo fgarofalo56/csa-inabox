@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.5.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.7...csa-inabox-v0.5.8) (2026-05-08)
+
+
+### Miscellaneous
+
+* **deps:** Bump googleapis/release-please-action from 4.4.1 to 5.0.0 ([#137](https://github.com/fgarofalo56/csa-inabox/issues/137)) ([f37be9f](https://github.com/fgarofalo56/csa-inabox/commit/f37be9fe68922d8a84f07c2815c775c292e48bcf))
+
 ## [0.5.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.6...csa-inabox-v0.5.7) (2026-05-08)
 
 
