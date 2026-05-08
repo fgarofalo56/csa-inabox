@@ -67,6 +67,14 @@ markdown_extensions:
       anchor_linenums: true
       line_spans: __span
       pygments_lang_class: true
+      # Register `azurecli` as a fence language Pygments will highlight
+      # using the bash lexer. Without this, ```azurecli blocks fall
+      # through to the `text` lexer and the wrapper renders as
+      # ``<div class="language-text">``, which the Cloud Shell button
+      # selector can't pick up.
+      extend_pygments_lang:
+        - name: azurecli
+          lang: bash
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
