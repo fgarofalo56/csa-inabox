@@ -10,6 +10,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.5.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.2...csa-inabox-v0.5.3) (2026-05-08)
+
+
+### Miscellaneous
+
+* **deps:** Bump actions/upload-pages-artifact from 3.0.1 to 5.0.0 ([#146](https://github.com/fgarofalo56/csa-inabox/issues/146)) ([cfdb0de](https://github.com/fgarofalo56/csa-inabox/commit/cfdb0def2f63530b8b6c9b267608b22ac3ef1fcb))
+* **deps:** Bump zod from 4.3.6 to 4.4.3 in /portal/react-webapp ([#139](https://github.com/fgarofalo56/csa-inabox/issues/139)) ([88dcebe](https://github.com/fgarofalo56/csa-inabox/commit/88dcebed292d80a97e621bb5095f6c5d5b26629a))
+
 ## [0.5.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.1...csa-inabox-v0.5.2) (2026-05-08)
 
 
