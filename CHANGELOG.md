@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.5.9](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.8...csa-inabox-v0.5.9) (2026-05-08)
+
+
+### Miscellaneous
+
+* **deps:** Bump react-hook-form in /portal/react-webapp ([#142](https://github.com/fgarofalo56/csa-inabox/issues/142)) ([8ee9bb2](https://github.com/fgarofalo56/csa-inabox/commit/8ee9bb2a8f0417dcedd1023ca25386f86abbea9d))
+
 ## [0.5.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.7...csa-inabox-v0.5.8) (2026-05-08)
 
 
