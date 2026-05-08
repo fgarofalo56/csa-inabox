@@ -10,6 +10,15 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.6.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.0...csa-inabox-v0.6.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* **checkov:** suppress 4 parser-bug + scenario-misfire findings globally ([#203](https://github.com/fgarofalo56/csa-inabox/issues/203)) ([a34f313](https://github.com/fgarofalo56/csa-inabox/commit/a34f31314185e0ef27741d9b6d7f4b13b77580ee))
+* **docs:** register azurecli as a Pygments alias for bash ([#204](https://github.com/fgarofalo56/csa-inabox/issues/204)) ([3ea1441](https://github.com/fgarofalo56/csa-inabox/commit/3ea1441caf849df09cb8c14be296d34dcbc73705))
+* **security+docs:** clear all 4 deferred alerts + Cloud Shell button selector ([#201](https://github.com/fgarofalo56/csa-inabox/issues/201)) ([57f504a](https://github.com/fgarofalo56/csa-inabox/commit/57f504adcb278b3619243a4966321693309603c8))
+
 ## [0.6.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.9...csa-inabox-v0.6.0) (2026-05-08)
 
 
