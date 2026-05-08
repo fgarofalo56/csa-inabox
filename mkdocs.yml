@@ -95,11 +95,13 @@ markdown_extensions:
 
 extra_css:
   - stylesheets/copilot-chat.css
+  - stylesheets/cloud-shell.css
   - stylesheets/docs.css
 
 extra_javascript:
   - javascripts/app-insights.js
   - javascripts/copilot-chat.js
+  - javascripts/cloud-shell.js
 
 nav:
   - Home: index.md
@@ -116,6 +118,7 @@ nav:
       - AI Copilot (chat with the docs): chat.md
       - Copilot privacy notice: copilot-privacy.md
       - Copilot analytics (operator runbook): copilot-analytics.md
+      - Try snippets in Cloud Shell: cloud-shell-snippets.md
       - Role-Based Quickstarts:
           - Overview: quickstarts/index.md
           - Data Engineer: quickstarts/data-engineer.md
@@ -138,6 +141,8 @@ nav:
           - Fabric vs Synapse vs Databricks: reference-architecture/fabric-vs-synapse-vs-databricks.md
           - AI/ML Platform Architecture: reference-architecture/ai-ml-architecture.md
           - Architecture Diagram Gallery: reference-architecture/diagram-gallery.md
+      - Comparisons:
+          - CSA-in-a-Box vs Microsoft Fabric: comparison/csa-inabox-vs-fabric.md
       - Decision Trees:
           - Overview: decisions/README.md
           - Batch vs Streaming: decisions/batch-vs-streaming.md
@@ -265,6 +270,7 @@ nav:
               - Azure Data Explorer: guides/azure-data-explorer.md
               - Azure AI Foundry: guides/azure-ai-foundry.md
               - Azure AI Search: guides/azure-ai-search.md
+              - LLM data safety (8-layer guide): guides/llm-data-safety.md
           - Integration & Governance:
               - ADF Setup: ADF_SETUP.md
               - Self-Hosted IR: SELF_HOSTED_IR.md
@@ -990,3 +996,4 @@ nav:
       - Log Schema: LOG_SCHEMA.md
       - Environment Protection: ENVIRONMENT_PROTECTION.md
       - Government Service Matrix: GOV_SERVICE_MATRIX.md
+      - Microsoft Fabric in Azure Government: fabric-in-gov-cloud.md
