@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.5.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.5...csa-inabox-v0.5.6) (2026-05-08)
+
+
+### Miscellaneous
+
+* **deps:** Bump anchore/sbom-action from 0.18.0 to 0.24.0 ([#136](https://github.com/fgarofalo56/csa-inabox/issues/136)) ([9152804](https://github.com/fgarofalo56/csa-inabox/commit/915280470adf02704d017a1c322d1c2b867378fb))
+
 ## [0.5.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.4...csa-inabox-v0.5.5) (2026-05-08)
 
 
