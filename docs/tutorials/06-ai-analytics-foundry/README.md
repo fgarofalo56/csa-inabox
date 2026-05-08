@@ -5,6 +5,8 @@
 
 Deploy Azure AI Foundry and Azure OpenAI on top of your CSA-in-a-Box foundation platform. By the end you will have a working AI chatbot that understands your data products, queries the Gold layer using natural language, and runs on Azure Container Apps.
 
+![Microsoft Foundry portal — resource list showing the deployed AI project under its Hub plus an Azure OpenAI account, with the "Try the new Microsoft Foundry experience" banner and the Explore models surface below](../../assets/images/azure/ai-foundry-studio.png){ .architecture-hero loading="lazy" }
+
 ---
 
 ## Prerequisites

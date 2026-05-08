@@ -72,6 +72,7 @@ tutorials and deep-dive guides:
 | Data Engineer        | [Databricks Guide](../DATABRICKS_GUIDE.md)                                            |
 | Data Scientist       | [Tutorial 06 -- AI Analytics Foundry](../tutorials/06-ai-analytics-foundry/README.md) |
 | BI Developer         | [Power BI Guide](../guides/power-bi.md)                                               |
+| BI Developer         | [Supercharge Microsoft Fabric — Direct Lake & Power BI Tutorial](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/tutorials/05-direct-lake-powerbi/) |
 | Security Admin       | [Purview Guide](../guides/purview.md)                                                 |
 | Security Admin       | [Security & Compliance Best Practices](../best-practices/security-compliance.md)      |
 | Platform Admin       | [Architecture Overview](../ARCHITECTURE.md)                                           |
@@ -87,3 +88,4 @@ tutorials and deep-dive guides:
 - [Tutorials Index](../tutorials/README.md)
 - [Best Practices Index](../best-practices/index.md)
 - [Use Cases Index](../use-cases/index.md)
+- [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) — companion site with 37 Fabric tutorials and POC agendas

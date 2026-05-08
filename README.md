@@ -361,6 +361,8 @@ All environment-specific values are externalized to parameter files:
 
 ### Verticals (`examples/`)
 
+Canonical showcase: **10 examples (9 verticals + iot-streaming cross-cutting pattern)**. Additional Beta examples (cybersecurity, fabric-data-agent, data-api-builder, ml-lifecycle) are listed below alongside the canonical 10 for completeness.
+
 | Vertical                                                                                                                                                         | Status  | File count                                                                  |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------- |
 | usda, noaa, epa, commerce, dot, interior, casino-analytics, tribal-health, usps, ml-lifecycle, iot-streaming, cybersecurity, fabric-data-agent, data-api-builder | Beta–GA | 19–56 files each (contracts, deploy, domains, notebooks, data, teardown.sh) |

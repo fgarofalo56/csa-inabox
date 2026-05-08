@@ -313,6 +313,11 @@ class TextSummarizer:
     ) -> SummarizationResult:
         """Summarize a document with automatic chunking for long texts.
 
+        .. note::
+           **Batch-only; do not use from FastAPI request handlers.** Uses
+           the synchronous Azure OpenAI SDK and a blocking ``time.sleep``
+           rate limiter. Call :meth:`summarize_async` from request paths.
+
         For documents that exceed the model's context window, the text is
         split into chunks, each is summarised, and the intermediate
         summaries are combined into a final summary.
@@ -380,6 +385,10 @@ class TextSummarizer:
     ) -> list[SummarizationResult]:
         """Summarize a batch of texts with rate limiting.
 
+        .. note::
+           **Batch-only; do not use from FastAPI request handlers.** Use
+           :meth:`summarize_batch_async` for request-path callers.
+
         Args:
             texts: List of document texts.
             mode: Summarization mode.
@@ -393,5 +402,40 @@ class TextSummarizer:
         for idx, text in enumerate(texts):
             logger.info("summarizing_document", index=idx + 1, total=len(texts))
             result = self.summarize(text, mode=mode, style=style, max_length=max_length)
+            results.append(result)
+        return results
+
+    # ------------------------------------------------------------------
+    # Async variants (CSA-0117) — request-path safe.
+    # ------------------------------------------------------------------
+
+    async def summarize_async(
+        self,
+        text: str,
+        mode: str | SummarizationMode = "abstractive",
+        style: str | SummarizationStyle = "paragraph",
+        max_length: int = 200,
+    ) -> SummarizationResult:
+        """Async variant of :meth:`summarize` — safe for FastAPI handlers.
+
+        Off-loads the synchronous OpenAI SDK calls onto a worker thread
+        via :func:`asyncio.to_thread`. No new dependencies are introduced.
+        """
+        import asyncio as _asyncio
+
+        return await _asyncio.to_thread(self.summarize, text, mode, style, max_length)
+
+    async def summarize_batch_async(
+        self,
+        texts: list[str],
+        mode: str = "abstractive",
+        style: str = "paragraph",
+        max_length: int = 200,
+    ) -> list[SummarizationResult]:
+        """Async variant of :meth:`summarize_batch` — safe for FastAPI handlers."""
+        results: list[SummarizationResult] = []
+        for idx, text in enumerate(texts):
+            logger.info("summarizing_document_async", index=idx + 1, total=len(texts))
+            result = await self.summarize_async(text, mode=mode, style=style, max_length=max_length)
             results.append(result)
         return results

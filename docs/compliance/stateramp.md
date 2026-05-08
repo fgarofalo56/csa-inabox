@@ -1,5 +1,7 @@
 # Compliance — StateRAMP
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 > **Scope:** StateRAMP security assessment framework for state and local government cloud adoption. This document maps CSA-in-a-Box platform controls to StateRAMP requirements and provides guidance for organizations pursuing StateRAMP authorization.
 
 ## What is StateRAMP?

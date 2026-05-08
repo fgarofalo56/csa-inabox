@@ -159,7 +159,8 @@ a new reviewer team is added), update this document in the same PR.
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Gov Service Matrix](GOV_SERVICE_MATRIX.md) — Azure Government service availability
-- [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist
+- ← Previous: [Log Schema](LOG_SCHEMA.md)
+- → Next: [Government Service Matrix](GOV_SERVICE_MATRIX.md)
+- ⌂ Index: [Documentation home](index.md)

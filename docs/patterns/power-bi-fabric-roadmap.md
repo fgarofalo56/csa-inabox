@@ -177,6 +177,9 @@ gantt
 - [ADR 0010 — Fabric Strategic Target](../adr/0010-fabric-strategic-target.md)
 - [Migration — Databricks to Fabric](../migrations/databricks-to-fabric.md)
 - [Use Case — Unified Analytics on Fabric](../use-cases/fabric-unified-analytics.md)
+- [Supercharge Microsoft Fabric — Direct Lake](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/features/direct-lake/) — Direct Lake deep dive
+- [Supercharge Microsoft Fabric — Power BI Best Practices](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/best-practices/power-bi-best-practices/) — production Power BI patterns
+- [Supercharge Microsoft Fabric — Capacity Planning](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/best-practices/capacity-planning-cost-optimization/) — F-SKU sizing and FinOps
 - TMDL: https://learn.microsoft.com/analysis-services/tmdl/tmdl-overview
 - Fabric Direct Lake: https://learn.microsoft.com/fabric/get-started/direct-lake-overview
 - Tabular Editor: https://tabulareditor.com/
