@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.5.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.0...csa-inabox-v0.5.1) (2026-05-08)
+
+
+### Miscellaneous
+
+* **deps-dev:** Update azure-search-documents requirement ([#145](https://github.com/fgarofalo56/csa-inabox/issues/145)) ([16196e9](https://github.com/fgarofalo56/csa-inabox/commit/16196e9af6b13d80fe9a524e63a0ec3890649e83))
+
 ## [0.5.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.4.0...csa-inabox-v0.5.0) (2026-05-07)
 
 
