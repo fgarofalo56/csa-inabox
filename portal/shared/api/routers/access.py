@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from csa_platform.common.audit import audit_event_from_request, audit_logger
 
+from .._log_safe import safe_for_log
 from ..dependencies import get_access_store, get_products_store
 from ..models.marketplace import (
     AccessRequest,
@@ -307,10 +308,10 @@ async def _enforce_review_authorization(
         logger.warning(
             "Review blocked: product missing for access request",
             extra={
-                "actor_sub": user.get("sub") or user.get("oid"),
-                "action": action,
-                "resource_id": access_request.id,
-                "product_id": access_request.data_product_id,
+                "actor_sub": safe_for_log(user.get("sub") or user.get("oid")),
+                "action": safe_for_log(action),
+                "resource_id": safe_for_log(access_request.id),
+                "product_id": safe_for_log(access_request.data_product_id),
                 "outcome": "denied",
                 "reason": "product_not_found",
             },
@@ -338,13 +339,13 @@ async def _enforce_review_authorization(
         logger.warning(
             "Self-review blocked on access request",
             extra={
-                "actor_sub": user.get("sub") or user.get("oid"),
-                "actor": _user_identifier(user),
-                "action": action,
-                "resource_id": access_request.id,
-                "product_id": access_request.data_product_id,
-                "target_domain": target_domain,
-                "caller_domain": scope.user_domain,
+                "actor_sub": safe_for_log(user.get("sub") or user.get("oid")),
+                "actor": safe_for_log(_user_identifier(user)),
+                "action": safe_for_log(action),
+                "resource_id": safe_for_log(access_request.id),
+                "product_id": safe_for_log(access_request.data_product_id),
+                "target_domain": safe_for_log(target_domain),
+                "caller_domain": safe_for_log(scope.user_domain),
                 "outcome": "denied",
                 "reason": "self_review_forbidden",
             },
@@ -364,13 +365,13 @@ async def _enforce_review_authorization(
         logger.warning(
             "Cross-domain review blocked on access request",
             extra={
-                "actor_sub": user.get("sub") or user.get("oid"),
-                "actor": _user_identifier(user),
-                "action": action,
-                "resource_id": access_request.id,
-                "product_id": access_request.data_product_id,
-                "target_domain": target_domain,
-                "caller_domain": scope.user_domain,
+                "actor_sub": safe_for_log(user.get("sub") or user.get("oid")),
+                "actor": safe_for_log(_user_identifier(user)),
+                "action": safe_for_log(action),
+                "resource_id": safe_for_log(access_request.id),
+                "product_id": safe_for_log(access_request.data_product_id),
+                "target_domain": safe_for_log(target_domain),
+                "caller_domain": safe_for_log(scope.user_domain),
                 "outcome": "denied",
                 "reason": "cross_domain_review_forbidden",
             },

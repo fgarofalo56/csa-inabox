@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from csa_platform.common.audit import audit_event_from_request, audit_logger
 
+from .._log_safe import safe_for_log
 from ..dependencies import get_sources_store
 from ..models.source import (
     ClassificationLevel,
@@ -402,8 +403,8 @@ async def update_source(
     logger.info(
         "Updated data source",
         extra={
-            "source_id": source_id,
-            "user": user.get("preferred_username", user.get("sub", "unknown")),
+            "source_id": safe_for_log(source_id),
+            "user": safe_for_log(user.get("preferred_username", user.get("sub", "unknown"))),
         },
     )
     return updated
@@ -585,7 +586,7 @@ async def scan_source(
     try:
         scan_id = await provisioning_service.trigger_purview_scan(source)
     except Exception as exc:
-        logger.exception("Purview scan failed for source %s", source_id)
+        logger.exception("Purview scan failed for source %s", safe_for_log(source_id))
         audit_logger.emit(
             audit_event_from_request(
                 request=request,

@@ -25,13 +25,13 @@ Verify source configuration:
 
 ```bash
 # Check MongoDB version
-mongosh --uri="mongodb+srv://admin:pass@source.mongodb.net" --eval "db.version()"
+mongosh --uri="mongodb+srv://<USERNAME>:<PASSWORD>@<SOURCE>.mongodb.net" --eval "db.version()"
 
 # Check replica set status
-mongosh --uri="mongodb+srv://admin:pass@source.mongodb.net" --eval "rs.status().set"
+mongosh --uri="mongodb+srv://<USERNAME>:<PASSWORD>@<SOURCE>.mongodb.net" --eval "rs.status().set"
 
 # Verify change stream support
-mongosh --uri="mongodb+srv://admin:pass@source.mongodb.net" --eval '
+mongosh --uri="mongodb+srv://<USERNAME>:<PASSWORD>@<SOURCE>.mongodb.net" --eval '
   const cs = db.getSiblingDB("admin").watch();
   print("Change streams supported: true");
   cs.close();
@@ -127,7 +127,7 @@ Expected output:
 | Setting           | Value                                         |
 | ----------------- | --------------------------------------------- |
 | Mode              | Standard (connection string)                  |
-| Connection string | `mongodb+srv://admin:pass@source.mongodb.net` |
+| Connection string | `mongodb+srv://<USERNAME>:<PASSWORD>@<SOURCE>.mongodb.net` |
 | SSL               | Required (for Atlas)                          |
 
 Click **Verify** to test the connection.
@@ -138,7 +138,7 @@ Click **Verify** to test the connection.
 
 | Setting           | Value                                                                                                 |
 | ----------------- | ----------------------------------------------------------------------------------------------------- |
-| Connection string | `mongodb+srv://admin:pass@target.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256` |
+| Connection string | `mongodb+srv://<USERNAME>:<PASSWORD>@<COSMOS_CLUSTER>.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256` |
 | SSL               | Required                                                                                              |
 
 **For Cosmos DB RU-based:**
@@ -312,7 +312,7 @@ az webapp stop --resource-group rg-app --name my-webapp
 az keyvault secret set \
   --vault-name kv-data-platform \
   --name cosmosdb-connection-string \
-  --value "mongodb+srv://admin:pass@target.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256"
+  --value "mongodb+srv://<USERNAME>:<PASSWORD>@<COSMOS_CLUSTER>.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256"
 
 # Restart application
 az webapp start --resource-group rg-app --name my-webapp

@@ -91,7 +91,7 @@ class ApiClient {
   }
 
   async getSource(id: string): Promise<SourceRecord> {
-    const { data } = await this.client.get(`/sources/${id}`);
+    const { data } = await this.client.get(`/sources/${encodeURIComponent(id)}`);
     return data;
   }
 
@@ -104,7 +104,7 @@ class ApiClient {
     id: string,
     updates: Partial<SourceRegistration>
   ): Promise<SourceRecord> {
-    const { data } = await this.client.patch(`/sources/${id}`, updates);
+    const { data } = await this.client.patch(`/sources/${encodeURIComponent(id)}`, updates);
     return data;
   }
 
