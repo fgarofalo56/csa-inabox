@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.5.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.6...csa-inabox-v0.5.7) (2026-05-08)
+
+
+### Miscellaneous
+
+* **deps:** Bump @tanstack/react-query in /portal/react-webapp ([#141](https://github.com/fgarofalo56/csa-inabox/issues/141)) ([6e96352](https://github.com/fgarofalo56/csa-inabox/commit/6e96352459dbb0b22ab69624adfce57e1d5b85a8))
+
 ## [0.5.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.5.5...csa-inabox-v0.5.6) (2026-05-08)
 
 
