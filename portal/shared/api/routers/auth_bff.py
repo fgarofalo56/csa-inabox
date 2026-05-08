@@ -42,6 +42,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from .._log_safe import safe_for_log
 from ..config import Settings, settings
 from ..models.auth_bff import (
     AuthMeResponse,
@@ -225,7 +226,7 @@ def auth_login(
     # Defence-in-depth: reject open-redirect attempts by refusing any
     # redirect_to that isn't a local path.
     if not redirect_to.startswith("/") or redirect_to.startswith("//"):
-        logger.warning("auth_login: rejected non-local redirect_to=%r", redirect_to)
+        logger.warning("auth_login: rejected non-local redirect_to=%s", safe_for_log(redirect_to))
         redirect_to = "/"
 
     code_verifier, code_challenge = _make_pkce_pair()
@@ -262,7 +263,7 @@ def auth_login(
     logger.info(
         "auth_login: redirecting to Entra ID (state=%s..., redirect_to=%s)",
         state[:6],
-        redirect_to,
+        safe_for_log(redirect_to),
     )
     response = RedirectResponse(url=url, status_code=status.HTTP_302_FOUND)
     _set_cookie(
@@ -537,7 +538,11 @@ async def auth_token(
             if isinstance(result, dict)
             else "silent acquisition returned no token"
         )
-        logger.info("auth_token: silent acquisition failed for resource=%s: %s", resource, err)
+        logger.info(
+            "auth_token: silent acquisition failed for resource=%s: %s",
+            safe_for_log(resource),
+            safe_for_log(err),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Silent token acquisition failed: {err}",

@@ -83,13 +83,13 @@ Cosmos DB for MongoDB vCore offers a free tier: 32 GB storage, burstable compute
 ### Atlas connection string (before)
 
 ```
-mongodb+srv://admin:password@cluster0.abc123.mongodb.net/mydb?retryWrites=true&w=majority
+mongodb+srv://<USERNAME>:<PASSWORD>@<CLUSTER>.mongodb.net/<DATABASE>?retryWrites=true&w=majority
 ```
 
 ### Cosmos DB vCore connection string (after)
 
 ```
-mongodb+srv://admin:password@my-cluster.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retrywrites=false&maxIdleTimeMS=120000
+mongodb+srv://<USERNAME>:<PASSWORD>@<COSMOS_CLUSTER>.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retrywrites=false&maxIdleTimeMS=120000
 ```
 
 Key differences:
@@ -244,11 +244,11 @@ For detailed data migration options, see [Data Migration Guide](data-migration.m
 
 ```bash
 # mongodump from source
-mongodump --uri="mongodb+srv://admin:pass@source-cluster.mongodb.net" \
+mongodump --uri="mongodb+srv://<USERNAME>:<PASSWORD>@<SOURCE_CLUSTER>.mongodb.net" \
   --out=/tmp/mongodump
 
 # mongorestore to Cosmos DB vCore
-mongorestore --uri="mongodb+srv://admin:pass@my-cluster.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256" \
+mongorestore --uri="mongodb+srv://<USERNAME>:<PASSWORD>@<COSMOS_CLUSTER>.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256" \
   /tmp/mongodump
 ```
 
@@ -256,7 +256,7 @@ mongorestore --uri="mongodb+srv://admin:pass@my-cluster.mongocluster.cosmos.azur
 
 ```bash
 # Connect with mongosh
-mongosh "mongodb+srv://admin:pass@my-cluster.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256"
+mongosh "mongodb+srv://<USERNAME>:<PASSWORD>@<COSMOS_CLUSTER>.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256"
 
 # Verify collections
 show dbs

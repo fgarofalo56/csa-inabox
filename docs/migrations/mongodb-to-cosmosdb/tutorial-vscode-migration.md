@@ -48,7 +48,7 @@ The Azure Cosmos DB migration extension for VS Code provides a guided, integrate
 5. Enter your MongoDB connection string:
 
     ```
-    mongodb+srv://admin:password@cluster0.abc123.mongodb.net/?retryWrites=true&w=majority
+    mongodb+srv://<USERNAME>:<PASSWORD>@<CLUSTER>.mongodb.net/?retryWrites=true&w=majority
     ```
 
 6. Click **Connect**.

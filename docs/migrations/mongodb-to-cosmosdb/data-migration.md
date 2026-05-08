@@ -59,7 +59,7 @@ The simplest migration path. Suitable for small datasets where downtime is accep
 ```bash
 # Full database export
 mongodump \
-  --uri="mongodb+srv://admin:pass@source.mongodb.net" \
+  --uri="mongodb+srv://<USERNAME>:<PASSWORD>@<SOURCE>.mongodb.net" \
   --db=mydb \
   --out=/data/migration/dump \
   --gzip \
@@ -67,7 +67,7 @@ mongodump \
 
 # Single collection export
 mongodump \
-  --uri="mongodb+srv://admin:pass@source.mongodb.net" \
+  --uri="mongodb+srv://<USERNAME>:<PASSWORD>@<SOURCE>.mongodb.net" \
   --db=mydb \
   --collection=orders \
   --out=/data/migration/dump \
@@ -79,7 +79,7 @@ mongodump \
 ```bash
 # Full database restore to Cosmos DB vCore
 mongorestore \
-  --uri="mongodb+srv://admin:pass@target.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256" \
+  --uri="mongodb+srv://<USERNAME>:<PASSWORD>@<COSMOS_CLUSTER>.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256" \
   --gzip \
   --numParallelCollections=4 \
   --numInsertionWorkersPerCollection=4 \
@@ -107,7 +107,7 @@ When restoring to RU-based Cosmos DB, the restore will hit RU limits and receive
 
 ```bash
 # Connect to target and verify counts
-mongosh "mongodb+srv://admin:pass@target.mongocluster.cosmos.azure.com/?tls=true" --eval '
+mongosh "mongodb+srv://<USERNAME>:<PASSWORD>@<COSMOS_CLUSTER>.mongocluster.cosmos.azure.com/?tls=true" --eval '
   const dbs = db.adminCommand({ listDatabases: 1 });
   dbs.databases.forEach(d => {
     const dbRef = db.getSiblingDB(d.name);

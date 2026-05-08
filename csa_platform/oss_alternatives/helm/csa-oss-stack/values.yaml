@@ -214,7 +214,13 @@ redis:
   enabled: true
   auth:
     enabled: true
-    password: ""  # Set via --set or secret
+    # MUST be supplied at install time. Either:
+    #   helm install ... --set redis.auth.password=$REDIS_PASSWORD
+    # or via existing-secret reference:
+    #   helm install ... --set redis.auth.existingSecret=redis-auth
+    # Helm will fail the chart install if neither is provided (the
+    # subchart enforces this when ``auth.enabled: true``).
+    password: ~
   master:
     resources:
       requests:

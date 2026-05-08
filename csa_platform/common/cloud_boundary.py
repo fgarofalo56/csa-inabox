@@ -194,16 +194,35 @@ def _from_alias(value: str | None) -> CloudEnvironment | None:
 
 
 def _from_arm_endpoint(arm: str | None) -> CloudEnvironment | None:
+    """Classify an ARM endpoint URL into a sovereign cloud.
+
+    Uses ``urlparse`` + suffix-match instead of substring-match to avoid
+    spoofable host strings like ``evil.usgovcloudapi.net.attacker.com``
+    (CodeQL ``py/incomplete-url-substring-sanitization``). The hostname
+    check accepts the canonical domain or a subdomain of it, never an
+    arbitrary string containing the marker.
+    """
     if not arm:
         return None
-    host = arm.lower()
-    if "usgovcloudapi.net" in host:
+    try:
+        from urllib.parse import urlparse  # local import — keeps cold-start lean
+        parsed = urlparse(arm if "://" in arm else f"https://{arm}")
+        hostname = (parsed.hostname or "").lower()
+    except Exception:
+        return None
+    if not hostname:
+        return None
+
+    def _matches(suffix: str) -> bool:
+        return hostname == suffix or hostname.endswith("." + suffix)
+
+    if _matches("usgovcloudapi.net"):
         return CloudEnvironment.US_GOV
-    if "microsoftazure.de" in host:
+    if _matches("microsoftazure.de"):
         return CloudEnvironment.GERMANY
-    if "chinacloudapi.cn" in host:
+    if _matches("chinacloudapi.cn"):
         return CloudEnvironment.CHINA
-    if "management.azure.com" in host:
+    if _matches("management.azure.com") or _matches("azure.com"):
         return CloudEnvironment.COMMERCIAL
     return None
 
