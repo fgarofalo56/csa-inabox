@@ -39,6 +39,13 @@ FROM python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da87
 
 WORKDIR /app
 
+# Upgrade pip in the runtime stage too. Stage 1 upgrades pip in the
+# *builder's* /usr/local, but the only thing we copy into the runtime
+# image is /install (which holds the requirements, not pip itself).
+# Without this line the runtime image still ships the base image's
+# pip 25.0.1 — flagged by Trivy as CVE-2026-6357.
+RUN pip install --no-cache-dir --upgrade 'pip>=26.1'
+
 # Copy installed packages from builder
 COPY --from=builder /install /usr/local
 

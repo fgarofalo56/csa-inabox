@@ -103,16 +103,22 @@ skip-check:
   - CKV_AZURE_103   # Data Factory git repo configuration -- repo URL/PAT is supplied at deploy-time, not in the template
 
   # =============================================================================
-  # Known parser limitations (4 residual findings -- accepted as defects)
+  # Known parser limitations
   # =============================================================================
   # The following findings re-appear on every scan despite the underlying
   # property being set correctly.  Verified by hand:
   #   * landing-zone-alz/modules/storage/storageAccount.bicep:77
   #     ``param skuName string = 'Standard_GRS'`` (default IS GRS); Checkov
   #     reads ``sku.name: skuName`` as an unresolved variable -> CKV_AZURE_206.
-  #   * VMSS upgradePolicy in 3 files explicitly sets
+  #     The vendored ALZ module is excluded from the scan via ``skip_path``
+  #     in the workflow, so this no longer surfaces in code-scanning.
+  #   * VMSS upgradePolicy in DLZ/selfHostedIntegrationRuntime.bicep and
+  #     DMLZ/webServer.bicep — both explicitly set
   #     ``automaticOSUpgradePolicy.enableAutomaticOSUpgrade=true`` AND
   #     ``disableAutomaticRollback=false`` (the two properties Checkov
-  #     normally requires); CKV_AZURE_95 still fires.  Suspected parser bug.
-  # These findings are documented and intentionally left visible in the
-  # SARIF upload so a future Checkov upgrade may resolve them automatically.
+  #     normally requires); CKV_AZURE_95 still fires.  Closed via inline
+  #     ``// #checkov:skip=CKV_AZURE_95`` directives on each VMSS resource
+  #     with a one-line rationale.
+  #   * gov/modules/storage.bicep — CKV_AZURE_206 closed by tightening the
+  #     ``@allowed`` list to GRS variants only (gov tier requires
+  #     geo-redundancy regardless), so Checkov can statically resolve it.
