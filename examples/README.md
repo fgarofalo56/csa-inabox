@@ -4,7 +4,7 @@
 
 
 > [!TIP]
-> **TL;DR** — This directory contains complete, working CSA implementations for 10 verticals spanning federal agencies, tribal organizations, and commercial sectors. Each includes real/synthetic data, dbt medallion models, data contracts, and deployment instructions for both Azure Commercial and Azure Government.
+> **TL;DR** — This directory contains complete, working CSA implementations: 10 examples (9 verticals + iot-streaming cross-cutting pattern) spanning federal agencies, tribal organizations, and commercial sectors. Each includes real/synthetic data, dbt medallion models, data contracts, and deployment instructions for both Azure Commercial and Azure Government.
 
 ---
 

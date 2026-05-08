@@ -1,5 +1,7 @@
 # Compliance — GDPR & EU Data Boundary
 
+--8<-- "_includes/compliance-disclaimer.md"
+
 > **Status:** Implementation guidance for **GDPR** (Regulation (EU) 2016/679) and **EU Data Boundary** for cloud services. Applies to any workload processing personal data of EU/EEA/UK residents — _regardless of where your company is located_.
 
 ## What is GDPR?

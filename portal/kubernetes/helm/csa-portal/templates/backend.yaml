@@ -12,6 +12,27 @@ metadata:
     {{- include "csa-portal.backend.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.backend.replicas }}
+  # Rollout strategy: defaults to RollingUpdate (maxSurge=25%, maxUnavailable=25%).
+  # For canary-style rollouts, override `backend.strategy` in values.yaml, e.g.:
+  #
+  #     backend:
+  #       strategy:
+  #         type: RollingUpdate
+  #         rollingUpdate:
+  #           maxSurge: 1
+  #           maxUnavailable: 0
+  #
+  # For progressive (canary, blue-green, weighted-traffic) rollouts that go
+  # beyond what the built-in Deployment strategy can express, use Argo
+  # Rollouts — see portal/kubernetes/argo-rollouts.example.yaml for a
+  # ready-to-paste CRD example, and docs/runbooks/portal-rollout-strategy.md
+  # for guidance on choosing between RollingUpdate and Argo Rollouts.
+  #
+  # Reference: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy
+  {{- with .Values.backend.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "csa-portal.name" . }}-backend

@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <title id="title">Delta Lake medallion architecture: Bronze → Silver → Gold</title>
+  <desc id="desc">Source systems land into Bronze (raw, schema-on-read), are validated and conformed into Silver, then aggregated into Gold business-ready facts. Quality gates enforced by Great Expectations at each transition. dbt drives transformations.</desc>
+
+  <defs>
+    <linearGradient id="src" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#475569"/>
+      <stop offset="1" stop-color="#334155"/>
+    </linearGradient>
+    <linearGradient id="bronze" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#CD7F32"/>
+      <stop offset="1" stop-color="#A66220"/>
+    </linearGradient>
+    <linearGradient id="silver" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#B8C2CC"/>
+      <stop offset="1" stop-color="#7A8896"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F1C232"/>
+      <stop offset="1" stop-color="#C7980E"/>
+    </linearGradient>
+    <linearGradient id="consumer" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5B6CFF"/>
+      <stop offset="1" stop-color="#3B4FE0"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L0,10 L10,5 z" fill="#94a3b8"/>
+    </marker>
+    <style>
+      .layer-title { font-size: 18px; font-weight: 700; fill: #fff; letter-spacing: 0.04em; text-transform: uppercase; }
+      .layer-sub { font-size: 13px; fill: rgba(255,255,255,0.92); }
+      .item { font-size: 13px; font-weight: 600; fill: #fff; }
+      .gate-label { font-size: 12px; font-weight: 700; fill: #b91c1c; letter-spacing: 0.04em; text-transform: uppercase; }
+      .gate-sub { font-size: 11px; fill: #b91c1c; }
+      .stage-label { font-size: 11px; font-weight: 700; fill: #475569; letter-spacing: 0.06em; text-transform: uppercase; }
+    </style>
+  </defs>
+
+  <!-- Sources column -->
+  <g transform="translate(20,30)">
+    <text x="0" y="-8" class="stage-label">Source systems</text>
+    <rect width="180" height="430" rx="10" fill="url(#src)"/>
+    <text x="16" y="26" class="layer-title">Sources</text>
+    <text x="16" y="44" class="layer-sub">Heterogeneous · stable</text>
+    <g transform="translate(14,60)">
+      <rect width="152" height="42" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="26" class="item">Operational DBs</text>
+      <rect y="52" width="152" height="42" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="78" class="item">SaaS APIs</text>
+      <rect y="104" width="152" height="42" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="130" class="item">Event streams</text>
+      <rect y="156" width="152" height="42" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="182" class="item">File drops</text>
+      <rect y="208" width="152" height="42" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="234" class="item">CDC change feeds</text>
+      <rect y="260" width="152" height="42" rx="6" fill="rgba(255,255,255,0.18)"/>
+      <text x="12" y="286" class="item">IoT telemetry</text>
+      <rect y="316" width="152" height="42" rx="6" fill="rgba(255,255,255,0.30)" stroke="rgba(255,255,255,0.4)" stroke-dasharray="3,3"/>
+      <text x="12" y="335" class="item">Ingestion:</text>
+      <text x="12" y="350" class="item" font-weight="500">ADF · Event Hubs · Kafka</text>
+    </g>
+  </g>
+
+  <!-- Bronze -->
+  <g transform="translate(280,30)">
+    <text x="0" y="-8" class="stage-label">Layer 1 · raw landing</text>
+    <rect width="220" height="430" rx="10" fill="url(#bronze)"/>
+    <text x="16" y="26" class="layer-title">Bronze</text>
+    <text x="16" y="44" class="layer-sub">As-is, schema-on-read, append-only</text>
+    <g transform="translate(14,62)">
+      <rect width="192" height="48" rx="6" fill="rgba(255,255,255,0.20)"/>
+      <text x="12" y="22" class="item">Delta tables · partitioned</text>
+      <text x="12" y="38" class="item" font-weight="500">retained 90 days hot</text>
+      <rect y="58" width="192" height="48" rx="6" fill="rgba(255,255,255,0.20)"/>
+      <text x="12" y="80" class="item">Source schema preserved</text>
+      <text x="12" y="96" class="item" font-weight="500">+ ingest metadata columns</text>
+      <rect y="116" width="192" height="48" rx="6" fill="rgba(255,255,255,0.20)"/>
+      <text x="12" y="138" class="item">Replayable · idempotent</text>
+      <text x="12" y="154" class="item" font-weight="500">Re-ingest is safe</text>
+      <rect y="174" width="192" height="48" rx="6" fill="rgba(255,255,255,0.20)"/>
+      <text x="12" y="196" class="item">Engines: Spark · Synapse</text>
+      <text x="12" y="212" class="item" font-weight="500">Serverless · Databricks</text>
+      <rect y="246" width="192" height="78" rx="6" fill="rgba(255,255,255,0.30)" stroke="rgba(255,255,255,0.4)" stroke-dasharray="3,3"/>
+      <text x="12" y="268" class="item">Example tables:</text>
+      <text x="12" y="285" class="item" font-weight="500">brz_orders (2,000 rows)</text>
+      <text x="12" y="301" class="item" font-weight="500">brz_customers (200)</text>
+      <text x="12" y="317" class="item" font-weight="500">brz_invoices (500)</text>
+    </g>
+  </g>
+
+  <!-- Silver -->
+  <g transform="translate(580,30)">
+    <text x="0" y="-8" class="stage-label">Layer 2 · validated &amp; conformed</text>
+    <rect width="220" height="430" rx="10" fill="url(#silver)"/>
+    <text x="16" y="26" class="layer-title">Silver</text>
+    <text x="16" y="44" class="layer-sub">Cleansed, typed, business keys</text>
+    <g transform="translate(14,62)">
+      <rect width="192" height="48" rx="6" fill="rgba(255,255,255,0.22)"/>
+      <text x="12" y="22" class="item">Type-cast &amp; normalised</text>
+      <text x="12" y="38" class="item" font-weight="500">enforce schema contract</text>
+      <rect y="58" width="192" height="48" rx="6" fill="rgba(255,255,255,0.22)"/>
+      <text x="12" y="80" class="item">Deduped · late-arriving safe</text>
+      <text x="12" y="96" class="item" font-weight="500">SCD2 where needed</text>
+      <rect y="116" width="192" height="48" rx="6" fill="rgba(255,255,255,0.22)"/>
+      <text x="12" y="138" class="item">PII classified · masked</text>
+      <text x="12" y="154" class="item" font-weight="500">Purview labels applied</text>
+      <rect y="174" width="192" height="48" rx="6" fill="rgba(255,255,255,0.22)"/>
+      <text x="12" y="196" class="item">dbt models drive build</text>
+      <text x="12" y="212" class="item" font-weight="500">tests on every refresh</text>
+      <rect y="246" width="192" height="78" rx="6" fill="rgba(255,255,255,0.30)" stroke="rgba(255,255,255,0.4)" stroke-dasharray="3,3"/>
+      <text x="12" y="268" class="item">Example tables:</text>
+      <text x="12" y="285" class="item" font-weight="500">slv_orders (~1,900 valid)</text>
+      <text x="12" y="301" class="item" font-weight="500">slv_customers (~190)</text>
+      <text x="12" y="317" class="item" font-weight="500">slv_invoices (~485)</text>
+    </g>
+  </g>
+
+  <!-- Gold -->
+  <g transform="translate(880,30)">
+    <text x="0" y="-8" class="stage-label">Layer 3 · business-ready</text>
+    <rect width="220" height="430" rx="10" fill="url(#gold)"/>
+    <text x="16" y="26" class="layer-title">Gold</text>
+    <text x="16" y="44" class="layer-sub">Facts &amp; dimensions · marts</text>
+    <g transform="translate(14,62)">
+      <rect width="192" height="48" rx="6" fill="rgba(255,255,255,0.22)"/>
+      <text x="12" y="22" class="item">Star schema · Kimball</text>
+      <text x="12" y="38" class="item" font-weight="500">facts + conformed dims</text>
+      <rect y="58" width="192" height="48" rx="6" fill="rgba(255,255,255,0.22)"/>
+      <text x="12" y="80" class="item">Domain-owned data products</text>
+      <text x="12" y="96" class="item" font-weight="500">contract-versioned</text>
+      <rect y="116" width="192" height="48" rx="6" fill="rgba(255,255,255,0.22)"/>
+      <text x="12" y="138" class="item">SLA-backed freshness</text>
+      <text x="12" y="154" class="item" font-weight="500">monitored end-to-end</text>
+      <rect y="174" width="192" height="48" rx="6" fill="rgba(255,255,255,0.22)"/>
+      <text x="12" y="196" class="item">Direct Lake / serving</text>
+      <text x="12" y="212" class="item" font-weight="500">Power BI, APIs, RAG</text>
+      <rect y="246" width="192" height="78" rx="6" fill="rgba(255,255,255,0.30)" stroke="rgba(255,255,255,0.4)" stroke-dasharray="3,3"/>
+      <text x="12" y="268" class="item">Example marts:</text>
+      <text x="12" y="285" class="item" font-weight="500">fact_orders</text>
+      <text x="12" y="301" class="item" font-weight="500">dim_customers</text>
+      <text x="12" y="317" class="item" font-weight="500">gld_aging_report</text>
+    </g>
+  </g>
+
+  <!-- Quality gates between stages -->
+  <g transform="translate(220,440)">
+    <rect width="60" height="40" rx="6" fill="#fee2e2" stroke="#fca5a5"/>
+    <text x="30" y="18" text-anchor="middle" class="gate-label">GE</text>
+    <text x="30" y="34" text-anchor="middle" class="gate-sub">gate</text>
+  </g>
+  <g transform="translate(520,440)">
+    <rect width="60" height="40" rx="6" fill="#fee2e2" stroke="#fca5a5"/>
+    <text x="30" y="18" text-anchor="middle" class="gate-label">GE</text>
+    <text x="30" y="34" text-anchor="middle" class="gate-sub">gate</text>
+  </g>
+  <g transform="translate(820,440)">
+    <rect width="60" height="40" rx="6" fill="#fee2e2" stroke="#fca5a5"/>
+    <text x="30" y="18" text-anchor="middle" class="gate-label">GE</text>
+    <text x="30" y="34" text-anchor="middle" class="gate-sub">gate</text>
+  </g>
+
+  <!-- arrows between stages -->
+  <line x1="200" y1="245" x2="280" y2="245" stroke="#94a3b8" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <line x1="500" y1="245" x2="580" y2="245" stroke="#94a3b8" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <line x1="800" y1="245" x2="880" y2="245" stroke="#94a3b8" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <!-- Bottom: governance band -->
+  <g transform="translate(20,500)">
+    <rect width="1080" height="32" rx="6" fill="#1e293b"/>
+    <text x="20" y="21" font-size="12" font-weight="700" fill="#fff" letter-spacing="0.04em">PURVIEW LINEAGE · DBT TESTS · GREAT EXPECTATIONS · DATA PRODUCT CONTRACTS</text>
+    <text x="700" y="21" font-size="11" fill="#cbd5e1">end-to-end at every transition</text>
+  </g>
+</svg>

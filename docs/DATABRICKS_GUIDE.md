@@ -323,8 +323,8 @@ See the general [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more issues.
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [ADF Setup](ADF_SETUP.md) — Azure Data Factory pipeline setup and orchestration
-- [Getting Started](GETTING_STARTED.md) — Platform deployment quickstart
-- [Architecture](ARCHITECTURE.md) — Platform architecture overview
+- ← Previous: [Documentation home](index.md)
+- → Next: [ADF Setup](ADF_SETUP.md)
+- ⌂ Index: [Documentation home](index.md)

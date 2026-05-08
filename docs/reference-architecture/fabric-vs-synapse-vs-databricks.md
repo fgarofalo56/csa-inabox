@@ -167,3 +167,4 @@ The point is **don't try to forklift**. Move workloads when they're already in f
 - [Migration — Databricks to Fabric](../migrations/databricks-to-fabric.md)
 - [Use Case — Unified Analytics on Fabric](../use-cases/fabric-unified-analytics.md)
 - [Patterns — Power BI & Fabric Roadmap](../patterns/power-bi-fabric-roadmap.md)
+- [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) — companion site with tutorials, feature guides, and production best practices for Fabric

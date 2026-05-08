@@ -465,3 +465,17 @@ cybersecurity/
 │   └── 03-kql-threat-hunting.py
 └── README.md                 # This file
 ```
+
+## Expected Results
+
+After running the medallion pipeline against the bundled seed data,
+the Gold layer should populate the following tables. Row counts vary
+with the seed-data generator parameters; the figures below are the
+approximate scale you should see on a default run.
+
+| Gold Table | Approximate Rows | Notes |
+| ---------- | ---------------- | ----- |
+| `rpt_compliance_posture` | TODO: capture after first run | Populated from Silver via dbt `--select tag:gold` |
+| `rpt_threat_landscape` | TODO: capture after first run | Populated from Silver via dbt `--select tag:gold` |
+
+> TODO: capture exact counts after the next end-to-end seed run. These are bounded by the seed-data generator parameters in `data/generators/`.

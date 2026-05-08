@@ -1113,8 +1113,8 @@ SELECT MAX(LastModified) FROM SyncMetadata WHERE Status = 'Success'
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [ADF_SETUP.md](ADF_SETUP.md) — Azure Data Factory pipeline setup and orchestration
-- [IaC-CICD-Best-Practices.md](IaC-CICD-Best-Practices.md) — Infrastructure-as-Code and CI/CD patterns
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Platform architecture overview
+- ← Previous: [ADF Setup](ADF_SETUP.md)
+- → Next: [Documentation home](index.md)
+- ⌂ Index: [Documentation home](index.md)

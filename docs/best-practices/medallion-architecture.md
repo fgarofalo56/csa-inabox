@@ -5,6 +5,8 @@ description: Comprehensive guide to implementing Bronze, Silver, and Gold layers
 
 # Medallion Architecture Best Practices
 
+![Bronze → Silver → Gold medallion flow showing source ingestion, validated and conformed Silver tables, business-ready Gold marts, and Great Expectations quality gates at each transition](../assets/images/medallion-flow.svg){ .architecture-hero loading="eager" }
+
 ## Overview
 
 The **medallion architecture** (also called multi-hop architecture) organizes a lakehouse into three progressive layers of data quality: **Bronze** (raw), **Silver** (cleansed), and **Gold** (analytics-ready). Each layer serves a distinct purpose in transforming raw source data into trusted, governed data products.
@@ -60,6 +62,10 @@ flowchart LR
 ```
 
 ---
+
+## What this looks like in Azure
+
+![Azure Storage account Overview blade — Essentials panel showing Standard performance, LRS replication, StorageV2 (general purpose v2) account kind, and the Storage browser / Data storage / Containers left-nav. ADLS Gen2 sits on top of this account; Bronze, Silver, and Gold land in three containers within it.](../assets/images/azure/storage-account-overview.png){ .architecture-hero loading="lazy" }
 
 ## Bronze Layer Best Practices
 

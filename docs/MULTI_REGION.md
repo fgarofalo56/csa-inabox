@@ -40,6 +40,44 @@ region) that are out of scope here.
 
 ---
 
+## 📦 Starter parameter file
+
+A starter parameter template lives at `deploy/bicep/DLZ/params.multi-region.json`
+— deploy it to the primary region, then create a paired secondary file with
+`location` set to the failover region. Snippet (truncated):
+
+```json
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location":    { "value": "East US 2" },
+    "environment": { "value": "prod" },
+    "prefix":      { "value": "dlz" },
+    "parCosmosDB": {
+      "value": {
+        "enableMultipleWriteLocations": "Enabled",
+        "secondaryLocation":            "westus2",
+        "_comment_multiRegion": "Active-active multi-master Cosmos DB."
+      }
+    },
+    "parStorage": {
+      "value": {
+        "sku": "Standard_RAGZRS",
+        "_comment_sku": "Read-access geo-zone-redundant storage; secondary region is readable at all times."
+      }
+    }
+  }
+}
+```
+
+See the file for the full set of services (Synapse, Databricks, Data Factory,
+Event Hubs Geo-DR alias, Azure ML, Data Explorer, Functions, Stream Analytics,
+App Insights) including the manual `az eventhubs georecovery-alias` setup
+commands embedded in the `_comment_geoDR` block.
+
+---
+
 ## 🏗️ 1. Architecture Overview
 
 CSA-in-a-Box multi-region uses an **active-active** topology where both
@@ -646,9 +684,8 @@ and naming conventions.
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [MULTI_TENANT.md](MULTI_TENANT.md) — Multi-tenant stamped deployment model
-- [DR.md](DR.md) — Disaster recovery runbook and failover procedures
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Platform architecture overview
-- [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) — Platform services reference and SKU details
+- ← Previous: [Platform Services](PLATFORM_SERVICES.md)
+- → Next: [Multi-Tenant](MULTI_TENANT.md)
+- ⌂ Index: [Documentation home](index.md)

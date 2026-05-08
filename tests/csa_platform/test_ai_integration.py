@@ -1345,7 +1345,9 @@ class TestRAGConfig:
         assert settings.chunk.chunk_size == 512
         assert settings.chunk.chunk_overlap == 64
         assert settings.search.top_k == 5
-        assert settings.azure_openai.embedding_dimensions == 1536
+        # CSA-0109: default upgraded to text-embedding-3-large (3072 dims).
+        assert settings.azure_openai.embedding_dimensions == 3072
+        assert settings.azure_openai.embedding_deployment == "text-embedding-3-large"
 
     def test_chunk_settings_defaults(self) -> None:
         """ChunkSettings has expected defaults."""

@@ -229,8 +229,8 @@ anything drifts.
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Troubleshooting](TROUBLESHOOTING.md) — Common issues and fixes
-- [Disaster Recovery](DR.md) — Multi-region failover runbook
-- [Production Checklist](PRODUCTION_CHECKLIST.md) — Production readiness checklist
+- ← Previous: [Cost Management](COST_MANAGEMENT.md)
+- → Next: [Troubleshooting](TROUBLESHOOTING.md)
+- ⌂ Index: [Documentation home](index.md)

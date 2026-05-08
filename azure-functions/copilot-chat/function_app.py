@@ -1,18 +1,31 @@
 """Azure Function: CSA-in-a-Box Copilot Chat Backend.
 
-POST /api/chat — accepts ``{message, history[], pageContext}`` and returns
-``{reply}`` from Azure OpenAI with full codebase context.
+Endpoints (POST unless noted):
+
+- ``/api/chat``      — primary chat endpoint (streamed Azure OpenAI completion)
+- ``/api/feedback``  — thumbs up/down + improvement comment for a turn
+- ``/api/backlog``   — explicit feature request, bug report, or uncovered-question
+- ``/api/health``    — GET-only liveness probe (no auth)
 
 Security hardening (SEC-COPILOT):
+
 - Origin validation against allowlist
-- Prompt injection detection and blocking
-- Message length limits and input sanitization
-- Per-IP and global rate limiting with daily caps
-- Daily token budget to prevent cost runaway
-- History sanitization (strip system messages, injection attempts)
-- Generic error messages (no internal leak)
 - Time-based request token validation
+- Per-IP rate limiting (per-min + daily) and global hourly cap
+- Daily token budget (global + per-IP)
+- Prompt-injection regex on user input + history
+- Input length / shape validation
+- History sanitisation (strip system messages, drop injection attempts)
+- Generic error messages (no internal leak)
 - Topic guardrails in system prompt
+
+Telemetry hardening (added 2026-05-06):
+
+- Optional persistence to Cosmos DB (no-op if unconfigured)
+- Optional Application Insights custom events (no-op if unconfigured)
+- PII redaction before persistence (emails, secrets, tokens, IPs)
+- Hashed IP-as-actor for analytics deduplication
+- Per-request opt-out via ``X-Copilot-Opt-Out: 1`` header
 """
 
 from __future__ import annotations
@@ -24,19 +37,34 @@ import os
 import re
 import time
 from collections import defaultdict
+from typing import Any
 
 import azure.functions as func
 from openai import AzureOpenAI
+
+# Azure Functions Python v2 loads ``function_app.py`` as a top-level
+# module (no package context), so absolute imports of the sibling
+# modules are correct here. The Functions host puts the function
+# directory on ``sys.path``; tests do the same via a ``conftest``.
+import redaction  # type: ignore  # noqa: E402
+import storage    # type: ignore  # noqa: E402
+import telemetry  # type: ignore  # noqa: E402
 
 app = func.FunctionApp()
 logger = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────
 
-MAX_MESSAGE_LENGTH = 2000       # max chars per user message
-MAX_HISTORY_TURNS = 10          # max conversation turns to include
-MAX_TOTAL_INPUT_CHARS = 8000    # max total chars across history + message
-MAX_COMPLETION_TOKENS = 1500    # max response tokens per request
+MAX_MESSAGE_LENGTH = 2000        # max chars per user message
+MAX_HISTORY_TURNS = 10           # max conversation turns to include
+MAX_TOTAL_INPUT_CHARS = 8000     # max total chars across history + message
+MAX_COMPLETION_TOKENS = 1500     # max response tokens per request
+MAX_FEEDBACK_TEXT_LENGTH = 1000  # max chars in improvement-text field
+MAX_BACKLOG_TEXT_LENGTH = 4000   # max chars per backlog title+description
+
+# Salt for IP hashing — kept in env so rotating it severs the link between
+# old and new analytics records (a privacy lever, not a security feature).
+_IP_HASH_SALT = os.environ.get("COPILOT_IP_HASH_SALT", "csa-copilot-default-salt-2026")
 
 # ── Rate Limiting ─────────────────────────────────────────────────────────
 
@@ -49,8 +77,13 @@ _DAILY_LIMIT_PER_IP = 200    # max requests/day per IP
 _GLOBAL_HOURLY_LIMIT = 1000  # max requests/hour globally
 _global_hourly: list[float] = []
 
+# Looser limits for the non-completion endpoints (feedback/backlog) — they
+# don't hit OpenAI, so the cost vector is just storage cardinality.
+_FEEDBACK_PER_MIN = 30
+_BACKLOG_PER_MIN = 10
 
-def _check_rate_limit(ip: str) -> tuple[bool, str]:
+
+def _check_rate_limit(ip: str, *, per_minute: int = _RATE_LIMIT_PER_MIN) -> tuple[bool, str]:
     """Return (allowed, reason) — False + reason if rate-limited."""
     global _daily_request_date, _global_hourly
     now = time.time()
@@ -64,10 +97,10 @@ def _check_rate_limit(ip: str) -> tuple[bool, str]:
     # Per-IP per-minute
     window = _rate_store[ip]
     _rate_store[ip] = [t for t in window if now - t < _RATE_WINDOW]
-    if len(_rate_store[ip]) >= _RATE_LIMIT_PER_MIN:
+    if len(_rate_store[ip]) >= per_minute:
         return False, "Too many requests. Please wait a moment before trying again."
 
-    # Per-IP daily
+    # Per-IP daily (chat-class endpoints share this counter)
     if _daily_request_store[ip] >= _DAILY_LIMIT_PER_IP:
         return False, "Daily request limit reached. Please try again tomorrow."
 
@@ -92,7 +125,6 @@ _PER_IP_DAILY_TOKEN_LIMIT = 100_000
 
 
 def _check_token_budget() -> tuple[bool, str]:
-    """Check if global daily token budget is exceeded."""
     today = time.strftime("%Y-%m-%d")
     if _token_budget["date"] != today:
         _token_budget["date"] = today
@@ -105,13 +137,11 @@ def _check_token_budget() -> tuple[bool, str]:
 
 
 def _record_tokens(ip: str, tokens_used: int) -> None:
-    """Record token usage for budget tracking."""
     _token_budget["tokens"] = int(_token_budget["tokens"]) + tokens_used
     _ip_token_budget[ip] += tokens_used
 
 
 def _check_ip_token_budget(ip: str) -> tuple[bool, str]:
-    """Check if per-IP token budget is exceeded."""
     if _ip_token_budget[ip] >= _PER_IP_DAILY_TOKEN_LIMIT:
         return False, "You have reached your daily usage limit. Please try again tomorrow."
     return True, ""
@@ -128,34 +158,27 @@ _ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
-# Also allow localhost for development
 if os.environ.get("AZURE_FUNCTIONS_ENVIRONMENT") == "Development":
     _ALLOWED_ORIGINS.extend(["http://localhost:8000", "http://127.0.0.1:8000"])
 
 
 def _validate_origin(req: func.HttpRequest) -> bool:
-    """Validate request origin against allowlist."""
     origin = req.headers.get("Origin", "").rstrip("/")
     referer = req.headers.get("Referer", "")
 
-    # Check Origin header (primary)
     if origin:
         return any(origin == allowed.rstrip("/") for allowed in _ALLOWED_ORIGINS)
 
-    # Fall back to Referer header
     if referer:
         return any(referer.startswith(allowed) for allowed in _ALLOWED_ORIGINS)
 
-    # No origin info — reject (API clients must provide Origin)
     return False
 
 
 def _cors_headers(req: func.HttpRequest | None = None) -> dict[str, str]:
-    """Build CORS response headers, echoing the validated origin."""
     origin = ""
     if req:
         origin = req.headers.get("Origin", "").rstrip("/")
-    # Only echo back if origin is in allowlist
     allowed_origin = _ALLOWED_ORIGINS[0] if _ALLOWED_ORIGINS else ""
     if origin:
         for allowed in _ALLOWED_ORIGINS:
@@ -165,8 +188,8 @@ def _cors_headers(req: func.HttpRequest | None = None) -> dict[str, str]:
 
     return {
         "Access-Control-Allow-Origin": allowed_origin,
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, X-Copilot-Token",
+        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, X-Copilot-Token, X-Copilot-Opt-Out, X-Copilot-Session, X-Copilot-Conversation",
         "Access-Control-Max-Age": "86400",
     }
 
@@ -202,8 +225,66 @@ _INJECTION_RE = re.compile("|".join(_INJECTION_PATTERNS), re.IGNORECASE)
 
 
 def _detect_injection(text: str) -> bool:
-    """Detect potential prompt injection attempts."""
     return bool(_INJECTION_RE.search(text))
+
+
+# ── Topic-class extraction (SEC-COPILOT 2026-05-07) ───────────────────────
+
+# Sentinel emitted by the LLM at the start of every reply per the system
+# prompt: ``<topic-class>on_topic|off_topic|ambiguous</topic-class>``.
+# Tolerates leading whitespace, surrounding code-fence markers, and
+# extra newlines. Anchored near the start (first 200 chars) so a stray
+# match later in the body doesn't poison classification.
+_TOPIC_CLASS_RE = re.compile(
+    r"<topic-class>\s*(on_topic|off_topic|ambiguous)\s*</topic-class>",
+    re.IGNORECASE,
+)
+_TOPIC_CLASS_VALUES = {"on_topic", "off_topic", "ambiguous"}
+
+# Legacy refusal phrasing — used as a fallback classifier if the model
+# forgets to emit the structured tag. Most replies will have the tag;
+# this is just a safety net.
+_OFFTOPIC_REFUSAL_RE = re.compile(
+    r"(?i)i can only help with (?:csa[- ]in[- ]a[- ]box|csa[- ]inabox|the cs[as][- ]in[- ]a[- ]box)",
+)
+
+
+def _extract_topic_class(reply: str) -> tuple[str, str]:
+    """Return ``(topic_class, reply_with_sentinel_stripped)``.
+
+    Defaults to ``"on_topic"`` when neither the structured tag nor the
+    legacy refusal phrase is present. Off-topic detection only takes
+    effect when the model affirmatively says so — being permissive at
+    classification time avoids treating real coverage gaps as
+    off-topic.
+    """
+    if not reply:
+        return "on_topic", reply
+
+    # Anchor at the start of the reply (allowing leading whitespace and
+    # an optional code-fence). Protects against a stray ``<topic-class>``
+    # token that the model might emit later inside a code block as part
+    # of a Python regex example.
+    head = reply.lstrip()[:100]
+    if head.startswith("```"):
+        # Strip an opening fence so models that wrap the whole reply
+        # in markdown still get classified.
+        head = head.split("\n", 1)[-1] if "\n" in head else head
+    m = _TOPIC_CLASS_RE.match(head)
+    if m:
+        cls = m.group(1).lower()
+        if cls not in _TOPIC_CLASS_VALUES:
+            cls = "on_topic"
+        # Strip the sentinel out of the reply (also drop the trailing
+        # newline so we don't leave an awkward empty line at the top).
+        cleaned = _TOPIC_CLASS_RE.sub("", reply, count=1).lstrip("\n").lstrip()
+        return cls, cleaned
+
+    # Fallback: legacy refusal phrase indicates off-topic.
+    if _OFFTOPIC_REFUSAL_RE.search(reply):
+        return "off_topic", reply
+
+    return "on_topic", reply
 
 
 # ── Request Token Validation ──────────────────────────────────────────────
@@ -212,29 +293,23 @@ _TOKEN_SECRET = os.environ.get("COPILOT_TOKEN_SECRET", "csa-copilot-2024")
 
 
 def _generate_token_hash(timestamp: int) -> str:
-    """Generate expected token hash for a given 30-second window."""
     payload = f"{timestamp}:{_TOKEN_SECRET}"
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def _validate_request_token(token: str | None) -> bool:
-    """Validate the time-based request token from the frontend.
-
-    Accepts current and previous 30-second windows to handle clock skew.
-    """
     if not token:
         return False
     try:
         parts = token.split(":")
         if len(parts) != 2:
             return False
-        int(parts[0])  # Validate timestamp is numeric
+        int(parts[0])
         provided_hash = parts[1]
     except (ValueError, IndexError):
         return False
 
     current_window = int(time.time()) // 30
-    # Accept current, previous, and next window (±30 seconds)
     for offset in (-1, 0, 1):
         expected = _generate_token_hash(current_window + offset)
         if provided_hash == expected:
@@ -242,19 +317,105 @@ def _validate_request_token(token: str | None) -> bool:
     return False
 
 
-# ── Helper ────────────────────────────────────────────────────────────────
+# ── Response Helpers ──────────────────────────────────────────────────────
 
 def _error_response(
     message: str,
     status_code: int,
     headers: dict[str, str],
 ) -> func.HttpResponse:
-    """Build a JSON error response."""
     return func.HttpResponse(
         json.dumps({"error": message}),
         status_code=status_code,
         mimetype="application/json",
         headers=headers,
+    )
+
+
+def _json_response(
+    body: dict[str, Any],
+    headers: dict[str, str],
+    status_code: int = 200,
+) -> func.HttpResponse:
+    return func.HttpResponse(
+        json.dumps(body, ensure_ascii=False),
+        status_code=status_code,
+        mimetype="application/json",
+        headers=headers,
+    )
+
+
+def _client_ip(req: func.HttpRequest) -> str:
+    """Return the request's source IP.
+
+    SEC-COPILOT (audit H-4, 2026-05-06): use the LAST entry of
+    ``X-Forwarded-For`` rather than the first. Azure App Service /
+    Functions front-end appends the original client IP as the rightmost
+    entry; earlier entries are user-controlled and trivially spoofable.
+    """
+    xff = req.headers.get("X-Forwarded-For", "")
+    if xff:
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
+    return req.headers.get("X-Real-IP", "unknown").strip()
+
+
+def _opt_out(req: func.HttpRequest) -> bool:
+    """Honor a per-request opt-out header from the widget."""
+    return req.headers.get("X-Copilot-Opt-Out", "").strip() in ("1", "true", "yes")
+
+
+def _safe_id(value: str | None, fallback_prefix: str) -> str:
+    """Sanitize a client-supplied id; replace junk with a server-issued fallback."""
+    if not value:
+        return f"{fallback_prefix}-{int(time.time() * 1000)}"
+    cleaned = re.sub(r"[^A-Za-z0-9_-]", "", value)[:64]
+    return cleaned or f"{fallback_prefix}-{int(time.time() * 1000)}"
+
+
+# ── Azure OpenAI client (SEC-COPILOT H-3 — MI preferred, key fallback) ───
+#
+# Prefers managed-identity auth via DefaultAzureCredential. The Function
+# App's system-assigned MI must hold ``Cognitive Services OpenAI User``
+# on the AOAI account (granted 2026-05-06).
+#
+# If ``AZURE_OPENAI_KEY`` is set, falls back to key auth — keeps local
+# dev (``func start``) working without an Azure session, and keeps the
+# old setting working as a defence-in-depth backstop while the MI role
+# binding propagates.
+
+_token_provider = None
+
+
+def _get_aad_token_provider():
+    """Lazy-init a bearer-token provider for AOAI. Cached at module scope."""
+    global _token_provider
+    if _token_provider is not None:
+        return _token_provider
+    from azure.identity import DefaultAzureCredential, get_bearer_token_provider  # type: ignore
+    cred = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+    _token_provider = get_bearer_token_provider(
+        cred, "https://cognitiveservices.azure.com/.default"
+    )
+    return _token_provider
+
+
+def _make_openai_client() -> AzureOpenAI:
+    """Build an AzureOpenAI client. MI-first, key-fallback."""
+    endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
+    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
+    api_key = os.environ.get("AZURE_OPENAI_KEY")
+    if api_key:
+        return AzureOpenAI(
+            azure_endpoint=endpoint,
+            api_key=api_key,
+            api_version=api_version,
+        )
+    return AzureOpenAI(
+        azure_endpoint=endpoint,
+        azure_ad_token_provider=_get_aad_token_provider(),
+        api_version=api_version,
     )
 
 
@@ -363,9 +524,145 @@ display clickable links.
 5. For troubleshooting, check `TROUBLESHOOTING` first.
 6. Be concise but thorough. Use code blocks for commands and file paths.
 7. If you don't know the answer, say so — don't guess.
+
+## Citation format
+
+When the user is given a list of GROUNDING DOCUMENTS as a system message, \
+use them to answer and **cite them inline using footnote markers** of the \
+form `[^N]` where N is the 1-based index in the grounding list. Examples:
+
+- "CSA-in-a-Box uses Bicep for IaC[^1]." (cites the first grounding doc)
+- "The medallion architecture has Bronze/Silver/Gold layers[^2][^3]."
+
+Cite each non-trivial claim. Do NOT invent citation numbers — only cite \
+documents you were actually given. If no grounding documents are provided, \
+do not use `[^N]` markers; cite by file path instead (e.g., \
+`docs/ARCHITECTURE.md`).
+
+Use markdown tables, task lists (`- [ ]`), code blocks with language \
+hints (e.g., ```bicep, ```python, ```bash), and bullet/ordered lists \
+liberally — the widget renders them with syntax highlighting and \
+copy-to-clipboard buttons.
+
+## Topic classification (REQUIRED — emit on EVERY response)
+
+At the very start of every response, output ONE of these three lines on \
+its own line, immediately followed by a blank line, then your actual \
+answer. The widget strips the tag before rendering.
+
+```
+<topic-class>on_topic</topic-class>
+<topic-class>off_topic</topic-class>
+<topic-class>ambiguous</topic-class>
+```
+
+### Classification rules
+
+**on_topic** — the question is about CSA-in-a-Box specifically OR about \
+Microsoft Azure data analytics platforms / products / architectures \
+(Synapse, Fabric, ADLS, ADF, Databricks, Purview, dbt, IaC for those \
+services, governance/compliance for data platforms, etc.).
+
+**off_topic** — has nothing to do with CSA-in-a-Box or Azure data \
+platforms. Includes: weather, sports, news, jokes, "write me a song / \
+poem / story", personal-life advice, generic LLM tasks (translate this \
+text, summarize this article, role-play as someone), and Azure topics \
+that aren't data-platform-related (App Service tuning, Logic Apps for \
+non-data flows, etc.).
+
+**ambiguous** — could go either way (general programming, broad Azure \
+questions that *might* connect to data). Default to a best-effort \
+answer with a polite "this is outside my main scope" caveat.
+
+### Off-topic responses — be helpfully snarky
+
+When you classify as `off_topic`, your response should:
+
+1. Politely but humorously decline.
+2. Tie the refusal back to a CSA-in-a-Box / Azure-data theme so it \
+   stays in-character.
+3. Suggest the user contact their Microsoft account team about Azure \
+   AI Foundry to build a custom agent for that purpose.
+4. End with an offer to help with an actual CSA-in-a-Box topic.
+
+Keep it short (3-4 sentences). Be warm-snarky, not contemptuous. Don't \
+lecture. Don't refuse rudely. Don't be preachy about scope.
+
+### Off-topic examples
+
+User: "What's the weather today?"
+You:
+```
+<topic-class>off_topic</topic-class>
+
+You're asking the wrong copilot — I can't predict the weather, but I \
+can predict your data lake will need partitioning if you don't tier it \
+properly. If you'd like a weather-aware agent for your data ops, your \
+Microsoft account team can help you stand one up on Azure AI Foundry. \
+Meanwhile, want to chat about the medallion pattern?
+```
+
+User: "Write me a song about Mondays"
+You:
+```
+<topic-class>off_topic</topic-class>
+
+I'm flattered you think I have rhythm, but my talents max out at \
+well-formed Bicep templates. Your Microsoft rep would love to help you \
+build a custom songwriter agent on Azure AI Foundry. I can sing the \
+praises of Purview lineage instead — interested?
+```
+
+User: "Who's your favorite football team?"
+You:
+```
+<topic-class>off_topic</topic-class>
+
+I root for whichever team has the cleanest data pipeline — call me \
+biased. For an AI that actually keeps up with sports, talk to your \
+Microsoft account team about Azure AI Foundry. Now, can I interest you \
+in something more in my lane, like ADF triggers or dbt incremental \
+models?
+```
+
+User: "Help me debug this Rust generic"
+You:
+```
+<topic-class>off_topic</topic-class>
+
+Borrow checker disputes are above my pay grade — I'm wired for the \
+Azure data analytics stack. Your Microsoft rep can connect you with a \
+custom code-help agent on Azure AI Foundry if that's a recurring \
+need. Otherwise, hit me with a Python-on-Databricks question or a \
+Bicep snag and I'm there.
+```
 """
 
 CONFIG_MAX_HISTORY = MAX_HISTORY_TURNS
+
+
+# ── Health Endpoint ───────────────────────────────────────────────────────
+
+@app.route(route="health", methods=["GET", "OPTIONS"], auth_level=func.AuthLevel.ANONYMOUS)
+def health(req: func.HttpRequest) -> func.HttpResponse:
+    """Liveness probe. No auth, no rate limiting, no logging.
+
+    Reports which side-channel pipelines are available so the widget /
+    monitoring can detect partial outages (e.g. App Insights down but
+    chat still serving).
+    """
+    headers = _cors_headers(req)
+    if req.method == "OPTIONS":
+        return func.HttpResponse(status_code=204, headers=headers)
+    return _json_response(
+        {
+            "status": "ok",
+            "version": "2026-05-06",
+            "telemetry_enabled": bool(os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING")),
+            "storage_enabled": storage.is_enabled(),
+        },
+        headers,
+    )
 
 
 # ── Chat Endpoint ─────────────────────────────────────────────────────────
@@ -373,59 +670,46 @@ CONFIG_MAX_HISTORY = MAX_HISTORY_TURNS
 
 @app.route(route="chat", methods=["POST", "OPTIONS"], auth_level=func.AuthLevel.ANONYMOUS)
 def chat(req: func.HttpRequest) -> func.HttpResponse:
-    """Handle chat requests from the Copilot widget.
-
-    Security layers (SEC-COPILOT):
-    1. Origin validation — reject requests from non-allowed origins
-    2. Request token validation — time-based token from frontend
-    3. Rate limiting — per-IP per-minute + daily + global hourly
-    4. Token budget — daily global + per-IP limits
-    5. Input validation — message length, history sanitization
-    6. Prompt injection detection — regex pattern matching
-    7. Topic guardrails — system prompt enforcement
-    """
+    """Handle chat requests from the Copilot widget."""
     headers = _cors_headers(req)
+    started = time.time()
 
-    # Preflight
     if req.method == "OPTIONS":
         return func.HttpResponse(status_code=204, headers=headers)
 
-    # SEC-1: Origin validation
     if not _validate_origin(req):
         logger.warning("Rejected request from invalid origin: %s",
-                        req.headers.get("Origin", "none"))
+                       req.headers.get("Origin", "none"))
         return _error_response(
             "Access denied. This API is only available from the CSA-in-a-Box documentation site.",
             403, headers,
         )
 
-    # Get client IP
-    ip = req.headers.get("X-Forwarded-For", req.headers.get("X-Real-IP", "unknown"))
-    ip = ip.split(",")[0].strip()
+    ip = _client_ip(req)
+    ip_hashed = redaction.hash_ip(ip, _IP_HASH_SALT)
 
-    # SEC-2: Request token validation
     token = req.headers.get("X-Copilot-Token")
     if not _validate_request_token(token):
         logger.warning("Invalid or missing request token from IP: %s", ip)
+        telemetry.track_event("chat.rejected", {"reason": "bad_token", "actor": ip_hashed})
         return _error_response("Invalid request. Please use the Copilot widget.", 403, headers)
 
-    # SEC-3: Rate limiting
     allowed, reason = _check_rate_limit(ip)
     if not allowed:
         logger.info("Rate limited IP: %s — %s", ip, reason)
+        telemetry.track_event("chat.rejected", {"reason": "rate_limit", "actor": ip_hashed})
         return _error_response(reason, 429, headers)
 
-    # SEC-4: Token budget (global)
     budget_ok, budget_msg = _check_token_budget()
     if not budget_ok:
+        telemetry.track_event("chat.rejected", {"reason": "global_budget", "actor": ip_hashed})
         return _error_response(budget_msg, 429, headers)
 
-    # SEC-4b: Token budget (per-IP)
     ip_budget_ok, ip_budget_msg = _check_ip_token_budget(ip)
     if not ip_budget_ok:
+        telemetry.track_event("chat.rejected", {"reason": "ip_budget", "actor": ip_hashed})
         return _error_response(ip_budget_msg, 429, headers)
 
-    # Parse body
     try:
         body = req.get_json()
     except ValueError:
@@ -434,7 +718,6 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
     if not isinstance(body, dict):
         return _error_response("Invalid request format.", 400, headers)
 
-    # SEC-5: Input validation — message length
     message = (body.get("message") or "")
     if not isinstance(message, str):
         return _error_response("Invalid message format.", 400, headers)
@@ -443,15 +726,32 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
     if not message:
         return _error_response("Message is required.", 400, headers)
 
-    # SEC-6: Prompt injection detection on user message
+    session_id = _safe_id(
+        body.get("session_id") or req.headers.get("X-Copilot-Session"),
+        "sess",
+    )
+    conversation_id = _safe_id(
+        body.get("conversation_id") or req.headers.get("X-Copilot-Conversation"),
+        "conv",
+    )
+
     if _detect_injection(message):
         logger.warning("Prompt injection detected from IP %s: %s", ip, message[:100])
+        telemetry.track_event(
+            "chat.rejected",
+            {
+                "reason": "injection",
+                "actor": ip_hashed,
+                "session_id": session_id,
+            },
+        )
+        # Note: injection attempts surface in App Insights via the
+        # ``chat.rejected`` event (reason=injection); no backlog row.
         return _error_response(
             "I can only help with CSA-in-a-Box and Azure data platform topics.",
             400, headers,
         )
 
-    # SEC-7: History sanitization
     conv_history = body.get("history", [])
     if not isinstance(conv_history, list):
         conv_history = []
@@ -467,13 +767,11 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
             continue
         content = content[:MAX_MESSAGE_LENGTH]
 
-        # Only allow user/assistant roles — strip system messages
         if role not in ("user", "assistant"):
             continue
         if not content:
             continue
 
-        # Skip history entries that contain injection attempts
         if _detect_injection(content):
             continue
 
@@ -483,10 +781,24 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
 
         clean_history.append({"role": role, "content": content})
 
-    # Build messages
     page_context = body.get("pageContext", {})
     if not isinstance(page_context, dict):
         page_context = {}
+
+    raw_grounding = body.get("grounding") or []
+    if not isinstance(raw_grounding, list):
+        raw_grounding = []
+    grounding_docs: list[dict[str, str]] = []
+    for g in raw_grounding[:5]:
+        if not isinstance(g, dict):
+            continue
+        title = str(g.get("title") or "")[:200].strip()
+        url = str(g.get("url") or "")[:500].strip()
+        if not url.startswith("https://fgarofalo56.github.io/csa-inabox/"):
+            continue
+        if not title:
+            continue
+        grounding_docs.append({"title": title, "url": url})
 
     messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -496,16 +808,17 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
         ctx_note = f"The user is currently viewing: {title} ({url})"
         messages.append({"role": "system", "content": ctx_note})
 
+    if grounding_docs:
+        lines = ["GROUNDING DOCUMENTS (cite these by [^N] index):"]
+        for i, g in enumerate(grounding_docs, start=1):
+            lines.append(f"[{i}] {g['title']} — {g['url']}")
+        messages.append({"role": "system", "content": "\n".join(lines)})
+
     messages.extend(clean_history)
     messages.append({"role": "user", "content": message})
 
-    # Call Azure OpenAI
     try:
-        client = AzureOpenAI(
-            azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-            api_key=os.environ["AZURE_OPENAI_KEY"],
-            api_version="2025-04-01-preview",
-        )
+        client = _make_openai_client()
 
         response = client.chat.completions.create(
             model=os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
@@ -515,30 +828,106 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
             stream=True,
         )
 
-        # Collect streamed chunks
-        reply_parts = []
+        reply_parts: list[str] = []
         total_tokens = 0
         for chunk in response:
             if chunk.choices and chunk.choices[0].delta.content:
                 reply_parts.append(chunk.choices[0].delta.content)
-            # Track usage from final chunk
             if hasattr(chunk, "usage") and chunk.usage:
                 total_tokens = chunk.usage.total_tokens
 
         reply = "".join(reply_parts)
 
-        # Estimate tokens if not provided by API
-        if total_tokens == 0:
-            total_tokens = len(message.split()) * 2 + len(reply.split()) * 2
+        # ── Topic-class extraction (SEC-COPILOT 2026-05-07) ─────────
+        # The system prompt asks the model to emit
+        # ``<topic-class>{on_topic|off_topic|ambiguous}</topic-class>``
+        # at the very start of every reply. Strip it out before the
+        # widget renders; surface it as a structured ``meta`` field so
+        # the UI can gate the "Add to backlog" prompt and the backend
+        # can split analytics by topic class.
+        topic_class, reply = _extract_topic_class(reply)
 
-        # Record token usage
-        _record_tokens(ip, total_tokens)
+        cited_sources: list[dict[str, str]] = []
+        cited_indexes = sorted({
+            int(m) for m in re.findall(r"\[\^(\d+)\]", reply)
+            if m.isdigit() and 1 <= int(m) <= len(grounding_docs)
+        })
+        for i in cited_indexes:
+            cited_sources.append(grounding_docs[i - 1])
 
-        return func.HttpResponse(
-            json.dumps({"reply": reply}),
-            status_code=200,
-            mimetype="application/json",
-            headers=headers,
+        tokens_used = total_tokens or (len(message.split()) * 2 + len(reply.split()) * 2)
+        _record_tokens(ip, tokens_used)
+
+        latency_ms = int((time.time() - started) * 1000)
+
+        # Uncovered = "this is a docs gap we should fix" → only fires
+        # for on-topic questions where we found no grounding hits.
+        # Off-topic questions are never "uncovered" (they're outside
+        # the scope of the docs entirely). Ambiguous = trust the
+        # grounding-hit signal.
+        is_uncovered = (
+            topic_class != "off_topic"
+            and len(grounding_docs) == 0
+        )
+
+        # ── Telemetry + persistence (best-effort, never blocks the response) ─
+        if not _opt_out(req):
+            telemetry.track_event(
+                "chat.request",
+                {
+                    "actor": ip_hashed,
+                    "session_id": session_id,
+                    "conversation_id": conversation_id,
+                    "latency_ms": latency_ms,
+                    "tokens_used": tokens_used,
+                    "grounding_count": len(grounding_docs),
+                    "citation_count": len(cited_sources),
+                    "topic_class": topic_class,
+                    "uncovered": is_uncovered,
+                    "page_url": str(page_context.get("url", ""))[:500],
+                    "page_title": str(page_context.get("title", ""))[:200],
+                },
+            )
+
+            if storage.is_enabled():
+                storage.write_conversation_turn(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    actor=ip_hashed,
+                    user_message=redaction.redact(message),
+                    assistant_reply=redaction.redact(reply),
+                    page_url=str(page_context.get("url", ""))[:500],
+                    page_title=str(page_context.get("title", ""))[:200],
+                    grounding=[{"title": g["title"], "url": g["url"]} for g in grounding_docs],
+                    citations=[{"title": s["title"], "url": s["url"]} for s in cited_sources],
+                    latency_ms=latency_ms,
+                    tokens_used=tokens_used,
+                    topic_class=topic_class,
+                    uncovered=is_uncovered,
+                )
+
+                # Note: auto-backlog rows for uncovered questions removed
+                # 2026-05-07. The ``uncovered`` dimension on the
+                # ``chat.request`` App Insights event already gives us
+                # the analytics signal; the backlog should hold only
+                # user-curated entries (so the GitHub Issues drain
+                # doesn't fire on every off-topic question and so a
+                # user clicking "Add to backlog" doesn't create a
+                # duplicate row).
+
+        return _json_response(
+            {
+                "reply": reply,
+                "sources": cited_sources,
+                "meta": {
+                    "session_id": session_id,
+                    "conversation_id": conversation_id,
+                    "topic_class": topic_class,
+                    "uncovered": is_uncovered,
+                    "latency_ms": latency_ms,
+                },
+            },
+            headers,
         )
 
     except KeyError as e:
@@ -549,7 +938,185 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
         )
     except Exception:
         logger.exception("Azure OpenAI call failed")
+        telemetry.track_event(
+            "chat.error",
+            {"actor": ip_hashed, "session_id": session_id, "stage": "openai"},
+        )
         return _error_response(
             "An error occurred processing your request. Please try again.",
             500, headers,
         )
+
+
+# ── Feedback Endpoint ─────────────────────────────────────────────────────
+
+
+@app.route(route="feedback", methods=["POST", "OPTIONS"], auth_level=func.AuthLevel.ANONYMOUS)
+def feedback(req: func.HttpRequest) -> func.HttpResponse:
+    """Capture thumbs up/down + optional improvement comment for a turn."""
+    headers = _cors_headers(req)
+
+    if req.method == "OPTIONS":
+        return func.HttpResponse(status_code=204, headers=headers)
+
+    if not _validate_origin(req):
+        return _error_response("Access denied.", 403, headers)
+
+    ip = _client_ip(req)
+    ip_hashed = redaction.hash_ip(ip, _IP_HASH_SALT)
+
+    token = req.headers.get("X-Copilot-Token")
+    if not _validate_request_token(token):
+        return _error_response("Invalid request.", 403, headers)
+
+    allowed, reason = _check_rate_limit(ip, per_minute=_FEEDBACK_PER_MIN)
+    if not allowed:
+        return _error_response(reason, 429, headers)
+
+    try:
+        body = req.get_json()
+    except ValueError:
+        return _error_response("Invalid request format.", 400, headers)
+    if not isinstance(body, dict):
+        return _error_response("Invalid request format.", 400, headers)
+
+    rating = (body.get("rating") or "").strip().lower()
+    if rating not in ("up", "down"):
+        return _error_response("rating must be 'up' or 'down'.", 400, headers)
+
+    session_id = _safe_id(body.get("session_id"), "sess")
+    conversation_id = _safe_id(body.get("conversation_id"), "conv")
+
+    improvement = (body.get("improvement") or "").strip()
+    if not isinstance(improvement, str):
+        improvement = ""
+    improvement = improvement[:MAX_FEEDBACK_TEXT_LENGTH]
+    improvement_redacted = redaction.redact(improvement, max_length=MAX_FEEDBACK_TEXT_LENGTH) if improvement else ""
+
+    if _opt_out(req):
+        # Honor opt-out — accept the call (don't break the UI) but skip persistence.
+        return _json_response({"ok": True, "stored": False}, headers)
+
+    telemetry.track_event(
+        "chat.feedback",
+        {
+            "actor": ip_hashed,
+            "session_id": session_id,
+            "conversation_id": conversation_id,
+            "rating": rating,
+            "has_improvement": bool(improvement_redacted),
+        },
+    )
+
+    stored = storage.write_feedback(
+        session_id=session_id,
+        conversation_id=conversation_id,
+        actor=ip_hashed,
+        rating=rating,
+        improvement=improvement_redacted,
+    )
+
+    # If the user took the time to leave qualitative thumbs-down feedback,
+    # mirror it to the backlog as a candidate bug/improvement signal so it
+    # surfaces in the GitHub Issues drain.
+    if rating == "down" and improvement_redacted:
+        storage.write_backlog(
+            kind="bug",
+            title=f"Thumbs-down feedback: {improvement_redacted[:80]}",
+            description=improvement_redacted,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            actor=ip_hashed,
+            source="chat-feedback",
+        )
+
+    return _json_response({"ok": True, "stored": stored}, headers)
+
+
+# ── Backlog Endpoint ──────────────────────────────────────────────────────
+
+
+_BACKLOG_KINDS = {"feature", "bug", "uncovered"}
+
+
+@app.route(route="backlog", methods=["POST", "OPTIONS"], auth_level=func.AuthLevel.ANONYMOUS)
+def backlog(req: func.HttpRequest) -> func.HttpResponse:
+    """Accept explicit backlog submissions: feature requests, bugs,
+    or user-flagged 'this should be covered' uncovered-question reports."""
+    headers = _cors_headers(req)
+
+    if req.method == "OPTIONS":
+        return func.HttpResponse(status_code=204, headers=headers)
+
+    if not _validate_origin(req):
+        return _error_response("Access denied.", 403, headers)
+
+    ip = _client_ip(req)
+    ip_hashed = redaction.hash_ip(ip, _IP_HASH_SALT)
+
+    token = req.headers.get("X-Copilot-Token")
+    if not _validate_request_token(token):
+        return _error_response("Invalid request.", 403, headers)
+
+    allowed, reason = _check_rate_limit(ip, per_minute=_BACKLOG_PER_MIN)
+    if not allowed:
+        return _error_response(reason, 429, headers)
+
+    try:
+        body = req.get_json()
+    except ValueError:
+        return _error_response("Invalid request format.", 400, headers)
+    if not isinstance(body, dict):
+        return _error_response("Invalid request format.", 400, headers)
+
+    kind = (body.get("kind") or "").strip().lower()
+    if kind not in _BACKLOG_KINDS:
+        return _error_response(f"kind must be one of {sorted(_BACKLOG_KINDS)}.", 400, headers)
+
+    title = (body.get("title") or "").strip()[:200]
+    description = (body.get("description") or "").strip()[:MAX_BACKLOG_TEXT_LENGTH]
+
+    if not title or not description:
+        return _error_response("title and description are required.", 400, headers)
+
+    if _detect_injection(title) or _detect_injection(description):
+        # Don't reject silently — accept but flag, so the bypass attempt is visible
+        # in App Insights but we don't pollute the backlog.
+        telemetry.track_event(
+            "chat.rejected",
+            {"reason": "injection_in_backlog", "actor": ip_hashed, "kind": kind},
+        )
+        return _error_response("Submission contains disallowed content.", 400, headers)
+
+    title_redacted = redaction.redact(title, max_length=200)
+    description_redacted = redaction.redact(description, max_length=MAX_BACKLOG_TEXT_LENGTH)
+
+    if _opt_out(req):
+        return _json_response({"ok": True, "stored": False}, headers)
+
+    session_id = _safe_id(body.get("session_id"), "sess")
+    conversation_id = _safe_id(body.get("conversation_id"), "conv")
+    page_url = str(body.get("page_url") or "")[:500]
+
+    telemetry.track_event(
+        "chat.backlog_submission",
+        {
+            "actor": ip_hashed,
+            "kind": kind,
+            "session_id": session_id,
+            "conversation_id": conversation_id,
+        },
+    )
+
+    stored = storage.write_backlog(
+        kind=kind,
+        title=title_redacted,
+        description=description_redacted,
+        session_id=session_id,
+        conversation_id=conversation_id,
+        actor=ip_hashed,
+        source="user-explicit",
+        page_url=page_url,
+    )
+
+    return _json_response({"ok": True, "stored": stored}, headers)

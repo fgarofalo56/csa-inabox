@@ -225,8 +225,8 @@ See the ADF section in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ---
 
-## 🔗 Related Documentation
+**See also:**
 
-- [Databricks Guide](DATABRICKS_GUIDE.md) — Databricks workspace setup and dbt integration
-- [Self-Hosted IR](SELF_HOSTED_IR.md) — Self-Hosted Integration Runtime for on-premises connectivity
-- [Getting Started](GETTING_STARTED.md) — Platform deployment quickstart
+- ← Previous: [Documentation home](index.md)
+- → Next: [Self-Hosted IR](SELF_HOSTED_IR.md)
+- ⌂ Index: [Documentation home](index.md)
