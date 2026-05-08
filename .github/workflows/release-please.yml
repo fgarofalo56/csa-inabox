@@ -25,6 +25,11 @@ on:
   push:
     branches:
       - main
+  # Allow manual re-runs to re-post statuses if the head SHA drifts after a
+  # rebase (release-please's `prs` output captures the SHA at action time, but
+  # a subsequent rebase by release-please itself can land a *different* SHA on
+  # the PR — leaving the previously-posted statuses pinned to a stale commit).
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -43,11 +48,13 @@ jobs:
           manifest-file: .release-please-manifest.json
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Mark required checks as passed on the release PR
-        if: ${{ steps.release.outputs.prs_created == 'true' || steps.release.outputs.prs != '[]' }}
+      - name: Mark required checks as passed on every open release PR
+        # Always run — discover open release PRs from the API rather than
+        # trusting `steps.release.outputs.prs`, which is empty on no-op runs
+        # and stale on rebased runs. This makes the step idempotent and
+        # safe to re-trigger via workflow_dispatch.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PRS_JSON: ${{ steps.release.outputs.prs }}
         shell: bash
         run: |
           set -euo pipefail
@@ -71,16 +78,22 @@ jobs:
           REPO="${GITHUB_REPOSITORY}"
           RUN_URL="${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
 
-          # `prs` may be empty array or absent; guard it.
-          if [ -z "${PRS_JSON:-}" ] || [ "$PRS_JSON" = "null" ] || [ "$PRS_JSON" = "[]" ]; then
-            echo "No release PRs reported by release-please — nothing to do."
+          # Find every open PR opened by github-actions[bot] whose head branch
+          # matches the release-please naming scheme. Resolve each to its
+          # *current* head SHA at runtime — never a cached value.
+          mapfile -t RELEASE_PRS < <(
+            gh pr list --repo "${REPO}" --state open --author 'app/github-actions' --json number,headRefName \
+              | jq -r '.[] | select(.headRefName | startswith("release-please--")) | .number'
+          )
+
+          if [ "${#RELEASE_PRS[@]}" -eq 0 ]; then
+            echo "No open release-please PRs found — nothing to do."
             exit 0
           fi
 
-          echo "$PRS_JSON" | jq -c '.[] | {number, headBranchName}' | while read -r pr; do
-            num=$(echo "$pr" | jq -r '.number')
-            branch=$(echo "$pr" | jq -r '.headBranchName')
+          for num in "${RELEASE_PRS[@]}"; do
             sha=$(gh api "repos/${REPO}/pulls/${num}" --jq '.head.sha')
+            branch=$(gh api "repos/${REPO}/pulls/${num}" --jq '.head.ref')
             echo ""
             echo "=== Release PR #${num} (${branch}) head SHA ${sha} ==="
 
