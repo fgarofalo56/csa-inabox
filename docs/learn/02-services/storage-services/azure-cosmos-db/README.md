@@ -7,6 +7,10 @@ tags:
 ---
 # 🌌 Azure Cosmos DB
 
+<!-- cross-link-admonition -->
+!!! info "See also: CSA-in-a-Box platform guide"
+    This is the generic Azure reference for Azure Cosmos DB. For how CSA-in-a-Box specifically deploys, configures, and integrates this service, see the platform guide: [`Azure Cosmos DB` guide](../../../../guides/cosmos-db.md).
+
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Type](https://img.shields.io/badge/Type-NoSQL%20Database-purple?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)

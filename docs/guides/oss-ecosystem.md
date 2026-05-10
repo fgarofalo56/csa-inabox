@@ -179,5 +179,5 @@ Planned additions:
 ## Related Documentation
 
 - [OSS Alternatives](../../csa_platform/oss_alternatives/README.md) — Helm charts and details
-- [Foundation Tutorial](../tutorials/01-foundation-platform/) — base platform setup
+- [Foundation Tutorial](../tutorials/01-foundation-platform/README.md) — base platform setup
 - [Governance Docs](governance/) — Purview configuration

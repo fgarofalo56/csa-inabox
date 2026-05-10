@@ -1292,8 +1292,8 @@ geospatial/earthquake_analysis.png                 2345678
 
 Your GeoAnalytics pipeline is operational. Choose your next path:
 
-- **[Tutorial 04: GeoAnalytics with ArcGIS Enterprise](../04-geoanalytics-arcgis/)** — Add ArcGIS Enterprise for advanced cartography and web maps (BYOL)
-- **[Tutorial 05: Real-Time Streaming](../05-streaming-lambda/)** — Stream earthquake data in real time with Lambda Architecture
+- **[Tutorial 04: GeoAnalytics with ArcGIS Enterprise](../04-geoanalytics-arcgis/README.md)** — Add ArcGIS Enterprise for advanced cartography and web maps (BYOL)
+- **[Tutorial 05: Real-Time Streaming](../05-streaming-lambda/README.md)** — Stream earthquake data in real time with Lambda Architecture
 - **[Tutorial 06: AI Analytics](../06-ai-analytics/)** — Apply ML models to predict seismic risk
 
 See the [Tutorial Index](../README.md) for all available paths.

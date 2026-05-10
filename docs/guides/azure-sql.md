@@ -14,6 +14,10 @@ tags:
 
 # Azure SQL — Comprehensive Guide
 
+<!-- cross-link-admonition -->
+!!! info "See also: generic Azure reference"
+    For service-agnostic deep-dive content on Azure SQL Database — architecture, feature reference, code samples, and patterns independent of CSA-in-a-Box — see [`Azure SQL Database` in the reference library](../learn/02-services/storage-services/azure-sql-database/README.md).
+
 !!! note "Quick Summary"
 Azure SQL is a family of managed relational database services built on the SQL Server engine.
 This guide covers **all three flavors** — SQL Database, SQL Managed Instance, and SQL Server

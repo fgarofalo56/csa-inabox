@@ -89,14 +89,14 @@ without superseding.
    compliance-control mapping from `governance/compliance/*.yaml` when
    the decision maps to a control family.
 6. Link forward to any relevant decision tree under
-   [`docs/decisions/`](../decisions/).
+   [`docs/decisions/`](../decisions/README.md).
 7. Open a PR. Reviewers from security, governance, and dev-loop are
    expected. Status stays `proposed` until the PR merges.
 
 ## Cross-references
 
 - **Decision trees** (scenario-driven, "which option for what
-  situation"): [`docs/decisions/`](../decisions/).
+  situation"): [`docs/decisions/`](../decisions/README.md).
 - **Architecture reference** (current-stack narrative):
   [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md).
 - **Compliance control matrices**:

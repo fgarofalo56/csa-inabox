@@ -1,5 +1,9 @@
 # Azure Event Hubs Guide
 
+<!-- cross-link-admonition -->
+!!! info "See also: generic Azure reference"
+    For service-agnostic deep-dive content on Azure Event Hubs — architecture, feature reference, code samples, and patterns independent of CSA-in-a-Box — see [`Azure Event Hubs` in the reference library](../learn/02-services/streaming-services/azure-event-hubs/README.md).
+
 > Event Hubs is the streaming backbone of CSA-in-a-Box — a managed,
 > Kafka-compatible ingestion layer that buffers high-velocity data into the
 > Bronze layer with zero broker operations.

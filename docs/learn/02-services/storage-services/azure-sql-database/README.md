@@ -7,6 +7,10 @@ tags:
 ---
 # 🗄️ Azure SQL Database
 
+<!-- cross-link-admonition -->
+!!! info "See also: CSA-in-a-Box platform guide"
+    This is the generic Azure reference for Azure SQL Database. For how CSA-in-a-Box specifically deploys, configures, and integrates this service, see the platform guide: [`Azure SQL Database` guide](../../../../guides/azure-sql.md).
+
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Type](https://img.shields.io/badge/Type-Relational%20Database-blue?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)

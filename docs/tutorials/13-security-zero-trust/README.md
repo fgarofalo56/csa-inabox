@@ -9,8 +9,8 @@ Harden your CSA-in-a-Box data platform with a Zero Trust posture covering identi
 
 ## Prerequisites
 
-- [ ] **[Tutorial 01: Foundation Platform](../01-foundation-platform/)** deployed and passing validation
-- [ ] **[Tutorial 02: Data Governance](../02-data-governance/)** with Purview configured
+- [ ] **[Tutorial 01: Foundation Platform](../01-foundation-platform/README.md)** deployed and passing validation
+- [ ] **[Tutorial 02: Data Governance](../02-data-governance/README.md)** with Purview configured
 - [ ] **Azure subscription** with Owner role (required for policy and role assignments)
 - [ ] **Azure CLI** 2.55+ with the `sentinel` extension (`az extension add --name sentinel --upgrade`)
 - [ ] **Bicep CLI** 0.24+ (verify with `az bicep version`)
@@ -517,9 +517,9 @@ All identity, network, data, and monitoring fields populated. CA policies: 3, Pr
 - [Security & Compliance Best Practices](../../best-practices/security-compliance.md)
 - [Identity & Secrets Flow](../../reference-architecture/identity-secrets-flow.md)
 - [Hub-Spoke Topology](../../reference-architecture/hub-spoke-topology.md)
-- [Tutorial 01: Foundation Platform](../01-foundation-platform/)
-- [Tutorial 02: Data Governance](../02-data-governance/)
-- [Tutorial 12: Monitoring & Observability](../12-monitoring-observability/)
+- [Tutorial 01: Foundation Platform](../01-foundation-platform/README.md)
+- [Tutorial 02: Data Governance](../02-data-governance/README.md)
+- [Tutorial 12: Monitoring & Observability](../12-monitoring-observability/README.md)
 - [Managed Identity vs Service Principal](../../decisions/managed-identity-vs-service-principal.md)
 - [Bicep Private Endpoint Module](../../../deploy/bicep/shared/modules/privateEndpoint.bicep)
 - [Bicep NSG Module](../../../deploy/bicep/shared/modules/networking/nsg.bicep)

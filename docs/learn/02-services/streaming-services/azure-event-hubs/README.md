@@ -7,6 +7,10 @@ tags:
 ---
 # 📨 Azure Event Hubs
 
+<!-- cross-link-admonition -->
+!!! info "See also: CSA-in-a-Box platform guide"
+    This is the generic Azure reference for Azure Event Hubs. For how CSA-in-a-Box specifically deploys, configures, and integrates this service, see the platform guide: [`Azure Event Hubs` guide](../../../../guides/event-hubs.md).
+
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Tier](https://img.shields.io/badge/Tier-Standard%20%7C%20Premium%20%7C%20Dedicated-purple?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Basic-green?style=flat-square)

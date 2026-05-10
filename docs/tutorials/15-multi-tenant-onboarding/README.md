@@ -11,7 +11,7 @@ Provision isolated tenant environments on the CSA-in-a-Box platform. By the end 
 
 Before starting, ensure you have the following installed and configured:
 
-- [ ] **Completed [Tutorial 01: Foundation Platform](../01-foundation-platform/)** -- a working DLZ is required
+- [ ] **Completed [Tutorial 01: Foundation Platform](../01-foundation-platform/README.md)** -- a working DLZ is required
 - [ ] **Azure subscription** with Owner role (needed for RBAC assignments)
 - [ ] **Azure CLI** 2.50+ -- [Install guide](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
 - [ ] **Bicep CLI** 0.22+ (verify with `az bicep version`)
@@ -941,9 +941,9 @@ az monitor activity-log alert create \
 
 ## Next Steps
 
-- **[Tutorial 13: Security & Zero Trust](../13-security-zero-trust/)** -- harden tenant isolation with private endpoints and conditional access
-- **[Tutorial 14: Cost Optimization](../14-cost-optimization/)** -- set up automated cost controls and reservation recommendations per tenant
-- **[Tutorial 16: dbt Development Workflow](../16-dbt-development-workflow/)** -- build the data models that run inside each tenant namespace
+- **[Tutorial 13: Security & Zero Trust](../13-security-zero-trust/README.md)** -- harden tenant isolation with private endpoints and conditional access
+- **[Tutorial 14: Cost Optimization](../14-cost-optimization/README.md)** -- set up automated cost controls and reservation recommendations per tenant
+- **[Tutorial 16: dbt Development Workflow](../16-dbt-development-workflow/README.md)** -- build the data models that run inside each tenant namespace
 
 See the [Tutorial Index](../README.md) for all available paths.
 

@@ -11,7 +11,7 @@ Integrate AI capabilities into the CSA-in-a-Box platform. You will deploy Azure 
 
 Before starting, ensure you have the following installed and configured:
 
-- [ ] **Completed [Tutorial 01: Foundation Platform](../01-foundation-platform/)** -- ADLS, Databricks, and Data Factory deployed
+- [ ] **Completed [Tutorial 01: Foundation Platform](../01-foundation-platform/README.md)** -- ADLS, Databricks, and Data Factory deployed
 - [ ] **Azure subscription** with permissions to create Azure OpenAI and Azure AI Search resources
 - [ ] **Azure OpenAI access** -- [Request access](https://aka.ms/oai/access) if not already enabled
 - [ ] **Azure CLI** 2.50+ -- [Install guide](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
@@ -1023,9 +1023,9 @@ PASS: Grounded Chat -- RAG pipeline returns sources with response
 
 ## Next Steps
 
-- **[Tutorial 08: RAG & Vector Search](../08-rag-vector-search/)** -- add vector embeddings for semantic search over your data catalog
-- **[Tutorial 07: Agents with Foundry & Semantic Kernel](../07-agents-foundry-sk/)** -- deploy multi-agent collaboration patterns
-- **[Tutorial 09: GraphRAG Knowledge](../09-graphrag-knowledge/)** -- build knowledge graphs for complex data lineage queries
+- **[Tutorial 08: RAG & Vector Search](../08-rag-vector-search/README.md)** -- add vector embeddings for semantic search over your data catalog
+- **[Tutorial 07: Agents with Foundry & Semantic Kernel](../07-agents-foundry-sk/README.md)** -- deploy multi-agent collaboration patterns
+- **[Tutorial 09: GraphRAG Knowledge](../09-graphrag-knowledge/README.md)** -- build knowledge graphs for complex data lineage queries
 
 See the [Tutorial Index](../README.md) for all available paths.
 

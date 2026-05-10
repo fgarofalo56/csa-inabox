@@ -8,6 +8,10 @@ tags:
 ---
 # 🔍 Azure Purview
 
+<!-- cross-link-admonition -->
+!!! info "See also: CSA-in-a-Box platform guide"
+    This is the generic Azure reference for Microsoft Purview. For how CSA-in-a-Box specifically deploys, configures, and integrates this service, see the platform guide: [`Microsoft Purview` guide](../../../../guides/purview.md).
+
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)
 ![Last Updated](https://img.shields.io/badge/Updated-2025-blue?style=flat-square)

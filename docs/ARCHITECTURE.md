@@ -453,7 +453,7 @@ csa-inabox/
 
 ## ⚙️ Primary Tech Choices
 
-This table is a **cheat sheet** of the default pick for each concern. For branching decisions with scenario-specific tradeoffs (cost, latency, compliance, skill match, anti-patterns), see the 8 decision trees at [`docs/decisions/`](decisions/) (machine-readable source of truth at [`decision-trees/`](../decision-trees/)).
+This table is a **cheat sheet** of the default pick for each concern. For branching decisions with scenario-specific tradeoffs (cost, latency, compliance, skill match, anti-patterns), see the 8 decision trees at [`docs/decisions/`](decisions/README.md) (machine-readable source of truth at [`decision-trees/`](../decision-trees/)).
 
 | Concern             | Primary Choice        | Alternative       | Rationale                                        |
 | ------------------- | --------------------- | ----------------- | ------------------------------------------------ |
@@ -492,7 +492,7 @@ All deployments enforce:
 - **Fabric migration path** — See the
   [`fabric-vs-databricks-vs-synapse` decision tree](../decision-trees/fabric-vs-databricks-vs-synapse/),
   [ADR-0010 (positioning)](adr/0010-fabric-strategic-target.md), and the
-  Palantir migration playbook in [`migrations/`](migrations/) for guidance on
+  Palantir migration playbook in [`migrations/`](migrations/README.md) for guidance on
   when to stay on CSA-in-a-Box, when to adopt Microsoft Fabric, and how
   components compose into a Fabric migration.
 - **Supercharge Microsoft Fabric** — For hands-on Fabric tutorials, feature guides,

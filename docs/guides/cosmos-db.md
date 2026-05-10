@@ -12,6 +12,10 @@ tags:
 
 # Azure Cosmos DB Guide
 
+<!-- cross-link-admonition -->
+!!! info "See also: generic Azure reference"
+    For service-agnostic deep-dive content on Azure Cosmos DB — architecture, feature reference, code samples, and patterns independent of CSA-in-a-Box — see [`Azure Cosmos DB` in the reference library](../learn/02-services/storage-services/azure-cosmos-db/README.md).
+
 ## Overview
 
 Azure Cosmos DB is a globally distributed, multi-model database service that provides single-digit millisecond latency at any scale. In CSA-in-a-Box it serves three primary roles:

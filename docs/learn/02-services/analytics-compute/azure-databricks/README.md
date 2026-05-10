@@ -7,6 +7,10 @@ tags:
 ---
 # 🧪 Azure Databricks
 
+<!-- cross-link-admonition -->
+!!! info "See also: CSA-in-a-Box platform guide"
+    This is the generic Azure reference for Azure Databricks. For how CSA-in-a-Box specifically deploys, configures, and integrates this service, see the platform guide: [`Azure Databricks` guide](../../../../guides/databricks-best-practices.md).
+
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Tier](https://img.shields.io/badge/Tier-Data%20Science-orange?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)

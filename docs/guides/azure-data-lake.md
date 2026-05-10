@@ -13,6 +13,10 @@ tags:
 
 # Azure Data Lake Storage Gen2
 
+<!-- cross-link-admonition -->
+!!! info "See also: generic Azure reference"
+    For service-agnostic deep-dive content on Azure Data Lake Storage Gen2 — architecture, feature reference, code samples, and patterns independent of CSA-in-a-Box — see [`Azure Data Lake Storage Gen2` in the reference library](../learn/02-services/storage-services/azure-data-lake-gen2/README.md).
+
 ## Overview
 
 Azure Data Lake Storage Gen2 (ADLS Gen2) is the **foundation storage layer** for every CSA-in-a-Box deployment. It combines the scalability and cost-efficiency of Azure Blob Storage with a **hierarchical namespace** (HNS) purpose-built for analytics workloads — giving you POSIX-like directory semantics, fine-grained ACLs, and atomic directory operations that flat object stores cannot provide.

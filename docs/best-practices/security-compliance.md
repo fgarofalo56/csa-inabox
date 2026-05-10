@@ -458,7 +458,7 @@ For data analytics platforms, focus on these high-impact control families:
 6. **CM-2 Baseline Configuration** — Bicep IaC as the single source of truth
 
 !!! tip "Cross-Reference"
-See the [Compliance documentation](../compliance/) for detailed control matrices, evidence collection templates, and audit preparation guides.
+See the [Compliance documentation](../compliance/README.md) for detailed control matrices, evidence collection templates, and audit preparation guides.
 
 ---
 

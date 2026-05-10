@@ -1213,7 +1213,7 @@ if __name__ == "__main__":
 
 Your Lambda Architecture streaming pipeline is operational. Choose your next path:
 
-- **[Tutorial 03: GeoAnalytics with Open-Source Tools](../03-geoanalytics-oss/)** — Add spatial analysis to your earthquake data
+- **[Tutorial 03: GeoAnalytics with Open-Source Tools](../03-geoanalytics-oss/README.md)** — Add spatial analysis to your earthquake data
 - **[Tutorial 06: AI Analytics](../06-ai-analytics/)** — Apply ML for earthquake prediction and anomaly detection
 - **[Tutorial 07: Security & Compliance](../07-security-compliance/)** — Secure your streaming pipeline with Private Link and encryption
 

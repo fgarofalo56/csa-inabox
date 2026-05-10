@@ -325,9 +325,9 @@ curl "http://localhost:8000/api/v1/marketplace/products/dp-environmental-air-qua
 
 ## What's Next
 
-- **Tutorial 01**: [Foundation Platform](../01-foundation-platform/) — deploy the base infrastructure
-- **Tutorial 02**: [Data Governance](../02-data-governance/) — configure Purview policies
-- **Tutorial 06**: [AI Analytics](../06-ai-analytics-foundry/) — add AI-powered insights
+- **Tutorial 01**: [Foundation Platform](../01-foundation-platform/README.md) — deploy the base infrastructure
+- **Tutorial 02**: [Data Governance](../02-data-governance/README.md) — configure Purview policies
+- **Tutorial 06**: [AI Analytics](../06-ai-analytics-foundry/README.md) — add AI-powered insights
 
 ## Related Documentation
 

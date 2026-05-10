@@ -514,5 +514,5 @@ Deleting Application Insights removes all historical trace and log data. Export 
 - [OSS Monitoring Guide](../../guides/oss-monitoring.md)
 - [Observability to Azure Monitor Migration](../../migrations/observability-to-azure-monitor.md)
 - [Performance Tuning Best Practices](../../best-practices/performance-tuning.md)
-- [Tutorial 01: Foundation Platform](../01-foundation-platform/) — prerequisite infrastructure
+- [Tutorial 01: Foundation Platform](../01-foundation-platform/README.md) — prerequisite infrastructure
 - [Tutorial Index](../README.md)
