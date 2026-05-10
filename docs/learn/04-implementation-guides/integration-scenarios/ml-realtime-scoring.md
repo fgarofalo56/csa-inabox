@@ -1,3 +1,10 @@
+---
+title: "ML Real-Time Scoring Integration"
+description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ML Real-time Scoring__"
+tags:
+  - implementation
+  - integration-scenarios
+---
 # ML Real-Time Scoring Integration
 
 > __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ML Real-time Scoring__

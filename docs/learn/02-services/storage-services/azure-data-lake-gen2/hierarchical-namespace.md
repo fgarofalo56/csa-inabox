@@ -1,3 +1,10 @@
+---
+title: "Hierarchical Namespace in ADLS Gen2"
+description: "The Hierarchical Namespace (HNS) is the foundational feature that transforms Azure Blob Storage into a true file system, enabling efficient directory operations and significantly improving performa..."
+tags:
+  - services
+  - azure-data-lake-gen2
+---
 # 🌳 Hierarchical Namespace in ADLS Gen2
 
 ![Performance](https://img.shields.io/badge/Performance-Optimized-green?style=flat-square)

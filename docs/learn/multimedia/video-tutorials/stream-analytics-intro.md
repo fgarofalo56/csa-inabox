@@ -1,3 +1,9 @@
+---
+title: "Video Script: Azure Stream Analytics Introduction"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Azure Stream Analytics Introduction
 
 ![Duration: 28 minutes](https://img.shields.io/badge/Duration-28%20minutes-blue)
@@ -515,8 +521,7 @@ FROM
 **[VISUAL: Architecture diagram]**
 
 **Data Flow**:
-```
-IoT Sensors → Event Hub → Stream Analytics → Power BI
+```textIoT Sensors → Event Hub → Stream Analytics → Power BI
                                           → Data Lake
                                           → Logic App (alerts)
 ```
@@ -635,8 +640,7 @@ WHERE
 "Meanwhile, all raw data is being archived to our Data Lake in Parquet format, partitioned by date and time for efficient historical queries."
 
 **Folder Structure**:
-```
-/sensor-archive/
+```text/sensor-archive/
   /2024/
     /01/
       /15/
@@ -660,8 +664,7 @@ WHERE
 
 **Key Metrics to Monitor**:
 
-```
-Input Events: 1,547,832 events/hour
+```textInput Events: 1,547,832 events/hour
 Output Events: 1,547,832 events/hour
 Watermark Delay: 00:00:02 (2 seconds)
 Resource Utilization: 65% SU utilization
@@ -718,8 +721,7 @@ Backlog: 0 backlogged events
 "Sometimes input data doesn't match expected schema."
 
 **Error Example**:
-```
-Error: Cannot convert value "N/A" to Float for column "temperature"
+```textError: Cannot convert value "N/A" to Float for column "temperature"
 ```
 
 **Solution Query**:
@@ -756,8 +758,7 @@ FROM
 "Stream Analytics scales linearly with streaming units."
 
 **Scaling Guide**:
-```
-1-3 SUs: Testing and development (up to 1 MB/s)
+```text1-3 SUs: Testing and development (up to 1 MB/s)
 6-12 SUs: Small production workloads (up to 5 MB/s)
 12-60 SUs: Medium workloads (up to 25 MB/s)
 60+ SUs: Large scale enterprise (> 25 MB/s)
@@ -902,8 +903,7 @@ FROM
 **Title**: Azure Stream Analytics Tutorial - Real-Time Data Processing Masterclass (2024)
 
 **Description**:
-```
-Master real-time data processing with Azure Stream Analytics! Learn to build streaming analytics solutions that process millions of events per second with SQL-like queries.
+```textMaster real-time data processing with Azure Stream Analytics! Learn to build streaming analytics solutions that process millions of events per second with SQL-like queries.
 
 🎯 What You'll Learn:
 ✅ Stream processing concepts and patterns

@@ -1,3 +1,10 @@
+---
+title: "Azure Stream Analytics"
+description: "Real-time analytics service for streaming data with SQL-based queries and built-in machine learning."
+tags:
+  - services
+  - stream-analytics
+---
 # ⚡ Azure Stream Analytics
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

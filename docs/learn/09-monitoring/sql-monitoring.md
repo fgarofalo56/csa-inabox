@@ -1,3 +1,9 @@
+---
+title: "Sql Monitoring"
+description: "[Home](../../README.md) > Monitoring > SQL Monitoring"
+tags:
+  - monitoring
+---
 # Sql Monitoring
 
 [Home](../../README.md) > Monitoring > SQL Monitoring

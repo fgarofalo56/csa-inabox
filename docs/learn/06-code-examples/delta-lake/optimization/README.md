@@ -1,3 +1,11 @@
+---
+title: "Delta Lake Optimization"
+description: "This section provides code examples for optimizing Delta Lake tables."
+tags:
+  - code-examples
+  - delta-lake
+  - optimization
+---
 # Delta Lake Optimization
 
 This section provides code examples for optimizing Delta Lake tables.

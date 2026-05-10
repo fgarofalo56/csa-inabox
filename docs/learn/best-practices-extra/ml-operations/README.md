@@ -1,3 +1,10 @@
+---
+title: "ML Operations Best Practices"
+description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **ML Operations**"
+tags:
+  - best-practices
+  - ml-operations
+---
 # ML Operations Best Practices
 
 > **[Home](../../README.md)** | **[Best Practices](../index.md)** | **ML Operations**

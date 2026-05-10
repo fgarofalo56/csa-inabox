@@ -1,3 +1,9 @@
+---
+title: "Spark Notebook Interactive Sandbox"
+tags:
+  - multimedia
+  - demos
+---
 # 🎯 Spark Notebook Interactive Sandbox
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

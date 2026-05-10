@@ -1,3 +1,10 @@
+---
+title: "Azure Synapse Scaling Troubleshooting"
+description: "Comprehensive guide for troubleshooting scaling issues, resource contention, and cost management in Azure Synapse Analytics."
+tags:
+  - troubleshooting
+  - synapse
+---
 # Azure Synapse Scaling Troubleshooting
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow)

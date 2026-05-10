@@ -1,3 +1,9 @@
+---
+title: "Presentation Customization Guide - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 🔧 Presentation Customization Guide - CSA-in-a-Box
 
 ![Type: Guide](https://img.shields.io/badge/Type-Guide-blue)

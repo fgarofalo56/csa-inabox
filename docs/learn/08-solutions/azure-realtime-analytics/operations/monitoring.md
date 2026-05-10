@@ -1,3 +1,10 @@
+---
+title: "Monitoring Setup Guide"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - operations
+---
 # 📊 Monitoring Setup Guide
 
 ---

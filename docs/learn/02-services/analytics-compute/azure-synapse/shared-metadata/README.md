@@ -1,3 +1,11 @@
+---
+title: "Shared Metadata Store - Azure Synapse Analytics"
+description: "Unified metadata catalog that enables seamless table sharing across Spark, SQL, and Data Explorer engines in Azure Synapse Analytics."
+tags:
+  - services
+  - synapse
+  - shared-metadata
+---
 # 🔗 Shared Metadata Store - Azure Synapse Analytics
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

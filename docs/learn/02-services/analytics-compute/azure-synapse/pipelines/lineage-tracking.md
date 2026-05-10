@@ -1,3 +1,11 @@
+---
+title: "Pipeline Lineage Tracking"
+description: "Comprehensive guide for implementing data lineage tracking in Azure Synapse pipelines with Azure Purview integration."
+tags:
+  - services
+  - synapse
+  - pipelines
+---
 # 🔗 Pipeline Lineage Tracking
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
@@ -315,8 +323,7 @@ ORDER BY pr.run_start DESC;
 
 ### 1. Naming Conventions
 
-```
-# Consistent naming enables better lineage discovery
+```text# Consistent naming enables better lineage discovery
 Datasets: {system}_{domain}_{entity}_{layer}
           erp_sales_orders_bronze
 

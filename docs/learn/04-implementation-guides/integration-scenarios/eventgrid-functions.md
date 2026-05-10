@@ -1,3 +1,10 @@
+---
+title: "Event Grid Integration with Azure Functions"
+description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __EventGrid + Functions__"
+tags:
+  - implementation
+  - integration-scenarios
+---
 # Event Grid Integration with Azure Functions
 
 > __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __EventGrid + Functions__

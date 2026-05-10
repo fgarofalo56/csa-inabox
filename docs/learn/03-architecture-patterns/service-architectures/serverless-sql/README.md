@@ -1,3 +1,11 @@
+---
+title: "Serverless SQL Architecture"
+description: "[🏠 Home](../../../README.md) > [🏗️ Architecture](../../README.md) > 📄 Serverless SQL"
+tags:
+  - architecture
+  - service-architectures
+  - serverless-sql
+---
 # Serverless SQL Architecture
 
 [🏠 Home](../../../README.md) > [🏗️ Architecture](../../README.md) > 📄 Serverless SQL

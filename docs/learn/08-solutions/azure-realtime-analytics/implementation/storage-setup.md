@@ -1,3 +1,10 @@
+---
+title: "$(echo $file | sed 's/-/ /g' | sed 's/.md//' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2))}1')"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # $(echo $file | sed 's/-/ /g' | sed 's/.md//' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) tolower(substr($i,2))}1')
 
 ---

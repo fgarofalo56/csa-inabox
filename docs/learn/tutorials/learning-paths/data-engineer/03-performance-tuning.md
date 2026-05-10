@@ -1,3 +1,11 @@
+---
+title: "Performance Tuning"
+description: "Step-by-step tutorial for performance tuning."
+tags:
+  - tutorials
+  - learning-paths
+  - data-engineer
+---
 # Performance Tuning
 
 Step-by-step tutorial for performance tuning.

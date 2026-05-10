@@ -1,3 +1,10 @@
+---
+title: "Performance Optimization Best Practices"
+description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Performance Optimization**"
+tags:
+  - best-practices
+  - performance-optimization
+---
 # Performance Optimization Best Practices
 
 > **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Performance Optimization**

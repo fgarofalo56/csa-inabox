@@ -1,3 +1,10 @@
+---
+title: "Azure Data Factory Integration with Azure Synapse Analytics"
+description: "[Home](../../../README.md) > [Code Examples](../../README.md) > Integration > Data Factory Integration"
+tags:
+  - code-examples
+  - integration
+---
 # Azure Data Factory Integration with Azure Synapse Analytics
 
 [Home](../../../README.md) > [Code Examples](../../README.md) > Integration > Data Factory Integration

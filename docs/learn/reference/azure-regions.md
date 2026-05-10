@@ -1,3 +1,9 @@
+---
+title: "Azure Regions Reference for Synapse Analytics"
+description: "[Home](../../README.md) > [Reference](README.md) > Azure Regions"
+tags:
+  - reference
+---
 # Azure Regions Reference for Synapse Analytics
 
 [Home](../../README.md) > [Reference](README.md) > Azure Regions

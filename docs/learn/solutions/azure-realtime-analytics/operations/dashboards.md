@@ -1,3 +1,11 @@
+---
+title: "Dashboards"
+description: "Step-by-step tutorial for dashboards."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - operations
+---
 # Dashboards
 
 Step-by-step tutorial for dashboards.

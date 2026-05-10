@@ -1,3 +1,10 @@
+---
+title: "Certification Preparation Resources"
+description: "__Comprehensive certification preparation guides aligned with Azure data and analytics certifications."
+tags:
+  - tutorials
+  - certification-prep
+---
 # 🎓 Certification Preparation Resources
 
 ![Certifications](https://img.shields.io/badge/Certifications-Azure_Data-blue)

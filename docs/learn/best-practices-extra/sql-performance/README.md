@@ -1,3 +1,10 @@
+---
+title: "SQL Performance Best Practices"
+description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **SQL Performance**"
+tags:
+  - best-practices
+  - sql-performance
+---
 # SQL Performance Best Practices
 
 > **[Home](../../README.md)** | **[Best Practices](../index.md)** | **SQL Performance**

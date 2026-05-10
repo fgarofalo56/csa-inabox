@@ -1,3 +1,9 @@
+---
+title: "Migration Assessment Wizard - Interactive Tool"
+tags:
+  - multimedia
+  - demos
+---
 # 🚀 Migration Assessment Wizard - Interactive Tool
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

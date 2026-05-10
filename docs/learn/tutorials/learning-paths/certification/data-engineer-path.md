@@ -1,3 +1,11 @@
+---
+title: "= DP-203: Azure Data Engineer Associate Certification Prep"
+description: "> **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= DP-203 Certification**"
+tags:
+  - tutorials
+  - learning-paths
+  - certification
+---
 # = DP-203: Azure Data Engineer Associate Certification Prep
 
 > **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= DP-203 Certification**

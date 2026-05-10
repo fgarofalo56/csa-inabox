@@ -1,3 +1,12 @@
+---
+title: "Architecture Overview"
+description: "> Comprehensive overview of the Azure Real-Time Analytics Platform architecture, design principles, and key capabilities."
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+  - example_mds
+---
 # Architecture Overview
 
 > Comprehensive overview of the Azure Real-Time Analytics Platform architecture, design principles, and key capabilities.
@@ -245,8 +254,7 @@ cluster_policies:
 ### Network Security
 
 #### Network Segmentation
-```
-Internet Zone (DMZ)
+```textInternet Zone (DMZ)
 ├── WAF + Front Door
 ├── API Management
 └── DDoS Protection
@@ -409,8 +417,7 @@ alerts:
 
 ### Multi-Environment Strategy
 
-```
-Development Environment
+```textDevelopment Environment
 ├── Feature Development
 ├── Unit Testing  
 ├── Integration Testing

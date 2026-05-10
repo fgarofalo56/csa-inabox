@@ -1,3 +1,12 @@
+---
+title: "Mapping Data Flows"
+description: "Visual data transformation at scale powered by Apache Spark, enabling code-free ETL with 70+ transformations."
+tags:
+  - services
+  - orchestration-services
+  - data-factory
+  - data-flows
+---
 # 🌊 Mapping Data Flows
 
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)

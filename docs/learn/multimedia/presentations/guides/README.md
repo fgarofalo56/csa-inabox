@@ -1,3 +1,9 @@
+---
+title: "Presentation Guides - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 📋 Presentation Guides - CSA-in-a-Box
 
 ![Type: Documentation](https://img.shields.io/badge/Type-Documentation-blue)

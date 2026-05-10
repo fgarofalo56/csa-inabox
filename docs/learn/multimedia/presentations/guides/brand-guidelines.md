@@ -1,3 +1,9 @@
+---
+title: "Brand Guidelines - CSA-in-a-Box Presentations"
+tags:
+  - multimedia
+  - presentations
+---
 # 🎨 Brand Guidelines - CSA-in-a-Box Presentations
 
 ![Type: Guide](https://img.shields.io/badge/Type-Guide-blue)

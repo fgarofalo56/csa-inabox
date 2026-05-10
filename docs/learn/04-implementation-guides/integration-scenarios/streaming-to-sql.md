@@ -1,3 +1,10 @@
+---
+title: "Streaming to SQL - Stream Analytics to Azure SQL"
+description: "Stream real-time data from Event Hubs to Azure SQL Database or Synapse SQL using Stream Analytics for operational dashboards and transactional analytics."
+tags:
+  - implementation
+  - integration-scenarios
+---
 # 💾 Streaming to SQL - Stream Analytics to Azure SQL
 
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)

@@ -1,3 +1,10 @@
+---
+title: "️ Azure Data Lake Storage Gen2"
+description: "Azure Data Lake Storage Gen2 is a highly scalable and secure data lake solution built on Azure Blob Storage with hierarchical namespace capabilities, optimized for big data analytics workloads."
+tags:
+  - services
+  - azure-data-lake-gen2
+---
 # 🏞️ Azure Data Lake Storage Gen2
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

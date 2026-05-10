@@ -1,3 +1,11 @@
+---
+title: "Azure Stream Analytics - Code Examples"
+description: "Complete Stream Analytics query examples for real-time data processing and analytics."
+tags:
+  - code-examples
+  - by-service
+  - stream-analytics
+---
 # Azure Stream Analytics - Code Examples
 
 ![Service](https://img.shields.io/badge/Service-Azure_Stream_Analytics-blue)

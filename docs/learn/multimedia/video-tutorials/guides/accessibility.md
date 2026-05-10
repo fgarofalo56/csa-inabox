@@ -1,3 +1,9 @@
+---
+title: "Video Accessibility Guidelines"
+tags:
+  - multimedia
+  - video
+---
 # Video Accessibility Guidelines
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)
@@ -201,8 +207,7 @@ FROM OPENROWSET(
     BULK 'https://lake.dfs.core.windows.net/data/*.parquet',
     FORMAT = 'PARQUET'
 ) AS data;
-```
-
+```text
 ---
 
 ## Section 2: Hands-On Demo (08:30 - 18:00)

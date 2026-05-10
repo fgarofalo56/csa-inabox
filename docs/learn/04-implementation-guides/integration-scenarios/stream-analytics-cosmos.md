@@ -1,3 +1,10 @@
+---
+title: "Stream Analytics to Cosmos DB - Global Operational Data"
+description: "Process streaming data with Stream Analytics and write to Cosmos DB for globally distributed, low-latency operational data."
+tags:
+  - implementation
+  - integration-scenarios
+---
 # 🌐 Stream Analytics to Cosmos DB - Global Operational Data
 
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)

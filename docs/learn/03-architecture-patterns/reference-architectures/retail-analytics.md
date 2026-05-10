@@ -1,3 +1,9 @@
+---
+title: "Retail Analytics Reference Architecture"
+tags:
+  - architecture
+  - reference-architectures
+---
 # Retail Analytics Reference Architecture
 
 ## Overview
@@ -330,8 +336,7 @@ erDiagram
 
 ### Storage Structure
 
-```
-/retail-analytics/
+```text/retail-analytics/
 ├── bronze/
 │   ├── pos/
 │   │   └── year=2024/month=01/day=15/*.parquet

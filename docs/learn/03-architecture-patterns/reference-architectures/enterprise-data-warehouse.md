@@ -1,3 +1,9 @@
+---
+title: "Enterprise Data Warehouse Modernization Reference Architecture"
+tags:
+  - architecture
+  - reference-architectures
+---
 # Enterprise Data Warehouse Modernization Reference Architecture
 
 ## Overview

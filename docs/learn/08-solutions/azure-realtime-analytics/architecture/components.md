@@ -1,3 +1,10 @@
+---
+title: "Solution Components Overview"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - architecture
+---
 # Solution Components Overview
 
 ---

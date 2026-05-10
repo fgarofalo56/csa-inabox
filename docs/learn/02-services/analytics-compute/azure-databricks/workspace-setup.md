@@ -1,3 +1,10 @@
+---
+title: "️ Azure Databricks Workspace Setup"
+description: "Complete guide for creating, configuring, and securing Azure Databricks workspaces for production use."
+tags:
+  - services
+  - databricks
+---
 # 🏗️ Azure Databricks Workspace Setup
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

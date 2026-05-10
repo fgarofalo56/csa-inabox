@@ -1,3 +1,9 @@
+---
+title: "Cloud Analytics Market Research & Trends"
+description: "Comprehensive market research on cloud analytics trends, Azure positioning, industry adoption patterns, and future outlook for 2025-2030."
+tags:
+  - resources
+---
 # 📈 Cloud Analytics Market Research & Trends
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

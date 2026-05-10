@@ -1,3 +1,10 @@
+---
+title: "Streaming Architecture Patterns for Cloud Scale Analytics"
+description: "Comprehensive guide to streaming architecture patterns for real-time data processing on Azure Cloud Scale Analytics platforms."
+tags:
+  - architecture
+  - streaming-architectures
+---
 # Streaming Architecture Patterns for Cloud Scale Analytics
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

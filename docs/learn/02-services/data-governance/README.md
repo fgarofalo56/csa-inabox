@@ -1,3 +1,10 @@
+---
+title: "Data Governance Services"
+description: "Documentation for Azure data governance and compliance services."
+tags:
+  - services
+  - data-governance
+---
 # 🔐 Data Governance Services
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

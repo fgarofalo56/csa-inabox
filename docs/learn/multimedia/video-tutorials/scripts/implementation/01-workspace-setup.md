@@ -1,3 +1,11 @@
+---
+title: "Workspace Setup Implementation Script"
+tags:
+  - multimedia
+  - video
+  - scripts
+  - implementation
+---
 # Workspace Setup Implementation Script
 
 ![Status: Draft](https://img.shields.io/badge/Status-Draft-yellow)

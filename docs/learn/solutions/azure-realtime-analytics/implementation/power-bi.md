@@ -1,3 +1,11 @@
+---
+title: "Power Bi"
+description: "Step-by-step tutorial for power bi."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Power Bi
 
 Step-by-step tutorial for power bi.

@@ -1,3 +1,11 @@
+---
+title: "Data Flow Architecture"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+  - example_mds
+---
 # 📊 Data Flow Architecture
 
 ## Table of Contents

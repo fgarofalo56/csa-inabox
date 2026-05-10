@@ -1,3 +1,10 @@
+---
+title: "️ HDInsight Cluster Types"
+description: "Comprehensive guide to Azure HDInsight cluster types, configurations, and best practices for each Apache ecosystem technology."
+tags:
+  - services
+  - hdinsight
+---
 # 🎛️ HDInsight Cluster Types
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

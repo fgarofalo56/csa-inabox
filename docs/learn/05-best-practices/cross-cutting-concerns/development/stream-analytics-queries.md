@@ -1,3 +1,10 @@
+---
+title: "Stream Analytics Query Development"
+description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Stream Analytics Queries**"
+tags:
+  - best-practices
+  - development
+---
 # Stream Analytics Query Development
 
 > **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Stream Analytics Queries**

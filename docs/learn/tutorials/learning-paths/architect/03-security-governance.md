@@ -1,3 +1,11 @@
+---
+title: "Security Governance"
+description: "Step-by-step tutorial for security governance."
+tags:
+  - tutorials
+  - learning-paths
+  - architect
+---
 # Security Governance
 
 Step-by-step tutorial for security governance.

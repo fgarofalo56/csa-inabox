@@ -1,3 +1,11 @@
+---
+title: "Medallion Architecture"
+description: "Comprehensive documentation for Medallion Architecture."
+tags:
+  - services
+  - architecture
+  - batch-architectures
+---
 # Medallion Architecture
 
 Comprehensive documentation for Medallion Architecture.

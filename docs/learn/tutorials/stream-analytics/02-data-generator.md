@@ -1,3 +1,10 @@
+---
+title: "Data Generator"
+description: "Step-by-step tutorial for data generator."
+tags:
+  - tutorials
+  - stream-analytics
+---
 # Data Generator
 
 Step-by-step tutorial for data generator.

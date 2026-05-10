@@ -1,3 +1,11 @@
+---
+title: "Infrastructure Automation"
+description: "Step-by-step tutorial for infrastructure automation."
+tags:
+  - tutorials
+  - learning-paths
+  - devops
+---
 # Infrastructure Automation
 
 Step-by-step tutorial for infrastructure automation.

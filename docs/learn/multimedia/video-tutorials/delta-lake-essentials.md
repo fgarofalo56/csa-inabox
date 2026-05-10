@@ -1,3 +1,9 @@
+---
+title: "Video Script: Delta Lake Essentials"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Delta Lake Essentials
 
 ![Duration: 28 minutes](https://img.shields.io/badge/Duration-28%20minutes-blue)
@@ -68,8 +74,7 @@ By the end of this video, viewers will be able to:
 **[VISUAL: Layered architecture diagram]**
 
 **Architecture Layers**:
-```
-┌─────────────────────────────────────┐
+```text┌─────────────────────────────────────┐
 │ Query Engines (Spark, SQL, Power BI)│
 ├─────────────────────────────────────┤
 │ Delta Lake (Transaction Log + Data) │
@@ -89,8 +94,7 @@ By the end of this video, viewers will be able to:
 
 **[VISUAL: Show actual file structure in storage]**
 
-```
-sales_delta/
+```textsales_delta/
 ├── _delta_log/
 │   ├── 00000000000000000000.json    # Version 0
 │   ├── 00000000000000000001.json    # Version 1

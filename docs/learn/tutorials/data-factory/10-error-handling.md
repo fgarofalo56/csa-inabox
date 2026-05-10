@@ -1,3 +1,10 @@
+---
+title: "️ Error Handling & Retry Logic"
+description: "__Implement robust error handling, retry policies, and failure recovery mechanisms for production-ready pipelines.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🛡️ Error Handling & Retry Logic
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Error_Handling-blue)

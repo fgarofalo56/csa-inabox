@@ -1,3 +1,10 @@
+---
+title: "Lambda-Kappa Hybrid Architecture"
+description: "Combines the strengths of both Lambda and Kappa architectures to provide flexible data processing capabilities for mixed batch and streaming workloads."
+tags:
+  - architecture
+  - hybrid-architectures
+---
 # ⚡🌊 Lambda-Kappa Hybrid Architecture
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

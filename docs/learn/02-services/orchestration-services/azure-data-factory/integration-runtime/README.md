@@ -1,3 +1,12 @@
+---
+title: "Integration Runtime"
+description: "Compute infrastructure that Azure Data Factory uses to provide data integration capabilities across different network environments."
+tags:
+  - services
+  - orchestration-services
+  - data-factory
+  - integration-runtime
+---
 # 🔗 Integration Runtime
 
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)

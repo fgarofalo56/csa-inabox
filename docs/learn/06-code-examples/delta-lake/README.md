@@ -1,3 +1,10 @@
+---
+title: "Delta Lake Examples for Azure Synapse Analytics"
+description: "[Home](../../../README.md) > [Code Examples](../../README.md) > Delta Lake"
+tags:
+  - code-examples
+  - delta-lake
+---
 # Delta Lake Examples for Azure Synapse Analytics
 
 [Home](../../../README.md) > [Code Examples](../../README.md) > Delta Lake

@@ -1,3 +1,10 @@
+---
+title: "Data Governance Patterns"
+description: "Architecture patterns for implementing data governance in Azure analytics platforms."
+tags:
+  - architecture
+  - governance-patterns
+---
 # 🔐 Data Governance Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

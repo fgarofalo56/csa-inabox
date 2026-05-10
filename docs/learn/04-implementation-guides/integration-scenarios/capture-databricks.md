@@ -1,3 +1,10 @@
+---
+title: "Change Data Capture with Databricks"
+description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Databricks CDC__"
+tags:
+  - implementation
+  - integration-scenarios
+---
 # Change Data Capture with Databricks
 
 > __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Databricks CDC__

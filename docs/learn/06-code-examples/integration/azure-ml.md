@@ -1,3 +1,10 @@
+---
+title: "Azure Machine Learning Integration with Azure Synapse Analytics"
+description: "[Home](../../../README.md) > [Code Examples](../../README.md) > Integration > Azure ML Integration"
+tags:
+  - code-examples
+  - integration
+---
 # Azure Machine Learning Integration with Azure Synapse Analytics
 
 [Home](../../../README.md) > [Code Examples](../../README.md) > Integration > Azure ML Integration

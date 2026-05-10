@@ -1,3 +1,10 @@
+---
+title: "Data Retention Policies"
+description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Retention Policies**"
+tags:
+  - best-practices
+  - data-governance
+---
 # Data Retention Policies
 
 > **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Retention Policies**

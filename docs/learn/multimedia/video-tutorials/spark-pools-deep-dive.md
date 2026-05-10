@@ -1,3 +1,9 @@
+---
+title: "Video Script: Spark Pools Deep Dive"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Spark Pools Deep Dive
 
 ![Duration: 35 minutes](https://img.shields.io/badge/Duration-35%20minutes-blue)

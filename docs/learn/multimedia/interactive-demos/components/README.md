@@ -1,3 +1,10 @@
+---
+title: "Interactive Demo Components"
+tags:
+  - multimedia
+  - demos
+  - components
+---
 # 🧩 Interactive Demo Components
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

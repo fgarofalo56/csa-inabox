@@ -1,3 +1,10 @@
+---
+title: "Spark Best Practices"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark**"
+tags:
+  - best-practices
+  - synapse
+---
 # Spark Best Practices
 
 > **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark**

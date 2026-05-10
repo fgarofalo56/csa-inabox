@@ -1,3 +1,10 @@
+---
+title: "Change Data Capture with Synapse Analytics"
+description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Synapse CDC__"
+tags:
+  - implementation
+  - integration-scenarios
+---
 # Change Data Capture with Synapse Analytics
 
 > __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Synapse CDC__

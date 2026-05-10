@@ -1,3 +1,12 @@
+---
+title: "Schema Evolution Strategies - Delta Lake"
+description: "Comprehensive guide to managing schema evolution in Delta Lake tables with backward compatibility."
+tags:
+  - services
+  - synapse
+  - spark-pools
+  - delta-lakehouse
+---
 # 🔄 Schema Evolution Strategies - Delta Lake
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

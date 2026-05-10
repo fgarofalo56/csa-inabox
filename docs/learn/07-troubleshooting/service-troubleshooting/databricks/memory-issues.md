@@ -1,3 +1,10 @@
+---
+title: "Azure Databricks Memory Issues Troubleshooting"
+description: "Guide for diagnosing and resolving memory-related issues in Azure Databricks including OutOfMemoryError, executor crashes, and memory pressure."
+tags:
+  - troubleshooting
+  - databricks
+---
 # Azure Databricks Memory Issues Troubleshooting
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red)

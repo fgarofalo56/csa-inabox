@@ -1,3 +1,11 @@
+---
+title: "Architecture Foundation Video Script"
+tags:
+  - multimedia
+  - video
+  - scripts
+  - architecture
+---
 # Architecture Foundation Video Script
 
 ![Status: Draft](https://img.shields.io/badge/Status-Draft-yellow)
@@ -58,8 +66,7 @@ Synapse Workspace:
 ### Section 3: Storage Architecture (10:00 - 13:00)
 
 **Data Lake Integration**:
-```
-Data Lake Storage Gen2
+```textData Lake Storage Gen2
 ├── Bronze (Raw data)
 ├── Silver (Cleansed data)
 └── Gold (Curated data)

@@ -1,3 +1,10 @@
+---
+title: "Intermediate Spark Pool Tutorial"
+description: "Master intermediate Spark pool concepts in Azure Synapse Analytics. Learn advanced data transformations, performance optimization, and structured streaming."
+tags:
+  - tutorials
+  - intermediate
+---
 # 🔥 Intermediate Spark Pool Tutorial
 
 ![Level](https://img.shields.io/badge/Level-Intermediate-orange)

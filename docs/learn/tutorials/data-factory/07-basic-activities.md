@@ -1,3 +1,10 @@
+---
+title: "️ Basic Pipeline Activities"
+description: "__Master fundamental pipeline activities including Copy, Lookup, Get Metadata, and Delete activities for building robust data workflows.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # ⚙️ Basic Pipeline Activities
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Basic_Activities-blue)

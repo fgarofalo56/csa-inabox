@@ -1,3 +1,9 @@
+---
+title: "Troubleshooting Authentication and Authorization Issues in Azure Synapse Analytics"
+description: "[Home](../../README.md) > Troubleshooting > Authentication Troubleshooting"
+tags:
+  - troubleshooting
+---
 # Troubleshooting Authentication and Authorization Issues in Azure Synapse Analytics
 
 [Home](../../README.md) > Troubleshooting > Authentication Troubleshooting

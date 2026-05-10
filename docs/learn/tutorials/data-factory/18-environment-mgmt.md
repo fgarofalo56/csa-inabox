@@ -1,3 +1,10 @@
+---
+title: "Environment Management"
+description: "__Manage multiple environments (Dev/Test/Prod) with proper configuration, deployment strategies, and environment-specific settings.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🌍 Environment Management
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Environment_Management-blue)

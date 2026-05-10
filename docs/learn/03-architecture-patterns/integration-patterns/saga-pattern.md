@@ -1,3 +1,10 @@
+---
+title: "Saga Pattern"
+description: "Saga pattern implementation for distributed transactions in Azure analytics workflows."
+tags:
+  - architecture
+  - integration-patterns
+---
 # 🔄 Saga Pattern
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

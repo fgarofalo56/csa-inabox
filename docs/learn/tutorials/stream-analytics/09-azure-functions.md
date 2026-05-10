@@ -1,3 +1,10 @@
+---
+title: "Tutorial 9: Azure Functions Integration"
+description: "__Extend Stream Analytics with Azure Functions for custom processing, external API calls, and automated responses. Trigger serverless functions from streaming events.__"
+tags:
+  - tutorials
+  - stream-analytics
+---
 # ⚡ Tutorial 9: Azure Functions Integration
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-09_Functions_Integration-blue)

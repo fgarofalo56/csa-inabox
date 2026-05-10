@@ -1,3 +1,11 @@
+---
+title: "Azure Synapse Serverless SQL Architecture"
+description: "[Home](../../../README.md) > [Architecture](../../README.md) > Serverless SQL > Overview"
+tags:
+  - architecture
+  - service-architectures
+  - serverless-sql
+---
 # Azure Synapse Serverless SQL Architecture
 
 [Home](../../../README.md) > [Architecture](../../README.md) > Serverless SQL > Overview

@@ -1,3 +1,9 @@
+---
+title: "Visual Pipeline Builder Demo"
+tags:
+  - multimedia
+  - demos
+---
 # 🔄 Visual Pipeline Builder Demo
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

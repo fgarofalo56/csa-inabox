@@ -1,3 +1,10 @@
+---
+title: "Cost Optimization Best Practices for Azure Synapse Analytics"
+description: "[Home](../../README.md) > Best Practices > Cost Optimization"
+tags:
+  - best-practices
+  - cost-optimization
+---
 # Cost Optimization Best Practices for Azure Synapse Analytics
 
 [Home](../../README.md) > Best Practices > Cost Optimization

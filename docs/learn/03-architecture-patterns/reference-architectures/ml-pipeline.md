@@ -1,3 +1,9 @@
+---
+title: "ML Pipeline Reference Architecture"
+tags:
+  - architecture
+  - reference-architectures
+---
 # ML Pipeline Reference Architecture
 
 ## Overview

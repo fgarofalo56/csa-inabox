@@ -1,3 +1,10 @@
+---
+title: "Beginner Tutorials"
+description: "__Start your cloud analytics journey with these beginner-friendly tutorials. No prior Azure experience required!__"
+tags:
+  - tutorials
+  - beginner
+---
 # 🎯 Beginner Tutorials
 
 ![Level](https://img.shields.io/badge/Level-Beginner-green)

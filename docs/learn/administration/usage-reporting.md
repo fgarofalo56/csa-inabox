@@ -1,3 +1,9 @@
+---
+title: "Documentation Usage Reporting Guide"
+description: "This guide provides instructions for generating, analyzing, and presenting documentation usage reports to understand adoption and guide improvement efforts."
+tags:
+  - administration
+---
 # Documentation Usage Reporting Guide
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

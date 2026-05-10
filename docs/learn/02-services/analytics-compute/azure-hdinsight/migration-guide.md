@@ -1,3 +1,10 @@
+---
+title: "HDInsight Migration Guide"
+description: "Comprehensive guide for migrating on-premises Hadoop workloads to Azure HDInsight, and modernizing to Azure Synapse Analytics or Azure Databricks."
+tags:
+  - services
+  - hdinsight
+---
 # 🔄 HDInsight Migration Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

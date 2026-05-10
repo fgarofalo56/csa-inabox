@@ -1,3 +1,11 @@
+---
+title: "Data Explorer Pools - Azure Synapse Analytics"
+description: "High-performance analytics engine optimized for time-series data, log analytics, and IoT telemetry using Kusto Query Language (KQL)."
+tags:
+  - services
+  - synapse
+  - data-explorer-pools
+---
 # 📊 Data Explorer Pools - Azure Synapse Analytics
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

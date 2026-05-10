@@ -1,3 +1,11 @@
+---
+title: "Network"
+description: "Step-by-step tutorial for network."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - architecture
+---
 # Network
 
 Step-by-step tutorial for network.

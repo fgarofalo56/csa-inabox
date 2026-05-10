@@ -1,3 +1,10 @@
+---
+title: "Service Architectures"
+description: "This section contains detailed architecture documentation for specific Azure services and their implementations within the Cloud Scale Analytics platform."
+tags:
+  - architecture
+  - service-architectures
+---
 # Service Architectures
 
 This section contains detailed architecture documentation for specific Azure services and their implementations within the Cloud Scale Analytics platform.

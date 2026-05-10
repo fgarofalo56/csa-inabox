@@ -1,3 +1,11 @@
+---
+title: "Security Architecture"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+  - architecture
+---
 # 🔒 Security Architecture
 
 ## Table of Contents
@@ -37,8 +45,7 @@ The Azure Real-Time Analytics platform implements a comprehensive security frame
 
 ### Core Components
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+```text┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Identity      │────│    Network      │────│      Data       │
 │                 │    │                 │    │                 │
 │ • Azure AD      │    │ • Private       │    │ • Encryption    │
@@ -77,8 +84,7 @@ The Azure Real-Time Analytics platform implements a comprehensive security frame
 
 ### Network Architecture
 
-```
-Internet
+```textInternet
     │
     ▼
 ┌─────────────────┐
@@ -124,8 +130,7 @@ Internet
 
 ### Firewall & Access Control
 
-```
-┌─────────────────┐
+```text┌─────────────────┐
 │ Azure Firewall  │ ── Centralized network security
 │                 │ ── Application/Network rules
 │ Rules:          │ ── Threat intelligence
@@ -154,8 +159,7 @@ Internet
 - **Passwordless**: Windows Hello for Business
 
 #### Service Principal Management
-```
-Data Analytics Service Principal
+```textData Analytics Service Principal
 ├── Databricks Workspace Access
 │   ├── Workspace Admin (Limited users)
 │   ├── Cluster Creator (Data engineers)
@@ -252,8 +256,7 @@ FROM customer_data;
 - **Perfect Forward Secrecy**: Ephemeral key exchange
 
 #### Key Management
-```
-Azure Key Vault
+```textAzure Key Vault
 ├── Customer Managed Keys
 │   ├── Storage Account Encryption Key
 │   ├── Databricks DBFS Key  
@@ -363,8 +366,7 @@ Actions:
 
 ### Security Monitoring Stack
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+```text┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Collection    │────│   Detection     │────│    Response     │
 │                 │    │                 │    │                 │
 │ • Azure Monitor │    │ • Sentinel      │    │ • Automated     │
@@ -434,8 +436,7 @@ SuspiciousDataAccess
 - **Security Engineering**: Tool development and tuning
 
 #### Incident Response Process
-```
-Detection → Triage → Investigation → Containment → Eradication → Recovery → Lessons Learned
+```textDetection → Triage → Investigation → Containment → Eradication → Recovery → Lessons Learned
     ↓         ↓           ↓             ↓             ↓           ↓            ↓
  <5 min   <15 min    <1 hour      <2 hours      <4 hours    <8 hours    <72 hours
 ```

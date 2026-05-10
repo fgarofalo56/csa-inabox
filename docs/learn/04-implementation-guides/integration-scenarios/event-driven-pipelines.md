@@ -1,3 +1,10 @@
+---
+title: "Event-Driven Data Pipelines - Automated ETL with Event Grid"
+description: "Build event-driven Data Factory pipelines triggered by Event Grid for automated, serverless ETL workflows."
+tags:
+  - implementation
+  - integration-scenarios
+---
 # 🎯 Event-Driven Data Pipelines - Automated ETL with Event Grid
 
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)

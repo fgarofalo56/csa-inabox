@@ -1,3 +1,10 @@
+---
+title: "Data Analyst Learning Path"
+description: "__Master data analysis and visualization on Azure. Build expertise in SQL, Power BI, and analytical storytelling to transform data into actionable business insights.__"
+tags:
+  - tutorials
+  - learning-paths
+---
 # 📈 Data Analyst Learning Path
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

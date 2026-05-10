@@ -1,3 +1,10 @@
+---
+title: "Microsoft Purview Integration with Azure Synapse Analytics"
+description: "[Home](../../../README.md) > [Code Examples](../../README.md) > Integration > Purview Integration"
+tags:
+  - code-examples
+  - integration
+---
 # Microsoft Purview Integration with Azure Synapse Analytics
 
 [Home](../../../README.md) > [Code Examples](../../README.md) > Integration > Purview Integration

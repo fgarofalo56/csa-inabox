@@ -1,3 +1,9 @@
+---
+title: "Stream Analytics Quickstart"
+description: "Comprehensive documentation for Stream Analytics Quickstart."
+tags:
+  - overview
+---
 # Stream Analytics Quickstart
 
 Comprehensive documentation for Stream Analytics Quickstart.

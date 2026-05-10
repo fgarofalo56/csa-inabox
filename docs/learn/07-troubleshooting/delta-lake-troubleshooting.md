@@ -1,3 +1,9 @@
+---
+title: "Troubleshooting Delta Lake Issues in Azure Synapse Analytics"
+description: "[Home](../../README.md) > Troubleshooting > Delta Lake Troubleshooting"
+tags:
+  - troubleshooting
+---
 # Troubleshooting Delta Lake Issues in Azure Synapse Analytics
 
 [Home](../../README.md) > Troubleshooting > Delta Lake Troubleshooting

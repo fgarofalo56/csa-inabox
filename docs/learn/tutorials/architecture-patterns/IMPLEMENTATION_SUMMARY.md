@@ -1,3 +1,10 @@
+---
+title: "Architecture Pattern Tutorials - Implementation Summary"
+description: "> __Complete Walkthrough Tutorials Feature - Delivery Report__"
+tags:
+  - tutorials
+  - architecture-patterns
+---
 # 🚀 Architecture Pattern Tutorials - Implementation Summary
 
 > __Complete Walkthrough Tutorials Feature - Delivery Report__

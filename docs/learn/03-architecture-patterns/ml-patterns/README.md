@@ -1,3 +1,10 @@
+---
+title: "Machine Learning Patterns"
+description: "Architecture patterns for machine learning systems in Azure."
+tags:
+  - architecture
+  - ml-patterns
+---
 # 🤖 Machine Learning Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

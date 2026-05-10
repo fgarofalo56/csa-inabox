@@ -1,3 +1,10 @@
+---
+title: "Performance Optimization in ADLS Gen2"
+description: "Maximize performance of ADLS Gen2 for big data analytics workloads through file sizing, partitioning strategies, parallel operations, and network optimization."
+tags:
+  - services
+  - azure-data-lake-gen2
+---
 # ⚡ Performance Optimization in ADLS Gen2
 
 ![Throughput](https://img.shields.io/badge/Throughput-High-brightgreen?style=flat-square)

@@ -1,3 +1,10 @@
+---
+title: "Security Architecture"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - architecture
+---
 # Security Architecture
 
 ---

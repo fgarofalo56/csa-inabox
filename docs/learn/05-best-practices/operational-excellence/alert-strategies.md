@@ -1,3 +1,10 @@
+---
+title: "Alerting Strategies"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Alert Strategies**"
+tags:
+  - best-practices
+  - operational-excellence
+---
 # Alerting Strategies
 
 > **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Alert Strategies**

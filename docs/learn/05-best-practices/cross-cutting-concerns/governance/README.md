@@ -1,3 +1,10 @@
+---
+title: "Governance Best Practices"
+description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Governance**"
+tags:
+  - best-practices
+  - governance
+---
 # Governance Best Practices
 
 > **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Governance**

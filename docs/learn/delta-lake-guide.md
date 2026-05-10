@@ -1,3 +1,7 @@
+---
+title: "Delta Lake Guide"
+description: "Comprehensive guide to Delta Lake on Azure."
+---
 # Delta Lake Guide
 
 Comprehensive guide to Delta Lake on Azure.

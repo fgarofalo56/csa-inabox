@@ -406,8 +406,7 @@ az stream-analytics job create \
 1. **T+0:00** - Initiate Event Hubs failover
    ```bash
    az eventhubs georecovery-alias break-pair ...
-   ```
-
+   ```text
 2. **T+0:05** - Monitor producer reconnection
    - Verify producers connect to secondary
    - Check for message loss (should be zero)
@@ -415,8 +414,7 @@ az stream-analytics job create \
 3. **T+0:10** - Failover Stream Analytics
    ```bash
    ./stream-analytics-failover.sh
-   ```
-
+   ```text
 4. **T+0:20** - Validate end-to-end flow
    - Send test events
    - Verify output in target systems

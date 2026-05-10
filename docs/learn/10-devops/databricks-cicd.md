@@ -1,3 +1,9 @@
+---
+title: "Databricks CI/CD"
+description: "> **[Home](../README.md)** | **[DevOps](../devops/README.md)** | **Databricks CI/CD**"
+tags:
+  - devops
+---
 # Databricks CI/CD
 
 > **[Home](../README.md)** | **[DevOps](../devops/README.md)** | **Databricks CI/CD**
@@ -380,8 +386,7 @@ def deploy_to_serving(model_name: str, endpoint_name: str):
 
 ### Repository Structure
 
-```
-databricks/
+```textdatabricks/
 ├── databricks.yml           # Bundle configuration
 ├── resources/
 │   ├── jobs.yml            # Job definitions

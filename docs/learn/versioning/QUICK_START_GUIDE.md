@@ -1,3 +1,9 @@
+---
+title: "Quick Start Guide: CSA Documentation Versioning"
+description: "This guide helps you get started with the comprehensive versioning workflow for Cloud Scale Analytics documentation."
+tags:
+  - versioning
+---
 # Quick Start Guide: CSA Documentation Versioning
 
 This guide helps you get started with the comprehensive versioning workflow for Cloud Scale Analytics documentation.

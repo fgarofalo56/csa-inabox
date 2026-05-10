@@ -1,3 +1,10 @@
+---
+title: "Joins Temporal"
+description: "Step-by-step tutorial for joins temporal."
+tags:
+  - tutorials
+  - stream-analytics
+---
 # Joins Temporal
 
 Step-by-step tutorial for joins temporal.

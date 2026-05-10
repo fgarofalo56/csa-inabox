@@ -1,3 +1,10 @@
+---
+title: "Machine Learning on Databricks"
+description: "__Build machine learning pipelines on Databricks. Learn MLflow, AutoML, and model deployment.__"
+tags:
+  - tutorials
+  - intermediate
+---
 # 🤖 Machine Learning on Databricks
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

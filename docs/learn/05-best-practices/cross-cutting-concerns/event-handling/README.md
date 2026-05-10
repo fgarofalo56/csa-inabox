@@ -1,3 +1,10 @@
+---
+title: "Event Handling Best Practices"
+description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Event Handling**"
+tags:
+  - best-practices
+  - event-handling
+---
 # Event Handling Best Practices
 
 > **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Event Handling**

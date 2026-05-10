@@ -1,3 +1,10 @@
+---
+title: "️ Tutorial 11: Error Handling and Resilience"
+description: "__Build resilient Stream Analytics solutions with comprehensive error handling, retry policies, dead-letter queues, and monitoring. Ensure production reliability and fault tolerance.__"
+tags:
+  - tutorials
+  - stream-analytics
+---
 # 🛡️ Tutorial 11: Error Handling and Resilience
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-11_Error_Handling-blue)

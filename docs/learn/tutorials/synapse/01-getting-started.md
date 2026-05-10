@@ -1,3 +1,10 @@
+---
+title: "Getting Started"
+description: "Step-by-step tutorial for getting started."
+tags:
+  - tutorials
+  - synapse
+---
 # Getting Started
 
 Step-by-step tutorial for getting started.

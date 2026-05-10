@@ -1,3 +1,10 @@
+---
+title: "Pipeline Optimization"
+description: "[Home](../../README.md) > Best Practices > Pipeline Optimization"
+tags:
+  - best-practices
+  - development
+---
 # Pipeline Optimization
 
 [Home](../../README.md) > Best Practices > Pipeline Optimization

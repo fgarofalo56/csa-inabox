@@ -1,3 +1,10 @@
+---
+title: "Advanced Tutorials"
+description: "__Master advanced cloud analytics scenarios. Build enterprise-grade solutions with complex architectures and optimization techniques.__"
+tags:
+  - tutorials
+  - advanced
+---
 # 🚀 Advanced Tutorials
 
 ![Level](https://img.shields.io/badge/Level-Advanced-red)
@@ -57,8 +64,7 @@ These tutorials require solid foundation:
 
 ### __Migration Specialist Path__
 
-```
-1. Hadoop Migration Workshop
+```text1. Hadoop Migration Workshop
 2. HDInsight optimization
 3. Modernization patterns
 4. Cutover strategies
@@ -66,8 +72,7 @@ These tutorials require solid foundation:
 
 ### __Real-Time Analytics Path__
 
-```
-1. Kafka on HDInsight
+```text1. Kafka on HDInsight
 2. Kafka Streaming
 3. HBase for storage
 4. Stream processing optimization
@@ -75,8 +80,7 @@ These tutorials require solid foundation:
 
 ### __Enterprise Architect Path__
 
-```
-1. All advanced tutorials
+```text1. All advanced tutorials
 2. Reference architectures
 3. Multi-region deployments
 4. Disaster recovery
@@ -112,8 +116,7 @@ These tutorials require solid foundation:
 
 ### __Lambda Architecture__
 
-```
-Batch Layer (Spark) → Storage (Delta Lake)
+```textBatch Layer (Spark) → Storage (Delta Lake)
                             ↓
 Stream Layer (Kafka) → Processing (Streaming)
                             ↓
@@ -122,8 +125,7 @@ Serving Layer (HBase) → Queries (Phoenix)
 
 ### __Kappa Architecture__
 
-```
-Event Stream (Kafka) → Stream Processing (Spark) → Storage (HBase/Delta)
+```textEvent Stream (Kafka) → Stream Processing (Spark) → Storage (HBase/Delta)
 ```
 
 ## 🔧 Advanced Tools

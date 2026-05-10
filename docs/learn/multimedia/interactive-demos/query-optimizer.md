@@ -1,3 +1,9 @@
+---
+title: "Query Optimizer Interactive Demo"
+tags:
+  - multimedia
+  - demos
+---
 # ⚡ Query Optimizer Interactive Demo
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

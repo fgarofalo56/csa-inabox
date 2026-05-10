@@ -1,3 +1,11 @@
+---
+title: "️ Medallion Architecture - Complete Tutorial"
+description: "Complete walkthrough tutorial for implementing the Medallion Architecture pattern on Azure."
+tags:
+  - tutorials
+  - architecture-patterns
+  - batch
+---
 # 🏛️ Medallion Architecture - Complete Tutorial
 
 ![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen?style=flat-square)

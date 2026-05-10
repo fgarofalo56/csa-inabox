@@ -1,3 +1,11 @@
+---
+title: "Delta Table Optimization in Azure Synapse Analytics"
+description: "[🏠 Home](../../../../README.md) > [💻 Code Examples](../../../README.md) > [🌞️ Delta Lake](../../README.md) > 📄 Table Optimization"
+tags:
+  - code-examples
+  - delta-lake
+  - optimization
+---
 # Delta Table Optimization in Azure Synapse Analytics
 
 [🏠 Home](../../../../README.md) > [💻 Code Examples](../../../README.md) > [🌞️ Delta Lake](../../README.md) > 📄 Table Optimization

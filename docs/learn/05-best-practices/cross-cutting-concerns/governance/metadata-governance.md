@@ -1,3 +1,10 @@
+---
+title: "Metadata Governance"
+description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Metadata Governance**"
+tags:
+  - best-practices
+  - governance
+---
 # Metadata Governance
 
 > **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Metadata Governance**

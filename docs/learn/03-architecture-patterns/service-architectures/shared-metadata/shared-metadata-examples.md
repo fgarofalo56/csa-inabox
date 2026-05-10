@@ -1,3 +1,11 @@
+---
+title: "Azure Synapse Shared Metadata - Code Examples"
+description: "[Home](../../../README.md) > [Architecture](../../README.md) > Shared Metadata > Code Examples"
+tags:
+  - architecture
+  - service-architectures
+  - shared-metadata
+---
 # Azure Synapse Shared Metadata - Code Examples
 
 [Home](../../../README.md) > [Architecture](../../README.md) > Shared Metadata > Code Examples

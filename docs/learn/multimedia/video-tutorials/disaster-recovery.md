@@ -1,3 +1,9 @@
+---
+title: "Video Script: Disaster Recovery for Azure Synapse"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Disaster Recovery for Azure Synapse
 
 ![Duration: 28 minutes](https://img.shields.io/badge/Duration-28%20minutes-blue)
@@ -38,8 +44,7 @@
 
 **[VISUAL: Timeline diagram showing RPO and RTO]**
 
-```
-Disaster Event
+```textDisaster Event
      |
      v
 [Last Backup]----RPO----|----RTO----[Service Restored]
@@ -58,8 +63,7 @@ Disaster Event
 
 #### DR Architecture Patterns (3:30 - 6:00)
 
-```
-Primary Region (East US 2)              Secondary Region (West US 2)
+```textPrimary Region (East US 2)              Secondary Region (West US 2)
 ┌─────────────────────────┐            ┌─────────────────────────┐
 │ Synapse Workspace       │            │ Synapse Workspace       │
 │ ├─ SQL Pool (Active)    │◄──────────►│ ├─ SQL Pool (Standby)   │

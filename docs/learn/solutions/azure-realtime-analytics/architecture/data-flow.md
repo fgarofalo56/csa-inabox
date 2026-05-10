@@ -1,3 +1,11 @@
+---
+title: "Data Flow"
+description: "Step-by-step tutorial for data flow."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - architecture
+---
 # Data Flow
 
 Step-by-step tutorial for data flow.

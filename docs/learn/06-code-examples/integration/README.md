@@ -1,3 +1,10 @@
+---
+title: "Azure Synapse Analytics Integration Examples"
+description: "[Home](../../../README.md) > [Code Examples](../../README.md) > Integration"
+tags:
+  - code-examples
+  - integration
+---
 # Azure Synapse Analytics Integration Examples
 
 [Home](../../../README.md) > [Code Examples](../../README.md) > Integration

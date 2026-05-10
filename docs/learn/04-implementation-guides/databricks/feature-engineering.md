@@ -1,3 +1,10 @@
+---
+title: "Feature Engineering Guide"
+description: "Best practices and patterns for feature engineering in Databricks."
+tags:
+  - implementation
+  - databricks
+---
 # 🔧 Feature Engineering Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

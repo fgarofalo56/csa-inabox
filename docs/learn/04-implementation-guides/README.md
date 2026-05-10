@@ -1,3 +1,9 @@
+---
+title: "Implementation Guides"
+description: "Step-by-step implementation guides for common Cloud Scale Analytics scenarios and integration patterns."
+tags:
+  - implementation
+---
 # 🚀 Implementation Guides
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

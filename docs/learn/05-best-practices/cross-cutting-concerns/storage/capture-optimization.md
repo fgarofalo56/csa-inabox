@@ -1,3 +1,10 @@
+---
+title: "Capture Optimization"
+description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Capture Optimization**"
+tags:
+  - best-practices
+  - storage
+---
 # Capture Optimization
 
 > **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Capture Optimization**
@@ -59,8 +66,7 @@ resource "azurerm_eventhub" "capture" {
 
 ### Partition Strategy
 
-```
-datalake/
+```textdatalake/
 └── capture/
     └── eventhub-ns/
         └── eh-telemetry/

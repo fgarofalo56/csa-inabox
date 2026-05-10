@@ -1,3 +1,10 @@
+---
+title: "Advanced Pipeline Orchestration"
+description: "__Master complex orchestration patterns including conditional logic, loops, parallelism, and dynamic pipeline execution for enterprise-scale data workflows.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🎭 Advanced Pipeline Orchestration
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Advanced_Orchestration-blue)

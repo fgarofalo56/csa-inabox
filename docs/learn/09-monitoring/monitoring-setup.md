@@ -1,3 +1,9 @@
+---
+title: "Monitoring Setup Guide"
+description: "[Home](../../README.md) > Monitoring > Monitoring Setup"
+tags:
+  - monitoring
+---
 # Monitoring Setup Guide
 
 [Home](../../README.md) > Monitoring > Monitoring Setup

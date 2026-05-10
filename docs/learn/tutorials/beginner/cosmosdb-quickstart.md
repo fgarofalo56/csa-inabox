@@ -1,3 +1,10 @@
+---
+title: "Azure Cosmos DB Quickstart"
+description: "__Get started with Azure Cosmos DB in under an hour. Learn to create a globally distributed NoSQL database and perform basic CRUD operations.__"
+tags:
+  - tutorials
+  - beginner
+---
 # 🌐 Azure Cosmos DB Quickstart
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

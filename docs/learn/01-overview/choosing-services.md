@@ -1,3 +1,9 @@
+---
+title: "Service Selection Guide"
+description: "Comprehensive decision trees and guidance for selecting the right Azure services for your Cloud Scale Analytics solution."
+tags:
+  - overview
+---
 # 🎯 Service Selection Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

@@ -1,3 +1,10 @@
+---
+title: "️ Polyglot Persistence Architecture"
+description: "Use different database technologies optimized for specific data patterns and access requirements, allowing each component to leverage the best tool for its unique characteristics."
+tags:
+  - architecture
+  - hybrid-architectures
+---
 # 🗄️ Polyglot Persistence Architecture
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

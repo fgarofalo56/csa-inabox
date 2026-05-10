@@ -1,3 +1,9 @@
+---
+title: "Video Script: Azure Synapse Analytics Fundamentals"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Azure Synapse Analytics Fundamentals
 
 ![Duration: 25 minutes](https://img.shields.io/badge/Duration-25%20minutes-blue)
@@ -694,8 +700,7 @@ ORDER BY sale_date DESC, total_sales DESC;
 **Title**: Azure Synapse Analytics Fundamentals - Complete Beginner's Guide (2024)
 
 **Description**:
-```
-Learn Azure Synapse Analytics from scratch! This comprehensive 25-minute tutorial covers everything you need to know to get started with Microsoft's unified analytics platform.
+```textLearn Azure Synapse Analytics from scratch! This comprehensive 25-minute tutorial covers everything you need to know to get started with Microsoft's unified analytics platform.
 
 🎯 What You'll Learn:
 ✅ Core Synapse components (SQL, Spark, Pipelines)

@@ -1,3 +1,11 @@
+---
+title: "Spark Pools"
+description: "Azure Synapse Spark Pools provide scalable Apache Spark compute for big data analytics and machine learning workloads."
+tags:
+  - services
+  - synapse
+  - spark-pools
+---
 # Spark Pools
 
 Azure Synapse Spark Pools provide scalable Apache Spark compute for big data analytics and machine learning workloads.

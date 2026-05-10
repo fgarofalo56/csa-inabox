@@ -1,3 +1,10 @@
+---
+title: "Azure Databricks Implementation Guides"
+description: "Step-by-step implementation guides for Azure Databricks features and capabilities."
+tags:
+  - implementation
+  - databricks
+---
 # 🧪 Azure Databricks Implementation Guides
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

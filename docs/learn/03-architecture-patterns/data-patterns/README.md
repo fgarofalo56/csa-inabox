@@ -1,3 +1,10 @@
+---
+title: "Data Patterns"
+description: "Architecture patterns for data modeling and processing in distributed systems."
+tags:
+  - architecture
+  - data-patterns
+---
 # 📊 Data Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

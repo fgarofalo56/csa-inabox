@@ -1,3 +1,10 @@
+---
+title: "Change Feed in Azure Cosmos DB"
+description: "Change Feed provides a persistent log of all changes to Cosmos DB documents, enabling real-time event-driven architectures, data synchronization, and audit trails."
+tags:
+  - services
+  - cosmos-db
+---
 # 🔄 Change Feed in Azure Cosmos DB
 
 ![Real-time](https://img.shields.io/badge/Type-Real%20time-brightgreen?style=flat-square)

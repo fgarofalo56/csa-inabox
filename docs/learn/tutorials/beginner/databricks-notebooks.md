@@ -1,3 +1,10 @@
+---
+title: "Azure Databricks Notebooks Introduction"
+description: "__Master Databricks notebooks for interactive data analysis. Learn notebook features, best practices, and collaboration techniques.__"
+tags:
+  - tutorials
+  - beginner
+---
 # 📓 Azure Databricks Notebooks Introduction
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

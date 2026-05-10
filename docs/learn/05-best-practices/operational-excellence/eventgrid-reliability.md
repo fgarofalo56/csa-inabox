@@ -1,3 +1,10 @@
+---
+title: "Event Grid Reliability"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Event Grid Reliability**"
+tags:
+  - best-practices
+  - operational-excellence
+---
 # Event Grid Reliability
 
 > **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Event Grid Reliability**

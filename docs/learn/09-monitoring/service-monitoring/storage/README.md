@@ -1,3 +1,11 @@
+---
+title: "Storage Monitoring"
+description: "> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **Storage Monitoring**"
+tags:
+  - monitoring
+  - service-monitoring
+  - storage
+---
 # Storage Monitoring
 
 > **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **Storage Monitoring**

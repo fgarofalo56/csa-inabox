@@ -1,3 +1,10 @@
+---
+title: "Sql Performance"
+description: "[Home](../../README.md) > Best Practices > SQL Performance"
+tags:
+  - best-practices
+  - synapse
+---
 # Sql Performance
 
 [Home](../../README.md) > Best Practices > SQL Performance

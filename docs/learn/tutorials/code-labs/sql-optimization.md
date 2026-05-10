@@ -1,3 +1,10 @@
+---
+title: "SQL Query Optimization Lab"
+description: "Master SQL query optimization in Azure Synapse serverless and dedicated pools. Learn execution plans, indexing strategies, and performance tuning."
+tags:
+  - tutorials
+  - code-labs
+---
 # 🎯 SQL Query Optimization Lab
 
 ![Lab](https://img.shields.io/badge/Lab-SQL_Optimization-blue)

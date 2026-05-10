@@ -1,3 +1,7 @@
+---
+title: "Setup Guide"
+description: "Azure Cloud Scale Analytics setup and configuration."
+---
 # Setup Guide
 
 Azure Cloud Scale Analytics setup and configuration.

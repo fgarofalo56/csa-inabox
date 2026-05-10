@@ -1,3 +1,10 @@
+---
+title: "ML Model Deployment Patterns"
+description: "Architecture patterns for deploying machine learning models in Azure analytics platforms."
+tags:
+  - architecture
+  - ml-patterns
+---
 # 🤖 ML Model Deployment Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

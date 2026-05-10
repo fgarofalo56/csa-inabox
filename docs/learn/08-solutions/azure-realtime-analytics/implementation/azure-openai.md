@@ -1,3 +1,10 @@
+---
+title: "Azure OpenAI Integration"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Azure OpenAI Integration
 
 ---

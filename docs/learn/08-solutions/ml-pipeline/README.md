@@ -1,3 +1,10 @@
+---
+title: "ML Pipeline Solution"
+description: "> __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __ML Pipeline__"
+tags:
+  - solutions
+  - ml-pipeline
+---
 # ML Pipeline Solution
 
 > __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __ML Pipeline__

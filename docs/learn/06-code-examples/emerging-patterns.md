@@ -1,3 +1,9 @@
+---
+title: "Emerging Patterns and Modern Integrations"
+description: "[🏠 Home](../../README.md) > [💻 Code Examples](README.md) > 🚀 Emerging Patterns"
+tags:
+  - code-examples
+---
 # 🚀 Emerging Patterns and Modern Integrations
 
 [🏠 Home](../../README.md) > [💻 Code Examples](README.md) > 🚀 Emerging Patterns

@@ -1,3 +1,11 @@
+---
+title: "Spark Analytics"
+description: "Step-by-step tutorial for spark analytics."
+tags:
+  - tutorials
+  - learning-paths
+  - data-scientist
+---
 # Spark Analytics
 
 Step-by-step tutorial for spark analytics.

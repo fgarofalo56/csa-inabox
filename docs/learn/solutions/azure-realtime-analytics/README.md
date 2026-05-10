@@ -1,3 +1,9 @@
+---
+title: "Azure Real-Time Analytics Solution"
+tags:
+  - solutions
+  - azure-realtime-analytics
+---
 # 🚀 Azure Real-Time Analytics Solution
 
 ---

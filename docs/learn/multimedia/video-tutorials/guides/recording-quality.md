@@ -1,3 +1,10 @@
+---
+title: "Recording Quality Guide"
+description: "Best practices for high-quality video recording."
+tags:
+  - multimedia
+  - video
+---
 # Recording Quality Guide
 
 Best practices for high-quality video recording.

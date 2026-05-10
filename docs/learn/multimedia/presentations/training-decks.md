@@ -1,3 +1,9 @@
+---
+title: "Training Decks - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 📊 Training Decks - CSA-in-a-Box
 
 ![Type: Training](https://img.shields.io/badge/Type-Training-blue)

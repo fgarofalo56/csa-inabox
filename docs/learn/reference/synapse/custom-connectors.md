@@ -1,3 +1,10 @@
+---
+title: "Custom Connectors for Azure Synapse Analytics"
+description: "> **Home [Home](../../../README.md)** | **Documentation** | **Reference [Reference](../README.md)** | **Synapse**"
+tags:
+  - reference
+  - synapse
+---
 # Custom Connectors for Azure Synapse Analytics
 
 > **Home [Home](../../../README.md)** | **Documentation** | **Reference [Reference](../README.md)** | **Synapse**

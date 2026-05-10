@@ -1,3 +1,10 @@
+---
+title: "Data Transformation Patterns"
+description: "__Master common data transformation patterns including cleansing, enrichment, aggregation, and complex business logic implementation.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🔄 Data Transformation Patterns
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Data_Transformation-blue)

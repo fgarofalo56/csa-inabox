@@ -1,3 +1,9 @@
+---
+title: "️ Azure Analytics Services Documentation"
+description: "Comprehensive documentation for all Azure analytics services, organized by service category."
+tags:
+  - services
+---
 # 🛠️ Azure Analytics Services Documentation
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

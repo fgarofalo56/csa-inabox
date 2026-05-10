@@ -1,3 +1,9 @@
+---
+title: "Best Practices Guide"
+description: "> **[Home](../README.md)** | **Best Practices**"
+tags:
+  - best-practices
+---
 # Best Practices Guide
 
 > **[Home](../README.md)** | **Best Practices**

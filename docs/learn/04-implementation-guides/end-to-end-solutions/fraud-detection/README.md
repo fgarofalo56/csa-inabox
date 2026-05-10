@@ -1,3 +1,11 @@
+---
+title: "Fraud Detection"
+description: "Comprehensive documentation for Fraud Detection."
+tags:
+  - implementation
+  - end-to-end-solutions
+  - fraud-detection
+---
 # Fraud Detection
 
 Comprehensive documentation for Fraud Detection.

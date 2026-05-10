@@ -1,3 +1,11 @@
+---
+title: "Log Analysis"
+description: "Step-by-step tutorial for log analysis."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - operations
+---
 # Log Analysis
 
 Step-by-step tutorial for log analysis.

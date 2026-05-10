@@ -1,3 +1,10 @@
+---
+title: "Hybrid Cloud Integration Tutorial"
+description: "Integrate on-premises data sources with Azure Synapse Analytics. Learn hybrid connectivity, data movement, and secure integration patterns."
+tags:
+  - tutorials
+  - integration
+---
 # 🔄 Hybrid Cloud Integration Tutorial
 
 ![Level](https://img.shields.io/badge/Level-Advanced-red)

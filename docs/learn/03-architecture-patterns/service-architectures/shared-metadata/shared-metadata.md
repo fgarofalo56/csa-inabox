@@ -1,3 +1,11 @@
+---
+title: "Azure Synapse Shared Metadata Architecture"
+description: "[Home](../../../README.md) > [Architecture](../../README.md) > Shared Metadata > Shared Metadata Architecture"
+tags:
+  - architecture
+  - service-architectures
+  - shared-metadata
+---
 # Azure Synapse Shared Metadata Architecture
 
 [Home](../../../README.md) > [Architecture](../../README.md) > Shared Metadata > Shared Metadata Architecture

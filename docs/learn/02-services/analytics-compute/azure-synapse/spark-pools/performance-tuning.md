@@ -1,3 +1,11 @@
+---
+title: "Spark Pool Performance Tuning - Azure Synapse Analytics"
+description: "Advanced performance optimization techniques for Azure Synapse Spark pools, including partitioning strategies, caching, join optimization, and Delta Lake performance tuning."
+tags:
+  - services
+  - synapse
+  - spark-pools
+---
 # ⚡ Spark Pool Performance Tuning - Azure Synapse Analytics
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

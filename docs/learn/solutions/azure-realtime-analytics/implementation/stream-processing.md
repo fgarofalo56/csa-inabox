@@ -1,3 +1,11 @@
+---
+title: "Stream Processing"
+description: "Step-by-step tutorial for stream processing."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Stream Processing
 
 Step-by-step tutorial for stream processing.

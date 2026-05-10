@@ -1,3 +1,9 @@
+---
+title: "Security & Compliance - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 📊 Security & Compliance - CSA-in-a-Box
 
 ![Type: Security](https://img.shields.io/badge/Type-Security-blue)

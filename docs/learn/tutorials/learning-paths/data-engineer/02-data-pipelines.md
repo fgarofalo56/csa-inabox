@@ -1,3 +1,11 @@
+---
+title: "Data Pipelines"
+description: "Step-by-step tutorial for data pipelines."
+tags:
+  - tutorials
+  - learning-paths
+  - data-engineer
+---
 # Data Pipelines
 
 Step-by-step tutorial for data pipelines.

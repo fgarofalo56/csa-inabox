@@ -1,3 +1,10 @@
+---
+title: "Pipeline Dependency Management"
+description: "__Manage complex pipeline dependencies, activity chaining, and conditional execution for robust data workflows.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🔗 Pipeline Dependency Management
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Dependency_Management-blue)

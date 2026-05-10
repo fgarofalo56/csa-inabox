@@ -1,3 +1,10 @@
+---
+title: "️ Azure Synapse Analytics Complete Tutorial Series"
+description: "__Master Azure Synapse Analytics from fundamentals to advanced enterprise patterns."
+tags:
+  - tutorials
+  - synapse
+---
 # 🏗️ Azure Synapse Analytics Complete Tutorial Series
 
 ![Tutorial Series](https://img.shields.io/badge/Tutorial-Complete_Series-success)

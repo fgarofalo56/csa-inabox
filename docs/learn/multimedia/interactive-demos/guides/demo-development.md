@@ -1,3 +1,9 @@
+---
+title: "️ Interactive Demo Development Guide"
+tags:
+  - multimedia
+  - demos
+---
 # 🛠️ Interactive Demo Development Guide
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

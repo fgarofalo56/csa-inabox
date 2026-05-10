@@ -1,3 +1,10 @@
+---
+title: "Performance Optimization"
+description: "__Optimize Azure Data Factory pipelines for maximum performance and cost efficiency.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # ⚡ Performance Optimization
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Performance_Optimization-blue)

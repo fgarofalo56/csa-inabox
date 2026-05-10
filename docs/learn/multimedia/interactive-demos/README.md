@@ -1,3 +1,9 @@
+---
+title: "Interactive Demos & Code Playgrounds"
+tags:
+  - multimedia
+  - demos
+---
 # 🎮 Interactive Demos & Code Playgrounds
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

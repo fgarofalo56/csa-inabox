@@ -1,3 +1,10 @@
+---
+title: "Video Script Template"
+tags:
+  - multimedia
+  - video
+  - templates
+---
 # Video Script Template
 
 ![Type: Template](https://img.shields.io/badge/Type-Template-blue)

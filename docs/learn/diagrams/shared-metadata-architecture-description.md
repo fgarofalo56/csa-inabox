@@ -1,3 +1,9 @@
+---
+title: "Shared Metadata Architecture Description"
+description: "Detailed description and visual representation of the shared metadata architecture in Azure Synapse Analytics, enabling cross-engine data access and unified governance."
+tags:
+  - diagrams
+---
 # 🔗 Shared Metadata Architecture Description
 
 ![Status](https://img.shields.io/badge/Status-Reference-blue?style=flat-square)

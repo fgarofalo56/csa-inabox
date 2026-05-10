@@ -1,3 +1,10 @@
+---
+title: "< Edge Deployments"
+description: "> __< [Home](../../../../README.md)__ | __= [Overview](../../../01-overview/README.md)__ | __= [Services](../../README.md)__ | __= [Streaming Services](../README.md)__ | __ [Stream Analytics](REA..."
+tags:
+  - services
+  - stream-analytics
+---
 # < Edge Deployments
 
 > __< [Home](../../../../README.md)__ | __= [Overview](../../../01-overview/README.md)__ | __= [Services](../../README.md)__ | __= [Streaming Services](../README.md)__ | __ [Stream Analytics](README.md)__ | __< Edge Deployments__

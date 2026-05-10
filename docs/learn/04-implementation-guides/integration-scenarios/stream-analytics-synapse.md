@@ -1,3 +1,10 @@
+---
+title: "Stream Analytics to Synapse - Lambda Architecture"
+description: "Integrate Stream Analytics with Synapse Analytics for real-time to batch analytics workflows implementing Lambda Architecture."
+tags:
+  - implementation
+  - integration-scenarios
+---
 # 📊 Stream Analytics to Synapse - Lambda Architecture
 
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)

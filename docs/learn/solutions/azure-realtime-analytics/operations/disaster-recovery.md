@@ -1,3 +1,11 @@
+---
+title: "Disaster Recovery"
+description: "Step-by-step tutorial for disaster recovery."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - operations
+---
 # Disaster Recovery
 
 Step-by-step tutorial for disaster recovery.

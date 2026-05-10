@@ -1,3 +1,10 @@
+---
+title: "Edge and Offline Handling"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Edge Offline Handling**"
+tags:
+  - best-practices
+  - operational-excellence
+---
 # Edge and Offline Handling
 
 > **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Edge Offline Handling**
@@ -19,8 +26,7 @@ Edge computing and offline scenarios require special handling to ensure data int
 
 ### Store and Forward
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+```text┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │  Edge       │     │   Gateway   │     │   Cloud     │
 │  Device     │────▶│   (Buffer)  │────▶│   Ingest    │
 │             │     │             │     │             │

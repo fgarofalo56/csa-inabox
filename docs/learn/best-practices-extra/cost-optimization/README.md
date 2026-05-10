@@ -1,3 +1,10 @@
+---
+title: "Cost Optimization Best Practices"
+description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Cost Optimization**"
+tags:
+  - best-practices
+  - cost-optimization
+---
 # Cost Optimization Best Practices
 
 > **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Cost Optimization**

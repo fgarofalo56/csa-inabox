@@ -1,3 +1,10 @@
+---
+title: "️ Azure SQL Database"
+description: "Azure SQL Database is a fully managed relational database service with built-in intelligence, security, and high availability."
+tags:
+  - services
+  - sql-database
+---
 # 🗄️ Azure SQL Database
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

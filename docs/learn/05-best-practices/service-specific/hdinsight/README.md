@@ -1,3 +1,10 @@
+---
+title: "HDInsight Best Practices"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **HDInsight**"
+tags:
+  - best-practices
+  - hdinsight
+---
 # HDInsight Best Practices
 
 > **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **HDInsight**

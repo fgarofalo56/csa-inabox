@@ -1,3 +1,10 @@
+---
+title: "Data Lake Analytics Architecture Pattern"
+description: "Comprehensive data lake architecture pattern with organized zones (raw, curated, consumption), multi-engine analytics, and enterprise governance for scalable big data processing."
+tags:
+  - architecture
+  - batch-architectures
+---
 # Data Lake Analytics Architecture Pattern
 
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen?style=flat-square)

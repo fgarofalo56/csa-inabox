@@ -1,3 +1,11 @@
+---
+title: "Predictive Maintenance"
+description: "Comprehensive documentation for Predictive Maintenance."
+tags:
+  - implementation
+  - end-to-end-solutions
+  - predictive-maintenance
+---
 # Predictive Maintenance
 
 Comprehensive documentation for Predictive Maintenance.

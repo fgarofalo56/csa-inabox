@@ -1,3 +1,11 @@
+---
+title: "CI/CD for Azure Data Factory"
+description: "Implement enterprise-grade CI/CD practices for Azure Data Factory pipelines using Git integration, ARM templates, and automated deployments."
+tags:
+  - services
+  - orchestration-services
+  - data-factory
+---
 # 🚀 CI/CD for Azure Data Factory
 
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)

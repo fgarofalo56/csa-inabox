@@ -1,3 +1,9 @@
+---
+title: "Streaming Services"
+description: "Real-time data processing and event-driven architecture services for streaming analytics."
+tags:
+  - services
+---
 # 🔄 Streaming Services
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

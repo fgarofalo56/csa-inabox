@@ -1,3 +1,10 @@
+---
+title: "Hyperscale Tier - Azure SQL Database"
+description: "Hyperscale is a scalable storage architecture that supports databases up to 100TB with instant backups and fast restores."
+tags:
+  - services
+  - sql-database
+---
 # 🚀 Hyperscale Tier - Azure SQL Database
 
 ![Tier](https://img.shields.io/badge/Tier-Hyperscale-purple?style=flat-square)

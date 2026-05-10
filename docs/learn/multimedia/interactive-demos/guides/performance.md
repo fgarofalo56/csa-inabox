@@ -1,3 +1,9 @@
+---
+title: "Performance Optimization for Interactive Demos"
+tags:
+  - multimedia
+  - demos
+---
 # ⚡ Performance Optimization for Interactive Demos
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

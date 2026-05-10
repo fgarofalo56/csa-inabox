@@ -1,3 +1,9 @@
+---
+title: "Troubleshooting Pipeline Issues in Azure Synapse Analytics"
+description: "[Home](../../README.md) > Troubleshooting > Pipeline Troubleshooting"
+tags:
+  - troubleshooting
+---
 # Troubleshooting Pipeline Issues in Azure Synapse Analytics
 
 [Home](../../README.md) > Troubleshooting > Pipeline Troubleshooting

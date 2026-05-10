@@ -1,3 +1,9 @@
+---
+title: "Serverless SQL Pool Architecture Diagram"
+description: "[🏠 Home](../../README.md) > [📊 Diagrams](README.md) > Serverless SQL Architecture"
+tags:
+  - diagrams
+---
 # Serverless SQL Pool Architecture Diagram
 
 [🏠 Home](../../README.md) > [📊 Diagrams](README.md) > Serverless SQL Architecture

@@ -1,3 +1,9 @@
+---
+title: "Lambda Architecture"
+tags:
+  - architecture
+  - hybrid-architectures
+---
 # Lambda Architecture
 
 ## Overview

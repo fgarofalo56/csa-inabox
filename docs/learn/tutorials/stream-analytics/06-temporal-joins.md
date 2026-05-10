@@ -1,3 +1,10 @@
+---
+title: "Tutorial 6: Joins and Temporal Operations"
+description: "__Master stream joins and temporal operations for correlating events across time. Learn stream-to-stream joins, reference data enrichment, and temporal pattern detection.__"
+tags:
+  - tutorials
+  - stream-analytics
+---
 # 🔗 Tutorial 6: Joins and Temporal Operations
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-06_Joins_Temporal-blue)

@@ -1,3 +1,9 @@
+---
+title: "KQL (Kusto Query Language) Reference"
+description: "[Home](../../README.md) > [Reference](README.md) > KQL Reference"
+tags:
+  - reference
+---
 # KQL (Kusto Query Language) Reference
 
 [Home](../../README.md) > [Reference](README.md) > KQL Reference

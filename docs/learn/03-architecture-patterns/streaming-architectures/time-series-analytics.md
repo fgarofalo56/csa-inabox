@@ -1,3 +1,10 @@
+---
+title: "Time Series Analytics Patterns"
+description: "Architecture patterns for time series data ingestion, storage, and analysis."
+tags:
+  - architecture
+  - streaming-architectures
+---
 # 📈 Time Series Analytics Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

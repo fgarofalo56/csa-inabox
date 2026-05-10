@@ -1,3 +1,10 @@
+---
+title: "Elastic Pools - Azure SQL Database"
+description: "Elastic Pools enable resource sharing across multiple databases, ideal for SaaS applications with unpredictable or variable workloads."
+tags:
+  - services
+  - sql-database
+---
 # 💰 Elastic Pools - Azure SQL Database
 
 ![Cost](https://img.shields.io/badge/Cost-Optimized-orange?style=flat-square)

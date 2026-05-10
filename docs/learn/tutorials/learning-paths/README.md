@@ -1,3 +1,10 @@
+---
+title: "️ Progressive Learning Paths"
+description: "__Structured learning journeys tailored to your role and career goals."
+tags:
+  - tutorials
+  - learning-paths
+---
 # 🛤️ Progressive Learning Paths
 
 ![Learning Paths](https://img.shields.io/badge/Learning-Role_Based_Paths-blue)

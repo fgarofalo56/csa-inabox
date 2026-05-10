@@ -1,3 +1,9 @@
+---
+title: "General Performance Troubleshooting - CSA in-a-Box"
+description: "Comprehensive guide for diagnosing and resolving performance issues across Cloud Scale Analytics services including Azure Synapse Analytics, Azure Data Factory, Azure Data Lake Storage, and streami..."
+tags:
+  - troubleshooting
+---
 # General Performance Troubleshooting - CSA in-a-Box
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow)

@@ -1,3 +1,9 @@
+---
+title: "Best Practices Deck - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 📊 Best Practices Deck - CSA-in-a-Box
 
 ![Type: Technical](https://img.shields.io/badge/Type-Technical-blue)

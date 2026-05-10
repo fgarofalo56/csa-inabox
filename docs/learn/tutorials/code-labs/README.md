@@ -1,3 +1,10 @@
+---
+title: "Interactive Code Labs"
+description: "__Hands-on coding experiences with immediate feedback. Master Azure Cloud Scale Analytics through interactive exercises, real code examples, and progressive skill-building challenges.__"
+tags:
+  - tutorials
+  - code-labs
+---
 # 💻 Interactive Code Labs
 
 ![Code Labs](https://img.shields.io/badge/Format-Interactive_Code_Labs-blue)

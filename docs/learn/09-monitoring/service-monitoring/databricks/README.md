@@ -1,3 +1,11 @@
+---
+title: "Databricks Monitoring"
+description: "> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **Databricks Monitoring**"
+tags:
+  - monitoring
+  - service-monitoring
+  - databricks
+---
 # Databricks Monitoring
 
 > **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **Databricks Monitoring**

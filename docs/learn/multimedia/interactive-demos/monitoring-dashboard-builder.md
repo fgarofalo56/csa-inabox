@@ -1,3 +1,9 @@
+---
+title: "Monitoring Dashboard Builder"
+tags:
+  - multimedia
+  - demos
+---
 # 📊 Monitoring Dashboard Builder
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

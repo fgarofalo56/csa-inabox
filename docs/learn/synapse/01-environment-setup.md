@@ -1,3 +1,9 @@
+---
+title: "Synapse Environment Setup"
+description: "> **[Home](../README.md)** | **[Synapse](README.md)** | **Environment Setup**"
+tags:
+  - synapse
+---
 # Synapse Environment Setup
 
 > **[Home](../README.md)** | **[Synapse](README.md)** | **Environment Setup**

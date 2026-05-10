@@ -1,3 +1,9 @@
+---
+title: "Script Writing Guidelines for Video Tutorials"
+tags:
+  - multimedia
+  - video
+---
 # Script Writing Guidelines for Video Tutorials
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

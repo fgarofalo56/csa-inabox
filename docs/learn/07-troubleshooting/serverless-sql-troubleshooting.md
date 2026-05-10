@@ -1,3 +1,9 @@
+---
+title: "Troubleshooting Serverless SQL Pool in Azure Synapse Analytics"
+description: "[Home](../../README.md) > Troubleshooting > Serverless SQL Troubleshooting"
+tags:
+  - troubleshooting
+---
 # Troubleshooting Serverless SQL Pool in Azure Synapse Analytics
 
 [Home](../../README.md) > Troubleshooting > Serverless SQL Troubleshooting

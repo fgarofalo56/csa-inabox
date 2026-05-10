@@ -1,3 +1,10 @@
+---
+title: "Azure Databricks Quickstart"
+description: "__Get started with Azure Databricks in under an hour. Learn to create a workspace, run Spark notebooks, and process data at scale.__"
+tags:
+  - tutorials
+  - beginner
+---
 # 🔥 Azure Databricks Quickstart
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

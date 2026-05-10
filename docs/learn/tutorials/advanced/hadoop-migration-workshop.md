@@ -1,3 +1,10 @@
+---
+title: "Hadoop Migration Workshop"
+description: "__Migrate on-premises Hadoop workloads to Azure. Learn assessment, planning, and execution strategies.__"
+tags:
+  - tutorials
+  - advanced
+---
 # 🔄 Hadoop Migration Workshop
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

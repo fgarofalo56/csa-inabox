@@ -1,3 +1,9 @@
+---
+title: "Financial Services Reference Architecture"
+tags:
+  - architecture
+  - reference-architectures
+---
 # Financial Services Reference Architecture
 
 ## Overview

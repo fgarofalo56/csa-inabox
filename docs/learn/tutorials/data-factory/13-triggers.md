@@ -1,3 +1,10 @@
+---
+title: "Pipeline Triggers & Scheduling"
+description: "__Master pipeline scheduling with schedule triggers, tumbling window triggers, and event-based triggers for automated data workflows.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # ⏰ Pipeline Triggers & Scheduling
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Pipeline_Triggers-blue)

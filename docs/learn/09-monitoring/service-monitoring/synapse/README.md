@@ -1,3 +1,11 @@
+---
+title: "Azure Synapse Analytics Monitoring"
+description: "Comprehensive monitoring guide for Azure Synapse Analytics workspaces, SQL pools, Spark pools, and data integration pipelines."
+tags:
+  - monitoring
+  - service-monitoring
+  - synapse
+---
 # 🎯 Azure Synapse Analytics Monitoring
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

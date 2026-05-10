@@ -1,3 +1,11 @@
+---
+title: "Workflow Automation with Azure Logic Apps"
+description: "Comprehensive guide to building automated workflows with Azure Logic Apps, covering common patterns, best practices, and enterprise integration scenarios."
+tags:
+  - services
+  - orchestration-services
+  - azure-logic-apps
+---
 # 🔄 Workflow Automation with Azure Logic Apps
 
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)

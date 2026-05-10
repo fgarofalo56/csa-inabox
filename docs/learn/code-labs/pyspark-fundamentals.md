@@ -1,3 +1,9 @@
+---
+title: "PySpark Fundamentals Lab"
+description: "> **[Home](../README.md)** | **[Code Labs](README.md)** | **PySpark Fundamentals**"
+tags:
+  - code-labs
+---
 # PySpark Fundamentals Lab
 
 > **[Home](../README.md)** | **[Code Labs](README.md)** | **PySpark Fundamentals**

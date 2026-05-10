@@ -1,3 +1,10 @@
+---
+title: "Wrangling Data Flows"
+description: "__Leverage Power Query integration in Azure Data Factory for self-service data preparation and transformation.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🧪 Wrangling Data Flows
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Wrangling_Data_Flows-blue)

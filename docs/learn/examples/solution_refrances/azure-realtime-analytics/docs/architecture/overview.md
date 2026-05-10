@@ -1,3 +1,11 @@
+---
+title: "️ Architecture Overview"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+  - architecture
+---
 # 🏗️ Architecture Overview
 
 ## Table of Contents
@@ -27,8 +35,7 @@ The Azure Real-Time Analytics platform is a modern, cloud-native solution design
 
 ### High-Level Components
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+```text┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Data Sources  │────│  Ingestion      │────│   Processing    │
 │                 │    │                 │    │                 │
 │ • Kafka Cloud   │    │ • Event Hubs    │    │ • Databricks    │
@@ -120,8 +127,7 @@ The Azure Real-Time Analytics platform is a modern, cloud-native solution design
 
 ### Real-Time Streaming Flow
 
-```
-Kafka → Event Hubs → Databricks Streaming → Delta Lake Bronze
+```textKafka → Event Hubs → Databricks Streaming → Delta Lake Bronze
   ↓         ↓              ↓                       ↓
 Schema   Stream        Validation              Raw Storage
 Registry Analytics    Deduplication           (5TB/day)
@@ -140,8 +146,7 @@ Topics    Functions     AI Enrichment → Delta Lake Silver
 
 ### Batch Processing Flow
 
-```
-Scheduled Triggers → Databricks Jobs → Data Processing
+```textScheduled Triggers → Databricks Jobs → Data Processing
      ↓                    ↓                 ↓
 • Hourly: 5-10 min    Job Clusters      ML Pipelines
 • Daily: 30-60 min    Auto-scaling      Data Quality

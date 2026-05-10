@@ -1,3 +1,10 @@
+---
+title: "Azure Synapse Troubleshooting Overview"
+description: "Comprehensive troubleshooting guide for Azure Synapse Analytics service-specific issues."
+tags:
+  - troubleshooting
+  - synapse
+---
 # Azure Synapse Troubleshooting Overview
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow)

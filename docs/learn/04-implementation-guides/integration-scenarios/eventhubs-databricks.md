@@ -1,3 +1,10 @@
+---
+title: "Event Hubs with Databricks - Structured Streaming"
+description: "Implement real-time structured streaming from Event Hubs to Databricks with Delta Lake for advanced analytics and machine learning."
+tags:
+  - implementation
+  - integration-scenarios
+---
 # ⚡ Event Hubs with Databricks - Structured Streaming
 
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)

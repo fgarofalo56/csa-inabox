@@ -1,3 +1,11 @@
+---
+title: "Databricks Component Architecture"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+  - architecture
+---
 # 🔧 Databricks Component Architecture
 
 ## Table of Contents
@@ -82,8 +90,7 @@ The **Data Plane** runs in the customer's Azure subscription within a dedicated 
 ### Data Plane Components
 
 #### 1. **Compute Layer**
-```
-┌─────────────────────────────────────────────────────────────┐
+```text┌─────────────────────────────────────────────────────────────┐
 │                    Compute Layer                            │
 ├─────────────────┬─────────────────┬─────────────────────────┤
 │  Job Clusters   │ SQL Warehouses  │  Interactive Clusters   │
@@ -137,8 +144,7 @@ job_cluster_config:
 - **Libraries**: Custom library management
 
 #### 2. **Storage Layer**
-```
-┌─────────────────────────────────────────────────────────────┐
+```text┌─────────────────────────────────────────────────────────────┐
 │                    Storage Layer                            │
 ├─────────────────┬─────────────────┬─────────────────────────┤
 │   ADLS Gen2     │  Mount Points   │        DBFS             │
@@ -169,8 +175,7 @@ dbutils.fs.mount(
 ```
 
 #### 3. **Networking & Security**
-```
-┌─────────────────────────────────────────────────────────────┐
+```text┌─────────────────────────────────────────────────────────────┐
 │                Networking & Security                        │
 ├─────────────────┬─────────────────┬─────────────────────────┤
 │  VNet Injection │  Private Link   │    NSG Rules            │
@@ -377,8 +382,7 @@ spark.conf.set(
 ### Spark Runtime Optimization
 
 #### 1. **Core Runtime Components**
-```
-┌─────────────────────────────────────────────────────────────┐
+```text┌─────────────────────────────────────────────────────────────┐
 │                Runtime Components                           │
 ├────────────┬────────────┬────────────┬────────────┬────────────┤
 │ Spark Core │ Delta Lake │   Photon   │ML Libraries│GPU Support │

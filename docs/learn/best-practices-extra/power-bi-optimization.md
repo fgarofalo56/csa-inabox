@@ -1,3 +1,9 @@
+---
+title: "Power BI Optimization Best Practices"
+description: "> **[Home](../README.md)** | **[Best Practices](index.md)** | **Power BI Optimization**"
+tags:
+  - best-practices
+---
 # Power BI Optimization Best Practices
 
 > **[Home](../README.md)** | **[Best Practices](index.md)** | **Power BI Optimization**

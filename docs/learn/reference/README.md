@@ -1,3 +1,9 @@
+---
+title: "Azure Synapse Analytics Reference"
+description: "[🏠 Home](../../README.md) > 📚 Reference"
+tags:
+  - reference
+---
 # 📚 Azure Synapse Analytics Reference
 
 [🏠 Home](../../README.md) > 📚 Reference

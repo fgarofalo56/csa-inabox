@@ -1,3 +1,10 @@
+---
+title: "Tutorial 4: Batch Data Ingestion"
+description: "__Build robust batch data ingestion pipelines using Azure Synapse Pipelines and Azure Data Factory. Learn to ingest multiple data formats, handle schema changes, and implement error handling.__"
+tags:
+  - tutorials
+  - synapse
+---
 # 📥 Tutorial 4: Batch Data Ingestion
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-04_Batch_Ingestion-blue)

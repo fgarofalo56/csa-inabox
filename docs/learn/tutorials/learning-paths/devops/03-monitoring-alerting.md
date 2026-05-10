@@ -1,3 +1,11 @@
+---
+title: "Monitoring Alerting"
+description: "Step-by-step tutorial for monitoring alerting."
+tags:
+  - tutorials
+  - learning-paths
+  - devops
+---
 # Monitoring Alerting
 
 Step-by-step tutorial for monitoring alerting.

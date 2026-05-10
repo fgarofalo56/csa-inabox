@@ -1,3 +1,9 @@
+---
+title: "Security Best Practices for DevOps"
+description: "> **Home [Home](../../README.md)** | **Documentation** | **DevOps**"
+tags:
+  - devops
+---
 # Security Best Practices for DevOps
 
 > **Home [Home](../../README.md)** | **Documentation** | **DevOps**

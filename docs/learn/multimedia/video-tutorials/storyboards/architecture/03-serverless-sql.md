@@ -1,3 +1,11 @@
+---
+title: "Serverless SQL Architecture Storyboard"
+tags:
+  - multimedia
+  - video
+  - storyboards
+  - architecture
+---
 # Serverless SQL Architecture Storyboard
 
 ![Status: Planning](https://img.shields.io/badge/Status-Planning-blue)
@@ -13,8 +21,7 @@ Storyboard for Serverless SQL architecture video showing query execution flow, c
 
 **Split Screen Comparison**:
 
-```
-┌─────────────────────┬─────────────────────┐
+```text┌─────────────────────┬─────────────────────┐
 │   Serverless SQL    │   Dedicated SQL     │
 ├─────────────────────┼─────────────────────┤
 │ Pay per query       │ Provisioned DWUs    │
@@ -33,8 +40,7 @@ Storyboard for Serverless SQL architecture video showing query execution flow, c
 
 **Visual Flow**:
 
-```
-User Query
+```textUser Query
     ↓
 Query Optimizer
     ↓
@@ -56,8 +62,7 @@ Result Set
 
 **Visual**: Interactive calculator
 
-```
-Data Scanned: [100 GB slider]
+```textData Scanned: [100 GB slider]
 Price per TB: $5.00
 ───────────────────
 Total Cost: $0.50
@@ -74,14 +79,12 @@ Total Cost: $0.50
 **Before/After Visualization**:
 
 **Before** (Scans all data):
-```
-[■■■■■■■■■■] 1000 files scanned
+```text[■■■■■■■■■■] 1000 files scanned
 Cost: $5.00
 ```
 
 **After** (Partition pruning):
-```
-[■■________] 200 files scanned
+```text[■■________] 200 files scanned
 Cost: $1.00
 ```
 
@@ -94,8 +97,7 @@ Cost: $1.00
 
 **Visual**: Bar chart race
 
-```
-CSV:     [████████████████] 1000 MB
+```textCSV:     [████████████████] 1000 MB
 JSON:    [████████████____] 800 MB
 Parquet: [████____________] 100 MB
 Delta:   [███_____________] 95 MB

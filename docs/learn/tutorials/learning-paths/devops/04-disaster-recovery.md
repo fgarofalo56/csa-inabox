@@ -1,3 +1,11 @@
+---
+title: "Disaster Recovery"
+description: "Step-by-step tutorial for disaster recovery."
+tags:
+  - tutorials
+  - learning-paths
+  - devops
+---
 # Disaster Recovery
 
 Step-by-step tutorial for disaster recovery.

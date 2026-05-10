@@ -1,3 +1,10 @@
+---
+title: "Event Grid Integration with Logic Apps"
+description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __EventGrid + Logic Apps__"
+tags:
+  - implementation
+  - integration-scenarios
+---
 # Event Grid Integration with Logic Apps
 
 > __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __EventGrid + Logic Apps__

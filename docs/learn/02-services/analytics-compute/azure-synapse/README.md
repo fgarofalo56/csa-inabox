@@ -1,3 +1,10 @@
+---
+title: "Azure Synapse Analytics"
+description: "Unified analytics service that combines data integration, data warehousing, and big data analytics in a single workspace."
+tags:
+  - services
+  - synapse
+---
 # 🎯 Azure Synapse Analytics
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

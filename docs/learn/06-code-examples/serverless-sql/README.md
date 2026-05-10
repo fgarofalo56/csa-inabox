@@ -1,3 +1,10 @@
+---
+title: "Serverless SQL Examples for Azure Synapse Analytics"
+description: "[Home](../../../README.md) > [Code Examples](../../README.md) > Serverless SQL"
+tags:
+  - code-examples
+  - serverless-sql
+---
 # Serverless SQL Examples for Azure Synapse Analytics
 
 [Home](../../../README.md) > [Code Examples](../../README.md) > Serverless SQL

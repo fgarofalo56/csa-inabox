@@ -1,3 +1,9 @@
+---
+title: "️ Delta Lakehouse Architecture Description"
+description: "Detailed description and visual representation of the Delta Lakehouse architecture pattern in Azure Synapse Analytics."
+tags:
+  - diagrams
+---
 # 🏞️ Delta Lakehouse Architecture Description
 
 ![Status](https://img.shields.io/badge/Status-Reference-blue?style=flat-square)

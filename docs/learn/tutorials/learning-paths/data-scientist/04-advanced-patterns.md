@@ -1,3 +1,11 @@
+---
+title: "Advanced Patterns"
+description: "Step-by-step tutorial for advanced patterns."
+tags:
+  - tutorials
+  - learning-paths
+  - data-scientist
+---
 # Advanced Patterns
 
 Step-by-step tutorial for advanced patterns.

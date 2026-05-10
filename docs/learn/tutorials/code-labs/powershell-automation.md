@@ -1,3 +1,10 @@
+---
+title: "PowerShell Automation Scripts Lab"
+description: "Master PowerShell automation for Azure Synapse Analytics operations. Learn to automate deployments, monitoring, maintenance, and operational tasks."
+tags:
+  - tutorials
+  - code-labs
+---
 # ⚡ PowerShell Automation Scripts Lab
 
 ![Lab](https://img.shields.io/badge/Lab-PowerShell_Automation-blue)

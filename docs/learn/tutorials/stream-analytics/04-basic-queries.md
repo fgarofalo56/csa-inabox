@@ -1,3 +1,10 @@
+---
+title: "Tutorial 4: Basic Query Development"
+description: "__Master fundamental Stream Analytics Query Language (SAQL) operations including SELECT projections, WHERE filtering, aggregations, and GROUP BY operations for real-time data transformation.__"
+tags:
+  - tutorials
+  - stream-analytics
+---
 # 📊 Tutorial 4: Basic Query Development
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-04_Basic_Queries-blue)

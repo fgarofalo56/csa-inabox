@@ -1,3 +1,10 @@
+---
+title: "Mapping Data Flows"
+description: "__Master visual data transformation using Mapping Data Flows for complex ETL logic without writing code.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🎨 Mapping Data Flows
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Mapping_Data_Flows-blue)

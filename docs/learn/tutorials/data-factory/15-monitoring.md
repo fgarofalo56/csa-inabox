@@ -1,3 +1,10 @@
+---
+title: "Monitoring & Alerting"
+description: "__Implement comprehensive monitoring and alerting for Azure Data Factory pipelines using Azure Monitor and custom dashboards.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 📊 Monitoring & Alerting
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Monitoring_Alerting-blue)

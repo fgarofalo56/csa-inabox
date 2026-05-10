@@ -1,3 +1,10 @@
+---
+title: "Linked Services & Datasets"
+description: "__Master the creation and management of linked services and datasets for seamless data source connectivity in Azure Data Factory.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🔗 Linked Services & Datasets
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Linked_Services-blue)

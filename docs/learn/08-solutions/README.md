@@ -1,3 +1,8 @@
+---
+title: "️ Cloud Scale Analytics Solutions"
+tags:
+  - solutions
+---
 # 🏗️ Cloud Scale Analytics Solutions
 
 ---

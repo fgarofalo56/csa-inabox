@@ -1,3 +1,9 @@
+---
+title: "️ Interactive Schema Designer"
+tags:
+  - multimedia
+  - demos
+---
 # 🗂️ Interactive Schema Designer
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

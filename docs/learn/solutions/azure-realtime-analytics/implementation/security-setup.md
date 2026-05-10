@@ -1,3 +1,11 @@
+---
+title: "Security Setup"
+description: "Step-by-step tutorial for security setup."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Security Setup
 
 Step-by-step tutorial for security setup.

@@ -1,3 +1,9 @@
+---
+title: "Data Governance Architecture Diagrams for Azure Synapse Analytics"
+description: "[Home](../../README.md) > Diagrams > Data Governance Diagrams"
+tags:
+  - diagrams
+---
 # Data Governance Architecture Diagrams for Azure Synapse Analytics
 
 [Home](../../README.md) > Diagrams > Data Governance Diagrams

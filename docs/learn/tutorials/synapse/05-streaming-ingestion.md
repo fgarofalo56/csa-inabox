@@ -1,3 +1,10 @@
+---
+title: "Tutorial 5: Real-time Streaming Ingestion"
+description: "__Build real-time data ingestion pipelines using Azure Event Hubs and Spark Structured Streaming. Process streaming data with low latency and integrate with batch processing layers.__"
+tags:
+  - tutorials
+  - synapse
+---
 # ⚡ Tutorial 5: Real-time Streaming Ingestion
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-05_Streaming_Ingestion-blue)

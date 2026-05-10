@@ -1,3 +1,11 @@
+---
+title: "Synapse Pipelines"
+description: "Data integration and orchestration within Azure Synapse Analytics."
+tags:
+  - services
+  - synapse
+  - pipelines
+---
 # 🔄 Synapse Pipelines
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

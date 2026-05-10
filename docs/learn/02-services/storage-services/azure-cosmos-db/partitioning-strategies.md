@@ -1,3 +1,10 @@
+---
+title: "Partitioning Strategies for Azure Cosmos DB"
+description: "Proper partition key selection is critical for Cosmos DB performance and scalability. Choose partition keys that distribute data evenly and align with query patterns."
+tags:
+  - services
+  - cosmos-db
+---
 # 🔀 Partitioning Strategies for Azure Cosmos DB
 
 ![Scaling](https://img.shields.io/badge/Scaling-Automatic-green?style=flat-square)

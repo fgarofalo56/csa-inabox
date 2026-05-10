@@ -1,3 +1,10 @@
+---
+title: "Tutorial 2: Data Generators and Simulators"
+description: "**Create realistic IoT data generators to simulate sensor streams for testing Stream Analytics queries. Learn data generation patterns, velocity control, and anomaly injection techniques.**"
+tags:
+  - tutorials
+  - stream-analytics
+---
 # 🎲 Tutorial 2: Data Generators and Simulators
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-02_Data_Generators-blue)

@@ -1,3 +1,12 @@
+---
+title: "Delta Monitoring"
+description: "Comprehensive documentation for Delta Monitoring."
+tags:
+  - services
+  - monitoring
+  - service-monitoring
+  - synapse
+---
 # Delta Monitoring
 
 Comprehensive documentation for Delta Monitoring.

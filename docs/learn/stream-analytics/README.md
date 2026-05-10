@@ -1,3 +1,9 @@
+---
+title: "Stream Analytics Documentation"
+description: "> **[Home](../README.md)** | **Stream Analytics**"
+tags:
+  - stream-analytics
+---
 # Stream Analytics Documentation
 
 > **[Home](../README.md)** | **Stream Analytics**

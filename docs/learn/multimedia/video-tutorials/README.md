@@ -1,3 +1,9 @@
+---
+title: "Video Tutorial Scripts & Production"
+tags:
+  - multimedia
+  - video
+---
 # 📹 Video Tutorial Scripts & Production
 
 ![Status: Production](https://img.shields.io/badge/Status-Production-brightgreen)

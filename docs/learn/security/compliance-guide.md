@@ -1,3 +1,9 @@
+---
+title: "Azure Synapse Analytics Security and Compliance Guide"
+description: "[Home](../../README.md) > Security > Compliance Guide"
+tags:
+  - security
+---
 # Azure Synapse Analytics Security and Compliance Guide
 
 [Home](../../README.md) > Security > Compliance Guide

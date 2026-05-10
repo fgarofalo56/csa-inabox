@@ -1,3 +1,10 @@
+---
+title: "Global Data Distribution Patterns"
+description: "Patterns for distributing analytics data across multiple Azure regions and geographies."
+tags:
+  - architecture
+  - hybrid-architectures
+---
 # 🌍 Global Data Distribution Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

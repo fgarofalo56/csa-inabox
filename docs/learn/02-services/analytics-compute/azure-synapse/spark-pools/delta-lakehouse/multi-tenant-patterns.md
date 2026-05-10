@@ -1,3 +1,12 @@
+---
+title: "Multi-Tenant Delta Lake Patterns"
+description: "Guide to implementing multi-tenant data architectures using Delta Lake."
+tags:
+  - services
+  - synapse
+  - spark-pools
+  - delta-lakehouse
+---
 # 🏢 Multi-Tenant Delta Lake Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

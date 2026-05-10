@@ -1,3 +1,10 @@
+---
+title: "Network Architecture"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - architecture
+---
 # Network Architecture
 
 ---

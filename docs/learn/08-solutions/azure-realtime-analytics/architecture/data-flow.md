@@ -1,3 +1,10 @@
+---
+title: "Data Flow Architecture"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - architecture
+---
 # Data Flow Architecture
 
 ---

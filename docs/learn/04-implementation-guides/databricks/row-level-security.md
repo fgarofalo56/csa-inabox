@@ -1,3 +1,10 @@
+---
+title: "Row-Level Security Implementation"
+description: "Implement fine-grained access control with Unity Catalog row filters."
+tags:
+  - implementation
+  - databricks
+---
 # 🔒 Row-Level Security Implementation
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

@@ -1,3 +1,10 @@
+---
+title: "Azure Synapse Connectivity Troubleshooting"
+description: "Comprehensive guide for resolving Azure Synapse connectivity, firewall, and private endpoint issues."
+tags:
+  - troubleshooting
+  - synapse
+---
 # Azure Synapse Connectivity Troubleshooting
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow)

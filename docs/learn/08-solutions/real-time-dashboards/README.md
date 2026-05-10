@@ -1,3 +1,10 @@
+---
+title: "Real-Time Dashboards Solution"
+description: "> __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Real-Time Dashboards__"
+tags:
+  - solutions
+  - real-time-dashboards
+---
 # Real-Time Dashboards Solution
 
 > __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Real-Time Dashboards__

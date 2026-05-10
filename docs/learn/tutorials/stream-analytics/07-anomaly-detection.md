@@ -1,3 +1,10 @@
+---
+title: "Tutorial 7: Anomaly Detection"
+description: "__Implement machine learning-powered anomaly detection using Stream Analytics built-in functions. Detect spikes, dips, change points, and custom anomalies in real-time streaming data.__"
+tags:
+  - tutorials
+  - stream-analytics
+---
 # 🚨 Tutorial 7: Anomaly Detection
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-07_Anomaly_Detection-blue)

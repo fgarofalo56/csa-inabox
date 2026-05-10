@@ -1,3 +1,9 @@
+---
+title: "Video Script: Serverless SQL Mastery"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Serverless SQL Mastery
 
 ![Duration: 30 minutes](https://img.shields.io/badge/Duration-30%20minutes-blue)
@@ -62,15 +68,13 @@ By the end of this video, viewers will be able to:
 **[VISUAL: Traditional vs Serverless architecture diagram]**
 
 **Traditional Data Warehouse**:
-```
-Data → ETL → Load → Warehouse → Query
+```textData → ETL → Load → Warehouse → Query
 Cost: Always running ($$$)
 Latency: Hours to load data
 ```
 
 **Serverless SQL**:
-```
-Data → Query in Place
+```textData → Query in Place
 Cost: Pay per query ($)
 Latency: Immediate access
 ```
@@ -432,8 +436,7 @@ ORDER BY total_revenue DESC
 **[VISUAL: Show cost breakdown]**
 
 **Cost Calculation**:
-```
-Cost = Data Scanned (TB) × $5.00 per TB
+```textCost = Data Scanned (TB) × $5.00 per TB
 
 Example:
 - Unoptimized: 500 GB scanned = $2.50

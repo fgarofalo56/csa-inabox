@@ -1,3 +1,9 @@
+---
+title: "Video Script: Azure Event Hubs Streaming Patterns"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Azure Event Hubs Streaming Patterns
 
 ![Duration: 26 minutes](https://img.shields.io/badge/Duration-26%20minutes-blue)
@@ -100,8 +106,7 @@ By the end of this video, viewers will be able to:
 **[VISUAL: Animated flow diagram]**
 
 **Data Flow**:
-```
-Producers → Event Hub → Partitions → Consumer Groups → Consumers
+```textProducers → Event Hub → Partitions → Consumer Groups → Consumers
                 ↓
             Capture → Data Lake
 ```
@@ -184,8 +189,7 @@ Producers → Event Hub → Partitions → Consumer Groups → Consumers
 ```
 
 **Partition Count Decision**:
-```
-Calculation:
+```textCalculation:
 - Expected throughput: 8 MB/s
 - 1 TU provides 1 MB/s ingress
 - Need 4 partitions for parallel processing
@@ -349,8 +353,7 @@ print(f"Throughput: {10000 / (end - start):.0f} events/sec")
 **[RUN CODE, show performance metrics]**
 
 **Performance Results**:
-```
-Successfully sent 10000 events
+```textSuccessfully sent 10000 events
 Throughput: 3,247 events/sec
 Duration: 3.08 seconds
 ```
@@ -624,8 +627,7 @@ class ParallelConsumer:
 ```
 
 **Performance Comparison**:
-```
-Sequential Processing: 10 events/sec
+```textSequential Processing: 10 events/sec
 Parallel Processing (4 workers): 38 events/sec
 Improvement: 3.8x
 ```
@@ -839,23 +841,20 @@ def main(events: func.EventHubEvent):
 #### Key Metrics
 
 **Throughput Metrics**:
-```
-Incoming Messages: 1.2M messages/min
+```textIncoming Messages: 1.2M messages/min
 Outgoing Messages: 1.2M messages/min
 Incoming Bytes: 850 MB/min
 Outgoing Bytes: 850 MB/min
 ```
 
 **Error Metrics**:
-```
-Server Errors: 0
+```textServer Errors: 0
 User Errors: 12 (quota exceeded)
 Throttled Requests: 0
 ```
 
 **Latency Metrics**:
-```
-Success E2E Latency: 145ms (P50), 420ms (P95)
+```textSuccess E2E Latency: 145ms (P50), 420ms (P95)
 Server Latency: 12ms (P50), 38ms (P95)
 ```
 
@@ -865,22 +864,19 @@ Server Latency: 12ms (P50), 38ms (P95)
 #### Common Issues and Solutions
 
 **Issue 1: Quota Exceeded**
-```
-Solution: Increase throughput units or enable auto-inflate
+```textSolution: Increase throughput units or enable auto-inflate
 Monitor: User Errors metric
 Alert Threshold: > 100 errors/min
 ```
 
 **Issue 2: Consumer Lag**
-```
-Solution: Scale out consumers or increase partition count
+```textSolution: Scale out consumers or increase partition count
 Monitor: Consumer group lag
 Alert Threshold: > 10 minutes behind
 ```
 
 **Issue 3: Connection Failures**
-```
-Solution: Check network/firewall rules, verify credentials
+```textSolution: Check network/firewall rules, verify credentials
 Monitor: Connection errors in diagnostic logs
 ```
 
@@ -1018,8 +1014,7 @@ Monitor: Connection errors in diagnostic logs
 **Title**: Azure Event Hubs Streaming Patterns - Complete Developer Guide (2024)
 
 **Description**:
-```
-Master Azure Event Hubs! Learn producer/consumer patterns, partitioning strategies, and integration with Stream Analytics and Synapse. Includes code examples in Python.
+```textMaster Azure Event Hubs! Learn producer/consumer patterns, partitioning strategies, and integration with Stream Analytics and Synapse. Includes code examples in Python.
 
 🎯 What You'll Learn:
 ✅ Event Hubs architecture

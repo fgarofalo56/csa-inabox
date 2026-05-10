@@ -1,3 +1,11 @@
+---
+title: "Lambda Kappa Hybrid"
+description: "Comprehensive documentation for Lambda Kappa Hybrid."
+tags:
+  - services
+  - architecture
+  - hybrid-architectures
+---
 # Lambda Kappa Hybrid
 
 Comprehensive documentation for Lambda Kappa Hybrid.

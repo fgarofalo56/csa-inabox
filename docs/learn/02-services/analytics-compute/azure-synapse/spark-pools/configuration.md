@@ -1,3 +1,11 @@
+---
+title: "️ Spark Pool Configuration - Azure Synapse Analytics"
+description: "Comprehensive guide to configuring Azure Synapse Spark pools for optimal performance, including node sizing, auto-scaling, library management, and configuration properties."
+tags:
+  - services
+  - synapse
+  - spark-pools
+---
 # ⚙️ Spark Pool Configuration - Azure Synapse Analytics
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

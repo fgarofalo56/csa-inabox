@@ -1,3 +1,11 @@
+---
+title: "Performance"
+description: "Step-by-step tutorial for performance."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - operations
+---
 # Performance
 
 Step-by-step tutorial for performance.

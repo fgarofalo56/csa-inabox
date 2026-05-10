@@ -1,3 +1,9 @@
+---
+title: "Export Settings Guide - CSA-in-a-Box Presentations"
+tags:
+  - multimedia
+  - presentations
+---
 # 📤 Export Settings Guide - CSA-in-a-Box Presentations
 
 ![Type: Guide](https://img.shields.io/badge/Type-Guide-blue)

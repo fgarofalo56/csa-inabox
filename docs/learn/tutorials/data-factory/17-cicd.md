@@ -1,3 +1,10 @@
+---
+title: "CI/CD Integration"
+description: "__Implement continuous integration and deployment for Azure Data Factory using ARM templates, Azure DevOps, and automated testing.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🚀 CI/CD Integration
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-CI_CD_Integration-blue)

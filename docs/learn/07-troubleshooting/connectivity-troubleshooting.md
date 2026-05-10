@@ -1,3 +1,9 @@
+---
+title: "Troubleshooting Connectivity Issues in Azure Synapse Analytics"
+description: "[Home](../../README.md) > Troubleshooting > Connectivity Troubleshooting"
+tags:
+  - troubleshooting
+---
 # Troubleshooting Connectivity Issues in Azure Synapse Analytics
 
 [Home](../../README.md) > Troubleshooting > Connectivity Troubleshooting

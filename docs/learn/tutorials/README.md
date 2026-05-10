@@ -1,3 +1,9 @@
+---
+title: "Interactive Learning Tutorials"
+description: "__Comprehensive hands-on learning resources for Azure Cloud Scale Analytics services."
+tags:
+  - tutorials
+---
 # 🎓 Interactive Learning Tutorials
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

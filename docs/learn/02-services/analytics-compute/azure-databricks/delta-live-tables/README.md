@@ -1,3 +1,11 @@
+---
+title: "Delta Live Tables"
+description: "Declarative framework for building reliable, maintainable, and testable data pipelines with automatic dependency management and data quality controls."
+tags:
+  - services
+  - databricks
+  - delta-live-tables
+---
 # 🌊 Delta Live Tables
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

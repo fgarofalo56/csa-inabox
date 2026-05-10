@@ -1,3 +1,9 @@
+---
+title: "Presentation Accessibility Guide - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # ♿ Presentation Accessibility Guide - CSA-in-a-Box
 
 ![Type: Guide](https://img.shields.io/badge/Type-Guide-blue)

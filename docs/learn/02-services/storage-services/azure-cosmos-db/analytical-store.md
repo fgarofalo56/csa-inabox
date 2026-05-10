@@ -1,3 +1,10 @@
+---
+title: "Analytical Store (HTAP) in Azure Cosmos DB"
+description: "Run analytics on operational data without impacting transactional workloads using Azure Cosmos DB Analytical Store with Synapse Link."
+tags:
+  - services
+  - cosmos-db
+---
 # 📈 Analytical Store (HTAP) in Azure Cosmos DB
 
 ![HTAP](https://img.shields.io/badge/HTAP-Enabled-orange?style=flat-square)

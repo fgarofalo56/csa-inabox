@@ -1,3 +1,10 @@
+---
+title: "Real-Time Streaming Analytics Lab"
+description: "Build real-time analytics solutions using Azure Stream Analytics and Synapse. Process streaming data, implement windowing, and create live dashboards."
+tags:
+  - tutorials
+  - code-labs
+---
 # 🌊 Real-Time Streaming Analytics Lab
 
 ![Lab](https://img.shields.io/badge/Lab-Streaming_Analytics-blue)

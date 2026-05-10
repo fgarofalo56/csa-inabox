@@ -1,3 +1,9 @@
+---
+title: "Video Production Equipment Requirements"
+tags:
+  - multimedia
+  - video
+---
 # Video Production Equipment Requirements
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)
@@ -137,8 +143,7 @@ Good lighting dramatically improves video quality.
 
 #### Basic Lighting Kit ($100-200)
 
-```
-[Setup Diagram]
+```text[Setup Diagram]
 ┌─────────────────────┐
 │    Background       │
 │        ↑            │

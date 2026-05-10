@@ -1,3 +1,9 @@
+---
+title: "Tutorial 11: Power BI Integration"
+tags:
+  - tutorials
+  - synapse
+---
 # Tutorial 11: Power BI Integration
 
 ## Overview
@@ -32,15 +38,13 @@ By the end of this tutorial, you will be able to:
 
 1. Click **Get Data** > **Azure** > **Azure Synapse Analytics SQL**
 2. Enter the serverless endpoint:
-   ```
-   yourworkspace-ondemand.sql.azuresynapse.net
+   ```text   yourworkspace-ondemand.sql.azuresynapse.net
    ```
 3. Select **DirectQuery** or **Import**
 4. Authenticate with Azure AD
 
 **Connection String:**
-```
-Server=yourworkspace-ondemand.sql.azuresynapse.net;Database=your_database;
+```textServer=yourworkspace-ondemand.sql.azuresynapse.net;Database=your_database;
 ```
 
 ### Connecting to Dedicated SQL Pool
@@ -49,15 +53,13 @@ Server=yourworkspace-ondemand.sql.azuresynapse.net;Database=your_database;
 
 1. Click **Get Data** > **Azure** > **Azure Synapse Analytics SQL**
 2. Enter the dedicated pool endpoint:
-   ```
-   yourworkspace.sql.azuresynapse.net
+   ```text   yourworkspace.sql.azuresynapse.net
    ```
 3. Select database (your dedicated pool name)
 4. Choose connectivity mode
 
 **Connection String:**
-```
-Server=yourworkspace.sql.azuresynapse.net;Database=your_dedicated_pool;
+```textServer=yourworkspace.sql.azuresynapse.net;Database=your_dedicated_pool;
 ```
 
 ### DirectQuery vs Import Mode
@@ -70,8 +72,7 @@ Server=yourworkspace.sql.azuresynapse.net;Database=your_dedicated_pool;
 | DAX Support | Limited | Full |
 | Use Case | Large datasets, real-time | Historical analysis |
 
-```
-DirectQuery Mode:
+```textDirectQuery Mode:
 ┌──────────────┐     Query      ┌──────────────┐
 │   Power BI   │───────────────▶│    Synapse   │
 │   Report     │◀───────────────│   SQL Pool   │
@@ -412,8 +413,7 @@ TOPN(1, VALUES(Product[Category]), [Total Sales], DESC)
 
 ### Report Layout Best Practices
 
-```
-┌────────────────────────────────────────────────────────────────┐
+```text┌────────────────────────────────────────────────────────────────┐
 │  [Logo]  Sales Dashboard                    [Date Slicer]      │
 ├────────────────────────────────────────────────────────────────┤
 │                                                                 │

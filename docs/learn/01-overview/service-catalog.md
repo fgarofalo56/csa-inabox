@@ -1,3 +1,9 @@
+---
+title: "Azure Cloud Scale Analytics Service Catalog"
+description: "Complete catalog of Azure analytics services with capabilities, use cases, and decision guidance."
+tags:
+  - overview
+---
 # 📖 Azure Cloud Scale Analytics Service Catalog
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

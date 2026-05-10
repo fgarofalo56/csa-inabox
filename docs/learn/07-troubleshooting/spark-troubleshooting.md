@@ -1,3 +1,9 @@
+---
+title: "Spark Troubleshooting Guide"
+description: "[Home](../../README.md) > Troubleshooting > Spark Troubleshooting"
+tags:
+  - troubleshooting
+---
 # Spark Troubleshooting Guide
 
 [Home](../../README.md) > Troubleshooting > Spark Troubleshooting

@@ -1,3 +1,10 @@
+---
+title: "Medallion Architecture - Lakehouse Pattern"
+description: "Multi-layered data architecture pattern that incrementally refines data quality from raw ingestion to business-ready analytics using Bronze, Silver, and Gold layers."
+tags:
+  - architecture
+  - batch-architectures
+---
 # Medallion Architecture - Lakehouse Pattern
 
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen?style=flat-square)

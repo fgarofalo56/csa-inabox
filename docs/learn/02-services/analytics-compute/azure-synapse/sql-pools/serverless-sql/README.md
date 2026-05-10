@@ -1,3 +1,12 @@
+---
+title: "Serverless SQL Pools"
+description: "Query data in your Azure Data Lake without provisioning or managing infrastructure. Pay only for the data processed by your queries."
+tags:
+  - services
+  - synapse
+  - sql-pools
+  - serverless-sql
+---
 # ⚡ Serverless SQL Pools
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

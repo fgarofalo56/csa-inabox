@@ -1,3 +1,11 @@
+---
+title: "End-to-End Streaming Data Pipeline"
+description: "Complete implementation of a production-ready streaming data pipeline integrating Azure Event Hubs, Stream Analytics, and Synapse Analytics."
+tags:
+  - code-examples
+  - integration-examples
+  - streaming-pipeline
+---
 # End-to-End Streaming Data Pipeline
 
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red)

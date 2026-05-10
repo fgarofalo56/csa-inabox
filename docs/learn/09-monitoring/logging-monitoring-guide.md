@@ -1,3 +1,9 @@
+---
+title: "Logging and Monitoring in Azure Synapse Analytics"
+description: "[Home](../../README.md) > Monitoring > Logging and Monitoring Guide"
+tags:
+  - monitoring
+---
 # Logging and Monitoring in Azure Synapse Analytics
 
 [Home](../../README.md) > Monitoring > Logging and Monitoring Guide

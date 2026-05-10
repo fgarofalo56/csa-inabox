@@ -1,3 +1,10 @@
+---
+title: "Access Control in ADLS Gen2"
+description: "ADLS Gen2 provides multiple layers of security controls including Azure RBAC, POSIX-compliant ACLs, and Shared Access Signatures, enabling fine-grained access management for enterprise data lakes."
+tags:
+  - services
+  - azure-data-lake-gen2
+---
 # 🔐 Access Control in ADLS Gen2
 
 ![Security](https://img.shields.io/badge/Security-Enterprise%20Grade-blue?style=flat-square)

@@ -1,3 +1,10 @@
+---
+title: "Databricks Best Practices"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **Databricks**"
+tags:
+  - best-practices
+  - databricks
+---
 # Databricks Best Practices
 
 > **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **Databricks**

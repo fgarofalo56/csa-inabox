@@ -1,3 +1,10 @@
+---
+title: "Kappa Architecture Pattern"
+description: "Stream-first architecture that processes all data as continuous, infinite streams - a simpler alternative to Lambda Architecture."
+tags:
+  - architecture
+  - streaming-architectures
+---
 # Kappa Architecture Pattern
 
 ![Stream-First](https://img.shields.io/badge/Type-Stream%20Only-green?style=flat-square)

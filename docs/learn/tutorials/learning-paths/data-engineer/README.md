@@ -1,3 +1,11 @@
+---
+title: "= Data Engineer Learning Path"
+description: "> **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= Data Engineer Path**"
+tags:
+  - tutorials
+  - learning-paths
+  - data-engineer
+---
 # = Data Engineer Learning Path
 
 > **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= Data Engineer Path**

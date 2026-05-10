@@ -1,3 +1,10 @@
+---
+title: "Tutorial 07: PySpark Processing in Azure Synapse"
+description: "> **Navigation**: [Home](../../README.md) > [Tutorials](../README.md) > [Synapse Series](README.md) > PySpark Processing"
+tags:
+  - tutorials
+  - synapse
+---
 # Tutorial 07: PySpark Processing in Azure Synapse
 
 > **Navigation**: [Home](../../README.md) > [Tutorials](../README.md) > [Synapse Series](README.md) > PySpark Processing

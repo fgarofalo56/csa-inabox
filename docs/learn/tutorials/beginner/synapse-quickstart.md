@@ -1,3 +1,10 @@
+---
+title: "= Azure Synapse Analytics Quickstart"
+description: "> __< [Home](../../../README.md)__ | __= [Documentation](../../README.md)__ | __< [Tutorials](../README.md)__ | __< Beginner__ | __= Synapse__"
+tags:
+  - tutorials
+  - beginner
+---
 # = Azure Synapse Analytics Quickstart
 
 > __< [Home](../../../README.md)__ | __= [Documentation](../../README.md)__ | __< [Tutorials](../README.md)__ | __< Beginner__ | __= Synapse__
@@ -25,7 +32,8 @@ After completing this quickstart, you will be able to:
 - [ ] __Azure Portal access__ - [portal.azure.com](https://portal.azure.com)
 - [ ] __5-10 minutes__ to complete setup
 
-## = What is Azure Synapse Analytics?
+## =
+ What is Azure Synapse Analytics?
 
 Azure Synapse is a unified analytics platform that brings together:
 
@@ -129,7 +137,8 @@ order_id,product,category,amount,order_date,customer_id
    - Choose `sales_data.csv`
    - Click "Upload"
 
-## = Step 3: Query Data with Serverless SQL
+## =
+ Step 3: Query Data with Serverless SQL
 
 Serverless SQL Pool lets you query data directly in storage without loading it first.
 

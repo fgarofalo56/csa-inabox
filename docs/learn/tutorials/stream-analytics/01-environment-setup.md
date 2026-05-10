@@ -1,3 +1,10 @@
+---
+title: "Tutorial 1: Environment Setup and Prerequisites"
+description: "__Set up your Azure environment and local development tools for the complete Stream Analytics tutorial series. This foundation ensures smooth execution of all real-time analytics tutorials.__"
+tags:
+  - tutorials
+  - stream-analytics
+---
 # 🚀 Tutorial 1: Environment Setup and Prerequisites
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-01_Environment_Setup-blue)

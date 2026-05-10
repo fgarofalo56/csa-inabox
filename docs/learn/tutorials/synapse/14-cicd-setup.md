@@ -1,3 +1,9 @@
+---
+title: "Tutorial 14: CI/CD Setup"
+tags:
+  - tutorials
+  - synapse
+---
 # Tutorial 14: CI/CD Setup
 
 ## Overview
@@ -27,8 +33,7 @@ By the end of this tutorial, you will be able to:
 
 ### Connecting Synapse to Git
 
-```
-┌─────────────────────────────────────────────────────────────────┐
+```text┌─────────────────────────────────────────────────────────────────┐
 │                  Synapse Git Integration                         │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
@@ -55,8 +60,7 @@ By the end of this tutorial, you will be able to:
 
 ### Repository Structure
 
-```
-synapse-workspace/
+```textsynapse-workspace/
 ├── .gitignore
 ├── workspace.json
 ├── publish_config.json
@@ -505,8 +509,7 @@ steps:
 
 ### Database Project Structure
 
-```
-sql-database/
+```textsql-database/
 ├── dbo/
 │   ├── Tables/
 │   │   ├── fact.Sales.sql
