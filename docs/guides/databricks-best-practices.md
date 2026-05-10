@@ -12,6 +12,10 @@ tags:
 
 # Databricks Best Practices for CSA-in-a-Box
 
+<!-- cross-link-admonition -->
+!!! info "See also: generic Azure reference"
+    For service-agnostic deep-dive content on Azure Databricks — architecture, feature reference, code samples, and patterns independent of CSA-in-a-Box — see [`Azure Databricks` in the reference library](../learn/02-services/analytics-compute/azure-databricks/README.md).
+
 ## Overview
 
 Azure Databricks is the **primary heavy-compute engine** for CSA-in-a-Box

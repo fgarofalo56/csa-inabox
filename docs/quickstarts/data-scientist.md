@@ -14,7 +14,7 @@ Before you begin, make sure the following are in place:
 
 - [ ] **Azure subscription** with Contributor access to the resource group
 - [ ] **Databricks workspace** provisioned in the Data Landing Zone (see
-      [tutorials/01-foundation-platform](../tutorials/01-foundation-platform/))
+      [tutorials/01-foundation-platform](../tutorials/01-foundation-platform/README.md))
 - [ ] **Python 3.10+** installed locally (for optional local testing)
 - [ ] **Gold layer data** in ADLS Gen2 or OneLake -- the dbt pipeline must
       have run at least once (see [QUICKSTART.md](../QUICKSTART.md))
@@ -396,7 +396,7 @@ Test with `az ml online-endpoint invoke`.
 - **Full ML lifecycle** -- CI/CD, evaluation gates, retraining:
   [examples/ml-lifecycle.md](../examples/ml-lifecycle.md)
 - **AI analytics with Azure AI Foundry** -- RAG pipelines and agents:
-  [tutorials/06-ai-analytics-foundry](../tutorials/06-ai-analytics-foundry/)
+  [tutorials/06-ai-analytics-foundry](../tutorials/06-ai-analytics-foundry/README.md)
 - **Azure AI Foundry guide** -- Hub/project setup, model catalog, prompt flow:
   [guides/azure-ai-foundry.md](../guides/azure-ai-foundry.md)
 - **Databricks best practices** -- Cluster policies, Unity Catalog:

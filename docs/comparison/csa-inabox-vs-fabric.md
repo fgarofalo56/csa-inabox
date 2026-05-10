@@ -204,7 +204,7 @@ moves rather than rewrites:
 | Power BI semantic models | Fabric / Direct Lake | **Low to Medium** — re-author for Direct Lake to get sub-second refresh |
 | ADF orchestrations | Fabric Data Factory pipelines | **Low** — UI / JSON formats are compatible; some triggers re-author |
 
-The repo's [`adr/`](../adr/) directory documents the per-component
+The repo's [`adr/`](../adr/README.md) directory documents the per-component
 forward path; together they constitute a migration runbook.
 
 ### Microsoft Fabric → CSA-in-a-Box (Gov customer leaving Fabric pilot)
@@ -267,5 +267,5 @@ up with hybrid topologies.
 ## See also
 
 - ← Previous: [Microsoft Fabric Platform Guide](../guides/microsoft-fabric.md)
-- → Next: [Migration paths](../migrations/)
+- → Next: [Migration paths](../migrations/README.md)
 - ⌂ Index: [Documentation home](../index.md)

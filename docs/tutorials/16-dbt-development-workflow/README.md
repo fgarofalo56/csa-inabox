@@ -11,7 +11,7 @@ Build a complete dbt project from scratch on the CSA-in-a-Box platform. You will
 
 Before starting, ensure you have the following installed and configured:
 
-- [ ] **Completed [Tutorial 01: Foundation Platform](../01-foundation-platform/)** -- Databricks workspace and ADLS storage deployed
+- [ ] **Completed [Tutorial 01: Foundation Platform](../01-foundation-platform/README.md)** -- Databricks workspace and ADLS storage deployed
 - [ ] **Python** 3.11+ -- [python.org](https://www.python.org/downloads/)
 - [ ] **Databricks Personal Access Token** -- created in Tutorial 01, Step 8b
 - [ ] **Git** -- [git-scm.com](https://git-scm.com/)
@@ -1177,9 +1177,9 @@ models:
 
 ## Next Steps
 
-- **[Tutorial 01: Foundation Platform](../01-foundation-platform/)** -- if you need to set up Databricks first
-- **[Tutorial 15: Multi-Tenant Onboarding](../15-multi-tenant-onboarding/)** -- isolate dbt schemas per tenant
-- **[Tutorial 12: Monitoring & Observability](../12-monitoring-observability/)** -- add dbt run monitoring and alerting
+- **[Tutorial 01: Foundation Platform](../01-foundation-platform/README.md)** -- if you need to set up Databricks first
+- **[Tutorial 15: Multi-Tenant Onboarding](../15-multi-tenant-onboarding/README.md)** -- isolate dbt schemas per tenant
+- **[Tutorial 12: Monitoring & Observability](../12-monitoring-observability/README.md)** -- add dbt run monitoring and alerting
 
 See the [Tutorial Index](../README.md) for all available paths.
 

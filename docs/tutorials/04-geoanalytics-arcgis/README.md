@@ -3,7 +3,7 @@
 > **Estimated Time:** 3-4 hours (plus ArcGIS installation time)
 > **Difficulty:** Advanced
 
-> **BYOL (Bring Your Own License):** This tutorial requires a valid Esri ArcGIS Enterprise license. CSA-in-a-Box provisions the Azure infrastructure, but you must supply your own Esri license files. If you do not have an Esri license, see [Tutorial 03: GeoAnalytics with Open-Source Tools](../03-geoanalytics-oss/) for a fully open-source alternative.
+> **BYOL (Bring Your Own License):** This tutorial requires a valid Esri ArcGIS Enterprise license. CSA-in-a-Box provisions the Azure infrastructure, but you must supply your own Esri license files. If you do not have an Esri license, see [Tutorial 03: GeoAnalytics with Open-Source Tools](../03-geoanalytics-oss/README.md) for a fully open-source alternative.
 
 Deploy ArcGIS Enterprise on Azure infrastructure provisioned by CSA-in-a-Box, register your data products as enterprise geodatabase feature services, and build web maps and dashboards connected to the CSA Gold layer.
 
@@ -507,7 +507,7 @@ Register-ScheduledTask -TaskName "CSA-GoldLayerRefresh" `
 For real-time streaming data, consider adding ArcGIS GeoEvent Server:
 
 1. **Install GeoEvent Server** on the same VM or a dedicated VM
-2. **Configure input connectors** for Azure Event Hubs (see [Tutorial 05](../05-streaming-lambda/))
+2. **Configure input connectors** for Azure Event Hubs (see [Tutorial 05](../05-streaming-lambda/README.md))
 3. **Create GeoEvent services** to process streaming earthquake data
 4. **Publish to real-time feature layers** for live dashboards
 
@@ -530,8 +530,8 @@ See: [ArcGIS GeoEvent Server Documentation](https://enterprise.arcgis.com/en/geo
 
 ## What's Next
 
-- **[Tutorial 03: GeoAnalytics with Open-Source Tools](../03-geoanalytics-oss/)** — Open-source alternative (if you haven't completed it)
-- **[Tutorial 05: Real-Time Streaming](../05-streaming-lambda/)** — Add streaming data pipeline with Lambda Architecture
+- **[Tutorial 03: GeoAnalytics with Open-Source Tools](../03-geoanalytics-oss/README.md)** — Open-source alternative (if you haven't completed it)
+- **[Tutorial 05: Real-Time Streaming](../05-streaming-lambda/README.md)** — Add streaming data pipeline with Lambda Architecture
 - **[Tutorial 06: AI Analytics](../06-ai-analytics/)** — Apply ML models for predictive geospatial analysis
 
 See the [Tutorial Index](../README.md) for all available paths.
@@ -565,4 +565,4 @@ az network public-ip delete --name "csa-vm-arcgis-dev-pip" --resource-group "$CS
 - [Enterprise Geodatabase with PostgreSQL](https://enterprise.arcgis.com/en/server/latest/manage-data/windows/database-requirements-postgresql.htm)
 - [ArcGIS REST API](https://developers.arcgis.com/rest/)
 - [CSA-in-a-Box Architecture](../../ARCHITECTURE.md)
-- [Tutorial 03: Open-Source GeoAnalytics](../03-geoanalytics-oss/)
+- [Tutorial 03: Open-Source GeoAnalytics](../03-geoanalytics-oss/README.md)

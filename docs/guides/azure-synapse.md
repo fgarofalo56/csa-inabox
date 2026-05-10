@@ -12,6 +12,10 @@ tags:
 
 # Azure Synapse Analytics Guide
 
+<!-- cross-link-admonition -->
+!!! info "See also: generic Azure reference"
+    For service-agnostic deep-dive content on Azure Synapse Analytics — architecture, feature reference, code samples, and patterns independent of CSA-in-a-Box — see [`Azure Synapse Analytics` in the reference library](../learn/02-services/analytics-compute/azure-synapse/README.md).
+
 ## Overview
 
 Azure Synapse Analytics is a unified analytics service that brings together

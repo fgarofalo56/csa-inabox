@@ -8,6 +8,10 @@ tags:
 ---
 # 🗄️ Unity Catalog
 
+<!-- cross-link-admonition -->
+!!! info "See also: CSA-in-a-Box platform guide"
+    This is the generic Azure reference for Databricks Unity Catalog. For how CSA-in-a-Box specifically deploys, configures, and integrates this service, see the platform guide: [`Databricks Unity Catalog` guide](../../../../../guides/databricks-unity-catalog.md).
+
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Feature](https://img.shields.io/badge/Feature-Data%20Governance-purple?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)

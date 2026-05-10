@@ -9,7 +9,7 @@ Reduce your Azure data platform spend by 30-60% without sacrificing performance.
 
 ## Prerequisites
 
-- [ ] **Completed [Tutorial 01: Foundation Platform](../01-foundation-platform/)** with all resources deployed
+- [ ] **Completed [Tutorial 01: Foundation Platform](../01-foundation-platform/README.md)** with all resources deployed
 - [ ] **Azure subscription** with Contributor role (Owner required for policy assignments)
 - [ ] **Azure CLI** 2.50+ with Bicep CLI 0.22+
 - [ ] **Cost Management + Billing** reader role at the subscription level
@@ -506,7 +506,7 @@ Set a calendar reminder for the first Monday of each month to run this review.
 
 ## Related
 
-- [Tutorial 01: Foundation Platform](../01-foundation-platform/) -- Deploy the base infrastructure this tutorial optimizes
+- [Tutorial 01: Foundation Platform](../01-foundation-platform/README.md) -- Deploy the base infrastructure this tutorial optimizes
 - [Tutorial 02: Governance & Compliance](../02-governance/) -- Policy enforcement and tagging standards
 - [Tutorial 10: Azure Monitor](../10-azure-monitor/) -- Monitoring and alerting for cost anomalies
 - [Azure Cost Management documentation](https://learn.microsoft.com/en-us/azure/cost-management-billing/)

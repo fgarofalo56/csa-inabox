@@ -570,4 +570,4 @@ Use this checklist to assess and track your governance maturity:
 | [Purview Setup](../governance/PURVIEW_SETUP.md)                       | Step-by-step Purview deployment guide                    |
 | [Metadata Management](../governance/METADATA_MANAGEMENT.md)           | Technical and business metadata standards                |
 | [ADR-0012: Data Mesh Federation](../adr/0012-data-mesh-federation.md) | Domain boundary decisions                                |
-| [Compliance Mappings](../compliance/)                                 | FedRAMP, NIST 800-53, StateRAMP control mappings         |
+| [Compliance Mappings](../compliance/README.md)                                 | FedRAMP, NIST 800-53, StateRAMP control mappings         |

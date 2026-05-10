@@ -13,6 +13,10 @@ status: published
 
 # Databricks Unity Catalog
 
+<!-- cross-link-admonition -->
+!!! info "See also: generic Azure reference"
+    For service-agnostic deep-dive content on Databricks Unity Catalog — architecture, feature reference, code samples, and patterns independent of CSA-in-a-Box — see [`Databricks Unity Catalog` in the reference library](../learn/02-services/analytics-compute/azure-databricks/unity-catalog/README.md).
+
 > Unified governance for all data and AI assets in the CSA-in-a-Box Databricks estate —
 > one metastore, consistent access control, automatic lineage, and cross-organization sharing.
 

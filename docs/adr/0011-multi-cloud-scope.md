@@ -162,9 +162,9 @@ We will know this decision is right if:
   [`./0010-fabric-strategic-target.md`](./0010-fabric-strategic-target.md)
 - Purview catalog strategy — [`./0006-purview-over-atlas.md`](./0006-purview-over-atlas.md)
 - Migration playbooks (Palantir, Snowflake, AWS, GCP) —
-  [`docs/migrations/`](../migrations/)
+  [`docs/migrations/`](../migrations/README.md)
 - Fabric vs Databricks vs Synapse decision tree —
-  [`docs/decisions/`](../decisions/)
+  [`docs/decisions/`](../decisions/README.md)
 - Framework controls: NIST 800-53 **CA-3** (system interconnections for
   cross-cloud scans), **AC-4** (information-flow enforcement across the
   S3/GCS shortcut boundary), **CM-7** (least-functionality — read-only

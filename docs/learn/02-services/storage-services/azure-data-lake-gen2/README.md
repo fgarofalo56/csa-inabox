@@ -7,6 +7,10 @@ tags:
 ---
 # 🏞️ Azure Data Lake Storage Gen2
 
+<!-- cross-link-admonition -->
+!!! info "See also: CSA-in-a-Box platform guide"
+    This is the generic Azure reference for Azure Data Lake Storage Gen2. For how CSA-in-a-Box specifically deploys, configures, and integrates this service, see the platform guide: [`Azure Data Lake Storage Gen2` guide](../../../../guides/azure-data-lake.md).
+
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Type](https://img.shields.io/badge/Type-Big%20Data%20Storage-darkgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Basic-green?style=flat-square)

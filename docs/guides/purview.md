@@ -1,5 +1,9 @@
 # Microsoft Purview Guide
 
+<!-- cross-link-admonition -->
+!!! info "See also: generic Azure reference"
+    For service-agnostic deep-dive content on Microsoft Purview — architecture, feature reference, code samples, and patterns independent of CSA-in-a-Box — see [`Microsoft Purview` in the reference library](../learn/02-services/data-governance/azure-purview/README.md).
+
 > Purview is the data governance hub for CSA-in-a-Box — providing data
 > cataloging, lineage, classification, and access policies across the
 > entire medallion architecture.

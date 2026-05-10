@@ -405,4 +405,4 @@ Invoke-ProcessTable -Server "powerbi://api.powerbi.com/v1.0/myorg/<workspace>" `
 - **Fabric end-to-end example** -- Lakehouse-to-report walkthrough:
   [examples/fabric-e2e.md](../examples/fabric-e2e.md)
 - **Data governance** -- Sensitivity labels, Purview, RLS:
-  [tutorials/02-data-governance](../tutorials/02-data-governance/)
+  [tutorials/02-data-governance](../tutorials/02-data-governance/README.md)

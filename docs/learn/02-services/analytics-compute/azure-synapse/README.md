@@ -7,6 +7,10 @@ tags:
 ---
 # 🎯 Azure Synapse Analytics
 
+<!-- cross-link-admonition -->
+!!! info "See also: CSA-in-a-Box platform guide"
+    This is the generic Azure reference for Azure Synapse Analytics. For how CSA-in-a-Box specifically deploys, configures, and integrates this service, see the platform guide: [`Azure Synapse Analytics` guide](../../../../guides/azure-synapse.md).
+
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Tier](https://img.shields.io/badge/Tier-Enterprise-purple?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)
