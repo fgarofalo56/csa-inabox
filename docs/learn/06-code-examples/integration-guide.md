@@ -1,12 +1,12 @@
 ---
 title: "Comprehensive Azure Integration Guide for Synapse Analytics"
-description: "[Home](../../README.md) > Code Examples > Integration Guide"
+description: "[Home](../index.md) > Code Examples > Integration Guide"
 tags:
   - code-examples
 ---
 # Comprehensive Azure Integration Guide for Synapse Analytics
 
-[Home](../../README.md) > Code Examples > Integration Guide
+[Home](../index.md) > Code Examples > Integration Guide
 
 !!! info "Guide Overview"
     This comprehensive guide provides code examples and patterns for integrating Azure Synapse Analytics with other Azure services including Azure Machine Learning, Microsoft Purview, and Azure Data Factory.

@@ -8,7 +8,7 @@ tags:
 # <
  Streaming Data Fundamentals
 
-> __< [Home](../../../README.md)__ | __= [Documentation](../../README.md)__ | __< [Tutorials](../README.md)__ | __< Beginner__ | __<
+> __< [Home](../../index.md)__ | __= [Documentation](../../index.md)__ | __< [Tutorials](../README.md)__ | __< Beginner__ | __<
  Streaming__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

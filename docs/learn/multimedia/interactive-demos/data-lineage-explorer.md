@@ -575,20 +575,20 @@ After completing this demo, you should understand:
 
 - [Azure Purview Data Lineage](../../02-services/data-governance/azure-purview/lineage.md)
 - [Synapse Pipeline Lineage](../../02-services/analytics-compute/azure-synapse/pipelines/lineage-tracking.md)
-- [Data Governance Best Practices](../../best-practices/data-governance.md)
-- [Metadata Management Guide](../../architecture/shared-metadata/shared-metadata.md)
+- [Data Governance Best Practices](../../best-practices-extra/data-governance/README.md)
+- [Metadata Management Guide](../../03-architecture-patterns/service-architectures/shared-metadata/shared-metadata.md)
 
 ### Tutorials
 
-- [Setting Up Azure Purview for Lineage](../../tutorials/purview/lineage-setup.md)
-- [Building Lineage-Aware Pipelines](../../tutorials/synapse/lineage-integration.md)
-- [Data Quality with Lineage](../../tutorials/data-quality/lineage-driven-quality.md)
+- Setting Up Azure Purview for Lineage
+- Building Lineage-Aware Pipelines
+- Data Quality with Lineage
 
 ### Code Examples
 
-- [Purview Lineage API Examples](../../code-examples/integration/azure-purview.md)
-- [Custom Lineage Collection](../../code-examples/data-governance/custom-lineage.md)
-- [Lineage Visualization Components](../../code-examples/visualizations/lineage-graphs.md)
+- [Purview Lineage API Examples](../../06-code-examples/integration/azure-purview.md)
+- Custom Lineage Collection
+- Lineage Visualization Components
 
 ## ❓ FAQ
 

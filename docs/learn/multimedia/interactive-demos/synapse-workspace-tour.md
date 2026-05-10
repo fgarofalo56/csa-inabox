@@ -633,8 +633,8 @@ const savedProgress = JSON.parse(
 **Alternative Formats:**
 
 - **Video Walkthrough:** [Watch on YouTube](https://youtube.com/placeholder)
-- **PDF Guide:** [Download Static Guide](./assets/workspace-tour-guide.pdf)
-- **Slides:** [View Presentation](./assets/workspace-tour-slides.pptx)
+- **PDF Guide:** Download Static Guide
+- **Slides:** View Presentation
 
 ### Code Samples Repository
 
@@ -656,8 +656,8 @@ npm start
 
 ### Related Documentation
 
-- [Synapse Workspace Concepts](../../architecture/README.md)
-- [Security Best Practices](../../best-practices/security.md)
+- [Synapse Workspace Concepts](../../03-architecture-patterns/reference-architectures/README.md)
+- [Security Best Practices](../../best-practices-extra/security/README.md)
 - [Workspace Management Guide](../../administration/workspace-management.md)
 
 ### Microsoft Documentation

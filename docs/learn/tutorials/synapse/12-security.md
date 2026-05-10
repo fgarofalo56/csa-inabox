@@ -677,5 +677,5 @@ Perform a security audit using built-in tools and document findings.
 ## Next Steps
 
 - Continue to [Tutorial 13: Monitoring and Diagnostics](13-monitoring.md)
-- Explore [Security Best Practices](../../best-practices/security.md)
-- Review [Security Troubleshooting](../../troubleshooting/security-troubleshooting.md)
+- Explore [Security Best Practices](../../best-practices-extra/security/README.md)
+- Review [Security Troubleshooting](../../07-troubleshooting/security-troubleshooting.md)

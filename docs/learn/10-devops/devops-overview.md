@@ -1,12 +1,12 @@
 ---
 title: "DevOps Documentation"
-description: "> **[Home](../README.md)** | **DevOps**"
+description: "> **[Home](../index.md)** | **DevOps**"
 tags:
   - devops
 ---
 # DevOps Documentation
 
-> **[Home](../README.md)** | **DevOps**
+> **[Home](../index.md)** | **DevOps**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-DevOps-orange?style=flat-square)
@@ -33,33 +33,33 @@ This section covers DevOps practices for analytics workloads:
 
 | Document | Description |
 |----------|-------------|
-| [Synapse CI/CD](../devops/pipeline-ci-cd/README.md) | Synapse workspace deployment |
-| [Databricks CI/CD](../06-devops/databricks-cicd.md) | Databricks deployment automation |
-| [ADF CI/CD](adf-cicd.md) | Data Factory pipeline deployment |
+| [Synapse CI/CD](../tutorials/learning-paths/devops/README.md) | Synapse workspace deployment |
+| [Databricks CI/CD](databricks-cicd.md) | Databricks deployment automation |
+| ADF CI/CD | Data Factory pipeline deployment |
 
 ### Infrastructure as Code
 
 | Document | Description |
 |----------|-------------|
-| [Bicep Templates](bicep-templates.md) | Azure Bicep for analytics |
-| [Terraform Modules](terraform-modules.md) | Terraform for multi-cloud |
-| [ARM Templates](arm-templates.md) | Legacy ARM template reference |
+| Bicep Templates | Azure Bicep for analytics |
+| Terraform Modules | Terraform for multi-cloud |
+| ARM Templates | Legacy ARM template reference |
 
 ### Testing
 
 | Document | Description |
 |----------|-------------|
-| [Data Quality Testing](../devops/automated-testing/README.md) | Automated data quality checks |
-| [Pipeline Testing](pipeline-testing.md) | Unit and integration tests |
-| [Performance Testing](performance-testing.md) | Load and stress testing |
+| [Data Quality Testing](../tutorials/learning-paths/devops/README.md) | Automated data quality checks |
+| Pipeline Testing | Unit and integration tests |
+| Performance Testing | Load and stress testing |
 
 ### Security
 
 | Document | Description |
 |----------|-------------|
 | [Security Best Practices](security-best-practices.md) | DevSecOps for analytics |
-| [Secret Management](secret-management.md) | Key Vault integration |
-| [Compliance Automation](compliance-automation.md) | Automated compliance checks |
+| Secret Management | Key Vault integration |
+| Compliance Automation | Automated compliance checks |
 
 ---
 
@@ -166,8 +166,8 @@ jobs:
 
 ## Related Documentation
 
-- [Monitoring Setup](../monitoring/README.md)
-- [Security Best Practices](../best-practices/security/README.md)
+- [Monitoring Setup](../09-monitoring/README.md)
+- [Security Best Practices](../best-practices-extra/security/README.md)
 - [Implementation Guides](../04-implementation-guides/README.md)
 
 ---

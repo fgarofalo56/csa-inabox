@@ -487,10 +487,10 @@ Key monitoring areas:
 
 ### Additional Guides
 
-- [Security Monitoring Guide](../best-practices/security.md)
-- [Performance Optimization](../best-practices/performance-optimization.md)
-- [Cost Optimization](../best-practices/cost-optimization.md)
-- [Troubleshooting Guide](../troubleshooting/README.md)
+- [Security Monitoring Guide](../best-practices-extra/security/README.md)
+- [Performance Optimization](../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+- [Cost Optimization](../best-practices-extra/cost-optimization/README.md)
+- [Troubleshooting Guide](../07-troubleshooting/README.md)
 
 ---
 

@@ -324,11 +324,11 @@ Runtime Layer:
 
 ## 📚 Related Documentation
 
-- **[Data Flow Details](data-flow.md)** - Detailed data processing flows
-- **[Component Architecture](components.md)** - Deep dive into Databricks platform  
-- **[Security Architecture](security.md)** - Comprehensive security implementation
-- **[Implementation Guide](../implementation/getting-started.md)** - Step-by-step deployment
-- **[Operations Guide](../operations/monitoring.md)** - Day-to-day operations
+- **[Data Flow Details](../docs/architecture/data-flow.md)** - Detailed data processing flows
+- **[Component Architecture](../docs/architecture/components.md)** - Deep dive into Databricks platform  
+- **[Security Architecture](../docs/architecture/security.md)** - Comprehensive security implementation
+- **Implementation Guide** - Step-by-step deployment
+- **Operations Guide** - Day-to-day operations
 
 ## 🆘 Support & Feedback
 

@@ -1,12 +1,12 @@
 ---
 title: "Migration Strategies"
-description: "> **[Home](../README.md)** | **[Best Practices](index.md)** | **Migration Strategies**"
+description: "> **[Home](../index.md)** | **[Best Practices](index.md)** | **Migration Strategies**"
 tags:
   - best-practices
 ---
 # Migration Strategies
 
-> **[Home](../README.md)** | **[Best Practices](index.md)** | **Migration Strategies**
+> **[Home](../index.md)** | **[Best Practices](index.md)** | **Migration Strategies**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -144,8 +144,8 @@ SELECT * FROM TargetCounts;
 
 ## Related Documentation
 
-- [Data Factory Tutorials](../docs/tutorials/data-factory/README.md)
-- [Synapse Setup](../docs/tutorials/synapse/01-environment-setup.md)
+- [Data Factory Tutorials](../tutorials/data-factory/README.md)
+- [Synapse Setup](../tutorials/synapse/01-environment-setup.md)
 
 ---
 

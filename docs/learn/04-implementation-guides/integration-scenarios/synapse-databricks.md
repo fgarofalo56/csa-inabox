@@ -1,13 +1,13 @@
 ---
 title: "Synapse and Databricks Integration"
-description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Synapse + Databricks__"
+description: "> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Synapse + Databricks__"
 tags:
   - implementation
   - integration-scenarios
 ---
 # Synapse and Databricks Integration
 
-> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Synapse + Databricks__
+> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Synapse + Databricks__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)
@@ -244,8 +244,8 @@ GRANT SELECT ON SHARE sales_share TO RECIPIENT synapse_analytics;
 ## Related Documentation
 
 - [Purview + Synapse](purview-synapse.md)
-- [Databricks Best Practices](../../05-best-practices/service-specific/databricks.md)
-- [Synapse Best Practices](../../05-best-practices/service-specific/synapse-analytics.md)
+- Databricks Best Practices
+- Synapse Best Practices
 
 ---
 

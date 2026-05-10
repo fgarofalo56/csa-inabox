@@ -1,13 +1,13 @@
 ---
 title: "Azure Cosmos DB Global Distribution Reference"
-description: "[Home](../../../README.md) > [Reference](../README.md) > [Cosmos DB](README.md) > Global Distribution"
+description: "[Home](../../index.md) > [Reference](../README.md) > [Cosmos DB](README.md) > Global Distribution"
 tags:
   - reference
   - cosmosdb
 ---
 # Azure Cosmos DB Global Distribution Reference
 
-[Home](../../../README.md) > [Reference](../README.md) > [Cosmos DB](README.md) > Global Distribution
+[Home](../../index.md) > [Reference](../README.md) > [Cosmos DB](README.md) > Global Distribution
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 ![Documentation](https://img.shields.io/badge/Documentation-Complete-blue)
@@ -830,7 +830,7 @@ AzureActivity
 - [Multi-Region Writes](https://docs.microsoft.com/azure/cosmos-db/how-to-multi-master)
 - [Conflict Resolution](https://docs.microsoft.com/azure/cosmos-db/conflict-resolution-policies)
 - [Azure Regions Reference](../azure-regions.md)
-- [Cost Optimization Best Practices](../../best-practices/cost-optimization.md)
+- [Cost Optimization Best Practices](../../best-practices-extra/cost-optimization/README.md)
 
 ---
 

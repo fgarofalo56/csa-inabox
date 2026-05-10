@@ -10,7 +10,7 @@ tags: ["delta-lake", "lakehouse", "medallion-architecture"]
 
 # Delta Lakehouse Architecture
 
-[🏠 Home](../../../README.md) > [🏗️ Architecture](../../README.md) > 📄 Delta Lakehouse
+[🏠 Home](../../../index.md) > [🏗️ Architecture](../../README.md) > 📄 Delta Lakehouse
 
 ## Overview
 

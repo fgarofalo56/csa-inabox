@@ -1,13 +1,13 @@
 ---
 title: "Serverless SQL Best Practices"
-description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Serverless SQL**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Serverless SQL**"
 tags:
   - best-practices
   - serverless-sql-best-practices
 ---
 # Serverless SQL Best Practices
 
-> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Serverless SQL**
+> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Serverless SQL**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -24,7 +24,7 @@ Serverless SQL is ideal for:
 - Data lake querying
 - ETL transformations
 
-For detailed guidance, see: **[Full Serverless SQL Guide](../../docs/05-best-practices/serverless-sql-best-practices/README.md)**
+For detailed guidance, see: **Full Serverless SQL Guide**
 
 ---
 
@@ -117,7 +117,7 @@ ORDER BY total_physical_reads DESC;
 
 ## Related Documentation
 
-- [Serverless SQL Architecture](../../docs/architecture/serverless-sql/README.md)
+- Serverless SQL Architecture
 - [SQL Performance](../sql-performance/README.md)
 
 ---

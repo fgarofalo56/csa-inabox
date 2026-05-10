@@ -999,9 +999,9 @@ spark_config = {
 
 **Related Documentation**:
 - [Medallion Architecture](medallion-architecture.md)
-- [Delta Lake Optimization](../../best-practices/delta-lake-optimization.md)
-- [Cost Optimization](../../best-practices/cost-optimization.md)
-- [Security Best Practices](../../best-practices/security.md)
+- Delta Lake Optimization
+- [Cost Optimization](../../best-practices-extra/cost-optimization/README.md)
+- [Security Best Practices](../../best-practices-extra/security/README.md)
 
 ---
 

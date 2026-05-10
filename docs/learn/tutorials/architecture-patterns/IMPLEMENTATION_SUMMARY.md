@@ -282,8 +282,8 @@ All remaining 13 tutorials have stub pages with:
 ### Contributing
 
 - [Tutorial Template](./TUTORIAL_TEMPLATE.md)
-- [Markdown Style Guide](../../guides/MARKDOWN_STYLE_GUIDE.md)
-- [Directory Structure Guide](../../guides/DIRECTORY_STRUCTURE_GUIDE.md)
+- Markdown Style Guide
+- Directory Structure Guide
 
 ---
 

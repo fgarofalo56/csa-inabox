@@ -868,7 +868,7 @@ ORDER BY avg_duration_ms DESC;
 - [**Azure Databricks Overview**](../README.md)
 - [**Delta Lake Best Practices**](../../../../05-best-practices/service-specific/databricks/delta-lake.md)
 - [**Pipeline Monitoring**](../../../../09-monitoring/service-monitoring/databricks/dlt-monitoring.md)
-- [**Cost Optimization**](../../../../05-best-practices/cross-cutting-concerns/cost-optimization/dlt-costs.md)
+- **Cost Optimization**
 
 ---
 
@@ -876,7 +876,7 @@ ORDER BY avg_duration_ms DESC;
 
 1. **[Set Up Unity Catalog](../unity-catalog/README.md)** - Add governance to pipelines
 2. **[Implement Monitoring](../../../../09-monitoring/service-monitoring/databricks/README.md)** - Track pipeline health
-3. **[Optimize Performance](../../../../05-best-practices/cross-cutting-concerns/performance/databricks-optimization.md)** - Tune for production
+3. **Optimize Performance** - Tune for production
 
 ---
 

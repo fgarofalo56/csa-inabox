@@ -1709,10 +1709,10 @@ az hdinsight monitor enable \
 
 ### Code Examples
 
-- **[Spark Jobs](../../../06-code-examples/by-service/hdinsight/spark-examples.md)** - Spark code samples
-- **[Hive Queries](../../../06-code-examples/by-service/hdinsight/hive-examples.md)** - SQL examples
-- **[HBase Applications](../../../06-code-examples/by-service/hdinsight/hbase-examples.md)** - NoSQL code
-- **[Kafka Examples](../../../06-code-examples/by-service/hdinsight/kafka-examples.md)** - Streaming code
+- **Spark Jobs** - Spark code samples
+- **Hive Queries** - SQL examples
+- **HBase Applications** - NoSQL code
+- **Kafka Examples** - Streaming code
 
 ---
 

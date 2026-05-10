@@ -15,15 +15,15 @@ Comprehensive troubleshooting guide for Azure Databricks including cluster issue
 
 | Issue Category | Description | Guide |
 |:---------------|:------------|:------|
-| 🚀 **Cluster Issues** | Startup failures, node provisioning | [Cluster Startup](cluster-startup.md) |
-| 🔢 **Node Provisioning** | Node allocation, autoscaling | [Node Provisioning](node-provisioning.md) |
+| 🚀 **Cluster Issues** | Startup failures, node provisioning | Cluster Startup |
+| 🔢 **Node Provisioning** | Node allocation, autoscaling | Node Provisioning |
 | 🧠 **Memory Issues** | OOM errors, memory pressure | [Memory Issues](memory-issues.md) |
-| 📊 **Query Performance** | Slow queries, optimization | [Query Performance](query-performance.md) |
-| 🔄 **Shuffle Optimization** | Shuffle operations, spills | [Shuffle Optimization](shuffle-optimization.md) |
-| 🏗️ **Delta Lake Issues** | Delta table problems, transactions | [Delta Issues](delta-issues.md) |
-| 📐 **Schema Evolution** | Schema changes, compatibility | [Schema Evolution](schema-evolution.md) |
-| 🌐 **Networking** | Connectivity, VNet integration | [Networking](networking.md) |
-| ✅ **Data Quality** | Data validation, corruption | [Data Quality](data-quality.md) |
+| 📊 **Query Performance** | Slow queries, optimization | Query Performance |
+| 🔄 **Shuffle Optimization** | Shuffle operations, spills | Shuffle Optimization |
+| 🏗️ **Delta Lake Issues** | Delta table problems, transactions | Delta Issues |
+| 📐 **Schema Evolution** | Schema changes, compatibility | [Schema Evolution](../../../02-services/analytics-compute/azure-synapse/spark-pools/delta-lakehouse/schema-evolution.md) |
+| 🌐 **Networking** | Connectivity, VNet integration | Networking |
+| ✅ **Data Quality** | Data validation, corruption | Data Quality |
 
 ## Common Error Categories
 

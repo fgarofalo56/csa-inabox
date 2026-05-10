@@ -1,13 +1,13 @@
 ---
 title: "ML Real-Time Scoring Integration"
-description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ML Real-time Scoring__"
+description: "> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ML Real-time Scoring__"
 tags:
   - implementation
   - integration-scenarios
 ---
 # ML Real-Time Scoring Integration
 
-> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ML Real-time Scoring__
+> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ML Real-time Scoring__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)

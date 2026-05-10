@@ -1,13 +1,13 @@
 ---
 title: "Databricks Best Practices"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **Databricks**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **Databricks**"
 tags:
   - best-practices
   - databricks
 ---
 # Databricks Best Practices
 
-> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **Databricks**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **Databricks**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Service](https://img.shields.io/badge/Service-Azure%20Databricks-orange?style=flat-square)
@@ -34,8 +34,8 @@ This section covers best practices for:
 |----------|-------------|
 | [Delta Lake Best Practices](delta-lake.md) | Delta Lake optimization and patterns |
 | [MLOps Best Practices](mlops.md) | Machine learning operations |
-| [Cluster Management](cluster-management.md) | Compute configuration |
-| [Cost Optimization](cost-optimization.md) | Cost management strategies |
+| Cluster Management | Compute configuration |
+| Cost Optimization | Cost management strategies |
 
 ---
 

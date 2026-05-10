@@ -1,12 +1,12 @@
 ---
 title: "Performance Benchmarks for Azure Synapse Analytics"
-description: "[Home](../../README.md) > Performance > Performance Benchmarks"
+description: "[Home](../index.md) > Performance > Performance Benchmarks"
 tags:
   - performance
 ---
 # Performance Benchmarks for Azure Synapse Analytics
 
-[Home](../../README.md) > Performance > Performance Benchmarks
+[Home](../index.md) > Performance > Performance Benchmarks
 
 This guide provides comprehensive performance benchmarking methodologies, reference metrics, and optimization recommendations for Azure Synapse Analytics components including Dedicated SQL Pools, Serverless SQL Pools, Spark Pools, and Pipelines.
 
@@ -700,10 +700,10 @@ elseif ($avgDWUUsage -gt 80) {
 
 ## Related Topics
 
-- [Performance Optimization Best Practices](../best-practices/performance.md)
-- [Monitoring and Logging Guide](../monitoring/logging-monitoring-guide.md)
-- [Troubleshooting Guide](../troubleshooting/README.md)
-- [Cost Optimization Strategies](../best-practices/cost-optimization.md)
+- [Performance Optimization Best Practices](../multimedia/video-tutorials/scripts/best-practices/performance.md)
+- [Monitoring and Logging Guide](../09-monitoring/logging-monitoring-guide.md)
+- [Troubleshooting Guide](../07-troubleshooting/README.md)
+- [Cost Optimization Strategies](../best-practices-extra/cost-optimization/README.md)
 
 ## External Resources
 

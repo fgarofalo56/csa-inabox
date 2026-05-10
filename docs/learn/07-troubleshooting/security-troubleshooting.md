@@ -834,8 +834,8 @@ AzureActivity
 
 | Resource | Description |
 |----------|-------------|
-| [Network Security Best Practices](../best-practices/network-security.md) | Network security configuration |
-| [Data Governance](../best-practices/data-governance.md) | Data classification and protection |
+| [Network Security Best Practices](../05-best-practices/cross-cutting-concerns/networking/network-security.md) | Network security configuration |
+| [Data Governance](../best-practices-extra/data-governance/README.md) | Data classification and protection |
 | [Security Checklist](../reference/security-checklist.md) | Security validation checklist |
 
 ### External Resources

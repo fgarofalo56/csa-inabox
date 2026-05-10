@@ -1,6 +1,6 @@
 ---
 title: "Change Data Capture (CDC) with Delta Lake in Azure Synapse Analytics"
-description: "[🏠 Home](../../../../README.md) > [💻 Code Examples](../../../README.md) > [🏞️ Delta Lake](../../README.md) > 📄 Change Data Capture"
+description: "[🏠 Home](../../../index.md) > [💻 Code Examples](../../../index.md) > [🏞️ Delta Lake](../../README.md) > 📄 Change Data Capture"
 tags:
   - code-examples
   - delta-lake
@@ -8,7 +8,7 @@ tags:
 ---
 # Change Data Capture (CDC) with Delta Lake in Azure Synapse Analytics
 
-[🏠 Home](../../../../README.md) > [💻 Code Examples](../../../README.md) > [🏞️ Delta Lake](../../README.md) > 📄 Change Data Capture
+[🏠 Home](../../../index.md) > [💻 Code Examples](../../../index.md) > [🏞️ Delta Lake](../../README.md) > 📄 Change Data Capture
 
 This guide provides detailed examples for implementing Change Data Capture (CDC) patterns with Delta Lake in Azure Synapse Analytics.
 

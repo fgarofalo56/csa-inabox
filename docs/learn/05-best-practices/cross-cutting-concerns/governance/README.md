@@ -1,13 +1,13 @@
 ---
 title: "Governance Best Practices"
-description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Governance**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Governance**"
 tags:
   - best-practices
   - governance
 ---
 # Governance Best Practices
 
-> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Governance**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Governance**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Governance-purple?style=flat-square)
@@ -25,7 +25,7 @@ Governance and catalog best practices for Azure analytics platforms.
 ## Related Documentation
 
 - [Data Governance](../data-governance/README.md)
-- [Azure Purview](../../../../02-services/governance-services/azure-purview/README.md)
+- [Azure Purview](../../../02-services/data-governance/azure-purview/README.md)
 
 ---
 

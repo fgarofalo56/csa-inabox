@@ -63,21 +63,21 @@ Confluent → Front Door → Event Hubs → Databricks → Delta → Power BI
 ## 📚 Documentation Structure
 
 ### 🏗️ [Architecture Documentation](docs/architecture/)
-- [**Platform Overview**](docs/architecture/overview.md) - High-level architecture and design principles
-- [**Data Flow Architecture**](docs/architecture/data-flow.md) - Detailed data processing flows
+- [**Platform Overview**](../docs/architecture/overview.md) - High-level architecture and design principles
+- [**Data Flow Architecture**](../docs/architecture/data-flow.md) - Detailed data processing flows
 - [**Component Architecture**](docs/architecture/components.md) - Databricks and Azure service details
 - [**Security Architecture**](docs/architecture/security.md) - Zero-trust security implementation
 
 ### 🚀 [Implementation Guides](docs/implementation/)
 - [**Getting Started**](docs/implementation/getting-started.md) - Prerequisites and setup
-- [**Databricks Configuration**](docs/implementation/databricks-setup.md) - Platform deployment
+- **Databricks Configuration** - Platform deployment
 - [**Power BI Integration**](docs/implementation/powerbi-integration.md) - BI setup and Direct Lake mode
 - [**Monitoring Setup**](docs/implementation/monitoring.md) - Observability and alerting
 
 ### 🔧 [Operations](docs/operations/)
 - [**Monitoring & Alerting**](docs/operations/monitoring.md) - System health and performance
 - [**Maintenance Procedures**](docs/operations/maintenance.md) - Regular maintenance tasks
-- [**Troubleshooting Guide**](docs/operations/troubleshooting.md) - Common issues and solutions
+- **Troubleshooting Guide** - Common issues and solutions
 
 ### 🔒 [Security](docs/security/)
 - [**Zero Trust Architecture**](docs/security/zero-trust.md) - Security principles and implementation
@@ -86,7 +86,7 @@ Confluent → Front Door → Event Hubs → Databricks → Delta → Power BI
 
 ### 📊 [Interactive Diagrams](docs/diagrams/)
 - [**Architecture Diagrams**](docs/diagrams/architecture-diagrams.html) - Interactive system architecture
-- [**Monitoring Dashboard**](docs/diagrams/monitoring-dashboard.html) - Live performance metrics
+- **Monitoring Dashboard** - Live performance metrics
 - [**Security Visualization**](docs/diagrams/security-network.html) - Network and security layers
 - [**Component Details**](docs/diagrams/component-architecture.html) - Databricks platform components
 
@@ -191,7 +191,7 @@ markdown-link-check **/*.md
 
 ### Real-Time Dashboards
 
-- **[System Health Dashboard](docs/diagrams/monitoring-dashboard.html)** - Live system metrics
+- **System Health Dashboard** - Live system metrics
 - **Azure Monitor Workbooks** - Custom performance analytics  
 - **Power BI Executive Dashboard** - Business KPIs and trends
 - **Grafana Dashboards** - Technical operational metrics

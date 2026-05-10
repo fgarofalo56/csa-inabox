@@ -23,7 +23,7 @@ Professional presentation templates and materials designed for various audiences
 __Duration__: 15 minutes  
 __Slides__: 20  
 __Audience__: C-Level, Decision Makers  
-__[Download PPTX](./templates/executive/csa-overview.pptx)__ | __[View PDF](./templates/executive/csa-overview.pdf)__
+__Download PPTX__ | __View PDF__
 
 ```yaml
 presentation:
@@ -85,7 +85,7 @@ presentation:
 __Duration__: 20 minutes  
 __Slides__: 25  
 __Audience__: Board Members, Stakeholders  
-__[Download PPTX](./templates/executive/digital-transformation.pptx)__
+__Download PPTX__
 
 ### 🔧 Technical Deep-Dives
 
@@ -94,7 +94,7 @@ __[Download PPTX](./templates/executive/digital-transformation.pptx)__
 __Duration__: 60 minutes  
 __Slides__: 80  
 __Audience__: Architects, Engineers  
-__[Download PPTX](./templates/technical/synapse-architecture.pptx)__
+__Download PPTX__
 
 ```markdown
 ## Slide Deck Structure
@@ -141,7 +141,7 @@ __[Download PPTX](./templates/technical/synapse-architecture.pptx)__
 __Duration__: 90 minutes  
 __Slides__: 120  
 __Audience__: DBAs, Performance Engineers  
-__[Download PPTX](./templates/technical/performance-optimization.pptx)__
+__Download PPTX__
 
 ### 🎓 Training Materials
 
@@ -150,7 +150,7 @@ __[Download PPTX](./templates/technical/performance-optimization.pptx)__
 __Duration__: 4 hours (Half-day workshop)  
 __Slides__: 150  
 __Labs__: 6 hands-on exercises  
-__[Download Course Pack](./templates/training/fundamentals-pack.zip)__
+__Download Course Pack__
 
 ```javascript
 // Training Module Structure
@@ -224,7 +224,7 @@ const trainingModules = {
 __Duration__: 30 minutes  
 __Slides__: 35  
 __Audience__: Technical Evaluators  
-__[Download PPTX](./templates/demo/poc-presentation.pptx)__
+__Download PPTX__
 
 ### Demo Script Example
 

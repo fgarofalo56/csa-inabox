@@ -1,6 +1,6 @@
 ---
 title: "Azure Synapse Analytics Shared Metadata"
-description: "[🏠 Home](../../../README.md) > [🏗️ Architecture](../../README.md) > 📄 Shared Metadata"
+description: "[🏠 Home](../../../index.md) > [🏗️ Architecture](../../README.md) > 📄 Shared Metadata"
 tags:
   - architecture
   - service-architectures
@@ -8,7 +8,7 @@ tags:
 ---
 # Azure Synapse Analytics Shared Metadata
 
-[🏠 Home](../../../README.md) > [🏗️ Architecture](../../README.md) > 📄 Shared Metadata
+[🏠 Home](../../../index.md) > [🏗️ Architecture](../../README.md) > 📄 Shared Metadata
 
 Azure Synapse Analytics provides a powerful shared metadata architecture that enables seamless integration between different compute engines, including Apache Spark pools and serverless SQL pools. This section provides in-depth documentation on the shared metadata capabilities, architecture, and best practices.
 
@@ -67,6 +67,6 @@ customer_df = spark.read.synapsesql("sales_gold.customer_summary")
 
 ## Related Resources
 
-- [Best Practices for Metadata Management](../../best-practices/data-governance.md)
-- [Integration Guide](../../code-examples/integration-guide.md)
-- [Reference Documentation](../../reference/README.md)
+- Best Practices for Metadata Management
+- [Integration Guide](../../../06-code-examples/integration-guide.md)
+- Reference Documentation

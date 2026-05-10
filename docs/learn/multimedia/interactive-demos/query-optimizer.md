@@ -250,8 +250,8 @@ const performanceIssues = {
 
 ## 📚 Additional Resources
 
-- [Query Performance Guide](../../best-practices/sql-performance.md)
-- [Execution Plan Analysis](../../troubleshooting/README.md)
+- [Query Performance Guide](../../best-practices-extra/sql-performance/README.md)
+- [Execution Plan Analysis](../../07-troubleshooting/README.md)
 
 ## 💬 Feedback
 

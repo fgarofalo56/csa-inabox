@@ -584,8 +584,8 @@ flowchart TD
 
 ### Cost Management
 
-- [Cost Optimization Guide](../05-best-practices/cost-optimization.md)
-- [Performance Optimization](../05-best-practices/performance-optimization.md)
+- [Cost Optimization Guide](../best-practices-extra/cost-optimization/README.md)
+- [Performance Optimization](../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
 
 ---
 

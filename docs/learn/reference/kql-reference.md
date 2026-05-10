@@ -1,12 +1,12 @@
 ---
 title: "KQL (Kusto Query Language) Reference"
-description: "[Home](../../README.md) > [Reference](README.md) > KQL Reference"
+description: "[Home](../index.md) > [Reference](README.md) > KQL Reference"
 tags:
   - reference
 ---
 # KQL (Kusto Query Language) Reference
 
-[Home](../../README.md) > [Reference](README.md) > KQL Reference
+[Home](../index.md) > [Reference](README.md) > KQL Reference
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 ![Documentation](https://img.shields.io/badge/Documentation-Complete-blue)

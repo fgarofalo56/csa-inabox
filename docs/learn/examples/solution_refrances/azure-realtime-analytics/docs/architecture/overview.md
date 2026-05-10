@@ -251,10 +251,10 @@ Topics    Functions     AI Enrichment → Delta Lake Silver
 1. **Review [Data Flow Architecture](data-flow.md)** - Deep dive into processing patterns
 2. **Explore [Component Details](components.md)** - Databricks platform architecture  
 3. **Understand [Security Model](security.md)** - Zero-trust implementation
-4. **Plan [Implementation](../implementation/deployment-guide.md)** - Step-by-step deployment
+4. **Plan Implementation** - Step-by-step deployment
 
 ---
 
 **📊 Interactive Diagrams**: Explore the [complete architecture diagrams](../../diagrams/) for detailed visual representations.
 
-**🔧 Implementation Ready**: Follow the [deployment guide](../implementation/deployment-guide.md) to build this architecture in your environment.
+**🔧 Implementation Ready**: Follow the deployment guide to build this architecture in your environment.

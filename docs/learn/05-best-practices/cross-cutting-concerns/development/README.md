@@ -1,13 +1,13 @@
 ---
 title: "Development Best Practices"
-description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Development**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Development**"
 tags:
   - best-practices
   - development
 ---
 # Development Best Practices
 
-> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Development**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Development**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Development-blue?style=flat-square)
@@ -24,8 +24,8 @@ Development best practices for Azure analytics platforms.
 
 ## Related Documentation
 
-- [DevOps Best Practices](../../../../devops/README.md)
-- [Code Examples](../../../../code-examples/README.md)
+- [DevOps Best Practices](../../../10-devops/README.md)
+- [Code Examples](../../../06-code-examples/README.md)
 
 ---
 

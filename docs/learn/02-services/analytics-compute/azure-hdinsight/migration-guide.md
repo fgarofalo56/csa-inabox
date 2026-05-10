@@ -1532,7 +1532,7 @@ print(f"\nSpeedup: {speedup:.2f}x")
 
 - **[Migration Workshop](../../../tutorials/advanced/hadoop-migration-workshop.md)** - Hands-on migration training
 - **[Best Practices](../../../05-best-practices/service-specific/hdinsight/README.md)** - HDInsight optimization
-- **[Code Examples](../../../06-code-examples/by-service/hdinsight/README.md)** - Migration code samples
+- **Code Examples** - Migration code samples
 
 ---
 

@@ -1,13 +1,13 @@
 ---
 title: "Stream Analytics Integration with Event Grid"
-description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ASA + Event Grid__"
+description: "> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ASA + Event Grid__"
 tags:
   - implementation
   - integration-scenarios
 ---
 # Stream Analytics Integration with Event Grid
 
-> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ASA + Event Grid__
+> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ASA + Event Grid__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)

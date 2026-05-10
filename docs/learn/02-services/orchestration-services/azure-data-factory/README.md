@@ -382,7 +382,7 @@ __Key Security Features__:
 }
 ```
 
-__[📖 Security Best Practices →](../../../best-practices/security.md)__
+__[📖 Security Best Practices →](../../../best-practices-extra/security/README.md)__
 
 ### ⚡ Performance Optimization
 
@@ -416,7 +416,7 @@ __Key Performance Features__:
 }
 ```
 
-__[📖 Performance Tuning Guide →](../../../best-practices/performance-optimization.md)__
+__[📖 Performance Tuning Guide →](../../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)__
 
 ### 📊 Monitoring & Alerts
 
@@ -453,7 +453,7 @@ __Azure Monitor Integration__:
 }
 ```
 
-__[📖 Monitoring Guide →](../../../monitoring/README.md)__
+__[📖 Monitoring Guide →](../../../09-monitoring/README.md)__
 
 ---
 
@@ -511,7 +511,7 @@ Trigger pipelines based on storage events.
 }
 ```
 
-__[📖 Integration Examples →](../../../code-examples/integration-guide.md)__
+__[📖 Integration Examples →](../../../06-code-examples/integration-guide.md)__
 
 ---
 
@@ -520,7 +520,7 @@ __[📖 Integration Examples →](../../../code-examples/integration-guide.md)__
 ### 🚀 __Getting Started__
 
 - [__ADF Quick Start Tutorial__](../../../tutorials/README.md)
-- [__Copy Activity Guide__](../../../code-examples/README.md)
+- [__Copy Activity Guide__](../../../06-code-examples/README.md)
 - [__Pipeline Development Basics__](pipeline-patterns.md)
 
 ### 📖 __Deep Dive Guides__
@@ -576,7 +576,7 @@ __Solution__:
 - __Documentation__: [Microsoft Learn](https://docs.microsoft.com/azure/data-factory/)
 - __GitHub__: [Azure Data Factory Feedback](https://feedback.azure.com/forums/270578-data-factory)
 
-__[📖 Troubleshooting Guide →](../../../troubleshooting/README.md)__
+__[📖 Troubleshooting Guide →](../../../07-troubleshooting/README.md)__
 
 ---
 
@@ -596,8 +596,8 @@ __[📖 Troubleshooting Guide →](../../../troubleshooting/README.md)__
 
 ### 💻 __Code Examples__
 
-- [ADF Pipeline Samples](../../../code-examples/README.md)
-- [Integration Scenarios](../../../code-examples/integration-guide.md)
+- [ADF Pipeline Samples](../../../06-code-examples/README.md)
+- [Integration Scenarios](../../../06-code-examples/integration-guide.md)
 
 ---
 

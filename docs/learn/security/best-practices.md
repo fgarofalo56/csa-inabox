@@ -1,12 +1,12 @@
 ---
 title: "Azure Synapse Analytics Security Best Practices"
-description: "[Home](../../README.md) > Security > Security Best Practices"
+description: "[Home](../index.md) > Security > Security Best Practices"
 tags:
   - security
 ---
 # Azure Synapse Analytics Security Best Practices
 
-[Home](../../README.md) > Security > Security Best Practices
+[Home](../index.md) > Security > Security Best Practices
 
 This document provides comprehensive security best practices for Azure Synapse Analytics implementations, helping you build secure analytics environments that protect your data assets while enabling productivity and insights.
 
@@ -855,7 +855,7 @@ Use this checklist to ensure comprehensive security implementation:
 - [Security Compliance Guide](compliance-guide.md)
 - Network Security Configuration
 - Data Protection Best Practices
-- [Monitoring and Logging Guide](../monitoring/logging-monitoring-guide.md)
+- [Monitoring and Logging Guide](../09-monitoring/logging-monitoring-guide.md)
 - DevOps Security Best Practices
 
 ## External Resources

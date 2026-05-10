@@ -71,9 +71,9 @@ resources/charts/
 
 ### Related Resources
 
-- [Other Resource Categories](../README.md)
-- [Presentation Templates](../../../templates/README.md)
-- [Multimedia Index](../../../MULTIMEDIA_INDEX.md)
+- Other Resource Categories
+- Presentation Templates
+- Multimedia Index
 
 ## 💡 Tips and Best Practices
 

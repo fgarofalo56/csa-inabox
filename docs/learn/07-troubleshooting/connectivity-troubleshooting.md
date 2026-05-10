@@ -1,12 +1,12 @@
 ---
 title: "Troubleshooting Connectivity Issues in Azure Synapse Analytics"
-description: "[Home](../../README.md) > Troubleshooting > Connectivity Troubleshooting"
+description: "[Home](../index.md) > Troubleshooting > Connectivity Troubleshooting"
 tags:
   - troubleshooting
 ---
 # Troubleshooting Connectivity Issues in Azure Synapse Analytics
 
-[Home](../../README.md) > Troubleshooting > Connectivity Troubleshooting
+[Home](../index.md) > Troubleshooting > Connectivity Troubleshooting
 
 This guide covers common connectivity and network-related issues in Azure Synapse Analytics, providing diagnostic approaches and solutions for establishing reliable connections to your Synapse workspace and its components.
 
@@ -431,10 +431,10 @@ SynapseBuiltinSqlPoolRequestsEnded
 
 ## Related Topics
 
-- [Network Security Configuration for Synapse](../best-practices/network-security.md)
-- [Private Link Configuration Guide](../architecture/private-link-architecture.md)
-- [Authentication Best Practices](../best-practices/security.md#authentication-controls)
-- [Monitoring and Logging Setup](../monitoring/monitoring-setup.md)
+- [Network Security Configuration for Synapse](../05-best-practices/cross-cutting-concerns/networking/network-security.md)
+- [Private Link Configuration Guide](../03-architecture-patterns/service-architectures/private-link-architecture.md)
+- [Authentication Best Practices](../best-practices-extra/security/README.md#authentication-controls)
+- [Monitoring and Logging Setup](../09-monitoring/monitoring-setup.md)
 
 ## External Resources
 

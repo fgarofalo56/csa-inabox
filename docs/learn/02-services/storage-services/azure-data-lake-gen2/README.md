@@ -235,7 +235,7 @@ __Pattern__: [Data Retention Strategy](../../../05-best-practices/cross-cutting-
 4. __Monitor Access Patterns__: Identify candidates for tier changes
 5. __Leverage Reserved Capacity__: Commit to 1-3 years for discounts
 
-__[📖 Detailed Cost Guide →](../../../05-best-practices/cross-cutting-concerns/cost-optimization/storage-optimization.md)__
+__[📖 Detailed Cost Guide →](../../../05-best-practices/cross-cutting-concerns/storage-optimization.md)__
 
 ---
 
@@ -368,7 +368,7 @@ storage_client.storage_accounts.update(
 )
 ```
 
-__[📖 Security Guide →](../../../05-best-practices/cross-cutting-concerns/security/storage-security.md)__
+__📖 Security Guide →__
 
 ### ⚡ Performance Tuning
 
@@ -533,7 +533,7 @@ __[📖 Integration Examples →](../../../04-implementation-guides/integration-
 
 - [__Architecture Patterns__](../../../03-architecture-patterns/README.md)
 - [__Best Practices__](../../../05-best-practices/service-specific/storage/README.md)
-- [__Code Examples__](../../../06-code-examples/by-service/storage/README.md)
+- __Code Examples__
 
 ### 🔧 __Advanced Topics__
 
@@ -547,9 +547,9 @@ __[📖 Integration Examples →](../../../04-implementation-guides/integration-
 
 ### 🔍 Common Issues
 
-- [__Connection & Access Issues__](../../../07-troubleshooting/service-troubleshooting/storage/connectivity.md)
-- [__Performance Problems__](../../../07-troubleshooting/service-troubleshooting/storage/performance.md)
-- [__ACL Configuration Errors__](../../../07-troubleshooting/service-troubleshooting/storage/permissions.md)
+- [__Connection & Access Issues__](../../../07-troubleshooting/service-troubleshooting/synapse/connectivity.md)
+- __Performance Problems__
+- __ACL Configuration Errors__
 
 ### 📞 Getting Help
 

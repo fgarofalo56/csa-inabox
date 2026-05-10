@@ -812,7 +812,7 @@ print(f"Number of Files: {detail.numFiles}")
 - [Databricks Cost Optimization](../../cross-cutting-concerns/cost-optimization/databricks-costs.md)
 - [Databricks Best Practices](./README.md)
 - [Delta Lake Documentation](https://docs.delta.io/)
-- [Performance Optimization](../../cross-cutting-concerns/performance/databricks-optimization.md)
+- Performance Optimization
 
 ---
 

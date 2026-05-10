@@ -1,6 +1,6 @@
 ---
 title: "= DP-203: Azure Data Engineer Associate Certification Prep"
-description: "> **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= DP-203 Certification**"
+description: "> **< [Home](../../../index.md)** | **= [Documentation](../../../index.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= DP-203 Certification**"
 tags:
   - tutorials
   - learning-paths
@@ -8,7 +8,7 @@ tags:
 ---
 # = DP-203: Azure Data Engineer Associate Certification Prep
 
-> **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= DP-203 Certification**
+> **< [Home](../../../index.md)** | **= [Documentation](../../../index.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= DP-203 Certification**
 
 ![Certification](https://img.shields.io/badge/Certification-DP--203-blue)
 ![Level](https://img.shields.io/badge/Level-Associate-green)
@@ -85,9 +85,9 @@ pie title DP-203 Exam Weight Distribution
 - Build external tables
 
 **CSA In-a-Box Coverage:**
--  [Data Lake Architecture](../../../architecture/delta-lakehouse/README.md)
--  [Delta Lake Implementation](../../../code-examples/delta-lake-guide.md)
--  [Table Optimization Patterns](../../../code-examples/delta-lake/optimization/table-optimization.md)
+-  [Data Lake Architecture](../../../03-architecture-patterns/service-architectures/delta-lakehouse/README.md)
+-  [Delta Lake Implementation](../../../06-code-examples/delta-lake-guide.md)
+-  [Table Optimization Patterns](../../../06-code-examples/delta-lake/optimization/table-optimization.md)
 
 ---
 
@@ -139,8 +139,8 @@ pie title DP-203 Exam Weight Distribution
 
 **CSA In-a-Box Coverage:**
 -  [PySpark Fundamentals](../../../tutorials/code-labs/pyspark-fundamentals.md)
--  [Auto Loader Implementation](../../../code-examples/delta-lake/ingestion/auto-loader.md)
--  [Change Data Capture](../../../code-examples/delta-lake/cdc/change-data-capture.md)
+-  [Auto Loader Implementation](../../../06-code-examples/delta-lake/ingestion/auto-loader.md)
+-  [Change Data Capture](../../../06-code-examples/delta-lake/cdc/change-data-capture.md)
 -  [Stream Analytics Tutorials](../../../tutorials/stream-analytics/README.md)
 
 ---
@@ -177,11 +177,11 @@ pie title DP-203 Exam Weight Distribution
 - Troubleshoot a failed pipeline run
 
 **CSA In-a-Box Coverage:**
--  [Security Best Practices](../../../best-practices/security.md)
--  [Network Security](../../../best-practices/network-security.md)
--  [Performance Optimization](../../../best-practices/performance-optimization.md)
--  [Spark Performance Tuning](../../../best-practices/spark-performance.md)
--  [Monitoring Setup](../../../monitoring/monitoring-setup.md)
+-  [Security Best Practices](../../../best-practices-extra/security/README.md)
+-  [Network Security](../../../05-best-practices/cross-cutting-concerns/networking/network-security.md)
+-  [Performance Optimization](../../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+-  [Spark Performance Tuning](../../../05-best-practices/service-specific/synapse/spark-performance.md)
+-  [Monitoring Setup](../../../09-monitoring/monitoring-setup.md)
 
 ---
 
@@ -198,9 +198,9 @@ pie title DP-203 Exam Weight Distribution
 - Design data processing solutions
 
 **CSA In-a-Box Coverage:**
--  [Data Factory Integration](../../../code-examples/integration/azure-data-factory.md)
--  [Azure ML Integration](../../../code-examples/integration/azure-ml.md)
--  [Azure Purview Integration](../../../code-examples/integration/azure-purview.md)
+-  [Data Factory Integration](../../../06-code-examples/integration/azure-data-factory.md)
+-  [Azure ML Integration](../../../06-code-examples/integration/azure-ml.md)
+-  [Azure Purview Integration](../../../06-code-examples/integration/azure-purview.md)
 
 ## < Study Plan
 
@@ -316,15 +316,15 @@ pie title DP-203 Exam Weight Distribution
 
 **Core Learning Materials:**
 - [Data Engineer Learning Path](../data-engineer/README.md) - Complete learning journey
-- [Architecture Patterns](../../../architecture/README.md) - Design patterns and best practices
-- [Code Examples](../../../code-examples/README.md) - Practical implementations
-- [Best Practices](../../../best-practices/README.md) - Production-ready guidance
+- [Architecture Patterns](../../../03-architecture-patterns/reference-architectures/README.md) - Design patterns and best practices
+- [Code Examples](../../../06-code-examples/README.md) - Practical implementations
+- [Best Practices](../../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md) - Production-ready guidance
 
 **Hands-On Practice:**
 - [Synapse Tutorials](../../../tutorials/synapse/README.md)
 - [PySpark Fundamentals Lab](../../../tutorials/code-labs/pyspark-fundamentals.md)
 - [Integration Scenarios](../../../tutorials/integration/README.md)
-- [Troubleshooting Guides](../../../troubleshooting/README.md)
+- [Troubleshooting Guides](../../../07-troubleshooting/README.md)
 
 ### Practice Tests & Assessments
 

@@ -1,13 +1,13 @@
 ---
 title: "Change Data Capture with Databricks"
-description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Databricks CDC__"
+description: "> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Databricks CDC__"
 tags:
   - implementation
   - integration-scenarios
 ---
 # Change Data Capture with Databricks
 
-> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Databricks CDC__
+> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Databricks CDC__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)
@@ -228,7 +228,7 @@ spark.sql("""
 ## Related Documentation
 
 - [Data Factory CDC](capture-data-factory.md)
-- [Delta Lake Best Practices](../../05-best-practices/service-specific/databricks.md)
+- Delta Lake Best Practices
 - [Streaming Architectures](../../03-architecture-patterns/streaming-architectures/README.md)
 
 ---

@@ -1,13 +1,13 @@
 ---
 title: "ML Operations Best Practices"
-description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **ML Operations**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **ML Operations**"
 tags:
   - best-practices
   - ml-operations
 ---
 # ML Operations Best Practices
 
-> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **ML Operations**
+> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **ML Operations**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -159,8 +159,8 @@ stages:
 
 ## Related Documentation
 
-- [ML Pipeline Solution](../../docs/solutions/ml-pipeline/README.md)
-- [Feature Store Setup](../../docs/04-implementation-guides/databricks/feature-store-setup.md)
+- ML Pipeline Solution
+- [Feature Store Setup](../../04-implementation-guides/databricks/feature-store-setup.md)
 
 ---
 

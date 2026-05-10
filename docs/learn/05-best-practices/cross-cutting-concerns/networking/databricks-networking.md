@@ -1,13 +1,13 @@
 ---
 title: "Databricks Networking Best Practices"
-description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Databricks Networking**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Databricks Networking**"
 tags:
   - best-practices
   - networking
 ---
 # Databricks Networking Best Practices
 
-> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Databricks Networking**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Databricks Networking**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Networking-blue?style=flat-square)
@@ -321,8 +321,8 @@ test_connectivity()
 ## Related Documentation
 
 - [Databricks Best Practices](../../service-specific/databricks/README.md)
-- [Network Security](../../../../best-practices/network-security/README.md)
-- [Private Link Architecture](../../../../architecture/private-link-architecture/README.md)
+- [Network Security](../../../best-practices-extra/network-security/README.md)
+- Private Link Architecture
 
 ---
 

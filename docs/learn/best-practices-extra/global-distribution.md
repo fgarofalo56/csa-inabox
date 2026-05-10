@@ -1,12 +1,12 @@
 ---
 title: "Global Distribution Best Practices"
-description: "> **[Home](../README.md)** | **[Best Practices](index.md)** | **Global Distribution**"
+description: "> **[Home](../index.md)** | **[Best Practices](index.md)** | **Global Distribution**"
 tags:
   - best-practices
 ---
 # Global Distribution Best Practices
 
-> **[Home](../README.md)** | **[Best Practices](index.md)** | **Global Distribution**
+> **[Home](../index.md)** | **[Best Practices](index.md)** | **Global Distribution**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -130,7 +130,7 @@ def register_global_asset(asset_name, regions):
 ## Related Documentation
 
 - [Network Architecture](network-security/README.md)
-- [Disaster Recovery](../docs/04-implementation-guides/disaster-recovery/README.md)
+- Disaster Recovery
 
 ---
 

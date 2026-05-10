@@ -1,12 +1,12 @@
 ---
 title: "Security Best Practices for DevOps"
-description: "> **Home [Home](../../README.md)** | **Documentation** | **DevOps**"
+description: "> **Home [Home](../index.md)** | **Documentation** | **DevOps**"
 tags:
   - devops
 ---
 # Security Best Practices for DevOps
 
-> **Home [Home](../../README.md)** | **Documentation** | **DevOps**
+> **Home [Home](../index.md)** | **Documentation** | **DevOps**
 
 ---
 

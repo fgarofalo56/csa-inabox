@@ -916,8 +916,8 @@ def add_stream_processing(stream_config):
 ### Implementation Guides
 
 - [Azure Synapse Analytics Documentation](https://docs.microsoft.com/azure/synapse-analytics/)
-- [Delta Lake Best Practices](../../best-practices/delta-lake-optimization.md)
-- [Stream Analytics Patterns](../../code-examples/serverless-sql-guide.md)
+- Delta Lake Best Practices
+- [Stream Analytics Patterns](../../06-code-examples/serverless-sql-guide.md)
 
 ### Reference Architectures
 

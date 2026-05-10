@@ -549,8 +549,8 @@ describe('Interactive Demo', () => {
 
 - [Interactive Demos Index](../README.md)
 - [Component Library](../components/README.md)
-- [Development Guide](../../production-guide/README.md)
-- [Examples](../../../code-examples/README.md)
+- Development Guide
+- [Examples](../../../06-code-examples/README.md)
 
 ## 📦 Installation
 

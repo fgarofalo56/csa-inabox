@@ -654,7 +654,7 @@ w.clusters.edit(
 ## Related Resources
 
 - [Cost Optimization Overview](./README.md)
-- [Storage Cost Optimization](./storage-optimization.md)
+- [Storage Cost Optimization](../storage-optimization.md)
 - [Delta Lake Best Practices](../../service-specific/databricks/delta-lake.md)
 - [Azure Databricks Pricing](https://azure.microsoft.com/pricing/details/databricks/)
 

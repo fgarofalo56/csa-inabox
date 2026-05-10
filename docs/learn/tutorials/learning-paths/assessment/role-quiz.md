@@ -249,7 +249,7 @@ __Your Path:__
 
 __First Steps:__
 
-- Review [Data Engineer Learning Path](../../data-engineer-path.md)
+- Review Data Engineer Learning Path
 - Start with [PySpark Fundamentals](../../code-labs/pyspark-fundamentals.md)
 - Build first data pipeline project
 
@@ -294,7 +294,7 @@ __Your Path:__
 __First Steps:__
 
 - Master SQL (start with intermediate level)
-- Learn Power BI with [Power BI Tutorial](../../power-bi/README.md)
+- Learn Power BI with [Power BI Tutorial](../../integration/power-bi/README.md)
 - Build dashboard for real business scenario
 
 ---

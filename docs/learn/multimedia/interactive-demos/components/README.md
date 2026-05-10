@@ -583,8 +583,8 @@ test('code editor updates on change', () => {
 
 - [API Reference](../api/README.md)
 - [Interactive Demos](../README.md)
-- [Theming Guide](../../production-guide/brand-guidelines.md)
-- [Accessibility Standards](../../production-guide/accessibility-standards.md)
+- [Theming Guide](../../presentations/guides/brand-guidelines.md)
+- Accessibility Standards
 
 ## 🔗 Component Gallery
 

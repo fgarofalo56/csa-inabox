@@ -1353,7 +1353,7 @@ __Best for__:
 - [__Competitive Analysis__](competitive-analysis.md) - Platform comparisons
 - [__Market Research__](market-research.md) - Industry trends
 - [__Architecture Patterns__](../03-architecture-patterns/README.md)
-- [__Cost Optimization Guide__](../05-best-practices/cost-optimization.md)
+- [__Cost Optimization Guide__](../best-practices-extra/cost-optimization/README.md)
 
 ---
 

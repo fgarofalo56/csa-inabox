@@ -1332,9 +1332,9 @@ def expensive_features():
 ## Related Resources
 
 ### Internal Documentation
-- [Databricks ML Guide](../../code-examples/delta-lake/README.md)
-- [Azure ML Best Practices](../../best-practices/ml-operations/README.md)
-- [Feature Engineering Patterns](../../architecture/feature-store/README.md)
+- [Databricks ML Guide](../../06-code-examples/delta-lake/README.md)
+- [Azure ML Best Practices](../../best-practices-extra/ml-operations/README.md)
+- [Feature Engineering Patterns](../service-architectures/feature-store/README.md)
 
 ### External References
 - [Azure Machine Learning](https://docs.microsoft.com/azure/machine-learning/)

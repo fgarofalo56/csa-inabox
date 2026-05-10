@@ -1,13 +1,13 @@
 ---
 title: "Event Handling Best Practices"
-description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Event Handling**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Event Handling**"
 tags:
   - best-practices
   - event-handling
 ---
 # Event Handling Best Practices
 
-> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Event Handling**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Event Handling**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Events-orange?style=flat-square)
@@ -26,7 +26,7 @@ Event handling and messaging best practices for Azure analytics platforms.
 
 - [Event Grid Reliability](../../operational-excellence/eventgrid-reliability.md)
 - [Event Hubs DR](../../operational-excellence/eventhub-dr.md)
-- [Streaming Architectures](../../../../03-architecture-patterns/streaming-architectures/README.md)
+- [Streaming Architectures](../../../03-architecture-patterns/streaming-architectures/README.md)
 
 ---
 

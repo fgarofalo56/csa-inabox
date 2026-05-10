@@ -1,13 +1,13 @@
 ---
 title: "Real-Time Dashboards Solution"
-description: "> __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Real-Time Dashboards__"
+description: "> __[Home](../../index.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Real-Time Dashboards__"
 tags:
   - solutions
   - real-time-dashboards
 ---
 # Real-Time Dashboards Solution
 
-> __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Real-Time Dashboards__
+> __[Home](../../index.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Real-Time Dashboards__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)

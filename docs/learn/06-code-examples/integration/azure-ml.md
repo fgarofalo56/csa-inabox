@@ -1,13 +1,13 @@
 ---
 title: "Azure Machine Learning Integration with Azure Synapse Analytics"
-description: "[Home](../../../README.md) > [Code Examples](../../README.md) > Integration > Azure ML Integration"
+description: "[Home](../../index.md) > [Code Examples](../../index.md) > Integration > Azure ML Integration"
 tags:
   - code-examples
   - integration
 ---
 # Azure Machine Learning Integration with Azure Synapse Analytics
 
-[Home](../../../README.md) > [Code Examples](../../README.md) > Integration > Azure ML Integration
+[Home](../../index.md) > [Code Examples](../../index.md) > Integration > Azure ML Integration
 
 This guide provides examples and best practices for integrating Azure Synapse Analytics with Azure Machine Learning (Azure ML).
 

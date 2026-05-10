@@ -1,13 +1,13 @@
 ---
 title: "Data Governance Best Practices"
-description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Data Governance**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Data Governance**"
 tags:
   - best-practices
   - data-governance
 ---
 # Data Governance Best Practices
 
-> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Data Governance**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Data Governance**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Governance-purple?style=flat-square)
@@ -25,7 +25,7 @@ Data governance practices for Azure analytics platforms.
 ## Related Documentation
 
 - [Metadata Governance](../governance/metadata-governance.md)
-- [Compliance Guide](../../../../security/compliance-guide.md)
+- [Compliance Guide](../../../security/compliance-guide.md)
 
 ---
 

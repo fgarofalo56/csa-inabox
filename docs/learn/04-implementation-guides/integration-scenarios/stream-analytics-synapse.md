@@ -571,7 +571,7 @@ ALTER DATABASE DWPool RESUME;
 
 - **[Build Power BI dashboards](../../08-solutions/real-time-dashboards/README.md)**
 - **[Implement ML on historical data](../../08-solutions/ml-pipeline/README.md)**
-- **[Add data governance with Purview](../../best-practices/data-governance.md)**
+- **[Add data governance with Purview](../../best-practices-extra/data-governance/README.md)**
 
 ---
 

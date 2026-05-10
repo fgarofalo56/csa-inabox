@@ -906,7 +906,7 @@ __Insights:__
 
 ## Getting Help
 
-- Review [Analytics Setup Guide](../guides/analytics-setup.md)
+- Review Analytics Setup Guide
 - Check [Google Analytics Help Center](https://support.google.com/analytics)
 - Consult with data analytics team
 - Join [GA4 Community](https://www.en.advertisercommunity.com/t5/Google-Analytics-4/ct-p/Google-Analytics)

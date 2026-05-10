@@ -634,5 +634,5 @@ Identify and optimize the top 5 slowest queries in your environment.
 ## Next Steps
 
 - Continue to [Tutorial 14: CI/CD Setup](14-cicd-setup.md)
-- Explore [Monitoring Best Practices](../../monitoring/monitoring-setup.md)
-- Review [Troubleshooting Guide](../../troubleshooting/index.md)
+- Explore [Monitoring Best Practices](../../09-monitoring/monitoring-setup.md)
+- Review Troubleshooting Guide

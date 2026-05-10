@@ -89,7 +89,7 @@ SELECT region, COUNT(*) FROM sales.orders GROUP BY region;
 
 - [Unity Catalog External Locations](unity-catalog-external-locations.md)
 - [Delta Sharing Setup](delta-sharing-setup.md)
-- [Security Best Practices](../../05-best-practices/cross-cutting-concerns/security/databricks-security.md)
+- Security Best Practices
 
 ---
 

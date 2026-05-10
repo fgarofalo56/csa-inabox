@@ -291,9 +291,9 @@ const architectureDecisionTree = {
 
 ## 📚 Additional Resources
 
-- [Architecture Patterns](../../architecture/README.md)
+- [Architecture Patterns](../../03-architecture-patterns/reference-architectures/README.md)
 - [Component Reference](../../02-services/README.md)
-- [Best Practices](../../best-practices/README.md)
+- [Best Practices](../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 
 ## 💬 Feedback
 

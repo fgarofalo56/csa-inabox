@@ -1,13 +1,13 @@
 ---
 title: "Data Lineage Solution"
-description: "> __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Data Lineage__"
+description: "> __[Home](../../index.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Data Lineage__"
 tags:
   - solutions
   - data-governance
 ---
 # Data Lineage Solution
 
-> __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Data Lineage__
+> __[Home](../../index.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Data Lineage__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)
@@ -325,7 +325,7 @@ def generate_lineage_report(report_type: str = "compliance"):
 ## Related Documentation
 
 - [Purview Integration](../../04-implementation-guides/integration-scenarios/purview-synapse.md)
-- [Data Governance Best Practices](../../05-best-practices/cross-cutting-concerns/governance/data-governance.md)
+- Data Governance Best Practices
 
 ---
 

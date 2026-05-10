@@ -36,7 +36,7 @@ Dedicated SQL Pool (formerly Azure SQL Data Warehouse) provides a massively para
 |-------|-------------|
 | [Sizing Guide](sizing.md) | DWU selection and capacity planning |
 | [Performance Tuning](../../../../05-best-practices/service-specific/synapse/dedicated-sql-best-practices.md) | Query optimization techniques |
-| [Cost Management](../../../../05-best-practices/cross-cutting-concerns/cost-optimization/dedicated-sql-costs.md) | Cost optimization strategies |
+| Cost Management | Cost optimization strategies |
 | [Troubleshooting](../../../../07-troubleshooting/service-troubleshooting/synapse/README.md) | Common issues and solutions |
 
 ---

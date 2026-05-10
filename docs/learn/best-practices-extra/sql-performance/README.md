@@ -1,13 +1,13 @@
 ---
 title: "SQL Performance Best Practices"
-description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **SQL Performance**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **SQL Performance**"
 tags:
   - best-practices
   - sql-performance
 ---
 # SQL Performance Best Practices
 
-> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **SQL Performance**
+> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **SQL Performance**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -150,7 +150,7 @@ WHERE r.status = 'Running';
 
 ## Related Documentation
 
-- [Dedicated SQL Troubleshooting](../../troubleshooting/dedicated-sql-troubleshooting.md)
+- Dedicated SQL Troubleshooting
 - [Performance Optimization](../performance-optimization/README.md)
 
 ---

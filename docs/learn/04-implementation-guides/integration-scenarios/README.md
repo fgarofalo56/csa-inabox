@@ -425,7 +425,7 @@ Set up monitoring and apply optimization best practices.
 | **Stream Analytics + Synapse** | Synapse DWUs, Storage | Pause when idle, use result set caching |
 | **Event-Driven Pipelines** | Data Factory activities, Storage | Optimize trigger frequency, batch operations |
 
-**[📖 Detailed Cost Guide →](../../best-practices/cost-optimization.md)**
+**[📖 Detailed Cost Guide →](../../best-practices-extra/cost-optimization/README.md)**
 
 ---
 
@@ -452,7 +452,7 @@ Set up monitoring and apply optimization best practices.
 - Implement **data masking** for sensitive fields
 - Configure **diagnostic logging** and auditing
 
-**[📖 Security Guide →](../../best-practices/security.md)**
+**[📖 Security Guide →](../../best-practices-extra/security/README.md)**
 
 ---
 

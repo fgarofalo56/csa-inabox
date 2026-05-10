@@ -207,7 +207,7 @@ async def with_timeout(activity_func, payload, timeout_seconds=300):
 
 - [Event Sourcing](../data-patterns/event-sourcing.md)
 - [Event Hubs](../../02-services/streaming-services/azure-event-hubs/README.md)
-- [Durable Functions](../../02-services/orchestration-services/azure-functions/README.md)
+- Durable Functions
 
 ---
 

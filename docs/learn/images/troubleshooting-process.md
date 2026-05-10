@@ -1,6 +1,6 @@
 # Placeholder Image
 
-[Home](../../README.md) > Images > Troubleshooting Process
+[Home](../index.md) > Images > Troubleshooting Process
 
 This is a placeholder for the image: troubleshooting-process.png
 

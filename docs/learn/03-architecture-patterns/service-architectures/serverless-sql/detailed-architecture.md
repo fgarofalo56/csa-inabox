@@ -1,6 +1,6 @@
 ---
 title: "Azure Synapse Analytics Serverless SQL: Detailed Architecture"
-description: "[Home](../../../README.md) > [Architecture](../../README.md) > Serverless SQL > Detailed Architecture"
+description: "[Home](../../../index.md) > [Architecture](../../README.md) > Serverless SQL > Detailed Architecture"
 tags:
   - architecture
   - service-architectures
@@ -8,7 +8,7 @@ tags:
 ---
 # Azure Synapse Analytics Serverless SQL: Detailed Architecture
 
-[Home](../../../README.md) > [Architecture](../../README.md) > Serverless SQL > Detailed Architecture
+[Home](../../../index.md) > [Architecture](../../README.md) > Serverless SQL > Detailed Architecture
 
 ## Overview
 
@@ -444,4 +444,4 @@ Using Serverless SQL as a data virtualization layer:
 
 ## Reference Implementation
 
-For detailed code samples and implementation patterns for Serverless SQL in Azure Synapse Analytics, refer to the [code examples section](../../code-examples/README.md) of this documentation.
+For detailed code samples and implementation patterns for Serverless SQL in Azure Synapse Analytics, refer to the code examples section of this documentation.

@@ -1,13 +1,13 @@
 ---
 title: "Spark Performance Tuning"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark Performance**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark Performance**"
 tags:
   - best-practices
   - synapse
 ---
 # Spark Performance Tuning
 
-> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark Performance**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark Performance**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Performance-green?style=flat-square)
@@ -217,7 +217,7 @@ EXPLAIN COST SELECT * FROM table WHERE col = 'value';
 ## Related Documentation
 
 - [Spark Best Practices](spark-best-practices.md)
-- [Spark Troubleshooting](../../../troubleshooting/spark-troubleshooting.md)
+- [Spark Troubleshooting](../../../07-troubleshooting/spark-troubleshooting.md)
 - [Spark Pool Configuration](../../../02-services/analytics-compute/azure-synapse/spark-pools/README.md)
 
 ---

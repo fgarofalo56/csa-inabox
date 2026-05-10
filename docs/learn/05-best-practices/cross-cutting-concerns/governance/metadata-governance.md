@@ -1,13 +1,13 @@
 ---
 title: "Metadata Governance"
-description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Metadata Governance**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Metadata Governance**"
 tags:
   - best-practices
   - governance
 ---
 # Metadata Governance
 
-> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Metadata Governance**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Metadata Governance**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Governance-purple?style=flat-square)
@@ -313,8 +313,8 @@ def search_data_assets(query: str, filters: dict = None) -> list:
 
 ## Related Documentation
 
-- [Data Governance Overview](../../../../best-practices/data-governance/README.md)
-- [Azure Purview Integration](../../../../02-services/governance-services/azure-purview/README.md)
+- [Data Governance Overview](../../../best-practices-extra/data-governance/README.md)
+- [Azure Purview Integration](../../../02-services/data-governance/azure-purview/README.md)
 - [Unity Catalog](../../service-specific/databricks/README.md)
 
 ---

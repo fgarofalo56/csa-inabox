@@ -607,14 +607,14 @@ GROUP BY TumblingWindow(minute,1)
 ### = Integration Scenarios
 
 - [__Stream Analytics + Event Hubs__](../../../04-implementation-guides/integration-scenarios/eventhub-stream-analytics.md)
-- [__Stream Analytics + Power BI__](../../../04-implementation-guides/integration-scenarios/stream-analytics-powerbi.md)
+- __Stream Analytics + Power BI__
 - [__Stream Analytics + Synapse__](../../../04-implementation-guides/integration-scenarios/stream-analytics-synapse.md)
 
 ### ✅ Best Practices
 
-- [__Performance Tuning__](../../../05-best-practices/cross-cutting-concerns/performance/stream-analytics-optimization.md)
+- __Performance Tuning__
 - [__Query Development__](../../../05-best-practices/cross-cutting-concerns/development/stream-analytics-queries.md)
-- [__Cost Optimization__](../../../05-best-practices/cross-cutting-concerns/cost-optimization/stream-analytics-cost.md)
+- __Cost Optimization__
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: "HDInsight Monitoring"
-description: "> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **HDInsight Monitoring**"
+description: "> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **HDInsight Monitoring**"
 tags:
   - monitoring
   - service-monitoring
@@ -8,7 +8,7 @@ tags:
 ---
 # HDInsight Monitoring
 
-> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **HDInsight Monitoring**
+> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **HDInsight Monitoring**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Service](https://img.shields.io/badge/Service-Azure%20HDInsight-blue?style=flat-square)
@@ -257,9 +257,9 @@ HDInsightYarnMetrics
 
 ## Related Documentation
 
-- [Spark Performance Tuning](../../../best-practices/spark-performance/README.md)
+- Spark Performance Tuning
 - [Kafka Best Practices](../../../02-services/streaming-services/azure-event-hubs/README.md)
-- [HDInsight Troubleshooting](../../../troubleshooting/spark-troubleshooting.md)
+- [HDInsight Troubleshooting](../../../07-troubleshooting/spark-troubleshooting.md)
 
 ---
 

@@ -1342,7 +1342,7 @@ az functionapp start --name func-projector
 
 - [CQRS Pattern Guide](cqrs-pattern.md) - Complementary pattern for read/write separation
 - [Lambda Architecture](lambda-architecture.md) - Batch and stream processing
-- [Best Practices](../../best-practices/README.md) - General best practices
+- [Best Practices](../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md) - General best practices
 
 ### Azure Services
 

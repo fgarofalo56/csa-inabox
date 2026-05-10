@@ -1,13 +1,13 @@
 ---
 title: "Event Hubs Integration with Azure Functions"
-description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __EventHub + Functions__"
+description: "> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __EventHub + Functions__"
 tags:
   - implementation
   - integration-scenarios
 ---
 # Event Hubs Integration with Azure Functions
 
-> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __EventHub + Functions__
+> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __EventHub + Functions__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Beginner-green?style=flat-square)

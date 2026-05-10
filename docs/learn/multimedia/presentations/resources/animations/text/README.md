@@ -65,15 +65,15 @@ resources/animations/text/
 
 ### Guidelines
 
-- [Brand Guidelines](../../guides/brand-guidelines.md)
-- [Accessibility Guide](../../guides/accessibility.md)
-- [Best Practices](../../guides/best-practices.md)
+- [Brand Guidelines](../../../guides/brand-guidelines.md)
+- [Accessibility Guide](../../../guides/accessibility.md)
+- [Best Practices](../../../guides/best-practices.md)
 
 ### Related Resources
 
-- [Other Resource Categories](../README.md)
-- [Presentation Templates](../../../templates/README.md)
-- [Multimedia Index](../../../MULTIMEDIA_INDEX.md)
+- Other Resource Categories
+- Presentation Templates
+- Multimedia Index
 
 ## 💡 Tips and Best Practices
 

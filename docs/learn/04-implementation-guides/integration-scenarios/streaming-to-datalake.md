@@ -838,7 +838,7 @@ az storage account management-policy create \
 
 - **[Process captured data with Databricks](eventhubs-databricks.md)**
 - **[Build Lambda architecture with Synapse](stream-analytics-synapse.md)**
-- **[Implement data governance with Purview](../../best-practices/data-governance.md)**
+- **[Implement data governance with Purview](../../best-practices-extra/data-governance/README.md)**
 
 ### Learn More
 

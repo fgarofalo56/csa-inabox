@@ -240,12 +240,12 @@ These tutorials prepare you for:
 
 - [Azure Architecture Center](https://learn.microsoft.com/azure/architecture/)
 - [Reference Architectures](../../03-architecture-patterns/reference-architectures/README.md)
-- [Best Practices](../../best-practices/README.md)
+- [Best Practices](../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 
 ### __Performance__
 
-- [Performance Optimization](../../best-practices/performance-optimization.md)
-- [Cost Optimization](../../best-practices/cost-optimization.md)
+- [Performance Optimization](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+- [Cost Optimization](../../best-practices-extra/cost-optimization/README.md)
 
 ### __Migration**
 

@@ -1,13 +1,13 @@
 ---
 title: "Spark Best Practices"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark**"
 tags:
   - best-practices
   - synapse
 ---
 # Spark Best Practices
 
-> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Service](https://img.shields.io/badge/Service-Synapse%20Spark-purple?style=flat-square)

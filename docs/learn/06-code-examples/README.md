@@ -231,7 +231,7 @@ Each example follows this consistent structure:
 ### Documentation
 
 - [Architecture Patterns](../03-architecture-patterns/README.md) - Design patterns and architecture guidance
-- [Best Practices](../best-practices/README.md) - Performance and security best practices
+- [Best Practices](../05-best-practices/cross-cutting-concerns/cost-optimization/README.md) - Performance and security best practices
 - Troubleshooting - Common issues and solutions
 
 ### External Resources

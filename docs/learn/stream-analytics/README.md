@@ -1,12 +1,12 @@
 ---
 title: "Stream Analytics Documentation"
-description: "> **[Home](../README.md)** | **Stream Analytics**"
+description: "> **[Home](../index.md)** | **Stream Analytics**"
 tags:
   - stream-analytics
 ---
 # Stream Analytics Documentation
 
-> **[Home](../README.md)** | **Stream Analytics**
+> **[Home](../index.md)** | **Stream Analytics**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Service](https://img.shields.io/badge/Service-Azure%20Stream%20Analytics-blue?style=flat-square)

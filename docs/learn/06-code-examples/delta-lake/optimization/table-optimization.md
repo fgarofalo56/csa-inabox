@@ -1,6 +1,6 @@
 ---
 title: "Delta Table Optimization in Azure Synapse Analytics"
-description: "[🏠 Home](../../../../README.md) > [💻 Code Examples](../../../README.md) > [🌞️ Delta Lake](../../README.md) > 📄 Table Optimization"
+description: "[🏠 Home](../../../index.md) > [💻 Code Examples](../../../index.md) > [🌞️ Delta Lake](../../README.md) > 📄 Table Optimization"
 tags:
   - code-examples
   - delta-lake
@@ -8,7 +8,7 @@ tags:
 ---
 # Delta Table Optimization in Azure Synapse Analytics
 
-[🏠 Home](../../../../README.md) > [💻 Code Examples](../../../README.md) > [🌞️ Delta Lake](../../README.md) > 📄 Table Optimization
+[🏠 Home](../../../index.md) > [💻 Code Examples](../../../index.md) > [🌞️ Delta Lake](../../README.md) > 📄 Table Optimization
 
 This guide provides detailed examples for optimizing Delta Lake tables in Azure Synapse Analytics to improve query performance and reduce costs.
 

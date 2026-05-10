@@ -1,13 +1,13 @@
 ---
 title: "Data Retention Policies"
-description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Retention Policies**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Retention Policies**"
 tags:
   - best-practices
   - data-governance
 ---
 # Data Retention Policies
 
-> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Retention Policies**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Retention Policies**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Governance-purple?style=flat-square)
@@ -218,7 +218,7 @@ ORDER BY days_since_vacuum DESC;
 
 - [Data Governance](../governance/metadata-governance.md)
 - [Storage Best Practices](../../service-specific/storage/README.md)
-- [Compliance Guide](../../../../security/compliance-guide.md)
+- [Compliance Guide](../../../security/compliance-guide.md)
 
 ---
 

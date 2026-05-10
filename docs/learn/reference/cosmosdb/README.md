@@ -1,13 +1,13 @@
 ---
 title: "Azure Cosmos DB Reference"
-description: "[Home](../../../README.md) > [Reference](../README.md) > Cosmos DB"
+description: "[Home](../../index.md) > [Reference](../README.md) > Cosmos DB"
 tags:
   - reference
   - cosmosdb
 ---
 # Azure Cosmos DB Reference
 
-[Home](../../../README.md) > [Reference](../README.md) > Cosmos DB
+[Home](../../index.md) > [Reference](../README.md) > Cosmos DB
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 ![Documentation](https://img.shields.io/badge/Documentation-Complete-blue)
@@ -102,8 +102,8 @@ az cosmosdb sql container create \
 ## Related Resources
 
 - [Azure Regions Reference](../azure-regions.md)
-- [Best Practices - Performance Optimization](../../best-practices/performance-optimization.md)
-- [Integration Guides](../../code-examples/integration/README.md)
+- [Best Practices - Performance Optimization](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+- [Integration Guides](../../06-code-examples/integration/README.md)
 
 ---
 

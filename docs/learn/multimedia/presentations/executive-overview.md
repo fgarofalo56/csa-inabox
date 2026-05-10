@@ -865,9 +865,9 @@ Enterprise analytics platform built on Microsoft Azure, providing:
 
 ### Presentation Development
 
-- **Template**: [Download Executive Template](../templates/executive-presentation-template.pptx)
-- **Brand Assets**: [Corporate Brand Guidelines](../../guides/brand-guidelines.md)
-- **Financial Models**: [ROI Calculator](../templates/roi-calculator.xlsx)
+- **Template**: Download Executive Template
+- **Brand Assets**: [Corporate Brand Guidelines](guides/brand-guidelines.md)
+- **Financial Models**: ROI Calculator
 
 ### Content Resources
 
@@ -877,9 +877,9 @@ Enterprise analytics platform built on Microsoft Azure, providing:
 
 ### Delivery Support
 
-- **Coaching**: [Presentation Skills](../../guides/presentation-skills.md)
+- **Coaching**: Presentation Skills
 - **Q&A Prep**: [FAQ Database](../../resources/executive-faq.md)
-- **Technical Support**: [AV Setup Guide](../../guides/technical-setup.md)
+- **Technical Support**: AV Setup Guide
 
 ---
 

@@ -1,12 +1,12 @@
 ---
 title: "Emerging Patterns and Modern Integrations"
-description: "[🏠 Home](../../README.md) > [💻 Code Examples](README.md) > 🚀 Emerging Patterns"
+description: "[🏠 Home](../index.md) > [💻 Code Examples](README.md) > 🚀 Emerging Patterns"
 tags:
   - code-examples
 ---
 # 🚀 Emerging Patterns and Modern Integrations
 
-[🏠 Home](../../README.md) > [💻 Code Examples](README.md) > 🚀 Emerging Patterns
+[🏠 Home](../index.md) > [💻 Code Examples](README.md) > 🚀 Emerging Patterns
 
 > 🌟 __Cutting-Edge Integration Patterns__
 > Explore modern integration patterns for Unity Catalog, Microsoft Fabric, and real-time analytics with Azure Synapse Analytics and related services.

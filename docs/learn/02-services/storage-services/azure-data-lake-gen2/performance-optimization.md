@@ -512,7 +512,7 @@ monitor_storage_performance()
 - [Hierarchical Namespace](hierarchical-namespace.md)
 - [Access Control](access-control.md)
 - [Data Lifecycle Management](data-lifecycle.md)
-- [Performance Best Practices](../../../05-best-practices/cross-cutting-concerns/performance/storage-performance.md)
+- Performance Best Practices
 
 ---
 

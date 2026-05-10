@@ -1180,9 +1180,9 @@ ORDER BY ABS(skew_pct) DESC;
 ## Related Resources
 
 ### Internal Documentation
-- [Data Factory ETL Patterns](../../code-examples/integration/azure-data-factory/README.md)
-- [Performance Tuning Guide](../../best-practices/performance-optimization/README.md)
-- [SQL Best Practices](../../best-practices/sql-performance/README.md)
+- Data Factory ETL Patterns
+- [Performance Tuning Guide](../../best-practices-extra/performance-optimization/README.md)
+- [SQL Best Practices](../../best-practices-extra/sql-performance/README.md)
 
 ### External References
 - [Synapse Analytics Documentation](https://docs.microsoft.com/azure/synapse-analytics/)

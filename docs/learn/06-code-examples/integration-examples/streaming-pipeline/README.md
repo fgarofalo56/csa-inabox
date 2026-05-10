@@ -826,8 +826,8 @@ ORDER BY WindowEnd DESC;
 ## Additional Resources
 
 - [Architecture Patterns](../../../03-architecture-patterns/README.md)
-- [Best Practices](../../../best-practices/README.md)
-- [Troubleshooting Guide](../../../troubleshooting/README.md)
+- [Best Practices](../../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
+- [Troubleshooting Guide](../../../07-troubleshooting/README.md)
 
 ---
 

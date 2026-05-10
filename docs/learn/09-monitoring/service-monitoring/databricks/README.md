@@ -1,6 +1,6 @@
 ---
 title: "Databricks Monitoring"
-description: "> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **Databricks Monitoring**"
+description: "> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **Databricks Monitoring**"
 tags:
   - monitoring
   - service-monitoring
@@ -8,7 +8,7 @@ tags:
 ---
 # Databricks Monitoring
 
-> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **Databricks Monitoring**
+> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **Databricks Monitoring**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Service](https://img.shields.io/badge/Service-Azure%20Databricks-orange?style=flat-square)
@@ -213,8 +213,8 @@ DatabricksJobs
 ## Related Documentation
 
 - [Delta Live Tables Monitoring](dlt-monitoring.md)
-- [Spark Performance Tuning](../../../best-practices/spark-performance/README.md)
-- [Azure Monitor Integration](../../monitoring-setup/README.md)
+- Spark Performance Tuning
+- Azure Monitor Integration
 
 ---
 

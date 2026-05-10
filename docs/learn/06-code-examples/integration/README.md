@@ -1,13 +1,13 @@
 ---
 title: "Azure Synapse Analytics Integration Examples"
-description: "[Home](../../../README.md) > [Code Examples](../../README.md) > Integration"
+description: "[Home](../../index.md) > [Code Examples](../../index.md) > Integration"
 tags:
   - code-examples
   - integration
 ---
 # Azure Synapse Analytics Integration Examples
 
-[Home](../../../README.md) > [Code Examples](../../README.md) > Integration
+[Home](../../index.md) > [Code Examples](../../index.md) > Integration
 
 This section provides code examples and patterns for integrating Azure Synapse Analytics with other Azure services.
 
@@ -96,6 +96,6 @@ run = experiment.submit(estimator)
 
 ## Related Resources
 
-- [Integration Guide](../../integration-guide.md) - Comprehensive integration guide
-- [Best Practices for Integration](../../best-practices/implementation-patterns.md) - Best practices
-- [Security Guidelines for Integration](../../best-practices/security.md) - Security considerations
+- [Integration Guide](../integration-guide.md) - Comprehensive integration guide
+- Best Practices for Integration - Best practices
+- [Security Guidelines for Integration](../../best-practices-extra/security/README.md) - Security considerations

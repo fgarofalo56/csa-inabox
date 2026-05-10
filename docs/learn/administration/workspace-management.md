@@ -1,12 +1,12 @@
 ---
 title: "Workspace Management"
-description: "[Home](../../README.md) > Administration > Workspace Management"
+description: "[Home](../index.md) > Administration > Workspace Management"
 tags:
   - administration
 ---
 # Workspace Management
 
-[Home](../../README.md) > Administration > Workspace Management
+[Home](../index.md) > Administration > Workspace Management
 
 !!! abstract "Overview"
     This guide covers best practices for managing Azure Synapse Analytics workspaces, including governance, access control, and operational tasks.

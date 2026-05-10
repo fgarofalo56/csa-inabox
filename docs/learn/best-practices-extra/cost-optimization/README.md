@@ -1,13 +1,13 @@
 ---
 title: "Cost Optimization Best Practices"
-description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Cost Optimization**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Cost Optimization**"
 tags:
   - best-practices
   - cost-optimization
 ---
 # Cost Optimization Best Practices
 
-> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Cost Optimization**
+> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Cost Optimization**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -24,7 +24,7 @@ Cost optimization is achieved through:
 - Using reserved capacity for predictable workloads
 - Implementing efficient data architectures
 
-For detailed guidance, see: **[Full Cost Optimization Guide](../../docs/05-best-practices/cost-optimization/README.md)**
+For detailed guidance, see: **[Full Cost Optimization Guide](../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)**
 
 ---
 
@@ -116,8 +116,8 @@ AzureDiagnostics
 
 ## Related Documentation
 
-- [Resource Planning](../../docs/05-best-practices/cost-optimization/README.md)
-- [Auto-Scaling Configuration](../../docs/04-implementation-guides/synapse/auto-scaling.md)
+- [Resource Planning](../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
+- Auto-Scaling Configuration
 
 ---
 

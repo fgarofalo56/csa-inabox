@@ -1,13 +1,13 @@
 ---
 title: "Security Best Practices"
-description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Security**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Security**"
 tags:
   - best-practices
   - security
 ---
 # Security Best Practices
 
-> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Security**
+> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Security**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -158,7 +158,7 @@ ALTER COLUMN CreditCard ADD MASKED WITH (FUNCTION = 'partial(0,"XXXX-XXXX-XXXX-"
 ## Related Documentation
 
 - [Network Security](../network-security/README.md)
-- [Security Monitoring](../../docs/solutions/azure-realtime-analytics/operations/security-monitoring.md)
+- [Security Monitoring](../../08-solutions/azure-realtime-analytics/operations/security-monitoring.md)
 
 ---
 

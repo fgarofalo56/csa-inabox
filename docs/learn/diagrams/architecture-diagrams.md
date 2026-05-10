@@ -1,12 +1,12 @@
 ---
 title: "Azure Synapse Analytics Architecture Diagrams"
-description: "[🏠 Home](../../README.md) > 📊 Diagrams > 📄 Architecture Diagrams"
+description: "[🏠 Home](../index.md) > 📊 Diagrams > 📄 Architecture Diagrams"
 tags:
   - diagrams
 ---
 # Azure Synapse Analytics Architecture Diagrams
 
-[🏠 Home](../../README.md) > 📊 Diagrams > 📄 Architecture Diagrams
+[🏠 Home](../index.md) > 📊 Diagrams > 📄 Architecture Diagrams
 
 This section contains architecture diagrams for Azure Synapse Analytics, focusing on Delta Lakehouse and Serverless SQL implementations.
 
@@ -16,7 +16,7 @@ The Delta Lakehouse architecture combines the best features of data lakes and da
 
 ### 🏗️ Our Delta Lakehouse Architecture
 
-![Delta Lakehouse Architecture](./delta-lakehouse-architecture.svg/README.md)
+![Delta Lakehouse Architecture](../images/README.md)
 
 ### 🔗 Microsoft Reference Architecture
 
@@ -36,7 +36,7 @@ The Serverless SQL architecture enables on-demand, scalable analytics without pr
 
 ### 🏗️ Our Serverless SQL Architecture
 
-![Serverless SQL Architecture](./serverless-sql-architecture.svg/README.md)
+![Serverless SQL Architecture](../images/README.md)
 
 ### 🔗 Microsoft Reference Architecture
 
@@ -56,7 +56,7 @@ The Shared Metadata architecture enables consistent data access across Spark and
 
 ### 🏗️ Our Shared Metadata Architecture
 
-![Shared Metadata Architecture](./shared-metadata-architecture.svg/README.md)
+![Shared Metadata Architecture](../images/README.md)
 
 ### 🔗 Microsoft Reference Architecture
 

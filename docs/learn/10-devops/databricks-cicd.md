@@ -1,12 +1,12 @@
 ---
 title: "Databricks CI/CD"
-description: "> **[Home](../README.md)** | **[DevOps](../devops/README.md)** | **Databricks CI/CD**"
+description: "> **[Home](../index.md)** | **[DevOps](README.md)** | **Databricks CI/CD**"
 tags:
   - devops
 ---
 # Databricks CI/CD
 
-> **[Home](../README.md)** | **[DevOps](../devops/README.md)** | **Databricks CI/CD**
+> **[Home](../index.md)** | **[DevOps](README.md)** | **Databricks CI/CD**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Platform](https://img.shields.io/badge/Platform-Azure%20Databricks-orange?style=flat-square)
@@ -415,9 +415,9 @@ def deploy_to_serving(model_name: str, endpoint_name: str):
 
 ## Related Documentation
 
-- [Databricks Best Practices](../best-practices/databricks/README.md)
-- [MLOps Guide](../best-practices/ml-operations/README.md)
-- [DevOps Overview](../devops/README.md)
+- [Databricks Best Practices](../05-best-practices/service-specific/databricks/README.md)
+- [MLOps Guide](../best-practices-extra/ml-operations/README.md)
+- [DevOps Overview](README.md)
 
 ---
 

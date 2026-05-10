@@ -1047,8 +1047,8 @@ versioning:
 
 **Related Documentation**:
 - [Medallion Architecture](medallion-architecture.md)
-- [Azure Purview Integration](../../code-examples/integration/azure-purview.md)
-- [Organizational Patterns](../../best-practices/data-governance.md)
+- [Azure Purview Integration](../../06-code-examples/integration/azure-purview.md)
+- [Organizational Patterns](../../best-practices-extra/data-governance/README.md)
 
 ---
 

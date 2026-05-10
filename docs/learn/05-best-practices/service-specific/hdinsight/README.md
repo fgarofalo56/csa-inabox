@@ -1,13 +1,13 @@
 ---
 title: "HDInsight Best Practices"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **HDInsight**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **HDInsight**"
 tags:
   - best-practices
   - hdinsight
 ---
 # HDInsight Best Practices
 
-> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **HDInsight**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **HDInsight**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Service](https://img.shields.io/badge/Service-Azure%20HDInsight-blue?style=flat-square)

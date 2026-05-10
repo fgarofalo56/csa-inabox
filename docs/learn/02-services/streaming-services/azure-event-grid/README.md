@@ -512,8 +512,8 @@ for metric in response.metrics:
 ### Best Practices
 
 - [__Reliability Patterns__](../../../05-best-practices/operational-excellence/eventgrid-reliability.md)
-- [__Security Configuration__](../../../05-best-practices/cross-cutting-concerns/security/eventgrid-security.md)
-- [__Performance Optimization__](../../../05-best-practices/cross-cutting-concerns/performance/eventgrid-optimization.md)
+- __Security Configuration__
+- __Performance Optimization__
 
 ---
 

@@ -1,12 +1,12 @@
 ---
 title: "Spark Configuration"
-description: "[Home](../../README.md) > Reference > Spark Configuration"
+description: "[Home](../index.md) > Reference > Spark Configuration"
 tags:
   - reference
 ---
 # Spark Configuration
 
-[Home](../../README.md) > Reference > Spark Configuration
+[Home](../index.md) > Reference > Spark Configuration
 
 ## Overview
 
@@ -48,7 +48,7 @@ This document provides comprehensive guidance on spark configuration.
 ## Related Resources
 
 - [Azure Synapse Analytics Documentation](https://docs.microsoft.com/azure/synapse-analytics/)
-- [Best Practices Overview](../best-practices/README.md)
+- [Best Practices Overview](../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 
 ## Next Steps
 

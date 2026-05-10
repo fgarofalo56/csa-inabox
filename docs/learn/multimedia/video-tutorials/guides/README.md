@@ -289,10 +289,10 @@ Before publishing, verify:
 
 ### Related Documentation
 
-- **[Multimedia Production Guide](../../production-guide/README.md)** - Overall multimedia strategy
-- **[Animation Guidelines](../../animations/animation-guidelines.md)** - Animated content standards
+- **Multimedia Production Guide** - Overall multimedia strategy
+- **Animation Guidelines** - Animated content standards
 - **[Interactive Demos](../../interactive-demos/README.md)** - Interactive tutorial alternatives
-- **[Visual Style Guide](../../../VISUAL-STYLE-GUIDE.md)** - Brand and design standards
+- **Visual Style Guide** - Brand and design standards
 
 ### Community & Support
 
@@ -309,7 +309,7 @@ Before publishing, verify:
 
 ## Contributing
 
-Found an error or have suggestions? See our [Contributing Guide](../../../guides/CONTRIBUTING_GUIDE.md).
+Found an error or have suggestions? See our Contributing Guide.
 
 ---
 

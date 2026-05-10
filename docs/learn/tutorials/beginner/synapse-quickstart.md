@@ -1,13 +1,13 @@
 ---
 title: "= Azure Synapse Analytics Quickstart"
-description: "> __< [Home](../../../README.md)__ | __= [Documentation](../../README.md)__ | __< [Tutorials](../README.md)__ | __< Beginner__ | __= Synapse__"
+description: "> __< [Home](../../index.md)__ | __= [Documentation](../../index.md)__ | __< [Tutorials](../README.md)__ | __< Beginner__ | __= Synapse__"
 tags:
   - tutorials
   - beginner
 ---
 # = Azure Synapse Analytics Quickstart
 
-> __< [Home](../../../README.md)__ | __= [Documentation](../../README.md)__ | __< [Tutorials](../README.md)__ | __< Beginner__ | __= Synapse__
+> __< [Home](../../index.md)__ | __= [Documentation](../../index.md)__ | __< [Tutorials](../README.md)__ | __< Beginner__ | __= Synapse__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 ![Level](https://img.shields.io/badge/Level-Beginner-green)
@@ -391,7 +391,7 @@ __Query Returns No Results__
 
 - [Synapse Complete Tutorial](../synapse/README.md) - Deep dive into all features
 - [Data Engineer Learning Path](../learning-paths/data-engineer-path.md)
-- [Serverless SQL Best Practices](../../best-practices/serverless-sql-best-practices.md)
+- [Serverless SQL Best Practices](../../best-practices-extra/serverless-sql-best-practices/README.md)
 
 ## > Cleanup
 

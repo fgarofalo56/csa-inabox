@@ -1,6 +1,6 @@
 ---
 title: "Azure Synapse Shared Metadata Architecture"
-description: "[Home](../../../README.md) > [Architecture](../../README.md) > Shared Metadata > Shared Metadata Architecture"
+description: "[Home](../../../index.md) > [Architecture](../../README.md) > Shared Metadata > Shared Metadata Architecture"
 tags:
   - architecture
   - service-architectures
@@ -8,7 +8,7 @@ tags:
 ---
 # Azure Synapse Shared Metadata Architecture
 
-[Home](../../../README.md) > [Architecture](../../README.md) > Shared Metadata > Shared Metadata Architecture
+[Home](../../../index.md) > [Architecture](../../README.md) > Shared Metadata > Shared Metadata Architecture
 
 ## Overview
 
@@ -178,5 +178,5 @@ This layered approach ensures that metadata synchronization complexity is applie
 
 1. [Delta Lakehouse Architecture](../delta-lakehouse/README.md)
 2. [Serverless SQL Architecture](../serverless-sql/README.md)
-3. [Best Practices](../../best-practices/README.md)
-4. [Code Examples](../../code-examples/README.md)
+3. Best Practices
+4. Code Examples

@@ -1,12 +1,12 @@
 ---
 title: "Process Flowcharts for Azure Synapse Analytics"
-description: "[Home](../../README.md) > Diagrams > Process Flowcharts"
+description: "[Home](../index.md) > Diagrams > Process Flowcharts"
 tags:
   - diagrams
 ---
 # Process Flowcharts for Azure Synapse Analytics
 
-[Home](../../README.md) > Diagrams > Process Flowcharts
+[Home](../index.md) > Diagrams > Process Flowcharts
 
 This section provides flowcharts for common processes related to Azure Synapse Analytics, including troubleshooting, optimization, and implementation workflows.
 

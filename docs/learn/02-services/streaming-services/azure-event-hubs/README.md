@@ -384,9 +384,9 @@ except KeyboardInterrupt:
 
 ### 🎯 Best Practices
 
-- [__Performance Optimization__](../../../05-best-practices/cross-cutting-concerns/performance/eventhub-optimization.md)
-- [__Security Configuration__](../../../05-best-practices/cross-cutting-concerns/security/eventhub-security.md)
-- [__Cost Optimization__](../../../05-best-practices/cross-cutting-concerns/cost-optimization/eventhub-cost.md)
+- __Performance Optimization__
+- __Security Configuration__
+- __Cost Optimization__
 
 ---
 
