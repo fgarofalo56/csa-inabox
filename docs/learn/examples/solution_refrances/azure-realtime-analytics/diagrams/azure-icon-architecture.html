@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azure Architecture - Service Icon Diagrams</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #f8f9fa;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: linear-gradient(90deg, #0078d4 0%, #40a9ff 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            font-weight: 400;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.95;
+        }
+        
+        .diagram-section {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+        
+        .diagram-title {
+            font-size: 1.8em;
+            color: #323130;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #0078d4;
+        }
+        
+        .diagram-container {
+            overflow-x: auto;
+            padding: 20px 0;
+        }
+        
+        svg {
+            display: block;
+            margin: 0 auto;
+        }
+        
+        .service-icon {
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .service-icon:hover {
+            transform: scale(1.05);
+        }
+        
+        .tooltip {
+            position: absolute;
+            background: #323130;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 1000;
+            display: none;
+        }
+        
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-top: 20px;
+            padding: 15px;
+            background: #f3f2f1;
+            border-radius: 5px;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e1dfdd;
+        }
+        
+        .tab {
+            padding: 10px 20px;
+            background: transparent;
+            border: none;
+            color: #323130;
+            cursor: pointer;
+            font-size: 1em;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+        
+        .tab:hover {
+            background: #f3f2f1;
+        }
+        
+        .tab.active {
+            color: #0078d4;
+            border-bottom-color: #0078d4;
+        }
+        
+        .view-content {
+            display: none;
+        }
+        
+        .view-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏗️ Azure Real-Time Analytics Architecture</h1>
+            <p>Complete Architecture Diagram with Azure Service Icons</p>
+        </div>
+
+        <div class="diagram-section">
+            <h2 class="diagram-title">Complete End-to-End Architecture</h2>
+            <div class="tabs">
+                <button class="tab active" onclick="showView('main-architecture')">Main Architecture</button>
+                <button class="tab" onclick="showView('data-flow-detail')">Data Flow Detail</button>
+                <button class="tab" onclick="showView('security-network')">Security & Network</button>
+            </div>
+            
+            <!-- Main Architecture View -->
+            <div id="main-architecture" class="view-content active">
+                <div class="diagram-container">
+                    <svg width="1600" height="1000" viewBox="0 0 1600 1000">
+                        <defs>
+                            <!-- Define gradients for Azure services -->
+                            <linearGradient id="azureGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#0078d4;stop-opacity:1" />
+                                <stop offset="100%" style="stop-color:#40a9ff;stop-opacity:1" />
+                            </linearGradient>
+                            
+                            <linearGradient id="confluentGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#ff6f00;stop-opacity:1" />
+                                <stop offset="100%" style="stop-color:#ffa000;stop-opacity:1" />
+                            </linearGradient>
+                            
+                            <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+                                <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
+                                <feOffset dx="2" dy="2" result="offsetblur"/>
+                                <feComponentTransfer>
+                                    <feFuncA type="linear" slope="0.2"/>
+                                </feComponentTransfer>
+                                <feMerge>
+                                    <feMergeNode/>
+                                    <feMergeNode in="SourceGraphic"/>
+                                </feMerge>
+                            </filter>
+                            
+                            <!-- Arrow marker -->
+                            <marker id="arrowblue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                                <path d="M0,0 L0,6 L9,3 z" fill="#0078d4"/>
+                            </marker>
+                        </defs>
+                        
+                        <!-- Title -->
+                        <text x="800" y="40" font-size="24" font-weight="500" text-anchor="middle" fill="#323130">Azure Real-Time Analytics Architecture</text>
+                        
+                        <!-- Region boundaries -->
+                        <rect x="20" y="80" width="1560" height="880" fill="none" stroke="#e1dfdd" stroke-width="2" rx="10" stroke-dasharray="10,5"/>
+                        <text x="50" y="110" font-size="14" fill="#605e5c">Azure Region: East US 2</text>
+                        
+                        <!-- Source Systems Section -->
+                        <g transform="translate(50, 150)">
+                            <rect width="300" height="600" fill="#fff8f0" stroke="#ff6f00" stroke-width="2" rx="10" opacity="0.3"/>
+                            <text x="150" y="30" font-size="16" font-weight="600" text-anchor="middle" fill="#323130">Data Sources</text>
+                            
+                            <!-- Confluent Cloud Icon -->
+                            <g transform="translate(75, 60)" class="service-icon">
+                                <rect width="150" height="100" fill="url(#confluentGradient)" rx="8" filter="url(#shadow)"/>
+                                <circle cx="75" cy="30" r="20" fill="white" opacity="0.9"/>
+                                <path d="M 65 30 L 75 20 L 85 30 L 75 40 Z" fill="#ff6f00"/>
+                                <text x="75" y="60" font-size="12" font-weight="bold" fill="white" text-anchor="middle">Confluent</text>
+                                <text x="75" y="75" font-size="11" fill="white" text-anchor="middle">Cloud Kafka</text>
+                                <text x="75" y="90" font-size="9" fill="white" text-anchor="middle">10+ Topics</text>
+                            </g>
+                            
+                            <!-- Schema Registry Icon -->
+                            <g transform="translate(75, 180)" class="service-icon">
+                                <rect width="150" height="80" fill="#ffa726" rx="8" filter="url(#shadow)"/>
+                                <rect x="55" y="15" width="40" height="35" fill="white" opacity="0.9" rx="2"/>
+                                <line x1="60" y1="25" x2="90" y2="25" stroke="#ff6f00" stroke-width="2"/>
+                                <line x1="60" y1="32" x2="90" y2="32" stroke="#ff6f00" stroke-width="2"/>
+                                <line x1="60" y1="39" x2="90" y2="39" stroke="#ff6f00" stroke-width="2"/>
+                                <text x="75" y="65" font-size="11" fill="white" text-anchor="middle">Schema Registry</text>
+                            </g>
+                            
+                            <!-- ksqlDB Icon -->
+                            <g transform="translate(75, 280)" class="service-icon">
+                                <rect width="150" height="80" fill="#ff8c00" rx="8" filter="url(#shadow)"/>
+                                <text x="75" y="35" font-size="20" font-weight="bold" fill="white" text-anchor="middle">SQL</text>
+                                <text x="75" y="55" font-size="11" fill="white" text-anchor="middle">ksqlDB</text>
+                                <text x="75" y="70" font-size="9" fill="white" text-anchor="middle">Stream Processing</text>
+                            </g>
+                        </g>
+                        
+                        <!-- Ingestion Layer -->
+                        <g transform="translate(400, 150)">
+                            <rect width="350" height="600" fill="#f0f8ff" stroke="#0078d4" stroke-width="2" rx="10" opacity="0.3"/>
+                            <text x="175" y="30" font-size="16" font-weight="600" text-anchor="middle" fill="#323130">Ingestion & Streaming</text>
+                            
+                            <!-- Event Hubs Icon -->
+                            <g transform="translate(50, 60)" class="service-icon">
+                                <rect width="120" height="120" fill="#0078d4" rx="8" filter="url(#shadow)"/>
+                                <circle cx="60" cy="40" r="25" fill="white" opacity="0.9"/>
+                                <circle cx="60" cy="40" r="15" fill="#0078d4"/>
+                                <path d="M 45 40 L 75 40 M 60 25 L 60 55" stroke="white" stroke-width="3"/>
+                                <text x="60" y="75" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Event Hubs</text>
+                                <text x="60" y="90" font-size="9" fill="white" text-anchor="middle">Kafka Protocol</text>
+                                <text x="60" y="105" font-size="9" fill="white" text-anchor="middle">Auto-scale</text>
+                            </g>
+                            
+                            <!-- Stream Analytics Icon -->
+                            <g transform="translate(200, 60)" class="service-icon">
+                                <rect width="120" height="120" fill="#59b4d1" rx="8" filter="url(#shadow)"/>
+                                <rect x="30" y="20" width="60" height="40" fill="white" opacity="0.9" rx="4"/>
+                                <path d="M 35 30 Q 60 45 85 30" stroke="#0078d4" stroke-width="3" fill="none"/>
+                                <path d="M 35 40 Q 60 55 85 40" stroke="#0078d4" stroke-width="3" fill="none"/>
+                                <text x="60" y="75" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Stream</text>
+                                <text x="60" y="90" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Analytics</text>
+                                <text x="60" y="105" font-size="9" fill="white" text-anchor="middle">Real-time</text>
+                            </g>
+                            
+                            <!-- Azure Data Factory Icon -->
+                            <g transform="translate(125, 200)" class="service-icon">
+                                <rect width="120" height="100" fill="#0078d4" rx="8" filter="url(#shadow)"/>
+                                <polygon points="30,30 90,30 90,50 60,70 30,50" fill="white" opacity="0.9"/>
+                                <circle cx="45" cy="40" r="5" fill="#0078d4"/>
+                                <circle cx="75" cy="40" r="5" fill="#0078d4"/>
+                                <text x="60" y="85" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Data Factory</text>
+                                <text x="60" y="95" font-size="9" fill="white" text-anchor="middle">Orchestration</text>
+                            </g>
+                        </g>
+                        
+                        <!-- Processing Layer - Databricks -->
+                        <g transform="translate(800, 150)">
+                            <rect width="400" height="600" fill="#fff5f5" stroke="#ff3621" stroke-width="2" rx="10" opacity="0.3"/>
+                            <text x="200" y="30" font-size="16" font-weight="600" text-anchor="middle" fill="#323130">Processing & Analytics</text>
+                            
+                            <!-- Databricks Main Icon -->
+                            <g transform="translate(100, 60)" class="service-icon">
+                                <rect width="200" height="150" fill="#ff3621" rx="8" filter="url(#shadow)"/>
+                                <polygon points="100,30 130,50 130,90 100,110 70,90 70,50" fill="white" opacity="0.9"/>
+                                <text x="100" y="70" font-size="24" font-weight="bold" fill="#ff3621" text-anchor="middle">DB</text>
+                                <text x="100" y="130" font-size="12" font-weight="bold" fill="white" text-anchor="middle">Azure Databricks</text>
+                                <text x="100" y="145" font-size="10" fill="white" text-anchor="middle">Unified Analytics</text>
+                            </g>
+                            
+                            <!-- Delta Lake Bronze -->
+                            <g transform="translate(50, 230)" class="service-icon">
+                                <rect width="100" height="80" fill="#00897b" rx="8" filter="url(#shadow)"/>
+                                <polygon points="50,20 70,30 70,50 50,60 30,50 30,30" fill="white" opacity="0.9"/>
+                                <text x="50" y="40" font-size="10" font-weight="bold" fill="#00897b" text-anchor="middle">Δ</text>
+                                <text x="50" y="70" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Bronze</text>
+                            </g>
+                            
+                            <!-- Delta Lake Silver -->
+                            <g transform="translate(160, 230)" class="service-icon">
+                                <rect width="100" height="80" fill="#00acc1" rx="8" filter="url(#shadow)"/>
+                                <polygon points="50,20 70,30 70,50 50,60 30,50 30,30" fill="white" opacity="0.9"/>
+                                <text x="50" y="40" font-size="10" font-weight="bold" fill="#00acc1" text-anchor="middle">Δ</text>
+                                <text x="50" y="70" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Silver</text>
+                            </g>
+                            
+                            <!-- Delta Lake Gold -->
+                            <g transform="translate(270, 230)" class="service-icon">
+                                <rect width="100" height="80" fill="#039be5" rx="8" filter="url(#shadow)"/>
+                                <polygon points="50,20 70,30 70,50 50,60 30,50 30,30" fill="white" opacity="0.9"/>
+                                <text x="50" y="40" font-size="10" font-weight="bold" fill="#039be5" text-anchor="middle">Δ</text>
+                                <text x="50" y="70" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Gold</text>
+                            </g>
+                            
+                            <!-- Unity Catalog -->
+                            <g transform="translate(100, 330)" class="service-icon">
+                                <rect width="200" height="80" fill="#9c27b0" rx="8" filter="url(#shadow)"/>
+                                <rect x="70" y="15" width="60" height="40" fill="white" opacity="0.9" rx="4"/>
+                                <circle cx="100" cy="35" r="12" fill="#9c27b0"/>
+                                <text x="100" y="40" font-size="10" font-weight="bold" fill="white" text-anchor="middle">UC</text>
+                                <text x="100" y="70" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Unity Catalog</text>
+                            </g>
+                            
+                            <!-- MLflow -->
+                            <g transform="translate(100, 430)" class="service-icon">
+                                <rect width="200" height="80" fill="#0194ef" rx="8" filter="url(#shadow)"/>
+                                <circle cx="100" cy="30" r="20" fill="white" opacity="0.9"/>
+                                <path d="M 85 30 L 100 20 L 115 30 L 100 40 Z" fill="#0194ef"/>
+                                <text x="100" y="60" font-size="11" font-weight="bold" fill="white" text-anchor="middle">MLflow</text>
+                                <text x="100" y="75" font-size="9" fill="white" text-anchor="middle">Model Management</text>
+                            </g>
+                        </g>
+                        
+                        <!-- AI Services -->
+                        <g transform="translate(600, 550)">
+                            <!-- Azure Cognitive Services -->
+                            <g transform="translate(0, 50)" class="service-icon">
+                                <rect width="140" height="100" fill="#673ab7" rx="8" filter="url(#shadow)"/>
+                                <circle cx="70" cy="30" r="20" fill="white" opacity="0.9"/>
+                                <path d="M 60 30 Q 70 20 80 30 Q 70 40 60 30" fill="#673ab7"/>
+                                <text x="70" y="60" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Cognitive</text>
+                                <text x="70" y="75" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Services</text>
+                                <text x="70" y="90" font-size="9" fill="white" text-anchor="middle">AI Enrichment</text>
+                            </g>
+                            
+                            <!-- Azure OpenAI -->
+                            <g transform="translate(160, 50)" class="service-icon">
+                                <rect width="140" height="100" fill="#1a1a1a" rx="8" filter="url(#shadow)"/>
+                                <circle cx="70" cy="30" r="20" fill="white" opacity="0.9"/>
+                                <text x="70" y="35" font-size="14" font-weight="bold" fill="#1a1a1a" text-anchor="middle">AI</text>
+                                <text x="70" y="60" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Azure OpenAI</text>
+                                <text x="70" y="75" font-size="11" font-weight="bold" fill="white" text-anchor="middle">GPT-4</text>
+                                <text x="70" y="90" font-size="9" fill="white" text-anchor="middle">Chat & Analysis</text>
+                            </g>
+                        </g>
+                        
+                        <!-- Storage Layer -->
+                        <g transform="translate(800, 780)">
+                            <!-- ADLS Gen2 -->
+                            <g transform="translate(50, 0)" class="service-icon">
+                                <rect width="140" height="100" fill="#0078d4" rx="8" filter="url(#shadow)"/>
+                                <rect x="40" y="20" width="60" height="40" fill="white" opacity="0.9" rx="2"/>
+                                <rect x="45" y="25" width="50" height="5" fill="#0078d4" rx="2"/>
+                                <rect x="45" y="35" width="50" height="5" fill="#0078d4" rx="2"/>
+                                <rect x="45" y="45" width="50" height="5" fill="#0078d4" rx="2"/>
+                                <text x="70" y="75" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Data Lake</text>
+                                <text x="70" y="90" font-size="9" fill="white" text-anchor="middle">Storage Gen2</text>
+                            </g>
+                            
+                            <!-- Key Vault -->
+                            <g transform="translate(210, 0)" class="service-icon">
+                                <rect width="120" height="100" fill="#0078d4" rx="8" filter="url(#shadow)"/>
+                                <circle cx="60" cy="35" r="20" fill="white" opacity="0.9"/>
+                                <rect x="50" y="25" width="20" height="25" fill="#0078d4" rx="2"/>
+                                <circle cx="60" cy="32" r="5" fill="white"/>
+                                <text x="60" y="70" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Key Vault</text>
+                                <text x="60" y="85" font-size="9" fill="white" text-anchor="middle">Secrets</text>
+                            </g>
+                        </g>
+                        
+                        <!-- Consumption Layer -->
+                        <g transform="translate(1250, 150)">
+                            <rect width="300" height="600" fill="#f0fff0" stroke="#4caf50" stroke-width="2" rx="10" opacity="0.3"/>
+                            <text x="150" y="30" font-size="16" font-weight="600" text-anchor="middle" fill="#323130">Data Consumption</text>
+                            
+                            <!-- Power BI Icon -->
+                            <g transform="translate(75, 60)" class="service-icon">
+                                <rect width="150" height="100" fill="#f2c811" rx="8" filter="url(#shadow)"/>
+                                <circle cx="75" cy="35" r="25" fill="white" opacity="0.9"/>
+                                <rect x="60" y="20" width="30" height="30" fill="#f2c811" rx="2"/>
+                                <polygon points="65,25 85,35 65,45" fill="white"/>
+                                <text x="75" y="70" font-size="12" font-weight="bold" fill="#333" text-anchor="middle">Power BI</text>
+                                <text x="75" y="85" font-size="10" fill="#333" text-anchor="middle">Direct Lake</text>
+                                <text x="75" y="95" font-size="9" fill="#333" text-anchor="middle">Real-time</text>
+                            </g>
+                            
+                            <!-- Dataverse Icon -->
+                            <g transform="translate(75, 180)" class="service-icon">
+                                <rect width="150" height="100" fill="#742774" rx="8" filter="url(#shadow)"/>
+                                <circle cx="75" cy="35" r="25" fill="white" opacity="0.9"/>
+                                <rect x="60" y="20" width="30" height="10" fill="#742774"/>
+                                <rect x="60" y="32" width="30" height="10" fill="#742774"/>
+                                <rect x="60" y="44" width="30" height="10" fill="#742774"/>
+                                <text x="75" y="70" font-size="12" font-weight="bold" fill="white" text-anchor="middle">Dataverse</text>
+                                <text x="75" y="85" font-size="10" fill="white" text-anchor="middle">Virtual Tables</text>
+                            </g>
+                            
+                            <!-- Power Apps Icon -->
+                            <g transform="translate(75, 300)" class="service-icon">
+                                <rect width="150" height="80" fill="#742774" rx="8" filter="url(#shadow)"/>
+                                <polygon points="75,15 95,25 95,45 75,55 55,45 55,25" fill="white" opacity="0.9"/>
+                                <text x="75" y="37" font-size="12" font-weight="bold" fill="#742774" text-anchor="middle">PA</text>
+                                <text x="75" y="70" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Power Apps</text>
+                            </g>
+                            
+                            <!-- Power Automate Icon -->
+                            <g transform="translate(75, 400)" class="service-icon">
+                                <rect width="150" height="80" fill="#0066ff" rx="8" filter="url(#shadow)"/>
+                                <path d="M 55 25 Q 75 35 95 25" stroke="white" stroke-width="3" fill="none"/>
+                                <path d="M 55 35 Q 75 45 95 35" stroke="white" stroke-width="3" fill="none"/>
+                                <text x="75" y="65" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Power Automate</text>
+                            </g>
+                            
+                            <!-- Teams Icon -->
+                            <g transform="translate(75, 500)" class="service-icon">
+                                <rect width="150" height="80" fill="#5059c9" rx="8" filter="url(#shadow)"/>
+                                <rect x="55" y="20" width="40" height="30" fill="white" opacity="0.9" rx="4"/>
+                                <text x="75" y="40" font-size="14" font-weight="bold" fill="#5059c9" text-anchor="middle">T</text>
+                                <text x="75" y="65" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Teams Integration</text>
+                            </g>
+                        </g>
+                        
+                        <!-- Connection Lines with Labels -->
+                        <!-- Confluent to Event Hubs -->
+                        <path d="M 350 250 L 450 250" stroke="#0078d4" stroke-width="3" fill="none" marker-end="url(#arrowblue)"/>
+                        <text x="400" y="240" font-size="10" fill="#605e5c" text-anchor="middle">Kafka Protocol</text>
+                        
+                        <!-- Event Hubs to Stream Analytics -->
+                        <path d="M 520 250 L 650 250" stroke="#0078d4" stroke-width="3" fill="none" marker-end="url(#arrowblue)"/>
+                        
+                        <!-- To Databricks -->
+                        <path d="M 750 250 L 900 250" stroke="#ff3621" stroke-width="3" fill="none" marker-end="url(#arrowblue)"/>
+                        <text x="825" y="240" font-size="10" fill="#605e5c" text-anchor="middle">Structured Streaming</text>
+                        
+                        <!-- Databricks to Bronze/Silver/Gold -->
+                        <path d="M 1000 330 L 1000 380" stroke="#00897b" stroke-width="2" fill="none"/>
+                        
+                        <!-- To AI Services -->
+                        <path d="M 900 500 L 740 600" stroke="#673ab7" stroke-width="2" fill="none" marker-end="url(#arrowblue)"/>
+                        <text x="820" y="550" font-size="10" fill="#605e5c" text-anchor="middle">Enrichment</text>
+                        
+                        <!-- To Power BI -->
+                        <path d="M 1200 300 L 1325 250" stroke="#f2c811" stroke-width="3" fill="none" marker-end="url(#arrowblue)"/>
+                        <text x="1262" y="270" font-size="10" fill="#605e5c" text-anchor="middle">Direct Lake</text>
+                        
+                        <!-- To Dataverse -->
+                        <path d="M 1200 350 L 1325 330" stroke="#742774" stroke-width="2" fill="none" marker-end="url(#arrowblue)"/>
+                        
+                        <!-- To Power Platform -->
+                        <path d="M 1200 400 L 1325 420" stroke="#0066ff" stroke-width="2" fill="none" marker-end="url(#arrowblue)"/>
+                        
+                        <!-- Performance Metrics Box -->
+                        <g transform="translate(350, 850)">
+                            <rect width="900" height="100" fill="#f3f2f1" rx="8"/>
+                            <text x="450" y="30" font-size="14" font-weight="600" fill="#323130" text-anchor="middle">Key Performance Indicators</text>
+                            
+                            <text x="100" y="60" font-size="12" fill="#605e5c">Throughput:</text>
+                            <text x="100" y="80" font-size="14" font-weight="bold" fill="#107c10">1M events/sec</text>
+                            
+                            <text x="300" y="60" font-size="12" fill="#605e5c">Latency:</text>
+                            <text x="300" y="80" font-size="14" font-weight="bold" fill="#107c10">&lt; 5 seconds</text>
+                            
+                            <text x="500" y="60" font-size="12" fill="#605e5c">Availability:</text>
+                            <text x="500" y="80" font-size="14" font-weight="bold" fill="#107c10">99.99%</text>
+                            
+                            <text x="700" y="60" font-size="12" fill="#605e5c">Cost/Million:</text>
+                            <text x="700" y="80" font-size="14" font-weight="bold" fill="#107c10">$0.85</text>
+                        </g>
+                    </svg>
+                </div>
+                
+                <div class="legend">
+                    <div class="legend-item">
+                        <div style="width: 20px; height: 20px; background: #ff6f00; border-radius: 4px;"></div>
+                        <span>External Services</span>
+                    </div>
+                    <div class="legend-item">
+                        <div style="width: 20px; height: 20px; background: #0078d4; border-radius: 4px;"></div>
+                        <span>Azure Core Services</span>
+                    </div>
+                    <div class="legend-item">
+                        <div style="width: 20px; height: 20px; background: #ff3621; border-radius: 4px;"></div>
+                        <span>Azure Databricks</span>
+                    </div>
+                    <div class="legend-item">
+                        <div style="width: 20px; height: 20px; background: #00897b; border-radius: 4px;"></div>
+                        <span>Delta Lake</span>
+                    </div>
+                    <div class="legend-item">
+                        <div style="width: 20px; height: 20px; background: #673ab7; border-radius: 4px;"></div>
+                        <span>AI Services</span>
+                    </div>
+                    <div class="legend-item">
+                        <div style="width: 20px; height: 20px; background: #f2c811; border-radius: 4px;"></div>
+                        <span>Power Platform</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Data Flow Detail View -->
+            <div id="data-flow-detail" class="view-content">
+                <div class="diagram-container">
+                    <svg width="1600" height="900" viewBox="0 0 1600 900">
+                        <text x="800" y="40" font-size="24" font-weight="500" text-anchor="middle" fill="#323130">Detailed Data Flow Architecture</text>
+                        
+                        <!-- Streaming Pipeline -->
+                        <g transform="translate(50, 100)">
+                            <rect width="1500" height="250" fill="#e6f7ff" stroke="#1890ff" stroke-width="2" rx="10" opacity="0.5"/>
+                            <text x="750" y="30" font-size="16" font-weight="600" text-anchor="middle" fill="#323130">Real-Time Streaming Pipeline</text>
+                            
+                            <!-- Kafka Source -->
+                            <g transform="translate(50, 50)" class="service-icon">
+                                <rect width="120" height="150" fill="#ff6f00" rx="8" filter="url(#shadow)"/>
+                                <text x="60" y="30" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Kafka Topic</text>
+                                <rect x="20" y="40" width="80" height="15" fill="white" opacity="0.9" rx="2"/>
+                                <text x="60" y="52" font-size="9" fill="#ff6f00" text-anchor="middle">Events</text>
+                                <rect x="20" y="60" width="80" height="15" fill="white" opacity="0.9" rx="2"/>
+                                <text x="60" y="72" font-size="9" fill="#ff6f00" text-anchor="middle">Schema</text>
+                                <rect x="20" y="80" width="80" height="15" fill="white" opacity="0.9" rx="2"/>
+                                <text x="60" y="92" font-size="9" fill="#ff6f00" text-anchor="middle">Partitions</text>
+                                <text x="60" y="120" font-size="10" fill="white" text-anchor="middle">Rate: 100K/s</text>
+                                <text x="60" y="135" font-size="10" fill="white" text-anchor="middle">Size: 1KB avg</text>
+                            </g>
+                            
+                            <!-- Stream Processing -->
+                            <g transform="translate(250, 50)" class="service-icon">
+                                <rect width="150" height="150" fill="#0078d4" rx="8" filter="url(#shadow)"/>
+                                <text x="75" y="25" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Stream Processing</text>
+                                <rect x="20" y="35" width="110" height="20" fill="white" opacity="0.9" rx="2"/>
+                                <text x="75" y="49" font-size="9" fill="#0078d4" text-anchor="middle">Deserialization</text>
+                                <rect x="20" y="60" width="110" height="20" fill="white" opacity="0.9" rx="2"/>
+                                <text x="75" y="74" font-size="9" fill="#0078d4" text-anchor="middle">Schema Validation</text>
+                                <rect x="20" y="85" width="110" height="20" fill="white" opacity="0.9" rx="2"/>
+                                <text x="75" y="99" font-size="9" fill="#0078d4" text-anchor="middle">Deduplication</text>
+                                <rect x="20" y="110" width="110" height="20" fill="white" opacity="0.9" rx="2"/>
+                                <text x="75" y="124" font-size="9" fill="#0078d4" text-anchor="middle">Watermarking</text>
+                            </g>
+                            
+                            <!-- Bronze Processing -->
+                            <g transform="translate(480, 50)" class="service-icon">
+                                <rect width="150" height="150" fill="#00897b" rx="8" filter="url(#shadow)"/>
+                                <text x="75" y="25" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Bronze Layer</text>
+                                <text x="75" y="45" font-size="10" fill="white" text-anchor="middle">• Raw Data Storage</text>
+                                <text x="75" y="65" font-size="10" fill="white" text-anchor="middle">• Append Only</text>
+                                <text x="75" y="85" font-size="10" fill="white" text-anchor="middle">• Partitioned by Date</text>
+                                <text x="75" y="105" font-size="10" fill="white" text-anchor="middle">• Checkpointing</text>
+                                <text x="75" y="125" font-size="10" fill="white" text-anchor="middle">• 90 Day Retention</text>
+                            </g>
+                            
+                            <!-- Silver Processing -->
+                            <g transform="translate(710, 50)" class="service-icon">
+                                <rect width="150" height="150" fill="#00acc1" rx="8" filter="url(#shadow)"/>
+                                <text x="75" y="25" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Silver Layer</text>
+                                <text x="75" y="45" font-size="10" fill="white" text-anchor="middle">• Data Cleansing</text>
+                                <text x="75" y="65" font-size="10" fill="white" text-anchor="middle">• Type Casting</text>
+                                <text x="75" y="85" font-size="10" fill="white" text-anchor="middle">• AI Enrichment</text>
+                                <text x="75" y="105" font-size="10" fill="white" text-anchor="middle">• Business Logic</text>
+                                <text x="75" y="125" font-size="10" fill="white" text-anchor="middle">• SCD Type 2</text>
+                            </g>
+                            
+                            <!-- Gold Processing -->
+                            <g transform="translate(940, 50)" class="service-icon">
+                                <rect width="150" height="150" fill="#039be5" rx="8" filter="url(#shadow)"/>
+                                <text x="75" y="25" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Gold Layer</text>
+                                <text x="75" y="45" font-size="10" fill="white" text-anchor="middle">• Aggregations</text>
+                                <text x="75" y="65" font-size="10" fill="white" text-anchor="middle">• Business Metrics</text>
+                                <text x="75" y="85" font-size="10" fill="white" text-anchor="middle">• Z-ORDER Index</text>
+                                <text x="75" y="105" font-size="10" fill="white" text-anchor="middle">• Materialized Views</text>
+                                <text x="75" y="125" font-size="10" fill="white" text-anchor="middle">• Query Optimized</text>
+                            </g>
+                            
+                            <!-- Serving Layer -->
+                            <g transform="translate(1170, 50)" class="service-icon">
+                                <rect width="150" height="150" fill="#4caf50" rx="8" filter="url(#shadow)"/>
+                                <text x="75" y="25" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Serving Layer</text>
+                                <text x="75" y="45" font-size="10" fill="white" text-anchor="middle">• REST APIs</text>
+                                <text x="75" y="65" font-size="10" fill="white" text-anchor="middle">• JDBC/ODBC</text>
+                                <text x="75" y="85" font-size="10" fill="white" text-anchor="middle">• Direct Lake</text>
+                                <text x="75" y="105" font-size="10" fill="white" text-anchor="middle">• Virtual Tables</text>
+                                <text x="75" y="125" font-size="10" fill="white" text-anchor="middle">• SQL Endpoints</text>
+                            </g>
+                            
+                            <!-- Flow indicators -->
+                            <path d="M 220 125 L 250 125" stroke="#333" stroke-width="3" fill="none" marker-end="url(#arrowblue)"/>
+                            <text x="235" y="115" font-size="9" fill="#605e5c" text-anchor="middle">100ms</text>
+                            
+                            <path d="M 450 125 L 480 125" stroke="#333" stroke-width="3" fill="none" marker-end="url(#arrowblue)"/>
+                            <text x="465" y="115" font-size="9" fill="#605e5c" text-anchor="middle">200ms</text>
+                            
+                            <path d="M 680 125 L 710 125" stroke="#333" stroke-width="3" fill="none" marker-end="url(#arrowblue)"/>
+                            <text x="695" y="115" font-size="9" fill="#605e5c" text-anchor="middle">500ms</text>
+                            
+                            <path d="M 910 125 L 940 125" stroke="#333" stroke-width="3" fill="none" marker-end="url(#arrowblue)"/>
+                            <text x="925" y="115" font-size="9" fill="#605e5c" text-anchor="middle">1s</text>
+                            
+                            <path d="M 1140 125 L 1170 125" stroke="#333" stroke-width="3" fill="none" marker-end="url(#arrowblue)"/>
+                            <text x="1155" y="115" font-size="9" fill="#605e5c" text-anchor="middle">2s</text>
+                        </g>
+                        
+                        <!-- AI Enrichment Pipeline -->
+                        <g transform="translate(50, 400)">
+                            <rect width="1500" height="200" fill="#f3e5f5" stroke="#9c27b0" stroke-width="2" rx="10" opacity="0.5"/>
+                            <text x="750" y="30" font-size="16" font-weight="600" text-anchor="middle" fill="#323130">AI Enrichment Pipeline</text>
+                            
+                            <!-- Input Data -->
+                            <g transform="translate(100, 50)" class="service-icon">
+                                <rect width="120" height="100" fill="#00acc1" rx="8" filter="url(#shadow)"/>
+                                <text x="60" y="30" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Silver Data</text>
+                                <text x="60" y="50" font-size="9" fill="white" text-anchor="middle">Cleaned</text>
+                                <text x="60" y="70" font-size="9" fill="white" text-anchor="middle">Validated</text>
+                                <text x="60" y="90" font-size="9" fill="white" text-anchor="middle">Structured</text>
+                            </g>
+                            
+                            <!-- Sentiment Analysis -->
+                            <g transform="translate(300, 50)" class="service-icon">
+                                <rect width="120" height="100" fill="#673ab7" rx="8" filter="url(#shadow)"/>
+                                <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Sentiment</text>
+                                <text x="60" y="45" font-size="9" fill="white" text-anchor="middle">Positive: 45%</text>
+                                <text x="60" y="65" font-size="9" fill="white" text-anchor="middle">Neutral: 40%</text>
+                                <text x="60" y="85" font-size="9" fill="white" text-anchor="middle">Negative: 15%</text>
+                            </g>
+                            
+                            <!-- Entity Recognition -->
+                            <g transform="translate(500, 50)" class="service-icon">
+                                <rect width="120" height="100" fill="#673ab7" rx="8" filter="url(#shadow)"/>
+                                <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Entities</text>
+                                <text x="60" y="45" font-size="9" fill="white" text-anchor="middle">People</text>
+                                <text x="60" y="65" font-size="9" fill="white" text-anchor="middle">Organizations</text>
+                                <text x="60" y="85" font-size="9" fill="white" text-anchor="middle">Locations</text>
+                            </g>
+                            
+                            <!-- Key Phrases -->
+                            <g transform="translate(700, 50)" class="service-icon">
+                                <rect width="120" height="100" fill="#673ab7" rx="8" filter="url(#shadow)"/>
+                                <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Key Phrases</text>
+                                <text x="60" y="45" font-size="9" fill="white" text-anchor="middle">Topics</text>
+                                <text x="60" y="65" font-size="9" fill="white" text-anchor="middle">Categories</text>
+                                <text x="60" y="85" font-size="9" fill="white" text-anchor="middle">Trends</text>
+                            </g>
+                            
+                            <!-- Azure OpenAI -->
+                            <g transform="translate(900, 50)" class="service-icon">
+                                <rect width="120" height="100" fill="#1a1a1a" rx="8" filter="url(#shadow)"/>
+                                <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">GPT-4</text>
+                                <text x="60" y="45" font-size="9" fill="white" text-anchor="middle">Summarization</text>
+                                <text x="60" y="65" font-size="9" fill="white" text-anchor="middle">Q&A</text>
+                                <text x="60" y="85" font-size="9" fill="white" text-anchor="middle">Insights</text>
+                            </g>
+                            
+                            <!-- Custom Models -->
+                            <g transform="translate(1100, 50)" class="service-icon">
+                                <rect width="120" height="100" fill="#0194ef" rx="8" filter="url(#shadow)"/>
+                                <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">ML Models</text>
+                                <text x="60" y="45" font-size="9" fill="white" text-anchor="middle">Anomaly</text>
+                                <text x="60" y="65" font-size="9" fill="white" text-anchor="middle">Forecasting</text>
+                                <text x="60" y="85" font-size="9" fill="white" text-anchor="middle">Classification</text>
+                            </g>
+                            
+                            <!-- Enriched Output -->
+                            <g transform="translate(1300, 50)" class="service-icon">
+                                <rect width="120" height="100" fill="#039be5" rx="8" filter="url(#shadow)"/>
+                                <text x="60" y="30" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Enriched</text>
+                                <text x="60" y="50" font-size="9" fill="white" text-anchor="middle">AI Enhanced</text>
+                                <text x="60" y="70" font-size="9" fill="white" text-anchor="middle">Insights</text>
+                                <text x="60" y="90" font-size="9" fill="white" text-anchor="middle">Predictions</text>
+                            </g>
+                            
+                            <!-- Flow arrows -->
+                            <path d="M 270 100 L 300 100" stroke="#673ab7" stroke-width="2" fill="none" marker-end="url(#arrowblue)"/>
+                            <path d="M 470 100 L 500 100" stroke="#673ab7" stroke-width="2" fill="none" marker-end="url(#arrowblue)"/>
+                            <path d="M 670 100 L 700 100" stroke="#673ab7" stroke-width="2" fill="none" marker-end="url(#arrowblue)"/>
+                            <path d="M 870 100 L 900 100" stroke="#673ab7" stroke-width="2" fill="none" marker-end="url(#arrowblue)"/>
+                            <path d="M 1070 100 L 1100 100" stroke="#673ab7" stroke-width="2" fill="none" marker-end="url(#arrowblue)"/>
+                            <path d="M 1270 100 L 1300 100" stroke="#673ab7" stroke-width="2" fill="none" marker-end="url(#arrowblue)"/>
+                        </g>
+                        
+                        <!-- Processing Metrics -->
+                        <g transform="translate(300, 650)">
+                            <rect width="1000" height="200" fill="#f3f2f1" rx="10"/>
+                            <text x="500" y="30" font-size="16" font-weight="600" text-anchor="middle" fill="#323130">Processing Metrics & SLAs</text>
+                            
+                            <g transform="translate(50, 60)">
+                                <text x="0" y="0" font-size="12" fill="#605e5c">Component</text>
+                                <text x="150" y="0" font-size="12" fill="#605e5c">Throughput</text>
+                                <text x="300" y="0" font-size="12" fill="#605e5c">Latency</text>
+                                <text x="450" y="0" font-size="12" fill="#605e5c">Error Rate</text>
+                                <text x="600" y="0" font-size="12" fill="#605e5c">Availability</text>
+                                
+                                <line x1="0" y1="10" x2="700" y2="10" stroke="#e1dfdd" stroke-width="1"/>
+                                
+                                <text x="0" y="30" font-size="11" fill="#323130">Kafka Ingestion</text>
+                                <text x="150" y="30" font-size="11" font-weight="bold" fill="#107c10">1M/sec</text>
+                                <text x="300" y="30" font-size="11" font-weight="bold" fill="#107c10">< 100ms</text>
+                                <text x="450" y="30" font-size="11" font-weight="bold" fill="#107c10">0.01%</text>
+                                <text x="600" y="30" font-size="11" font-weight="bold" fill="#107c10">99.99%</text>
+                                
+                                <text x="0" y="50" font-size="11" fill="#323130">Stream Processing</text>
+                                <text x="150" y="50" font-size="11" font-weight="bold" fill="#107c10">500K/sec</text>
+                                <text x="300" y="50" font-size="11" font-weight="bold" fill="#107c10">< 500ms</text>
+                                <text x="450" y="50" font-size="11" font-weight="bold" fill="#107c10">0.05%</text>
+                                <text x="600" y="50" font-size="11" font-weight="bold" fill="#107c10">99.95%</text>
+                                
+                                <text x="0" y="70" font-size="11" fill="#323130">AI Enrichment</text>
+                                <text x="150" y="70" font-size="11" font-weight="bold" fill="#107c10">10K/sec</text>
+                                <text x="300" y="70" font-size="11" font-weight="bold" fill="#ffb900">< 2s</text>
+                                <text x="450" y="70" font-size="11" font-weight="bold" fill="#107c10">0.1%</text>
+                                <text x="600" y="70" font-size="11" font-weight="bold" fill="#107c10">99.9%</text>
+                                
+                                <text x="0" y="90" font-size="11" fill="#323130">Delta Lake Write</text>
+                                <text x="150" y="90" font-size="11" font-weight="bold" fill="#107c10">100K/sec</text>
+                                <text x="300" y="90" font-size="11" font-weight="bold" fill="#107c10">< 1s</text>
+                                <text x="450" y="90" font-size="11" font-weight="bold" fill="#107c10">0.001%</text>
+                                <text x="600" y="90" font-size="11" font-weight="bold" fill="#107c10">99.999%</text>
+                                
+                                <text x="0" y="110" font-size="11" fill="#323130">Query Performance</text>
+                                <text x="150" y="110" font-size="11" font-weight="bold" fill="#107c10">1K QPS</text>
+                                <text x="300" y="110" font-size="11" font-weight="bold" fill="#107c10">< 2s</text>
+                                <text x="450" y="110" font-size="11" font-weight="bold" fill="#107c10">0.01%</text>
+                                <text x="600" y="110" font-size="11" font-weight="bold" fill="#107c10">99.99%</text>
+                            </g>
+                        </g>
+                    </svg>
+                </div>
+            </div>
+            
+            <!-- Security & Network View -->
+            <div id="security-network" class="view-content">
+                <div class="diagram-container">
+                    <svg width="1600" height="900" viewBox="0 0 1600 900">
+                        <text x="800" y="40" font-size="24" font-weight="500" text-anchor="middle" fill="#323130">Security & Network Architecture</text>
+                        
+                        <!-- Internet Zone -->
+                        <g transform="translate(50, 100)">
+                            <rect width="1500" height="150" fill="#ffebee" stroke="#d32f2f" stroke-width="2" rx="10" stroke-dasharray="10,5"/>
+                            <text x="750" y="30" font-size="16" font-weight="600" text-anchor="middle" fill="#d32f2f">Internet / Public Zone</text>
+                            
+                            <!-- Confluent Cloud -->
+                            <g transform="translate(100, 50)" class="service-icon">
+                                <rect width="140" height="80" fill="#ff6f00" rx="8" filter="url(#shadow)"/>
+                                <text x="70" y="40" font-size="12" font-weight="bold" fill="white" text-anchor="middle">Confluent Cloud</text>
+                                <text x="70" y="60" font-size="10" fill="white" text-anchor="middle">TLS 1.3</text>
+                            </g>
+                            
+                            <!-- Users -->
+                            <g transform="translate(1200, 50)" class="service-icon">
+                                <rect width="140" height="80" fill="#323130" rx="8" filter="url(#shadow)"/>
+                                <text x="70" y="40" font-size="12" font-weight="bold" fill="white" text-anchor="middle">Users</text>
+                                <text x="70" y="60" font-size="10" fill="white" text-anchor="middle">HTTPS</text>
+                            </g>
+                        </g>
+                        
+                        <!-- DMZ / Edge Services -->
+                        <g transform="translate(50, 280)">
+                            <rect width="1500" height="120" fill="#fff3e0" stroke="#ff9800" stroke-width="2" rx="10"/>
+                            <text x="750" y="30" font-size="16" font-weight="600" text-anchor="middle" fill="#ff9800">Edge Services</text>
+                            
+                            <!-- Azure Front Door -->
+                            <g transform="translate(200, 40)" class="service-icon">
+                                <rect width="140" height="60" fill="#0078d4" rx="8" filter="url(#shadow)"/>
+                                <text x="70" y="30" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Front Door</text>
+                                <text x="70" y="45" font-size="9" fill="white" text-anchor="middle">WAF | DDoS</text>
+                            </g>
+                            
+                            <!-- API Management -->
+                            <g transform="translate(400, 40)" class="service-icon">
+                                <rect width="140" height="60" fill="#0078d4" rx="8" filter="url(#shadow)"/>
+                                <text x="70" y="30" font-size="11" font-weight="bold" fill="white" text-anchor="middle">API Management</text>
+                                <text x="70" y="45" font-size="9" fill="white" text-anchor="middle">Rate Limiting</text>
+                            </g>
+                            
+                            <!-- Azure Firewall -->
+                            <g transform="translate(600, 40)" class="service-icon">
+                                <rect width="140" height="60" fill="#d32f2f" rx="8" filter="url(#shadow)"/>
+                                <text x="70" y="30" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Azure Firewall</text>
+                                <text x="70" y="45" font-size="9" fill="white" text-anchor="middle">L4-L7 Protection</text>
+                            </g>
+                            
+                            <!-- Application Gateway -->
+                            <g transform="translate(800, 40)" class="service-icon">
+                                <rect width="140" height="60" fill="#0078d4" rx="8" filter="url(#shadow)"/>
+                                <text x="70" y="30" font-size="11" font-weight="bold" fill="white" text-anchor="middle">App Gateway</text>
+                                <text x="70" y="45" font-size="9" fill="white" text-anchor="middle">SSL Termination</text>
+                            </g>
+                            
+                            <!-- DDoS Protection -->
+                            <g transform="translate(1000, 40)" class="service-icon">
+                                <rect width="140" height="60" fill="#d32f2f" rx="8" filter="url(#shadow)"/>
+                                <text x="70" y="30" font-size="11" font-weight="bold" fill="white" text-anchor="middle">DDoS Protection</text>
+                                <text x="70" y="45" font-size="9" fill="white" text-anchor="middle">Standard Tier</text>
+                            </g>
+                        </g>
+                        
+                        <!-- Virtual Network -->
+                        <g transform="translate(50, 430)">
+                            <rect width="1500" height="400" fill="#e3f2fd" stroke="#1976d2" stroke-width="2" rx="10"/>
+                            <text x="750" y="30" font-size="16" font-weight="600" text-anchor="middle" fill="#1976d2">Azure Virtual Network (10.0.0.0/16)</text>
+                            
+                            <!-- Ingestion Subnet -->
+                            <g transform="translate(50, 50)">
+                                <rect width="450" height="300" fill="#bbdefb" stroke="#0d47a1" stroke-width="1" rx="8" opacity="0.5"/>
+                                <text x="225" y="25" font-size="14" font-weight="600" text-anchor="middle" fill="#0d47a1">Ingestion Subnet (10.0.1.0/24)</text>
+                                
+                                <!-- Event Hubs Private Endpoint -->
+                                <g transform="translate(50, 50)" class="service-icon">
+                                    <rect width="140" height="80" fill="#0078d4" rx="8" filter="url(#shadow)"/>
+                                    <text x="70" y="30" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Event Hubs</text>
+                                    <text x="70" y="50" font-size="9" fill="white" text-anchor="middle">Private Endpoint</text>
+                                    <text x="70" y="65" font-size="8" fill="white" text-anchor="middle">10.0.1.10</text>
+                                </g>
+                                
+                                <!-- Stream Analytics -->
+                                <g transform="translate(250, 50)" class="service-icon">
+                                    <rect width="140" height="80" fill="#59b4d1" rx="8" filter="url(#shadow)"/>
+                                    <text x="70" y="30" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Stream Analytics</text>
+                                    <text x="70" y="50" font-size="9" fill="white" text-anchor="middle">Managed VNet</text>
+                                    <text x="70" y="65" font-size="8" fill="white" text-anchor="middle">10.0.1.20</text>
+                                </g>
+                                
+                                <!-- NSG Rules -->
+                                <g transform="translate(150, 180)">
+                                    <rect width="200" height="100" fill="#e1f5fe" rx="5"/>
+                                    <text x="100" y="20" font-size="11" font-weight="600" text-anchor="middle" fill="#0277bd">NSG Rules</text>
+                                    <text x="100" y="40" font-size="9" fill="#01579b" text-anchor="middle">✓ Allow HTTPS (443)</text>
+                                    <text x="100" y="55" font-size="9" fill="#01579b" text-anchor="middle">✓ Allow Kafka (9093)</text>
+                                    <text x="100" y="70" font-size="9" fill="#01579b" text-anchor="middle">✗ Deny All Other</text>
+                                    <text x="100" y="85" font-size="9" fill="#01579b" text-anchor="middle">Priority: 100-500</text>
+                                </g>
+                            </g>
+                            
+                            <!-- Processing Subnet -->
+                            <g transform="translate(550, 50)">
+                                <rect width="450" height="300" fill="#c8e6c9" stroke="#1b5e20" stroke-width="1" rx="8" opacity="0.5"/>
+                                <text x="225" y="25" font-size="14" font-weight="600" text-anchor="middle" fill="#1b5e20">Processing Subnet (10.0.2.0/24)</text>
+                                
+                                <!-- Databricks -->
+                                <g transform="translate(50, 50)" class="service-icon">
+                                    <rect width="350" height="100" fill="#ff3621" rx="8" filter="url(#shadow)"/>
+                                    <text x="175" y="30" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Azure Databricks</text>
+                                    <text x="90" y="55" font-size="9" fill="white" text-anchor="middle">Public Subnet</text>
+                                    <text x="90" y="70" font-size="8" fill="white" text-anchor="middle">10.0.2.0/26</text>
+                                    <text x="260" y="55" font-size="9" fill="white" text-anchor="middle">Private Subnet</text>
+                                    <text x="260" y="70" font-size="8" fill="white" text-anchor="middle">10.0.2.64/26</text>
+                                    <text x="175" y="90" font-size="9" fill="white" text-anchor="middle">VNet Injection</text>
+                                </g>
+                                
+                                <!-- Storage Private Endpoints -->
+                                <g transform="translate(100, 180)" class="service-icon">
+                                    <rect width="120" height="60" fill="#0078d4" rx="8" filter="url(#shadow)"/>
+                                    <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">ADLS Gen2</text>
+                                    <text x="60" y="40" font-size="9" fill="white" text-anchor="middle">Private EP</text>
+                                    <text x="60" y="52" font-size="8" fill="white" text-anchor="middle">10.0.2.150</text>
+                                </g>
+                                
+                                <!-- Key Vault -->
+                                <g transform="translate(250, 180)" class="service-icon">
+                                    <rect width="120" height="60" fill="#0078d4" rx="8" filter="url(#shadow)"/>
+                                    <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Key Vault</text>
+                                    <text x="60" y="40" font-size="9" fill="white" text-anchor="middle">Private EP</text>
+                                    <text x="60" y="52" font-size="8" fill="white" text-anchor="middle">10.0.2.160</text>
+                                </g>
+                            </g>
+                            
+                            <!-- Consumption Subnet -->
+                            <g transform="translate(1050, 50)">
+                                <rect width="400" height="300" fill="#fff9c4" stroke="#f57f17" stroke-width="1" rx="8" opacity="0.5"/>
+                                <text x="200" y="25" font-size="14" font-weight="600" text-anchor="middle" fill="#f57f17">Consumption Subnet (10.0.3.0/24)</text>
+                                
+                                <!-- Power BI Gateway -->
+                                <g transform="translate(50, 50)" class="service-icon">
+                                    <rect width="120" height="60" fill="#f2c811" rx="8" filter="url(#shadow)"/>
+                                    <text x="60" y="25" font-size="10" font-weight="bold" fill="#333" text-anchor="middle">Power BI GW</text>
+                                    <text x="60" y="40" font-size="9" fill="#333" text-anchor="middle">On-prem GW</text>
+                                    <text x="60" y="52" font-size="8" fill="#333" text-anchor="middle">10.0.3.10</text>
+                                </g>
+                                
+                                <!-- Azure OpenAI -->
+                                <g transform="translate(200, 50)" class="service-icon">
+                                    <rect width="120" height="60" fill="#1a1a1a" rx="8" filter="url(#shadow)"/>
+                                    <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Azure OpenAI</text>
+                                    <text x="60" y="40" font-size="9" fill="white" text-anchor="middle">Private EP</text>
+                                    <text x="60" y="52" font-size="8" fill="white" text-anchor="middle">10.0.3.20</text>
+                                </g>
+                                
+                                <!-- Private DNS Zone -->
+                                <g transform="translate(100, 150)">
+                                    <rect width="200" height="80" fill="#e1f5fe" rx="5"/>
+                                    <text x="100" y="20" font-size="11" font-weight="600" text-anchor="middle" fill="#0277bd">Private DNS Zones</text>
+                                    <text x="100" y="40" font-size="9" fill="#01579b" text-anchor="middle">privatelink.blob.core.windows.net</text>
+                                    <text x="100" y="55" font-size="9" fill="#01579b" text-anchor="middle">privatelink.dfs.core.windows.net</text>
+                                    <text x="100" y="70" font-size="9" fill="#01579b" text-anchor="middle">privatelink.openai.azure.com</text>
+                                </g>
+                            </g>
+                        </g>
+                        
+                        <!-- Security Services -->
+                        <g transform="translate(300, 50)">
+                            <text x="500" y="0" font-size="14" font-weight="600" fill="#323130">Security Services</text>
+                            
+                            <!-- Azure AD -->
+                            <g transform="translate(0, 20)" class="service-icon">
+                                <rect width="120" height="50" fill="#0078d4" rx="5" filter="url(#shadow)"/>
+                                <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Azure AD</text>
+                                <text x="60" y="40" font-size="9" fill="white" text-anchor="middle">SSO | MFA</text>
+                            </g>
+                            
+                            <!-- Defender -->
+                            <g transform="translate(140, 20)" class="service-icon">
+                                <rect width="120" height="50" fill="#0078d4" rx="5" filter="url(#shadow)"/>
+                                <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Defender</text>
+                                <text x="60" y="40" font-size="9" fill="white" text-anchor="middle">Threat Protection</text>
+                            </g>
+                            
+                            <!-- Sentinel -->
+                            <g transform="translate(280, 20)" class="service-icon">
+                                <rect width="120" height="50" fill="#0078d4" rx="5" filter="url(#shadow)"/>
+                                <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Sentinel</text>
+                                <text x="60" y="40" font-size="9" fill="white" text-anchor="middle">SIEM | SOAR</text>
+                            </g>
+                            
+                            <!-- Monitor -->
+                            <g transform="translate(420, 20)" class="service-icon">
+                                <rect width="120" height="50" fill="#0078d4" rx="5" filter="url(#shadow)"/>
+                                <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Monitor</text>
+                                <text x="60" y="40" font-size="9" fill="white" text-anchor="middle">Logs | Metrics</text>
+                            </g>
+                            
+                            <!-- Purview -->
+                            <g transform="translate(560, 20)" class="service-icon">
+                                <rect width="120" height="50" fill="#0078d4" rx="5" filter="url(#shadow)"/>
+                                <text x="60" y="25" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Purview</text>
+                                <text x="60" y="40" font-size="9" fill="white" text-anchor="middle">Compliance</text>
+                            </g>
+                        </g>
+                    </svg>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="tooltip" id="tooltip"></div>
+    
+    <script>
+        function showView(viewId) {
+            // Hide all views
+            const views = document.querySelectorAll('.view-content');
+            views.forEach(view => view.classList.remove('active'));
+            
+            // Remove active from all tabs
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
+            
+            // Show selected view
+            document.getElementById(viewId).classList.add('active');
+            
+            // Mark tab as active
+            event.target.classList.add('active');
+        }
+        
+        // Tooltip functionality
+        document.querySelectorAll('.service-icon').forEach(icon => {
+            icon.addEventListener('mouseenter', (e) => {
+                const tooltip = document.getElementById('tooltip');
+                tooltip.style.display = 'block';
+                tooltip.style.left = e.pageX + 10 + 'px';
+                tooltip.style.top = e.pageY - 30 + 'px';
+                tooltip.textContent = 'Click for more details';
+            });
+            
+            icon.addEventListener('mouseleave', () => {
+                document.getElementById('tooltip').style.display = 'none';
+            });
+        });
+    </script>
+</body>
+</html>
