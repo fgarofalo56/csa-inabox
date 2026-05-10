@@ -1005,3 +1005,18 @@ nav:
       - Environment Protection: ENVIRONMENT_PROTECTION.md
       - Government Service Matrix: GOV_SERVICE_MATRIX.md
       - Microsoft Fabric in Azure Government: fabric-in-gov-cloud.md
+  - Learn (reference library):
+      - Overview: learn/index.md
+      - Curriculum: learn/01-overview/README.md
+      - Services: learn/02-services/README.md
+      - Architecture Patterns: learn/03-architecture-patterns/README.md
+      - Implementation Guides: learn/04-implementation-guides/README.md
+      - Best Practices: learn/05-best-practices/README.md
+      - Code Examples: learn/06-code-examples/README.md
+      - Troubleshooting: learn/07-troubleshooting/README.md
+      - Solutions: learn/08-solutions/README.md
+      - Monitoring: learn/09-monitoring/README.md
+      - DevOps: learn/10-devops/README.md
+      - Tutorials: learn/tutorials/README.md
+      - Reference: learn/reference/README.md
+      - Diagrams: learn/diagrams/README.md

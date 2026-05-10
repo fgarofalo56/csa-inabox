@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font: bold 24px Arial, sans-serif; text-anchor: middle; fill: #0078D4; }
+      .service-box { fill: #E8F5E8; stroke: #4CAF50; stroke-width: 2; rx: 8; }
+      .service-text { font: 14px Arial, sans-serif; text-anchor: middle; fill: #333; }
+      .service-title { font: bold 16px Arial, sans-serif; text-anchor: middle; fill: #4CAF50; }
+      .arrow { fill: none; stroke: #4CAF50; stroke-width: 2; marker-end: url(#arrowhead); }
+      .data-flow { fill: none; stroke: #FF9800; stroke-width: 3; stroke-dasharray: 5,5; }
+      .zone-title { font: bold 18px Arial, sans-serif; text-anchor: middle; fill: #666; }
+      .zone-box { fill: none; stroke: #999; stroke-width: 1; stroke-dasharray: 8,4; rx: 12; }
+      .sql-box { fill: #FFF3E0; stroke: #FF9800; stroke-width: 2; rx: 8; }
+      .sql-text { color: #FF9800; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#4CAF50" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="30" class="title">Serverless SQL Pool Architecture</text>
+
+  <!-- Client Applications Zone -->
+  <rect x="50" y="80" width="250" height="200" class="zone-box"/>
+  <text x="175" y="105" class="zone-title">Client Applications</text>
+  
+  <!-- Power BI -->
+  <rect x="70" y="120" width="100" height="40" class="service-box"/>
+  <text x="120" y="145" class="service-text">Power BI</text>
+  
+  <!-- SSMS -->
+  <rect x="180" y="120" width="100" height="40" class="service-box"/>
+  <text x="230" y="145" class="service-text">SSMS</text>
+  
+  <!-- Azure Data Studio -->
+  <rect x="70" y="180" width="100" height="40" class="service-box"/>
+  <text x="120" y="205" class="service-text">Data Studio</text>
+  
+  <!-- Custom Apps -->
+  <rect x="180" y="180" width="100" height="40" class="service-box"/>
+  <text x="230" y="205" class="service-text">Custom Apps</text>
+  
+  <!-- Jupyter -->
+  <rect x="125" y="240" width="100" height="40" class="service-box"/>
+  <text x="175" y="265" class="service-text">Jupyter</text>
+
+  <!-- Serverless SQL Pool Zone -->
+  <rect x="350" y="80" width="500" height="350" class="zone-box"/>
+  <text x="600" y="105" class="zone-title">Serverless SQL Pool</text>
+  
+  <!-- Connection Gateway -->
+  <rect x="370" y="130" width="460" height="50" class="sql-box"/>
+  <text x="600" y="150" class="service-title">Connection Gateway</text>
+  <text x="600" y="165" class="service-text">TDS Protocol • Authentication • Load Balancing</text>
+  
+  <!-- Query Processing Engine -->
+  <rect x="370" y="200" width="220" height="80" class="sql-box"/>
+  <text x="480" y="220" class="service-title">Query Processing</text>
+  <text x="480" y="238" class="service-text">• Query Parsing</text>
+  <text x="480" y="252" class="service-text">• Query Optimization</text>
+  <text x="480" y="266" class="service-text">• Execution Planning</text>
+  
+  <!-- Distributed Query Execution -->
+  <rect x="610" y="200" width="220" height="80" class="sql-box"/>
+  <text x="720" y="220" class="service-title">Distributed Execution</text>
+  <text x="720" y="238" class="service-text">• Parallel Processing</text>
+  <text x="720" y="252" class="service-text">• Dynamic Scaling</text>
+  <text x="720" y="266" class="service-text">• Result Aggregation</text>
+  
+  <!-- Metadata Service -->
+  <rect x="370" y="300" width="140" height="60" class="sql-box"/>
+  <text x="440" y="320" class="service-title">Metadata</text>
+  <text x="440" y="335" class="service-text">Schema Info</text>
+  <text x="440" y="350" class="service-text">Statistics</text>
+  
+  <!-- External Data Access -->
+  <rect x="530" y="300" width="140" height="60" class="sql-box"/>
+  <text x="600" y="320" class="service-title">Data Access</text>
+  <text x="600" y="335" class="service-text">PolyBase</text>
+  <text x="600" y="350" class="service-text">Native Queries</text>
+  
+  <!-- Cache Layer -->
+  <rect x="690" y="300" width="140" height="60" class="sql-box"/>
+  <text x="760" y="320" class="service-title">Result Cache</text>
+  <text x="760" y="335" class="service-text">Query Cache</text>
+  <text x="760" y="350" class="service-text">Metadata Cache</text>
+  
+  <!-- Security & Monitoring -->
+  <rect x="370" y="380" width="460" height="40" class="sql-box"/>
+  <text x="600" y="400" class="service-title">Security & Monitoring</text>
+  <text x="600" y="415" class="service-text">RBAC • Column Security • Audit Logs • Query Metrics</text>
+
+  <!-- Data Sources Zone -->
+  <rect x="900" y="80" width="250" height="350" class="zone-box"/>
+  <text x="1025" y="105" class="zone-title">Data Sources</text>
+  
+  <!-- Azure Data Lake Gen2 -->
+  <rect x="920" y="130" width="210" height="60" class="service-box"/>
+  <text x="1025" y="150" class="service-title">Data Lake Gen2</text>
+  <text x="1025" y="168" class="service-text">Parquet Files</text>
+  <text x="1025" y="182" class="service-text">Delta Tables</text>
+  
+  <!-- Azure Blob Storage -->
+  <rect x="920" y="210" width="210" height="50" class="service-box"/>
+  <text x="1025" y="230" class="service-title">Blob Storage</text>
+  <text x="1025" y="245" class="service-text">CSV, JSON, ORC</text>
+  
+  <!-- External Databases -->
+  <rect x="920" y="280" width="210" height="50" class="service-box"/>
+  <text x="1025" y="300" class="service-title">External Databases</text>
+  <text x="1025" y="315" class="service-text">SQL Server, CosmosDB</text>
+  
+  <!-- Azure Synapse Link -->
+  <rect x="920" y="350" width="210" height="50" class="service-box"/>
+  <text x="1025" y="370" class="service-title">Synapse Link</text>
+  <text x="1025" y="385" class="service-text">Real-time Analytics</text>
+
+  <!-- SQL Objects Zone -->
+  <rect x="50" y="480" width="1100" height="140" class="zone-box"/>
+  <text x="600" y="505" class="zone-title">SQL Database Objects</text>
+  
+  <!-- External Tables -->
+  <rect x="80" y="530" width="150" height="50" class="service-box"/>
+  <text x="155" y="550" class="service-title">External Tables</text>
+  <text x="155" y="565" class="service-text">Schema-on-Read</text>
+  
+  <!-- Views -->
+  <rect x="250" y="530" width="150" height="50" class="service-box"/>
+  <text x="325" y="550" class="service-title">Views</text>
+  <text x="325" y="565" class="service-text">Business Logic</text>
+  
+  <!-- Stored Procedures -->
+  <rect x="420" y="530" width="150" height="50" class="service-box"/>
+  <text x="495" y="550" class="service-title">Stored Procedures</text>
+  <text x="495" y="565" class="service-text">Complex Queries</text>
+  
+  <!-- Functions -->
+  <rect x="590" y="530" width="150" height="50" class="service-box"/>
+  <text x="665" y="550" class="service-title">Functions</text>
+  <text x="665" y="565" class="service-text">Reusable Logic</text>
+  
+  <!-- Data Sources -->
+  <rect x="760" y="530" width="150" height="50" class="service-box"/>
+  <text x="835" y="550" class="service-title">Data Sources</text>
+  <text x="835" y="565" class="service-text">Connection Info</text>
+  
+  <!-- File Formats -->
+  <rect x="930" y="530" width="150" height="50" class="service-box"/>
+  <text x="1005" y="550" class="service-title">File Formats</text>
+  <text x="1005" y="565" class="service-text">Schema Definition</text>
+
+  <!-- Connection Arrows -->
+  <path d="M 300 155 L 350 155" class="arrow"/>
+  <path d="M 850 240 L 900 240" class="arrow"/>
+  <path d="M 850 330 L 900 300" class="arrow"/>
+  
+  <!-- Internal connections -->
+  <path d="M 600 180 L 600 200" class="arrow"/>
+  <path d="M 590 240 L 610 240" class="arrow"/>
+  <path d="M 600 280 L 600 300" class="arrow"/>
+  <path d="M 600 360 L 600 380" class="arrow"/>
+  
+  <!-- To SQL Objects -->
+  <path d="M 600 430 L 600 480" class="arrow"/>
+
+  <!-- Key Features -->
+  <rect x="50" y="650" width="1100" height="120" class="zone-box"/>
+  <text x="600" y="680" class="zone-title">Serverless SQL Pool Benefits</text>
+  
+  <text x="80" y="710" class="service-text">• Pay-per-Query: Only pay for data processed, not compute time</text>
+  <text x="80" y="730" class="service-text">• Auto-scaling: Automatically scales based on query complexity</text>
+  <text x="80" y="750" class="service-text">• T-SQL Compatible: Use familiar SQL syntax and tools</text>
+  
+  <text x="620" y="710" class="service-text">• No Infrastructure Management: Fully managed service</text>
+  <text x="620" y="730" class="service-text">• Multi-format Support: Query Parquet, Delta, CSV, JSON</text>
+  <text x="620" y="750" class="service-text">• Enterprise Security: Built-in authentication and authorization</text>
+</svg>
