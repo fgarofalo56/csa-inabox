@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font: bold 24px Arial, sans-serif; text-anchor: middle; fill: #0078D4; }
+      .service-box { fill: #E1F5FE; stroke: #0078D4; stroke-width: 2; rx: 8; }
+      .service-text { font: 14px Arial, sans-serif; text-anchor: middle; fill: #333; }
+      .service-title { font: bold 16px Arial, sans-serif; text-anchor: middle; fill: #0078D4; }
+      .arrow { fill: none; stroke: #0078D4; stroke-width: 2; marker-end: url(#arrowhead); }
+      .data-flow { fill: none; stroke: #4CAF50; stroke-width: 3; stroke-dasharray: 5,5; }
+      .zone-title { font: bold 18px Arial, sans-serif; text-anchor: middle; fill: #666; }
+      .zone-box { fill: none; stroke: #999; stroke-width: 1; stroke-dasharray: 8,4; rx: 12; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#0078D4" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="30" class="title">Delta Lakehouse Architecture</text>
+
+  <!-- Data Sources Zone -->
+  <rect x="50" y="80" width="250" height="180" class="zone-box"/>
+  <text x="175" y="105" class="zone-title">Data Sources</text>
+  
+  <!-- On-premises Data -->
+  <rect x="70" y="120" width="100" height="40" class="service-box"/>
+  <text x="120" y="145" class="service-text">On-premises</text>
+  
+  <!-- SaaS Applications -->
+  <rect x="180" y="120" width="100" height="40" class="service-box"/>
+  <text x="230" y="145" class="service-text">SaaS Apps</text>
+  
+  <!-- Streaming Data -->
+  <rect x="70" y="180" width="100" height="40" class="service-box"/>
+  <text x="120" y="205" class="service-text">Streaming</text>
+  
+  <!-- APIs -->
+  <rect x="180" y="180" width="100" height="40" class="service-box"/>
+  <text x="230" y="205" class="service-text">APIs</text>
+
+  <!-- Ingestion Zone -->
+  <rect x="350" y="80" width="200" height="180" class="zone-box"/>
+  <text x="450" y="105" class="zone-title">Data Ingestion</text>
+  
+  <!-- Azure Data Factory -->
+  <rect x="370" y="120" width="160" height="50" class="service-box"/>
+  <text x="450" y="140" class="service-title">Azure Data Factory</text>
+  <text x="450" y="155" class="service-text">ETL/ELT Pipelines</text>
+  
+  <!-- Event Hubs -->
+  <rect x="370" y="190" width="160" height="50" class="service-box"/>
+  <text x="450" y="210" class="service-title">Azure Event Hubs</text>
+  <text x="450" y="225" class="service-text">Streaming Ingestion</text>
+
+  <!-- Storage Zone -->
+  <rect x="600" y="80" width="250" height="280" class="zone-box"/>
+  <text x="725" y="105" class="zone-title">Delta Lake Storage</text>
+  
+  <!-- ADLS Gen2 -->
+  <rect x="620" y="130" width="210" height="60" class="service-box"/>
+  <text x="725" y="150" class="service-title">Azure Data Lake Gen2</text>
+  <text x="725" y="168" class="service-text">Raw Data Storage</text>
+  <text x="725" y="182" class="service-text">Parquet + Delta Format</text>
+  
+  <!-- Delta Tables -->
+  <rect x="640" y="210" width="80" height="40" class="service-box"/>
+  <text x="680" y="235" class="service-text">Bronze</text>
+  
+  <rect x="730" y="210" width="80" height="40" class="service-box"/>
+  <text x="770" y="235" class="service-text">Silver</text>
+  
+  <rect x="640" y="260" width="80" height="40" class="service-box"/>
+  <text x="680" y="285" class="service-text">Gold</text>
+  
+  <rect x="730" y="260" width="80" height="40" class="service-box"/>
+  <text x="770" y="285" class="service-text">Platinum</text>
+
+  <!-- Processing Zone -->
+  <rect x="900" y="80" width="250" height="280" class="zone-box"/>
+  <text x="1025" y="105" class="zone-title">Data Processing</text>
+  
+  <!-- Spark Pools -->
+  <rect x="920" y="130" width="210" height="60" class="service-box"/>
+  <text x="1025" y="150" class="service-title">Synapse Spark Pools</text>
+  <text x="1025" y="168" class="service-text">Distributed Processing</text>
+  <text x="1025" y="182" class="service-text">Machine Learning</text>
+  
+  <!-- Serverless SQL -->
+  <rect x="920" y="210" width="210" height="60" class="service-box"/>
+  <text x="1025" y="230" class="service-title">Serverless SQL Pool</text>
+  <text x="1025" y="248" class="service-text">On-demand Queries</text>
+  <text x="1025" y="262" class="service-text">External Tables</text>
+  
+  <!-- Synapse Pipelines -->
+  <rect x="920" y="290" width="210" height="50" class="service-box"/>
+  <text x="1025" y="310" class="service-title">Synapse Pipelines</text>
+  <text x="1025" y="325" class="service-text">Orchestration</text>
+
+  <!-- Analytics Zone -->
+  <rect x="350" y="420" width="500" height="180" class="zone-box"/>
+  <text x="600" y="445" class="zone-title">Analytics & Visualization</text>
+  
+  <!-- Power BI -->
+  <rect x="370" y="460" width="140" height="50" class="service-box"/>
+  <text x="440" y="480" class="service-title">Power BI</text>
+  <text x="440" y="495" class="service-text">Dashboards</text>
+  
+  <!-- Azure ML -->
+  <rect x="530" y="460" width="140" height="50" class="service-box"/>
+  <text x="600" y="480" class="service-title">Azure ML</text>
+  <text x="600" y="495" class="service-text">ML Models</text>
+  
+  <!-- Synapse Studio -->
+  <rect x="690" y="460" width="140" height="50" class="service-box"/>
+  <text x="760" y="480" class="service-title">Synapse Studio</text>
+  <text x="760" y="495" class="service-text">Development</text>
+  
+  <!-- Jupyter Notebooks -->
+  <rect x="370" y="530" width="140" height="50" class="service-box"/>
+  <text x="440" y="550" class="service-title">Jupyter</text>
+  <text x="440" y="565" class="service-text">Notebooks</text>
+  
+  <!-- External Tools -->
+  <rect x="530" y="530" width="140" height="50" class="service-box"/>
+  <text x="600" y="550" class="service-title">External Tools</text>
+  <text x="600" y="565" class="service-text">SSMS, Azure CLI</text>
+
+  <!-- Management Zone -->
+  <rect x="50" y="420" width="250" height="180" class="zone-box"/>
+  <text x="175" y="445" class="zone-title">Management & Security</text>
+  
+  <!-- Azure Active Directory -->
+  <rect x="70" y="460" width="100" height="40" class="service-box"/>
+  <text x="120" y="485" class="service-text">Azure AD</text>
+  
+  <!-- Key Vault -->
+  <rect x="180" y="460" width="100" height="40" class="service-box"/>
+  <text x="230" y="485" class="service-text">Key Vault</text>
+  
+  <!-- Monitor -->
+  <rect x="70" y="520" width="100" height="40" class="service-box"/>
+  <text x="120" y="545" class="service-text">Monitor</text>
+  
+  <!-- Purview -->
+  <rect x="180" y="520" width="100" height="40" class="service-box"/>
+  <text x="230" y="545" class="service-text">Purview</text>
+
+  <!-- Data Flow Arrows -->
+  <path d="M 300 140 L 350 140" class="arrow"/>
+  <path d="M 300 200 L 350 200" class="arrow"/>
+  <path d="M 550 150 L 600 160" class="arrow"/>
+  <path d="M 550 220 L 600 220" class="arrow"/>
+  <path d="M 850 160 L 900 160" class="arrow"/>
+  <path d="M 850 240 L 900 240" class="arrow"/>
+  
+  <!-- From processing to analytics -->
+  <path d="M 1025 360 Q 1025 400 600 400 Q 600 420 600 460" class="arrow"/>
+  
+  <!-- From storage to analytics -->
+  <path d="M 725 360 Q 725 400 600 420" class="arrow"/>
+
+  <!-- Key Features Box -->
+  <rect x="50" y="650" width="1100" height="120" class="zone-box"/>
+  <text x="600" y="680" class="zone-title">Key Architectural Benefits</text>
+  
+  <text x="100" y="710" class="service-text">• ACID Transactions with Delta Lake format ensuring data consistency</text>
+  <text x="100" y="730" class="service-text">• Schema Evolution supporting changing data requirements</text>
+  <text x="100" y="750" class="service-text">• Time Travel capabilities for data versioning and rollback</text>
+  
+  <text x="600" y="710" class="service-text">• Unified Analytics with shared metadata across Spark and SQL</text>
+  <text x="600" y="730" class="service-text">• Scalable Processing with auto-scaling compute resources</text>
+  <text x="600" y="750" class="service-text">• Cost Optimization through serverless and on-demand pricing</text>
+</svg>
