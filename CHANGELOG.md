@@ -10,6 +10,14 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.6.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.3...csa-inabox-v0.6.4) (2026-05-10)
+
+
+### Documentation
+
+* **learn:** beautify imported reference library ([#218](https://github.com/fgarofalo56/csa-inabox/issues/218)) ([db58c24](https://github.com/fgarofalo56/csa-inabox/commit/db58c24d132c84a918aeb2ce88775fe6f7be82b6))
+* **learn:** fix 1160 inherited broken links + re-enable mkdocs --strict ([#220](https://github.com/fgarofalo56/csa-inabox/issues/220)) ([4801471](https://github.com/fgarofalo56/csa-inabox/commit/4801471050667348a1bd57d2915914490acf2221))
+
 ## [0.6.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.2...csa-inabox-v0.6.3) (2026-05-10)
 
 
