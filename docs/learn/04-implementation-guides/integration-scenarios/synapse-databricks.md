@@ -1,3 +1,10 @@
+---
+title: "Synapse and Databricks Integration"
+description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Synapse + Databricks__"
+tags:
+  - implementation
+  - integration-scenarios
+---
 # Synapse and Databricks Integration
 
 > __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Synapse + Databricks__

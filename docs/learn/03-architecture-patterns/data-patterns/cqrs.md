@@ -1,3 +1,10 @@
+---
+title: "CQRS Pattern"
+description: "Command Query Responsibility Segregation (CQRS) pattern for Azure analytics architectures."
+tags:
+  - architecture
+  - data-patterns
+---
 # 📊 CQRS Pattern
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

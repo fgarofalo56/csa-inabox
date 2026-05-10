@@ -1,3 +1,10 @@
+---
+title: "MLOps Pipeline Implementation"
+description: "Implement end-to-end MLOps pipelines with Databricks and MLflow."
+tags:
+  - implementation
+  - databricks
+---
 # 🔄 MLOps Pipeline Implementation
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

@@ -1,3 +1,10 @@
+---
+title: "IoT Analytics Reference Architecture"
+description: "Complete IoT analytics solution from device connectivity through real-time processing to predictive maintenance and operational insights."
+tags:
+  - architecture
+  - reference-architectures
+---
 # 🏭 IoT Analytics Reference Architecture
 
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen?style=flat-square)

@@ -1,3 +1,10 @@
+---
+title: "Hybrid Connectivity Patterns"
+description: "Patterns for connecting on-premises systems with Azure analytics services."
+tags:
+  - architecture
+  - integration-patterns
+---
 # 🔌 Hybrid Connectivity Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

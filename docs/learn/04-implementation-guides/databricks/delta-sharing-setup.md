@@ -1,3 +1,10 @@
+---
+title: "Delta Sharing Setup Guide"
+description: "Configure Delta Sharing for secure cross-organization data sharing."
+tags:
+  - implementation
+  - databricks
+---
 # 🔗 Delta Sharing Setup Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

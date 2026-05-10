@@ -1,3 +1,10 @@
+---
+title: "Feature Store Setup Guide"
+description: "Configure Databricks Feature Store for centralized ML feature management."
+tags:
+  - implementation
+  - databricks
+---
 # 🏪 Feature Store Setup Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

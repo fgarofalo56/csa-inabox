@@ -1,3 +1,10 @@
+---
+title: "Batch Architecture Patterns"
+description: "Reference architectures and patterns for batch data processing workloads."
+tags:
+  - architecture
+  - batch-architectures
+---
 # 📦 Batch Architecture Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

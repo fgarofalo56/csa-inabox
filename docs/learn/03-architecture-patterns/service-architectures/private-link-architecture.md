@@ -1,3 +1,10 @@
+---
+title: "Private Link Architecture"
+description: "[Home](../../README.md) > Architecture > Private Link Architecture"
+tags:
+  - architecture
+  - service-architectures
+---
 # Private Link Architecture
 
 [Home](../../README.md) > Architecture > Private Link Architecture

@@ -1,3 +1,11 @@
+---
+title: "Real Time Dashboard"
+description: "Comprehensive documentation for Real Time Dashboard."
+tags:
+  - implementation
+  - end-to-end-solutions
+  - real-time-dashboard
+---
 # Real Time Dashboard
 
 Comprehensive documentation for Real Time Dashboard.

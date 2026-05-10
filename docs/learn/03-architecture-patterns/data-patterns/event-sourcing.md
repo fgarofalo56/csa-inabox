@@ -1,3 +1,10 @@
+---
+title: "Event Sourcing Pattern"
+description: "Event sourcing pattern implementation for Azure analytics and data platforms."
+tags:
+  - architecture
+  - data-patterns
+---
 # 📝 Event Sourcing Pattern
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

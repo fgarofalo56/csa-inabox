@@ -1,3 +1,10 @@
+---
+title: "Integration Scenarios"
+description: "Step-by-step guides for integrating Azure streaming and analytics services in common Cloud Scale Analytics scenarios."
+tags:
+  - implementation
+  - integration-scenarios
+---
 # 🔗 Integration Scenarios
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

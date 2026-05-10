@@ -1,3 +1,11 @@
+---
+title: "Azure Synapse Shared Metadata Architecture - Visual Guides"
+description: "[Home](../../../README.md) > [Architecture](../../README.md) > Shared Metadata > Visual Guides"
+tags:
+  - architecture
+  - service-architectures
+  - shared-metadata
+---
 # Azure Synapse Shared Metadata Architecture - Visual Guides
 
 [Home](../../../README.md) > [Architecture](../../README.md) > Shared Metadata > Visual Guides

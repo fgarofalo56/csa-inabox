@@ -1,3 +1,10 @@
+---
+title: "️ Azure Synapse Analytics Delta Lakehouse Architecture"
+description: "[🏠 Home](../../README.md) > 🏗️ Architecture > 📄 Delta Lakehouse Overview"
+tags:
+  - architecture
+  - service-architectures
+---
 # 🏞️ Azure Synapse Analytics Delta Lakehouse Architecture
 
 [🏠 Home](../../README.md) > 🏗️ Architecture > 📄 Delta Lakehouse Overview

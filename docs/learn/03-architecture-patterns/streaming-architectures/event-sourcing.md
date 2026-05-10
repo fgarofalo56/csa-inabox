@@ -1,3 +1,10 @@
+---
+title: "Event Sourcing Architecture Pattern"
+description: "Store all changes to application state as an immutable sequence of events, enabling complete audit trails, temporal queries, and event replay capabilities."
+tags:
+  - architecture
+  - streaming-architectures
+---
 # Event Sourcing Architecture Pattern
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

@@ -1,3 +1,11 @@
+---
+title: "Azure Synapse Analytics Shared Metadata"
+description: "[🏠 Home](../../../README.md) > [🏗️ Architecture](../../README.md) > 📄 Shared Metadata"
+tags:
+  - architecture
+  - service-architectures
+  - shared-metadata
+---
 # Azure Synapse Analytics Shared Metadata
 
 [🏠 Home](../../../README.md) > [🏗️ Architecture](../../README.md) > 📄 Shared Metadata

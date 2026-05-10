@@ -1,3 +1,11 @@
+---
+title: "Azure Synapse Analytics Delta Lakehouse Detailed Architecture"
+description: "[Home](../../../README.md) > [Architecture](../../README.md) > Delta Lakehouse > Detailed Architecture"
+tags:
+  - architecture
+  - service-architectures
+  - delta-lakehouse
+---
 # Azure Synapse Analytics Delta Lakehouse Detailed Architecture
 
 [Home](../../../README.md) > [Architecture](../../README.md) > Delta Lakehouse > Detailed Architecture

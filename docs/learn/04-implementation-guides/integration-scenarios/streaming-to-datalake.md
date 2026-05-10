@@ -1,3 +1,10 @@
+---
+title: "Streaming to Data Lake - Event Hubs Capture"
+description: "Configure Event Hubs Capture to automatically archive streaming data to Azure Data Lake Storage Gen2 for long-term storage and batch analytics."
+tags:
+  - implementation
+  - integration-scenarios
+---
 # 📨 Streaming to Data Lake - Event Hubs Capture
 
 ![Complexity](https://img.shields.io/badge/Complexity-Basic-green?style=flat-square)

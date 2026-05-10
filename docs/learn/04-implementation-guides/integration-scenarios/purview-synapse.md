@@ -1,3 +1,10 @@
+---
+title: "Purview and Synapse Integration"
+description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Purview + Synapse__"
+tags:
+  - implementation
+  - integration-scenarios
+---
 # Purview and Synapse Integration
 
 > __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Purview + Synapse__

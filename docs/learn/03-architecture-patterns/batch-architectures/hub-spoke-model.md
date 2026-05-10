@@ -1,3 +1,10 @@
+---
+title: "Hub and Spoke Architecture Model"
+description: "Centralized data warehouse (hub) with specialized departmental data marts (spokes) for optimized analytics and reporting across the enterprise."
+tags:
+  - architecture
+  - batch-architectures
+---
 # Hub and Spoke Architecture Model
 
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen?style=flat-square)

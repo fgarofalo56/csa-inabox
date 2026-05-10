@@ -1,3 +1,10 @@
+---
+title: "Stream Analytics Integration with Azure Functions"
+description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ASA + Functions__"
+tags:
+  - implementation
+  - integration-scenarios
+---
 # Stream Analytics Integration with Azure Functions
 
 > __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __ASA + Functions__

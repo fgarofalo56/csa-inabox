@@ -1,3 +1,10 @@
+---
+title: "Lambda Architecture Pattern"
+description: "Comprehensive guide to implementing Lambda Architecture on Azure for combining batch and real-time stream processing."
+tags:
+  - architecture
+  - streaming-architectures
+---
 # Lambda Architecture Pattern
 
 ![Real-time](https://img.shields.io/badge/Type-Hybrid%20Processing-brightgreen?style=flat-square)

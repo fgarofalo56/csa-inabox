@@ -1,3 +1,10 @@
+---
+title: "Reference Architectures by Industry"
+description: "Industry-specific reference architectures combining Azure Cloud Scale Analytics services with domain-specific patterns, compliance requirements, and best practices."
+tags:
+  - architecture
+  - reference-architectures
+---
 # 🌐 Reference Architectures by Industry
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

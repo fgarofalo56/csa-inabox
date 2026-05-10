@@ -1,3 +1,10 @@
+---
+title: "Data Mesh Architecture Pattern"
+description: "Domain-oriented decentralized data architecture that treats data as a product, enabling scalable and autonomous data ownership across the enterprise."
+tags:
+  - architecture
+  - batch-architectures
+---
 # Data Mesh Architecture Pattern
 
 ![Status](https://img.shields.io/badge/Status-Emerging%20Pattern-yellow?style=flat-square)

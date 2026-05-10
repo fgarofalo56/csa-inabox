@@ -1,3 +1,11 @@
+---
+title: "Iot Analytics"
+description: "Comprehensive documentation for Iot Analytics."
+tags:
+  - implementation
+  - end-to-end-solutions
+  - iot-analytics
+---
 # Iot Analytics
 
 Comprehensive documentation for Iot Analytics.

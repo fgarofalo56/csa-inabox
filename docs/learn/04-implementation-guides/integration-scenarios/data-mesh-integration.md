@@ -1,3 +1,10 @@
+---
+title: "Data Mesh Integration Patterns"
+description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Data Mesh__"
+tags:
+  - implementation
+  - integration-scenarios
+---
 # Data Mesh Integration Patterns
 
 > __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Data Mesh__

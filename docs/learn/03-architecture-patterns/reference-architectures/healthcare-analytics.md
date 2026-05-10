@@ -1,3 +1,9 @@
+---
+title: "Healthcare Analytics Reference Architecture"
+tags:
+  - architecture
+  - reference-architectures
+---
 # Healthcare Analytics Reference Architecture
 
 ## Overview

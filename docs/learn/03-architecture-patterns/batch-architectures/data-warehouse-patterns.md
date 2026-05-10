@@ -1,3 +1,10 @@
+---
+title: "️ Data Warehouse Patterns"
+description: "Comprehensive guide to data warehouse modeling patterns for Azure analytics."
+tags:
+  - architecture
+  - batch-architectures
+---
 # 🏛️ Data Warehouse Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

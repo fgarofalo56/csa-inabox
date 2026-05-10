@@ -1,3 +1,9 @@
+---
+title: "Kappa Architecture"
+tags:
+  - architecture
+  - hybrid-architectures
+---
 # Kappa Architecture
 
 ## Overview

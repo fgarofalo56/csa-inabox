@@ -1,3 +1,10 @@
+---
+title: "CQRS (Command Query Responsibility Segregation) Pattern"
+description: "Separate read and write data models to optimize performance, scalability, and security by treating queries and commands as fundamentally different operations."
+tags:
+  - architecture
+  - streaming-architectures
+---
 # CQRS (Command Query Responsibility Segregation) Pattern
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

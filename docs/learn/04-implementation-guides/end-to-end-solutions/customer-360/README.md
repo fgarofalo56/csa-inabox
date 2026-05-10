@@ -1,3 +1,11 @@
+---
+title: "Customer 360"
+description: "Comprehensive documentation for Customer 360."
+tags:
+  - implementation
+  - end-to-end-solutions
+  - customer-360
+---
 # Customer 360
 
 Comprehensive documentation for Customer 360.

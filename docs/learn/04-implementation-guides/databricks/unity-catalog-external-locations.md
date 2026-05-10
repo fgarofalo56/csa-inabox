@@ -1,3 +1,10 @@
+---
+title: "Unity Catalog External Locations"
+description: "Configure Unity Catalog external locations for managed access to cloud storage."
+tags:
+  - implementation
+  - databricks
+---
 # 📍 Unity Catalog External Locations
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

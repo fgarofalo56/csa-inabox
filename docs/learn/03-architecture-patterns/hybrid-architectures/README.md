@@ -1,3 +1,10 @@
+---
+title: "Hybrid Architecture Patterns"
+description: "Architecture patterns for hybrid cloud and multi-cloud analytics deployments."
+tags:
+  - architecture
+  - hybrid-architectures
+---
 # 🔀 Hybrid Architecture Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

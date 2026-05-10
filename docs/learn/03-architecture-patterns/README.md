@@ -1,3 +1,9 @@
+---
+title: "️ Cloud Scale Analytics Architecture Patterns"
+description: "Proven architectural patterns and reference implementations for Azure Cloud Scale Analytics solutions."
+tags:
+  - architecture
+---
 # 🏗️ Cloud Scale Analytics Architecture Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

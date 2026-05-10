@@ -1,3 +1,10 @@
+---
+title: "Integration Patterns"
+description: "Architecture patterns for system integration and data exchange."
+tags:
+  - architecture
+  - integration-patterns
+---
 # 🔗 Integration Patterns
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
