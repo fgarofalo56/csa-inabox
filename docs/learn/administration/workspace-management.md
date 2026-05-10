@@ -1,3 +1,9 @@
+---
+title: "Workspace Management"
+description: "[Home](../../README.md) > Administration > Workspace Management"
+tags:
+  - administration
+---
 # Workspace Management
 
 [Home](../../README.md) > Administration > Workspace Management

@@ -1,3 +1,9 @@
+---
+title: "Spark Monitoring"
+description: "[Home](../../README.md) > Monitoring > Spark Monitoring"
+tags:
+  - monitoring
+---
 # Spark Monitoring
 
 [Home](../../README.md) > Monitoring > Spark Monitoring

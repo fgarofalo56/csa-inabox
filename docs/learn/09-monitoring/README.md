@@ -1,3 +1,9 @@
+---
+title: "Monitoring & Observability"
+description: "Comprehensive monitoring and observability guidance for Cloud Scale Analytics services using Azure Monitor, Log Analytics, and Application Insights."
+tags:
+  - monitoring
+---
 # 📊 Monitoring & Observability
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

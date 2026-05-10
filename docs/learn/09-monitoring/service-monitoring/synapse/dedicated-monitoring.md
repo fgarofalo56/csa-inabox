@@ -1,3 +1,11 @@
+---
+title: "Dedicated SQL Pool Monitoring"
+description: "> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **[Synapse](../synapse)** | **Dedicated SQL Pool Monitoring**"
+tags:
+  - monitoring
+  - service-monitoring
+  - synapse
+---
 # Dedicated SQL Pool Monitoring
 
 > **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **[Synapse](../synapse)** | **Dedicated SQL Pool Monitoring**

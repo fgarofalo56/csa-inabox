@@ -1,3 +1,9 @@
+---
+title: "DevOps Documentation"
+description: "> **[Home](../README.md)** | **DevOps**"
+tags:
+  - devops
+---
 # DevOps Documentation
 
 > **[Home](../README.md)** | **DevOps**

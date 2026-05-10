@@ -1,3 +1,9 @@
+---
+title: "Deployment Monitoring"
+description: "[Home](../../README.md) > Monitoring > Deployment Monitoring"
+tags:
+  - monitoring
+---
 # Deployment Monitoring
 
 [Home](../../README.md) > Monitoring > Deployment Monitoring

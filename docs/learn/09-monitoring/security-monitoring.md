@@ -1,3 +1,9 @@
+---
+title: "Security Monitoring"
+description: "[Home](../../README.md) > Monitoring > Security Monitoring"
+tags:
+  - monitoring
+---
 # Security Monitoring
 
 [Home](../../README.md) > Monitoring > Security Monitoring

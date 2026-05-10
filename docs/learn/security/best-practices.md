@@ -1,3 +1,9 @@
+---
+title: "Azure Synapse Analytics Security Best Practices"
+description: "[Home](../../README.md) > Security > Security Best Practices"
+tags:
+  - security
+---
 # Azure Synapse Analytics Security Best Practices
 
 [Home](../../README.md) > Security > Security Best Practices

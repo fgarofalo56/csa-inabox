@@ -1,3 +1,9 @@
+---
+title: "Automated Testing for Synapse Analytics"
+description: "[Home](../../README.md) > DevOps > Automated Testing"
+tags:
+  - devops
+---
 # Automated Testing for Synapse Analytics
 
 [Home](../../README.md) > DevOps > Automated Testing

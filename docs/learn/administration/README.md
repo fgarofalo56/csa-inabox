@@ -1,3 +1,9 @@
+---
+title: "Administration"
+description: "This section covers administrative tasks and workspace management for Azure Cloud Scale Analytics."
+tags:
+  - administration
+---
 # Administration
 
 This section covers administrative tasks and workspace management for Azure Cloud Scale Analytics.

@@ -1,3 +1,9 @@
+---
+title: "Security Guide"
+description: "> __[Home](../../README.md)__ | __Security Documentation__"
+tags:
+  - security
+---
 # Security Guide
 
 > __[Home](../../README.md)__ | __Security Documentation__

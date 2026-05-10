@@ -1,3 +1,11 @@
+---
+title: "HDInsight Monitoring"
+description: "> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **HDInsight Monitoring**"
+tags:
+  - monitoring
+  - service-monitoring
+  - hdinsight
+---
 # HDInsight Monitoring
 
 > **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **HDInsight Monitoring**

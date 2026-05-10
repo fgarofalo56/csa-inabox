@@ -1,3 +1,9 @@
+---
+title: "CI/CD for Azure Synapse Analytics"
+description: "[Home](../../README.md) > DevOps > CI/CD Pipeline"
+tags:
+  - devops
+---
 # CI/CD for Azure Synapse Analytics
 
 [Home](../../README.md) > DevOps > CI/CD Pipeline

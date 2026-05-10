@@ -1,3 +1,9 @@
+---
+title: "Performance Benchmarks for Azure Synapse Analytics"
+description: "[Home](../../README.md) > Performance > Performance Benchmarks"
+tags:
+  - performance
+---
 # Performance Benchmarks for Azure Synapse Analytics
 
 [Home](../../README.md) > Performance > Performance Benchmarks

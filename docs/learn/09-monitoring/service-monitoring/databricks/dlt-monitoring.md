@@ -1,3 +1,11 @@
+---
+title: "Delta Live Tables Monitoring"
+description: "> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **[Databricks](README.md)** | **DLT Monitoring**"
+tags:
+  - monitoring
+  - service-monitoring
+  - databricks
+---
 # Delta Live Tables Monitoring
 
 > **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **[Databricks](README.md)** | **DLT Monitoring**

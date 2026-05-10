@@ -1,3 +1,9 @@
+---
+title: "DevOps"
+description: "This section covers DevOps practices, CI/CD pipelines, and operational automation for Azure Cloud Scale Analytics."
+tags:
+  - devops
+---
 # DevOps
 
 This section covers DevOps practices, CI/CD pipelines, and operational automation for Azure Cloud Scale Analytics.

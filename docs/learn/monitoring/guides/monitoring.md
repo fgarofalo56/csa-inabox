@@ -1,3 +1,9 @@
+---
+title: "Monitoring Guide"
+description: "Monitoring and observability guide."
+tags:
+  - monitoring
+---
 # Monitoring Guide
 
 Monitoring and observability guide.

@@ -1,3 +1,9 @@
+---
+title: "API Guide"
+description: "API reference and usage guide."
+tags:
+  - api
+---
 # API Guide
 
 API reference and usage guide.

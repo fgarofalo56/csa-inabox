@@ -1,3 +1,9 @@
+---
+title: "10 Security"
+description: "Comprehensive documentation for 10 Security."
+tags:
+  - security
+---
 # 10 Security
 
 Comprehensive documentation for 10 Security.
