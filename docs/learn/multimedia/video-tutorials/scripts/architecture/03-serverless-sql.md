@@ -1,3 +1,11 @@
+---
+title: "Serverless SQL Architecture Video Script"
+tags:
+  - multimedia
+  - video
+  - scripts
+  - architecture
+---
 # Serverless SQL Architecture Video Script
 
 ![Status: Draft](https://img.shields.io/badge/Status-Draft-yellow)
@@ -18,8 +26,7 @@ Video script covering Azure Synapse Serverless SQL Pool architecture, query opti
 
 #### Serverless Engine
 
-```
-Query Request
+```textQuery Request
     ↓
 Query Optimizer
     ↓
@@ -131,8 +138,7 @@ WHERE year = 2024 AND month = 1;
 
 #### Cost Calculation
 
-```
-Cost = Data Scanned (TB) × $5.00 per TB
+```textCost = Data Scanned (TB) × $5.00 per TB
 
 Example:
 - Query scans 100GB

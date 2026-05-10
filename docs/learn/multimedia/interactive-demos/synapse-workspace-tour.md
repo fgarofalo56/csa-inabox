@@ -1,3 +1,9 @@
+---
+title: "Synapse Workspace Interactive Tour"
+tags:
+  - multimedia
+  - demos
+---
 # 🏢 Synapse Workspace Interactive Tour
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

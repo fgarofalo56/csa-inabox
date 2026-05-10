@@ -1,3 +1,9 @@
+---
+title: "SQL Query Interactive Playground"
+tags:
+  - multimedia
+  - demos
+---
 # 🎯 SQL Query Interactive Playground
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

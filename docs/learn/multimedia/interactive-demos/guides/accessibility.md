@@ -1,3 +1,9 @@
+---
+title: "Accessibility Guidelines for Interactive Demos"
+tags:
+  - multimedia
+  - demos
+---
 # ♿ Accessibility Guidelines for Interactive Demos
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

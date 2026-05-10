@@ -1,3 +1,9 @@
+---
+title: "Cost-Benefit Analysis - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 📊 Cost-Benefit Analysis - CSA-in-a-Box
 
 ![Type: Financial](https://img.shields.io/badge/Type-Financial-blue)

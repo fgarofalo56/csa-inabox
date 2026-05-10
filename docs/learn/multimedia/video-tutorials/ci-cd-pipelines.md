@@ -1,3 +1,9 @@
+---
+title: "Video Script: CI/CD Pipelines for Azure Synapse"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: CI/CD Pipelines for Azure Synapse
 
 ![Duration: 35 minutes](https://img.shields.io/badge/Duration-35%20minutes-blue)
@@ -67,8 +73,7 @@ synapse-repo/
 
 **[VISUAL: Git branching diagram]**
 
-```
-main (protected)
+```textmain (protected)
 ├── develop
 │   ├── feature/data-pipeline
 │   └── feature/ml-notebook

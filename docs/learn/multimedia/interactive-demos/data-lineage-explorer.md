@@ -1,3 +1,9 @@
+---
+title: "Data Lineage Explorer - Interactive Visualization Demo"
+tags:
+  - multimedia
+  - demos
+---
 # 🔍 Data Lineage Explorer - Interactive Visualization Demo
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

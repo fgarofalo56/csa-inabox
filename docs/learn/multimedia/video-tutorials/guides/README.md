@@ -1,3 +1,9 @@
+---
+title: "Video Tutorial Production Guides"
+tags:
+  - multimedia
+  - video
+---
 # Video Tutorial Production Guides
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

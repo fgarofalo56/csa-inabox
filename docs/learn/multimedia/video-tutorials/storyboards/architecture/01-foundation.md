@@ -1,3 +1,11 @@
+---
+title: "Architecture Foundation Storyboard"
+tags:
+  - multimedia
+  - video
+  - storyboards
+  - architecture
+---
 # Architecture Foundation Storyboard
 
 ![Status: Planning](https://img.shields.io/badge/Status-Planning-blue)
@@ -57,8 +65,7 @@ Visual storyboard for the Architecture Foundation video tutorial, detailing scen
 ### Frame 4: Compute Options Split (1:00 - 2:00)
 
 **Visual Layout**:
-```
-┌────────────────┬────────────────┐
+```text┌────────────────┬────────────────┐
 │  SQL Pools     │  Spark Pools   │
 ├────────────────┼────────────────┤
 │  Serverless    │  Auto-scaling  │

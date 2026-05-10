@@ -1,3 +1,9 @@
+---
+title: "Video Script: Monitoring Dashboards for Azure Synapse"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Monitoring Dashboards for Azure Synapse
 
 ![Duration: 25 minutes](https://img.shields.io/badge/Duration-25%20minutes-blue)

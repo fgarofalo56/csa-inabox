@@ -1,3 +1,9 @@
+---
+title: "Video Production Best Practices"
+tags:
+  - multimedia
+  - video
+---
 # Video Production Best Practices
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)
@@ -503,8 +509,7 @@ Breathing Room:
 
 **Standard Audio Chain:**
 
-```
-1. Noise Reduction (if needed)
+```text1. Noise Reduction (if needed)
    - Apply to room tone sample
    - Reduce 6-12 dB
 
@@ -610,8 +615,7 @@ color:
 
 **File Naming Convention:**
 
-```
-CSA_[Series]_[Episode]_[Title]_[Resolution]_[Date].mp4
+```textCSA_[Series]_[Episode]_[Title]_[Resolution]_[Date].mp4
 
 Examples:
 CSA_Synapse_01_Introduction_1080p_20250115.mp4

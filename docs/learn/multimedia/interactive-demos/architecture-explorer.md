@@ -1,3 +1,9 @@
+---
+title: "️ Interactive Architecture Explorer"
+tags:
+  - multimedia
+  - demos
+---
 # 🏗️ Interactive Architecture Explorer
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

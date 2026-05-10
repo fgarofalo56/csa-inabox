@@ -1,3 +1,11 @@
+---
+title: "Data Lake Architecture Storyboard"
+tags:
+  - multimedia
+  - video
+  - storyboards
+  - architecture
+---
 # Data Lake Architecture Storyboard
 
 ![Status: Planning](https://img.shields.io/badge/Status-Planning-blue)
@@ -13,8 +21,7 @@ Visual storyboard for the Data Lake Architecture video, focusing on medallion ar
 
 **Visual Concept**: Three-tier pyramid
 
-```
-        ┌─────────┐
+```text        ┌─────────┐
         │  Gold   │ ← Business ready
         ├─────────┤
         │ Silver  │ ← Cleansed
@@ -38,8 +45,7 @@ Visual storyboard for the Data Lake Architecture video, focusing on medallion ar
 
 **Visual**: Folder tree animation
 
-```
-sales/
+```textsales/
   year=2024/
     month=01/
       day=01/
@@ -70,8 +76,7 @@ sales/
 
 **Visual**: Hierarchical security diagram
 
-```
-Storage Account
+```textStorage Account
   └─ RBAC (Role assignments)
       └─ Container
           └─ ACLs (File/folder permissions)

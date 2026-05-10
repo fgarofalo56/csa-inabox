@@ -1,3 +1,11 @@
+---
+title: "Common Issues Troubleshooting Script"
+tags:
+  - multimedia
+  - video
+  - scripts
+  - troubleshooting
+---
 # Common Issues Troubleshooting Script
 
 ![Status: Draft](https://img.shields.io/badge/Status-Draft-yellow)

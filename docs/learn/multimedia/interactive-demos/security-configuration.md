@@ -1,3 +1,9 @@
+---
+title: "Security Configuration Wizard"
+tags:
+  - multimedia
+  - demos
+---
 # 🔒 Security Configuration Wizard
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

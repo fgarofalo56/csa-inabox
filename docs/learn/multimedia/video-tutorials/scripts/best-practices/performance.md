@@ -1,3 +1,11 @@
+---
+title: "Performance Best Practices Video Script"
+tags:
+  - multimedia
+  - video
+  - scripts
+  - best-practices
+---
 # Performance Best Practices Video Script
 
 ![Status: Draft](https://img.shields.io/badge/Status-Draft-yellow)

@@ -1,3 +1,9 @@
+---
+title: "Interactive Cost Calculator"
+tags:
+  - multimedia
+  - demos
+---
 # 💰 Interactive Cost Calculator
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

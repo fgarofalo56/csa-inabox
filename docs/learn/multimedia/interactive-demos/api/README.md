@@ -1,3 +1,10 @@
+---
+title: "Interactive Demo APIs"
+tags:
+  - multimedia
+  - demos
+  - api
+---
 # 🔌 Interactive Demo APIs
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

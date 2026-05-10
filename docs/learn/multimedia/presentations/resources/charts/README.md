@@ -1,3 +1,11 @@
+---
+title: "Charts Resources - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+  - resources
+  - charts
+---
 # 📚 Charts Resources - CSA-in-a-Box
 
 ![Type: Resources](https://img.shields.io/badge/Type-Resources-blue)

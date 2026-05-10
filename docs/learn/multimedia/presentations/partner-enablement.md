@@ -1,3 +1,9 @@
+---
+title: "Partner Enablement - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 📊 Partner Enablement - CSA-in-a-Box
 
 ![Type: Training](https://img.shields.io/badge/Type-Training-blue)

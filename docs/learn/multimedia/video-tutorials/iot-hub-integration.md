@@ -1,3 +1,9 @@
+---
+title: "Video Script: IoT Hub Integration with Synapse Analytics"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: IoT Hub Integration with Synapse Analytics
 
 ![Duration: 27 minutes](https://img.shields.io/badge/Duration-27%20minutes-blue)
@@ -64,8 +70,7 @@ By the end of this video, viewers will be able to:
 **[VISUAL: End-to-end architecture diagram]**
 
 **Complete IoT Architecture**:
-```
-IoT Devices → IoT Hub → Event Hubs Endpoint → Stream Analytics/Synapse Spark
+```textIoT Devices → IoT Hub → Event Hubs Endpoint → Stream Analytics/Synapse Spark
                 ↓                                          ↓
           Device Management                         Delta Lake Storage
                 ↓                                          ↓
@@ -338,8 +343,7 @@ if __name__ == "__main__":
 **[RUN CODE, show console output]**
 
 **Console Output**:
-```
-Device connected to IoT Hub
+```textDevice connected to IoT Hub
 Sent: Temperature=23.45°C
 Sent: Temperature=27.12°C
 Sent: Temperature=31.78°C  [HIGH ALERT]
@@ -519,8 +523,7 @@ display(iot_stream.printSchema())
 ```
 
 **Schema Output**:
-```
-root
+```textroot
  |-- body: binary
  |-- partition: string
  |-- offset: long
@@ -879,8 +882,7 @@ WHERE
 **[VISUAL: Navigate to IoT Hub Metrics]**
 
 **Key Metrics**:
-```
-Telemetry Messages Sent: 1.2M messages/day
+```textTelemetry Messages Sent: 1.2M messages/day
 Connected Devices: 1,547 devices
 Device Twin Operations: 3,245 operations/hour
 Failed Operations: 12 (< 0.001%)
@@ -919,8 +921,7 @@ Routing Latency: 85ms (P50), 245ms (P95)
 **[VISUAL: Synapse Monitor hub]**
 
 **Streaming Job Health**:
-```
-Input Rate: 850 events/second
+```textInput Rate: 850 events/second
 Processing Rate: 850 events/second
 Watermark Delay: 2.5 seconds
 Backlog: 0 events
@@ -931,8 +932,7 @@ Failures: 0
 **Common Issues and Solutions**:
 
 **Issue 1: Watermark Delay Increasing**
-```
-Symptoms: Delay growing over time
+```textSymptoms: Delay growing over time
 Causes: Processing slower than ingestion
 Solutions:
   - Increase Spark executor count
@@ -941,8 +941,7 @@ Solutions:
 ```
 
 **Issue 2: Missing Device Data**
-```
-Symptoms: Gaps in telemetry
+```textSymptoms: Gaps in telemetry
 Causes: Device connectivity issues
 Solutions:
   - Check device twin status
@@ -951,8 +950,7 @@ Solutions:
 ```
 
 **Issue 3: Schema Evolution**
-```
-Symptoms: Parse errors in Spark
+```textSymptoms: Parse errors in Spark
 Causes: Device firmware updated schema
 Solutions:
   - Enable schema merging in Delta Lake
@@ -1131,8 +1129,7 @@ def validate_iot_pipeline():
 **Title**: IoT Hub Integration with Azure Synapse Analytics - Complete Tutorial (2024)
 
 **Description**:
-```
-Build end-to-end IoT analytics pipelines! Learn to connect Azure IoT Hub with Synapse Analytics for real-time device telemetry processing and visualization.
+```textBuild end-to-end IoT analytics pipelines! Learn to connect Azure IoT Hub with Synapse Analytics for real-time device telemetry processing and visualization.
 
 🎯 What You'll Learn:
 ✅ IoT Hub setup and device management

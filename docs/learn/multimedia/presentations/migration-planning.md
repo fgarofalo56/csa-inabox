@@ -1,3 +1,9 @@
+---
+title: "Migration Planning - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 📊 Migration Planning - CSA-in-a-Box
 
 ![Type: Technical](https://img.shields.io/badge/Type-Technical-blue)

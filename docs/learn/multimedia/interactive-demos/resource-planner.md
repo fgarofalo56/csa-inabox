@@ -1,3 +1,9 @@
+---
+title: "Resource Planner - Interactive Capacity Calculator"
+tags:
+  - multimedia
+  - demos
+---
 # 📊 Resource Planner - Interactive Capacity Calculator
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)

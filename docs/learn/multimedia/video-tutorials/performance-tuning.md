@@ -1,3 +1,9 @@
+---
+title: "Video Script: Performance Tuning for Azure Synapse"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Performance Tuning for Azure Synapse
 
 ![Duration: 32 minutes](https://img.shields.io/badge/Duration-32%20minutes-blue)

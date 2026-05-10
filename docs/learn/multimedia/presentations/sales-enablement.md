@@ -1,3 +1,9 @@
+---
+title: "Sales Enablement - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 📊 Sales Enablement - CSA-in-a-Box
 
 ![Type: Sales](https://img.shields.io/badge/Type-Sales-blue)

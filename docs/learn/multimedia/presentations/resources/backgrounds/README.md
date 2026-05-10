@@ -1,3 +1,11 @@
+---
+title: "Backgrounds Resources - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+  - resources
+  - backgrounds
+---
 # 📚 Backgrounds Resources - CSA-in-a-Box
 
 ![Type: Resources](https://img.shields.io/badge/Type-Resources-blue)

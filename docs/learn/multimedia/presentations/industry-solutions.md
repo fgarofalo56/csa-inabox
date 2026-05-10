@@ -1,3 +1,9 @@
+---
+title: "Industry Solutions - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 📊 Industry Solutions - CSA-in-a-Box
 
 ![Type: Vertical](https://img.shields.io/badge/Type-Vertical-blue)

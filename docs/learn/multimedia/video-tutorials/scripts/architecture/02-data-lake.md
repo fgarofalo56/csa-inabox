@@ -1,3 +1,11 @@
+---
+title: "Data Lake Architecture Video Script"
+tags:
+  - multimedia
+  - video
+  - scripts
+  - architecture
+---
 # Data Lake Architecture Video Script
 
 ![Status: Draft](https://img.shields.io/badge/Status-Draft-yellow)
@@ -18,8 +26,7 @@ Comprehensive video script covering Azure Data Lake Storage Gen2 architecture, m
 
 #### Bronze Layer (Raw)
 
-```
-bronze/
+```textbronze/
 ├── source_system_1/
 │   ├── 2024/
 │   │   ├── 01/
@@ -73,8 +80,7 @@ GROUP BY date_key, customer_segment;
 
 #### Partitioning Strategy
 
-```
-/data/sales/
+```text/data/sales/
     year=2024/
         month=01/
             day=01/

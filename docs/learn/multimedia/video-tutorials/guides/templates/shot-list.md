@@ -1,3 +1,10 @@
+---
+title: "Video Shot List Template"
+tags:
+  - multimedia
+  - video
+  - templates
+---
 # Video Shot List Template
 
 ![Type: Template](https://img.shields.io/badge/Type-Template-blue)

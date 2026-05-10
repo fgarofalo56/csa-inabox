@@ -1,3 +1,9 @@
+---
+title: "Conference Talks - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 📊 Conference Talks - CSA-in-a-Box
 
 ![Type: Public](https://img.shields.io/badge/Type-Public-blue)

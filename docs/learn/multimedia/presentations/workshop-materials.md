@@ -1,3 +1,9 @@
+---
+title: "Workshop Materials - CSA-in-a-Box"
+tags:
+  - multimedia
+  - presentations
+---
 # 📊 Workshop Materials - CSA-in-a-Box
 
 ![Type: Workshop](https://img.shields.io/badge/Type-Workshop-blue)

@@ -1,3 +1,9 @@
+---
+title: "Video Script: Azure Data Factory Pipeline Creation"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Azure Data Factory Pipeline Creation
 
 ![Duration: 30 minutes](https://img.shields.io/badge/Duration-30%20minutes-blue)
@@ -386,8 +392,7 @@ By the end of this video, viewers will be able to:
 **[VISUAL: Create new Data Flow]**
 
 **Transformation Example**:
-```
-Source (Customers)
+```textSource (Customers)
   → Filter (created_date >= $StartDate)
   → DerivedColumn (full_name = concat(first_name, ' ', last_name))
   → AggregateByRegion (count customers by region)
@@ -773,8 +778,7 @@ WHERE table_name = 'Customers'
 **Title**: Azure Data Factory Pipelines - Complete Tutorial from Scratch (2024)
 
 **Description**:
-```
-Master Azure Data Factory pipeline creation! This 30-minute comprehensive tutorial shows you how to build production-ready ETL pipelines with monitoring, error handling, and automation.
+```textMaster Azure Data Factory pipeline creation! This 30-minute comprehensive tutorial shows you how to build production-ready ETL pipelines with monitoring, error handling, and automation.
 
 🎯 What You'll Learn:
 ✅ Linked services and dataset configuration

@@ -1,3 +1,9 @@
+---
+title: "Video Script: Advanced Azure Synapse Features"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Advanced Azure Synapse Features
 
 ![Duration: 30 minutes](https://img.shields.io/badge/Duration-30%20minutes-blue)
@@ -276,8 +282,7 @@ daily_metrics.write \
 **[VISUAL: Show repository structure]**
 
 **Repository Structure**:
-```
-synapse-workspace/
+```textsynapse-workspace/
 ├── sqlscript/
 │   ├── DailyETL.json
 │   └── SalesReport.json

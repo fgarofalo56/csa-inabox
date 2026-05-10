@@ -1,3 +1,10 @@
+---
+title: "Video Review Checklist Template"
+tags:
+  - multimedia
+  - video
+  - templates
+---
 # Video Review Checklist Template
 
 ![Type: Template](https://img.shields.io/badge/Type-Template-blue)

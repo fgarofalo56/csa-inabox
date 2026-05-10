@@ -1,3 +1,9 @@
+---
+title: "Video Script: Power BI Reporting with Azure Synapse"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Power BI Reporting with Azure Synapse
 
 ![Duration: 22 minutes](https://img.shields.io/badge/Duration-22%20minutes-blue)
@@ -36,8 +42,7 @@
 
 #### DirectQuery Connection (1:00 - 3:00)
 
-```
-Power BI Desktop Steps:
+```textPower BI Desktop Steps:
 1. Home → Get Data → Azure → Azure Synapse Analytics SQL
 2. Server: mysynapse.sql.azuresynapse.net
 3. Database: DW
@@ -47,8 +52,7 @@ Power BI Desktop Steps:
 ```
 
 **Connection String**:
-```
-Data Source=mysynapse.sql.azuresynapse.net;
+```textData Source=mysynapse.sql.azuresynapse.net;
 Initial Catalog=DW;
 Authentication=Active Directory Integrated;
 ```
@@ -66,8 +70,7 @@ Authentication=Active Directory Integrated;
 - Offline access
 
 **Composite Model** (Best of both):
-```
-Large fact tables: DirectQuery
+```textLarge fact tables: DirectQuery
 Small dimensions: Import
 Aggregations: Import
 ```
@@ -320,8 +323,7 @@ RETURN MarginPct
 
 #### Publish to Service (20:00 - 21:00)
 
-```
-Steps:
+```textSteps:
 1. File → Publish → Publish to Power BI
 2. Select workspace
 3. Configure refresh schedule
@@ -332,8 +334,7 @@ Steps:
 
 #### Performance Monitoring (21:00 - 22:00)
 
-```
-Power BI Service:
+```textPower BI Service:
 1. Workspace settings → Premium capacity metrics
 2. Monitor query duration
 3. Review refresh history

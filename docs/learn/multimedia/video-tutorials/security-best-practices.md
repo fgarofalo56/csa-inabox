@@ -1,3 +1,9 @@
+---
+title: "Video Script: Security Best Practices for Azure Synapse Analytics"
+tags:
+  - multimedia
+  - video
+---
 # Video Script: Security Best Practices for Azure Synapse Analytics
 
 ![Duration: 32 minutes](https://img.shields.io/badge/Duration-32%20minutes-blue)
@@ -165,8 +171,7 @@ By the end of this video, viewers will be able to:
 **[VISUAL: Network diagram showing private connectivity]**
 
 **Private Link Architecture**:
-```
-On-Premises Network
+```textOn-Premises Network
     ↓ (ExpressRoute/VPN)
 Azure Virtual Network
     ↓ (Private Endpoint)
@@ -738,8 +743,7 @@ SELECT * FROM Users WHERE Username = 'admin' OR '1'='1'
 ```
 
 **Data Exfiltration Alert**:
-```
-Alert: Unusual volume of data exported
+```textAlert: Unusual volume of data exported
 User: analyst@contoso.com
 Rows Extracted: 10,000,000 (10x normal)
 Time: 2024-01-15 02:30 AM
@@ -903,8 +907,7 @@ Action Required: Investigate and confirm legitimacy
 **[VISUAL: Security Center dashboard]**
 
 **Automated Recommendations**:
-```
-High Priority:
+```textHigh Priority:
 - Enable Advanced Threat Protection on Synapse workspaces
 - Remediate vulnerabilities in SQL databases
 - Enable diagnostic logs for Synapse workspaces
@@ -1026,8 +1029,7 @@ Low Priority:
 **Title**: Azure Synapse Analytics Security Best Practices - Complete Enterprise Guide (2024)
 
 **Description**:
-```
-Secure your Azure Synapse workspace! Comprehensive guide to enterprise security including network isolation, encryption, access control, auditing, and compliance.
+```textSecure your Azure Synapse workspace! Comprehensive guide to enterprise security including network isolation, encryption, access control, auditing, and compliance.
 
 🎯 What You'll Learn:
 ✅ Network security with Private Link
