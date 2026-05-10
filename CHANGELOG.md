@@ -10,6 +10,23 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.6.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.1...csa-inabox-v0.6.2) (2026-05-10)
+
+
+### Documentation
+
+* **learn:** import comprehensive Azure analytics reference library ([#215](https://github.com/fgarofalo56/csa-inabox/issues/215)) ([b1933f6](https://github.com/fgarofalo56/csa-inabox/commit/b1933f6062f3f62e744289c53af870bb94383602))
+
+
+### Miscellaneous
+
+* **deps-dev:** Bump @types/node in /portal/react-webapp ([#210](https://github.com/fgarofalo56/csa-inabox/issues/210)) ([8f0ee49](https://github.com/fgarofalo56/csa-inabox/commit/8f0ee4915b7a9a7e2a8bfb85e6980871fab5cdfc))
+* **deps-dev:** Bump jest-environment-jsdom in /portal/react-webapp ([#208](https://github.com/fgarofalo56/csa-inabox/issues/208)) ([b085c6a](https://github.com/fgarofalo56/csa-inabox/commit/b085c6a154f6d9eefb57848023f7f8ce0683ee12))
+* **deps-dev:** Update cryptography requirement ([#213](https://github.com/fgarofalo56/csa-inabox/issues/213)) ([d627d72](https://github.com/fgarofalo56/csa-inabox/commit/d627d72a4228605b4d311cb522ddf469d20509e6))
+* **deps-dev:** Update mypy requirement ([#212](https://github.com/fgarofalo56/csa-inabox/issues/212)) ([a7e6987](https://github.com/fgarofalo56/csa-inabox/commit/a7e6987500677416bbb7f53dc3525cc283902f5f))
+* **deps:** Bump axios from 1.15.2 to 1.16.0 in /portal/react-webapp ([#205](https://github.com/fgarofalo56/csa-inabox/issues/205)) ([e80d0a7](https://github.com/fgarofalo56/csa-inabox/commit/e80d0a77fa46e99af0d4ce6ee33fe3028049b16b))
+* **deps:** Bump next from 16.2.4 to 16.2.6 in /portal/react-webapp ([#207](https://github.com/fgarofalo56/csa-inabox/issues/207)) ([fc7bf90](https://github.com/fgarofalo56/csa-inabox/commit/fc7bf908c31a6278ec6a3ce105c2c62560624ef1))
+
 ## [0.6.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.0...csa-inabox-v0.6.1) (2026-05-08)
 
 
