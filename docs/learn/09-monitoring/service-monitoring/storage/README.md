@@ -1,6 +1,6 @@
 ---
 title: "Storage Monitoring"
-description: "> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **Storage Monitoring**"
+description: "> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **Storage Monitoring**"
 tags:
   - monitoring
   - service-monitoring
@@ -8,7 +8,7 @@ tags:
 ---
 # Storage Monitoring
 
-> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **Storage Monitoring**
+> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **Storage Monitoring**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Service](https://img.shields.io/badge/Service-Azure%20Storage-blue?style=flat-square)
@@ -291,9 +291,9 @@ StorageBlobLogs
 
 ## Related Documentation
 
-- [Data Lake Architecture](../../../architecture/delta-lakehouse/README.md)
-- [Cost Optimization](../../../best-practices/cost-optimization/README.md)
-- [Security Best Practices](../../../best-practices/security/README.md)
+- [Data Lake Architecture](../../../03-architecture-patterns/service-architectures/delta-lakehouse/README.md)
+- [Cost Optimization](../../../best-practices-extra/cost-optimization/README.md)
+- [Security Best Practices](../../../best-practices-extra/security/README.md)
 
 ---
 

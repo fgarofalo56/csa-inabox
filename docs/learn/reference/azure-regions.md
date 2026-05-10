@@ -1,12 +1,12 @@
 ---
 title: "Azure Regions Reference for Synapse Analytics"
-description: "[Home](../../README.md) > [Reference](README.md) > Azure Regions"
+description: "[Home](../index.md) > [Reference](README.md) > Azure Regions"
 tags:
   - reference
 ---
 # Azure Regions Reference for Synapse Analytics
 
-[Home](../../README.md) > [Reference](README.md) > Azure Regions
+[Home](../index.md) > [Reference](README.md) > Azure Regions
 
 > Comprehensive reference guide for Azure region selection, availability, disaster recovery planning, and performance optimization for Azure Synapse Analytics deployments.
 
@@ -868,9 +868,9 @@ class RegionMigration:
 ## Related Resources
 
 - [Regional Compliance Guide](regional-compliance.md)
-- [Network Security Best Practices](../best-practices/network-security.md)
-- [Disaster Recovery Planning](../architecture/README.md)
-- [Cost Optimization Guide](../best-practices/cost-optimization.md)
+- [Network Security Best Practices](../05-best-practices/cross-cutting-concerns/networking/network-security.md)
+- [Disaster Recovery Planning](../03-architecture-patterns/reference-architectures/README.md)
+- [Cost Optimization Guide](../best-practices-extra/cost-optimization/README.md)
 - [Azure Products by Region](https://azure.microsoft.com/en-us/global-infrastructure/services/)
 - [Azure Regional Pairs](https://docs.microsoft.com/en-us/azure/availability-zones/cross-region-replication-azure)
 

@@ -42,5 +42,5 @@ Azure Cosmos DB is a globally distributed, multi-model database service. This gu
 
 ## Related Resources
 
-- [Cosmos DB Documentation](../../02-services/storage-services/azure-cosmos-db/README.md)
-- [Performance Best Practices](../../05-best-practices/cross-cutting-concerns/performance/README.md)
+- [Cosmos DB Documentation](../../../02-services/storage-services/azure-cosmos-db/README.md)
+- [Performance Best Practices](../../../05-best-practices/cross-cutting-concerns/performance/README.md)

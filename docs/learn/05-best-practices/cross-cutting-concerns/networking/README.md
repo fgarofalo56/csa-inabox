@@ -1,13 +1,13 @@
 ---
 title: "Networking Best Practices"
-description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Networking**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Networking**"
 tags:
   - best-practices
   - networking
 ---
 # Networking Best Practices
 
-> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Networking**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Networking**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Networking-blue?style=flat-square)
@@ -24,8 +24,8 @@ Network architecture and security best practices for Azure analytics platforms.
 
 ## Related Documentation
 
-- [Network Security](../../../../best-practices/network-security/README.md)
-- [Private Link Architecture](../../../../architecture/private-link-architecture/README.md)
+- [Network Security](../../../best-practices-extra/network-security/README.md)
+- Private Link Architecture
 
 ---
 

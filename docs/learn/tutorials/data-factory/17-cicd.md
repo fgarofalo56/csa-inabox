@@ -110,7 +110,7 @@ stages:
 ## 📚 Additional Resources
 
 - [ADF CI/CD Documentation](https://docs.microsoft.com/azure/data-factory/continuous-integration-deployment)
-- [DevOps Guide](../../devops/pipeline-ci-cd.md)
+- [DevOps Guide](../../10-devops/pipeline-ci-cd.md)
 
 ## 🚀 Next Steps
 

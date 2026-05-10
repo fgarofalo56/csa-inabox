@@ -832,7 +832,7 @@ FROM
 ## Additional Resources
 
 - [Stream Analytics Documentation](../../../02-services/streaming-services/azure-stream-analytics/README.md)
-- [Best Practices](../../../best-practices/README.md)
+- [Best Practices](../../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 - [Query Language Reference](https://docs.microsoft.com/stream-analytics-query/stream-analytics-query-language-reference)
 
 ---

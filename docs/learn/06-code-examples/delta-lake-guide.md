@@ -1,12 +1,12 @@
 ---
 title: "Comprehensive Delta Lake Guide for Azure Synapse Analytics"
-description: "[Home](../../README.md) > Code Examples > Delta Lake Guide"
+description: "[Home](../index.md) > Code Examples > Delta Lake Guide"
 tags:
   - code-examples
 ---
 # Comprehensive Delta Lake Guide for Azure Synapse Analytics
 
-[Home](../../README.md) > Code Examples > Delta Lake Guide
+[Home](../index.md) > Code Examples > Delta Lake Guide
 
 !!! info "Guide Overview"
     This comprehensive guide provides detailed examples for working with Delta Lake in Azure Synapse Analytics, covering data ingestion, change data capture, and table optimization techniques.
@@ -446,6 +446,6 @@ spark.sql(f"DESCRIBE HISTORY delta.`{delta_table_path}`").show(truncate=False)
 
 ## Related Topics
 
-- [Serverless SQL with Delta Lake](../serverless-sql/README.md)
+- Serverless SQL with Delta Lake
 - [Integration with Azure ML](integration/azure-ml.md)
-- [Delta Lake Architecture Overview](../../architecture/delta-lakehouse/README.md)
+- [Delta Lake Architecture Overview](../03-architecture-patterns/service-architectures/delta-lakehouse/README.md)

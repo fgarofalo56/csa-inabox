@@ -869,7 +869,7 @@ spark.sql("""
 
 - [**Azure Databricks Overview**](../README.md)
 - [**Delta Live Tables**](../delta-live-tables/README.md)
-- [**Security Best Practices**](../../../../05-best-practices/cross-cutting-concerns/security/unity-catalog-security.md)
+- **Security Best Practices**
 - [**Data Governance Patterns**](../../../../03-architecture-patterns/governance-patterns/README.md)
 
 ---

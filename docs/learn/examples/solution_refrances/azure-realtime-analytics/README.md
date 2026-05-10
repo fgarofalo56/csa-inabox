@@ -68,20 +68,20 @@ This repository contains the complete architectural documentation, implementatio
 Start by reviewing the [Architecture Overview](docs/architecture/overview.md) to understand the system design and components.
 
 ### 2️⃣ Implementation
-Follow the [Deployment Guide](docs/implementation/deployment-guide.md) for step-by-step implementation instructions.
+Follow the Deployment Guide for step-by-step implementation instructions.
 
 ### 3️⃣ Monitoring Setup
-Configure monitoring using the [Monitoring Setup Guide](docs/operations/monitoring.md) to ensure operational excellence.
+Configure monitoring using the Monitoring Setup Guide to ensure operational excellence.
 
 ## 📊 Interactive Diagrams
 
 Explore the complete architecture through interactive diagrams:
 
-- **[Technical Architecture & Data Flow](diagrams/clean-architecture-diagrams.html)** - Complete system overview
-- **[Azure Service Icons](diagrams/clean-azure-architecture.html)** - Service-level architecture
-- **[Databricks Components](diagrams/clean-databricks-architecture.html)** - Platform deep dive
-- **[Security & Network](diagrams/clean-security-network.html)** - Zero-trust security model
-- **[Monitoring Dashboard](diagrams/monitoring-dashboard.html)** - Real-time operations view
+- **Technical Architecture & Data Flow** - Complete system overview
+- **Azure Service Icons** - Service-level architecture
+- **Databricks Components** - Platform deep dive
+- **Security & Network** - Zero-trust security model
+- **Monitoring Dashboard** - Real-time operations view
 
 ## 🔒 Security & Compliance
 
@@ -111,7 +111,7 @@ This platform implements **Zero Trust Architecture** with comprehensive security
 - **Network Utilization**: 4.2GB/s sustained throughput
 - **Auto-scaling**: Dynamic based on demand
 
-[→ View Performance Details](docs/operations/monitoring.md)
+→ View Performance Details
 
 ## 🛠️ Implementation Guides
 
@@ -121,9 +121,9 @@ This platform implements **Zero Trust Architecture** with comprehensive security
 | [📊 Data Flow Design](docs/architecture/data-flow.md) | Real-time and batch processing | Data Engineers |
 | [🔧 Component Details](docs/architecture/components.md) | Databricks platform architecture | Platform Engineers |
 | [🔒 Security Implementation](docs/architecture/security.md) | Zero-trust security model | Security Teams |
-| [🚀 Deployment Guide](docs/implementation/deployment-guide.md) | Step-by-step implementation | DevOps, Deployment Teams |
+| 🚀 Deployment Guide | Step-by-step implementation | DevOps, Deployment Teams |
 | [📊 Power BI Integration](docs/implementation/power-bi-integration.md) | Business intelligence setup | BI Developers |
-| [📈 Monitoring Setup](docs/operations/monitoring.md) | Observability and alerting | Operations, SRE Teams |
+| 📈 Monitoring Setup | Observability and alerting | Operations, SRE Teams |
 
 ## 🔧 Operations & Maintenance
 
@@ -139,7 +139,7 @@ This platform implements **Zero Trust Architecture** with comprehensive security
 - **Quarterly**: Architecture review and capacity planning
 - **Annually**: Full disaster recovery testing
 
-[→ View Operations Guide](docs/operations/maintenance.md)
+→ View Operations Guide
 
 ## 🤝 Contributing
 
@@ -177,8 +177,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**🚀 Ready to get started?** Begin with the [Architecture Overview](docs/architecture/overview.md) or jump directly to the [Quick Start Guide](docs/implementation/deployment-guide.md).
+**🚀 Ready to get started?** Begin with the [Architecture Overview](docs/architecture/overview.md) or jump directly to the Quick Start Guide.
 
-**📊 Want to see it in action?** Explore the [Interactive Diagrams](diagrams/) or view the [Live Monitoring Dashboard](diagrams/monitoring-dashboard.html).
+**📊 Want to see it in action?** Explore the [Interactive Diagrams](diagrams/) or view the Live Monitoring Dashboard.
 
-**🔒 Security focused?** Review our [Zero Trust Implementation](docs/architecture/security.md) and [Compliance Framework](docs/resources/security-guidelines.md).
+**🔒 Security focused?** Review our [Zero Trust Implementation](docs/architecture/security.md) and Compliance Framework.

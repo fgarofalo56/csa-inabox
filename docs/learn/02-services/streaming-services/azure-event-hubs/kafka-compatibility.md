@@ -572,9 +572,9 @@ if __name__ == "__main__":
 
 ### Best Practices
 
-- [__Migration Strategies__](../../../05-best-practices/migration/kafka-to-eventhubs.md)
-- [__Performance Tuning__](../../../05-best-practices/cross-cutting-concerns/performance/kafka-eventhubs-optimization.md)
-- [__Security Hardening__](../../../05-best-practices/cross-cutting-concerns/security/kafka-security.md)
+- __Migration Strategies__
+- __Performance Tuning__
+- __Security Hardening__
 
 ### External Resources
 

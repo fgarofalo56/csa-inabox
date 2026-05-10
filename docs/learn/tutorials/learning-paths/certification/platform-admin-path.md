@@ -1,6 +1,6 @@
 ---
 title: "= AZ-104: Azure Administrator Associate Certification Prep"
-description: "> **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= AZ-104 Certification**"
+description: "> **< [Home](../../../index.md)** | **= [Documentation](../../../index.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= AZ-104 Certification**"
 tags:
   - tutorials
   - learning-paths
@@ -8,7 +8,7 @@ tags:
 ---
 # = AZ-104: Azure Administrator Associate Certification Prep
 
-> **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= AZ-104 Certification**
+> **< [Home](../../../index.md)** | **= [Documentation](../../../index.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= AZ-104 Certification**
 
 ![Certification](https://img.shields.io/badge/Certification-AZ--104-blue)
 ![Level](https://img.shields.io/badge/Level-Associate-green)
@@ -84,8 +84,8 @@ While AZ-104 covers general Azure administration, this guide emphasizes skills c
 
 **CSA In-a-Box Coverage:**
 -  [Workspace Management](../../../administration/workspace-management.md)
--  [Security Best Practices](../../../best-practices/security.md)
--  [Cost Optimization](../../../best-practices/cost-optimization.md)
+-  [Security Best Practices](../../../best-practices-extra/security/README.md)
+-  [Cost Optimization](../../../best-practices-extra/cost-optimization/README.md)
 
 ---
 
@@ -110,9 +110,9 @@ While AZ-104 covers general Azure administration, this guide emphasizes skills c
 - Manage blob access tiers (hot, cool, archive)
 
 **CSA In-a-Box Coverage:**
--  [Architecture Overview](../../../architecture/README.md)
--  [Delta Lakehouse Storage](../../../architecture/delta-lakehouse/README.md)
--  [Best Practices](../../../best-practices/README.md)
+-  [Architecture Overview](../../../03-architecture-patterns/reference-architectures/README.md)
+-  [Delta Lakehouse Storage](../../../03-architecture-patterns/service-architectures/delta-lakehouse/README.md)
+-  [Best Practices](../../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 
 ---
 
@@ -135,7 +135,7 @@ While AZ-104 covers general Azure administration, this guide emphasizes skills c
 
 **CSA In-a-Box Coverage:**
 -  [Infrastructure Setup](../../../reference/README.md)
--  [Deployment Patterns](../../../devops/README.md)
+-  [Deployment Patterns](../../../10-devops/README.md)
 
 ---
 
@@ -159,9 +159,9 @@ While AZ-104 covers general Azure administration, this guide emphasizes skills c
 - Implement private DNS zones for private endpoints
 
 **CSA In-a-Box Coverage:**
--  [Private Link Architecture](../../../architecture/private-link-architecture.md)
--  [Network Security](../../../best-practices/network-security.md)
--  [Security Monitoring](../../../monitoring/security-monitoring.md)
+-  [Private Link Architecture](../../../03-architecture-patterns/service-architectures/private-link-architecture.md)
+-  [Network Security](../../../05-best-practices/cross-cutting-concerns/networking/network-security.md)
+-  [Security Monitoring](../../../09-monitoring/security-monitoring.md)
 
 ---
 
@@ -186,10 +186,10 @@ While AZ-104 covers general Azure administration, this guide emphasizes skills c
 - Implement monitoring dashboards
 
 **CSA In-a-Box Coverage:**
--  [Monitoring Setup](../../../monitoring/monitoring-setup.md)
--  [Spark Monitoring](../../../monitoring/spark-monitoring.md)
--  [SQL Monitoring](../../../monitoring/sql-monitoring.md)
--  [Security Monitoring](../../../monitoring/security-monitoring.md)
+-  [Monitoring Setup](../../../09-monitoring/monitoring-setup.md)
+-  [Spark Monitoring](../../../09-monitoring/spark-monitoring.md)
+-  [SQL Monitoring](../../../09-monitoring/sql-monitoring.md)
+-  [Security Monitoring](../../../09-monitoring/security-monitoring.md)
 
 ## < Study Plan for Analytics Administrators
 
@@ -348,20 +348,20 @@ Final preparation and exam readiness verification.
 
 **Administration Guides:**
 - [Workspace Management](../../../administration/workspace-management.md)
-- [Monitoring Setup](../../../monitoring/README.md)
-- [Security Best Practices](../../../best-practices/security.md)
-- [Network Security](../../../best-practices/network-security.md)
-- [Cost Optimization](../../../best-practices/cost-optimization.md)
+- [Monitoring Setup](../../../09-monitoring/README.md)
+- [Security Best Practices](../../../best-practices-extra/security/README.md)
+- [Network Security](../../../05-best-practices/cross-cutting-concerns/networking/network-security.md)
+- [Cost Optimization](../../../best-practices-extra/cost-optimization/README.md)
 
 **Architecture Documentation:**
-- [Architecture Overview](../../../architecture/README.md)
-- [Private Link Architecture](../../../architecture/private-link-architecture.md)
-- [Delta Lakehouse](../../../architecture/delta-lakehouse/README.md)
+- [Architecture Overview](../../../03-architecture-patterns/reference-architectures/README.md)
+- [Private Link Architecture](../../../03-architecture-patterns/service-architectures/private-link-architecture.md)
+- [Delta Lakehouse](../../../03-architecture-patterns/service-architectures/delta-lakehouse/README.md)
 
 **Operational Guides:**
-- [Troubleshooting](../../../troubleshooting/README.md)
-- [Performance Optimization](../../../best-practices/performance-optimization.md)
-- [DevOps Practices](../../../devops/README.md)
+- [Troubleshooting](../../../07-troubleshooting/README.md)
+- [Performance Optimization](../../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+- [DevOps Practices](../../../10-devops/README.md)
 
 ### Practice Tests & Assessments
 

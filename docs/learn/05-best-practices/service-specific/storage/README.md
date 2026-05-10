@@ -1,13 +1,13 @@
 ---
 title: "Storage Best Practices"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **Storage**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **Storage**"
 tags:
   - best-practices
   - storage
 ---
 # Storage Best Practices
 
-> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **Storage**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **Storage**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Service](https://img.shields.io/badge/Service-Azure%20Storage-blue?style=flat-square)
@@ -178,8 +178,8 @@ az storage fs access set \
 ## Related Documentation
 
 - [Storage Monitoring](../../../09-monitoring/service-monitoring/storage/README.md)
-- [Data Governance](../../data-governance/README.md)
-- [Security Best Practices](../../security/README.md)
+- [Data Governance](../../../best-practices-extra/data-governance/README.md)
+- [Security Best Practices](../../../best-practices-extra/security/README.md)
 
 ---
 

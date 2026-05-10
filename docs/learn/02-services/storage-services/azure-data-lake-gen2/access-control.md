@@ -578,7 +578,7 @@ def enable_diagnostic_logging():
 - [Hierarchical Namespace Overview](hierarchical-namespace.md)
 - [Performance Optimization](performance-optimization.md)
 - [Data Lifecycle Management](data-lifecycle.md)
-- [Security Best Practices](../../../05-best-practices/cross-cutting-concerns/security/storage-security.md)
+- Security Best Practices
 
 ---
 

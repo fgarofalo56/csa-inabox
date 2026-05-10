@@ -216,7 +216,7 @@ const architectureBuilder = {
 
 ### 💰 Cost Calculator Tool
 
-__[Open Cost Calculator](./demos/cost-calculator/index.html)__
+__Open Cost Calculator__
 
 Interactive calculator for estimating Azure Synapse Analytics costs.
 
@@ -299,7 +299,7 @@ Interactive calculator for estimating Azure Synapse Analytics costs.
 
 ### 🎯 Query Optimizer Playground
 
-__[Try Query Optimizer](./demos/query-optimizer/index.html)__
+__Try Query Optimizer__
 
 Interactive SQL query optimization tool with real-time performance analysis.
 
@@ -353,13 +353,13 @@ class QueryOptimizer {
 
 ### 🔄 Pipeline Designer
 
-__[Open Pipeline Designer](./demos/pipeline-designer/index.html)__
+__Open Pipeline Designer__
 
 Visual pipeline designer for Azure Data Factory workflows.
 
 ### 📊 Data Flow Simulator
 
-__[Launch Data Flow Simulator](./demos/data-flow-simulator/index.html)__
+__Launch Data Flow Simulator__
 
 Simulate and visualize data flows through your architecture.
 
@@ -527,7 +527,7 @@ graph TD
 
 ### Implementation Wizard
 
-__[Launch Implementation Wizard](./demos/implementation-wizard/index.html)__
+__Launch Implementation Wizard__
 
 Step-by-step guided setup for common scenarios:
 
@@ -615,7 +615,7 @@ class PerformanceCalculator {
 
 ### Resource Sizing Calculator
 
-__[Open Resource Calculator](./demos/resource-calculator/index.html)__
+__Open Resource Calculator__
 
 Calculate optimal resource allocation based on workload characteristics.
 

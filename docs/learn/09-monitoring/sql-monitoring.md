@@ -1,12 +1,12 @@
 ---
 title: "Sql Monitoring"
-description: "[Home](../../README.md) > Monitoring > SQL Monitoring"
+description: "[Home](../index.md) > Monitoring > SQL Monitoring"
 tags:
   - monitoring
 ---
 # Sql Monitoring
 
-[Home](../../README.md) > Monitoring > SQL Monitoring
+[Home](../index.md) > Monitoring > SQL Monitoring
 
 ## Overview
 
@@ -48,7 +48,7 @@ This document provides comprehensive guidance on sql monitoring.
 ## Related Resources
 
 - [Azure Synapse Analytics Documentation](https://docs.microsoft.com/azure/synapse-analytics/)
-- [Best Practices Overview](../best-practices/README.md)
+- [Best Practices Overview](../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 
 ## Next Steps
 

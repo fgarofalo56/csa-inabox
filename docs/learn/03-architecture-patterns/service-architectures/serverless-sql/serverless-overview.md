@@ -1,6 +1,6 @@
 ---
 title: "Azure Synapse Serverless SQL Architecture"
-description: "[Home](../../../README.md) > [Architecture](../../README.md) > Serverless SQL > Overview"
+description: "[Home](../../../index.md) > [Architecture](../../README.md) > Serverless SQL > Overview"
 tags:
   - architecture
   - service-architectures
@@ -8,7 +8,7 @@ tags:
 ---
 # Azure Synapse Serverless SQL Architecture
 
-[Home](../../../README.md) > [Architecture](../../README.md) > Serverless SQL > Overview
+[Home](../../../index.md) > [Architecture](../../README.md) > Serverless SQL > Overview
 
 ## Overview
 
@@ -127,6 +127,6 @@ GROUP BY customer_id
 ## Next Steps
 
 1. [Shared Metadata Architecture](../shared-metadata/README.md)
-2. [Best Practices](../../best-practices/README.md)
-3. [Code Examples](../../code-examples/README.md)
-4. [Security Guide](../../reference/security.md)
+2. Best Practices
+3. Code Examples
+4. [Security Guide](../../../reference/security.md)

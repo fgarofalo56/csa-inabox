@@ -804,9 +804,9 @@ FROM delta.`/path/to/table/_delta_log`;
 ---
 
 **Related Documentation**:
-- [Delta Lake Guide](../../code-examples/delta-lake-guide.md)
-- [Performance Optimization](../../best-practices/performance-optimization.md)
-- [Data Quality Patterns](../../best-practices/data-governance.md)
+- [Delta Lake Guide](../../06-code-examples/delta-lake-guide.md)
+- [Performance Optimization](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+- [Data Quality Patterns](../../best-practices-extra/data-governance/README.md)
 
 ---
 

@@ -775,7 +775,7 @@ resource streamAnalyticsJob 'Microsoft.StreamAnalytics/streamingjobs@2021-10-01-
 ## 📚 Related Resources
 
 - [Lambda Architecture](../streaming-architectures/lambda-architecture.md)
-- [Time-Series Patterns](../../best-practices/performance-optimization.md)
+- [Time-Series Patterns](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
 - [Edge Computing Guide](../../tutorials/README.md)
 
 ---

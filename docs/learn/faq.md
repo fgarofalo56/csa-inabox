@@ -412,7 +412,7 @@ __See Also__: [Performance Optimization Guide](./05-best-practices/README.md)
 >
 > - ✅ __Yes, this answered my question__ - Great! Consider sharing with colleagues
 > - ❌ __No, I need more information__ - [Submit feedback](https://github.com/your-repo/issues/new?template=documentation-feedback.md)
-> - 💡 __I have a suggestion__ - [Contribute improvements](./guides/CONTRIBUTING_GUIDE.md)
+> - 💡 __I have a suggestion__ - Contribute improvements
 >
 > __Quick Feedback__: Rate this page
 >
@@ -442,7 +442,7 @@ __See Also__: [Performance Optimization Guide](./05-best-practices/README.md)
 > 2. __Check Troubleshooting Guides__: Review component-specific guides in [troubleshooting](./07-troubleshooting/README.md)
 > 3. __Community Forums__: Visit [Azure Synapse Community](https://techcommunity.microsoft.com/t5/azure-synapse-analytics/bd-p/AzureSynapseAnalytics)
 > 4. __Microsoft Support__: Contact [Azure Support](https://azure.microsoft.com/support/create-ticket/) for technical issues
-> 5. __Contribute__: Help improve this FAQ by [submitting suggestions](./guides/CONTRIBUTING_GUIDE.md)
+> 5. __Contribute__: Help improve this FAQ by submitting suggestions
 
 ---
 

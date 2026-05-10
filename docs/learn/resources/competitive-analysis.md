@@ -877,7 +877,7 @@ __Reasons__:
 
 ### Cost & ROI
 
-- [__Cost Optimization Best Practices__](../05-best-practices/cost-optimization.md)
+- [__Cost Optimization Best Practices__](../best-practices-extra/cost-optimization/README.md)
 - [__Azure Pricing Calculator__](https://azure.microsoft.com/pricing/calculator/)
 
 ---

@@ -1,13 +1,13 @@
 ---
 title: "Dedicated SQL Pool Best Practices"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Dedicated SQL**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Dedicated SQL**"
 tags:
   - best-practices
   - synapse
 ---
 # Dedicated SQL Pool Best Practices
 
-> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Dedicated SQL**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Dedicated SQL**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Service](https://img.shields.io/badge/Service-Dedicated%20SQL-purple?style=flat-square)
@@ -226,7 +226,7 @@ WHERE STATS_DATE(object_id, stats_id) < DATEADD(day, -7, GETDATE());
 ## Related Documentation
 
 - [Dedicated SQL Monitoring](../../../09-monitoring/service-monitoring/synapse/dedicated-monitoring.md)
-- [SQL Performance Guide](../../../best-practices/sql-performance/README.md)
+- [SQL Performance Guide](../../../best-practices-extra/sql-performance/README.md)
 - [Synapse Overview](../../../02-services/analytics-compute/azure-synapse/README.md)
 
 ---

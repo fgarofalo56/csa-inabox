@@ -1,13 +1,13 @@
 ---
 title: "Logic Apps Integration Solution"
-description: "> __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Logic Apps Integration__"
+description: "> __[Home](../../index.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Logic Apps Integration__"
 tags:
   - solutions
   - logic-apps-integration
 ---
 # Logic Apps Integration Solution
 
-> __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Logic Apps Integration__
+> __[Home](../../index.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Logic Apps Integration__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Beginner-green?style=flat-square)

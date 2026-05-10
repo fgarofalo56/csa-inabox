@@ -44,10 +44,10 @@ This repository contains the complete architecture documentation, implementation
 
 ### Quick Navigation
 
-- 📋 **[Architecture Overview](docs/architecture/overview.md)** - High-level system design
-- 🔄 **[Data Flow Architecture](docs/architecture/data-flow.md)** - Detailed data processing flow
-- 🔧 **[Component Architecture](docs/architecture/component-architecture.md)** - Databricks platform details
-- 🔒 **[Security & Network](docs/architecture/security-network.md)** - Zero-trust implementation
+- 📋 **[Architecture Overview](../docs/architecture/overview.md)** - High-level system design
+- 🔄 **[Data Flow Architecture](../docs/architecture/data-flow.md)** - Detailed data processing flow
+- 🔧 **Component Architecture** - Databricks platform details
+- 🔒 **Security & Network** - Zero-trust implementation
 - ⚡ **[Implementation Guides](docs/implementation/)** - Step-by-step setup instructions
 - 📊 **[Operations](docs/operations/)** - Monitoring, maintenance, and troubleshooting
 - 🛡️ **[Compliance](docs/compliance/)** - Security standards and audit procedures
@@ -214,9 +214,9 @@ Reserved Capacity:    30% for critical workloads
    ```
 
 3. **Follow implementation guides**
-   - [Databricks Setup](docs/implementation/databricks-setup.md)
-   - [Power BI Integration](docs/implementation/power-bi-integration.md)
-   - [Security Implementation](docs/implementation/security-implementation.md)
+   - Databricks Setup
+   - [Power BI Integration](../docs/implementation/power-bi-integration.md)
+   - Security Implementation
 
 4. **Configure monitoring**
    ```bash
@@ -228,25 +228,25 @@ Reserved Capacity:    30% for critical workloads
 ## 📚 Documentation
 
 ### Architecture Documentation
-- **[System Overview](docs/architecture/overview.md)** - High-level architecture and design principles
-- **[Data Flow](docs/architecture/data-flow.md)** - Detailed data processing pipeline
-- **[Components](docs/architecture/component-architecture.md)** - Individual component specifications
-- **[Security](docs/architecture/security-network.md)** - Security architecture and controls
+- **[System Overview](../docs/architecture/overview.md)** - High-level architecture and design principles
+- **[Data Flow](../docs/architecture/data-flow.md)** - Detailed data processing pipeline
+- **Components** - Individual component specifications
+- **Security** - Security architecture and controls
 
 ### Implementation Guides  
-- **[Power BI Integration](docs/implementation/power-bi-integration.md)** - Business intelligence setup
-- **[Databricks Configuration](docs/implementation/databricks-setup.md)** - Platform configuration
-- **[Monitoring Setup](docs/implementation/monitoring-setup.md)** - Observability implementation
-- **[Security Implementation](docs/implementation/security-implementation.md)** - Security controls
+- **[Power BI Integration](../docs/implementation/power-bi-integration.md)** - Business intelligence setup
+- **Databricks Configuration** - Platform configuration
+- **[Monitoring Setup](../../../../09-monitoring/monitoring-setup.md)** - Observability implementation
+- **Security Implementation** - Security controls
 
 ### Operations Guides
-- **[Monitoring Dashboards](docs/operations/monitoring-dashboards.md)** - Operations monitoring
-- **[Maintenance Procedures](docs/operations/maintenance-procedures.md)** - Routine maintenance
-- **[Troubleshooting](docs/operations/troubleshooting.md)** - Problem resolution
+- **[Monitoring Dashboards](../../../../multimedia/video-tutorials/monitoring-dashboards.md)** - Operations monitoring
+- **Maintenance Procedures** - Routine maintenance
+- **Troubleshooting** - Problem resolution
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+We welcome contributions! Please see CONTRIBUTING.md for guidelines.
 
 ### How to Contribute
 1. **Fork the repository**
@@ -291,10 +291,10 @@ For enterprise support, training, and customization services, contact our archit
 
 | Resource | Link | Description |
 |----------|------|-------------|
-| 📋 **Architecture** | [Overview](docs/architecture/overview.md) | System design and principles |
+| 📋 **Architecture** | [Overview](../docs/architecture/overview.md) | System design and principles |
 | 🚀 **Quick Start** | [Implementation](docs/implementation/) | Step-by-step setup guides |
-| 📊 **Monitoring** | [Dashboards](docs/operations/monitoring-dashboards.md) | Operations and monitoring |
-| 🔒 **Security** | [Standards](docs/compliance/security-standards.md) | Security and compliance |
+| 📊 **Monitoring** | [Dashboards](../../../../multimedia/video-tutorials/monitoring-dashboards.md) | Operations and monitoring |
+| 🔒 **Security** | Standards | Security and compliance |
 | 🎨 **Diagrams** | [Interactive](diagrams/) | Visual architecture documentation |
 | 💻 **Code** | [Examples](code/) | Implementation code and scripts |
 

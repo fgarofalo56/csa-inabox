@@ -787,5 +787,5 @@ Take a slow query and optimize it using statistics, indexes, and materialized vi
 ## Next Steps
 
 - Continue to [Tutorial 11: Power BI Integration](11-power-bi-integration.md)
-- Explore [SQL Performance Best Practices](../../best-practices/sql-performance.md)
-- Review [Dedicated SQL Troubleshooting](../../troubleshooting/dedicated-sql-troubleshooting.md)
+- Explore [SQL Performance Best Practices](../../best-practices-extra/sql-performance/README.md)
+- Review Dedicated SQL Troubleshooting

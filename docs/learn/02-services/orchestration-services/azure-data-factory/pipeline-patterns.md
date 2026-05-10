@@ -911,7 +911,7 @@ graph TB
 - [Data Flows Guide](data-flows/README.md)
 - [Integration Runtime](integration-runtime/README.md)
 - [CI/CD for Pipelines](ci-cd-pipelines.md)
-- [Best Practices](../../../best-practices/README.md)
+- [Best Practices](../../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 
 ---
 

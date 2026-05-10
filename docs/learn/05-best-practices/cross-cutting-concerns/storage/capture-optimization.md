@@ -1,13 +1,13 @@
 ---
 title: "Capture Optimization"
-description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Capture Optimization**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Capture Optimization**"
 tags:
   - best-practices
   - storage
 ---
 # Capture Optimization
 
-> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Capture Optimization**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Capture Optimization**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Storage-green?style=flat-square)
@@ -263,7 +263,7 @@ def apply_lifecycle_policy():
 
 ## Related Documentation
 
-- [Event Hubs Overview](../../../../02-services/streaming-services/azure-event-hubs/README.md)
+- [Event Hubs Overview](../../../02-services/streaming-services/azure-event-hubs/README.md)
 - [Event Hubs DR](../../operational-excellence/eventhub-dr.md)
 - [Storage Best Practices](../../service-specific/storage/README.md)
 

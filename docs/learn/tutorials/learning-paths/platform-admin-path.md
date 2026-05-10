@@ -100,8 +100,8 @@ __Security Best Practices:__
 
 __Resources:__
 
-- [Security Best Practices](../../../best-practices/security.md)
-- [Network Security](../../../best-practices/network-security.md)
+- [Security Best Practices](../../best-practices-extra/security/README.md)
+- [Network Security](../../05-best-practices/cross-cutting-concerns/networking/network-security.md)
 
 __Assessment Questions:__
 
@@ -150,7 +150,7 @@ __Network Architecture Example:__
 
 __Resources:__
 
-- [Private Link Architecture](../../../architecture/private-link-architecture.md)
+- [Private Link Architecture](../../03-architecture-patterns/service-architectures/private-link-architecture.md)
 
 __Assessment Questions:__
 
@@ -227,7 +227,7 @@ graph TD
 
 __Resources:__
 
-- [Azure Purview Integration](../../../code-examples/integration/azure-purview.md)
+- [Azure Purview Integration](../../06-code-examples/integration/azure-purview.md)
 
 __Assessment Questions:__
 
@@ -269,9 +269,9 @@ __Critical Metrics to Monitor:__
 
 __Resources:__
 
-- [Monitoring Setup](../../../monitoring/monitoring-setup.md)
-- [Spark Monitoring](../../../monitoring/spark-monitoring.md)
-- [SQL Monitoring](../../../monitoring/sql-monitoring.md)
+- [Monitoring Setup](../../09-monitoring/monitoring-setup.md)
+- [Spark Monitoring](../../09-monitoring/spark-monitoring.md)
+- [SQL Monitoring](../../09-monitoring/sql-monitoring.md)
 
 __Assessment Questions:__
 
@@ -309,8 +309,8 @@ __Performance Tuning Checklist:__
 
 __Resources:__
 
-- [Performance Optimization](../../../best-practices/performance-optimization.md)
-- [SQL Performance](../../../best-practices/sql-performance.md)
+- [Performance Optimization](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+- [SQL Performance](../../best-practices-extra/sql-performance/README.md)
 
 __Assessment Questions:__
 
@@ -406,7 +406,7 @@ Write-Host "Maintenance complete."
 
 __Resources:__
 
-- [DevOps Pipeline CI/CD](../../../devops/pipeline-ci-cd.md)
+- [DevOps Pipeline CI/CD](../../10-devops/pipeline-ci-cd.md)
 
 __Assessment Questions:__
 
@@ -516,7 +516,7 @@ __Troubleshooting Methodology:__
 
 __Resources:__
 
-- [Troubleshooting Guide](../../../troubleshooting/README.md)
+- [Troubleshooting Guide](../../07-troubleshooting/README.md)
 
 __Assessment Questions:__
 
@@ -608,7 +608,7 @@ __Hands-on Exercises:__
 
 __Resources:__
 
-- [Security Monitoring](../../../monitoring/security-monitoring.md)
+- [Security Monitoring](../../09-monitoring/security-monitoring.md)
 
 __Assessment Questions:__
 

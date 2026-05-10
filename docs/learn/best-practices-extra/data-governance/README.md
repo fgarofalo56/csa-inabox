@@ -1,13 +1,13 @@
 ---
 title: "Data Governance Best Practices"
-description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Data Governance**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Data Governance**"
 tags:
   - best-practices
   - data-governance
 ---
 # Data Governance Best Practices
 
-> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Data Governance**
+> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Data Governance**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -24,7 +24,7 @@ Effective data governance ensures:
 - Data security and privacy
 - Clear data ownership and accountability
 
-For detailed guidance, see: **[Full Data Governance Guide](../../docs/05-best-practices/data-governance/README.md)**
+For detailed guidance, see: **[Full Data Governance Guide](../../05-best-practices/cross-cutting-concerns/data-governance/README.md)**
 
 ---
 
@@ -115,8 +115,8 @@ INSERT INTO data_quality_rules VALUES
 
 ## Related Documentation
 
-- [Azure Purview Integration](../../docs/04-implementation-guides/integration-scenarios/purview-synapse.md)
-- [Data Lineage](../../docs/solutions/data-governance/lineage.md)
+- [Azure Purview Integration](../../04-implementation-guides/integration-scenarios/purview-synapse.md)
+- Data Lineage
 
 ---
 

@@ -1,12 +1,12 @@
 ---
 title: "Power BI Optimization Best Practices"
-description: "> **[Home](../README.md)** | **[Best Practices](index.md)** | **Power BI Optimization**"
+description: "> **[Home](../index.md)** | **[Best Practices](index.md)** | **Power BI Optimization**"
 tags:
   - best-practices
 ---
 # Power BI Optimization Best Practices
 
-> **[Home](../README.md)** | **[Best Practices](index.md)** | **Power BI Optimization**
+> **[Home](../index.md)** | **[Best Practices](index.md)** | **Power BI Optimization**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -109,8 +109,8 @@ GROUP BY DateKey, ProductCategoryKey, RegionKey;
 
 ## Related Documentation
 
-- [Power BI Troubleshooting](../troubleshooting/power-bi-troubleshooting.md)
-- [Serverless SQL for Power BI](../docs/02-services/analytics-compute/azure-synapse/serverless-sql/README.md)
+- Power BI Troubleshooting
+- [Serverless SQL for Power BI](../02-services/analytics-compute/azure-synapse/sql-pools/serverless-sql/README.md)
 
 ---
 

@@ -1,13 +1,13 @@
 ---
 title: "Purview and Synapse Integration"
-description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Purview + Synapse__"
+description: "> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Purview + Synapse__"
 tags:
   - implementation
   - integration-scenarios
 ---
 # Purview and Synapse Integration
 
-> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Purview + Synapse__
+> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Purview + Synapse__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)
@@ -242,7 +242,7 @@ GROUP BY asset_type;
 ## Related Documentation
 
 - [Synapse + Databricks](synapse-databricks.md)
-- [Data Governance Best Practices](../../05-best-practices/cross-cutting-concerns/governance/data-governance.md)
+- Data Governance Best Practices
 - [Azure Purview Lineage](../../02-services/data-governance/azure-purview/lineage.md)
 
 ---

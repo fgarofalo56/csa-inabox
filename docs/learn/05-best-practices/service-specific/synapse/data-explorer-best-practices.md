@@ -1,13 +1,13 @@
 ---
 title: "Data Explorer Best Practices"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Data Explorer**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Data Explorer**"
 tags:
   - best-practices
   - synapse
 ---
 # Data Explorer Best Practices
 
-> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Data Explorer**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Data Explorer**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Service](https://img.shields.io/badge/Service-Data%20Explorer-purple?style=flat-square)

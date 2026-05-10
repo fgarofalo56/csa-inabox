@@ -57,8 +57,8 @@ __Recommended Learning Path:__
    - Performance optimization
 
 4. __Week 7-8__: Data engineering best practices
-   - [Delta Lake Guide](../../../code-examples/delta-lake-guide.md)
-   - [Pipeline Optimization](../../../best-practices/pipeline-optimization.md)
+   - [Delta Lake Guide](../../../06-code-examples/delta-lake-guide.md)
+   - [Pipeline Optimization](../../../05-best-practices/cross-cutting-concerns/development/pipeline-optimization.md)
    - Build end-to-end data pipeline project
 
 __Key Resources:__
@@ -98,22 +98,22 @@ __Recommended Learning Path:__
 2. __Week 3-4__: Azure data services for DBAs
    - Azure SQL Database vs Synapse SQL
    - Serverless SQL pools
-   - [Serverless SQL Best Practices](../../../best-practices/serverless-sql-best-practices.md)
+   - [Serverless SQL Best Practices](../../../best-practices-extra/serverless-sql-best-practices/README.md)
 
 3. __Week 5-6__: Platform operations
-   - [Monitoring Setup](../../../monitoring/README.md)
+   - [Monitoring Setup](../../../09-monitoring/README.md)
    - Security and compliance automation
    - Backup and disaster recovery
 
 4. __Week 7-8__: Advanced administration
-   - [Performance Optimization](../../../best-practices/performance-optimization.md)
-   - [Cost Optimization](../../../best-practices/cost-optimization.md)
+   - [Performance Optimization](../../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+   - [Cost Optimization](../../../best-practices-extra/cost-optimization/README.md)
    - Capstone: Migrate on-premises database to Azure
 
 __Key Resources:__
 
-- [Platform Administrator Path](../../platform-admin-path.md)
-- [Security Best Practices](../../../best-practices/security.md)
+- Platform Administrator Path
+- [Security Best Practices](../../../best-practices-extra/security/README.md)
 
 ---
 
@@ -145,12 +145,12 @@ __Recommended Learning Path:__
    - Window functions for analytics
 
 2. __Week 3-4__: Power BI mastery
-   - [Power BI Integration Tutorial](../../power-bi/README.md)
+   - [Power BI Integration Tutorial](../../integration/power-bi/README.md)
    - DAX formulas and calculations
    - Dashboard design best practices
 
 3. __Week 5-6__: Azure analytics platform
-   - [Serverless SQL Guide](../../../code-examples/serverless-sql-guide.md)
+   - [Serverless SQL Guide](../../../06-code-examples/serverless-sql-guide.md)
    - Connecting Power BI to Azure Synapse
    - Query optimization for analysts
 
@@ -161,8 +161,8 @@ __Recommended Learning Path:__
 
 __Key Resources:__
 
-- [Data Analyst Learning Path](../../data-analyst-path.md)
-- [Serverless SQL Query Optimization](../../../code-examples/serverless-sql/query-optimization.md)
+- [Data Analyst Learning Path](../data-analyst-path.md)
+- [Serverless SQL Query Optimization](../../../06-code-examples/serverless-sql/query-optimization.md)
 
 ---
 
@@ -194,7 +194,7 @@ __Recommended Learning Path:__
    - Refactoring notebooks to production code
 
 2. __Week 4-6__: Azure ML platform
-   - [Azure ML Integration](../../../code-examples/integration/azure-ml.md)
+   - [Azure ML Integration](../../../06-code-examples/integration/azure-ml.md)
    - Experiment tracking and model management
    - Model deployment patterns
 
@@ -211,7 +211,7 @@ __Recommended Learning Path:__
 __Key Resources:__
 
 - [Data Scientist Learning Path](../data-scientist/README.md)
-- [DevOps CI/CD Guide](../../../devops/pipeline-ci-cd.md)
+- [DevOps CI/CD Guide](../../../10-devops/pipeline-ci-cd.md)
 
 ---
 
@@ -253,14 +253,14 @@ __Recommended Learning Path:__
    - Performance optimization
 
 4. __Week 7-8__: Modern data architecture
-   - [Delta Lakehouse Architecture](../../../architecture/delta-lakehouse/README.md)
-   - [Change Data Capture](../../../code-examples/delta-lake/cdc/change-data-capture.md)
+   - [Delta Lakehouse Architecture](../../../03-architecture-patterns/service-architectures/delta-lakehouse/README.md)
+   - [Change Data Capture](../../../06-code-examples/delta-lake/cdc/change-data-capture.md)
    - Build modern data pipeline
 
 __Key Resources:__
 
 - [Data Engineer Learning Path](../data-engineer/README.md)
-- [Delta Lake Optimization](../../../best-practices/delta-lake-optimization.md)
+- Delta Lake Optimization
 
 ---
 
@@ -297,19 +297,19 @@ __Recommended Learning Path:__
    - Version control and GitOps
 
 3. __Week 7-9__: CI/CD pipelines
-   - [DevOps CI/CD Guide](../../../devops/pipeline-ci-cd.md)
+   - [DevOps CI/CD Guide](../../../10-devops/pipeline-ci-cd.md)
    - GitHub Actions and Azure Pipelines
    - Automated testing and deployment
 
 4. __Week 10-12__: Advanced DevOps
    - Container orchestration (Kubernetes basics)
-   - [Monitoring and alerting](../../../monitoring/README.md)
+   - [Monitoring and alerting](../../../09-monitoring/README.md)
    - Build complete DevOps solution
 
 __Key Resources:__
 
 - [DevOps Engineer Learning Path](../devops/README.md)
-- [Automated Testing Guide](../../../devops/automated-testing.md)
+- [Automated Testing Guide](../../../10-devops/automated-testing.md)
 
 ---
 

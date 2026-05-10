@@ -1,13 +1,13 @@
 ---
 title: "MLOps Best Practices"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Databricks](README.md)** | **MLOps**"
+description: "> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Databricks](README.md)** | **MLOps**"
 tags:
   - best-practices
   - databricks
 ---
 # MLOps Best Practices
 
-> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Databricks](README.md)** | **MLOps**
+> **[Home](../../../index.md)** | **[Best Practices](../../README.md)** | **[Databricks](README.md)** | **MLOps**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-MLOps-purple?style=flat-square)
@@ -259,7 +259,7 @@ def log_inference(request, prediction, model_version):
 ## Related Documentation
 
 - [ML on Databricks Tutorial](../../../tutorials/intermediate/ml-databricks.md)
-- [Feature Store Architecture](../../../architecture/feature-store/README.md)
+- [Feature Store Architecture](../../../03-architecture-patterns/service-architectures/feature-store/README.md)
 - [Delta Lake Best Practices](delta-lake.md)
 
 ---

@@ -1,6 +1,6 @@
 # Placeholder Image
 
-[Home](../../../README.md) > [Images](../../README.md) > Architecture > Serverless SQL Architecture
+[Home](../../index.md) > [Images](../../index.md) > Architecture > Serverless SQL Architecture
 
 This is a placeholder for the image: serverless-sql-architecture.png
 

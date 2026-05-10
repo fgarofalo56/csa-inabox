@@ -475,9 +475,9 @@ resource "azurerm_databricks_workspace" "analytics" {
 
 ## 🔗 Related Documentation
 
-- **[Data Flow Architecture](data-flow.md)** - Detailed processing pipeline
-- **[Component Architecture](component-architecture.md)** - Platform components  
-- **[Security & Network](security-network.md)** - Security implementation
+- **[Data Flow Architecture](../docs/architecture/data-flow.md)** - Detailed processing pipeline
+- **Component Architecture** - Platform components  
+- **Security & Network** - Security implementation
 - **[Implementation Guides](../implementation/)** - Setup instructions
 - **[Operations Guides](../operations/)** - Monitoring and maintenance
 

@@ -703,9 +703,9 @@ SynapseSqlPoolExecRequests
 | Resource | Description |
 |----------|-------------|
 | [Synapse Query Performance](service-troubleshooting/synapse/query-performance.md) | Synapse-specific query optimization |
-| [Databricks Performance](service-troubleshooting/databricks/query-performance.md) | Databricks query and job optimization |
-| [Best Practices: Performance](../best-practices/performance-optimization.md) | General performance best practices |
-| [Monitoring Setup](../monitoring/monitoring-setup.md) | Configure comprehensive monitoring |
+| Databricks Performance | Databricks query and job optimization |
+| [Best Practices: Performance](../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md) | General performance best practices |
+| [Monitoring Setup](../09-monitoring/monitoring-setup.md) | Configure comprehensive monitoring |
 
 ### External Resources
 

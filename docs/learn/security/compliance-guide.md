@@ -1,12 +1,12 @@
 ---
 title: "Azure Synapse Analytics Security and Compliance Guide"
-description: "[Home](../../README.md) > Security > Compliance Guide"
+description: "[Home](../index.md) > Security > Compliance Guide"
 tags:
   - security
 ---
 # Azure Synapse Analytics Security and Compliance Guide
 
-[Home](../../README.md) > Security > Compliance Guide
+[Home](../index.md) > Security > Compliance Guide
 
 This comprehensive guide covers security best practices, compliance mappings, and implementation guidance for Azure Synapse Analytics, helping you meet organizational and regulatory requirements while protecting your data assets.
 
@@ -540,10 +540,10 @@ Use this checklist to ensure comprehensive security compliance:
 
 ## Related Topics
 
-- [Security Best Practices](../best-practices/security.md)
-- [Data Governance Implementation](../best-practices/data-governance.md)
+- [Security Best Practices](../best-practices-extra/security/README.md)
+- [Data Governance Implementation](../best-practices-extra/data-governance/README.md)
 - Network Security Configuration
-- [Monitoring and Logging Guide](../monitoring/logging-monitoring-guide.md)
+- [Monitoring and Logging Guide](../09-monitoring/logging-monitoring-guide.md)
 
 ## External Resources
 

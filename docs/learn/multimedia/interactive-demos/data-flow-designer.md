@@ -296,9 +296,9 @@ const performanceAnalysis = {
 
 ## 📚 Additional Resources
 
-- [Data Flow Transformations Reference](../../code-examples/integration-guide.md)
-- [Performance Tuning Guide](../../best-practices/performance-optimization.md)
-- [ETL Best Practices](../../best-practices/README.md)
+- [Data Flow Transformations Reference](../../06-code-examples/integration-guide.md)
+- [Performance Tuning Guide](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+- [ETL Best Practices](../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 
 ## 💬 Feedback
 

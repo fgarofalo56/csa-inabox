@@ -1050,10 +1050,10 @@ After completing this demo, you should understand:
 
 ### Documentation
 
-- [Migration Best Practices](../../best-practices/migration-strategies.md)
-- [Synapse Migration Guide](../../tutorials/migration/synapse-migration.md)
-- [Cost Optimization](../../best-practices/cost-optimization.md)
-- [Security Planning](../../best-practices/security.md)
+- [Migration Best Practices](../../best-practices-extra/migration-strategies.md)
+- Synapse Migration Guide
+- [Cost Optimization](../../best-practices-extra/cost-optimization/README.md)
+- [Security Planning](../../best-practices-extra/security/README.md)
 
 ### Tools
 
@@ -1095,7 +1095,7 @@ Help us improve the Migration Assessment Wizard!
 ---
 
 **Next Steps:**
-- Review [Migration Best Practices](../../best-practices/migration-strategies.md)
+- Review [Migration Best Practices](../../best-practices-extra/migration-strategies.md)
 - Try [Resource Planner](resource-planner.md) for post-migration sizing
 - Explore [Cost Calculator](cost-calculator.md) for detailed cost analysis
 

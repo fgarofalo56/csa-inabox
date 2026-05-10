@@ -107,8 +107,8 @@ ORDER BY OrderYear, OrderMonth;
 
 __Resources:__
 
-- [SQL Performance Optimization](../../../best-practices/sql-performance.md)
-- [Serverless SQL Best Practices](../../../best-practices/serverless-sql-best-practices.md)
+- [SQL Performance Optimization](../../best-practices-extra/sql-performance/README.md)
+- [Serverless SQL Best Practices](../../best-practices-extra/serverless-sql-best-practices/README.md)
 
 __Assessment Questions:__
 
@@ -137,8 +137,8 @@ __Hands-on Exercises:__
 
 __Resources:__
 
-- [Serverless SQL Architecture](../../../architecture/serverless-sql/README.md)
-- [Serverless SQL Query Optimization](../../../code-examples/serverless-sql/query-optimization.md)
+- [Serverless SQL Architecture](../../03-architecture-patterns/service-architectures/serverless-sql/README.md)
+- [Serverless SQL Query Optimization](../../06-code-examples/serverless-sql/query-optimization.md)
 
 __Assessment Questions:__
 

@@ -95,7 +95,7 @@ az monitor metrics alert create \
 ## 📚 Additional Resources
 
 - [ADF Monitoring](https://docs.microsoft.com/azure/data-factory/monitor-visually)
-- [Azure Monitor Integration](../../monitoring/README.md)
+- [Azure Monitor Integration](../../09-monitoring/README.md)
 
 ## 🚀 Next Steps
 

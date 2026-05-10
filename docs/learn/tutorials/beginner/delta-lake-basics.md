@@ -488,7 +488,7 @@ __Slow queries__
 
 ### __Guides__
 
-- [Delta Lake Optimization](../../best-practices/delta-lake-optimization.md)
+- Delta Lake Optimization
 - [Synapse Delta Lake](../../02-services/analytics-compute/azure-synapse/spark-pools/delta-lakehouse/README.md)
 
 ## 🎉 Summary

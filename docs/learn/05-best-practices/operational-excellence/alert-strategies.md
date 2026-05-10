@@ -1,13 +1,13 @@
 ---
 title: "Alerting Strategies"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Alert Strategies**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Alert Strategies**"
 tags:
   - best-practices
   - operational-excellence
 ---
 # Alerting Strategies
 
-> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Alert Strategies**
+> **[Home](../../index.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Alert Strategies**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Operations-orange?style=flat-square)
@@ -342,7 +342,7 @@ Alerts
 
 - [Monitoring Best Practices](monitoring.md)
 - [Reliability Patterns](reliability.md)
-- [Synapse Monitoring](../../../09-monitoring/service-monitoring/synapse/README.md)
+- [Synapse Monitoring](../../09-monitoring/service-monitoring/synapse/README.md)
 
 ---
 

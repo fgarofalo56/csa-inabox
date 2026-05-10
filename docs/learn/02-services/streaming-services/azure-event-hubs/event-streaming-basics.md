@@ -634,15 +634,15 @@ def calculate_consumer_lag(partition_context, event):
 
 ### Best Practices
 
-- [__Performance Tuning__](../../../05-best-practices/cross-cutting-concerns/performance/eventhub-optimization.md)
-- [__Security Configuration__](../../../05-best-practices/cross-cutting-concerns/security/eventhub-security.md)
+- __Performance Tuning__
+- __Security Configuration__
 - [__Disaster Recovery__](../../../05-best-practices/operational-excellence/eventhub-dr.md)
 
 ### Code Examples
 
-- [__Python SDK Examples__](../../../06-code-examples/by-service/event-hubs/python-examples.md)
-- [__C# SDK Examples__](../../../06-code-examples/by-service/event-hubs/dotnet-examples.md)
-- [__Integration Scenarios__](../../../06-code-examples/integration-examples/eventhub-patterns.md)
+- __Python SDK Examples__
+- __C# SDK Examples__
+- __Integration Scenarios__
 
 ---
 

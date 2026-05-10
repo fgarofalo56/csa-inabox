@@ -144,7 +144,7 @@ resource expressRouteCircuit 'Microsoft.Network/expressRouteCircuits@2023-05-01'
 
 - [Global Data Distribution](global-data-distribution.md)
 - [Network Security](../../05-best-practices/cross-cutting-concerns/networking/README.md)
-- [Migration Strategies](../../05-best-practices/migration-strategies.md)
+- [Migration Strategies](../../best-practices-extra/migration-strategies.md)
 
 ---
 

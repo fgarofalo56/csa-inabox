@@ -1,13 +1,13 @@
 ---
 title: "Azure Storage Geo-Replication Reference"
-description: "[Home](../../../README.md) > [Reference](../README.md) > [Storage](README.md) > Geo-Replication"
+description: "[Home](../../index.md) > [Reference](../README.md) > [Storage](README.md) > Geo-Replication"
 tags:
   - reference
   - storage
 ---
 # Azure Storage Geo-Replication Reference
 
-[Home](../../../README.md) > [Reference](../README.md) > [Storage](README.md) > Geo-Replication
+[Home](../../index.md) > [Reference](../README.md) > [Storage](README.md) > Geo-Replication
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 ![Documentation](https://img.shields.io/badge/Documentation-Complete-blue)

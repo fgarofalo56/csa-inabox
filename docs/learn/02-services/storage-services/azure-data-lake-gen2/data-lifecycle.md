@@ -612,7 +612,7 @@ tag_blobs_for_lifecycle(
 - [Hierarchical Namespace](hierarchical-namespace.md)
 - [Access Control](access-control.md)
 - [Performance Optimization](performance-optimization.md)
-- [Cost Optimization Best Practices](../../../05-best-practices/cross-cutting-concerns/cost-optimization/storage-optimization.md)
+- [Cost Optimization Best Practices](../../../05-best-practices/cross-cutting-concerns/storage-optimization.md)
 
 ---
 

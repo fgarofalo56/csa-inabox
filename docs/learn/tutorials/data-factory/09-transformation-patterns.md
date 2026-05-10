@@ -95,7 +95,7 @@ Visual data transformation designer.
 ## 📚 Additional Resources
 
 - [Data Flow Documentation](https://docs.microsoft.com/azure/data-factory/concepts-data-flow-overview)
-- [Transformation Patterns](../../best-practices/pipeline-optimization.md)
+- [Transformation Patterns](../../05-best-practices/cross-cutting-concerns/development/pipeline-optimization.md)
 
 ## 🚀 Next Steps
 

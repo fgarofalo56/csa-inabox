@@ -1,12 +1,12 @@
 ---
 title: "Security Monitoring"
-description: "[Home](../../README.md) > Monitoring > Security Monitoring"
+description: "[Home](../index.md) > Monitoring > Security Monitoring"
 tags:
   - monitoring
 ---
 # Security Monitoring
 
-[Home](../../README.md) > Monitoring > Security Monitoring
+[Home](../index.md) > Monitoring > Security Monitoring
 
 !!! abstract "Overview"
 This guide covers security monitoring approaches for Azure Synapse Analytics, including threat detection, audit logging, and compliance monitoring.

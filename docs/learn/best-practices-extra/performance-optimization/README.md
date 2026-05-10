@@ -1,13 +1,13 @@
 ---
 title: "Performance Optimization Best Practices"
-description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Performance Optimization**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Performance Optimization**"
 tags:
   - best-practices
   - performance-optimization
 ---
 # Performance Optimization Best Practices
 
-> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Performance Optimization**
+> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Performance Optimization**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -17,7 +17,7 @@ Best practices for optimizing performance in Cloud Scale Analytics.
 
 ## Overview
 
-For detailed guidance, see: **[Full Performance Guide](../../docs/05-best-practices/performance/README.md)**
+For detailed guidance, see: **[Full Performance Guide](../../05-best-practices/cross-cutting-concerns/performance/README.md)**
 
 ---
 
@@ -100,9 +100,9 @@ SynapseSparkLogs
 
 ## Related Documentation
 
-- [Spark Performance](../../docs/05-best-practices/spark-performance/README.md)
-- [SQL Performance](sql-performance/README.md)
-- [Delta Lake Optimization](../../docs/05-best-practices/delta-lake-optimization/README.md)
+- Spark Performance
+- SQL Performance
+- Delta Lake Optimization
 
 ---
 

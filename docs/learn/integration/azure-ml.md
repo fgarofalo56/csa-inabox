@@ -1,12 +1,12 @@
 ---
 title: "Azure Machine Learning Integration Guide"
-description: "> **Home [Home](../../README.md)** | **Documentation** | **Integration**"
+description: "> **Home [Home](../index.md)** | **Documentation** | **Integration**"
 tags:
   - integration
 ---
 # Azure Machine Learning Integration Guide
 
-> **Home [Home](../../README.md)** | **Documentation** | **Integration**
+> **Home [Home](../index.md)** | **Documentation** | **Integration**
 
 ---
 

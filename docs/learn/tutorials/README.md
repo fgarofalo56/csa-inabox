@@ -31,7 +31,7 @@ After completing these tutorials, you will be able to:
 | __[Azure Synapse Analytics Complete Guide](synapse/README.md)__ | 4-6 hours | ![Beginner to Advanced](https://img.shields.io/badge/Level-Beginner_to_Advanced-blue) | Azure basics |
 | __[Azure Stream Analytics Real-Time Pipeline](stream-analytics/README.md)__ | 2-3 hours | ![Intermediate](https://img.shields.io/badge/Level-Intermediate-yellow) | Event processing basics |
 | __[Azure Data Factory Orchestration](data-factory/README.md)__ | 3-4 hours | ![Intermediate](https://img.shields.io/badge/Level-Intermediate-yellow) | Data integration concepts |
-| __[Power BI Integration & Analytics](power-bi/README.md)__ | 2-3 hours | ![Beginner to Intermediate](https://img.shields.io/badge/Level-Beginner_to_Intermediate-green) | Basic SQL knowledge |
+| __[Power BI Integration & Analytics](integration/power-bi/README.md)__ | 2-3 hours | ![Beginner to Intermediate](https://img.shields.io/badge/Level-Beginner_to_Intermediate-green) | Basic SQL knowledge |
 
 ### 🔄 Integration Scenarios
 
@@ -282,54 +282,54 @@ This tutorial collection is continuously updated with:
 
 ### Getting Started
 
-- 🚀 [Quick Start Wizard](../guides/quick-start-wizard.md) - Find your personalized learning path
+- 🚀 Quick Start Wizard - Find your personalized learning path
 - 📖 [Platform Overview](../01-overview/README.md) - Understand the platform
 - 📚 [Glossary](../reference/glossary.md) - Learn the terminology
 
 ### Reference Materials
 
-- 🏗️ [Architecture Patterns](../architecture/README.md) - Design principles and patterns
-  - [Delta Lakehouse](../architecture/delta-lakehouse/README.md)
-  - [Serverless SQL](../architecture/serverless-sql/README.md)
-  - [Shared Metadata](../architecture/shared-metadata/README.md)
-- 📋 [Best Practices](../best-practices/README.md) - Implementation guidance
-  - [Performance Optimization](../best-practices/performance-optimization.md)
-  - [Security Best Practices](../best-practices/security.md)
-  - [Cost Optimization](../best-practices/cost-optimization.md)
+- 🏗️ [Architecture Patterns](../03-architecture-patterns/reference-architectures/README.md) - Design principles and patterns
+  - [Delta Lakehouse](../03-architecture-patterns/service-architectures/delta-lakehouse/README.md)
+  - [Serverless SQL](../03-architecture-patterns/service-architectures/serverless-sql/README.md)
+  - [Shared Metadata](../03-architecture-patterns/service-architectures/shared-metadata/README.md)
+- 📋 [Best Practices](../05-best-practices/cross-cutting-concerns/cost-optimization/README.md) - Implementation guidance
+  - [Performance Optimization](../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+  - [Security Best Practices](../best-practices-extra/security/README.md)
+  - [Cost Optimization](../best-practices-extra/cost-optimization/README.md)
 
 ### Hands-On Learning
 
-- 💻 [Code Examples](../code-examples/README.md) - Working code samples
-  - [Delta Lake Examples](../code-examples/delta-lake-guide.md)
-  - [Serverless SQL Examples](../code-examples/serverless-sql-guide.md)
-  - [Integration Examples](../code-examples/integration-guide.md)
+- 💻 [Code Examples](../06-code-examples/README.md) - Working code samples
+  - [Delta Lake Examples](../06-code-examples/delta-lake-guide.md)
+  - [Serverless SQL Examples](../06-code-examples/serverless-sql-guide.md)
+  - [Integration Examples](../06-code-examples/integration-guide.md)
 - 🎯 [Solutions](../08-solutions/README.md) - Complete solution patterns
   - [Real-time Analytics](../08-solutions/azure-realtime-analytics/README.md)
 
 ### Support Resources
 
-- 🔧 [Guided Troubleshooting](../troubleshooting/guided-troubleshooting.md) - Interactive problem resolution
-- 📊 [Monitoring Setup](../monitoring/README.md) - Observability implementation
+- 🔧 [Guided Troubleshooting](../07-troubleshooting/guided-troubleshooting.md) - Interactive problem resolution
+- 📊 [Monitoring Setup](../09-monitoring/README.md) - Observability implementation
 - ❓ [FAQ](../faq.md) - Frequently asked questions
 
 ### Development Practices
 
-- 🚀 [DevOps Integration](../devops/pipeline-ci-cd.md) - CI/CD practices
-- ✅ [Testing Guide](../guides/TESTING_GUIDE.md) - Testing strategies
-- 📝 [Contributing Guide](../guides/CONTRIBUTING_GUIDE.md) - Contribute to documentation
+- 🚀 [DevOps Integration](../10-devops/pipeline-ci-cd.md) - CI/CD practices
+- ✅ Testing Guide - Testing strategies
+- 📝 Contributing Guide - Contribute to documentation
 
 ### Learning Paths by Role
 
-- 🔧 __Data Engineer__: [Environment Setup](synapse/01-environment-setup.md) → [Delta Lake](code-labs/pyspark-fundamentals.md) → [CI/CD](../devops/pipeline-ci-cd.md)
-- 📊 __Data Analyst__: [Serverless SQL](../code-examples/serverless-sql-guide.md) → [Query Optimization](../code-examples/serverless-sql/query-optimization.md) → [Best Practices](../best-practices/serverless-sql-best-practices.md)
-- 🏗️ __Architect__: [Architecture Overview](../architecture/README.md) → [Reference Architectures](../architecture/delta-lakehouse/README.md) → [Solutions](../08-solutions/README.md)
-- ⚙️ __Administrator__: [Environment Setup](synapse/01-environment-setup.md) → [Monitoring](../monitoring/README.md) → [Security](../best-practices/security.md)
+- 🔧 __Data Engineer__: [Environment Setup](synapse/01-environment-setup.md) → [Delta Lake](code-labs/pyspark-fundamentals.md) → [CI/CD](../10-devops/pipeline-ci-cd.md)
+- 📊 __Data Analyst__: [Serverless SQL](../06-code-examples/serverless-sql-guide.md) → [Query Optimization](../06-code-examples/serverless-sql/query-optimization.md) → [Best Practices](../best-practices-extra/serverless-sql-best-practices/README.md)
+- 🏗️ __Architect__: [Architecture Overview](../03-architecture-patterns/reference-architectures/README.md) → [Reference Architectures](../03-architecture-patterns/service-architectures/delta-lakehouse/README.md) → [Solutions](../08-solutions/README.md)
+- ⚙️ __Administrator__: [Environment Setup](synapse/01-environment-setup.md) → [Monitoring](../09-monitoring/README.md) → [Security](../best-practices-extra/security/README.md)
 
 ---
 
 __Ready to start learning?__ Choose your path:
 
-- __🚀 New to Azure Analytics?__ Start with the [Quick Start Wizard](../guides/quick-start-wizard.md) to find your personalized path
+- __🚀 New to Azure Analytics?__ Start with the Quick Start Wizard to find your personalized path
 - __💻 Prefer hands-on coding?__ Jump to [Interactive Code Labs](code-labs/README.md)
 - __🎯 Role-specific learning?__ Select your [Learning Path](learning-paths/README.md)
 - __🔄 Integration focus?__ Explore [Multi-Service Scenarios](integration/README.md)

@@ -465,7 +465,7 @@ const troubleshootHighCosts = {
 ## 📚 Additional Resources
 
 - [Azure Synapse Pricing](https://azure.microsoft.com/pricing/details/synapse-analytics/)
-- [Cost Optimization Guide](../../best-practices/cost-optimization.md)
+- [Cost Optimization Guide](../../best-practices-extra/cost-optimization/README.md)
 - [Resource Planning](./resource-planner.md)
 
 ## 💬 Feedback

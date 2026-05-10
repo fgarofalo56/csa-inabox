@@ -1499,7 +1499,7 @@ class MonitoredCommandHandler:
 
 - [Event Sourcing Pattern](event-sourcing.md) - Complementary pattern
 - [Lambda Architecture](lambda-architecture.md) - Batch and stream processing
-- [Best Practices](../../best-practices/README.md) - General best practices
+- [Best Practices](../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md) - General best practices
 
 ### Azure Services
 

@@ -1,6 +1,6 @@
 ---
 title: "Serverless SQL Architecture"
-description: "[🏠 Home](../../../README.md) > [🏗️ Architecture](../../README.md) > 📄 Serverless SQL"
+description: "[🏠 Home](../../../index.md) > [🏗️ Architecture](../../README.md) > 📄 Serverless SQL"
 tags:
   - architecture
   - service-architectures
@@ -8,7 +8,7 @@ tags:
 ---
 # Serverless SQL Architecture
 
-[🏠 Home](../../../README.md) > [🏗️ Architecture](../../README.md) > 📄 Serverless SQL
+[🏠 Home](../../../index.md) > [🏗️ Architecture](../../README.md) > 📄 Serverless SQL
 
 Serverless SQL architecture in Azure Synapse Analytics allows you to query data directly in your data lake without moving or copying data, using familiar T-SQL syntax.
 
@@ -28,7 +28,7 @@ Serverless SQL architecture in Azure Synapse Analytics allows you to query data 
 
 ## Architecture Overview
 
-![Serverless SQL Pool Architecture](../../diagrams/serverless-sql-architecture.svg)
+![Serverless SQL Pool Architecture](../../../diagrams/serverless-sql-architecture.svg)
 
 Serverless SQL pools in Azure Synapse Analytics provide a serverless distributed query processing engine for big data analytics. The architecture is designed to support on-demand query execution over data stored in your data lake without the need to manage infrastructure.
 
@@ -58,7 +58,7 @@ For best performance with Serverless SQL:
 
 ## Related Resources
 
-- [Best Practices for Serverless SQL](../../best-practices/README.md)
-- [Serverless SQL Guide](../../code-examples/serverless-sql-guide.md)
-- [Performance Optimization](../../best-practices/performance.md)
-- [Cost Management](../../best-practices/cost-optimization.md)
+- Best Practices for Serverless SQL
+- Serverless SQL Guide
+- [Performance Optimization](../../../multimedia/video-tutorials/scripts/best-practices/performance.md)
+- Cost Management

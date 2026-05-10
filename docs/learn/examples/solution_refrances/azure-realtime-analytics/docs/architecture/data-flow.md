@@ -328,8 +328,8 @@ def track_processing_metrics(df, stage_name):
 
 1. **[Explore Components](components.md)** - Databricks architecture deep dive
 2. **[Review Security](security.md)** - Zero-trust implementation  
-3. **[Implementation Guide](../implementation/deployment-guide.md)** - Deploy data flow
-4. **[Monitoring Setup](../operations/monitoring.md)** - Configure observability
+3. **Implementation Guide** - Deploy data flow
+4. **Monitoring Setup** - Configure observability
 
 ---
 

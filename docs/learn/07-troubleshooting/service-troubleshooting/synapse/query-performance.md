@@ -787,8 +787,8 @@ Contact Microsoft Support if:
 
 - [Connectivity Troubleshooting](connectivity.md)
 - [Scaling Issues](scaling.md)
-- [Best Practices: Performance Optimization](../../../best-practices/performance-optimization.md)
-- [SQL Performance Best Practices](../../../best-practices/sql-performance.md)
+- [Best Practices: Performance Optimization](../../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+- [SQL Performance Best Practices](../../../best-practices-extra/sql-performance/README.md)
 - [Synapse SQL Performance Documentation](https://docs.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-best-practices)
 
 ---

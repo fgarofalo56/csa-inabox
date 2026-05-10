@@ -1,13 +1,13 @@
 ---
 title: "Operational Excellence"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **Operational Excellence**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../README.md)** | **Operational Excellence**"
 tags:
   - best-practices
   - operational-excellence
 ---
 # Operational Excellence
 
-> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **Operational Excellence**
+> **[Home](../../index.md)** | **[Best Practices](../README.md)** | **Operational Excellence**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Operations-orange?style=flat-square)
@@ -86,8 +86,8 @@ Operational excellence encompasses the practices and procedures required to run 
 ## Related Documentation
 
 - [Cross-Cutting Concerns](../cross-cutting-concerns/README.md)
-- [Service-Specific Best Practices](../service-specific/README.md)
-- [Monitoring Services](../../../09-monitoring/README.md)
+- Service-Specific Best Practices
+- [Monitoring Services](../../09-monitoring/README.md)
 
 ---
 

@@ -43,5 +43,5 @@ graph TD
 \```
 
 <!-- Static image fallback for GitHub -->
-![Diagram Example](filename.png)
+Diagram Example
 ```

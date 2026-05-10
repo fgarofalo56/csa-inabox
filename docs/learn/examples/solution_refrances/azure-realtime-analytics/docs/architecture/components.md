@@ -450,9 +450,9 @@ echo "spark.databricks.delta.preview.enabled true" >> /databricks/spark/conf/spa
 ## Next Steps
 
 1. **[Review Security Architecture](security.md)** - Zero-trust implementation details
-2. **[Deployment Guide](../implementation/deployment-guide.md)** - Step-by-step setup
-3. **[Monitoring Setup](../operations/monitoring.md)** - Observability configuration
-4. **[Performance Tuning](../resources/performance-tuning.md)** - Optimization guide
+2. **Deployment Guide** - Step-by-step setup
+3. **Monitoring Setup** - Observability configuration
+4. **Performance Tuning** - Optimization guide
 
 ---
 

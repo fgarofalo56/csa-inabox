@@ -1,12 +1,12 @@
 ---
 title: "Spark Troubleshooting Guide"
-description: "[Home](../../README.md) > Troubleshooting > Spark Troubleshooting"
+description: "[Home](../index.md) > Troubleshooting > Spark Troubleshooting"
 tags:
   - troubleshooting
 ---
 # Spark Troubleshooting Guide
 
-[Home](../../README.md) > Troubleshooting > Spark Troubleshooting
+[Home](../index.md) > Troubleshooting > Spark Troubleshooting
 
 Apache Spark in Azure Synapse Analytics
 
@@ -463,9 +463,9 @@ Set up Azure Monitor to track Spark application performance:
 
 ## Related Topics
 
-- [Monitoring Azure Synapse Spark Pools](../monitoring/spark-monitoring.md)
-- [Performance Optimization for Spark](../best-practices/spark-performance.md)
-- [Azure Synapse Security Best Practices](../best-practices/security.md)
+- [Monitoring Azure Synapse Spark Pools](../09-monitoring/spark-monitoring.md)
+- [Performance Optimization for Spark](../05-best-practices/service-specific/synapse/spark-performance.md)
+- [Azure Synapse Security Best Practices](../best-practices-extra/security/README.md)
 - [Spark Configuration Reference](../reference/spark-configuration.md)
 
 ## External Resources

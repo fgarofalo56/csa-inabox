@@ -481,7 +481,7 @@ az cosmosdb sql container throughput update \
 
 - **[Add Azure Functions for change feed processing](../../08-solutions/change-feed-processor/README.md)**
 - **[Integrate with Synapse Link for analytics](stream-analytics-synapse.md)**
-- **[Implement global distribution strategy](../../best-practices/global-distribution.md)**
+- **[Implement global distribution strategy](../../best-practices-extra/global-distribution.md)**
 
 ---
 

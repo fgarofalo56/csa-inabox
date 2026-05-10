@@ -1,12 +1,12 @@
 ---
 title: "Security Implementation Diagrams for Azure Synapse Analytics"
-description: "[Home](../../README.md) > Diagrams > Security Diagrams"
+description: "[Home](../index.md) > Diagrams > Security Diagrams"
 tags:
   - diagrams
 ---
 # Security Implementation Diagrams for Azure Synapse Analytics
 
-[Home](../../README.md) > Diagrams > Security Diagrams
+[Home](../index.md) > Diagrams > Security Diagrams
 
 This section provides security implementation diagrams for Azure Synapse Analytics, focusing on security patterns and best practices.
 

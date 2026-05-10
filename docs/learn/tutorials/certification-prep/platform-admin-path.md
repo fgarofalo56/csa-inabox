@@ -171,9 +171,9 @@ __Study Hours__: 15-20 hours/week
 
 __Resources__:
 
-- [Security Best Practices](../../best-practices/security.md)
-- [Network Security](../../best-practices/network-security.md)
-- [Private Link Architecture](../../architecture/private-link-architecture.md)
+- [Security Best Practices](../../best-practices-extra/security/README.md)
+- [Network Security](../../05-best-practices/cross-cutting-concerns/networking/network-security.md)
+- [Private Link Architecture](../../03-architecture-patterns/service-architectures/private-link-architecture.md)
 
 __Week 5-6: Monitoring and Operations__
 
@@ -186,9 +186,9 @@ __Study Hours__: 15-20 hours/week
 
 __Resources__:
 
-- [Monitoring Setup](../../monitoring/README.md)
-- [Spark Monitoring](../../monitoring/spark-monitoring.md)
-- [SQL Monitoring](../../monitoring/sql-monitoring.md)
+- [Monitoring Setup](../../09-monitoring/README.md)
+- [Spark Monitoring](../../09-monitoring/spark-monitoring.md)
+- [SQL Monitoring](../../09-monitoring/sql-monitoring.md)
 
 __Week 7-8: Performance and Cost Optimization__
 
@@ -201,8 +201,8 @@ __Study Hours__: 15-20 hours/week
 
 __Resources__:
 
-- [Cost Optimization](../../best-practices/cost-optimization.md)
-- [Performance Optimization](../../best-practices/performance-optimization.md)
+- [Cost Optimization](../../best-practices-extra/cost-optimization/README.md)
+- [Performance Optimization](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
 
 __Week 9-10: Data Processing Fundamentals__
 

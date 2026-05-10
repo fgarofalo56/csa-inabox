@@ -1,12 +1,12 @@
 ---
 title: "Spark Monitoring"
-description: "[Home](../../README.md) > Monitoring > Spark Monitoring"
+description: "[Home](../index.md) > Monitoring > Spark Monitoring"
 tags:
   - monitoring
 ---
 # Spark Monitoring
 
-[Home](../../README.md) > Monitoring > Spark Monitoring
+[Home](../index.md) > Monitoring > Spark Monitoring
 
 ## Overview
 
@@ -48,7 +48,7 @@ This document provides comprehensive guidance on spark monitoring.
 ## Related Resources
 
 - [Azure Synapse Analytics Documentation](https://docs.microsoft.com/azure/synapse-analytics/)
-- [Best Practices Overview](../best-practices/README.md)
+- [Best Practices Overview](../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 
 ## Next Steps
 

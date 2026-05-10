@@ -1,13 +1,13 @@
 ---
 title: "Edge and Offline Handling"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Edge Offline Handling**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Edge Offline Handling**"
 tags:
   - best-practices
   - operational-excellence
 ---
 # Edge and Offline Handling
 
-> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Edge Offline Handling**
+> **[Home](../../index.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Edge Offline Handling**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Operations-orange?style=flat-square)
@@ -349,7 +349,7 @@ OfflineEvents
 
 - [Event Hubs DR](eventhub-dr.md)
 - [Reliability Patterns](reliability.md)
-- [IoT Hub Integration](../../../02-services/streaming-services/azure-iot-hub/README.md)
+- IoT Hub Integration
 
 ---
 

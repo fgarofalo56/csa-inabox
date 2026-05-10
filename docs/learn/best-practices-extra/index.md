@@ -1,12 +1,12 @@
 ---
 title: "Best Practices Guide"
-description: "> **[Home](../README.md)** | **Best Practices**"
+description: "> **[Home](../index.md)** | **Best Practices**"
 tags:
   - best-practices
 ---
 # Best Practices Guide
 
-> **[Home](../README.md)** | **Best Practices**
+> **[Home](../index.md)** | **Best Practices**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -18,7 +18,7 @@ Comprehensive best practices for Cloud Scale Analytics implementations.
 
 This is a legacy path. For the most up-to-date best practices documentation, please visit:
 
-**[Full Best Practices Documentation](../docs/05-best-practices/README.md)**
+**[Full Best Practices Documentation](../05-best-practices/README.md)**
 
 ---
 
@@ -28,9 +28,9 @@ This is a legacy path. For the most up-to-date best practices documentation, ple
 
 | Area | Key Practices | Guide |
 |------|---------------|-------|
-| Spark Optimization | Partition tuning, caching, broadcast joins | [Spark Performance](../docs/05-best-practices/spark-performance/README.md) |
+| Spark Optimization | Partition tuning, caching, broadcast joins | Spark Performance |
 | SQL Performance | Query optimization, indexing, statistics | [SQL Performance](sql-performance/README.md) |
-| Delta Lake | Z-ordering, compaction, vacuum | [Delta Lake](../docs/05-best-practices/delta-lake-optimization/README.md) |
+| Delta Lake | Z-ordering, compaction, vacuum | Delta Lake |
 | Power BI | Query folding, aggregations, DirectQuery | [Power BI Optimization](power-bi-optimization.md) |
 
 ### Security
@@ -89,9 +89,9 @@ This is a legacy path. For the most up-to-date best practices documentation, ple
 
 ## Related Documentation
 
-- [Architecture Patterns](../docs/03-architecture-patterns/README.md)
-- [Implementation Guides](../docs/04-implementation-guides/README.md)
-- [Troubleshooting](../troubleshooting/index.md)
+- [Architecture Patterns](../03-architecture-patterns/README.md)
+- [Implementation Guides](../04-implementation-guides/README.md)
+- Troubleshooting
 
 ---
 

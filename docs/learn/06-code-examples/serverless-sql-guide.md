@@ -1,12 +1,12 @@
 ---
 title: "Comprehensive Serverless SQL Guide for Azure Synapse Analytics"
-description: "[Home](../../README.md) > Code Examples > Serverless SQL Guide"
+description: "[Home](../index.md) > Code Examples > Serverless SQL Guide"
 tags:
   - code-examples
 ---
 # Comprehensive Serverless SQL Guide for Azure Synapse Analytics
 
-[Home](../../README.md) > Code Examples > Serverless SQL Guide
+[Home](../index.md) > Code Examples > Serverless SQL Guide
 
 !!! info "Guide Overview"
     This comprehensive guide provides detailed examples for working with Serverless SQL pools in Azure Synapse Analytics, covering query optimization, external tables, security, and best practices.

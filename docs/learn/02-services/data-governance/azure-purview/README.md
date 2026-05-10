@@ -33,8 +33,8 @@ Azure Purview (now Microsoft Purview) provides comprehensive data governance cap
 | Topic | Description |
 |-------|-------------|
 | [Data Lineage](lineage.md) | End-to-end lineage tracking |
-| [Classification Guide](classifications.md) | Sensitive data detection |
-| [Integration Setup](integration.md) | Connect data sources |
+| Classification Guide | Sensitive data detection |
+| Integration Setup | Connect data sources |
 
 ---
 

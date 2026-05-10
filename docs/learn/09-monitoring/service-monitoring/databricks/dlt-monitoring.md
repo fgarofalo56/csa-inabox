@@ -1,6 +1,6 @@
 ---
 title: "Delta Live Tables Monitoring"
-description: "> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **[Databricks](README.md)** | **DLT Monitoring**"
+description: "> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **[Databricks](README.md)** | **DLT Monitoring**"
 tags:
   - monitoring
   - service-monitoring
@@ -8,7 +8,7 @@ tags:
 ---
 # Delta Live Tables Monitoring
 
-> **[Home](../../../README.md)** | **[Monitoring](../../README.md)** | **[Databricks](README.md)** | **DLT Monitoring**
+> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **[Databricks](README.md)** | **DLT Monitoring**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Feature](https://img.shields.io/badge/Feature-Delta%20Live%20Tables-blue?style=flat-square)
@@ -285,8 +285,8 @@ high_cost_pipelines = dbu_metrics \
 ## Related Documentation
 
 - [Databricks Monitoring Index](README.md)
-- [Delta Lake Best Practices](../../../best-practices/delta-lake-optimization.md)
-- [Pipeline Troubleshooting](../../../troubleshooting/pipeline-troubleshooting/README.md)
+- Delta Lake Best Practices
+- Pipeline Troubleshooting
 
 ---
 

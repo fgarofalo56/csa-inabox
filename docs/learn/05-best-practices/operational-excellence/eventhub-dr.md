@@ -1,13 +1,13 @@
 ---
 title: "Event Hubs Disaster Recovery"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Event Hubs DR**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Event Hubs DR**"
 tags:
   - best-practices
   - operational-excellence
 ---
 # Event Hubs Disaster Recovery
 
-> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Event Hubs DR**
+> **[Home](../../index.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Event Hubs DR**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Operations-orange?style=flat-square)
@@ -358,7 +358,7 @@ AzureDiagnostics
 
 ## Related Documentation
 
-- [Event Hubs Overview](../../../02-services/streaming-services/azure-event-hubs/README.md)
+- [Event Hubs Overview](../../02-services/streaming-services/azure-event-hubs/README.md)
 - [Capture Optimization](../cross-cutting-concerns/storage/capture-optimization.md)
 - [Reliability Patterns](reliability.md)
 

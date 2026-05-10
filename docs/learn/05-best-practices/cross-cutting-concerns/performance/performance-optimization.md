@@ -521,7 +521,7 @@ VACUUM sales_data RETAIN 30 DAYS;         -- Execute cleanup
 
 ### 🔄 Continuous Improvement Process
 
-![Performance optimization continuous improvement cycle diagram showing monitoring, analysis, implementation, and validation phases](../images/diagrams/best-practices-performance-optimization-diagram-1.png)
+![Performance optimization continuous improvement cycle diagram showing monitoring, analysis, implementation, and validation phases](../../../images/diagrams/best-practices-performance-optimization-diagram-1.png)
 
 ---
 
@@ -529,4 +529,4 @@ VACUUM sales_data RETAIN 30 DAYS;         -- Execute cleanup
 > Performance optimization is an iterative process that should be tailored to your specific workload characteristics and business requirements. Start with the highest-impact optimizations and measure results before proceeding.
 >
 > 🔗 __Next Steps__
-> Ready to implement? Start with our [Delta Lake optimization examples](../code-examples/delta-lake-guide.md) for hands-on guidance.
+> Ready to implement? Start with our Delta Lake optimization examples for hands-on guidance.

@@ -1,12 +1,12 @@
 ---
 title: "Azure Synapse Analytics Reference"
-description: "[🏠 Home](../../README.md) > 📚 Reference"
+description: "[🏠 Home](../index.md) > 📚 Reference"
 tags:
   - reference
 ---
 # 📚 Azure Synapse Analytics Reference
 
-[🏠 Home](../../README.md) > 📚 Reference
+[🏠 Home](../index.md) > 📚 Reference
 
 > 📋 __Reference Hub__  
 > This section provides comprehensive reference materials for Azure Synapse Analytics, including security checklists, configuration references, and best practices summaries. Use these resources as quick references during implementation and operation.
@@ -120,8 +120,8 @@ tags:
 | Resource | Purpose | Content Coverage | Quick Access |
 |----------|---------|------------------|--------------|
 | 🏗️ __[Architecture](/docs/architecture/README.md)__ | Reference architectures and design patterns | Lakehouse, serverless, shared metadata | [![Architecture](https://img.shields.io/badge/🏗️-Architecture-blue)](#) |
-| 📋 __[Best Practices](../best-practices/README.md)__ | Implementation recommendations and guidance | Performance, security, cost, governance | [![Best Practices](https://img.shields.io/badge/📋-Best_Practices-green)](#) |
-| 🔧 __[Troubleshooting](../troubleshooting/README.md)__ | Common issues and resolution procedures | Error handling, performance tuning | [![Troubleshooting](https://img.shields.io/badge/🔧-Troubleshooting-red)](#) |
+| 📋 __[Best Practices](../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)__ | Implementation recommendations and guidance | Performance, security, cost, governance | [![Best Practices](https://img.shields.io/badge/📋-Best_Practices-green)](#) |
+| 🔧 __[Troubleshooting](../07-troubleshooting/README.md)__ | Common issues and resolution procedures | Error handling, performance tuning | [![Troubleshooting](https://img.shields.io/badge/🔧-Troubleshooting-red)](#) |
 | ❓ __[FAQ](/docs/faq.md)__ | Frequently asked questions and answers | Common scenarios, quick solutions | [![FAQ](https://img.shields.io/badge/❓-FAQ-yellow)](#) |
 
 ---

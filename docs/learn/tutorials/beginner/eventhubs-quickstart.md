@@ -442,7 +442,7 @@ __Throttling Errors__
 ### __Related Learning Paths__
 
 - [Data Engineer Path](../learning-paths/data-engineer-path.md)
-- [Streaming Architecture Patterns](../../architecture/README.md)
+- [Streaming Architecture Patterns](../../03-architecture-patterns/reference-architectures/README.md)
 
 ## 🧹 Cleanup
 

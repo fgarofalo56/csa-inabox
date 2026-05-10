@@ -243,7 +243,7 @@ We welcome contributions:
 3. **Report Issues** - Help us improve
 4. **Suggest Features** - Request new solutions
 
-See [Contributing Guide](../guides/CONTRIBUTING_GUIDE.md) for details.
+See Contributing Guide for details.
 
 ---
 

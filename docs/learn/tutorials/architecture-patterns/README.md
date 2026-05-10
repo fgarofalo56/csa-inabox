@@ -251,8 +251,8 @@ Each tutorial includes:
 
 Want to contribute a new tutorial or improve existing ones?
 
-1. Review the [Contributing Guide](../../../docs/guides/CONTRIBUTING_GUIDE.md)
-2. Follow the [Markdown Style Guide](../../../docs/guides/MARKDOWN_STYLE_GUIDE.md)
+1. Review the Contributing Guide
+2. Follow the Markdown Style Guide
 3. Use the [Tutorial Template](TUTORIAL_TEMPLATE.md)
 4. Submit a pull request
 

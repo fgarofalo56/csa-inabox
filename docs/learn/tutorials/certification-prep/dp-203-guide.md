@@ -61,9 +61,9 @@ __Study Resources:__
 
 | Topic | Documentation Link | Priority |
 |-------|-------------------|----------|
-| Delta Lake Architecture | [Architecture Guide](../../../architecture/delta-lakehouse/README.md) | ⭐⭐⭐ |
-| Data Lake Best Practices | [Best Practices](../../../best-practices/delta-lake-optimization.md) | ⭐⭐⭐ |
-| File Format Selection | [Overview](../../../01-overview/README.md) | ⭐⭐ |
+| Delta Lake Architecture | [Architecture Guide](../../03-architecture-patterns/service-architectures/delta-lakehouse/README.md) | ⭐⭐⭐ |
+| Data Lake Best Practices | Best Practices | ⭐⭐⭐ |
+| File Format Selection | [Overview](../../01-overview/README.md) | ⭐⭐ |
 
 __Practice Questions:__
 
@@ -95,7 +95,7 @@ __Study Resources:__
 | Topic | Documentation Link | Priority |
 |-------|-------------------|----------|
 | Data Modeling | [Learning Path - Module 1.4](../learning-paths/data-engineer-path.md#module-14-data-modeling-fundamentals-12-hours) | ⭐⭐⭐ |
-| Architecture Patterns | [Patterns](../../../03-architecture-patterns/README.md) | ⭐⭐⭐ |
+| Architecture Patterns | [Patterns](../../03-architecture-patterns/README.md) | ⭐⭐⭐ |
 
 __Practice Scenario:__
 
@@ -135,8 +135,8 @@ __Study Resources:__
 |-------|-------------------|----------|
 | PySpark Fundamentals | [Code Lab](../../code-labs/pyspark-fundamentals.md) | ⭐⭐⭐ |
 | Data Pipeline Development | [Learning Path - Module 2.3](../learning-paths/data-engineer-path.md#module-23-data-pipeline-development-20-hours) | ⭐⭐⭐ |
-| Azure Data Factory | [Integration Guide](../../../code-examples/integration/azure-data-factory.md) | ⭐⭐⭐ |
-| Stream Analytics | [Solutions](../../../08-solutions/azure-realtime-analytics/README.md) | ⭐⭐ |
+| Azure Data Factory | [Integration Guide](../../06-code-examples/integration/azure-data-factory.md) | ⭐⭐⭐ |
+| Stream Analytics | [Solutions](../../08-solutions/azure-realtime-analytics/README.md) | ⭐⭐ |
 
 __Key Concepts to Master:__
 
@@ -225,9 +225,9 @@ __Study Resources:__
 
 | Topic | Documentation Link | Priority |
 |-------|-------------------|----------|
-| Spark Performance | [Best Practices](../../../best-practices/spark-performance.md) | ⭐⭐⭐ |
-| Pipeline Optimization | [Optimization Guide](../../../best-practices/pipeline-optimization.md) | ⭐⭐⭐ |
-| Automated Testing | [DevOps Guide](../../../devops/automated-testing.md) | ⭐⭐ |
+| Spark Performance | Best Practices | ⭐⭐⭐ |
+| Pipeline Optimization | [Optimization Guide](../../05-best-practices/cross-cutting-concerns/development/pipeline-optimization.md) | ⭐⭐⭐ |
+| Automated Testing | [DevOps Guide](../../10-devops/automated-testing.md) | ⭐⭐ |
 
 __Critical Exam Topics:__
 
@@ -273,7 +273,7 @@ __Study Resources:__
 
 | Topic | Documentation Link | Priority |
 |-------|-------------------|----------|
-| Real-time Analytics | [Solutions Guide](../../../08-solutions/azure-realtime-analytics/README.md) | ⭐⭐⭐ |
+| Real-time Analytics | [Solutions Guide](../../08-solutions/azure-realtime-analytics/README.md) | ⭐⭐⭐ |
 | Stream Analytics | [Tutorial](../../stream-analytics/README.md) | ⭐⭐⭐ |
 
 __Key Streaming Concepts:__
@@ -347,8 +347,8 @@ __Study Resources:__
 
 | Topic | Documentation Link | Priority |
 |-------|-------------------|----------|
-| Security Best Practices | [Guide](../../../best-practices/security.md) | ⭐⭐⭐ |
-| Network Security | [Architecture](../../../best-practices/network-security.md) | ⭐⭐⭐ |
+| Security Best Practices | [Guide](../../best-practices-extra/security/README.md) | ⭐⭐⭐ |
+| Network Security | [Architecture](../../05-best-practices/cross-cutting-concerns/networking/network-security.md) | ⭐⭐⭐ |
 | Platform Admin Security | [Learning Path](../learning-paths/platform-admin-path.md#module-11-identity-and-access-management-16-hours) | ⭐⭐⭐ |
 
 __Critical Security Concepts:__
@@ -414,9 +414,9 @@ __Study Resources:__
 
 | Topic | Documentation Link | Priority |
 |-------|-------------------|----------|
-| Monitoring Setup | [Guide](../../../monitoring/monitoring-setup.md) | ⭐⭐⭐ |
-| Spark Monitoring | [Spark Guide](../../../monitoring/spark-monitoring.md) | ⭐⭐ |
-| SQL Monitoring | [SQL Guide](../../../monitoring/sql-monitoring.md) | ⭐⭐ |
+| Monitoring Setup | [Guide](../../09-monitoring/monitoring-setup.md) | ⭐⭐⭐ |
+| Spark Monitoring | [Spark Guide](../../09-monitoring/spark-monitoring.md) | ⭐⭐ |
+| SQL Monitoring | [SQL Guide](../../09-monitoring/sql-monitoring.md) | ⭐⭐ |
 
 __Key Monitoring Metrics:__
 
@@ -450,9 +450,9 @@ __Study Resources:__
 
 | Topic | Documentation Link | Priority |
 |-------|-------------------|----------|
-| Performance Optimization | [Guide](../../../best-practices/performance-optimization.md) | ⭐⭐⭐ |
-| Troubleshooting | [Guide](../../../troubleshooting/README.md) | ⭐⭐⭐ |
-| Query Optimization | [SQL Guide](../../../code-examples/serverless-sql/query-optimization.md) | ⭐⭐⭐ |
+| Performance Optimization | [Guide](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md) | ⭐⭐⭐ |
+| Troubleshooting | [Guide](../../07-troubleshooting/README.md) | ⭐⭐⭐ |
+| Query Optimization | [SQL Guide](../../06-code-examples/serverless-sql/query-optimization.md) | ⭐⭐⭐ |
 
 __Common Performance Issues:__
 

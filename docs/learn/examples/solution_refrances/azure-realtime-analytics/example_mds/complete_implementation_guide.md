@@ -420,13 +420,13 @@ git push origin architecture-update-v2.1
 # Architecture Overview
 
 ## System Architecture
-![Azure Architecture](./diagrams/azure-architecture-clean.svg)
+Azure Architecture
 
 ## Performance Metrics
-![Monitoring Dashboard](./diagrams/monitoring-dashboard.svg)
+Monitoring Dashboard
 
 ## Security Implementation
-![Security Architecture](./diagrams/security-network-clean.svg)
+Security Architecture
 ```
 
 #### 4. Mobile-Responsive Views

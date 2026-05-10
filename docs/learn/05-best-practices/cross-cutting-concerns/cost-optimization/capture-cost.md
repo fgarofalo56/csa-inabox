@@ -538,8 +538,8 @@ result = analyze_capture_efficiency(resource_id)
 
 ## Related Resources
 
-- [Event Hubs Cost Optimization](./eventhub-cost.md)
-- [Storage Optimization](./storage-optimization.md)
+- Event Hubs Cost Optimization
+- [Storage Optimization](../storage-optimization.md)
 - [Streaming Performance](../performance/streaming-optimization.md)
 - [Event Hubs Best Practices](https://learn.microsoft.com/azure/event-hubs/event-hubs-capture-overview)
 

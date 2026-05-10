@@ -38,8 +38,8 @@ This section provides detailed troubleshooting guidance for Azure Synapse Analyt
 | **Connectivity Failures** | High | Critical | [Connectivity Guide](connectivity.md) |
 | **Query Performance** | High | Medium | [Query Performance Guide](query-performance.md) |
 | **Scaling Issues** | Medium | High | [Scaling Guide](scaling.md) |
-| **Authentication Errors** | Medium | Critical | [Authentication Guide](../../../troubleshooting/authentication-troubleshooting.md) |
-| **Pipeline Failures** | Medium | Medium | [Pipeline Guide](../../../troubleshooting/pipeline-troubleshooting.md) |
+| **Authentication Errors** | Medium | Critical | [Authentication Guide](../../authentication-troubleshooting.md) |
+| **Pipeline Failures** | Medium | Medium | [Pipeline Guide](../../pipeline-troubleshooting.md) |
 
 ---
 
@@ -174,7 +174,7 @@ Before diving into specific guides, collect this information:
 |:-------------------|:-------------|:----------|:---------------|
 | `Error 40613` | Resource limit reached | Scale up or wait | [Scaling](scaling.md#resource-limits) |
 | `Error 40501` | Service busy | Retry with backoff | [Query Performance](query-performance.md#service-busy) |
-| `Error 18456` | Authentication failed | Check credentials | [Security](../../../troubleshooting/authentication-troubleshooting.md) |
+| `Error 18456` | Authentication failed | Check credentials | [Security](../../authentication-troubleshooting.md) |
 | `Timeout expired` | Query too slow | Optimize query | [Query Performance](query-performance.md#timeout-errors) |
 | `Connection failed` | Network issue | Check firewall | [Connectivity](connectivity.md#firewall-issues) |
 

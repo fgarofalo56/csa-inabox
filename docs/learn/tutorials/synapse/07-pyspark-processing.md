@@ -1,13 +1,13 @@
 ---
 title: "Tutorial 07: PySpark Processing in Azure Synapse"
-description: "> **Navigation**: [Home](../../README.md) > [Tutorials](../README.md) > [Synapse Series](README.md) > PySpark Processing"
+description: "> **Navigation**: [Home](../../index.md) > [Tutorials](../README.md) > [Synapse Series](README.md) > PySpark Processing"
 tags:
   - tutorials
   - synapse
 ---
 # Tutorial 07: PySpark Processing in Azure Synapse
 
-> **Navigation**: [Home](../../README.md) > [Tutorials](../README.md) > [Synapse Series](README.md) > PySpark Processing
+> **Navigation**: [Home](../../index.md) > [Tutorials](../README.md) > [Synapse Series](README.md) > PySpark Processing
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-07%20of%2014-blue)
 ![Duration](https://img.shields.io/badge/Duration-60%20minutes-orange)

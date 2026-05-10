@@ -477,7 +477,7 @@ ALTER ROLE db_datareader ADD MEMBER [adf-tutorial-dev-001];
 - [ADF Managed Virtual Network](https://docs.microsoft.com/azure/data-factory/managed-virtual-network-private-endpoint)
 - [Managed Identity Documentation](https://docs.microsoft.com/azure/active-directory/managed-identities-azure-resources/)
 - [Azure Private Link](https://docs.microsoft.com/azure/private-link/)
-- [Security Best Practices](../../best-practices/security.md)
+- [Security Best Practices](../../best-practices-extra/security/README.md)
 
 ## 🚀 Next Steps
 

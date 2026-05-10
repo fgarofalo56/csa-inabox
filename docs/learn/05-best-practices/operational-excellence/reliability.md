@@ -1,13 +1,13 @@
 ---
 title: "Reliability Patterns"
-description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Reliability**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Reliability**"
 tags:
   - best-practices
   - operational-excellence
 ---
 # Reliability Patterns
 
-> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Reliability**
+> **[Home](../../index.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Reliability**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-Operations-orange?style=flat-square)

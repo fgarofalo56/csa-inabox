@@ -50,7 +50,7 @@ When complete, this tutorial will include:
 
 Want to help build this tutorial? We welcome contributions!
 
-1. Review the [Contributing Guide](../../guides/CONTRIBUTING_GUIDE.md)
+1. Review the Contributing Guide
 2. Follow the [Tutorial Template](./TUTORIAL_TEMPLATE.md)
 3. Use the established [Medallion Architecture Tutorial](./batch/medallion-architecture-tutorial.md) as reference
 4. Submit a pull request

@@ -1,13 +1,13 @@
 ---
 title: "Data Mesh Integration Patterns"
-description: "> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Data Mesh__"
+description: "> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Data Mesh__"
 tags:
   - implementation
   - integration-scenarios
 ---
 # Data Mesh Integration Patterns
 
-> __[Home](../../../README.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Data Mesh__
+> __[Home](../../index.md)__ | __[Implementation](../README.md)__ | __[Integration](README.md)__ | __Data Mesh__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)
@@ -374,7 +374,7 @@ ORDER BY quality_score DESC;
 
 - [Synapse + Databricks](synapse-databricks.md)
 - [Purview + Synapse](purview-synapse.md)
-- [Data Governance Best Practices](../../05-best-practices/cross-cutting-concerns/governance/data-governance.md)
+- Data Governance Best Practices
 
 ---
 

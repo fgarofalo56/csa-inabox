@@ -60,7 +60,7 @@ __Optimize Azure Data Factory pipelines for maximum performance and cost efficie
 ## 📚 Additional Resources
 
 - [Copy Activity Performance](https://docs.microsoft.com/azure/data-factory/copy-activity-performance)
-- [Performance Tuning Guide](../../best-practices/performance-optimization.md)
+- [Performance Tuning Guide](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
 
 ## 🚀 Next Steps
 

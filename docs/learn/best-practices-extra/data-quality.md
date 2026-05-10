@@ -1,12 +1,12 @@
 ---
 title: "Data Quality Best Practices"
-description: "> **[Home](../README.md)** | **[Best Practices](index.md)** | **Data Quality**"
+description: "> **[Home](../index.md)** | **[Best Practices](index.md)** | **Data Quality**"
 tags:
   - best-practices
 ---
 # Data Quality Best Practices
 
-> **[Home](../README.md)** | **[Best Practices](index.md)** | **Data Quality**
+> **[Home](../index.md)** | **[Best Practices](index.md)** | **Data Quality**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -146,7 +146,7 @@ quality_gate(df, {
 ## Related Documentation
 
 - [Data Governance](data-governance/README.md)
-- [Delta Lake Optimization](../docs/05-best-practices/delta-lake-optimization/README.md)
+- Delta Lake Optimization
 
 ---
 

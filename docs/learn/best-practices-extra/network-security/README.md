@@ -1,13 +1,13 @@
 ---
 title: "Network Security Best Practices"
-description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Network Security**"
+description: "> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Network Security**"
 tags:
   - best-practices
   - network-security
 ---
 # Network Security Best Practices
 
-> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Network Security**
+> **[Home](../../index.md)** | **[Best Practices](../index.md)** | **Network Security**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 
@@ -124,8 +124,8 @@ az network private-dns link vnet create \
 
 ## Related Documentation
 
-- [Security Best Practices](security/README.md)
-- [Private Link Architecture](../../docs/architecture/private-link-architecture/README.md)
+- Security Best Practices
+- Private Link Architecture
 
 ---
 

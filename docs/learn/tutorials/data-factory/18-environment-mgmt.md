@@ -200,8 +200,8 @@ Congratulations! You've completed the Azure Data Factory Tutorial Series.
 ### Additional Resources
 
 - [Azure Data Factory Documentation](https://docs.microsoft.com/azure/data-factory/)
-- [ADF Best Practices](../../best-practices/README.md)
-- [Architecture Patterns](../../architecture/README.md)
+- [ADF Best Practices](../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
+- [Architecture Patterns](../../03-architecture-patterns/reference-architectures/README.md)
 - [Community Forums](https://github.com/Azure/Azure-DataFactory/discussions)
 
 ### Feedback

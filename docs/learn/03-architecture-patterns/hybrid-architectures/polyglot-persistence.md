@@ -976,7 +976,7 @@ class DistributedTransactionCoordinator:
 
 - [Azure SQL Database Best Practices](https://docs.microsoft.com/azure/sql-database/)
 - [Cosmos DB Multi-Model Guide](https://docs.microsoft.com/azure/cosmos-db/)
-- [Data Synchronization Patterns](../../best-practices/README.md)
+- [Data Synchronization Patterns](../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 
 ### Reference Architectures
 

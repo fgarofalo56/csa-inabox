@@ -149,8 +149,8 @@ const schemaValidator = {
 
 ## 📚 Additional Resources
 
-- [Table Design Guide](../../best-practices/performance-optimization.md)
-- [Distribution Strategies](../../architecture/README.md)
+- [Table Design Guide](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+- [Distribution Strategies](../../03-architecture-patterns/reference-architectures/README.md)
 
 ## 💬 Feedback
 

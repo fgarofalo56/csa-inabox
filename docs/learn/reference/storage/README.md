@@ -1,13 +1,13 @@
 ---
 title: "Azure Storage Reference"
-description: "[Home](../../../README.md) > [Reference](../README.md) > Storage"
+description: "[Home](../../index.md) > [Reference](../README.md) > Storage"
 tags:
   - reference
   - storage
 ---
 # Azure Storage Reference
 
-[Home](../../../README.md) > [Reference](../README.md) > Storage
+[Home](../../index.md) > [Reference](../README.md) > Storage
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 ![Documentation](https://img.shields.io/badge/Documentation-Complete-blue)
@@ -295,8 +295,8 @@ az monitor diagnostic-settings create \
 
 ## Related Resources
 
-- [Best Practices - Performance Optimization](../../best-practices/performance-optimization.md)
-- [Network Security](../../best-practices/network-security.md)
+- [Best Practices - Performance Optimization](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+- [Network Security](../../05-best-practices/cross-cutting-concerns/networking/network-security.md)
 - [Security Checklist](../security-checklist/README.md)
 
 ---

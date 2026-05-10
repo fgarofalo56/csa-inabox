@@ -249,8 +249,8 @@ def setup_memory_monitoring():
 
 | Resource | Description |
 |----------|-------------|
-| [Query Performance](query-performance.md) | Query optimization techniques |
-| [Shuffle Optimization](shuffle-optimization.md) | Reduce shuffle memory usage |
+| Query Performance | Query optimization techniques |
+| Shuffle Optimization | Reduce shuffle memory usage |
 | [Databricks Performance Guide](https://docs.databricks.com/optimizations/index.html) | Official documentation |
 
 ---

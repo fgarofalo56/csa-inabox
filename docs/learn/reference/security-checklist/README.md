@@ -1,13 +1,13 @@
 ---
 title: "Azure Security Checklist Reference"
-description: "[Home](../../../README.md) > [Reference](../README.md) > Security Checklist"
+description: "[Home](../../index.md) > [Reference](../README.md) > Security Checklist"
 tags:
   - reference
   - security-checklist
 ---
 # Azure Security Checklist Reference
 
-[Home](../../../README.md) > [Reference](../README.md) > Security Checklist
+[Home](../../index.md) > [Reference](../README.md) > Security Checklist
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 ![Documentation](https://img.shields.io/badge/Documentation-Complete-blue)
@@ -831,8 +831,8 @@ az policy definition create \
 - [Azure Security Best Practices](https://docs.microsoft.com/azure/security/fundamentals/best-practices-and-patterns)
 - [Microsoft Cloud Security Benchmark](https://docs.microsoft.com/security/benchmark/azure/introduction)
 - [Azure Well-Architected Framework - Security](https://docs.microsoft.com/azure/architecture/framework/security/overview)
-- [Network Security Best Practices](../../best-practices/network-security.md)
-- [Data Governance Guide](../../best-practices/data-governance.md)
+- [Network Security Best Practices](../../05-best-practices/cross-cutting-concerns/networking/network-security.md)
+- [Data Governance Guide](../../best-practices-extra/data-governance/README.md)
 
 ---
 

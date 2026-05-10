@@ -469,7 +469,7 @@ az deployment group create \
 ### Implementation Guides
 
 - [Deployment Guide](../../tutorials/README.md)
-- [Best Practices](../../best-practices/README.md)
+- [Best Practices](../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 - [Security Guide](../../security/README.md)
 
 ### Architecture Patterns

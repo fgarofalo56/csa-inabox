@@ -1162,7 +1162,7 @@ Implement a complete CI/CD solution with:
 
 ## 📚 Additional Resources
 
-- [Azure Synapse CI/CD Best Practices](../../devops/pipeline-ci-cd.md)
+- [Azure Synapse CI/CD Best Practices](../../10-devops/pipeline-ci-cd.md)
 - [GitHub Actions for Azure](https://docs.microsoft.com/azure/developer/github/github-actions)
 - [Azure DevOps for Data Platforms](https://docs.microsoft.com/azure/devops/)
 - [Great Expectations Documentation](https://docs.greatexpectations.io/)

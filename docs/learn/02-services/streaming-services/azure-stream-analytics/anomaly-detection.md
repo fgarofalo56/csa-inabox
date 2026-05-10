@@ -8,7 +8,7 @@ tags:
 # =
  Anomaly Detection
 
-> __< [Home](../../../../README.md)__ | __= [Overview](../../../01-overview/README.md)__ | __= [Services](../../README.md)__ | __= [Streaming Services](../README.md)__ | __ [Stream Analytics](README.md)__ | __=
+> __< [Home](../../../index.md)__ | __= [Overview](../../../01-overview/README.md)__ | __= [Services](../../README.md)__ | __= [Streaming Services](../README.md)__ | __ [Stream Analytics](README.md)__ | __=
  Anomaly Detection__
 
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)
@@ -567,7 +567,7 @@ WHERE
 
 ### Best Practices
 
-- [__ML Model Tuning__](../../../05-best-practices/cross-cutting-concerns/performance/anomaly-detection-tuning.md)
+- __ML Model Tuning__
 - [__Alert Management__](../../../05-best-practices/operational-excellence/alert-strategies.md)
 
 ---

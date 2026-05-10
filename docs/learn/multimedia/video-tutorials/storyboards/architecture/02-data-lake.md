@@ -107,7 +107,7 @@ Visual storyboard for the Data Lake Architecture video, focusing on medallion ar
 ## Related Content
 
 - [Foundation Storyboard](01-foundation.md)
-- [Data Lake Script](../scripts/architecture/02-data-lake.md)
+- Data Lake Script
 
 ---
 

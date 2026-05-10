@@ -11,11 +11,11 @@ This section covers deployment processes and configurations for the Cloud Scale 
 
 ## Topics
 
-- [MkDocs Deployment Guide](../guides/MKDOCS_DEPLOYMENT.md)
-- [CI/CD Guide](../guides/CICD_GUIDE.md)
-- [Azure Integration](../guides/AZURE_INTEGRATION.md)
+- MkDocs Deployment Guide
+- CI/CD Guide
+- Azure Integration
 
 ## Related Resources
 
-- [Configuration](../../config/README.md)
-- [Scripts - Deployment](../../scripts/deployment/README.md)
+- Configuration
+- [Scripts - Deployment](README.md)

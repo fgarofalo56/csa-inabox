@@ -911,7 +911,7 @@ GROUP BY cluster_id;
 1. **[Configure Unity Catalog](unity-catalog/README.md)** - Set up centralized governance
 2. **[Create Delta Live Tables Pipeline](delta-live-tables/README.md)** - Build ETL workflows
 3. **[Set Up MLflow](mlflow-integration/README.md)** - Enable ML lifecycle management
-4. **[Implement Security](../../../05-best-practices/cross-cutting-concerns/security/databricks-security.md)** - Harden your deployment
+4. **Implement Security** - Harden your deployment
 
 ---
 
@@ -919,7 +919,7 @@ GROUP BY cluster_id;
 
 - [**Azure Databricks Documentation**](https://docs.microsoft.com/azure/databricks/)
 - [**Networking Best Practices**](../../../05-best-practices/cross-cutting-concerns/networking/databricks-networking.md)
-- [**Security Hardening Guide**](../../../05-best-practices/cross-cutting-concerns/security/databricks-security.md)
+- **Security Hardening Guide**
 - [**Cost Optimization**](../../../05-best-practices/cross-cutting-concerns/cost-optimization/databricks-costs.md)
 
 ---

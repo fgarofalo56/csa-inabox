@@ -251,8 +251,8 @@ WHERE pr.name = 'user@contoso.com';
 
 ## 📚 Additional Resources
 
-- [Security Best Practices](../../best-practices/security.md)
-- [Network Security Guide](../../best-practices/network-security.md)
+- [Security Best Practices](../../best-practices-extra/security/README.md)
+- [Network Security Guide](../../05-best-practices/cross-cutting-concerns/networking/network-security.md)
 - [Compliance Reference](../../reference/security.md)
 
 ## 💬 Feedback

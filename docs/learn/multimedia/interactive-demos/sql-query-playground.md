@@ -824,9 +824,9 @@ GROUP BY CustomerID;
 ## 📚 Additional Resources
 
 - [T-SQL Reference](https://docs.microsoft.com/sql/t-sql/)
-- [Synapse SQL Best Practices](../../best-practices/sql-performance.md)
-- [Query Optimization Guide](../../best-practices/performance-optimization.md)
-- [Serverless SQL Pool Guide](../../architecture/serverless-sql/README.md)
+- [Synapse SQL Best Practices](../../best-practices-extra/sql-performance/README.md)
+- [Query Optimization Guide](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
+- [Serverless SQL Pool Guide](../../03-architecture-patterns/service-architectures/serverless-sql/README.md)
 
 ## 💬 Feedback
 

@@ -761,16 +761,16 @@ After completing this demo, you should understand:
 
 ### Documentation
 
-- [Cost Optimization Best Practices](../../best-practices/cost-optimization.md)
-- [Performance Optimization Guide](../../best-practices/performance-optimization.md)
+- [Cost Optimization Best Practices](../../best-practices-extra/cost-optimization/README.md)
+- [Performance Optimization Guide](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
 - [Spark Pool Configuration](../../02-services/analytics-compute/azure-synapse/spark-pools/configuration.md)
 - [SQL Pool Sizing Guide](../../02-services/analytics-compute/azure-synapse/dedicated-sql/sizing.md)
 
 ### Tutorials
 
-- [Right-Sizing Resources Tutorial](../../tutorials/optimization/right-sizing.md)
-- [Auto-Scaling Configuration](../../tutorials/synapse/autoscaling-setup.md)
-- [Cost Monitoring Setup](../../tutorials/monitoring/cost-tracking.md)
+- Right-Sizing Resources Tutorial
+- Auto-Scaling Configuration
+- Cost Monitoring Setup
 
 ### Tools
 
@@ -805,7 +805,7 @@ Help us improve this resource planner!
 **Next Steps:**
 - Try the [Cost Calculator](cost-calculator.md)
 - Explore the [Migration Assessment Wizard](migration-assessment.md)
-- Review [Performance Optimization Guide](../../best-practices/performance-optimization.md)
+- Review [Performance Optimization Guide](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
 
 ---
 

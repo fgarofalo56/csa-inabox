@@ -471,10 +471,10 @@ SuspiciousDataAccess
 
 ## Next Steps
 
-1. **Review [Monitoring Setup](../operations/monitoring.md)** - Implement security monitoring
-2. **Configure [Compliance Framework](../resources/security-guidelines.md)** - Detailed compliance procedures
-3. **Deploy [Security Controls](../implementation/deployment-guide.md)** - Step-by-step security implementation
-4. **Establish [Security Operations](../operations/maintenance.md)** - Operational security procedures
+1. **Review Monitoring Setup** - Implement security monitoring
+2. **Configure Compliance Framework** - Detailed compliance procedures
+3. **Deploy Security Controls** - Step-by-step security implementation
+4. **Establish Security Operations** - Operational security procedures
 
 ---
 

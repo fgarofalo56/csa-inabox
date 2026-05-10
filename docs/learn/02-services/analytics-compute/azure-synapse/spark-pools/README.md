@@ -49,10 +49,10 @@ To create a Spark Pool:
 
 ## Related Documentation
 
-- [Best Practices](../../../../best-practices/spark-performance.md)
-- [Troubleshooting](../../../../troubleshooting/spark-troubleshooting.md)
+- [Best Practices](../../../../05-best-practices/service-specific/synapse/spark-performance.md)
+- [Troubleshooting](../../../../07-troubleshooting/spark-troubleshooting.md)
 - [Configuration Reference](../../../../reference/spark-configuration.md)
 
 ---
 
-Back to Azure Synapse | [Documentation Home](../../../../README.md)
+Back to Azure Synapse | [Documentation Home](../../../../index.md)

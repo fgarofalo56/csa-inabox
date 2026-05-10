@@ -668,13 +668,13 @@ alerts:
 
 ## Next Steps
 
-1. **[Explore Components](components.md)** - Deep dive into Databricks architecture
-2. **[Review Security](security.md)** - Zero-trust security implementation
-3. **[Implementation Guide](../implementation/deployment-guide.md)** - Deploy the data flow
-4. **[Monitoring Setup](../operations/monitoring.md)** - Configure observability
+1. **[Explore Components](../docs/architecture/components.md)** - Deep dive into Databricks architecture
+2. **[Review Security](../docs/architecture/security.md)** - Zero-trust security implementation
+3. **Implementation Guide** - Deploy the data flow
+4. **Monitoring Setup** - Configure observability
 
 ---
 
 **🎯 Performance Target**: The data flow architecture delivers **<5 second end-to-end latency** for 99% of events while processing **1.2M+ events per second** with **99.8% data quality**.
 
-**🔧 Optimization Ready**: Follow the [performance tuning guide](../resources/performance-tuning.md) to optimize for your specific workload patterns.
+**🔧 Optimization Ready**: Follow the performance tuning guide to optimize for your specific workload patterns.

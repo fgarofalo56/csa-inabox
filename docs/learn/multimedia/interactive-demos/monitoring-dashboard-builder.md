@@ -141,8 +141,8 @@ const alertRules = {
 
 ## 📚 Additional Resources
 
-- [Monitoring Guide](../../monitoring/README.md)
-- [Performance Optimization](../../best-practices/performance-optimization.md)
+- [Monitoring Guide](../../09-monitoring/README.md)
+- [Performance Optimization](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
 
 ## 💬 Feedback
 

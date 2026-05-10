@@ -974,7 +974,7 @@ Phase 3: Additional Spokes (Months 7-12)
 **Related Documentation**:
 - [Medallion Architecture](medallion-architecture.md)
 - [Synapse Dedicated SQL Pools](../../02-services/analytics-compute/azure-synapse/README.md)
-- [Performance Optimization](../../best-practices/performance-optimization.md)
+- [Performance Optimization](../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
 
 ---
 

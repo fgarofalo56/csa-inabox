@@ -1,13 +1,13 @@
 ---
 title: "Azure Storage Custom Domains Reference"
-description: "[Home](../../../README.md) > [Reference](../README.md) > [Storage](README.md) > Custom Domains"
+description: "[Home](../../index.md) > [Reference](../README.md) > [Storage](README.md) > Custom Domains"
 tags:
   - reference
   - storage
 ---
 # Azure Storage Custom Domains Reference
 
-[Home](../../../README.md) > [Reference](../README.md) > [Storage](README.md) > Custom Domains
+[Home](../../index.md) > [Reference](../README.md) > [Storage](README.md) > Custom Domains
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 ![Documentation](https://img.shields.io/badge/Documentation-Complete-blue)

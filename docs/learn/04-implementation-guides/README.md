@@ -360,7 +360,7 @@ Apply best practices and set up monitoring for production readiness.
 - **Synapse**: Pause when not in use, optimize DWU allocation
 - **Storage**: Use lifecycle management, choose appropriate tiers
 
-**[📖 Detailed Cost Guide →](../best-practices/cost-optimization.md)**
+**[📖 Detailed Cost Guide →](../best-practices-extra/cost-optimization/README.md)**
 
 ---
 
@@ -382,7 +382,7 @@ Apply best practices and set up monitoring for production readiness.
 - **Azure Advisor**: Optimization recommendations
 - **Cost Management**: Budget tracking and alerts
 
-**[📖 Monitoring Guide →](../monitoring/README.md)**
+**[📖 Monitoring Guide →](../09-monitoring/README.md)**
 
 ---
 
@@ -420,7 +420,7 @@ Apply best practices and set up monitoring for production readiness.
 - Check for throttling in metrics
 - Analyze diagnostic logs
 
-**[📖 Full Troubleshooting Guide →](../troubleshooting/README.md)**
+**[📖 Full Troubleshooting Guide →](../07-troubleshooting/README.md)**
 
 ---
 
@@ -442,7 +442,7 @@ Apply best practices and set up monitoring for production readiness.
 
 - [Azure Samples on GitHub](https://github.com/Azure-Samples)
 - [Azure Quickstart Templates](https://github.com/Azure/azure-quickstart-templates)
-- [CSA Code Examples](../code-examples/README.md)
+- [CSA Code Examples](../06-code-examples/README.md)
 
 ---
 
@@ -450,8 +450,8 @@ Apply best practices and set up monitoring for production readiness.
 
 Have an implementation guide to share? We welcome contributions!
 
-1. Review the [Contributing Guide](../guides/CONTRIBUTING_GUIDE.md)
-2. Follow the [Markdown Style Guide](../guides/MARKDOWN_STYLE_GUIDE.md)
+1. Review the Contributing Guide
+2. Follow the Markdown Style Guide
 3. Submit a pull request with your guide
 
 ---

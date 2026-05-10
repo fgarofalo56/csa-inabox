@@ -806,8 +806,8 @@ Contact Microsoft Support if:
 
 - [Connectivity Troubleshooting](connectivity.md)
 - [Query Performance](query-performance.md)
-- [Cost Optimization Best Practices](../../../best-practices/cost-optimization.md)
-- [Performance Optimization](../../../best-practices/performance-optimization.md)
+- [Cost Optimization Best Practices](../../../best-practices-extra/cost-optimization/README.md)
+- [Performance Optimization](../../../05-best-practices/cross-cutting-concerns/performance/performance-optimization.md)
 - [Synapse Capacity Management](https://docs.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-manage-compute-overview)
 
 ---

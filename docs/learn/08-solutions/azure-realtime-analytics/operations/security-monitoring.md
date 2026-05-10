@@ -1,6 +1,6 @@
 ---
 title: "Security Monitoring"
-description: "> __[Home](../../../../README.md)__ | __[Solutions](../../../08-solutions/README.md)__ | __[Real-Time Analytics](../README.md)__ | __Security Monitoring__"
+description: "> __[Home](../../../index.md)__ | __[Solutions](../../../08-solutions/README.md)__ | __[Real-Time Analytics](../README.md)__ | __Security Monitoring__"
 tags:
   - solutions
   - azure-realtime-analytics
@@ -8,7 +8,7 @@ tags:
 ---
 # Security Monitoring
 
-> __[Home](../../../../README.md)__ | __[Solutions](../../../08-solutions/README.md)__ | __[Real-Time Analytics](../README.md)__ | __Security Monitoring__
+> __[Home](../../../index.md)__ | __[Solutions](../../../08-solutions/README.md)__ | __[Real-Time Analytics](../README.md)__ | __Security Monitoring__
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red?style=flat-square)

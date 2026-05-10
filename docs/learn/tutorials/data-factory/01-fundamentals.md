@@ -394,7 +394,7 @@ __ADF Solution__:
 
 - [Azure Data Factory Documentation](https://docs.microsoft.com/azure/data-factory/)
 - [ADF Pricing Calculator](https://azure.microsoft.com/pricing/details/data-factory/)
-- [ADF Best Practices](../../best-practices/README.md)
+- [ADF Best Practices](../../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)
 - [ADF Design Patterns](https://docs.microsoft.com/azure/architecture/data-guide/)
 
 ## 🎯 Knowledge Check

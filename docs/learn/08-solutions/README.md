@@ -246,7 +246,7 @@ We welcome contributions:
 3. __Report Issues__ - Help us improve
 4. __Suggest Features__ - Request new solutions
 
-See [Contributing Guide](../guides/CONTRIBUTING_GUIDE.md) for details.
+See Contributing Guide for details.
 
 ---
 

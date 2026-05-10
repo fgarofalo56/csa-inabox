@@ -1,12 +1,12 @@
 ---
 title: "Troubleshooting Authentication and Authorization Issues in Azure Synapse Analytics"
-description: "[Home](../../README.md) > Troubleshooting > Authentication Troubleshooting"
+description: "[Home](../index.md) > Troubleshooting > Authentication Troubleshooting"
 tags:
   - troubleshooting
 ---
 # Troubleshooting Authentication and Authorization Issues in Azure Synapse Analytics
 
-[Home](../../README.md) > Troubleshooting > Authentication Troubleshooting
+[Home](../index.md) > Troubleshooting > Authentication Troubleshooting
 
 This guide covers common authentication and authorization problems in Azure Synapse Analytics, providing solutions for identity, access management, and permission-related issues across all Synapse components.
 
@@ -559,10 +559,10 @@ SynapseBuiltinSqlPoolRequestsEnded
 
 ## Related Topics
 
-- [Azure Synapse Security Configuration](../best-practices/security.md)
-- [Role-Based Access Control in Synapse](../best-practices/security.md#authorization-framework)
-- [Managed Identity Setup](../best-practices/security.md#azure-active-directory-integration)
-- [Monitoring Authentication Events](../monitoring/security-monitoring.md)
+- [Azure Synapse Security Configuration](../best-practices-extra/security/README.md)
+- [Role-Based Access Control in Synapse](../best-practices-extra/security/README.md#authorization-framework)
+- [Managed Identity Setup](../best-practices-extra/security/README.md#azure-active-directory-integration)
+- [Monitoring Authentication Events](../09-monitoring/security-monitoring.md)
 
 ## External Resources
 

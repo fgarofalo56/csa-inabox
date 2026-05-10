@@ -140,7 +140,7 @@ Delta:   [███_____________] 95 MB
 ## Related Content
 
 - [Foundation Storyboard](01-foundation.md)
-- [Serverless SQL Script](../scripts/architecture/03-serverless-sql.md)
+- Serverless SQL Script
 
 ---
 

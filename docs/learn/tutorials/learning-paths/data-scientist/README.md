@@ -149,8 +149,8 @@ __Hands-on Exercises:__
 
 __Resources:__
 
-- [Delta Lake Guide](../../../code-examples/delta-lake-guide.md)
-- [Table Optimization](../../../code-examples/delta-lake/optimization/table-optimization.md)
+- [Delta Lake Guide](../../../06-code-examples/delta-lake-guide.md)
+- [Table Optimization](../../../06-code-examples/delta-lake/optimization/table-optimization.md)
 
 __Assessment:__
 
@@ -201,7 +201,7 @@ __Hands-on Exercises:__
 
 __Resources:__
 
-- [Azure ML Integration](../../../code-examples/integration/azure-ml.md)
+- [Azure ML Integration](../../../06-code-examples/integration/azure-ml.md)
 
 ### __Module 2.3: Advanced ML Techniques__ (14 hours)
 
@@ -290,7 +290,7 @@ __Hands-on Exercises:__
 
 __Resources:__
 
-- [Monitoring Setup](../../../monitoring/README.md)
+- [Monitoring Setup](../../../09-monitoring/README.md)
 
 ## 📚 Phase 4: MLOps and Production (2-3 weeks)
 

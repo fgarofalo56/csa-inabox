@@ -1,6 +1,6 @@
 ---
 title: "Auto Loader for Delta Lake in Azure Synapse Analytics"
-description: "[🏠 Home](../../../../README.md) > [💻 Code Examples](../../../README.md) > [🌞️ Delta Lake](../../README.md) > 📄 Auto Loader"
+description: "[🏠 Home](../../../index.md) > [💻 Code Examples](../../../index.md) > [🌞️ Delta Lake](../../README.md) > 📄 Auto Loader"
 tags:
   - code-examples
   - delta-lake
@@ -8,7 +8,7 @@ tags:
 ---
 # Auto Loader for Delta Lake in Azure Synapse Analytics
 
-[🏠 Home](../../../../README.md) > [💻 Code Examples](../../../README.md) > [🌞️ Delta Lake](../../README.md) > 📄 Auto Loader
+[🏠 Home](../../../index.md) > [💻 Code Examples](../../../index.md) > [🌞️ Delta Lake](../../README.md) > 📄 Auto Loader
 
 This guide provides detailed examples for using Auto Loader with Azure Synapse Analytics to efficiently ingest data into Delta Lake tables.
 

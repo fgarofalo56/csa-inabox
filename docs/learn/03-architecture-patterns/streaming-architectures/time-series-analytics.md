@@ -194,7 +194,7 @@ SensorReadings
 
 - [Stream Analytics](../../02-services/streaming-services/azure-stream-analytics/README.md)
 - [Azure Data Explorer](../../02-services/analytics-compute/azure-synapse/data-explorer-pools/README.md)
-- [IoT Hub Integration](../../04-implementation-guides/iot/README.md)
+- IoT Hub Integration
 
 ---
 

@@ -569,5 +569,5 @@ Take a slow DirectQuery report and optimize it using aggregations.
 ## Next Steps
 
 - Continue to [Tutorial 12: Security Configuration](12-security.md)
-- Explore [Power BI Best Practices](../../best-practices/power-bi-optimization.md)
-- Review [Power BI Troubleshooting](../../troubleshooting/power-bi-troubleshooting.md)
+- Explore [Power BI Best Practices](../../best-practices-extra/power-bi-optimization.md)
+- Review Power BI Troubleshooting

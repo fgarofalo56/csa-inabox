@@ -839,9 +839,9 @@ df = df.na.fill({"price": 0.0})
 
 ### Code Examples
 
-- [Spark Best Practices](../../code-examples/README.md)
-- [Performance Tuning Guide](../../best-practices/spark-performance.md)
-- [Delta Lake Examples](../../code-examples/delta-lake-guide.md)
+- [Spark Best Practices](../../06-code-examples/README.md)
+- [Performance Tuning Guide](../../05-best-practices/service-specific/synapse/spark-performance.md)
+- [Delta Lake Examples](../../06-code-examples/delta-lake-guide.md)
 
 ## 💬 Feedback
 
