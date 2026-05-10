@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.6.3](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.2...csa-inabox-v0.6.3) (2026-05-10)
+
+
+### Documentation
+
+* **learn:** import remaining csa-inabox-docs content (round 2) ([#216](https://github.com/fgarofalo56/csa-inabox/issues/216)) ([f0c03c1](https://github.com/fgarofalo56/csa-inabox/commit/f0c03c18c5ddcb842a05730e9b46480aa7c237da))
+
 ## [0.6.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.1...csa-inabox-v0.6.2) (2026-05-10)
 
 
