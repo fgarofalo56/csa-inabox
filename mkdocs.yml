@@ -1020,3 +1020,10 @@ nav:
       - Tutorials: learn/tutorials/README.md
       - Reference: learn/reference/README.md
       - Diagrams: learn/diagrams/README.md
+      - Best Practices (extra): learn/best-practices-extra/index.md
+      - Reference Solutions: learn/examples/solution_refrances/azure-realtime-analytics/README.md
+      - Code Labs: learn/code-labs/pyspark-fundamentals.md
+      - Multimedia (presentations + video scripts):
+          - Presentations: learn/multimedia/presentations/README.md
+          - Video Tutorials: learn/multimedia/video-tutorials/README.md
+          - Interactive Demos: learn/multimedia/interactive-demos/README.md
