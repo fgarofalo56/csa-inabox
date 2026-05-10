@@ -1,3 +1,10 @@
+---
+title: "Advanced Analytics with Azure Synapse Lab"
+description: "Master advanced analytics patterns using Azure Synapse Analytics. Learn complex data transformations, statistical analysis, machine learning integration, and production-grade analytics pipelines."
+tags:
+  - tutorials
+  - code-labs
+---
 # 🎯 Advanced Analytics with Azure Synapse Lab
 
 ![Lab](https://img.shields.io/badge/Lab-Advanced_Analytics-blue)

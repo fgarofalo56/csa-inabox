@@ -1,3 +1,10 @@
+---
+title: "ML Pipeline Integration Tutorial"
+description: "Integrate Azure Machine Learning with Synapse Analytics for end-to-end ML workflows. Learn feature engineering, model training, deployment, and monitoring."
+tags:
+  - tutorials
+  - integration
+---
 # 🤖 ML Pipeline Integration Tutorial
 
 ![Level](https://img.shields.io/badge/Level-Advanced-red)

@@ -1,3 +1,10 @@
+---
+title: "Azure Stream Analytics Real-Time Pipeline Tutorial"
+description: "__Build a complete real-time data processing pipeline using Azure Stream Analytics."
+tags:
+  - tutorials
+  - stream-analytics
+---
 # 🌊 Azure Stream Analytics Real-Time Pipeline Tutorial
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Stream_Analytics-blue)

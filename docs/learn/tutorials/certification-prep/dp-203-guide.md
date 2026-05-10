@@ -1,3 +1,10 @@
+---
+title: "DP-203 Certification Preparation Guide"
+description: "__Complete preparation guide for Microsoft Certified: Azure Data Engineer Associate (DP-203) certification exam."
+tags:
+  - tutorials
+  - certification-prep
+---
 # 🎓 DP-203 Certification Preparation Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

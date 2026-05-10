@@ -1,3 +1,10 @@
+---
+title: "Azure Data Factory Environment Setup"
+description: "__Create and configure your Azure Data Factory instance with proper security, networking, and governance settings for production-ready data integration.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🚀 Azure Data Factory Environment Setup
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Environment_Setup-blue)

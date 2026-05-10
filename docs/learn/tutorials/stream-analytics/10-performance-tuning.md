@@ -1,3 +1,10 @@
+---
+title: "Tutorial 10: Performance Tuning and Optimization"
+description: "__Optimize Stream Analytics jobs for maximum throughput, minimal latency, and cost efficiency. Learn scaling strategies, query optimization, and monitoring best practices for production workloads.__"
+tags:
+  - tutorials
+  - stream-analytics
+---
 # ⚡ Tutorial 10: Performance Tuning and Optimization
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-10_Performance_Tuning-blue)

@@ -1,3 +1,11 @@
+---
+title: "Lambda-Kappa Hybrid - Complete Tutorial"
+description: "> __📝 Note__: This tutorial is in development. Use [Medallion Architecture](../batch/medallion-architecture-tutorial.md) as a complete reference."
+tags:
+  - tutorials
+  - architecture-patterns
+  - hybrid
+---
 # ⚡🌊 Lambda-Kappa Hybrid - Complete Tutorial
 
 ![Status](https://img.shields.io/badge/Status-Coming_Soon-yellow?style=flat-square)

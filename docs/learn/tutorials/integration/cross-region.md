@@ -1,3 +1,10 @@
+---
+title: "Cross-Region Integration Tutorial"
+description: "Build cross-region analytics solutions with Azure Synapse. Learn data replication, failover strategies, and geo-distributed processing."
+tags:
+  - tutorials
+  - integration
+---
 # 🌍 Cross-Region Integration Tutorial
 
 ![Level](https://img.shields.io/badge/Level-Advanced-red)

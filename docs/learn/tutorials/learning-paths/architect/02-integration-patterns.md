@@ -1,3 +1,11 @@
+---
+title: "Integration Patterns"
+description: "Step-by-step tutorial for integration patterns."
+tags:
+  - tutorials
+  - learning-paths
+  - architect
+---
 # Integration Patterns
 
 Step-by-step tutorial for integration patterns.

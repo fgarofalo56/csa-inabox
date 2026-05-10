@@ -1,3 +1,10 @@
+---
+title: "Azure Data Lake Storage Gen2 Quickstart"
+description: "__Get started with Azure Data Lake Storage Gen2 in under an hour. Learn to create storage, organize data with hierarchical namespaces, and access data efficiently.__"
+tags:
+  - tutorials
+  - beginner
+---
 # 💾 Azure Data Lake Storage Gen2 Quickstart
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
@@ -342,8 +349,7 @@ df.display()
 
 ### __Directory Organization__
 
-```
-data/
+```textdata/
 ├── raw/              # Raw ingested data (immutable)
 │   ├── year=2024/
 │   │   ├── month=01/

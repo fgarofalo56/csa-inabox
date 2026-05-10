@@ -1,3 +1,10 @@
+---
+title: "Tutorial 5: Windowing Functions"
+description: "__Master time-based windowing functions for temporal aggregations. Learn tumbling, hopping, sliding, and session windows to analyze streaming data over time intervals.__"
+tags:
+  - tutorials
+  - stream-analytics
+---
 # ⏰ Tutorial 5: Windowing Functions
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-05_Windowing_Functions-blue)

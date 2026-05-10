@@ -1,3 +1,11 @@
+---
+title: "Real Time Scoring"
+description: "Step-by-step tutorial for real time scoring."
+tags:
+  - tutorials
+  - learning-paths
+  - data-scientist
+---
 # Real Time Scoring
 
 Step-by-step tutorial for real time scoring.

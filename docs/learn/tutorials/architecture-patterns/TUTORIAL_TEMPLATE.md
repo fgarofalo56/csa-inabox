@@ -1,3 +1,10 @@
+---
+title: "[PATTERN NAME] - Complete Tutorial"
+description: "> __📝 Note__: This tutorial is currently in development. Check back soon or contribute!"
+tags:
+  - tutorials
+  - architecture-patterns
+---
 # [PATTERN NAME] - Complete Tutorial
 
 ![Status](https://img.shields.io/badge/Status-Coming_Soon-yellow?style=flat-square)

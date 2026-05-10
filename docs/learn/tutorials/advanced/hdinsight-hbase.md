@@ -1,3 +1,10 @@
+---
+title: "️ HBase on HDInsight"
+description: "__Master HBase on HDInsight. Learn NoSQL design, real-time reads/writes, and integration patterns.__"
+tags:
+  - tutorials
+  - advanced
+---
 # 🗄️ HBase on HDInsight
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

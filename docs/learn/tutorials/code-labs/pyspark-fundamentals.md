@@ -1,3 +1,10 @@
+---
+title: "PySpark Data Processing Fundamentals Lab"
+description: "__Master distributed data processing with PySpark through hands-on exercises."
+tags:
+  - tutorials
+  - code-labs
+---
 # 🐍 PySpark Data Processing Fundamentals Lab
 
 ![Lab](https://img.shields.io/badge/Lab-PySpark_Fundamentals-blue)

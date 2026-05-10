@@ -1,3 +1,10 @@
+---
+title: "Prerequisites and Setup Guide"
+description: "Complete setup guide for running Azure Cloud Scale Analytics architecture pattern tutorials."
+tags:
+  - tutorials
+  - architecture-patterns
+---
 # 📋 Prerequisites and Setup Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

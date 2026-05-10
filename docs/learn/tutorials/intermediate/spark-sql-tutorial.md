@@ -1,3 +1,10 @@
+---
+title: "Spark SQL Tutorial"
+description: "__Master Spark SQL for distributed data processing. Learn advanced queries, optimization, and best practices.__"
+tags:
+  - tutorials
+  - intermediate
+---
 # 🔍 Spark SQL Tutorial
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

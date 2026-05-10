@@ -1,3 +1,10 @@
+---
+title: "️ Delta Lake Deep Dive Lab"
+description: "Master Delta Lake features for building reliable data lakes. Learn ACID transactions, time travel, schema evolution, and optimization techniques."
+tags:
+  - tutorials
+  - code-labs
+---
 # 🏞️ Delta Lake Deep Dive Lab
 
 ![Lab](https://img.shields.io/badge/Lab-Delta_Lake-blue)

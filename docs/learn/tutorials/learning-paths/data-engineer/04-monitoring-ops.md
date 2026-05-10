@@ -1,3 +1,11 @@
+---
+title: "Monitoring Ops"
+description: "Step-by-step tutorial for monitoring ops."
+tags:
+  - tutorials
+  - learning-paths
+  - data-engineer
+---
 # Monitoring Ops
 
 Step-by-step tutorial for monitoring ops.

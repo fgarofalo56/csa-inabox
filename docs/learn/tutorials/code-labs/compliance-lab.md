@@ -1,3 +1,10 @@
+---
+title: "Implementing Compliance Controls Lab"
+description: "Implement enterprise-grade compliance and governance controls for Azure Synapse Analytics. Learn data classification, audit logging, policy enforcement, and regulatory compliance."
+tags:
+  - tutorials
+  - code-labs
+---
 # 📋 Implementing Compliance Controls Lab
 
 ![Lab](https://img.shields.io/badge/Lab-Compliance_Controls-blue)

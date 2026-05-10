@@ -1,3 +1,10 @@
+---
+title: "Tutorial 3: Data Lake Setup and Configuration"
+description: "__Design and implement a scalable Data Lake structure using Azure Data Lake Storage Gen2."
+tags:
+  - tutorials
+  - synapse
+---
 # 📦 Tutorial 3: Data Lake Setup and Configuration
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-03_Data_Lake_Setup-blue)
@@ -44,8 +51,7 @@ After completing this tutorial, you will be able to:
 
 Implement the medallion architecture for data organization:
 
-```
-synapse-data/                    # Default container from Tutorial 2
+```textsynapse-data/                    # Default container from Tutorial 2
 ├── raw/                         # Bronze layer - ingested data
 │   ├── sales/
 │   │   ├── year=2024/

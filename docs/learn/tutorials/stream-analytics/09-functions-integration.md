@@ -1,3 +1,10 @@
+---
+title: "Functions Integration"
+description: "Step-by-step tutorial for functions integration."
+tags:
+  - tutorials
+  - stream-analytics
+---
 # Functions Integration
 
 Step-by-step tutorial for functions integration.

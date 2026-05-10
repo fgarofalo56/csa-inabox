@@ -1,3 +1,10 @@
+---
+title: "Intermediate SQL Pool Tutorial"
+description: "Master SQL pool optimization and design in Azure Synapse Analytics. Learn distribution strategies, indexing, and performance tuning for dedicated SQL pools."
+tags:
+  - tutorials
+  - intermediate
+---
 # 💾 Intermediate SQL Pool Tutorial
 
 ![Level](https://img.shields.io/badge/Level-Intermediate-orange)

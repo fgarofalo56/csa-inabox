@@ -1,3 +1,10 @@
+---
+title: "Multi-Service Integration Scenarios"
+description: "__Master complex enterprise integration patterns by building complete, production-ready solutions that span multiple Azure services."
+tags:
+  - tutorials
+  - integration
+---
 # 🔄 Multi-Service Integration Scenarios
 
 ![Integration](https://img.shields.io/badge/Tutorial-Multi_Service_Integration-blue)

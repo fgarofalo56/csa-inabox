@@ -1,3 +1,10 @@
+---
+title: "️ Data Lakehouse Integration Tutorial"
+description: "Build a complete data lakehouse architecture using Azure Synapse and Delta Lake. Implement medallion architecture with bronze, silver, and gold layers."
+tags:
+  - tutorials
+  - integration
+---
 # 🏞️ Data Lakehouse Integration Tutorial
 
 ![Level](https://img.shields.io/badge/Level-Intermediate-orange)

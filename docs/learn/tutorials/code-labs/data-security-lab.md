@@ -1,3 +1,10 @@
+---
+title: "Data Security and Encryption Lab"
+description: "Master data security and encryption in Azure Synapse Analytics. Implement encryption at rest and in transit, manage access controls, and secure sensitive data."
+tags:
+  - tutorials
+  - code-labs
+---
 # 🔐 Data Security and Encryption Lab
 
 ![Lab](https://img.shields.io/badge/Lab-Data_Security-blue)

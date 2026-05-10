@@ -1,3 +1,10 @@
+---
+title: "Secure Connectivity Patterns"
+description: "__Implement enterprise-grade security for data movement using private endpoints, managed virtual networks, managed identities, and Azure Key Vault integration.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🔒 Secure Connectivity Patterns
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Secure_Connectivity-blue)

@@ -1,3 +1,9 @@
+---
+title: "Interactive Tutorial: End-to-End Data Pipeline in Synapse Analytics"
+description: "[Home](../../README.md) > Tutorials > Interactive Data Pipeline"
+tags:
+  - tutorials
+---
 # Interactive Tutorial: End-to-End Data Pipeline in Synapse Analytics
 
 [Home](../../README.md) > Tutorials > Interactive Data Pipeline

@@ -1,3 +1,10 @@
+---
+title: "Azure Data Factory Fundamentals"
+description: "__Master the foundational concepts of Azure Data Factory (ADF) including architecture, components, and design patterns for enterprise data integration.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🎯 Azure Data Factory Fundamentals
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-ADF_Fundamentals-blue)

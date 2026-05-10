@@ -1,3 +1,10 @@
+---
+title: "Integration Runtime Configuration"
+description: "__Configure Azure Integration Runtime and Self-Hosted Integration Runtime for secure data movement across cloud and on-premises environments.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # ⚡ Integration Runtime Configuration
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Integration_Runtime-blue)

@@ -1,3 +1,10 @@
+---
+title: "Kafka Streaming on HDInsight"
+description: "__Build real-time streaming pipelines with Kafka on HDInsight. Learn topics, producers, consumers, and Spark integration.__"
+tags:
+  - tutorials
+  - advanced
+---
 # 🌊 Kafka Streaming on HDInsight
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

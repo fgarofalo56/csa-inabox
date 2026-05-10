@@ -1,3 +1,10 @@
+---
+title: "️ Tutorial 2: Synapse Workspace Basics"
+description: "__Master Azure Synapse workspace fundamentals including workspace creation, navigation, resource management, and identity configuration."
+tags:
+  - tutorials
+  - synapse
+---
 # 🏗️ Tutorial 2: Synapse Workspace Basics
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-02_Workspace_Basics-blue)

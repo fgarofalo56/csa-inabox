@@ -1,3 +1,10 @@
+---
+title: "️ Architecture Pattern Tutorials"
+description: "Complete, hands-on walkthrough tutorials for implementing Azure Cloud Scale Analytics architecture patterns."
+tags:
+  - tutorials
+  - architecture-patterns
+---
 # 🏗️ Architecture Pattern Tutorials
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

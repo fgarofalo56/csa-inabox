@@ -1,3 +1,10 @@
+---
+title: "Azure Event Hubs Quickstart"
+description: "__Get started with Azure Event Hubs in under an hour. Learn to send and receive streaming events using this fully managed, real-time data ingestion service.__"
+tags:
+  - tutorials
+  - beginner
+---
 # ⚡ Azure Event Hubs Quickstart
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
@@ -220,8 +227,7 @@ python producer.py
 
 __Expected Output:__
 
-```
-Added event 1: {'device_id': 'device_1', 'temperature': 20, 'humidity': 60, ...}
+```textAdded event 1: {'device_id': 'device_1', 'temperature': 20, 'humidity': 60, ...}
 Added event 2: {'device_id': 'device_2', 'temperature': 22, 'humidity': 61, ...}
 ...
 ✅ Successfully sent 10 events to Event Hub!
@@ -301,8 +307,7 @@ python consumer.py
 
 __Expected Output:__
 
-```
-🎧 Listening for events... (Press Ctrl+C to stop)
+```text🎧 Listening for events... (Press Ctrl+C to stop)
 
 📨 Received event from partition 0:
    Device: device_1

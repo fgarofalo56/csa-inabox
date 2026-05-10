@@ -1,3 +1,10 @@
+---
+title: "Platform Administrator Learning Path"
+description: "__Master the administration, security, and operations of Azure analytics platforms."
+tags:
+  - tutorials
+  - learning-paths
+---
 # 🔧 Platform Administrator Learning Path
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

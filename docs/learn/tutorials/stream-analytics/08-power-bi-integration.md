@@ -1,3 +1,10 @@
+---
+title: "Tutorial 8: Power BI Integration"
+description: "__Create real-time dashboards with Power BI streaming datasets. Visualize live sensor data, anomalies, and KPIs with automatic refresh and interactive reports.__"
+tags:
+  - tutorials
+  - stream-analytics
+---
 # 📊 Tutorial 8: Power BI Integration
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-08_Power_BI_Integration-blue)
@@ -167,15 +174,13 @@ After Stream Analytics starts sending data:
 Create a new dashboard with these tiles:
 
 __Tile 1: Active Devices Count__
-```
-Visualization: Card
+```textVisualization: Card
 Field: activeDevices (Max)
 Title: "Active Sensors"
 ```
 
 __Tile 2: Average Temperature__
-```
-Visualization: Gauge
+```textVisualization: Gauge
 Field: avgTemperature
 Minimum: 60
 Maximum: 100
@@ -183,24 +188,21 @@ Title: "Current Avg Temperature"
 ```
 
 __Tile 3: Temperature Trend__
-```
-Visualization: Line Chart
+```textVisualization: Line Chart
 Axis: timestamp
 Values: avgTemperature
 Title: "Temperature Over Time (Last Hour)"
 ```
 
 __Tile 4: Devices by Status__
-```
-Visualization: Donut Chart
+```textVisualization: Donut Chart
 Legend: status
 Values: Count of deviceId
 Title: "Device Health Status"
 ```
 
 __Tile 5: Critical Alerts__
-```
-Visualization: Card
+```textVisualization: Card
 Field: criticalCount (Sum)
 Format: Conditional (Red if > 0)
 Title: "Critical Alerts"
@@ -210,8 +212,7 @@ Title: "Critical Alerts"
 
 Build a detailed report page:
 
-```
-Page Layout:
+```textPage Layout:
 ┌─────────────────────────────────────────┐
 │  KPI Cards Row                          │
 │  [Active] [Avg Temp] [Alerts] [Health%]│
@@ -357,8 +358,7 @@ Configure data alerts:
 
 Enable Q&A on dashboard:
 
-```
-Example questions:
+```textExample questions:
 - "Show average temperature by building"
 - "Which devices have critical status?"
 - "Temperature trend for last hour"
@@ -378,8 +378,7 @@ Create drill-through from device tile to details:
 
 Create navigation:
 
-```
-Bookmarks:
+```textBookmarks:
 - Overview (default view)
 - Anomalies (filtered to anomalies only)
 - Critical Devices (status = critical)

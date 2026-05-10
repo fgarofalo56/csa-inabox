@@ -1,3 +1,10 @@
+---
+title: "HDInsight Hadoop Introduction"
+description: "__Deep dive into Hadoop on HDInsight. Learn HDFS, MapReduce, YARN, and Hive for distributed data processing.__"
+tags:
+  - tutorials
+  - beginner
+---
 # 🐘 HDInsight Hadoop Introduction
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

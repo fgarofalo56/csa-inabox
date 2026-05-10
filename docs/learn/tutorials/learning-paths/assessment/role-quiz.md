@@ -1,3 +1,11 @@
+---
+title: "Role Assessment Quiz"
+description: "__Discover your ideal Azure data and analytics learning path. This interactive assessment helps you identify the role that best matches your skills, interests, and career goals.__"
+tags:
+  - tutorials
+  - learning-paths
+  - assessment
+---
 # 🎯 Role Assessment Quiz
 
 ![Status](https://img.shields.io/badge/Status-Interactive-brightgreen)

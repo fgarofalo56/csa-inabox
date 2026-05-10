@@ -1,3 +1,10 @@
+---
+title: "Delta Lake Basics"
+description: "__Learn Delta Lake fundamentals. Understand ACID transactions, time travel, and schema evolution for reliable data lakes.__"
+tags:
+  - tutorials
+  - beginner
+---
 # 🔺 Delta Lake Basics
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

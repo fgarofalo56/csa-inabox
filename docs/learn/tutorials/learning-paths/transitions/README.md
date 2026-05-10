@@ -1,3 +1,11 @@
+---
+title: "Career Transition Guides"
+description: "__Navigate career transitions into Azure data and analytics roles."
+tags:
+  - tutorials
+  - learning-paths
+  - transitions
+---
 # 🔄 Career Transition Guides
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

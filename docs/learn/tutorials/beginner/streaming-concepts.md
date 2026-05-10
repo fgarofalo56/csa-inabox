@@ -1,3 +1,10 @@
+---
+title: "<"
+description: "Streaming Data Fundamentals"
+tags:
+  - tutorials
+  - beginner
+---
 # <
  Streaming Data Fundamentals
 
@@ -137,8 +144,7 @@ __Why It Matters:__
 
 __Example Scenario:__
 
-```
-IoT sensor records temperature at 10:00 AM (event time)
+```textIoT sensor records temperature at 10:00 AM (event time)
 Network outage until 11:00 AM
 Event arrives at server at 11:15 AM (processing time)
 We want to analyze temperature at 10:00 AM, not 11:15 AM!
@@ -152,8 +158,7 @@ Windows divide continuous streams into bounded chunks for aggregation.
 
 Fixed-size, non-overlapping time intervals.
 
-```
-Time:     0    5    10   15   20   25   30
+```textTime:     0    5    10   15   20   25   30
 Windows:  [----][----][----][----][----][----]
           Win1  Win2  Win3  Win4  Win5  Win6
 ```
@@ -173,8 +178,7 @@ GROUP BY TumblingWindow(minute, 5)
 
 Fixed-size windows that advance by smaller intervals.
 
-```
-Time:     0    5    10   15   20   25   30
+```textTime:     0    5    10   15   20   25   30
 Windows:  [--------]
                [--------]
                     [--------]
@@ -196,8 +200,7 @@ GROUP BY HoppingWindow(minute, 10, 5)
 
 Window advances with each new event.
 
-```
-Events:   E1   E2      E3         E4
+```textEvents:   E1   E2      E3         E4
 Windows:  [---E1,E2---]
                [---E2,E3---]
                       [---E3,E4---]
@@ -220,8 +223,7 @@ HAVING COUNT(*) >= 3
 
 Variable-size windows based on periods of inactivity.
 
-```
-Events:   E1 E2   (gap)      E3 E4 E5  (gap)   E6
+```textEvents:   E1 E2   (gap)      E3 E4 E5  (gap)   E6
 Sessions: [--S1--]           [---S2---]        [S3]
 ```
 
@@ -243,8 +245,7 @@ Watermarks track progress in event time and handle late data.
 
 __Problem:__ Events don't always arrive in order
 
-```
-Event Time:    10:00  10:01  10:02  10:03  10:04
+```textEvent Time:    10:00  10:01  10:02  10:03  10:04
 Arrival Time:  10:01  10:02  10:04  10:03  10:05
                  ^      ^      ^      ^      ^
                  OK     OK    Late!   OK     OK
@@ -252,8 +253,7 @@ Arrival Time:  10:01  10:02  10:04  10:03  10:05
 
 __Watermark Solution:__
 
-```
-Watermark: "I've processed all events up to time T"
+```textWatermark: "I've processed all events up to time T"
 
 Example:
 - Watermark at 10:03 means:

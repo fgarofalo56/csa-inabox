@@ -1,3 +1,10 @@
+---
+title: "Kafka on HDInsight"
+description: "__Deploy and manage Kafka on HDInsight. Learn cluster setup, topic management, and high availability.__"
+tags:
+  - tutorials
+  - advanced
+---
 # 📨 Kafka on HDInsight
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

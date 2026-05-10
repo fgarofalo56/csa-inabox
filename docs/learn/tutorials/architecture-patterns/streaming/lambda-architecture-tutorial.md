@@ -1,3 +1,11 @@
+---
+title: "Lambda Architecture - Complete Tutorial"
+description: "> __📝 Note__: This tutorial is currently in development. Check back soon!"
+tags:
+  - tutorials
+  - architecture-patterns
+  - streaming
+---
 # 🌊 Lambda Architecture - Complete Tutorial
 
 ![Status](https://img.shields.io/badge/Status-Coming_Soon-yellow?style=flat-square)

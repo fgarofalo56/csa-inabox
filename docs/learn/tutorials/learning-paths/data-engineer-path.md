@@ -1,3 +1,10 @@
+---
+title: "Data Engineer Learning Path"
+description: "__Build production-grade data processing systems and pipelines on Azure. Master the skills to design, implement, and maintain scalable data engineering solutions for enterprise-scale analytics.__"
+tags:
+  - tutorials
+  - learning-paths
+---
 # 📊 Data Engineer Learning Path
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

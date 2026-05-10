@@ -1,3 +1,11 @@
+---
+title: "Synapse Basics"
+description: "Step-by-step tutorial for synapse basics."
+tags:
+  - tutorials
+  - learning-paths
+  - data-engineer
+---
 # Synapse Basics
 
 Step-by-step tutorial for synapse basics.

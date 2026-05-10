@@ -1,3 +1,10 @@
+---
+title: "Azure HDInsight Quickstart"
+description: "__Get started with Azure HDInsight. Learn to create Hadoop clusters and run big data workloads on Azure.__"
+tags:
+  - tutorials
+  - beginner
+---
 # 🐘 Azure HDInsight Quickstart
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

@@ -1,3 +1,11 @@
+---
+title: "Data Scientist Learning Path"
+description: "__Build and deploy production machine learning models on Azure. Master the complete ML lifecycle from data exploration to model deployment, monitoring, and MLOps automation.__"
+tags:
+  - tutorials
+  - learning-paths
+  - data-scientist
+---
 # 🔬 Data Scientist Learning Path
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

@@ -1,3 +1,10 @@
+---
+title: "Powerbi Integration"
+description: "Step-by-step tutorial for powerbi integration."
+tags:
+  - tutorials
+  - stream-analytics
+---
 # Powerbi Integration
 
 Step-by-step tutorial for powerbi integration.

@@ -1,3 +1,10 @@
+---
+title: "CI/CD for Analytics Pipelines Lab"
+description: "**Master continuous integration and deployment for analytics pipelines."
+tags:
+  - tutorials
+  - code-labs
+---
 # 🚀 CI/CD for Analytics Pipelines Lab
 
 ![Lab](https://img.shields.io/badge/Lab-CI/CD_Analytics-purple)

@@ -1,3 +1,10 @@
+---
+title: "Intermediate Tutorials"
+description: "Build on foundational knowledge with intermediate-level tutorials covering Spark pools, SQL pools, and Stream Analytics in Azure Synapse Analytics."
+tags:
+  - tutorials
+  - intermediate
+---
 # 📚 Intermediate Tutorials
 
 ![Level](https://img.shields.io/badge/Level-Intermediate-orange)

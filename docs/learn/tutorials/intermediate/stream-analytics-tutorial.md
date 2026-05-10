@@ -1,3 +1,10 @@
+---
+title: "Intermediate Stream Analytics Tutorial"
+description: "Master Azure Stream Analytics for real-time data processing. Learn windowing functions, complex joins, pattern detection, and output optimization."
+tags:
+  - tutorials
+  - intermediate
+---
 # 🌊 Intermediate Stream Analytics Tutorial
 
 ![Level](https://img.shields.io/badge/Level-Intermediate-orange)

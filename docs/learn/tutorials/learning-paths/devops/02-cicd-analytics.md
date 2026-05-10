@@ -1,3 +1,11 @@
+---
+title: "Cicd Analytics"
+description: "Step-by-step tutorial for cicd analytics."
+tags:
+  - tutorials
+  - learning-paths
+  - devops
+---
 # Cicd Analytics
 
 Step-by-step tutorial for cicd analytics.

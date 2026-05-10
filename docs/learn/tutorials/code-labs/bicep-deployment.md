@@ -1,3 +1,10 @@
+---
+title: "️ Infrastructure as Code with Bicep Lab"
+description: "Master Infrastructure as Code using Azure Bicep. Learn to deploy, manage, and version control Azure Synapse Analytics infrastructure with declarative templates and best practices."
+tags:
+  - tutorials
+  - code-labs
+---
 # 🏗️ Infrastructure as Code with Bicep Lab
 
 ![Lab](https://img.shields.io/badge/Lab-Bicep_IaC-blue)

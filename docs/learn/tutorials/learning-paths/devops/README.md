@@ -1,3 +1,11 @@
+---
+title: "️ DevOps Engineer Learning Path"
+description: "__Master DevOps practices for Azure analytics platforms. Build CI/CD pipelines, implement Infrastructure as Code, and automate deployment, monitoring, and operations for data engineering workloads.__"
+tags:
+  - tutorials
+  - learning-paths
+  - devops
+---
 # ⚙️ DevOps Engineer Learning Path
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

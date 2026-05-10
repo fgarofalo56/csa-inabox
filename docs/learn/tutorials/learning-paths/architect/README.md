@@ -1,3 +1,11 @@
+---
+title: "️ Solution Architect Learning Path"
+description: "__Design and architect enterprise-scale analytics solutions on Azure."
+tags:
+  - tutorials
+  - learning-paths
+  - architect
+---
 # 🏗️ Solution Architect Learning Path
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

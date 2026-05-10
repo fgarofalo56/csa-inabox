@@ -1,3 +1,10 @@
+---
+title: "Tutorial 6: Spark Pool Configuration"
+description: "__Configure and optimize Apache Spark pools for performance and cost-efficiency. Learn pool sizing, auto-scaling, package management, and performance tuning.__"
+tags:
+  - tutorials
+  - synapse
+---
 # 🔥 Tutorial 6: Spark Pool Configuration
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-06_Spark_Pools-blue)

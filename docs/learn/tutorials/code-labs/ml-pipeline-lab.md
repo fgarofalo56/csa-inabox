@@ -1,3 +1,10 @@
+---
+title: "ML Pipeline with Azure ML Lab"
+description: "Build end-to-end machine learning pipelines integrating Azure ML with Synapse Analytics. Learn model training, deployment, monitoring, and MLOps practices."
+tags:
+  - tutorials
+  - code-labs
+---
 # 🤖 ML Pipeline with Azure ML Lab
 
 ![Lab](https://img.shields.io/badge/Lab-ML_Pipeline-blue)

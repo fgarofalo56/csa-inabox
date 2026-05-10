@@ -1,3 +1,10 @@
+---
+title: "Tutorial 3: Stream Analytics Job Creation"
+description: "__Create your first Azure Stream Analytics job with proper input/output configuration. Learn the fundamentals of Stream Analytics Query Language (SAQL) and test queries with live data.__"
+tags:
+  - tutorials
+  - stream-analytics
+---
 # 🔧 Tutorial 3: Stream Analytics Job Creation
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-03_Job_Creation-blue)

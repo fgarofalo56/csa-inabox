@@ -1,3 +1,11 @@
+---
+title: "= Power BI Integration with Azure Synapse Analytics"
+description: "> **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Integration](../README.md)** | **= Power BI**"
+tags:
+  - tutorials
+  - integration
+  - power-bi
+---
 # = Power BI Integration with Azure Synapse Analytics
 
 > **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Integration](../README.md)** | **= Power BI**

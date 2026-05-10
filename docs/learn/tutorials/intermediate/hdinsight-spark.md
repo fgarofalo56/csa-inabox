@@ -1,3 +1,10 @@
+---
+title: "Spark on HDInsight"
+description: "__Master Apache Spark on HDInsight. Learn in-memory processing, DataFrames, SQL, and streaming analytics.__"
+tags:
+  - tutorials
+  - intermediate
+---
 # ⚡ Spark on HDInsight
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

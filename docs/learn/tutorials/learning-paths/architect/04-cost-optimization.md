@@ -1,3 +1,11 @@
+---
+title: "Cost Optimization"
+description: "Step-by-step tutorial for cost optimization."
+tags:
+  - tutorials
+  - learning-paths
+  - architect
+---
 # Cost Optimization
 
 Step-by-step tutorial for cost optimization.

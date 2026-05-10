@@ -1,3 +1,11 @@
+---
+title: "= AZ-104: Azure Administrator Associate Certification Prep"
+description: "> **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= AZ-104 Certification**"
+tags:
+  - tutorials
+  - learning-paths
+  - certification
+---
 # = AZ-104: Azure Administrator Associate Certification Prep
 
 > **< [Home](../../../../README.md)** | **= [Documentation](../../../README.md)** | **< [Tutorials](../../README.md)** | **= [Learning Paths](../README.md)** | **= AZ-104 Certification**

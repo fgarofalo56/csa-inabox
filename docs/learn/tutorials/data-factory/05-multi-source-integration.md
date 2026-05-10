@@ -1,3 +1,10 @@
+---
+title: "Multi-Source Data Integration"
+description: "__Integrate data from diverse sources including databases, file systems, APIs, cloud services, and SaaS applications into a unified data platform.__"
+tags:
+  - tutorials
+  - data-factory
+---
 # 🔄 Multi-Source Data Integration
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-Multi_Source_Integration-blue)

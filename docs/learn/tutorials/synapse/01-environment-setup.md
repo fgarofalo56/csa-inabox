@@ -1,3 +1,10 @@
+---
+title: "Tutorial 1: Environment Setup and Prerequisites"
+description: "__Set up your Azure environment and local development tools for the complete Synapse Analytics tutorial series. This foundation ensures smooth execution of all subsequent tutorials.__"
+tags:
+  - tutorials
+  - synapse
+---
 # 🚀 Tutorial 1: Environment Setup and Prerequisites
 
 ![Tutorial](https://img.shields.io/badge/Tutorial-01_Environment_Setup-blue)

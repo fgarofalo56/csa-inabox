@@ -1,3 +1,10 @@
+---
+title: "Platform Administrator Certification Path"
+description: "__Complete certification roadmap for Azure platform administrators managing data and analytics workloads."
+tags:
+  - tutorials
+  - certification-prep
+---
 # 🔐 Platform Administrator Certification Path
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

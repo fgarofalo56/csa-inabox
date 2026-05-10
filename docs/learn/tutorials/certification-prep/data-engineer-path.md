@@ -1,3 +1,10 @@
+---
+title: "DP-203: Azure Data Engineer Associate - Certification Study Guide"
+description: "__Complete study guide for the DP-203: Data Engineering on Microsoft Azure certification exam. Master the skills needed to design and implement data solutions on Azure.__"
+tags:
+  - tutorials
+  - certification-prep
+---
 # 📜 DP-203: Azure Data Engineer Associate - Certification Study Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)
