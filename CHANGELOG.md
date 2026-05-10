@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.6.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.4...csa-inabox-v0.6.5) (2026-05-10)
+
+
+### Bug Fixes
+
+* **checkov:** suppress CKV_AZURE_104 globally — same parser bug as CKV_AZURE_95 ([#221](https://github.com/fgarofalo56/csa-inabox/issues/221)) ([e04b66d](https://github.com/fgarofalo56/csa-inabox/commit/e04b66db7a5da9c1febe52e8ae6ee62061a9481c))
+
 ## [0.6.4](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.3...csa-inabox-v0.6.4) (2026-05-10)
 
 
