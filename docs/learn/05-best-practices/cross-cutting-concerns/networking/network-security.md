@@ -1,3 +1,10 @@
+---
+title: "Network Security Best Practices"
+description: "[Home](../../README.md) > Best Practices > Network Security"
+tags:
+  - best-practices
+  - networking
+---
 # Network Security Best Practices
 
 [Home](../../README.md) > Best Practices > Network Security

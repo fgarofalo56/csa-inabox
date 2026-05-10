@@ -1,3 +1,9 @@
+---
+title: "Code Examples - CSA-in-a-Box"
+description: "Complete collection of practical code examples for Cloud Scale Analytics services including Azure Synapse Analytics, Azure Event Hubs, and Azure Stream Analytics."
+tags:
+  - code-examples
+---
 # Code Examples - CSA-in-a-Box
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

@@ -1,3 +1,10 @@
+---
+title: "Event Grid Patterns"
+description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Event Grid Patterns**"
+tags:
+  - best-practices
+  - event-handling
+---
 # Event Grid Patterns
 
 > **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Event Grid Patterns**

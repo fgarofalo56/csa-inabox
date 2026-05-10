@@ -1,3 +1,9 @@
+---
+title: "Comprehensive Delta Lake Guide for Azure Synapse Analytics"
+description: "[Home](../../README.md) > Code Examples > Delta Lake Guide"
+tags:
+  - code-examples
+---
 # Comprehensive Delta Lake Guide for Azure Synapse Analytics
 
 [Home](../../README.md) > Code Examples > Delta Lake Guide

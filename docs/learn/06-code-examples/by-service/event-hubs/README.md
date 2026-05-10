@@ -1,3 +1,11 @@
+---
+title: "Azure Event Hubs Code Examples"
+description: "Production-ready code examples for Azure Event Hubs including event producers, consumers, and advanced streaming patterns with complete error handling and best practices."
+tags:
+  - code-examples
+  - by-service
+  - event-hubs
+---
 # Azure Event Hubs Code Examples
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

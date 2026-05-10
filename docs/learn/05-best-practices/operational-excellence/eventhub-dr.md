@@ -1,3 +1,10 @@
+---
+title: "Event Hubs Disaster Recovery"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Event Hubs DR**"
+tags:
+  - best-practices
+  - operational-excellence
+---
 # Event Hubs Disaster Recovery
 
 > **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Event Hubs DR**

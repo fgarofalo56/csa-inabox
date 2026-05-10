@@ -1,3 +1,9 @@
+---
+title: "Migration Strategies"
+description: "> **[Home](../README.md)** | **[Best Practices](index.md)** | **Migration Strategies**"
+tags:
+  - best-practices
+---
 # Migration Strategies
 
 > **[Home](../README.md)** | **[Best Practices](index.md)** | **Migration Strategies**

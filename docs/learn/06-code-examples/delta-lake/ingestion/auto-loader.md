@@ -1,3 +1,11 @@
+---
+title: "Auto Loader for Delta Lake in Azure Synapse Analytics"
+description: "[🏠 Home](../../../../README.md) > [💻 Code Examples](../../../README.md) > [🌞️ Delta Lake](../../README.md) > 📄 Auto Loader"
+tags:
+  - code-examples
+  - delta-lake
+  - ingestion
+---
 # Auto Loader for Delta Lake in Azure Synapse Analytics
 
 [🏠 Home](../../../../README.md) > [💻 Code Examples](../../../README.md) > [🌞️ Delta Lake](../../README.md) > 📄 Auto Loader

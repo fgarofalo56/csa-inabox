@@ -1,3 +1,9 @@
+---
+title: "Comprehensive Azure Integration Guide for Synapse Analytics"
+description: "[Home](../../README.md) > Code Examples > Integration Guide"
+tags:
+  - code-examples
+---
 # Comprehensive Azure Integration Guide for Synapse Analytics
 
 [Home](../../README.md) > Code Examples > Integration Guide

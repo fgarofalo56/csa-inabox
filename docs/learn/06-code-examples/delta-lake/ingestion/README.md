@@ -1,3 +1,11 @@
+---
+title: "Data Ingestion"
+description: "This section provides code examples for data ingestion patterns with Delta Lake."
+tags:
+  - code-examples
+  - delta-lake
+  - ingestion
+---
 # Data Ingestion
 
 This section provides code examples for data ingestion patterns with Delta Lake.

@@ -1,3 +1,10 @@
+---
+title: "Storage Best Practices"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **Storage**"
+tags:
+  - best-practices
+  - storage
+---
 # Storage Best Practices
 
 > **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **Storage**
@@ -53,8 +60,7 @@ az storage account create \
 
 ### Directory Structure
 
-```
-container/
+```textcontainer/
 ├── bronze/          # Raw data
 │   ├── source1/
 │   │   └── year=2024/month=01/day=15/

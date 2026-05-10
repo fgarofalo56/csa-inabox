@@ -1,3 +1,10 @@
+---
+title: "Delta Lake Optimization"
+description: "[Home](../../README.md) > Best Practices > Delta Lake Optimization"
+tags:
+  - best-practices
+  - databricks
+---
 # Delta Lake Optimization
 
 [Home](../../README.md) > Best Practices > Delta Lake Optimization

@@ -1,3 +1,10 @@
+---
+title: "Operational Excellence"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **Operational Excellence**"
+tags:
+  - best-practices
+  - operational-excellence
+---
 # Operational Excellence
 
 > **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **Operational Excellence**

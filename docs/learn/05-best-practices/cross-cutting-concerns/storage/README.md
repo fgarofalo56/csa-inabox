@@ -1,3 +1,10 @@
+---
+title: "Storage Best Practices"
+description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Storage**"
+tags:
+  - best-practices
+  - storage
+---
 # Storage Best Practices
 
 > **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Storage**

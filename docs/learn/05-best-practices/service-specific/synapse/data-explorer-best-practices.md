@@ -1,3 +1,10 @@
+---
+title: "Data Explorer Best Practices"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Data Explorer**"
+tags:
+  - best-practices
+  - synapse
+---
 # Data Explorer Best Practices
 
 > **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Data Explorer**
@@ -151,8 +158,7 @@ ingest_client.ingest_from_dataframe(df, props)
 .alter table Events policy retention
 ```
 { "SoftDeletePeriod": "365.00:00:00", "Recoverability": "Enabled" }
-```
-
+```text
 // Set caching policy
 .alter table Events policy caching hot = 30d
 ```

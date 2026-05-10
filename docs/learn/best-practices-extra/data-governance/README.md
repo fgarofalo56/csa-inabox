@@ -1,3 +1,10 @@
+---
+title: "Data Governance Best Practices"
+description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Data Governance**"
+tags:
+  - best-practices
+  - data-governance
+---
 # Data Governance Best Practices
 
 > **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Data Governance**

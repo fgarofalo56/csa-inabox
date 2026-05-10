@@ -1,3 +1,10 @@
+---
+title: "Serverless SQL Best Practices"
+description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Serverless SQL**"
+tags:
+  - best-practices
+  - serverless-sql-best-practices
+---
 # Serverless SQL Best Practices
 
 > **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Serverless SQL**

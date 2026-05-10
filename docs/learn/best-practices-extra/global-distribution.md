@@ -1,3 +1,9 @@
+---
+title: "Global Distribution Best Practices"
+description: "> **[Home](../README.md)** | **[Best Practices](index.md)** | **Global Distribution**"
+tags:
+  - best-practices
+---
 # Global Distribution Best Practices
 
 > **[Home](../README.md)** | **[Best Practices](index.md)** | **Global Distribution**

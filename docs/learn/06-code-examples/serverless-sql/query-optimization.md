@@ -1,3 +1,10 @@
+---
+title: "Serverless SQL Query Optimization in Azure Synapse Analytics"
+description: "[🏠 Home](../../../README.md) > [💻 Code Examples](../../README.md) > ☁️ Serverless SQL > 📄 Query Optimization"
+tags:
+  - code-examples
+  - serverless-sql
+---
 # Serverless SQL Query Optimization in Azure Synapse Analytics
 
 [🏠 Home](../../../README.md) > [💻 Code Examples](../../README.md) > ☁️ Serverless SQL > 📄 Query Optimization

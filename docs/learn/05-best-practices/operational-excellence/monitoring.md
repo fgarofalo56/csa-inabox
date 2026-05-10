@@ -1,3 +1,10 @@
+---
+title: "Monitoring Best Practices"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Monitoring**"
+tags:
+  - best-practices
+  - operational-excellence
+---
 # Monitoring Best Practices
 
 > **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Monitoring**
@@ -19,8 +26,7 @@ Effective monitoring provides visibility into platform health, performance, and 
 
 ### Observability Stack
 
-```
-┌─────────────────────────────────────────────────────────────┐
+```text┌─────────────────────────────────────────────────────────────┐
 │                    Business Metrics                          │
 │              (SLAs, Data Freshness, Quality)                │
 ├─────────────────────────────────────────────────────────────┤

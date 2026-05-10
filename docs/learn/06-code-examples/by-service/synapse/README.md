@@ -1,3 +1,11 @@
+---
+title: "Azure Synapse Analytics Code Examples"
+description: "Comprehensive code examples for Azure Synapse Analytics covering Spark pools, SQL pools, and data processing patterns."
+tags:
+  - code-examples
+  - by-service
+  - synapse
+---
 # 📊 Azure Synapse Analytics Code Examples
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
@@ -105,8 +113,7 @@ summary.show()
 
 __Expected Output:__
 
-```
-+----------------+-----------+---------------+-----------+
+```text+----------------+-----------+---------------+-----------+
 |product_category|total_sales|avg_order_value|order_count|
 +----------------+-----------+---------------+-----------+
 |Electronics     |1234567.89 |456.78         |2703       |

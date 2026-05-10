@@ -1,3 +1,10 @@
+---
+title: "Security Best Practices"
+description: "> **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Security**"
+tags:
+  - best-practices
+  - security
+---
 # Security Best Practices
 
 > **[Home](../../README.md)** | **[Best Practices](../index.md)** | **Security**

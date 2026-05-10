@@ -1,3 +1,10 @@
+---
+title: "Networking Best Practices"
+description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Networking**"
+tags:
+  - best-practices
+  - networking
+---
 # Networking Best Practices
 
 > **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Networking**

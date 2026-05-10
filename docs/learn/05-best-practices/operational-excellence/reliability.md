@@ -1,3 +1,10 @@
+---
+title: "Reliability Patterns"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Reliability**"
+tags:
+  - best-practices
+  - operational-excellence
+---
 # Reliability Patterns
 
 > **[Home](../../../README.md)** | **[Best Practices](../README.md)** | **[Operational Excellence](README.md)** | **Reliability**

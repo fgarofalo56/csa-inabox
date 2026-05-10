@@ -1,3 +1,9 @@
+---
+title: "Data Quality Best Practices"
+description: "> **[Home](../README.md)** | **[Best Practices](index.md)** | **Data Quality**"
+tags:
+  - best-practices
+---
 # Data Quality Best Practices
 
 > **[Home](../README.md)** | **[Best Practices](index.md)** | **Data Quality**

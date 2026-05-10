@@ -1,3 +1,10 @@
+---
+title: "Dedicated SQL Pool Best Practices"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Dedicated SQL**"
+tags:
+  - best-practices
+  - synapse
+---
 # Dedicated SQL Pool Best Practices
 
 > **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Dedicated SQL**

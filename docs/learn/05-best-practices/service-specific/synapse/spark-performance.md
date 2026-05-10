@@ -1,3 +1,10 @@
+---
+title: "Spark Performance Tuning"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark Performance**"
+tags:
+  - best-practices
+  - synapse
+---
 # Spark Performance Tuning
 
 > **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Synapse](README.md)** | **Spark Performance**

@@ -1,3 +1,10 @@
+---
+title: "Development Best Practices"
+description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Development**"
+tags:
+  - best-practices
+  - development
+---
 # Development Best Practices
 
 > **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Development**

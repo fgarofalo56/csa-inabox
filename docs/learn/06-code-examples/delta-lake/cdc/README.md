@@ -1,3 +1,11 @@
+---
+title: "Change Data Capture (CDC)"
+description: "This section provides code examples for implementing Change Data Capture patterns with Delta Lake."
+tags:
+  - code-examples
+  - delta-lake
+  - cdc
+---
 # Change Data Capture (CDC)
 
 This section provides code examples for implementing Change Data Capture patterns with Delta Lake.

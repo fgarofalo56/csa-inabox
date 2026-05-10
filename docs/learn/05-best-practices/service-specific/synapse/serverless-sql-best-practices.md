@@ -1,3 +1,10 @@
+---
+title: "Serverless Sql Best Practices"
+description: "[Home](../../README.md) > Best Practices > Serverless SQL Best Practices"
+tags:
+  - best-practices
+  - synapse
+---
 # Serverless Sql Best Practices
 
 [Home](../../README.md) > Best Practices > Serverless SQL Best Practices

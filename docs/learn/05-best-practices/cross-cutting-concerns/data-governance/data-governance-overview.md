@@ -1,3 +1,10 @@
+---
+title: "Data Governance Best Practices for Azure Synapse Analytics"
+description: "[Home](../../README.md) > Best Practices > Data Governance"
+tags:
+  - best-practices
+  - data-governance
+---
 # Data Governance Best Practices for Azure Synapse Analytics
 
 [Home](../../README.md) > Best Practices > Data Governance

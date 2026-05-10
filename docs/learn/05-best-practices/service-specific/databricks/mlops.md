@@ -1,3 +1,10 @@
+---
+title: "MLOps Best Practices"
+description: "> **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Databricks](README.md)** | **MLOps**"
+tags:
+  - best-practices
+  - databricks
+---
 # MLOps Best Practices
 
 > **[Home](../../../README.md)** | **[Best Practices](../../README.md)** | **[Databricks](README.md)** | **MLOps**

@@ -1,3 +1,10 @@
+---
+title: "Databricks Networking Best Practices"
+description: "> **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Databricks Networking**"
+tags:
+  - best-practices
+  - networking
+---
 # Databricks Networking Best Practices
 
 > **[Home](../../../../README.md)** | **[Best Practices](../../README.md)** | **[Cross-Cutting](../README.md)** | **Databricks Networking**
@@ -19,8 +26,7 @@ Secure network configuration is essential for enterprise Databricks deployments,
 
 ### Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
+```text┌─────────────────────────────────────────────────────────────┐
 │                    Customer VNet                             │
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │              Databricks Delegated Subnets               │ │
