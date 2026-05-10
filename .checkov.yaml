@@ -65,6 +65,7 @@ skip-check:
   - CKV_AZURE_43    # Storage account naming rules -- 3 occurrences are cosmetic (mixed-case in module-name interpolation); rename requires breaking deployments
   - CKV_AZURE_9     # NSG default-deny on inbound -- ArcGIS NSG explicitly allows 80/443/6080/6443 for ArcGIS Server; lab pattern
   - CKV_AZURE_95    # VMSS automatic OS image patching -- selfHostedIntegrationRuntime + DMLZ/webServer both set ``automaticOSUpgradePolicy.enableAutomaticOSUpgrade=true`` AND ``disableAutomaticRollback=false``; Checkov 3.x parser misses the nested property and inline skip directives are not honored
+  - CKV_AZURE_104   # Data Factory public network access -- both DLZ/datafactory.bicep and gov/modules/dataFactory.bicep parameterize ``publicNetworkAccess`` (gov defaults to ``Disabled``); Checkov can't statically resolve the parameter value, and inline ``// #checkov:skip=`` directives are not honored on these resources (same parser bug as CKV_AZURE_95)
   - CKV_AZURE_206   # Storage account replication -- gov/modules/storage.bicep tightens ``@allowed`` to GRS / RAGRS / GZRS / RAGZRS only (geo-redundancy is guaranteed by the parameter contract); Checkov cannot statically resolve the parameterized value
 
   # ---------------------------------------------------------------------------
