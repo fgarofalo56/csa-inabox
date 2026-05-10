@@ -1,3 +1,10 @@
+---
+title: "Azure Storage Reference"
+description: "[Home](../../../README.md) > [Reference](../README.md) > Storage"
+tags:
+  - reference
+  - storage
+---
 # Azure Storage Reference
 
 [Home](../../../README.md) > [Reference](../README.md) > Storage

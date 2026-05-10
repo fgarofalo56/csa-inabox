@@ -1,3 +1,12 @@
+---
+title: "Azure Real-Time Analytics Platform Documentation"
+description: "Enterprise-grade real-time data analytics platform built on Microsoft Azure"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+  - example_mds
+---
 # Azure Real-Time Analytics Platform Documentation
 
 <p align="center">
@@ -34,8 +43,7 @@ This repository contains comprehensive documentation for an enterprise Azure rea
 ## 🏗️ Architecture
 
 ### High-Level Architecture
-```
-Internet → Edge Security → Azure VNet → Processing → Storage → Consumption
+```textInternet → Edge Security → Azure VNet → Processing → Storage → Consumption
     ↓           ↓             ↓            ↓          ↓          ↓
 Confluent → Front Door → Event Hubs → Databricks → Delta → Power BI
    Cloud       WAF        Kafka      Streaming    Lake      Direct

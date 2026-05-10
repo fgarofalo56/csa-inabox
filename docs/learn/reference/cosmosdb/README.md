@@ -1,3 +1,10 @@
+---
+title: "Azure Cosmos DB Reference"
+description: "[Home](../../../README.md) > [Reference](../README.md) > Cosmos DB"
+tags:
+  - reference
+  - cosmosdb
+---
 # Azure Cosmos DB Reference
 
 [Home](../../../README.md) > [Reference](../README.md) > Cosmos DB

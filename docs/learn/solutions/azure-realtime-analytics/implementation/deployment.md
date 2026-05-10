@@ -1,3 +1,10 @@
+---
+title: "Deployment Guide"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # 🚀 Deployment Guide
 
 ---

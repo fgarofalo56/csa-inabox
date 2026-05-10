@@ -1,3 +1,11 @@
+---
+title: "Storage Setup"
+description: "Step-by-step tutorial for storage setup."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Storage Setup
 
 Step-by-step tutorial for storage setup.

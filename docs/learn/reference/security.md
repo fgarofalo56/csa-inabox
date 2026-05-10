@@ -1,3 +1,9 @@
+---
+title: "Azure Synapse Analytics Security Reference"
+description: "[Home](../../README.md) > Reference > Security Guide"
+tags:
+  - reference
+---
 # Azure Synapse Analytics Security Reference
 
 [Home](../../README.md) > Reference > Security Guide

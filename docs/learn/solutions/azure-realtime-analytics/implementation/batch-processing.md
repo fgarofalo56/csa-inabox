@@ -1,3 +1,11 @@
+---
+title: "Batch Processing"
+description: "Step-by-step tutorial for batch processing."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Batch Processing
 
 Step-by-step tutorial for batch processing.

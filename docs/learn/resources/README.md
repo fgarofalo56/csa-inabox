@@ -1,3 +1,9 @@
+---
+title: "Business Resources"
+description: "Business-focused resources for executives, decision-makers, and stakeholders evaluating Azure Cloud Scale Analytics platform."
+tags:
+  - resources
+---
 # 💼 Business Resources
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

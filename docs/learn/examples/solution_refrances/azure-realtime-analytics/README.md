@@ -1,3 +1,11 @@
+---
+title: "️ Azure Real-Time Analytics Architecture"
+description: "[](https://azure.microsoft.com/)"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+---
 # 🏗️ Azure Real-Time Analytics Architecture
 
 [![Azure](https://img.shields.io/badge/Azure-0078D4?style=for-the-badge&logo=microsoft-azure&logoColor=white)](https://azure.microsoft.com/)
@@ -38,8 +46,7 @@ This repository contains the complete architectural documentation, implementatio
 
 ## 📚 Documentation Structure
 
-```
-├── 📖 docs/
+```text├── 📖 docs/
 │   ├── 🏗️ architecture/           # System architecture documentation
 │   ├── 🚀 implementation/         # Deployment and setup guides
 │   ├── 🔧 operations/             # Monitoring and maintenance

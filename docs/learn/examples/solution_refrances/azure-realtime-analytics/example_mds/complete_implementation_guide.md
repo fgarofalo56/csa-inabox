@@ -1,3 +1,11 @@
+---
+title: "Clean Visual Documentation - Complete Implementation Guide"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+  - example_mds
+---
 # 📊 Clean Visual Documentation - Complete Implementation Guide
 
 ## 🎯 Executive Summary

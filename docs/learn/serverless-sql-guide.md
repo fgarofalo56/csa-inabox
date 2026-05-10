@@ -1,3 +1,7 @@
+---
+title: "Serverless SQL Guide"
+description: "Guide to Azure Synapse Serverless SQL."
+---
 # Serverless SQL Guide
 
 Guide to Azure Synapse Serverless SQL.

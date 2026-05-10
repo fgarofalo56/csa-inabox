@@ -1,3 +1,11 @@
+---
+title: "Components"
+description: "Step-by-step tutorial for components."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - architecture
+---
 # Components
 
 Step-by-step tutorial for components.

@@ -1,3 +1,11 @@
+---
+title: "Kafka Setup"
+description: "Step-by-step tutorial for kafka setup."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Kafka Setup
 
 Step-by-step tutorial for kafka setup.

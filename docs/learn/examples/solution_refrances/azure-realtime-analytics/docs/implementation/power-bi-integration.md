@@ -1,3 +1,11 @@
+---
+title: "Power BI Integration Guide"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+  - implementation
+---
 # 📊 Power BI Integration Guide
 
 ## Table of Contents
@@ -16,8 +24,7 @@ Power BI integration with Azure Databricks enables real-time analytics through D
 
 ### Architecture Components
 
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+```text┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Databricks    │────│   Power BI      │────│   Consumption   │
 │                 │    │                 │    │                 │
 │ • Delta Tables  │    │ • Direct Lake   │    │ • Dashboards    │

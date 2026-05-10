@@ -1,3 +1,9 @@
+---
+title: "Azure Analytics Glossary"
+description: "[🏠 Home](../../README.md) > [📖 Reference](./README.md) > 📚 Glossary"
+tags:
+  - reference
+---
 # Azure Analytics Glossary
 
 [🏠 Home](../../README.md) > [📖 Reference](./README.md) > 📚 Glossary

@@ -1,3 +1,11 @@
+---
+title: "Maintenance"
+description: "Step-by-step tutorial for maintenance."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - operations
+---
 # Maintenance
 
 Step-by-step tutorial for maintenance.

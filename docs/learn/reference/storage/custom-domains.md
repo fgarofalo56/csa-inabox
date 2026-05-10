@@ -1,3 +1,10 @@
+---
+title: "Azure Storage Custom Domains Reference"
+description: "[Home](../../../README.md) > [Reference](../README.md) > [Storage](README.md) > Custom Domains"
+tags:
+  - reference
+  - storage
+---
 # Azure Storage Custom Domains Reference
 
 [Home](../../../README.md) > [Reference](../README.md) > [Storage](README.md) > Custom Domains

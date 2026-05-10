@@ -1,8 +1,14 @@
+---
+title: "Documentation Project Task List"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+---
 # 📋 Documentation Project Task List
 
 ## Project Structure
-```
-azure-realtime-analytics/
+```textazure-realtime-analytics/
 ├── README.md                           ✅ Main project overview
 ├── docs/                              
 │   ├── architecture/                  

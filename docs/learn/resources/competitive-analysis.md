@@ -1,3 +1,9 @@
+---
+title: "Cloud Analytics Platform Competitive Analysis"
+description: "Comprehensive comparison of Azure Cloud Scale Analytics against AWS, Google Cloud, Databricks, Snowflake, and on-premises solutions."
+tags:
+  - resources
+---
 # 🔍 Cloud Analytics Platform Competitive Analysis
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

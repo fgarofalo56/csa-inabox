@@ -1,3 +1,9 @@
+---
+title: "️ Serverless SQL Architecture Description"
+description: "Detailed description and visual representation of Azure Synapse Serverless SQL Pool architecture and query processing."
+tags:
+  - diagrams
+---
 # ☁️ Serverless SQL Architecture Description
 
 ![Status](https://img.shields.io/badge/Status-Reference-blue?style=flat-square)

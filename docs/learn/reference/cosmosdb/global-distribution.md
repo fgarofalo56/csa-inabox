@@ -1,3 +1,10 @@
+---
+title: "Azure Cosmos DB Global Distribution Reference"
+description: "[Home](../../../README.md) > [Reference](../README.md) > [Cosmos DB](README.md) > Global Distribution"
+tags:
+  - reference
+  - cosmosdb
+---
 # Azure Cosmos DB Global Distribution Reference
 
 [Home](../../../README.md) > [Reference](../README.md) > [Cosmos DB](README.md) > Global Distribution

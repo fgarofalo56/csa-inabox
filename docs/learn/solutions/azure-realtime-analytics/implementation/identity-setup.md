@@ -1,3 +1,11 @@
+---
+title: "Identity Setup"
+description: "Step-by-step tutorial for identity setup."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Identity Setup
 
 Step-by-step tutorial for identity setup.

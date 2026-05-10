@@ -1,3 +1,11 @@
+---
+title: "Troubleshooting"
+description: "Step-by-step tutorial for troubleshooting."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - operations
+---
 # Troubleshooting
 
 Step-by-step tutorial for troubleshooting.

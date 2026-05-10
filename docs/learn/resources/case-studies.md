@@ -1,3 +1,9 @@
+---
+title: "Azure Analytics Customer Case Studies"
+description: "Real-world implementations of Azure Cloud Scale Analytics across industries, showcasing business value, technical solutions, and measurable outcomes."
+tags:
+  - resources
+---
 # 📊 Azure Analytics Customer Case Studies
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

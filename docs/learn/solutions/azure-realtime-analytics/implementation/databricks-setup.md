@@ -1,3 +1,11 @@
+---
+title: "Databricks Setup"
+description: "Step-by-step tutorial for databricks setup."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Databricks Setup
 
 Step-by-step tutorial for databricks setup.

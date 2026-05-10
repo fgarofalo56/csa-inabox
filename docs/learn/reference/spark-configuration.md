@@ -1,3 +1,9 @@
+---
+title: "Spark Configuration"
+description: "[Home](../../README.md) > Reference > Spark Configuration"
+tags:
+  - reference
+---
 # Spark Configuration
 
 [Home](../../README.md) > Reference > Spark Configuration

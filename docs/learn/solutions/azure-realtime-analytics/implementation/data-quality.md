@@ -1,3 +1,11 @@
+---
+title: "Data Quality"
+description: "Step-by-step tutorial for data quality."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Data Quality
 
 Step-by-step tutorial for data quality.

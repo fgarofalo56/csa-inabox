@@ -1,3 +1,11 @@
+---
+title: "Security"
+description: "Step-by-step tutorial for security."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - architecture
+---
 # Security
 
 Step-by-step tutorial for security.

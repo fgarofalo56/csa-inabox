@@ -1,3 +1,9 @@
+---
+title: "Delta Lakehouse Architecture Diagram"
+description: "[🏠 Home](../../README.md) > [📊 Diagrams](README.md) > Delta Lakehouse Architecture"
+tags:
+  - diagrams
+---
 # Delta Lakehouse Architecture Diagram
 
 [🏠 Home](../../README.md) > [📊 Diagrams](README.md) > Delta Lakehouse Architecture

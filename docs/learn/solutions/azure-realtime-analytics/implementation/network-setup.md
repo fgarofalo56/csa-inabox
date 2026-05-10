@@ -1,3 +1,11 @@
+---
+title: "Network Setup"
+description: "Step-by-step tutorial for network setup."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Network Setup
 
 Step-by-step tutorial for network setup.

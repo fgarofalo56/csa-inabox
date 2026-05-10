@@ -1,3 +1,9 @@
+---
+title: "Executive FAQ - Azure Cloud Scale Analytics"
+description: "Comprehensive answers to common executive and business questions about Azure Cloud Scale Analytics platform adoption, ROI, and strategic considerations."
+tags:
+  - resources
+---
 # ❓ Executive FAQ - Azure Cloud Scale Analytics
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

@@ -1,3 +1,9 @@
+---
+title: "Azure Synapse Analytics Security Checklist"
+description: "[Home](../../README.md) > Reference > Security Checklist"
+tags:
+  - reference
+---
 # Azure Synapse Analytics Security Checklist
 
 [Home](../../README.md) > Reference > Security Checklist

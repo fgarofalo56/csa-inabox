@@ -1,3 +1,12 @@
+---
+title: "Azure Real-Time Analytics Architecture"
+description: "[](https://opensource.org/licenses/MIT)"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+  - example_mds
+---
 # Azure Real-Time Analytics Architecture
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -60,8 +69,7 @@ graph LR
 
 ## 📁 Repository Structure
 
-```
-├── README.md                          # This file
+```text├── README.md                          # This file
 ├── docs/                              # Documentation
 │   ├── architecture/                  # System architecture
 │   │   ├── overview.md               # Architecture overview
@@ -133,24 +141,21 @@ Our architecture documentation includes interactive, professionally-designed dia
 ## 📈 Performance Benchmarks
 
 ### Throughput Performance
-```
-Peak Throughput:     1.2M events/second
+```textPeak Throughput:     1.2M events/second
 Sustained Rate:      850K events/second  
 Batch Processing:    5TB/hour
 Query Performance:   Sub-second response
 ```
 
 ### Latency Metrics
-```
-Ingestion:          < 100ms (p95)
+```textIngestion:          < 100ms (p95)
 Processing:         < 2s (p95) 
 End-to-End:         < 5s (p99)
 Query Response:     < 1s (p95)
 ```
 
 ### Cost Optimization
-```
-Spot Instance Usage:  70%
+```textSpot Instance Usage:  70%
 Cost Reduction:       32% vs baseline
 Auto-scaling:         Yes
 Reserved Capacity:    30% for critical workloads

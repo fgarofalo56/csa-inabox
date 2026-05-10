@@ -1,3 +1,7 @@
+---
+title: "Frequently Asked Questions"
+description: "Home > ❓ FAQ"
+---
 # ❓ Frequently Asked Questions
 
 🏠 Home > ❓ FAQ

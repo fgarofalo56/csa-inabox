@@ -1,3 +1,11 @@
+---
+title: "Platform Architecture Overview"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+  - example_mds
+---
 # Platform Architecture Overview
 
 ## 🎯 Executive Summary

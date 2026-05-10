@@ -1,3 +1,11 @@
+---
+title: "Data Flow Architecture"
+tags:
+  - examples
+  - solution_refrances
+  - azure-realtime-analytics
+  - architecture
+---
 # 📊 Data Flow Architecture
 
 ## Table of Contents
@@ -117,8 +125,7 @@ query = processed_df \
 
 ### Scheduled Processing
 
-```
-Hourly Jobs (5-10 min)     Daily Jobs (30-60 min)    Weekly Jobs (2-4 hrs)
+```textHourly Jobs (5-10 min)     Daily Jobs (30-60 min)    Weekly Jobs (2-4 hrs)
 ├─ Aggregation Jobs        ├─ Full Reprocessing       ├─ Data Archival
 ├─ Data Quality Checks     ├─ ML Model Training       ├─ Performance Tuning
 └─ ML Feature Updates      └─ Business Reports        └─ Security Scans

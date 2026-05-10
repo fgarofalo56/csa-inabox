@@ -1,3 +1,10 @@
+---
+title: "Azure Security Checklist Reference"
+description: "[Home](../../../README.md) > [Reference](../README.md) > Security Checklist"
+tags:
+  - reference
+  - security-checklist
+---
 # Azure Security Checklist Reference
 
 [Home](../../../README.md) > [Reference](../README.md) > Security Checklist

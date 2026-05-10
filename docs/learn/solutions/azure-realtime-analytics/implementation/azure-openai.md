@@ -1,3 +1,11 @@
+---
+title: "Azure Openai"
+description: "Step-by-step tutorial for azure openai."
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Azure Openai
 
 Step-by-step tutorial for azure openai.

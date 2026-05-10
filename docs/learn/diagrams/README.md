@@ -1,3 +1,9 @@
+---
+title: "Azure Synapse Analytics Architecture Diagrams"
+description: "[🏠 Home](../../README.md) > 📊 Diagrams"
+tags:
+  - diagrams
+---
 # 📊 Azure Synapse Analytics Architecture Diagrams
 
 [🏠 Home](../../README.md) > 📊 Diagrams

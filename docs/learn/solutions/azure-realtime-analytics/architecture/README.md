@@ -1,3 +1,10 @@
+---
+title: "️ Architecture Documentation"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - architecture
+---
 # 🏗️ Architecture Documentation
 
 ---

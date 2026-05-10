@@ -1,3 +1,9 @@
+---
+title: "Process Flowcharts for Azure Synapse Analytics"
+description: "[Home](../../README.md) > Diagrams > Process Flowcharts"
+tags:
+  - diagrams
+---
 # Process Flowcharts for Azure Synapse Analytics
 
 [Home](../../README.md) > Diagrams > Process Flowcharts
