@@ -1,3 +1,9 @@
+---
+title: "Guided Troubleshooting"
+description: "[🏠 Home](../../README.md) > [🔧 Troubleshooting](./README.md) > 🧭 Guided Troubleshooting"
+tags:
+  - troubleshooting
+---
 # Guided Troubleshooting
 
 [🏠 Home](../../README.md) > [🔧 Troubleshooting](./README.md) > 🧭 Guided Troubleshooting

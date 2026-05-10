@@ -1,3 +1,10 @@
+---
+title: "Azure Databricks Troubleshooting Guide"
+description: "Comprehensive troubleshooting guide for Azure Databricks including cluster issues, Spark performance, Delta Lake problems, and data quality concerns."
+tags:
+  - troubleshooting
+  - databricks
+---
 # Azure Databricks Troubleshooting Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Service](https://img.shields.io/badge/Service-Databricks-orange)

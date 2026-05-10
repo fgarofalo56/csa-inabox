@@ -1,3 +1,10 @@
+---
+title: "Azure Synapse Query Performance Troubleshooting"
+description: "Comprehensive guide for diagnosing and resolving slow queries, analyzing execution plans, and optimizing statistics in Azure Synapse Analytics."
+tags:
+  - troubleshooting
+  - synapse
+---
 # Azure Synapse Query Performance Troubleshooting
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red)

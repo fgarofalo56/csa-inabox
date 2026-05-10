@@ -1,3 +1,10 @@
+---
+title: "Azure Cosmos DB Query Performance Troubleshooting"
+description: "Guide for diagnosing and resolving query performance issues in Azure Cosmos DB including slow queries, high RU consumption, and query optimization strategies."
+tags:
+  - troubleshooting
+  - cosmosdb
+---
 # Azure Cosmos DB Query Performance Troubleshooting
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow)

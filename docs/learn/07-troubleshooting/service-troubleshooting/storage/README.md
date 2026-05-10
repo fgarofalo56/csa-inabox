@@ -1,3 +1,10 @@
+---
+title: "Azure Storage Troubleshooting Guide"
+description: "Troubleshooting guide for Azure Storage including Blob Storage, Data Lake Storage Gen2, File Storage, and Queue Storage."
+tags:
+  - troubleshooting
+  - storage
+---
 # Azure Storage Troubleshooting Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Service](https://img.shields.io/badge/Service-Storage-lightblue)

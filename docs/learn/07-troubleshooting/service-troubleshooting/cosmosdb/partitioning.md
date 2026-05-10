@@ -1,3 +1,10 @@
+---
+title: "Azure Cosmos DB Partition Troubleshooting"
+description: "Comprehensive guide for diagnosing and resolving partition-related issues in Azure Cosmos DB including hot partitions, partition key selection, cross-partition queries, and partition splitting."
+tags:
+  - troubleshooting
+  - cosmosdb
+---
 # Azure Cosmos DB Partition Troubleshooting
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red)

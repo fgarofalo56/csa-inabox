@@ -1,3 +1,10 @@
+---
+title: "Logic Apps Integration Solution"
+description: "> __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Logic Apps Integration__"
+tags:
+  - solutions
+  - logic-apps-integration
+---
 # Logic Apps Integration Solution
 
 > __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Logic Apps Integration__

@@ -1,3 +1,10 @@
+---
+title: "Azure HDInsight Troubleshooting Guide"
+description: "Troubleshooting guide for Azure HDInsight clusters including Hadoop, Spark, Hive, HBase, and Kafka workloads."
+tags:
+  - troubleshooting
+  - hdinsight
+---
 # Azure HDInsight Troubleshooting Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Service](https://img.shields.io/badge/Service-HDInsight-blue)
@@ -47,15 +54,13 @@ Azure HDInsight is a managed Apache Hadoop service. This guide covers common iss
 ### Ambari UI
 
 Access cluster management interface:
-```
-https://<cluster-name>.azurehdinsight.net
+```texthttps://<cluster-name>.azurehdinsight.net
 ```
 
 ### YARN Resource Manager
 
 Monitor job execution:
-```
-https://<cluster-name>.azurehdinsight.net/yarnui
+```texthttps://<cluster-name>.azurehdinsight.net/yarnui
 ```
 
 ### Check Cluster Health

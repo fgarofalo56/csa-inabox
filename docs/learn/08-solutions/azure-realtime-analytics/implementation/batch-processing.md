@@ -1,3 +1,10 @@
+---
+title: "Batch Processing Setup"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Batch Processing Setup
 
 ---

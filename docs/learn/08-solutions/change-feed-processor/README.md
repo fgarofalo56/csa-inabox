@@ -1,3 +1,10 @@
+---
+title: "Change Feed Processor Solution"
+description: "> __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Change Feed Processor__"
+tags:
+  - solutions
+  - change-feed-processor
+---
 # Change Feed Processor Solution
 
 > __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Change Feed Processor__

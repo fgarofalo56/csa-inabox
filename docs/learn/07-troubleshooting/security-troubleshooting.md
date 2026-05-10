@@ -1,3 +1,9 @@
+---
+title: "Security Troubleshooting - CSA in-a-Box"
+description: "Comprehensive guide for diagnosing and resolving security-related issues including authentication failures, authorization problems, network security, and data protection across Cloud Scale Analytic..."
+tags:
+  - troubleshooting
+---
 # Security Troubleshooting - CSA in-a-Box
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Complexity](https://img.shields.io/badge/Complexity-Advanced-red)

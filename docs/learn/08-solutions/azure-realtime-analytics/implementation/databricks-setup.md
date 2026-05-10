@@ -1,3 +1,10 @@
+---
+title: "Databricks Workspace Setup"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Databricks Workspace Setup
 
 ---

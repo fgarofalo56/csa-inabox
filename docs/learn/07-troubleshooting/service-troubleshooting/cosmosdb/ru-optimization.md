@@ -1,3 +1,10 @@
+---
+title: "Azure Cosmos DB RU Optimization"
+description: "Comprehensive guide for optimizing Request Unit (RU) consumption in Azure Cosmos DB to reduce costs and improve performance."
+tags:
+  - troubleshooting
+  - cosmosdb
+---
 # Azure Cosmos DB RU Optimization
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen) ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow)

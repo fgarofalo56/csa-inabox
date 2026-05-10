@@ -1,3 +1,10 @@
+---
+title: "Cosmos DB Troubleshooting"
+description: "This section provides troubleshooting guidance for Azure Cosmos DB issues in Cloud Scale Analytics environments."
+tags:
+  - troubleshooting
+  - cosmosdb
+---
 # Cosmos DB Troubleshooting
 
 This section provides troubleshooting guidance for Azure Cosmos DB issues in Cloud Scale Analytics environments.

@@ -1,3 +1,11 @@
+---
+title: "Security Monitoring"
+description: "> __[Home](../../../../README.md)__ | __[Solutions](../../../08-solutions/README.md)__ | __[Real-Time Analytics](../README.md)__ | __Security Monitoring__"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - operations
+---
 # Security Monitoring
 
 > __[Home](../../../../README.md)__ | __[Solutions](../../../08-solutions/README.md)__ | __[Real-Time Analytics](../README.md)__ | __Security Monitoring__

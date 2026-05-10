@@ -1,3 +1,9 @@
+---
+title: "️ Common Errors - CSA in-a-Box"
+description: "Comprehensive guide to common error codes, messages, and resolution procedures for Cloud Scale Analytics components."
+tags:
+  - troubleshooting
+---
 # ⚠️ Common Errors - CSA in-a-Box
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

@@ -1,3 +1,9 @@
+---
+title: "Troubleshooting - CSA in-a-Box"
+description: "Comprehensive troubleshooting guides for Cloud Scale Analytics in-a-box, covering diagnostic procedures, error resolution, and Azure support escalation paths."
+tags:
+  - troubleshooting
+---
 # 🔧 Troubleshooting - CSA in-a-Box
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen)

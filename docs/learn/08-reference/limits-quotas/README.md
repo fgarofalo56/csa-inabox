@@ -1,3 +1,10 @@
+---
+title: "Limits Quotas"
+description: "Comprehensive documentation for Limits Quotas."
+tags:
+  - reference
+  - limits-quotas
+---
 # Limits Quotas
 
 Comprehensive documentation for Limits Quotas.

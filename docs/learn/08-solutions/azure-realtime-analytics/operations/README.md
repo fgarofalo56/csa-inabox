@@ -1,3 +1,10 @@
+---
+title: "Operations Documentation"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - operations
+---
 # 🔧 Operations Documentation
 
 ---

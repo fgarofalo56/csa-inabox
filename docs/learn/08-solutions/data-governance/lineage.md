@@ -1,3 +1,10 @@
+---
+title: "Data Lineage Solution"
+description: "> __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Data Lineage__"
+tags:
+  - solutions
+  - data-governance
+---
 # Data Lineage Solution
 
 > __[Home](../../../README.md)__ | __[Solutions](../../08-solutions/README.md)__ | __Data Lineage__

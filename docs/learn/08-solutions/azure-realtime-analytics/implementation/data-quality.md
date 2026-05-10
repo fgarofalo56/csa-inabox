@@ -1,3 +1,10 @@
+---
+title: "Data Quality Implementation"
+tags:
+  - solutions
+  - azure-realtime-analytics
+  - implementation
+---
 # Data Quality Implementation
 
 ---
