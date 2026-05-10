@@ -1,3 +1,10 @@
+---
+title: "Azure Analytics Services Overview"
+description: "This overview provides a comprehensive guide to selecting and implementing Azure analytics services for your Cloud Scale Analytics (CSA) solutions."
+tags:
+  - services
+  - overview
+---
 # 🔭 Azure Analytics Services Overview
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

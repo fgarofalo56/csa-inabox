@@ -1,3 +1,11 @@
+---
+title: "️ Azure Data Factory"
+description: "Cloud-based data integration service for creating, scheduling, and orchestrating ETL/ELT data pipelines at scale."
+tags:
+  - services
+  - orchestration-services
+  - data-factory
+---
 # 🏗️ Azure Data Factory
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

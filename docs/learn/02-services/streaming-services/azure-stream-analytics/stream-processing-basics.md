@@ -1,3 +1,10 @@
+---
+title: "<"
+description: "Stream Processing Basics"
+tags:
+  - services
+  - stream-analytics
+---
 # <
  Stream Processing Basics
 
@@ -530,7 +537,8 @@ WHERE
 
 ---
 
-## = Debugging and Testing
+## =
+ Debugging and Testing
 
 ### Test Queries with Sample Data
 

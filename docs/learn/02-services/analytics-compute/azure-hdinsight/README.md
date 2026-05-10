@@ -1,3 +1,10 @@
+---
+title: "Azure HDInsight"
+description: "Fully managed cloud service for deploying and managing Apache Hadoop, Spark, HBase, Kafka, and other open-source big data frameworks with enterprise-grade security and reliability."
+tags:
+  - services
+  - hdinsight
+---
 # 🐘 Azure HDInsight
 
 ![Status](https://img.shields.io/badge/Status-Migration-blue?style=flat-square)

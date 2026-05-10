@@ -1,3 +1,9 @@
+---
+title: "Data Factory Quickstart"
+description: "Comprehensive documentation for Data Factory Quickstart."
+tags:
+  - overview
+---
 # Data Factory Quickstart
 
 Comprehensive documentation for Data Factory Quickstart.

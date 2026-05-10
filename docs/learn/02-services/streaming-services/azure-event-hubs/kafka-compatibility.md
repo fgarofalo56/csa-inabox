@@ -1,3 +1,10 @@
+---
+title: "Kafka Compatibility"
+description: "Use Azure Event Hubs as a drop-in replacement for Apache Kafka with native protocol support."
+tags:
+  - services
+  - event-hubs
+---
 # 🔄 Kafka Compatibility
 
 ![Compatibility](https://img.shields.io/badge/Kafka-Compatible-brightgreen?style=flat-square)

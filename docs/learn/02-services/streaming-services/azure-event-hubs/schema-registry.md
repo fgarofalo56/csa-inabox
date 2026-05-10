@@ -1,3 +1,10 @@
+---
+title: "Schema Registry"
+description: "Centralized schema management for Event Hubs with validation, versioning, and compatibility rules."
+tags:
+  - services
+  - event-hubs
+---
 # 📋 Schema Registry
 
 ![Feature](https://img.shields.io/badge/Feature-Schema%20Registry-brightgreen?style=flat-square)

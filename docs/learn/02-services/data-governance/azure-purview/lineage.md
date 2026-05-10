@@ -1,3 +1,11 @@
+---
+title: "Azure Purview Data Lineage"
+description: "Comprehensive guide to implementing and managing data lineage with Azure Purview (now Microsoft Purview)."
+tags:
+  - services
+  - data-governance
+  - purview
+---
 # 🔗 Azure Purview Data Lineage
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

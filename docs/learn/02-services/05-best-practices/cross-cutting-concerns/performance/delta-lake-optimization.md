@@ -1,3 +1,11 @@
+---
+title: "Delta Lake Optimization"
+description: "Comprehensive documentation for Delta Lake Optimization."
+tags:
+  - services
+  - best-practices
+  - performance
+---
 # Delta Lake Optimization
 
 Comprehensive documentation for Delta Lake Optimization.

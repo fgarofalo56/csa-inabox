@@ -1,3 +1,10 @@
+---
+title: "Azure Databricks"
+description: "Collaborative analytics platform optimized for data science, data engineering, and machine learning workflows on Azure."
+tags:
+  - services
+  - databricks
+---
 # 🧪 Azure Databricks
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

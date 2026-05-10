@@ -1,3 +1,9 @@
+---
+title: "️ Architecture Patterns Overview"
+description: "High-level architectural patterns and decision framework for Cloud Scale Analytics implementations."
+tags:
+  - overview
+---
 # 🏗️ Architecture Patterns Overview
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

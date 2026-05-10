@@ -1,3 +1,12 @@
+---
+title: "Cross-Region Delta Lake Setup - Azure Synapse Analytics"
+description: "Comprehensive guide to setting up Delta Lake across multiple Azure regions for disaster recovery, data residency, and global access patterns."
+tags:
+  - services
+  - synapse
+  - spark-pools
+  - delta-lakehouse
+---
 # 🌍 Cross-Region Delta Lake Setup - Azure Synapse Analytics
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

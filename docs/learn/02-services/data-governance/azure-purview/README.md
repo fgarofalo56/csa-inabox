@@ -1,3 +1,11 @@
+---
+title: "Azure Purview"
+description: "Unified data governance solution for discovering, classifying, and managing data across your enterprise."
+tags:
+  - services
+  - data-governance
+  - purview
+---
 # 🔍 Azure Purview
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

@@ -1,3 +1,10 @@
+---
+title: "API Selection Guide for Azure Cosmos DB"
+description: "Choose the right API for your application based on data model, query patterns, and migration requirements."
+tags:
+  - services
+  - cosmos-db
+---
 # 🔌 API Selection Guide for Azure Cosmos DB
 
 ![Multi-Model](https://img.shields.io/badge/APIs-5%20Supported-blue?style=flat-square)

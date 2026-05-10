@@ -1,3 +1,12 @@
+---
+title: "️ Delta Lakehouse Architecture with Azure Synapse"
+description: "Modern lakehouse architecture combining data lake flexibility with data warehouse ACID transactions and performance."
+tags:
+  - services
+  - synapse
+  - spark-pools
+  - delta-lakehouse
+---
 # 🏛️ Delta Lakehouse Architecture with Azure Synapse
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

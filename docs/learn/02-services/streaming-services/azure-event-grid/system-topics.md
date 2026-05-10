@@ -1,3 +1,10 @@
+---
+title: "System Topics"
+description: "React to Azure service events using Event Grid system topics for seamless cloud automation."
+tags:
+  - services
+  - azure-event-grid
+---
 # 🌐 System Topics
 
 ![Feature](https://img.shields.io/badge/Feature-System%20Events-brightgreen?style=flat-square)

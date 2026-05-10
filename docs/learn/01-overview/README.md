@@ -1,3 +1,9 @@
+---
+title: "Cloud Scale Analytics Platform Overview"
+description: "Comprehensive documentation for Azure Cloud Scale Analytics services, architectures, and implementation patterns."
+tags:
+  - overview
+---
 # 🌐 Cloud Scale Analytics Platform Overview
 
 ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

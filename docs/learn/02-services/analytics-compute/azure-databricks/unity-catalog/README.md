@@ -1,3 +1,11 @@
+---
+title: "️ Unity Catalog"
+description: "Unified governance solution for data and AI assets across Azure Databricks workspaces with centralized access control, audit logging, and data discovery."
+tags:
+  - services
+  - databricks
+  - unity-catalog
+---
 # 🗄️ Unity Catalog
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
@@ -70,8 +78,7 @@ graph TB
 
 ### Three-Level Namespace
 
-```
-metastore
+```textmetastore
   └── catalog                 # Environment or business unit
       └── schema              # Functional area or domain
           └── table/view      # Data asset

@@ -1,3 +1,9 @@
+---
+title: "Synapse Quickstart"
+description: "Comprehensive documentation for Synapse Quickstart."
+tags:
+  - overview
+---
 # Synapse Quickstart
 
 Comprehensive documentation for Synapse Quickstart.

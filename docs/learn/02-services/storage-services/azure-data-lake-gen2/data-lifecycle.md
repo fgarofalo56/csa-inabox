@@ -1,3 +1,10 @@
+---
+title: "️ Data Lifecycle Management in ADLS Gen2"
+description: "Automate data tier transitions and deletion with lifecycle management policies to optimize storage costs while maintaining data availability and compliance requirements."
+tags:
+  - services
+  - azure-data-lake-gen2
+---
 # ♻️ Data Lifecycle Management in ADLS Gen2
 
 ![Cost](https://img.shields.io/badge/Cost-Optimized-orange?style=flat-square)

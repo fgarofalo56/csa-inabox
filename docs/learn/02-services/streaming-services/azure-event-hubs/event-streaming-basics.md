@@ -1,3 +1,10 @@
+---
+title: "Event Streaming Basics"
+description: "Fundamental concepts and patterns for event streaming with Azure Event Hubs."
+tags:
+  - services
+  - event-hubs
+---
 # 🌊 Event Streaming Basics
 
 ![Complexity](https://img.shields.io/badge/Complexity-Beginner-green?style=flat-square)

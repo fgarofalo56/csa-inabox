@@ -1,3 +1,10 @@
+---
+title: "Azure Cosmos DB"
+description: "Azure Cosmos DB is a globally distributed, multi-model NoSQL database service that offers turnkey global distribution, elastic scaling, and comprehensive SLAs for throughput, latency, availability,..."
+tags:
+  - services
+  - cosmos-db
+---
 # 🌌 Azure Cosmos DB
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

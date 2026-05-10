@@ -1,3 +1,11 @@
+---
+title: "Dedicated SQL Pool Sizing Guide"
+description: "Comprehensive guide for sizing Azure Synapse Dedicated SQL Pools to optimize performance and cost."
+tags:
+  - services
+  - synapse
+  - dedicated-sql
+---
 # 📐 Dedicated SQL Pool Sizing Guide
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

@@ -1,3 +1,10 @@
+---
+title: "Azure Event Grid"
+description: "Fully managed event routing service for building reactive, event-driven applications at scale."
+tags:
+  - services
+  - azure-event-grid
+---
 # 🌐 Azure Event Grid
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

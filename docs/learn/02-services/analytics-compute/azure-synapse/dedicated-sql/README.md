@@ -1,3 +1,11 @@
+---
+title: "️ Dedicated SQL Pool"
+description: "Enterprise data warehousing solution within Azure Synapse Analytics."
+tags:
+  - services
+  - synapse
+  - dedicated-sql
+---
 # 🗄️ Dedicated SQL Pool
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

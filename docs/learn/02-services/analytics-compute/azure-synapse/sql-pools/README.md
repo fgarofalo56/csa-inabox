@@ -1,3 +1,11 @@
+---
+title: "️ Azure Synapse SQL Pools"
+description: "SQL Pools in Azure Synapse provide both serverless and dedicated SQL compute options for data warehousing and analytics workloads."
+tags:
+  - services
+  - synapse
+  - sql-pools
+---
 # 🗄️ Azure Synapse SQL Pools
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

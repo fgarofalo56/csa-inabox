@@ -1,3 +1,10 @@
+---
+title: "> Windowing Functions"
+description: "> __ Windowing Functions__"
+tags:
+  - services
+  - stream-analytics
+---
 # > Windowing Functions
 
 > __< [Home](../../../../README.md)__ | __= [Overview](../../../01-overview/README.md)__ | __= [Services](../../README.md)__ | __= [Streaming Services](../README.md)__ | __ [Stream Analytics](README.md)__ | __> Windowing Functions__
@@ -30,7 +37,8 @@ graph LR
 
 ---
 
-## = Window Types
+## =
+ Window Types
 
 ### 1. Tumbling Window
 

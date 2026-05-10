@@ -1,3 +1,10 @@
+---
+title: "Event Hub Capture to Storage"
+description: "Automatically capture streaming events to Azure Data Lake Storage Gen2 or Blob Storage for batch processing and long-term retention."
+tags:
+  - services
+  - event-hubs
+---
 # 📦 Event Hub Capture to Storage
 
 ![Feature](https://img.shields.io/badge/Feature-Auto%20Capture-brightgreen?style=flat-square)
@@ -166,13 +173,11 @@ resource "azurerm_eventhub" "example" {
 ### File Naming Convention
 
 Default format:
-```
-{Namespace}/{EventHub}/{PartitionId}/{Year}/{Month}/{Day}/{Hour}/{Minute}/{Second}
+```text{Namespace}/{EventHub}/{PartitionId}/{Year}/{Month}/{Day}/{Hour}/{Minute}/{Second}
 ```
 
 Example output:
-```
-mynamespace/
+```textmynamespace/
 └── telemetry-events/
     ├── 0/
     │   └── 2025/
@@ -198,8 +203,7 @@ mynamespace/
 ```
 
 Output:
-```
-mynamespace/telemetry-events/year=2025/month=01/day=28/hour=14/0_2025_01_28_14_00_00.avro
+```textmynamespace/telemetry-events/year=2025/month=01/day=28/hour=14/0_2025_01_28_14_00_00.avro
 ```
 
 ---

@@ -1,3 +1,12 @@
+---
+title: "Dedicated SQL Pool - Azure Synapse Analytics"
+description: "Enterprise-scale massively parallel processing (MPP) data warehouse with predictable performance and dedicated compute resources."
+tags:
+  - services
+  - synapse
+  - sql-pools
+  - dedicated-sql
+---
 # 🏢 Dedicated SQL Pool - Azure Synapse Analytics
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

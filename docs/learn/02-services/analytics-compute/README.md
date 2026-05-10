@@ -1,3 +1,9 @@
+---
+title: "Analytics Compute Services"
+description: "Large-scale data processing and analytics compute services for enterprise workloads."
+tags:
+  - services
+---
 # 💾 Analytics Compute Services
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

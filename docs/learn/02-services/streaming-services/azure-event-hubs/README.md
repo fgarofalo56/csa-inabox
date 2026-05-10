@@ -1,3 +1,10 @@
+---
+title: "Azure Event Hubs"
+description: "Big data streaming platform and event ingestion service for millions of events per second."
+tags:
+  - services
+  - event-hubs
+---
 # 📨 Azure Event Hubs
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

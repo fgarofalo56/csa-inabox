@@ -1,3 +1,9 @@
+---
+title: "️ Azure Storage Services"
+description: "Comprehensive documentation for Azure storage services used in cloud-scale analytics solutions."
+tags:
+  - services
+---
 # 🗃️ Azure Storage Services
 
 ![Services](https://img.shields.io/badge/Services-3-blue?style=flat-square)

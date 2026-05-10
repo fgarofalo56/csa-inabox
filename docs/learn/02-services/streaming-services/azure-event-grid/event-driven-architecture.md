@@ -1,3 +1,10 @@
+---
+title: "Event-Driven Architecture"
+description: "Design patterns and best practices for building event-driven applications with Azure Event Grid."
+tags:
+  - services
+  - azure-event-grid
+---
 # 🔄 Event-Driven Architecture
 
 ![Pattern](https://img.shields.io/badge/Pattern-Event%20Driven-brightgreen?style=flat-square)

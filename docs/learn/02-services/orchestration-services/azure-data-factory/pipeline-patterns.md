@@ -1,3 +1,11 @@
+---
+title: "Azure Data Factory Pipeline Patterns"
+description: "Common pipeline design patterns and best practices for Azure Data Factory implementations."
+tags:
+  - services
+  - orchestration-services
+  - data-factory
+---
 # 🔀 Azure Data Factory Pipeline Patterns
 
 ![Complexity](https://img.shields.io/badge/Complexity-Intermediate-yellow?style=flat-square)

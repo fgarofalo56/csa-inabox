@@ -1,3 +1,11 @@
+---
+title: "Azure Logic Apps"
+description: "Serverless workflow automation service for integrating apps, data, services, and systems across enterprises and organizations."
+tags:
+  - services
+  - orchestration-services
+  - azure-logic-apps
+---
 # ⚡ Azure Logic Apps
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)

@@ -1,3 +1,11 @@
+---
+title: "MLflow Integration"
+description: "End-to-end machine learning lifecycle management with MLflow for experiment tracking, model registry, and deployment on Azure Databricks."
+tags:
+  - services
+  - databricks
+  - mlflow-integration
+---
 # 🤖 MLflow Integration
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
