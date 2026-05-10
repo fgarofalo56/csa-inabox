@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.6.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.5...csa-inabox-v0.6.6) (2026-05-10)
+
+
+### Documentation
+
+* add /guides/ &lt;-&gt; /learn/ cross-link admonitions + fix tutorial dir-style links ([#223](https://github.com/fgarofalo56/csa-inabox/issues/223)) ([d21ef95](https://github.com/fgarofalo56/csa-inabox/commit/d21ef954e87c275533b0d5e934213e074344d4b9))
+
 ## [0.6.5](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.4...csa-inabox-v0.6.5) (2026-05-10)
 
 
