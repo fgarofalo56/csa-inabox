@@ -1,6 +1,6 @@
 [project]
 name = "csa-inabox"
-version = "0.6.0"
+version = "0.6.1"
 description = "Cloud-Scale Analytics in-a-Box — Azure-native reference implementation of the Microsoft 'Unify your data platform' CAF guidance, providing Fabric-parity capabilities on Azure PaaS for Government (pre-Fabric-GA) and regulated Commercial workloads."
 requires-python = ">=3.10"
 license = "MIT"
@@ -13,7 +13,7 @@ dev = [
     "pytest>=7.0.0,<10.0.0",
     "pytest-cov>=4.0.0,<8.0.0",
     "pytest-asyncio>=0.23.0,<2.0.0",
-    "mypy>=1.0.0,<2.0.0",
+    "mypy>=1.0.0,<3.0.0",
     "bandit>=1.7.5,<2.0.0",
     "pre-commit>=3.5.0,<5.0.0",
     # structlog is a governance runtime dep but tests for the shared
@@ -120,7 +120,7 @@ portal = [
     "pydantic-settings>=2.3.0,<3.0.0",
     # Authentication (Azure AD / Entra ID JWT)
     "PyJWT>=2.8.0,<3.0.0",
-    "cryptography>=41.0.0,<48.0.0",
+    "cryptography>=41.0.0,<49.0.0",
     # Caching (JWKS TTL cache)
     "cachetools>=5.3.0,<8.0.0",
     # HTTP client
