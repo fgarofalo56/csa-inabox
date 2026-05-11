@@ -27,9 +27,35 @@ permissions:
 jobs:
   # -------------------------------------------------------------------------
   # Bicep Linting & Validation
+  #
+  # The lint + build steps walk every .bicep file and take ~10 min.
+  # That tax doesn't need to land on every PR — only the ones that
+  # actually touch IaC. The ``changes`` job below detects that and
+  # gates the heavy ``bicep-lint`` job. Other jobs in this workflow
+  # (Secret Scan, Repo Hygiene, Python Lint, etc.) still run on every
+  # PR because they're fast enough and Secret Scan is a required check.
   # -------------------------------------------------------------------------
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      bicep: ${{ steps.filter.outputs.bicep }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: filter
+        with:
+          filters: |
+            bicep:
+              - '**/*.bicep'
+              - 'deploy/**/*.json'
+              - '.github/workflows/validate.yml'
+
   bicep-lint:
     name: Bicep Lint
+    needs: changes
+    if: needs.changes.outputs.bicep == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
