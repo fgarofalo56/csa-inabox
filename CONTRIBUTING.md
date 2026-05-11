@@ -105,6 +105,21 @@ The project uses ruff with a line length of 120 characters (not PEP 8's default 
 - Test deployments with `--what-if` before applying
 - Strip notebook outputs before committing (`nbstripout`)
 
+### 🧪 Where to put new tests
+
+The repo uses a **two-tier test layout** documented in
+[ADR 0024](docs/adr/0024-two-tier-test-layout.md):
+
+| Kind | Lives at | Examples |
+|------|----------|----------|
+| Per-package unit | `csa_platform/<pkg>/tests/`, `apps/copilot/<surface>/tests/` | `csa_platform/common/tests/test_cloud_boundary.py` |
+| Cross-package integration / e2e | `tests/`, `portal/shared/portal_tests/` | `tests/integration/test_e2e_contracts.py` |
+
+Both trees are auto-discovered by pytest (`--import-mode=importlib`).
+A new test for one package's public API goes next to that package;
+a test that exercises multiple packages or the dbt/scripts/repo
+boundary goes in `tests/`.
+
 ### 🤖 Where to put new Copilot code
 
 The repo has **one Copilot agent** (`apps/copilot/`) exposed via
