@@ -105,6 +105,15 @@ The project uses ruff with a line length of 120 characters (not PEP 8's default 
 - Test deployments with `--what-if` before applying
 - Strip notebook outputs before committing (`nbstripout`)
 
+### 🤖 Where to put new Copilot code
+
+The repo has **one Copilot agent** (`apps/copilot/`) exposed via
+multiple **surfaces** (API, CLI daemon, MCP) plus a separate
+**docs-site chat widget** (`azure-functions/copilot-chat/`). They
+look like duplicates but aren't — see
+[ADR 0022](docs/adr/0022-copilot-surfaces-vs-docs-widget.md) for
+which goes where.
+
 ---
 
 ## 💡 Code Style
