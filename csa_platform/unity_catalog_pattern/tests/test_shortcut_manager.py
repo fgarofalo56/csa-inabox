@@ -20,13 +20,23 @@ _unity = str(Path(__file__).resolve().parent.parent / "unity_catalog")
 if _unity not in sys.path:
     sys.path.insert(0, _unity)
 
-# Ensure azure.storage.blob is a real module (not a MagicMock) so that
-# @patch("azure.storage.blob.BlobServiceClient") works even when the
-# multi_synapse tests have already injected a MagicMock for "azure".
-_blob_mod = types.ModuleType("azure.storage.blob")
-_blob_mod.BlobServiceClient = MagicMock()
-sys.modules.setdefault("azure.storage", types.ModuleType("azure.storage"))
-sys.modules["azure.storage.blob"] = _blob_mod
+# Only inject a stub ``azure.storage.blob`` when the real package isn't
+# installed. Unconditionally overwriting it (as the previous version
+# did) leaks across tests: when ``tests/csa_platform/test_azure_clients.py``
+# runs after this file with the per-package discovery enabled (ADR 0024),
+# its ``@patch("azure.storage.blob.BlobServiceClient", ...)`` patches the
+# stub here while ``get_blob_client``'s ``from azure.storage.blob import
+# BlobServiceClient`` returns the un-patched stub MagicMock — so the
+# patch is silently a no-op. Gating on the import keeps the original
+# "make these tests runnable without azure-storage-blob installed"
+# escape hatch while not stomping on the real module when present.
+try:
+    import azure.storage.blob  # noqa: F401
+except ImportError:
+    _blob_mod = types.ModuleType("azure.storage.blob")
+    _blob_mod.BlobServiceClient = MagicMock()
+    sys.modules.setdefault("azure.storage", types.ModuleType("azure.storage"))
+    sys.modules["azure.storage.blob"] = _blob_mod
 # ---------------------------------------------------------------------------
 
 import pytest
