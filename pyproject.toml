@@ -27,6 +27,12 @@ dev = [
     # CSA-0047 — Cookiecutter scaffold for new verticals.  Used by
     # scripts/new-vertical.sh and templates/example-vertical/.
     "cookiecutter>=2.6.0,<3.0.0",
+    # RAG loader test fixtures (csa_platform/ai_integration/rag/tests/)
+    # exercise the pypdf + python-docx paths against committed fixtures.
+    # The runtime extras live on ``platform`` so the rag package itself
+    # stays slim; tests need them at install time.
+    "pypdf>=4.0.0,<7.0.0",
+    "python-docx>=1.1.0,<2.0.0",
 ]
 tutorials = [
     # CSA-0074 — Great Expectations tutorial (docs/tutorials/great-expectations.md)
@@ -433,13 +439,21 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.pytest.ini_options]
-# Both test directories are now discoverable without namespace collision:
-# portal/shared/tests/ was renamed to portal/shared/portal_tests/ so the
-# conftest.py files no longer resolve to the same ``tests.conftest`` module.
-testpaths = ["tests", "portal/shared/portal_tests"]
+# Three discovery roots:
+# - tests/ - central integration suite (e2e, cross-package, scripts).
+# - portal/shared/portal_tests/ - portal backend; renamed from tests/
+#   to avoid the tests.conftest namespace collision with central suite.
+# - csa_platform/ - per-package unit tests next to code under
+#   csa_platform/<pkg>/tests/. See ADR 0024 for the layout decision.
+# importlib import-mode is required to avoid the same-basename collision
+# between tests/contracts/test_*.py and csa_platform/<pkg>/tests/test_*.py.
+# pythonpath ensures from portal.shared.api... resolves at collection.
+# --ignore paths track to-fix items (see ADR 0024 "Currently ignored" section).
+testpaths = ["tests", "portal/shared/portal_tests", "csa_platform"]
+pythonpath = ["."]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
-addopts = "--tb=short -q --strict-markers"
+addopts = "--tb=short -q --strict-markers --import-mode=importlib --ignore=csa_platform/streaming/tests --ignore=csa_platform/multi_synapse/tests"
 markers = [
     "live: requires a live Azure connection (az login)",
 ]
