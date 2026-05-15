@@ -5,50 +5,60 @@
  * full-screen pan/zoom modal opened by diagram-zoom.js.
  */
 
-/* Inline diagram host -- positions the expand trigger in the corner. */
+/* Inline diagram host -- positions the expand trigger in the corner and
+ * makes the whole diagram clickable for the modal. */
 .diagram-zoom-host {
   position: relative;
+  cursor: zoom-in;
 }
 
 .diagram-zoom-host:hover .diagram-zoom-trigger,
 .diagram-zoom-host:focus-within .diagram-zoom-trigger {
   opacity: 1;
+  transform: translateY(0);
 }
 
 .diagram-zoom-trigger {
   position: absolute;
   top: 0.5rem;
   right: 0.5rem;
-  width: 2rem;
-  height: 2rem;
+  height: 1.85rem;
+  padding: 0 0.6rem;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 0.35rem;
   border: 1px solid var(--md-default-fg-color--lightest, rgba(0, 0, 0, 0.12));
-  border-radius: 4px;
+  border-radius: 999px;
   background: var(--md-default-bg-color, #fff);
   color: var(--md-default-fg-color, #333);
-  cursor: pointer;
-  font-size: 1.1rem;
+  cursor: zoom-in;
+  font-size: 0.8rem;
+  font-weight: 500;
   line-height: 1;
-  opacity: 0;
-  transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease;
+  /* Always visible, but understated until hover. */
+  opacity: 0.82;
+  transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease, color 0.15s ease;
   z-index: 2;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+.diagram-zoom-trigger .diagram-zoom-trigger-label {
+  font-size: 0.75rem;
 }
 
 .diagram-zoom-trigger:hover,
 .diagram-zoom-trigger:focus-visible {
   background: var(--md-accent-fg-color, #f5a623);
   color: var(--md-accent-bg-color, #fff);
-  transform: scale(1.05);
+  opacity: 1;
+  transform: translateY(-1px);
   outline: none;
 }
 
-/* Touch devices: keep the button visible since there is no hover. */
+/* Touch devices: full opacity since there is no hover. */
 @media (hover: none) {
   .diagram-zoom-trigger {
-    opacity: 0.85;
+    opacity: 0.95;
   }
 }
 
@@ -147,6 +157,19 @@ body.diagram-zoom-open {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.diagram-zoom-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--md-default-fg-color--light, #666);
+  font-size: 0.85rem;
+  pointer-events: none;
+  text-align: center;
+  padding: 1rem;
 }
 
 .diagram-zoom-hint {
