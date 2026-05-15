@@ -10,6 +10,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.6.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.6...csa-inabox-v0.6.7) (2026-05-11)
+
+
+### Tests
+
+* enable per-package test discovery + fix 3 latent bugs it surfaced ([#226](https://github.com/fgarofalo56/csa-inabox/issues/226)) ([56b482e](https://github.com/fgarofalo56/csa-inabox/commit/56b482e5692c389881f2be3081da5824169e489f))
+
 ## [0.6.6](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.5...csa-inabox-v0.6.6) (2026-05-10)
 
 
