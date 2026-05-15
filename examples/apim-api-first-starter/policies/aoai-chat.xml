@@ -1,0 +1,76 @@
+<!--
+AOAI chat completions policy bundle — the LLM gateway differentiator.
+Implements: identity, token budget, semantic cache, content safety, token-emit telemetry.
+Applies on the API; inherits the global policy.
+
+Background: docs/guides/apim-universal-gateway.md (Tier 7 LLM policies)
+            docs/best-practices/multi-model-ai-orchestration.md
+-->
+<policies>
+  <inbound>
+    <base />
+
+    <!-- 1. Validate Entra-issued JWT.
+         Replace the openid-config URL with the tenant-specific URL.
+         For Azure Gov, use login.microsoftonline.us. -->
+    <validate-jwt
+      header-name="Authorization"
+      failed-validation-httpcode="401"
+      failed-validation-error-message="Unauthorized"
+      require-scheme="Bearer"
+      require-signed-tokens="true">
+      <openid-config url="https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration" />
+      <required-claims>
+        <claim name="aud" match="any">
+          <value>https://cognitiveservices.azure.com</value>
+        </claim>
+      </required-claims>
+    </validate-jwt>
+
+    <!-- 2. Per-subscription token budget (tokens per minute).
+         Solves the #1 production problem: runaway agent loops draining budgets. -->
+    <azure-openai-token-limit
+      counter-key="@(context.Subscription?.Id ?? "anonymous")"
+      tokens-per-minute="100000"
+      estimate-prompt-tokens="true"
+      tokens-consumed-header-name="x-ratelimit-tokens-consumed"
+      remaining-tokens-header-name="x-ratelimit-remaining-tokens" />
+
+    <!-- 3. Semantic cache lookup. Vector-based hit on similar prompts.
+         Tune score-threshold per workload: 0.85 default, 0.9 conservative, 0.8 aggressive. -->
+    <azure-openai-semantic-cache-lookup
+      score-threshold="0.85"
+      embeddings-backend-id="aoai-backend"
+      embeddings-deployment-id="text-embedding-3-small"
+      ignore-system-messages="true">
+      <vary-by>@(context.Subscription?.Id ?? "anonymous")</vary-by>
+    </azure-openai-semantic-cache-lookup>
+
+    <!-- 4. Route to backend. AOAI backend was provisioned in Bicep. -->
+    <set-backend-service backend-id="aoai-backend" />
+  </inbound>
+
+  <backend>
+    <forward-request />
+  </backend>
+
+  <outbound>
+    <base />
+
+    <!-- 5. Persist successful responses in semantic cache.
+         1-hour TTL is a sane default for chat; tune per workload. -->
+    <azure-openai-semantic-cache-store duration="3600" />
+
+    <!-- 6. Emit token usage to App Insights with dimensions for chargeback.
+         Pivot in KQL by subscription, model, and api-name. -->
+    <azure-openai-emit-token-metric namespace="LlmGateway">
+      <dimension name="subscription-id" value="@(context.Subscription?.Id ?? "anonymous")" />
+      <dimension name="api-name" value="@(context.Api.Name)" />
+      <dimension name="model-id" value="@(context.Request.MatchedParameters.GetValueOrDefault("deployment-id", "unknown"))" />
+    </azure-openai-emit-token-metric>
+  </outbound>
+
+  <on-error>
+    <base />
+  </on-error>
+</policies>

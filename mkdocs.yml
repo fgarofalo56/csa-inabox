@@ -165,9 +165,12 @@ nav:
           - Identity & Secrets Flow: reference-architecture/identity-secrets-flow.md
           - Fabric vs Synapse vs Databricks: reference-architecture/fabric-vs-synapse-vs-databricks.md
           - AI/ML Platform Architecture: reference-architecture/ai-ml-architecture.md
+          - API-First Multi-Model Ecosystem: reference-architecture/api-first-multi-model-ecosystem.md
           - Architecture Diagram Gallery: reference-architecture/diagram-gallery.md
       - Comparisons:
           - CSA-in-a-Box vs Microsoft Fabric: comparison/csa-inabox-vs-fabric.md
+          - Azure vs MuleSoft Anypoint Platform: comparison/azure-vs-mulesoft.md
+          - Azure vs AWS API Stack: comparison/azure-vs-aws-api-stack.md
       - Decision Trees:
           - Overview: decisions/README.md
           - Batch vs Streaming: decisions/batch-vs-streaming.md
@@ -194,6 +197,9 @@ nav:
           - Monitoring & Observability: best-practices/monitoring-observability.md
           - Performance Tuning: best-practices/performance-tuning.md
           - Disaster Recovery: best-practices/disaster-recovery.md
+          - API-First Data Strategy: best-practices/api-first-data-strategy.md
+          - Zero-Move Data Architecture: best-practices/zero-move-data-architecture.md
+          - Multi-Model AI Orchestration: best-practices/multi-model-ai-orchestration.md
       - ADRs:
           - Overview: adr/README.md
           - "0001: ADF + dbt over Airflow": adr/0001-adf-dbt-over-airflow.md
@@ -218,6 +224,7 @@ nav:
           - "0020: Portal Observability": adr/0020-portal-observability-and-rate-limiting.md
           - "0021: Two Rate Limiters": adr/0021-two-rate-limiters-not-duplicates.md
           - "0022: Copilot Surfaces vs Docs Widget": adr/0022-copilot-surfaces-vs-docs-widget.md
+          - "0025: APIM as the Integration Fabric": adr/0025-apim-as-integration-fabric.md
       - Multi-Region: MULTI_REGION.md
       - Multi-Tenant: MULTI_TENANT.md
       - Disaster Recovery: DR.md
@@ -302,6 +309,9 @@ nav:
               - Event Hubs: guides/event-hubs.md
               - Microsoft Purview: guides/purview.md
               - APIM Data-Mesh Gateway: guides/apim-data-mesh-gateway.md
+              - APIM as the Universal API Gateway: guides/apim-universal-gateway.md
+              - APIM + MCP Layered Orchestration: guides/apim-mcp-layered-orchestration.md
+              - Zero-Trust API Governance (Federal): guides/zero-trust-api-governance-federal.md
           - Quality & Performance:
               - Data Quality Playbook: guides/data-quality-playbook.md
               - Performance Testing: guides/performance-testing.md
@@ -352,12 +362,20 @@ nav:
           - Unified Analytics on Fabric: use-cases/fabric-unified-analytics.md
       - Multi-Cloud:
           - Data Virtualization with Azure: use-cases/multi-cloud-data-virtualization.md
+      - API-First Data Strategy:
+          - Whitepaper — API-First Data Strategy on Azure: research/api-first-data-strategy-whitepaper.md
+          - API-First Multi-Model AI Ecosystem: use-cases/api-first-multi-model-ai-ecosystem.md
+          - Dataverse API Integration: use-cases/dataverse-api-integration.md
+          - Enterprise Asset Management through APIM: use-cases/enterprise-asset-management-apim.md
+          - Cross-Platform Integration (Connective Tissue): use-cases/cross-platform-integration-fabric.md
+          - Solution Store — Azure API-First Accelerators: solution-store/index.md
       - Research:
           - Index: research/index.md
           - Enterprise Data Platforms 2026: research/enterprise-data-platforms-2026.md
           - AI Readiness Framework: research/ai-readiness-framework.md
           - Data Mesh Maturity Model: research/data-mesh-maturity-model.md
           - Federal Cloud Adoption Trends: research/federal-cloud-adoption-trends.md
+          - API-First Data Strategy Whitepaper: research/api-first-data-strategy-whitepaper.md
 
   # ============================================================
   # 5. OPERATE — Day-2 ops, runbooks, compliance, migrations
