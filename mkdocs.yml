@@ -50,6 +50,20 @@ plugins:
       minify_html: true
   - include-markdown:
       rewrite_relative_urls: true
+  - glightbox:
+      touchNavigation: true
+      loop: false
+      effect: zoom
+      slide_effect: slide
+      width: 100%
+      height: auto
+      zoomable: true
+      draggable: true
+      skip_classes:
+        - no-lightbox
+        - twemoji
+      auto_caption: false
+      caption_position: bottom
 
 hooks:
   - docs/hooks/rewrite_example_links.py
@@ -105,11 +119,14 @@ extra_css:
   - stylesheets/copilot-chat.css
   - stylesheets/cloud-shell.css
   - stylesheets/docs.css
+  - stylesheets/diagram-zoom.css
 
 extra_javascript:
   - javascripts/app-insights.js
   - javascripts/copilot-chat.js
   - javascripts/cloud-shell.js
+  - https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.2/dist/svg-pan-zoom.min.js
+  - javascripts/diagram-zoom.js
 
 nav:
   - Home: index.md
