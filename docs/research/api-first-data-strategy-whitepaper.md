@@ -580,4 +580,4 @@ Outcomes at the end of year one:
 - [Guide: APIM + MCP layered orchestration](../guides/apim-mcp-layered-orchestration.md)
 - [Guide: Zero-trust API governance for federal mission environments](../guides/zero-trust-api-governance-federal.md)
 - [Solution Store — Azure API-first accelerators](../solution-store/index.md)
-- [ADR-0023 — APIM as the integration fabric](../adr/0023-apim-as-integration-fabric.md)
+- [ADR-0025 — APIM as the integration fabric](../adr/0025-apim-as-integration-fabric.md)
