@@ -266,4 +266,4 @@ Measured deliverables — the kind the technical gatekeepers will validate:
 - [Reference architecture — API-first multi-model ecosystem](../reference-architecture/api-first-multi-model-ecosystem.md)
 - [Guide — APIM + MCP layered orchestration](../guides/apim-mcp-layered-orchestration.md)
 - [Guide — Zero-trust API governance for federal mission environments](../guides/zero-trust-api-governance-federal.md)
-- [ADR-0023 — APIM as the integration fabric](../adr/0023-apim-as-integration-fabric.md)
+- [ADR-0025 — APIM as the integration fabric](../adr/0025-apim-as-integration-fabric.md)
