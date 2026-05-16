@@ -52,8 +52,10 @@ resource emb 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   }
 }
 
+// AOAI keys are intentionally NOT exposed as outputs.
+// APIM authenticates to AOAI via managed identity (see modules/apim.bicep
+// role assignment for 'Cognitive Services OpenAI User'). For local testing,
+// fetch a key with `az cognitiveservices account keys list` instead.
 output endpoint string = aoai.properties.endpoint
-@secure()
-output apiKey string = aoai.listKeys().key1
 output chatDeploymentName string = gpt.name
 output embeddingsDeploymentName string = emb.name

@@ -10,10 +10,10 @@ param appInsightsId string
 @secure()
 param appInsightsInstrumentationKey string
 param miId string
-param miClientId string
-param aoaiEndpoint string
-@secure()
-param aoaiKey string
+@description('When set, an AOAI backend is provisioned in APIM wired via APIM system-assigned identity (no shared key). Empty means the backend is not auto-wired and you can register it manually after deployment.')
+param aoaiEndpoint string = ''
+@description('AOAI account name used to scope the role assignment that lets APIM call AOAI via managed identity. Required when aoaiEndpoint is set.')
+param aoaiAccountName string = ''
 param deploySampleBackend bool
 
 resource apim 'Microsoft.ApiManagement/service@2023-09-01-preview' = {
@@ -75,18 +75,33 @@ resource gatewayDiag 'Microsoft.ApiManagement/service/diagnostics@2023-09-01-pre
   }
 }
 
-// AOAI backend (provisioned when deployOpenAi is true)
+// AOAI backend (provisioned when aoaiEndpoint is set).
+// Auth uses APIM's system-assigned managed identity — no shared key on disk.
+// The role assignment below grants the identity 'Cognitive Services OpenAI User'.
 resource aoaiBackend 'Microsoft.ApiManagement/service/backends@2023-09-01-preview' = if (!empty(aoaiEndpoint)) {
   parent: apim
   name: 'aoai-backend'
   properties: {
     protocol: 'http'
     url: aoaiEndpoint
-    credentials: {
-      header: {
-        'api-key': [aoaiKey]
-      }
-    }
+  }
+}
+
+// Resolve the AOAI account in this RG so we can target the role assignment.
+resource aoaiAccount 'Microsoft.CognitiveServices/accounts@2024-10-01' existing = if (!empty(aoaiAccountName)) {
+  name: aoaiAccountName
+}
+
+// 'Cognitive Services OpenAI User' built-in role id.
+var aoaiUserRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
+
+resource aoaiRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(aoaiEndpoint) && !empty(aoaiAccountName)) {
+  scope: aoaiAccount
+  name: guid(apim.id, aoaiUserRoleId, aoaiAccountName)
+  properties: {
+    principalId: apim.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aoaiUserRoleId)
   }
 }
 

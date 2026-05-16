@@ -92,9 +92,8 @@ module apim 'modules/apim.bicep' = {
     appInsightsId: obs.outputs.appiId
     appInsightsInstrumentationKey: obs.outputs.appiInstrumentationKey
     miId: mi.id
-    miClientId: mi.properties.clientId
     aoaiEndpoint: deployOpenAi ? aoai!.outputs.endpoint : ''
-    aoaiKey: deployOpenAi ? aoai!.outputs.apiKey : ''
+    aoaiAccountName: deployOpenAi ? aoaiName : ''
     deploySampleBackend: deploySampleBackend
   }
 }
