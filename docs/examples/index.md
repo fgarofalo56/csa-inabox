@@ -72,14 +72,6 @@ description: 18 industry-vertical implementations of CSA-in-a-Box — federal ag
 
     [:octicons-arrow-right-24: USPS](usps.md)
 
-- :material-rocket-launch:{ .lg .middle } **NASA — API-First Multi-Model AI**
-
-    ***
-
-    Copy-paste end-to-end: APIM Premium v2 in Azure Gov + self-hosted gateway at NASA centers + Maximo + Dataverse + Copilot Studio agent. Zero data movement. FedRAMP High.
-
-    [:octicons-arrow-right-24: NASA API-First](nasa-api-first.md)
-
 </div>
 
 ---

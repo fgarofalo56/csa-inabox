@@ -148,7 +148,7 @@ Each accelerator carries its own README with prerequisites, deployment commands,
 
 1. **Read the corresponding use case or best practice** in this site to understand the architectural intent.
 2. **Stand up the `APIM API-First Starter`** as the foundation.
-3. **Layer the accelerator(s)** that match the customer's first use case.
+3. **Layer the accelerator(s)** that match your first use case.
 4. **Wire telemetry into the AI Chargeback Dashboard** from day one.
 5. **Engage the Displacement Kit** for the incumbent platform (MuleSoft or AWS) to plan strangler-fig migration.
 

@@ -53,7 +53,7 @@ These categories compound. Whichever vendor owns them earns increasing leverage 
 
 ## The five pillars of an API-first AI reality
 
-Every customer architecture team building this kind of ecosystem — federal mission agency, regulated commercial enterprise, sovereign-cloud operator — converges on the same five architectural pillars. Any platform proposal must answer to all five.
+Architecture teams building this kind of ecosystem — federal mission, regulated commercial enterprise, sovereign-cloud operator — converge on the same five architectural pillars. Any platform proposal must answer to all five.
 
 <div class="grid cards" markdown>
 
@@ -115,7 +115,7 @@ This paper is the technical brief that backs that claim, with side-by-side compa
 
 ## 1. Why these five pillars are non-negotiable now
 
-The pillars above are the customer-visible architecture. The forces below are why those pillars became mandatory rather than aspirational over the last 24 months.
+The pillars above are the architecture you implement. The forces below are why those pillars became mandatory rather than aspirational over the last 24 months.
 
 | Force | What changed | Consequence |
 |---|---|---|
@@ -389,7 +389,7 @@ A realistic federal or regulated-commercial deployment has at least four model c
 | **Domain fine-tunes** | Customer-tuned models on internal data | Foundry custom-deployment | Specialized tasks (legal, scientific, mission) |
 | **Small task models** | Phi-4-mini, distilled classifiers | Foundry / containerized | High-volume cheap inference, edge |
 
-Plus the customer often has **external models** they want to keep using — Bedrock for AWS-hosted workloads, sovereign-cloud LLMs accredited under FedRAMP High by third parties. APIM brokers those too: the gateway abstracts the model, the consumer sees one endpoint.
+Most environments also include **external models** that need to keep operating — Bedrock for AWS-hosted workloads, sovereign-cloud LLMs accredited under FedRAMP High by third parties. APIM brokers those too: the gateway abstracts the model, the consumer sees one endpoint.
 
 ### 5.2 MCP — the protocol layer behind the gateway
 
@@ -468,7 +468,7 @@ API-first competitive positioning that stops at "gateway versus gateway" misses 
 
 A competing API-first story on AWS reaches as far as the API. The Microsoft story reaches all the way to the human's email inbox, their team chat, their developer IDE, and their no-code app builder — with the same identity, same governance, and same audit trail.
 
-This is the **"ecosystem connective tissue"** argument. The customer does not need Microsoft to be the only AI. The customer needs Microsoft to be the layer that makes the ecosystem work — and the layer that connects that ecosystem to where their users actually do their jobs.
+This is the **"ecosystem connective tissue"** position. Microsoft does not need to be the only AI in the environment. Microsoft is positioned as the layer that makes the ecosystem work — and the layer that connects that ecosystem to where the workforce actually does its job.
 
 ---
 
@@ -513,7 +513,7 @@ When the incumbent is API Gateway + Cognito + EventBridge + Step Functions + App
 4. **Lead with governance.** Lake Formation is table-level. Purview is enterprise data + API + AI governance with sensitivity-label propagation through the chain.
 5. **Coexist on data.** Leave data in S3 / Redshift. Use OneLake shortcuts and APIM to reach it. Zero-move keeps the AWS sunk costs whole.
 
-The customer does not have to delete AWS to win Azure. The customer has to add Azure where Azure is better — and the AI / identity / productivity gaps are where Azure is decisively better.
+An AWS-anchored environment does not need to delete AWS to adopt Azure. Azure is added where it is decisively better — and the AI / identity / productivity gaps are where Azure is decisively better.
 
 ---
 

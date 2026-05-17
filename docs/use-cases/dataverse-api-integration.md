@@ -403,7 +403,7 @@ The migration is straightforward: identify SQL queries hitting the replica, tran
 
 ### From MuleSoft or AWS connectors
 
-If the agency is already using MuleSoft's Dataverse connector or AWS AppFlow's Dynamics 365 connector, the Web API is what those connectors call under the hood. Replacing the connector with a direct Web API call (or a Logic Apps / Power Automate flow) removes a per-connector license line item and a layer of indirection.
+If an existing integration uses MuleSoft's Dataverse connector or AWS AppFlow's Dynamics 365 connector, the Web API is what those connectors call under the hood. Replacing the connector with a direct Web API call (or a Logic Apps / Power Automate flow) removes a per-connector license line item and a layer of indirection.
 
 ---
 
