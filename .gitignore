@@ -307,3 +307,27 @@ csa_platform/metadata_framework/tests/output/
 temp/azure-screenshots/
 temp/atlas-tools/__pycache__/
 
+# ---------------------------
+# Repo-root images — diagrams and screenshots belong under docs/ or examples/
+# This catches accidental "downloaded a screenshot, dragged it to the repo root"
+# patterns without affecting intentional images under docs/.
+# ---------------------------
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.svg
+/*.bmp
+/*.webp
+# Exceptions: any image that genuinely belongs at the root (none today)
+
+# ---------------------------
+# CLI artifacts that accumulate at the root
+# ---------------------------
+/*.bak
+/*.orig
+/*.rej
+/*.tmp
+/*.swp
+/tmpclaude-*
+
