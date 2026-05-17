@@ -61,18 +61,21 @@ _REPO_ROOT_FILES = (
 )
 
 
-def _resolve_against_source(href: str, page_src_path: str) -> str | None:
+def _resolve_against_source(
+    href: str, page_src_path: str, is_include_shim: bool = True
+) -> str | None:
     """Resolve `href` against the page's *source* repo location.
 
-    For `docs/examples/<name>.md` the source is `examples/<name>/README.md`
-    (the include-markdown source).  For other pages it's the page itself
-    rooted at `docs/<page_src_path>`.
+    For include-markdown shims like `docs/examples/<name>.md` that pull
+    `examples/<name>/README.md`, the source is the README's location.
+    For standalone docs (including standalone docs that happen to live under
+    `docs/examples/`), resolve from the doc's own location under `docs/`.
 
     Returns the resolved repo-rooted POSIX path, or None if it cannot be
     resolved (e.g. went above repo root).
     """
     p = Path(page_src_path)
-    if p.parts[:1] == ("examples",) and p.name != "index.md":
+    if is_include_shim and p.parts[:1] == ("examples",) and p.name != "index.md":
         # Include-markdown shim — resolve from the README's location
         base_dir = Path("examples") / p.stem
     else:
@@ -110,9 +113,15 @@ def _should_rewrite(resolved: str) -> bool:
 def on_page_markdown(markdown: str, page, config, files):  # noqa: ANN001 (mkdocs API)
     src_path = page.file.src_path.replace("\\", "/")
 
+    # A page under docs/examples/ is only an include-markdown shim when it
+    # actually pulls a sibling README via the include-markdown plugin.
+    # Standalone docs that live there (e.g. NASA API-first end-to-end) must
+    # resolve relative links from their own docs/ location instead.
+    is_include_shim = "{% include-markdown" in markdown or "{%- include-markdown" in markdown
+
     def _sub(match: re.Match[str]) -> str:
         text, target, anchor = match.group(1), match.group(2), match.group(3) or ""
-        resolved = _resolve_against_source(target, src_path)
+        resolved = _resolve_against_source(target, src_path, is_include_shim)
         if not resolved or not _should_rewrite(resolved):
             return match.group(0)
         return f"{text}({REPO_BLOB}/{resolved}{anchor})"
