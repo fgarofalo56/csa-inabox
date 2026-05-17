@@ -79,7 +79,7 @@ var effectiveStorageSku = !empty(storageSku)
 // #checkov:skip=CKV_AZURE_33:Storage queue logging not required — queues not used in data lake storage
 // #checkov:skip=CKV2_AZURE_38:Soft-delete enabled on blob services below; not applicable at account level
 // #checkov:skip=CKV2_AZURE_1:CMK encryption is optional for dev/lab — enable via parEnableCmk parameter for prod
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storage 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: storageNameCleaned
   location: location
   tags: tags
@@ -141,7 +141,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
 }
 
 // Lifecycle Management Policy
-resource storageManagementPolicies 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
+resource storageManagementPolicies 'Microsoft.Storage/storageAccounts/managementPolicies@2025-01-01' = {
   parent: storage
   name: 'default'
   properties: {
@@ -172,7 +172,7 @@ resource storageManagementPolicies 'Microsoft.Storage/storageAccounts/management
 // set used by the rollback procedure in docs/ROLLBACK.md.  Versioning +
 // change feed are prerequisites for restorePolicy, and blob/container
 // soft-delete give a second line of recovery.
-resource storageBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+resource storageBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   parent: storage
   name: 'default'
   properties: {

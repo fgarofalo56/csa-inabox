@@ -86,7 +86,7 @@ param parCmkIdentityId string = ''
 
 // Resources
 // #checkov:skip=CKV_AZURE_171:Data Explorer CMK encryption is optional for dev/lab — enable via parEnableCmk for prod
-resource kustoCluster 'Microsoft.Kusto/clusters@2023-08-15' = {
+resource kustoCluster 'Microsoft.Kusto/clusters@2024-04-13' = {
   name: clusterName
   location: location
   tags: tags
@@ -122,7 +122,7 @@ resource kustoCluster 'Microsoft.Kusto/clusters@2023-08-15' = {
 }
 
 // Databases
-resource kustoDatabase 'Microsoft.Kusto/clusters/databases@2023-08-15' = [
+resource kustoDatabase 'Microsoft.Kusto/clusters/databases@2024-04-13' = [
   for db in databases: {
     parent: kustoCluster
     name: db.name

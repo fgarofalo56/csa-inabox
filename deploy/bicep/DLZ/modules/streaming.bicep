@@ -157,7 +157,7 @@ resource streamAnalyticsJob 'Microsoft.StreamAnalytics/streamingjobs@2021-10-01-
 
 // ADX provides fast analytical queries over streaming data with built-in
 // time-series functions. Dev SKU uses a single node with no SLA.
-resource adxCluster 'Microsoft.Kusto/clusters@2023-08-15' = {
+resource adxCluster 'Microsoft.Kusto/clusters@2024-04-13' = {
   name: replace('${baseName}-adx', '-', '')
   location: location
   tags: tags
@@ -182,7 +182,7 @@ resource adxCluster 'Microsoft.Kusto/clusters@2023-08-15' = {
   }
 }
 
-resource adxDatabase 'Microsoft.Kusto/clusters/databases@2023-08-15' = {
+resource adxDatabase 'Microsoft.Kusto/clusters/databases@2024-04-13' = {
   parent: adxCluster
   name: 'streaming_db'
   location: location
@@ -278,7 +278,7 @@ resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
 // ============================================================================
 
 // Storage account required by Functions runtime
-resource funcStorageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource funcStorageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: replace('${baseName}-func', '-', '')
   location: location
   tags: tags
