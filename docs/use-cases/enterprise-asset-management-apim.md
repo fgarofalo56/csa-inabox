@@ -1,23 +1,21 @@
 ---
 title: "Enterprise Asset Management Exposed Through APIM — Facilities, Work Orders, and Mission Operations"
-description: "End-to-end use case. An agency's enterprise asset management (EAM) system — facilities datasets, work orders, asset hierarchies, maintenance records — exposed as RESTful APIs through Azure API Management with zero data movement. Agents in Copilot Studio and applications across the enterprise consume EAM data via stable, governed, identity-grounded endpoints."
-audience: "Federal facilities, mission operations, infrastructure managers, EAM platform owners, integration architects"
-last_updated: 2026-05-15
+description: "Reference use case. An enterprise asset management (EAM) system — facilities datasets, work orders, asset hierarchies, maintenance records — exposed as RESTful APIs through Azure API Management with zero data movement. Agents in Copilot Studio and applications across the enterprise consume EAM data via stable, governed, identity-grounded endpoints."
+audience: "Facilities and mission-operations platform owners, EAM platform owners, integration architects, CDO / CIO offices"
+last_updated: 2026-05-16
 ---
 
 # Enterprise Asset Management Exposed Through APIM
 
-## The customer situation
+## When this pattern applies
 
-An agency operates an enterprise asset management (EAM) platform — work-order management, facilities, maintenance, asset hierarchies, parts inventory — typically deployed on-premises or in a partner cloud. The EAM system is mission-critical: it tracks every physical asset, every maintenance event, every work order, every cost code, sometimes for decades.
-
-The agency wants to:
+Use this reference when an enterprise asset management (EAM) platform — work-order management, facilities, maintenance, asset hierarchies, parts inventory — is mission-critical, typically deployed on-premises or in a partner cloud, and the goal is to:
 
 1. Make EAM data **discoverable and queryable** by AI agents, BI tools, and downstream systems
 2. **Not move the data** out of the EAM system (compliance, freshness, governance, licensing)
 3. Apply **unified identity, rate limiting, audit, and cost governance** across all consumers
 4. Catalog the EAM endpoints in **Purview** alongside data lakes, Dataverse, and SaaS systems
-5. Use the same pattern for the next enterprise use case — **financial procurement** — and the one after
+5. Use the same pattern for the next enterprise domain — **financial procurement** — and the one after
 
 This is the exemplar use case for an API-first, zero-move architecture.
 
@@ -217,23 +215,23 @@ Same architecture, different domain. This is the "enterprise catalog buildout" p
 
 ## "Least burden" inventory
 
-What the agency does **not** have to change to make this work:
+What does **not** have to change to make this work:
 
 - The EAM platform stays in place — no migration required
 - Existing on-prem networking and security stays in place — APIM Self-Hosted Gateway can run inside the boundary
-- Existing identity sources at regional centers stay — federated to Entra via B2B
+- Existing identity sources at regional sites stay — federated to Entra via B2B
 - Existing licensing for the EAM product is honored
 - Existing dashboards continue to work — they can be pointed at APIM or left direct
 
 What changes:
 
-- A new APIM Premium v2 instance is stood up in the agency's Azure Gov subscription
+- A new APIM Premium v2 instance is stood up in the target Azure subscription
 - EAM API contracts are documented as OpenAPI and imported into APIM
 - Entra tokens are issued and validated at the gateway
 - Purview registers the new endpoints
 - One agent / one dashboard / one notebook starts using the new front door
 
-The displacement is **additive**. No existing investment is disturbed.
+The deployment is **additive**. No existing investment is disturbed.
 
 ---
 

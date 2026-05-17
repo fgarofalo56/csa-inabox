@@ -7,11 +7,11 @@ last_updated: 2026-05-15
 
 # Cross-Platform Integration — Microsoft as the Connective Tissue
 
-## The argument in one sentence
+## The architectural position in one sentence
 
-> Microsoft does not need to be the only AI in the customer's environment. Microsoft needs to be the **layer that makes the ecosystem work** — and the layer that connects that ecosystem to where the customer's users actually do their jobs.
+> Microsoft does not need to be the only AI in a heterogeneous environment. Microsoft is positioned as the **layer that makes the ecosystem work** — and the layer that connects that ecosystem to where the workforce actually does its job.
 
-The customer's environment is plural. It includes Azure, AWS, often GCP, Databricks, third-party data fabrics, sovereign LLM gateways, on-prem mission systems, and a Microsoft 365 estate where the actual workforce reads email and edits documents. Any platform that pretends the customer is mono-vendor loses. Any platform that respects the ecosystem and offers to bind it together wins.
+A modern enterprise environment is plural. It includes Azure, AWS, often GCP, Databricks, third-party data fabrics, partner LLM gateways, on-prem systems-of-record, and a Microsoft 365 estate where the workforce reads email and edits documents. Any platform proposal that assumes mono-vendor loses. Any platform that respects the ecosystem and offers to bind it together wins.
 
 This use case documents the integration architecture in full.
 
@@ -86,7 +86,7 @@ Stand any one of these up alone and you have a useful capability. Stand all thre
 
 ### Pattern 1 — Cross-cloud data without movement
 
-The customer's data lives in S3 (AWS), in GCS (GCP), in ADLS (Azure), in on-prem file shares. The pattern:
+Authoritative data typically lives in S3 (AWS), GCS (GCP), ADLS (Azure), and on-prem file shares simultaneously. The pattern:
 
 - **OneLake shortcuts** point at S3 / GCS / ADLS — the data appears in OneLake without copying
 - **APIM façades** expose AWS RDS / Redshift / on-prem databases as REST APIs
@@ -99,8 +99,8 @@ No data moves. Compute travels to the data. The same Purview catalog covers all 
 
 Single-sign-on is a 20-year-old technology. The 2026 reality is harder: device-trust signals, geolocation, real-time risk, just-in-time elevation, continuous re-evaluation. Entra provides:
 
-- **OIDC / SAML federation** to any IdP at any regional center or partner
-- **B2B / cross-tenant access settings** for federated agencies and vendors
+- **OIDC / SAML federation** to any IdP at any regional site or partner
+- **B2B / cross-tenant access settings** for federated tenants and vendors
 - **Conditional Access** on every API call, with rich signals
 - **PIM** for just-in-time admin elevation
 - **CAE** that revokes tokens within minutes on risk events
@@ -133,7 +133,7 @@ The Microsoft asymmetry that no competitor matches: **the same APIs that the age
 | Sales / Service / Finance Copilots | Dynamics + Graph | Role-specific copilots grounded in the workforce |
 | Foundry Agent Service | MCP, OpenAPI tools, Foundry models | Pro-code agents in the same governance plane |
 
-This is the differentiator against Gemini's "we integrate with SharePoint Online" narrative. Microsoft integrates with **every productivity surface a workforce uses, in one identity graph**.
+This is the differentiator against integration narratives anchored on SharePoint-only connectivity. Microsoft integrates with **every productivity surface a workforce uses, in one identity graph**.
 
 ### Pattern 5 — Governance that crosses clouds and systems
 
@@ -145,7 +145,7 @@ Purview is the only governance plane that natively spans Azure, AWS, GCP, on-pre
 - **DLP** — applied at endpoint, M365, cloud apps; same policies, same labels, same enforcement points
 - **Insider risk** — Purview Insider Risk Management on behavior across surfaces
 
-The Lake Formation + tags equivalent on AWS covers S3 / Glue / Redshift well. It does not cover APIs, AI artifacts, M365, or cross-cloud. The Purview reach is decisive for any customer with data outside of one cloud or a productivity estate inside Microsoft 365.
+The Lake Formation + tags equivalent on AWS covers S3 / Glue / Redshift well. It does not cover APIs, AI artifacts, M365, or cross-cloud. The Purview reach is decisive for any environment with data outside of one cloud or a productivity estate inside Microsoft 365.
 
 ### Pattern 6 — Agent identity and lifecycle
 
@@ -161,33 +161,33 @@ The agent lifecycle problem is the next mile of AI governance. Microsoft has the
 
 ---
 
-## The competitive narrative — "the connective tissue"
+## The architectural framing — "the connective tissue"
 
-The story to tell, in five lines:
+The position in five lines:
 
-1. The customer is building an ecosystem, not buying one AI.
+1. Modern enterprises build ecosystems, they do not buy one AI.
 2. Ecosystems generate four hard problems: orchestration, governance, integration, lifecycle.
 3. Microsoft is the only vendor that solves all four natively, on one integrated platform.
 4. The seam is APIM, Entra, Purview — operating across any cloud, any system, any boundary.
 5. The differentiator is productivity reach — Microsoft's surfaces are where users actually work, and the same identity / governance / gateway reaches them.
 
-This narrative is not a product pitch. It is the architectural position from which the rest of the conversation flows. It is also the narrative most resistant to substitution: when the customer adds a new vendor (a sovereign LLM, a partner data fabric, a regional system), the seam absorbs the new participant. The architectural value compounds.
+This is the architectural position. It is also the position most resistant to substitution: when a new vendor enters the environment (a sovereign LLM, a partner data fabric, a regional system), the seam absorbs the new participant. The architectural value compounds.
 
 ---
 
-## What the customer is asked to do
+## How to start producing value — the minimum-disruption sequence
 
-The pattern is engineered to require **minimum customer-side change** to start producing value:
+The pattern is engineered to require **minimum change to existing investments** to start producing value:
 
 1. Stand up APIM Premium v2 (Bicep template available in the [Solution Store](../solution-store/index.md))
-2. Federate or align Entra tenant with the customer's identity sources
-3. Register the customer's first existing API behind APIM via OpenAPI import
+2. Federate or align the Entra tenant with existing identity sources
+3. Register the first existing API behind APIM via OpenAPI import
 4. Stand up Purview and connect to the first three data sources
 5. Run one Copilot Studio agent against the new front door
 6. Measure: latency, cache hit rate, cost, audit completeness
-7. Repeat for the second use case
+7. Repeat for the second domain
 
-At each step the customer accumulates capability without disturbing existing investments. This is the "least burden" path in concrete form.
+At each step the architecture accumulates capability without disturbing existing investments. This is the "least burden" path in concrete form.
 
 ---
 

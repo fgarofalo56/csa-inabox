@@ -281,7 +281,7 @@ The semantic-cache savings alone (30–70% reduction in LLM spend for FAQ-style 
 
 ## Section 12: The displacement playbook
 
-### When the customer is AWS-native today
+### When the environment is AWS-native today
 
 Do not propose deleting AWS. Propose **adding Azure where Azure is decisively better**:
 
@@ -291,7 +291,7 @@ Do not propose deleting AWS. Propose **adding Azure where Azure is decisively be
 4. **Governance → Purview.** Cover the AWS estate with Purview cross-cloud scans; do not move data to do it.
 5. **Selective workload moves.** Move workloads to Azure only where the platform advantage materially exceeds migration cost. For most data, **keep it in S3 and reach it with OneLake shortcuts and APIM façades.**
 
-### When the customer is greenfield
+### When the environment is greenfield
 
 Lead with the integrated platform argument:
 
