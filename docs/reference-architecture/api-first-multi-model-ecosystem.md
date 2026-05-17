@@ -17,7 +17,7 @@ This is the canonical Azure reference architecture for an organization that:
 - Requires identity-grounded zero-trust access for every API call
 - Needs unified governance across data, APIs, and AI artifacts
 - Operates productivity surfaces (Microsoft 365) where the workforce actually works
-- Must integrate with existing investments — "least burden"
+- Must integrate with existing investments — minimum disruption
 
 The architecture works in Azure Commercial, Azure Government, GCC High, and DoD IL5 / select IL6.
 

@@ -125,14 +125,14 @@ The five blocks below organize the work into deliverable phases. Each one is ind
 
 You arrive aligned with the five pillars, not redirecting them. The platform message is:
 
-> "Here is how the Microsoft platform supports the API-first, multi-model, zero-move architecture you have already chosen — with least burden on the way you exist today."
+> Here is how the Microsoft platform supports an API-first, multi-model, zero-move architecture — additive to existing investments, with minimum disruption to current operations.
 
 The position acknowledges:
 
 - The five pillars are the right pillars
 - Zero-move is mandatory, not aspirational
 - Multi-vendor model strategy is correct — Microsoft does not need to be the only AI
-- "Least burden" is the binding requirement; the architecture honors it
+- Minimum disruption to existing investments is the binding requirement; the architecture honors it
 
 ### Block 2: APIM as the enterprise API gateway
 
@@ -204,7 +204,7 @@ The same pattern applies to financial procurement, scientific data, mission plan
 
 ---
 
-## "Least burden" — what does not have to change
+## Minimum disruption — what does not have to change
 
 The architecture is engineered to require minimum disruption to existing investments:
 

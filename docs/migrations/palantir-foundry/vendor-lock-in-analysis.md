@@ -247,7 +247,7 @@ Foundry's proprietary architecture creates tension with these mandates. Azure's 
 
 ### Procurement risk
 
-Concentrating a mission-critical data platform on a single vendor with a $3B annual revenue creates supplier concentration risk. If Palantir experiences financial difficulties, strategic pivots, or pricing changes, the agency has limited recourse. Azure's scale ($100B+ annual cloud revenue) and multi-vendor partner ecosystem distribute this risk.
+Concentrating a mission-critical data platform on a single vendor with a $3B annual revenue creates supplier concentration risk. If Palantir experiences financial difficulties, strategic pivots, or pricing changes, the buyer has limited recourse. Azure's scale ($100B+ annual cloud revenue) and multi-vendor partner ecosystem distribute this risk.
 
 ---
 

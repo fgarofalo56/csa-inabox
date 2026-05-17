@@ -301,7 +301,7 @@ Lead with the integrated platform argument:
 4. One productivity reach (M365 + Copilot + GitHub) — AWS has no counterpart.
 5. One AI plane (Foundry + AOAI + Copilot Studio) — broader than Bedrock + Q.
 
-The integrated platform argument plays directly into "least burden" and "ecosystem composability" — both procurement-gate requirements in modern RFPs.
+The integrated platform argument plays directly into minimum-disruption integration and ecosystem composability — both procurement-gate requirements in modern RFPs.
 
 ---
 
