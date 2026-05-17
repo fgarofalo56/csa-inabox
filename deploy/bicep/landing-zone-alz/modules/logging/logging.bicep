@@ -49,7 +49,7 @@ param parLogAnalyticsWorkspaceSkuName string = 'PerGB2018'
 
 // Resource
 // Create a Log Analytics Workspace
-resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
   name: parmLogAnalyticsWorkspaceName
   location: parLocation
   tags: tags

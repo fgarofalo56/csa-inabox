@@ -82,7 +82,7 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 // ─── Cosmos DB Account ──────────────────────────────────────────────────────
 
 @description('Cosmos DB account for marketplace data (products, access requests, quality metrics).')
-resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-02-15-preview' = {
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-08-15' = {
   name: cosmosAccountName
   location: location
   tags: union(tags, { Pattern: 'DataMarketplace' })
@@ -114,7 +114,7 @@ resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-02-15-preview
 }
 
 @description('Marketplace database.')
-resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-02-15-preview' = {
+resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-08-15' = {
   parent: cosmosAccount
   name: cosmosDatabaseName
   properties: {
@@ -125,7 +125,7 @@ resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024
 }
 
 @description('Data products container.')
-resource productsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-02-15-preview' = {
+resource productsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-08-15' = {
   parent: cosmosDatabase
   name: 'products'
   properties: {
@@ -153,7 +153,7 @@ resource productsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/c
 }
 
 @description('Access requests container.')
-resource accessRequestsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-02-15-preview' = {
+resource accessRequestsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-08-15' = {
   parent: cosmosDatabase
   name: 'access_requests'
   properties: {
@@ -170,7 +170,7 @@ resource accessRequestsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatab
 }
 
 @description('Quality metrics container with TTL for historical data.')
-resource qualityContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-02-15-preview' = {
+resource qualityContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-08-15' = {
   parent: cosmosDatabase
   name: 'quality_metrics'
   properties: {
@@ -273,7 +273,7 @@ resource marketplaceApi 'Microsoft.ApiManagement/service/apis@2023-09-01-preview
 var cosmosDataContributorRoleId = '00000000-0000-0000-0000-000000000002'
 
 @description('Grant the web app managed identity Cosmos DB data contributor access.')
-resource cosmosRbac 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-02-15-preview' = {
+resource cosmosRbac 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-08-15' = {
   parent: cosmosAccount
   name: guid(cosmosAccount.id, webApp.id, cosmosDataContributorRoleId)
   properties: {

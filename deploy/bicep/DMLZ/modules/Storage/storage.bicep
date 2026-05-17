@@ -101,7 +101,7 @@ var queuePrivateEndpointName = '${storageNameCleaned}-queue-pe'
 // #checkov:skip=CKV_AZURE_33:Storage queue logging not required — queues not used in DMLZ governance storage
 // #checkov:skip=CKV2_AZURE_38:Soft-delete enabled on blob services below; not applicable at account level
 // #checkov:skip=CKV2_AZURE_1:CMK encryption is optional for dev/lab — enable via parEnableCmk parameter for prod
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storage 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: storageNameCleaned
   location: location
   tags: tags
@@ -165,7 +165,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
 }
 
 // Blob Service Properties — soft-delete and versioning for governance data protection.
-resource storageBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+resource storageBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   parent: storage
   name: 'default'
   properties: {
@@ -178,7 +178,7 @@ resource storageBlobServices 'Microsoft.Storage/storageAccounts/blobServices@202
 }
 
 // Blob Containers for governance data
-resource containers 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = [
+resource containers 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [
   for containerName in containerNames: {
     parent: storageBlobServices
     name: containerName
@@ -189,7 +189,7 @@ resource containers 'Microsoft.Storage/storageAccounts/blobServices/containers@2
 ]
 
 // Lifecycle Management — tier governance data to cool storage after 90 days.
-resource storageManagementPolicies 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
+resource storageManagementPolicies 'Microsoft.Storage/storageAccounts/managementPolicies@2025-01-01' = {
   parent: storage
   name: 'default'
   properties: {

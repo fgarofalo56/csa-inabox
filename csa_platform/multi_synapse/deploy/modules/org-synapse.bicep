@@ -46,7 +46,7 @@ var defaultFileSystemName = 'workspace'
 // #checkov:skip=CKV2_AZURE_38:Soft-delete enabled on blob services below; not applicable at account level
 // #checkov:skip=CKV2_AZURE_1:CMK encryption is optional for dev/lab — enable via enableCmk parameter for prod
 @description('ADLS Gen2 storage for the Synapse workspace default filesystem.')
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storage 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: storageName
   location: location
   tags: union(tags, { Organization: orgName })
@@ -75,7 +75,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-resource blobServices 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+resource blobServices 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   parent: storage
   name: 'default'
   properties: {
@@ -86,26 +86,26 @@ resource blobServices 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01
   }
 }
 
-resource defaultFileSystem 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+resource defaultFileSystem 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = {
   parent: blobServices
   name: defaultFileSystemName
   properties: { publicAccess: 'None' }
 }
 
 // Medallion containers for the organization
-resource bronzeContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+resource bronzeContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = {
   parent: blobServices
   name: 'bronze'
   properties: { publicAccess: 'None' }
 }
 
-resource silverContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+resource silverContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = {
   parent: blobServices
   name: 'silver'
   properties: { publicAccess: 'None' }
 }
 
-resource goldContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+resource goldContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = {
   parent: blobServices
   name: 'gold'
   properties: { publicAccess: 'None' }

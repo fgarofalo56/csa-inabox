@@ -160,7 +160,7 @@ resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-
 // #checkov:skip=CKV2_AZURE_38:Soft-delete enabled on blob services below; not applicable at account level
 // #checkov:skip=CKV2_AZURE_1:CMK encryption is optional for dev/lab — enable via enableCmk parameter for prod
 @description('ADLS Gen2 storage account with hierarchical namespace — OneLake equivalent.')
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storage 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: storageName
   location: location
   tags: union(tags, {
@@ -223,7 +223,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
 // ─── Blob Service Properties ────────────────────────────────────────────────
 
 @description('Blob service configuration with versioning, soft delete, and point-in-time restore.')
-resource blobServices 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+resource blobServices 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   parent: storage
   name: 'default'
   properties: {
@@ -239,7 +239,7 @@ resource blobServices 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01
 // ─── Containers (Lakehouses) ────────────────────────────────────────────────
 
 @description('Storage containers representing OneLake lakehouses (bronze/silver/gold/quarantine).')
-resource containers 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = [
+resource containers 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [
   for container in allContainers: {
     parent: blobServices
     name: container.name
@@ -253,7 +253,7 @@ resource containers 'Microsoft.Storage/storageAccounts/blobServices/containers@2
 // ─── Lifecycle Management ───────────────────────────────────────────────────
 
 @description('Lifecycle policies for cost optimization — tier bronze to cool/archive, clean quarantine.')
-resource lifecyclePolicy 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
+resource lifecyclePolicy 'Microsoft.Storage/storageAccounts/managementPolicies@2025-01-01' = {
   parent: storage
   name: 'default'
   properties: {

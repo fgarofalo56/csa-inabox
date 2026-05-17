@@ -29,7 +29,7 @@ var storageExternalPrivateEndpointNameBlob = '${storageNameCleaned}-blob-pe'
 // #checkov:skip=CKV_AZURE_33:Storage queue logging not required — queues not used in external storage
 // #checkov:skip=CKV2_AZURE_38:Soft-delete enabled on blob services below; not applicable at account level
 // #checkov:skip=CKV2_AZURE_1:CMK encryption not required for external staging storage in dev/lab
-resource storageExternal 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storageExternal 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: storageNameCleaned
   location: location
   tags: tags
@@ -69,7 +69,7 @@ resource storageExternal 'Microsoft.Storage/storageAccounts@2023-05-01' = {
 }
 
 // Storage Lifecycle Management Policy
-resource storageExternalManagementPolicies 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05-01' = {
+resource storageExternalManagementPolicies 'Microsoft.Storage/storageAccounts/managementPolicies@2025-01-01' = {
   parent: storageExternal
   name: 'default'
   properties: {
@@ -97,7 +97,7 @@ resource storageExternalManagementPolicies 'Microsoft.Storage/storageAccounts/ma
 }
 
 // Blob Services
-resource storageExternalBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+resource storageExternalBlobServices 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   parent: storageExternal
   name: 'default'
   properties: {
@@ -110,7 +110,7 @@ resource storageExternalBlobServices 'Microsoft.Storage/storageAccounts/blobServ
 }
 
 // File Systems
-resource storageExternalFileSystems 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = [
+resource storageExternalFileSystems 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [
   for fileSystemName in fileSystemNames: {
     parent: storageExternalBlobServices
     name: fileSystemName

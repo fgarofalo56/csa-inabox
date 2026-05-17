@@ -158,6 +158,7 @@ nav:
   - Architecture:
       - Overview: ARCHITECTURE.md
       - Platform Services: PLATFORM_SERVICES.md
+      - Maintainer Succession Plan: SUCCESSION.md
       - Reference Architectures:
           - Index: reference-architecture/index.md
           - Hub-Spoke Topology for Analytics: reference-architecture/hub-spoke-topology.md
