@@ -271,6 +271,7 @@ nav:
           - "IoT Streaming": examples/iot-streaming.md
           - "Manufacturing IoT": examples/manufacturing-iot.md
           - "ML Lifecycle (Loan Default)": examples/ml-lifecycle.md
+          - "NASA — API-First Multi-Model AI": examples/nasa-api-first.md
           - "NOAA Climate & Ocean": examples/noaa.md
           - "Retail Demand Forecasting": examples/retail-demand-forecasting.md
           - "Streaming": examples/streaming.md
