@@ -494,9 +494,17 @@ omit = [
 # below this threshold (see .github/workflows/test.yml).  The threshold
 # ratchets upward as the test suite grows — do not lower it without an
 # explicit justification in the commit message.
-# Target: raise to 70 once streaming/data_activator/metadata_framework
-# test suites are consolidated into the root test runner.
-fail_under = 60
+#
+# Ratchet history:
+#   60 → 65 on 2026-05-17 (post-audit; the suite has matured well past 60 and
+#       was hiding regressions).
+#
+# Next targets (raise one notch only after CI is consistently 5+ points
+# above the current threshold for a full release cycle):
+#   65 → 70 once streaming/data_activator/metadata_framework test suites
+#           are consolidated into the root test runner.
+#   70 → 75 after portal backend reaches parity with platform packages.
+fail_under = 65
 show_missing = true
 skip_covered = false
 exclude_lines = [
