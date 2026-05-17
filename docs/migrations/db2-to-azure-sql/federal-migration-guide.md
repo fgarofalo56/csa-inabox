@@ -148,7 +148,7 @@ Federal agencies typically have IBM software licenses through one of these vehic
 | **SEWP V**                                        | NASA SEWP contract vehicle                                             | Fast procurement (2-3 weeks)                           |
 | **ESI** (Enterprise Software Initiative)          | DoD enterprise software agreements                                     | DoD organizations                                      |
 
-**MACC alignment:** If the agency has an existing MACC, Azure SQL MI consumption counts against the commitment. This can be a compelling financial argument: migrating from IBM licensing (separate budget line) to Azure consumption (already committed spend) improves budget utilization.
+**MACC alignment:** If the organization has an existing MACC, Azure SQL MI consumption counts against the commitment. This can be a compelling financial argument: migrating from IBM licensing (separate budget line) to Azure consumption (already committed spend) improves budget utilization.
 
 ---
 

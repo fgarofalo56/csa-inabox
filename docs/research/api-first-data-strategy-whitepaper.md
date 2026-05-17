@@ -121,7 +121,7 @@ The pillars above are the architecture you implement. The forces below are why t
 |---|---|---|
 | **Multi-model is the new normal** | No single model wins every task; frontier, sovereign, open-weight, and small task-specific models all coexist | Architecture must abstract the model. Hardcoded clients to a single LLM lose all option value. |
 | **Data movement is becoming illegal — or uneconomic** | Data residency regulations, sovereign cloud mandates, classified data handling, and petabyte-scale economics | Zero-move is the default. Materialization requires justification, not the other way around. |
-| **Ecosystem composability beats walled gardens** | Customers operate Databricks + Snowflake + SAP + ServiceNow + SharePoint + mainframe + 3 LLM vendors simultaneously | Any platform demanding rip-and-replace is dead on arrival. The "least burden" requirement is now a procurement gate. |
+| **Ecosystem composability beats walled gardens** | Enterprises operate Databricks + Snowflake + SAP + ServiceNow + SharePoint + mainframe + 3 LLM vendors simultaneously | Any platform demanding rip-and-replace is dead on arrival. Minimum-disruption integration is now a procurement gate. |
 | **Agentic AI requires machine-readable surfaces** | Agents discover and call tools at runtime; they cannot operate against undocumented APIs or screen-scraping | API-first stops being a developer preference and becomes the foundation for the agent layer. |
 | **Identity and audit are AI-safety requirements** | Token-level attribution is the only viable defence against prompt-injection, data-exfiltration, and chargeback disputes | Identity-grounded gateways are mandatory for any agentic deployment beyond prototype. |
 
@@ -517,9 +517,9 @@ An AWS-anchored environment does not need to delete AWS to adopt Azure. Azure is
 
 ---
 
-## 9. Migration paths — "least burden"
+## 9. Migration paths — minimum disruption
 
-The single most important architectural constraint for any large existing customer is: **"this must work with how we exist today, with the least burden."** No rip-and-replace. No data movement. No re-credentialing.
+The single most important architectural constraint for any large existing estate is: **the architecture must work with what is already deployed, with minimum disruption.** No rip-and-replace. No data movement. No re-credentialing.
 
 The Azure pattern honors this on three axes:
 

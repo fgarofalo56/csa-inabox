@@ -213,7 +213,7 @@ Same architecture, different domain. This is the "enterprise catalog buildout" p
 
 ---
 
-## "Least burden" inventory
+## Minimum-disruption inventory
 
 What does **not** have to change to make this work:
 

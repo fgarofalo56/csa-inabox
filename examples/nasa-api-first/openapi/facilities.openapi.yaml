@@ -1,0 +1,269 @@
+openapi: 3.0.3
+info:
+  title: Facilities (EAM) — API-first reference
+  description: |
+    Synthetic facilities / work-order REST surface fronted by Azure API Management.
+    Demonstrates the OData-style filter / sort / projection conventions used across
+    the API-first multi-model analytics platform. All payloads are synthetic.
+  version: 1.0.0
+  contact:
+    name: API-First Platform Team
+servers:
+  - url: https://{apimGateway}/facilities
+    variables:
+      apimGateway:
+        default: example.azure-api.us
+        description: APIM gateway hostname
+
+security:
+  - subscriptionKey: []
+    bearerAuth: []
+
+paths:
+  /sites:
+    get:
+      summary: List facilities sites
+      description: Returns a paged list of sites with optional region filter.
+      parameters:
+        - $ref: '#/components/parameters/Top'
+        - $ref: '#/components/parameters/Skip'
+        - name: region
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Page of sites
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: array
+                    items: { $ref: '#/components/schemas/Site' }
+                  '@odata.nextLink': { type: string, format: uri }
+  /buildings/{id}:
+    get:
+      summary: Retrieve one building
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Building
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Building' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /assets/{id}:
+    get:
+      summary: Retrieve one asset
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Asset
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Asset' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /work-orders:
+    get:
+      summary: List work orders
+      parameters:
+        - name: site
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [open, in-progress, closed, cancelled]
+        - name: priority
+          in: query
+          schema:
+            type: string
+            enum: [low, medium, high, critical]
+        - $ref: '#/components/parameters/Top'
+        - $ref: '#/components/parameters/Skip'
+      responses:
+        '200':
+          description: Page of work orders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: array
+                    items: { $ref: '#/components/schemas/WorkOrder' }
+                  '@odata.nextLink': { type: string, format: uri }
+    post:
+      summary: Create a work order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkOrderCreate' }
+      responses:
+        '201':
+          description: Created
+          headers:
+            Location: { schema: { type: string, format: uri } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkOrder' }
+  /work-orders/{id}:
+    patch:
+      summary: Update a work order
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkOrderPatch' }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkOrder' }
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '412':
+          description: ETag concurrency conflict
+  /preventive-maintenance/overdue:
+    get:
+      summary: List PM schedules overdue by N days
+      parameters:
+        - name: days
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 365, default: 30 }
+      responses:
+        '200':
+          description: Page of overdue PM schedules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    type: array
+                    items: { $ref: '#/components/schemas/PMSchedule' }
+
+components:
+  securitySchemes:
+    subscriptionKey:
+      type: apiKey
+      in: header
+      name: Ocp-Apim-Subscription-Key
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Top:
+      name: $top
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+    Skip:
+      name: $skip
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/problem+json:
+          schema:
+            type: object
+            properties:
+              type: { type: string }
+              title: { type: string }
+              status: { type: integer }
+              detail: { type: string }
+
+  schemas:
+    Site:
+      type: object
+      required: [id, name, region]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        region: { type: string }
+        latitude: { type: number, format: double }
+        longitude: { type: number, format: double }
+    Building:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        siteId: { type: string, format: uuid }
+        name: { type: string }
+        squareFootage: { type: number }
+        condition:
+          type: string
+          enum: [excellent, good, fair, poor, critical]
+        costCenter: { type: string }
+    Asset:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        buildingId: { type: string, format: uuid }
+        make: { type: string }
+        model: { type: string }
+        installDate: { type: string, format: date }
+        lifecycleStage:
+          type: string
+          enum: [active, deferred, decommissioned]
+    WorkOrder:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        site: { type: string }
+        building: { type: string }
+        asset: { type: string }
+        status: { type: string }
+        priority: { type: string }
+        assignedTo: { type: string }
+        createdOn: { type: string, format: date-time }
+        modifiedOn: { type: string, format: date-time }
+        notes: { type: string }
+    WorkOrderCreate:
+      type: object
+      required: [site, priority, description]
+      properties:
+        site: { type: string }
+        building: { type: string }
+        asset: { type: string }
+        priority: { type: string }
+        description: { type: string }
+    WorkOrderPatch:
+      type: object
+      properties:
+        status: { type: string }
+        priority: { type: string }
+        assignedTo: { type: string }
+        notes: { type: string }
+    PMSchedule:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        intervalDays: { type: integer }
+        lastCompleted: { type: string, format: date }
+        nextDue: { type: string, format: date }
+        overdueDays: { type: integer }

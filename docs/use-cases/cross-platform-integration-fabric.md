@@ -187,7 +187,7 @@ The pattern is engineered to require **minimum change to existing investments** 
 6. Measure: latency, cache hit rate, cost, audit completeness
 7. Repeat for the second domain
 
-At each step the architecture accumulates capability without disturbing existing investments. This is the "least burden" path in concrete form.
+At each step the architecture accumulates capability without disturbing existing investments. This is the minimum-disruption path in concrete form.
 
 ---
 
