@@ -15,7 +15,16 @@ Thank you for your interest in contributing to Cloud-Scale Analytics in-a-Box.
 - [🤝 Pull Request Process](#-pull-request-process)
 - [🏷️ Branch Naming](#️-branch-naming)
 - [🔧 Reporting Issues](#-reporting-issues)
+- [👥 Maintainers & Succession Plan](#-maintainers--succession-plan)
 - [🔗 Related Documentation](#-related-documentation)
+
+---
+
+## 👥 Maintainers & Succession Plan
+
+This repo is currently single-maintainer. Becoming a second maintainer is a documented on-ramp — see [`docs/SUCCESSION.md`](docs/SUCCESSION.md) for the criteria, the three-phase probation flow (Triage → Write → Maintain), the branch-protection commands to run when a second human reaches Phase 3, and the explicit list of tribal-knowledge topics that need transfer.
+
+If you are interested in becoming a maintainer, the entry signals are: ≥ 10 merged PRs over ≥ 60 days, PRs that cross at least two subsystems, substantive reviews on at least 3 PRs, hands-on execution of at least one runbook, and at least one ADR co-authored. See `docs/SUCCESSION.md` §1 for the full criteria.
 
 ---
 
