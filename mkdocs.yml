@@ -345,6 +345,7 @@ nav:
           - EPA Environmental Analytics: use-cases/epa-environmental-analytics.md
           - NOAA Climate & Ocean Analytics: use-cases/noaa-climate-analytics.md
           - NASA Earth Science Analytics: use-cases/nasa-earth-science-analytics.md
+          - "NASA: API-First End-to-End Implementation": use-cases/nasa-api-first-end-to-end.md
           - Interior Natural Resources: use-cases/interior-natural-resources-analytics.md
           - USDA Agricultural Analytics: use-cases/usda-agriculture-analytics.md
           - USPS Postal Operations: use-cases/usps-postal-analytics.md
@@ -368,6 +369,7 @@ nav:
           - Dataverse API Integration: use-cases/dataverse-api-integration.md
           - Enterprise Asset Management through APIM: use-cases/enterprise-asset-management-apim.md
           - Cross-Platform Integration (Connective Tissue): use-cases/cross-platform-integration-fabric.md
+          - NASA — End-to-End Implementation: use-cases/nasa-api-first-end-to-end.md
           - Solution Store — Azure API-First Accelerators: solution-store/index.md
       - Research:
           - Index: research/index.md
