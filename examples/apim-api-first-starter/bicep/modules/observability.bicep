@@ -5,7 +5,7 @@ param logName string
 param appiName string
 param retentionDays int = 30
 
-resource log 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+resource log 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
   name: logName
   location: location
   properties: {

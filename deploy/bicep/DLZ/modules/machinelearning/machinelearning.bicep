@@ -73,7 +73,7 @@ param parCmkIdentityId string = ''
 
 // Resources
 // #checkov:skip=CKV_AZURE_144:AML workspace CMK encryption is optional for dev/lab — enable via parEnableCmk for prod
-resource amlWorkspace 'Microsoft.MachineLearningServices/workspaces@2024-04-01' = {
+resource amlWorkspace 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
   name: workspaceName
   location: location
   tags: tags

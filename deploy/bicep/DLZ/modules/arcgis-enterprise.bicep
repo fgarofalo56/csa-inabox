@@ -266,7 +266,7 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-03-01' = {
 
 // ArcGIS Enterprise uses PostgreSQL as the backend for the enterprise
 // geodatabase. PostGIS extension is required for spatial type support.
-resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
+resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: '${baseName}-postgres'
   location: location
   tags: tags
@@ -303,7 +303,7 @@ resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-pr
 // Storage Account — ArcGIS File Shares & Backups
 // ============================================================================
 
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: replace('${baseName}st', '-', '')
   location: location
   tags: tags

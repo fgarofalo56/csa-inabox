@@ -63,7 +63,7 @@ param logAnalyticsId string = ''
 // #checkov:skip=CKV_AZURE_172:Secrets Store CSI auto-rotation configured via addon block below
 // #checkov:skip=CKV_AZURE_226:Ephemeral OS disks require gov runbook SKU sizing decision
 // #checkov:skip=CKV_AZURE_227:Encryption-at-host enforced by gov-tier SKU floor; explicit flag pinned in agent pool below
-resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
+resource aks 'Microsoft.ContainerService/managedClusters@2024-10-01' = {
   name: name
   location: location
   tags: tags

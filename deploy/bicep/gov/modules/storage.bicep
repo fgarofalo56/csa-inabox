@@ -48,7 +48,7 @@ param keyVaultId string = ''
 @description('Log Analytics workspace ID for diagnostics.')
 param logAnalyticsId string = ''
 
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: name
   location: location
   tags: tags
@@ -82,7 +82,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   parent: storageAccount
   name: 'default'
   properties: {
@@ -102,7 +102,7 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
   }
 }
 
-resource storageContainers 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = [
+resource storageContainers 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [
   for container in containers: {
     parent: blobService
     name: container
