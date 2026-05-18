@@ -1,4 +1,6 @@
-"""mkdocs hook: rewrite relative links in any docs page that escape the\ndocs tree (e.g. `../../examples/foo/README.md` or `../../deploy/...`) into\nabsolute GitHub source-tree URLs.
+"""mkdocs hook: rewrite relative links in any docs page that escape the
+docs tree (e.g. `../../examples/foo/README.md` or `../../deploy/...`) into
+absolute GitHub source-tree URLs.
 
 Why:
 - `docs/examples/<name>.md` are include-markdown shims pulling
@@ -10,6 +12,42 @@ Why:
 Rather than duplicating those source files into `docs/`, this hook detects
 any leftover relative link that mkdocs cannot resolve as a doc file and
 rewrites it to point at the GitHub source tree on `main`.
+
+============================================================================
+SHIM vs STANDALONE — the rule that decides where links are resolved from
+============================================================================
+
+A page under `docs/examples/` can be one of two shapes:
+
+  (A) An **include-markdown SHIM**: the source under `docs/examples/foo.md`
+      is a thin frontmatter + `{% include-markdown "../../examples/foo/README.md" %}`
+      wrapper. The actual content lives in `examples/foo/README.md` and uses
+      relative links from THAT location (e.g. `../../README.md` means the
+      repo root). When mkdocs renders the shim, those links are evaluated
+      against the README's location, not the shim's.
+
+  (B) A **standalone doc**: the source under `docs/examples/foo.md` is the
+      real content, with no include-markdown directive. Its relative links
+      should be resolved against `docs/examples/foo.md` itself (so
+      `../use-cases/bar.md` means `docs/use-cases/bar.md`).
+
+This hook MUST distinguish the two, otherwise standalone docs under
+`docs/examples/` get their `../use-cases/...` links rewritten to point at
+the non-existent `examples/use-cases/...` path in the GitHub blob tree
+(broken). See PR #243 for the bug that prompted this distinction and the
+fix.
+
+The detection rule: a page is a SHIM if and only if its markdown source
+contains the literal token `{% include-markdown` (or its whitespace
+variant). The `on_page_markdown` callback inspects the markdown directly
+and passes `is_include_shim` to `_resolve_against_source`.
+
+If you add a new page under `docs/examples/`:
+- If it's an include-markdown shim, the existing 22 sibling files are
+  the template — drop in a 9-line wrapper and you're done.
+- If it's a standalone doc, just write the doc normally. The hook will
+  detect the absence of `{% include-markdown` and resolve links from the
+  doc's own `docs/examples/` location.
 """
 
 from __future__ import annotations
