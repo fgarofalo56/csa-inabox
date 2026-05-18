@@ -29,7 +29,7 @@ var workspaceId = resourceId('Microsoft.OperationalInsights/workspaces', logAnal
 
 // Get Existing Resources if needed
 
-// resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2020-08-01' existing = {
+// resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
 //   name: logAnalytics
 //   scope: resourceGroup()
 // }

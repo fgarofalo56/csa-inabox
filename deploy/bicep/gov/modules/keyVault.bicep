@@ -30,7 +30,7 @@ param networkAcls object = {
 
 // #checkov:skip=CKV_AZURE_110:Key Vault secret expiration managed via operational process, not resource policy
 // #checkov:skip=CKV_AZURE_112:Key Vault key expiration managed via operational process, not resource policy
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   name: name
   location: location
   tags: tags

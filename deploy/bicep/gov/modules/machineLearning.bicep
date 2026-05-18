@@ -25,7 +25,7 @@ param publicNetworkAccess string = 'Disabled'
 @description('Log Analytics workspace ID.')
 param logAnalyticsId string = ''
 
-resource mlWorkspace 'Microsoft.MachineLearningServices/workspaces@2024-04-01' = {
+resource mlWorkspace 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
   name: name
   location: location
   tags: tags

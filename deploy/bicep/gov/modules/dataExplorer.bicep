@@ -27,7 +27,7 @@ param logAnalyticsId string = ''
 
 var isDevSku = startsWith(sku, 'Dev')
 
-resource cluster 'Microsoft.Kusto/clusters@2023-08-15' = {
+resource cluster 'Microsoft.Kusto/clusters@2024-04-13' = {
   name: name
   location: location
   tags: tags
@@ -52,7 +52,7 @@ resource cluster 'Microsoft.Kusto/clusters@2023-08-15' = {
 }
 
 // Default databases for CSA analytics
-resource dbRealtime 'Microsoft.Kusto/clusters/databases@2023-08-15' = {
+resource dbRealtime 'Microsoft.Kusto/clusters/databases@2024-04-13' = {
   parent: cluster
   name: 'realtime'
   location: location
@@ -63,7 +63,7 @@ resource dbRealtime 'Microsoft.Kusto/clusters/databases@2023-08-15' = {
   }
 }
 
-resource dbTelemetry 'Microsoft.Kusto/clusters/databases@2023-08-15' = {
+resource dbTelemetry 'Microsoft.Kusto/clusters/databases@2024-04-13' = {
   parent: cluster
   name: 'telemetry'
   location: location

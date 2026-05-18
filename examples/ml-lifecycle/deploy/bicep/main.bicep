@@ -58,7 +58,7 @@ var deploymentName = 'blue'
 
 // ------------------------ Storage ---------------------------
 
-resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storage 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: storageName
   location: location
   tags: tags
@@ -87,7 +87,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
 
 // ------------------------ Key Vault -------------------------
 
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   name: kvName
   location: location
   tags: tags
@@ -125,7 +125,7 @@ resource appi 'Microsoft.Insights/components@2020-02-02' = {
 
 // ------------------------ Azure ML --------------------------
 
-resource aml 'Microsoft.MachineLearningServices/workspaces@2024-04-01' = {
+resource aml 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = {
   name: amlName
   location: location
   tags: tags

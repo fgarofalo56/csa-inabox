@@ -66,7 +66,7 @@ var baseName = '${namePrefix}-geo-${environment}-${uniqueId}'
 
 // PostGIS extends PostgreSQL with geometry types, spatial indexing (GiST),
 // and hundreds of spatial functions — the de facto standard for OSS geospatial.
-resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
+resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: '${baseName}-postgres'
   location: location
   tags: tags
@@ -110,7 +110,7 @@ resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-pr
 
 // Enable PostGIS and related extensions via azure.extensions server parameter.
 // This allowlists extensions; CREATE EXTENSION must still be run in-database.
-resource postgresExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2023-12-01-preview' = {
+resource postgresExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
   parent: postgresServer
   name: 'azure.extensions'
   properties: {
@@ -119,7 +119,7 @@ resource postgresExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configura
   }
 }
 
-resource postgresDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2023-12-01-preview' = {
+resource postgresDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
   parent: postgresServer
   name: 'geodata'
   properties: {
@@ -153,7 +153,7 @@ resource mapsAccount 'Microsoft.Maps/accounts@2023-06-01' = {
 
 // Hierarchical namespace (HNS) enables efficient directory operations and
 // is required for ADLS Gen2 semantics used by Spark/Sedona and GeoParquet.
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource storageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: replace('${baseName}geo', '-', '')
   location: location
   tags: tags
@@ -181,7 +181,7 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-resource geospatialContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+resource geospatialContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = {
   name: '${storageAccount.name}/default/geospatial'
   properties: {
     publicAccess: 'None'
