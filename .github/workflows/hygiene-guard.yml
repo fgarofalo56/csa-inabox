@@ -1,0 +1,235 @@
+name: Hygiene Guard
+
+# Repo-level housekeeping checks. Fails PRs that introduce stray root-level
+# artifacts that the .gitignore patterns are designed to prevent — e.g. a
+# diagram PNG dropped at the repo root, a *.bak file, a tmpclaude-* working
+# file. Also reports stale branches on a weekly cadence so they don't
+# accumulate.
+#
+# See:
+#   .gitignore §"Repo-root images" and §"CLI artifacts that accumulate at the
+#   root" for the prevented patterns.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Weekly stale-branch report on Mondays 06:00 UTC.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  no-stray-root-files:
+    name: No stray root-level files
+    runs-on: ubuntu-latest
+    # Only fires on PR / push events (the schedule job uses a different job below)
+    if: github.event_name != 'schedule'
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Scan for prohibited root-level artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          VIOLATIONS=0
+
+          # Patterns that should NEVER appear at the repo root.
+          # .gitignore catches them on `git add`; this check catches them
+          # in case someone uses `git add -f` or commits directly.
+          PROHIBITED_PATTERNS=(
+            '*.png'
+            '*.jpg'
+            '*.jpeg'
+            '*.gif'
+            '*.svg'
+            '*.bmp'
+            '*.webp'
+            '*.bak'
+            '*.orig'
+            '*.rej'
+            '*.tmp'
+            '*.swp'
+            'tmpclaude-*'
+          )
+
+          # Allow-list — files that are intentionally at the root despite
+          # matching a prohibited pattern (none today, but reserved for future).
+          declare -A ALLOWED=()
+
+          for pattern in "${PROHIBITED_PATTERNS[@]}"; do
+            for f in $pattern; do
+              # Bash globbing: if no match, the pattern itself stays — skip it.
+              if [ ! -e "$f" ]; then
+                continue
+              fi
+              if [ -n "${ALLOWED[$f]:-}" ]; then
+                echo "::notice::Allowed root file ${f} (in allow-list)"
+                continue
+              fi
+              echo "::error file=${f}::Prohibited root-level file. Move it under docs/ or examples/ (or your appropriate subdirectory). See .gitignore §Repo-root images for the rationale."
+              VIOLATIONS=$((VIOLATIONS + 1))
+            done
+          done
+
+          if [ "$VIOLATIONS" -gt 0 ]; then
+            echo ""
+            echo "::error::Found $VIOLATIONS prohibited root-level file(s). Fix by moving them into docs/ or examples/, OR by adding an explicit allow-list entry in .github/workflows/hygiene-guard.yml if the file genuinely belongs at the root."
+            exit 1
+          fi
+
+          echo "Root hygiene: clean."
+
+  large-file-guard:
+    name: No large files in PR
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for large files in this PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 5 MB threshold — anything bigger should be in Azure Artifacts / Blob /
+          # Git LFS, not in the repo.
+          MAX_BYTES=5242880
+          VIOLATIONS=0
+
+          # Files added or modified in this PR
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          # In case of unusual fork PRs the SHAs might not be available locally
+          if ! git rev-parse --verify "$BASE_SHA" >/dev/null 2>&1; then
+            git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}" --depth=50 || true
+            BASE_SHA="origin/${{ github.event.pull_request.base.ref }}"
+          fi
+
+          CHANGED=$(git diff --name-only --diff-filter=AM "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)
+          if [ -z "$CHANGED" ]; then
+            echo "No added/modified files to check."
+            exit 0
+          fi
+
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            [ ! -f "$f" ] && continue
+            size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
+            if [ "$size" -gt "$MAX_BYTES" ]; then
+              human=$(numfmt --to=iec --suffix=B "$size" 2>/dev/null || echo "${size} bytes")
+              echo "::error file=${f}::Large file (${human}) — exceeds 5 MB threshold. Move to Azure Artifacts / Blob Storage / Git LFS. If genuinely required in-repo, add a documented exception in this workflow."
+              VIOLATIONS=$((VIOLATIONS + 1))
+            fi
+          done <<< "$CHANGED"
+
+          if [ "$VIOLATIONS" -gt 0 ]; then
+            echo "::error::Found $VIOLATIONS file(s) exceeding the 5 MB threshold."
+            exit 1
+          fi
+
+          echo "Large-file guard: clean."
+
+  stale-branches-report:
+    name: Stale-branches weekly report
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute stale branches
+        id: report
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A branch is "stale" if it is not main, has no open PR, and has
+          # had no commits in the last 90 days.
+          NINETY_DAYS_AGO=$(date -u -d '90 days ago' +%s 2>/dev/null || date -v-90d +%s)
+
+          # All remote branches except main + release-please bots
+          BRANCHES=$(git for-each-ref --format='%(refname:short) %(committerdate:unix)' refs/remotes/origin/ \
+                     | grep -v 'origin/main$' \
+                     | grep -v 'origin/release-please--' \
+                     | grep -v 'origin/HEAD$')
+
+          OPEN_PR_BRANCHES=$(gh pr list --state open --json headRefName --jq '.[].headRefName' | sort -u)
+
+          STALE=""
+          while IFS=' ' read -r branch ts; do
+            [ -z "$branch" ] && continue
+            short="${branch#origin/}"
+            # Skip if branch has an open PR
+            if echo "$OPEN_PR_BRANCHES" | grep -Fxq "$short"; then
+              continue
+            fi
+            if [ "$ts" -lt "$NINETY_DAYS_AGO" ]; then
+              days=$(( ( $(date -u +%s) - ts ) / 86400 ))
+              STALE+="- \`$short\` (last commit $days days ago)"$'\n'
+            fi
+          done <<< "$BRANCHES"
+
+          if [ -z "$STALE" ]; then
+            echo "No stale branches."
+            echo "stale_count=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "stale_count=$(echo "$STALE" | grep -c '^-')"
+            echo "stale_branches<<EOF"
+            echo "$STALE"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: File / update tracking issue
+        if: steps.report.outputs.stale_count != '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STALE: ${{ steps.report.outputs.stale_branches }}
+          COUNT: ${{ steps.report.outputs.stale_count }}
+        run: |
+          set -euo pipefail
+          TITLE="Stale branches report (weekly)"
+          BODY=$(cat <<EOF
+          # Stale branches as of $(date -u +'%Y-%m-%d')
+
+          The following $COUNT branches have had no commits in the last 90 days
+          and have no open PR. Delete or rebase them.
+
+          $STALE
+
+          ## How to triage
+
+          - Branches with no value: \`gh api -X DELETE repos/${{ github.repository }}/git/refs/heads/<name>\`
+          - Branches with WIP work: rebase onto main and open a draft PR
+          - Branches blocked on external review: add a comment with the blocker; the next weekly report will skip branches with an open PR
+
+          _Generated by \`.github/workflows/hygiene-guard.yml\` → \`stale-branches-report\` job._
+          EOF
+          )
+          EXISTING=$(gh issue list --search "$TITLE in:title" --state open --json number --jq '.[0].number' || echo "")
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --body "$BODY"
+            echo "Updated existing issue #$EXISTING"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label "hygiene,housekeeping"
+          fi
