@@ -211,6 +211,62 @@ output id string = storageAccount.id
 output primaryEndpoint string = storageAccount.properties.primaryEndpoints.blob
 ```
 
+### Bicep apiVersion ratchet policy
+
+The Bicep linter's `use-recent-api-versions` rule flags any resource declaration whose `apiVersion` is older than 730 days. Left unattended, the warning count creeps upward and the CI signal-to-noise ratio degrades.
+
+This repo enforces a deliberate **ratchet policy**:
+
+| Cadence | Action |
+|---|---|
+| **Every release cycle (≤ quarterly)** | Sweep all `.bicep` files with `az bicep lint`. Triage each `use-recent-api-versions` warning. |
+| **Per warning** | If a newer GA exists → bump to the GA. If only newer previews exist → hold the current version until a GA arrives. |
+| **Preview → GA migration** | When a service publishes a GA replacing a preview, bump in the same PR that documents the change. |
+| **GA → newer GA migration** | Bump conservatively; favor the most recent GA listed in the linter's "Acceptable versions" hint over the absolute newest preview. |
+| **Pre-existing linter false positives** | A handful of types (notably `Microsoft.Insights/diagnosticSettings`) have a linter database that lags reality. Document the false positive in the commit message and hold the current version. |
+
+### Recipe for a ratchet pass
+
+```bash
+# 1. Inventory all (type, apiVersion) pairs across the repo
+grep -rhE "'Microsoft\.[A-Za-z]+/[A-Za-z/]+@[0-9][^']*'" deploy/ csa_platform/ examples/ 2>/dev/null \
+  | grep -oE "'Microsoft\.[A-Za-z]+/[A-Za-z/]+@[0-9][^']*'" \
+  | sort -u
+
+# 2. Run the linter to surface stale ones
+for f in $(find deploy csa_platform examples -name '*.bicep'); do
+  az bicep lint --file "$f" 2>&1 | grep "use-recent-api-versions" || true
+done
+
+# 3. Apply substitutions via a single-shot Python script (preferred over sed —
+#    easier to capture the per-substitution counts and easier to reason about).
+#    Template:
+python -c "
+from pathlib import Path
+MAPPING = {
+    'Microsoft.X/Y@OLD': 'Microsoft.X/Y@NEW',
+    # ...
+}
+for f in Path('.').rglob('*.bicep'):
+    text = f.read_text(encoding='utf-8')
+    for old, new in MAPPING.items():
+        text = text.replace(f\"'{old}'\", f\"'{new}'\")
+    f.write_text(text, encoding='utf-8')
+"
+
+# 4. Verify with a representative build
+az bicep build --file examples/apim-api-first-starter/bicep/main.bicep
+
+# 5. Commit with a per-substitution table in the commit message (see PR #248
+#    for an example shape).
+```
+
+### What NOT to do
+
+- **Do not** chase the absolute newest preview just to clear a warning. Previews can be withdrawn; GAs cannot.
+- **Do not** downgrade to an older GA the linter "accepts" if the current preview has features you depend on. Document the hold in a comment above the resource.
+- **Do not** mix the ratchet with substantive Bicep refactors in the same PR. The ratchet should be reviewable as a pure version substitution; refactors deserve their own PR.
+
 ---
 
 ## GitHub Actions Workflows

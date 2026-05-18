@@ -75,19 +75,19 @@ required_conversation_resolution:        true
 
 ## 4. Topics that need explicit knowledge transfer
 
-These are the "tribal knowledge" topics the primary maintainer should write down before — or as part of — onboarding a second maintainer. Each one is a follow-on commit, not a blocker.
+These are the "tribal knowledge" topics that previously lived only in the primary maintainer's head. All 7 have been converted to durable docs, runbooks, or ADRs as of 2026-05-17 — the bus factor on each is now zero regardless of whether a second human is onboarded yet.
 
-| Topic | Where to capture it |
-|---|---|
-| Why `release-please` is bypassed for some status checks | Already partly captured in [ADR-0023](adr/0023-release-please-status-bypass.md). Add the runbook entry. |
-| How the Copilot Studio agent registration is rotated | Add a runbook: `docs/runbooks/copilot-agent-rotation.md` |
-| Which Azure subscriptions the GitHub Actions service principal can reach | Capture in `docs/runbooks/azure-deployment-principal.md` (cross-link to MEMORY entry already documenting `limitlessdata_deploy` scope) |
-| Bicep `apiVersion` ratchet policy | Add a section to `docs/best-practices/iac-cicd.md` |
-| Per-vertical dbt warehouse selection rationale | Existing decision tree at `docs/decisions/lakehouse-vs-warehouse-vs-lake.md` — verify it covers per-vertical reasoning |
-| How the `rewrite_example_links.py` hook decides shim vs standalone | Already captured in PR #243 commit message; promote to a comment block at the top of the hook |
-| Test layout (per-package vs central) | Already captured in [ADR-0024](adr/0024-two-tier-test-layout.md) — keep current |
+| Topic | Where it is captured | Status |
+|---|---|---|
+| Why `release-please` is bypassed for some status checks | [ADR-0023](adr/0023-release-please-status-bypass.md) (architectural rationale) + [`runbooks/release-please-bypass.md`](runbooks/release-please-bypass.md) (day-2 ops) | ✅ Done |
+| How the Copilot Studio agent registration is rotated | [`runbooks/copilot-studio-agent-rotation.md`](runbooks/copilot-studio-agent-rotation.md) | ✅ Done |
+| Which Azure subscriptions the GitHub Actions service principal can reach | [`runbooks/azure-deployment-principal.md`](runbooks/azure-deployment-principal.md) | ✅ Done |
+| Bicep `apiVersion` ratchet policy | [`best-practices/iac-cicd.md`](best-practices/iac-cicd.md) — *Bicep apiVersion ratchet policy* subsection | ✅ Done |
+| Per-vertical dbt warehouse selection rationale | [`decisions/lakehouse-vs-warehouse-vs-lake.md`](decisions/lakehouse-vs-warehouse-vs-lake.md) | ✅ Existing |
+| How the `rewrite_example_links.py` hook decides shim vs standalone | Header docstring of [`docs/hooks/rewrite_example_links.py`](https://github.com/fgarofalo56/csa-inabox/blob/main/docs/hooks/rewrite_example_links.py) | ✅ Done |
+| Test layout (per-package vs central) | [ADR-0024](adr/0024-two-tier-test-layout.md) | ✅ Existing |
 
-The pattern: every "you would have to ask me" topic gets converted to a doc, a runbook, or an ADR. Then the topic is no longer tribal.
+The pattern: every "you would have to ask me" topic becomes a doc, a runbook, or an ADR. Then the topic is no longer tribal — anyone with read access to the repo can self-serve.
 
 ---
 
