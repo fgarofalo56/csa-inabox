@@ -59,7 +59,7 @@ resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
 // Log Analytics + Application Insights
 // ============================================================================
 
-resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+resource law 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
   name: lawName
   location: location
   tags: tags

@@ -595,7 +595,7 @@ module logAnalyticsWorkspace 'modules/logging/logging.bicep' = if (bool(deployMo
   }
 }
 
-resource resLAWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = if (!bool(deployModules.logging)) {
+resource resLAWorkspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = if (!bool(deployModules.logging)) {
   name: '${name}-${parLogAnalytics.parWorkspaceSufix}'
   scope: resourceGroup(parSpokeNetworks[0].parHubSubscriptionId, parLoggingResourceGroupName)
 }
