@@ -22,7 +22,7 @@ param deployments array = []
 @description('Log Analytics workspace ID.')
 param logAnalyticsId string = ''
 
-resource openAI 'Microsoft.CognitiveServices/accounts@2024-04-01-preview' = {
+resource openAI 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   name: name
   location: location
   tags: tags
@@ -44,7 +44,7 @@ resource openAI 'Microsoft.CognitiveServices/accounts@2024-04-01-preview' = {
 }
 
 // Model deployments
-resource modelDeployments 'Microsoft.CognitiveServices/accounts/deployments@2024-04-01-preview' = [
+resource modelDeployments 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = [
   for deployment in deployments: {
     parent: openAI
     name: deployment.name

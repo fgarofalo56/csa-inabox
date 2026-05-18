@@ -74,7 +74,7 @@ param isHnsEnabled bool = false
 var varStorageAccountname = substring(replace(replace(replace(toLower(concat(parmStorageAccountName, uniqueString(subscription().subscriptionId, resourceGroup, parmStorageAccountName))),'-',''),' ', ''),'_', ''), 0, 24) 
 
 // Resource Definition for Storage Account
-resource resStorageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
+resource resStorageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: varStorageAccountname
   location: location
   tags: tags

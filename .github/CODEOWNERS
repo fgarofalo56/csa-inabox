@@ -2,6 +2,17 @@
 # Each line: pattern  @owner1 @owner2
 # Last matching pattern wins.
 #
+# Today every line routes to @fgarofalo56 because the repo is currently
+# single-maintainer. To onboard a second maintainer:
+#   1. Read docs/SUCCESSION.md for the criteria and onboarding flow.
+#   2. Add the new GitHub handle to the lines below (e.g. add a second
+#      @handle separated by a space — last matching pattern wins, so the
+#      override granularity is preserved).
+#   3. Once the second maintainer is active, enable required PR reviews
+#      on the main branch via repo settings → branches → main (or the
+#      `gh api PATCH .../branches/main/protection` command in
+#      docs/SUCCESSION.md).
+
 # Default — every PR pings the repo owner unless overridden below.
 
 *                                       @fgarofalo56
@@ -11,13 +22,17 @@
 *.md                                    @fgarofalo56
 mkdocs.yml                              @fgarofalo56
 
-# Architecture decisions — extra scrutiny
+# Architecture decisions — extra scrutiny.
+# When a second maintainer is added, prefer requiring BOTH owners on ADR
+# changes (CODEOWNERS supports multiple owners; protection rule "require
+# review from Code Owners" enforces it).
 /docs/adr/                              @fgarofalo56
 
 # IaC — Bicep modules
 /deploy/                                @fgarofalo56
 
-# CI/CD workflows + supply chain
+# CI/CD workflows + supply chain — highest blast-radius changes.
+# Add second-maintainer requirement here first when onboarding.
 /.github/                               @fgarofalo56
 /.pre-commit-config.yaml                @fgarofalo56
 /scripts/                               @fgarofalo56

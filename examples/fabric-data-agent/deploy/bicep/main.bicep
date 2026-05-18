@@ -50,7 +50,7 @@ var appiName = '${baseName}-appi-${environment}'
 
 // ------------------------ Key Vault -------------------------
 
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   name: kvName
   location: location
   tags: tags

@@ -14,7 +14,7 @@ param environment string = 'dev'
 // Reference to existing workspace
 // --------------------------------------------------------------------------
 
-resource workspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' existing = {
+resource workspace 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
   name: workspaceName
 }
 
