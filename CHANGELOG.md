@@ -10,6 +10,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.6.9](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.8...csa-inabox-v0.6.9) (2026-05-18)
+
+
+### Miscellaneous
+
+* **deps-dev:** Bump @types/node from 25.6.2 to 25.9.0 in /portal/react-webapp ([#234](https://github.com/fgarofalo56/csa-inabox/issues/234)) ([ef5667f](https://github.com/fgarofalo56/csa-inabox/commit/ef5667fa599fafe3d1c1e58b37a987adddb6e9ee))
+* **deps:** Bump @azure/msal-browser from 5.10.0 to 5.10.1 in /portal/react-webapp ([#232](https://github.com/fgarofalo56/csa-inabox/issues/232)) ([dded8ea](https://github.com/fgarofalo56/csa-inabox/commit/dded8eae54c2f95254bc73b10b3b1aed5232497c))
+* **deps:** Bump @azure/msal-react from 5.4.0 to 5.4.1 in /portal/react-webapp ([#238](https://github.com/fgarofalo56/csa-inabox/issues/238)) ([ff0a5a4](https://github.com/fgarofalo56/csa-inabox/commit/ff0a5a42923a755969fb298346037a2c7c972682))
+* **deps:** Bump @tanstack/react-query from 5.100.9 to 5.100.10 in /portal/react-webapp ([#236](https://github.com/fgarofalo56/csa-inabox/issues/236)) ([10210da](https://github.com/fgarofalo56/csa-inabox/commit/10210da80b1c5d8b18ad1caf9e6c94b0a506bad8))
+* **deps:** Bump axios from 1.16.0 to 1.16.1 in /portal/react-webapp ([#233](https://github.com/fgarofalo56/csa-inabox/issues/233)) ([9134fbb](https://github.com/fgarofalo56/csa-inabox/commit/9134fbbc2437eb0ab6d3aa9472119e029dc13c4a))
+* **deps:** Bump tailwind-merge from 3.5.0 to 3.6.0 in /portal/react-webapp ([#237](https://github.com/fgarofalo56/csa-inabox/issues/237)) ([2a41507](https://github.com/fgarofalo56/csa-inabox/commit/2a41507e643dd5194816caefd1d0be63b0411747))
+
 ## [0.6.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.7...csa-inabox-v0.6.8) (2026-05-18)
 
 
