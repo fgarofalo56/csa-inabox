@@ -54,7 +54,7 @@ var funcStorageName = take(toLower(replace('strulesng${environment}${uniqueSuffi
 
 // ─── Storage Account (Function App) ─────────────────────────────────────────
 
-resource funcStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+resource funcStorage 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: funcStorageName
   location: location
   tags: union(tags, { Purpose: 'Rule Engine Function App storage' })

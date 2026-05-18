@@ -1,0 +1,139 @@
+{
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "name": "csa-inabox",
+
+  // Microsoft-published image with Python 3.12, common dev tooling, and
+  // non-root `vscode` user pre-configured.
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+
+  // Layered features add the rest of the toolchain (Node for the React
+  // portal + frontend tests, Azure CLI for Bicep / az commands, GitHub CLI
+  // for the PR workflow, Bicep CLI bundled with az, Docker-in-Docker for
+  // container-based examples + APIM self-hosted gateway smoke tests).
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/azure-cli:1": {
+      "installBicep": true,
+      "extensions": "account,resource-graph"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest"
+    },
+    "ghcr.io/devcontainers/features/powershell:1": {
+      "version": "latest"
+    }
+  },
+
+  // Container customizations — pre-install useful VS Code extensions so the
+  // workspace is productive on first open in both VS Code and Codespaces.
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // Python
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-python.mypy-type-checker",
+        // Bicep + Azure
+        "ms-azuretools.vscode-bicep",
+        "ms-azuretools.vscode-azureresourcegroups",
+        "ms-azuretools.vscode-azurefunctions",
+        // YAML / JSON / Markdown
+        "redhat.vscode-yaml",
+        "yzhang.markdown-all-in-one",
+        "DavidAnson.vscode-markdownlint",
+        // GitHub
+        "github.vscode-pull-request-github",
+        "github.vscode-github-actions",
+        // dbt
+        "innoverio.vscode-dbt-power-user",
+        // Frontend / React portal
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        // MkDocs preview
+        "bierner.markdown-mermaid"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.unittestEnabled": false,
+        "python.analysis.typeCheckingMode": "strict",
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.formatOnSave": true,
+          "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+          }
+        },
+        "[bicep]": {
+          "editor.formatOnSave": true,
+          "editor.tabSize": 2
+        },
+        "[yaml]": {
+          "editor.tabSize": 2
+        },
+        "files.exclude": {
+          "**/.venv": true,
+          "**/.pytest_cache": true,
+          "**/.mypy_cache": true,
+          "**/.ruff_cache": true,
+          "**/__pycache__": true,
+          "**/site": true,
+          "**/node_modules": true
+        }
+      }
+    }
+  },
+
+  // After the container is created: bootstrap the Python env, install dev
+  // dependencies, install pre-commit hooks, install Playwright browsers
+  // (needed for portal/react-webapp E2E tests).
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  // After the container starts (every time): re-print quickstart hints.
+  "postStartCommand": "echo '\\nWelcome to csa-inabox. Run `make help` to see available targets, or `mkdocs serve` to preview the docs site at http://localhost:8000.\\n'",
+
+  // Ports the dev loop exposes.
+  "forwardPorts": [
+    8000,
+    8080,
+    8081,
+    3000,
+    5173,
+    7071
+  ],
+  "portsAttributes": {
+    "8000": { "label": "MkDocs docs site", "onAutoForward": "openBrowser" },
+    "8080": { "label": "APIM self-hosted gateway (HTTP)" },
+    "8081": { "label": "APIM self-hosted gateway (status)" },
+    "3000": { "label": "Portal React webapp (dev server)" },
+    "5173": { "label": "Vite dev server" },
+    "7071": { "label": "Azure Functions host" }
+  },
+
+  // Use the non-root vscode user that ships with the base image. Codespaces
+  // and local VS Code both honour this.
+  "remoteUser": "vscode",
+  "containerUser": "vscode",
+
+  // Mount the host `.gitconfig` so commits show the correct author when
+  // running locally; Codespaces ignores this and uses the user's GitHub
+  // identity automatically.
+  "mounts": [
+    "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached"
+  ],
+
+  // Resource minimum for Codespaces — the platform package + dbt + portal
+  // backend together need ≥ 4 CPU / 8 GB to feel responsive.
+  "hostRequirements": {
+    "cpus": 4,
+    "memory": "8gb",
+    "storage": "32gb"
+  }
+}

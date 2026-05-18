@@ -61,7 +61,7 @@ var appInsightsName = '${baseName}-insights-${environment}'
 
 // ─── Storage Account (Function App) ─────────────────────────────────────────
 
-resource funcStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = if (empty(functionStorageAccountName)) {
+resource funcStorage 'Microsoft.Storage/storageAccounts@2025-01-01' = if (empty(functionStorageAccountName)) {
   name: funcStorageName
   location: location
   tags: union(tags, { Purpose: 'Data Activator Function App storage' })

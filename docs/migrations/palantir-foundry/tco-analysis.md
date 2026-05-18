@@ -138,7 +138,7 @@ Estimated switching cost: **$2M–$8M** depending on deployment size and complex
 
 #### 4. Renewal negotiation leverage
 
-With high switching costs, the agency has limited leverage in license renewal negotiations. Palantir's revenue growth expectations create pressure to maintain or increase per-seat pricing. The structural lock-in reduces the buyer's negotiating position over time.
+With high switching costs, an existing buyer has limited leverage in license renewal negotiations. Palantir's revenue growth expectations create pressure to maintain or increase per-seat pricing. The structural lock-in reduces the buyer's negotiating position over time.
 
 ### Costs often underestimated in Azure migrations
 

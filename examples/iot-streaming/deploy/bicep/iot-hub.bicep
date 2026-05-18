@@ -205,7 +205,7 @@ resource manageRule 'Microsoft.EventHub/namespaces/authorizationRules@2024-01-01
 }
 
 // ─── Key Vault (for storing connection strings securely) ─────
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   name: keyVaultName
   location: location
   tags: tags

@@ -10,6 +10,37 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.6.8](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.7...csa-inabox-v0.6.8) (2026-05-18)
+
+
+### Bug Fixes
+
+* **docs-hook:** rewrite_example_links treats standalone docs/examples/*.md correctly ([#243](https://github.com/fgarofalo56/csa-inabox/issues/243)) ([56a809a](https://github.com/fgarofalo56/csa-inabox/commit/56a809a7db25d87101c9484df12c0e9a9a94a8f1))
+* **docs:** correct ADR cross-link from 0023 to 0025 ([#240](https://github.com/fgarofalo56/csa-inabox/issues/240)) ([d2f57b7](https://github.com/fgarofalo56/csa-inabox/commit/d2f57b721fa467e6423f9a6f3b984086fe4d4142))
+* **docs:** make Mermaid diagrams clickable for pan/zoom ([#231](https://github.com/fgarofalo56/csa-inabox/issues/231)) ([507bf7a](https://github.com/fgarofalo56/csa-inabox/commit/507bf7a1158d5e88fcb265705cdcefa9b9f2f1d8))
+
+
+### Documentation
+
+* add click-to-zoom + pan for images and Mermaid diagrams ([#230](https://github.com/fgarofalo56/csa-inabox/issues/230)) ([1736b9a](https://github.com/fgarofalo56/csa-inabox/commit/1736b9a4844aa76e73355c20f0c29b0443cefba1))
+* API-First Data Strategy pillar (APIM, Dataverse, MuleSoft + AWS takedowns) ([#239](https://github.com/fgarofalo56/csa-inabox/issues/239)) ([fe3a5d7](https://github.com/fgarofalo56/csa-inabox/commit/fe3a5d7c7e877ed8056d9b615fabf8a412683b90))
+* **bus-factor:** convert 5 tribal-knowledge topics from SUCCESSION §4 to durable docs ([#252](https://github.com/fgarofalo56/csa-inabox/issues/252)) ([f184ce0](https://github.com/fgarofalo56/csa-inabox/commit/f184ce0e6fabf60d53c6000a3ce7c6bccb2a1f5a))
+* **examples:** add NASA API-first end-to-end deployment example ([#242](https://github.com/fgarofalo56/csa-inabox/issues/242)) ([bdaac11](https://github.com/fgarofalo56/csa-inabox/commit/bdaac11492e0571b2b87096b9e3b79d5efab8c98))
+* full pillar voice scrub + NASA example in matched federal-agency style ([#245](https://github.com/fgarofalo56/csa-inabox/issues/245)) ([d0d5e2d](https://github.com/fgarofalo56/csa-inabox/commit/d0d5e2d351d3f6540250d724ab38922a18ac0a65))
+* NASA API-first end-to-end implementation guide ([#241](https://github.com/fgarofalo56/csa-inabox/issues/241)) ([ea2561f](https://github.com/fgarofalo56/csa-inabox/commit/ea2561f26c379be5ba8f8634c76d36fd57bf6acc))
+* rewrite API-First pillar in neutral CDO voice, remove customer-named framing ([#244](https://github.com/fgarofalo56/csa-inabox/issues/244)) ([7c7db20](https://github.com/fgarofalo56/csa-inabox/commit/7c7db20a468a331b2af840dcbb396b914aacc2f6))
+
+
+### Miscellaneous
+
+* add bus-factor succession plan + CODEOWNERS scaffolding ([#247](https://github.com/fgarofalo56/csa-inabox/issues/247)) ([43a743d](https://github.com/fgarofalo56/csa-inabox/commit/43a743d8f291b714d48dd58554e604e1acad191a))
+* **bicep:** ratchet apiVersion across 38 modules to current GAs ([#248](https://github.com/fgarofalo56/csa-inabox/issues/248)) ([d7ef4ef](https://github.com/fgarofalo56/csa-inabox/commit/d7ef4ef0ec8f97d8a4934b3c6afbec2302594359))
+* **coverage:** ratchet fail_under threshold 60 -&gt; 65 ([#249](https://github.com/fgarofalo56/csa-inabox/issues/249)) ([15b84bd](https://github.com/fgarofalo56/csa-inabox/commit/15b84bd9ed7966810bd24dfbfdd9de5a6de3cdf5))
+* **devcontainer:** add Codespaces + VS Code Dev Container config ([#250](https://github.com/fgarofalo56/csa-inabox/issues/250)) ([4183e00](https://github.com/fgarofalo56/csa-inabox/commit/4183e00cb6da7d375fb315003b50753c6432d90c))
+* **hygiene+community:** CI guard against root strays + CoC + MAINTAINERS ([#253](https://github.com/fgarofalo56/csa-inabox/issues/253)) ([fc69dda](https://github.com/fgarofalo56/csa-inabox/commit/fc69dda6acdc4ecf524c34e16440509d69807742))
+* **hygiene:** delete stray root PNG + ratchet .gitignore for root-level images ([#251](https://github.com/fgarofalo56/csa-inabox/issues/251)) ([23d4c23](https://github.com/fgarofalo56/csa-inabox/commit/23d4c23e18169fcfea99a5d2b912a3d651386e9b))
+* migrate off Archon v1 (rules + task ledger) ([#228](https://github.com/fgarofalo56/csa-inabox/issues/228)) ([51bc5e5](https://github.com/fgarofalo56/csa-inabox/commit/51bc5e560a1681dd4521e25a842a345c80bf7289))
+
 ## [0.6.7](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.6...csa-inabox-v0.6.7) (2026-05-11)
 
 

@@ -1,0 +1,57 @@
+<!--
+Global policy applied to ALL APIs in this APIM instance.
+Keep this small. Per-API policy chains belong on the API itself.
+-->
+<policies>
+  <inbound>
+    <!-- CORS for browser-based callers; tighten origins for production -->
+    <cors allow-credentials="false">
+      <allowed-origins>
+        <origin>*</origin>
+      </allowed-origins>
+      <allowed-methods>
+        <method>GET</method>
+        <method>POST</method>
+        <method>PUT</method>
+        <method>PATCH</method>
+        <method>DELETE</method>
+        <method>OPTIONS</method>
+      </allowed-methods>
+      <allowed-headers>
+        <header>*</header>
+      </allowed-headers>
+      <expose-headers>
+        <header>x-ratelimit-remaining-tokens</header>
+        <header>x-ratelimit-remaining-calls</header>
+      </expose-headers>
+    </cors>
+
+    <!-- Default rate limit per subscription — generous floor; tighten on signal -->
+    <rate-limit-by-key
+      calls="600"
+      renewal-period="60"
+      counter-key="@(context.Subscription?.Id ?? context.Request.IpAddress)" />
+
+    <!-- Surface the correlation ID for distributed tracing -->
+    <set-header name="X-Correlation-Id" exists-action="skip">
+      <value>@(Guid.NewGuid().ToString())</value>
+    </set-header>
+  </inbound>
+
+  <backend>
+    <forward-request />
+  </backend>
+
+  <outbound>
+    <!-- Echo correlation ID back to caller -->
+    <set-header name="X-Correlation-Id" exists-action="override">
+      <value>@((string)context.Variables.GetValueOrDefault("X-Correlation-Id", context.Request.Headers.GetValueOrDefault("X-Correlation-Id", "")))</value>
+    </set-header>
+  </outbound>
+
+  <on-error>
+    <set-header name="X-Correlation-Id" exists-action="override">
+      <value>@((string)context.Variables.GetValueOrDefault("X-Correlation-Id", context.Request.Headers.GetValueOrDefault("X-Correlation-Id", "")))</value>
+    </set-header>
+  </on-error>
+</policies>

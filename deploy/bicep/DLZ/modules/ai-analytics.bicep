@@ -362,7 +362,7 @@ resource agentMemoryContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabase
 }
 
 // PostgreSQL Flexible Server with pgvector
-resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-preview' = {
+resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: '${baseName}-postgres'
   location: location
   tags: tags
@@ -407,7 +407,7 @@ resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2023-12-01-pr
 }
 
 // PostgreSQL Database
-resource postgresDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2023-12-01-preview' = {
+resource postgresDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
   parent: postgresServer
   name: 'vectorstore'
   properties: {
@@ -417,7 +417,7 @@ resource postgresDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2
 }
 
 // PostgreSQL Configuration for pgvector extension
-resource postgresConfig 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2023-12-01-preview' = {
+resource postgresConfig 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
   parent: postgresServer
   name: 'shared_preload_libraries'
   properties: {
@@ -449,7 +449,7 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2024-03-01'
 }
 
 // Container Registry
-resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' = {
+resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: replace('${baseName}-acr', '-', '')
   location: location
   tags: tags
@@ -492,7 +492,7 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-11-01-pr
 }
 
 // Key Vault
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   name: '${baseName}-kv'
   location: location
   tags: tags

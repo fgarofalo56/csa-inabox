@@ -233,6 +233,22 @@ See [QUICKSTART.md](docs/QUICKSTART.md) for the complete setup guide, including
 infrastructure deployment, sample data loading, dbt pipeline execution, and
 expected row counts for every model.
 
+### Fastest path — GitHub Codespaces or VS Code Dev Containers
+
+The repo ships a [`.devcontainer/`](.devcontainer/devcontainer.json) config that
+gives you a fully-provisioned development environment in roughly 3 minutes:
+Python 3.12 + ruff + mypy + pre-commit, Azure CLI + Bicep, Node 20 (for the
+portal frontend), GitHub CLI, Docker-in-Docker, PowerShell, and 16 curated
+VS Code extensions.
+
+| How to launch | Command |
+|---|---|
+| **GitHub Codespaces** (browser, no local install) | Click the green **Code** → **Codespaces** → **Create codespace on main** |
+| **VS Code Dev Containers** (local, requires Docker) | `Dev Containers: Reopen in Container` from the command palette |
+| **VS Code CLI** | `code --remote dev-container+$(pwd) .` after cloning |
+
+The `postCreateCommand` runs [`.devcontainer/post-create.sh`](.devcontainer/post-create.sh) automatically — it installs the repo with `dev`, `governance`, and `tutorials` extras, sets up pre-commit hooks, configures `git`, and (when needed) installs Playwright browsers for the portal E2E tests. Forwards ports 8000 (docs), 3000 (portal), 7071 (Functions host), and 8080/8081 (APIM self-hosted gateway).
+
 > [!NOTE]
 > **Cloning the repository**: throughout the documentation the placeholder `<CLONE_URL>`
 > is used in `git clone` commands. Replace `<CLONE_URL>` with your appropriate

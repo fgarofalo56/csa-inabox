@@ -121,7 +121,7 @@ param parTenantEndpointState string
 
 // #checkov:skip=CKV_AZURE_35:Purview-managed storage uses Microsoft-managed keys; CMK not configurable directly
 // #checkov:skip=CKV_AZURE_43:Purview-managed storage redundancy is controlled by Purview service
-resource purviewAcct 'Microsoft.Purview/accounts@2024-04-01-preview' = {
+resource purviewAcct 'Microsoft.Purview/accounts@2021-12-01' = {
   name: purviewAcctName
   tags: tags
   location: location
@@ -176,7 +176,7 @@ resource purviewDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-pr
 }
 
 // Assign the Purview account the correct roles for the Event Hub (Event Hubs Data Owner )
-resource purviewRoleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = if (configKafka) {
+resource purviewRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (configKafka) {
   name: guid(uniqueString(resourceGroup().id, 'DataOwner'))
   scope: resourceGroup()
   properties: {
@@ -186,7 +186,7 @@ resource purviewRoleAssignment 'Microsoft.Authorization/roleAssignments@2020-04-
   }
 }
 
-resource purviewRoleAssignment02 'Microsoft.Authorization/roleAssignments@2020-04-01-preview' = if (configKafka) {
+resource purviewRoleAssignment02 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (configKafka) {
   name: guid(uniqueString(resourceGroup().id, 'EventHubSender'))
   scope: resourceGroup()
   properties: {
@@ -196,7 +196,7 @@ resource purviewRoleAssignment02 'Microsoft.Authorization/roleAssignments@2020-0
   }
 }
 
-resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-05-01-preview' = if (configKafka) {
+resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-01-01' = if (configKafka) {
   name: '${purviewAcctName}-kafka'
   location: location
   sku: {
@@ -213,7 +213,7 @@ resource eventHubNamespace 'Microsoft.EventHub/namespaces@2024-05-01-preview' = 
   }
 }
 
-resource eventHub 'Microsoft.EventHub/namespaces/eventhubs@2024-05-01-preview' = if (configKafka) {
+resource eventHub 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' = if (configKafka) {
   parent: eventHubNamespace
   name: 'purview-kafka'
   properties: {
@@ -223,7 +223,7 @@ resource eventHub 'Microsoft.EventHub/namespaces/eventhubs@2024-05-01-preview' =
 }
 
 // Deploy Kafka Configuration for Purview
-resource kafkaConfig 'Microsoft.Purview/accounts/kafkaConfigurations@2024-04-01-preview' = if (configKafka) {
+resource kafkaConfig 'Microsoft.Purview/accounts/kafkaConfigurations@2021-12-01' = if (configKafka) {
   parent: purviewAcct
   name: '${purviewAcctName}-kafka'
   properties: {

@@ -72,6 +72,14 @@ description: 18 industry-vertical implementations of CSA-in-a-Box — federal ag
 
     [:octicons-arrow-right-24: USPS](usps.md)
 
+- :material-rocket-launch:{ .lg .middle } **NASA — API-First Multi-Model**
+
+    ***
+
+    Federated mission-center pattern with APIM Premium v2 + multi-model AI + zero-move data on Azure Government. Synthetic facilities data plus public open-science references.
+
+    [:octicons-arrow-right-24: NASA API-First](nasa-api-first.md)
+
 </div>
 
 ---
