@@ -22,13 +22,17 @@ DocType = Literal[
     "runbook",
     "example",
     "overview",
+    "external",
     "unknown",
 ]
 """Coarse document taxonomy applied to every indexed chunk.
 
 ``overview`` covers top-level guides (``docs/*.md``, ``README.md``,
-``ARCHITECTURE.md``).  ``unknown`` is a fallback for paths the
-classifier cannot confidently bucket.
+``ARCHITECTURE.md``).  ``external`` marks chunks pulled live from
+third-party sources (e.g. Microsoft Learn via the MS Learn MCP tool —
+see :class:`apps.copilot.tools.ms_learn.SearchMicrosoftLearnTool`).
+``unknown`` is a fallback for paths the classifier cannot confidently
+bucket.
 """
 
 

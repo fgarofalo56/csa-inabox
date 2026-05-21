@@ -226,6 +226,51 @@ class CopilotSettings(BaseSettings):
         ),
     )
 
+    # ---- Microsoft Learn MCP (CSA-0162) -----------------------------------
+    # External grounding source. When enabled, the agent can supplement
+    # local AI Search retrieval with results from the Microsoft Learn MCP
+    # server for questions that exceed the csa-inabox corpus (Azure
+    # service docs, language-specific Microsoft API references, etc.).
+    ms_learn_enabled: bool = Field(
+        default=False,
+        description=(
+            "When True, the agent registers the search_microsoft_learn "
+            "read-class tool. When False, the tool is omitted from the "
+            "default registry — local AI Search remains the only "
+            "retrieval source. Disabled by default so existing deployments "
+            "opt in explicitly."
+        ),
+    )
+    ms_learn_mcp_url: str = Field(
+        default="https://learn.microsoft.com/api/mcp",
+        description=(
+            "Endpoint of the Microsoft Learn MCP server. The shipped "
+            "default points at Microsoft's hosted, public MCP service "
+            "which exposes microsoft_docs_search, microsoft_docs_fetch, "
+            "and microsoft_code_sample_search."
+        ),
+    )
+    ms_learn_request_timeout_seconds: float = Field(
+        default=20.0,
+        ge=1.0,
+        le=120.0,
+        description=(
+            "Per-request timeout in seconds for the MS Learn MCP client. "
+            "MCP transports occasionally stall on long search payloads — "
+            "the timeout prevents the agent loop from hanging."
+        ),
+    )
+    ms_learn_max_results: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description=(
+            "Maximum number of chunks the search_microsoft_learn tool "
+            "returns per invocation. Caps remote-context volume so the "
+            "agent prompt stays within Azure OpenAI's context window."
+        ),
+    )
+
     # ---- Multi-turn conversation (post-Phase-1) ----------------------------
     conversation_max_turns: int = Field(
         default=8,

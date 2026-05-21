@@ -252,6 +252,7 @@ nav:
           - "0023: Release-please PRs auto-pass required status checks": adr/0023-release-please-status-bypass.md
           - "0024: Two-tier test layout — per-package units + central integration": adr/0024-two-tier-test-layout.md
           - "0025: APIM as the Integration Fabric": adr/0025-apim-as-integration-fabric.md
+          - "0026: MS Learn MCP as External Grounding": adr/0026-ms-learn-mcp-as-external-grounding.md
       - Governance:
           - Data Access: governance/DATA_ACCESS.md
           - Data Cataloging: governance/DATA_CATALOGING.md
