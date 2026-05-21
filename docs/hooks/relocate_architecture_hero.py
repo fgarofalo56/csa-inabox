@@ -1,70 +1,101 @@
-"""mkdocs hook: relocate `.architecture-hero` images to the top of each
-page so the hero renders ABOVE the H1 title instead of below it.
+"""mkdocs hook: promote `.architecture-hero` images to a full-grid page hero.
 
-Why:
-- Heroes were authored inline below the H1 across ~70 pages. Below-title
-  placement reads like an in-article illustration, not a page hero.
-- Users want heroes to read like a banner: above the H1, content-column
-  wide, with the title sitting underneath.
+Pages across the site embed a hero image inline:
 
-Rather than mass-editing 70 files, this hook moves the FIRST line that
-contains `.architecture-hero` to immediately above the FIRST H1 (or to
-the very top of the page if no H1 exists). The CSS treatment in
-`docs/stylesheets/docs.css` styles `.architecture-hero` as a wide,
-top-of-page banner.
+    ![alt](path/to/hero.svg){ .architecture-hero loading="eager" }
 
-Behavior:
-- If the hero already appears before the H1 in the source, do nothing.
-- Skip pages without a `.architecture-hero` image.
-- Skip frontmatter blocks (handled before `on_page_markdown` is called).
+…optionally wrapped in a link::
 
-This complements `rewrite_example_links.py` — both hooks run on the
-merged markdown after include-markdown has expanded shims.
+    [![alt](path/to/hero.svg){ .architecture-hero }](TARGET.md "title")
+
+Users want that hero to render as a banner that spans the FULL grid
+width (left sidebar edge to right TOC edge) sitting between the top
+navigation tabs and the main grid. The article's own content column is
+too narrow for a banner role.
+
+Implementation
+--------------
+
+This hook runs on the merged markdown (after include-markdown shims
+expand). For the first `.architecture-hero` image found it:
+
+1. Parses ``src``, ``alt``, and the optional surrounding link.
+2. Stashes a dict on ``page.meta["page_hero"]``::
+
+       {"src": "path/to/hero.svg", "alt": "...", "link": "TARGET.md" | None}
+
+3. Removes the inline image line from the markdown so the article body
+   does not double-render the hero.
+
+The companion Material theme override at ``overrides/main.html`` reads
+``page.meta.page_hero`` and renders the banner in the Material ``hero``
+template block — which lives inside ``.md-container`` but outside
+``.md-main__inner``, giving the banner full grid width.
+
+Pages without a hero are returned unchanged.
 """
 
 from __future__ import annotations
 
 import re
 
-_H1_RE = re.compile(r"^(#\s+\S.*)$", re.MULTILINE)
+# A markdown line containing an architecture-hero image. We accept the
+# image either bare or wrapped in a link, with anchor text matching:
+#
+#   ![alt](src){ ... .architecture-hero ... }
+#   [![alt](src){ ... .architecture-hero ... }](LINK "title")
+#
+# The regex captures the full line so callers can excise it cleanly.
 _HERO_LINE_RE = re.compile(
     r"^.*!\[[^\]]*\]\([^)]+\)\{[^}]*\barchitecture-hero\b[^}]*\}.*$",
     re.MULTILINE,
 )
 
+# Inner extraction of src + alt from the image. Run on the captured
+# line so we don't have to worry about line boundaries.
+_HERO_IMG_RE = re.compile(
+    r"!\[(?P<alt>[^\]]*)\]\((?P<src>[^)]+)\)\{[^}]*\barchitecture-hero\b[^}]*\}",
+)
+
+# Detect the link wrapper that puts the hero inside `[ ... ](TARGET)`.
+# We tolerate an optional `"title"` after the target. The link target
+# itself stops at whitespace or `)` so titles do not bleed in.
+_HERO_LINK_RE = re.compile(
+    r"\[!\[[^\]]*\]\([^)]+\)\{[^}]*\barchitecture-hero\b[^}]*\}\]"
+    r"\((?P<link>[^\s)]+)(?:\s+\"[^\"]*\")?\)",
+)
+
 
 def on_page_markdown(markdown: str, page, config, files):  # noqa: ANN001 (mkdocs API)
-    hero_match = _HERO_LINE_RE.search(markdown)
-    if not hero_match:
+    hero_line_match = _HERO_LINE_RE.search(markdown)
+    if not hero_line_match:
         return markdown
 
-    h1_match = _H1_RE.search(markdown)
-    if not h1_match:
-        # No H1 anywhere — hero stays where it is (already at top in
-        # include-markdown shim pages, or the page genuinely has no
-        # title and we shouldn't speculate).
+    line = hero_line_match.group(0)
+
+    img_match = _HERO_IMG_RE.search(line)
+    if not img_match:
         return markdown
 
-    # Hero already above H1 — nothing to do.
-    if hero_match.start() < h1_match.start():
-        return markdown
+    alt = img_match.group("alt")
+    src = img_match.group("src")
 
-    hero_line = hero_match.group(0)
-    # Remove the hero from its original location, leaving a blank line
-    # so paragraph reflow stays clean.
-    rest = markdown[: hero_match.start()] + markdown[hero_match.end() :]
+    link_match = _HERO_LINK_RE.search(line)
+    link = link_match.group("link") if link_match else None
 
-    # Re-find the H1 in the modified text (offset may have shifted).
-    h1_in_rest = _H1_RE.search(rest)
-    if not h1_in_rest:
-        # Defensive: H1 was somehow consumed; fall back to leaving hero
-        # at the top of the page.
-        return f"{hero_line}\n\n{markdown}"
+    # Stash on page.meta so the Material override template can find it.
+    # `page.meta` is a regular dict on mkdocs Page objects; create the
+    # key if absent rather than replacing the whole dict.
+    if page.meta is None:  # pragma: no cover - defensive
+        page.meta = {}
+    page.meta["page_hero"] = {"src": src, "alt": alt, "link": link}
 
-    insert_at = h1_in_rest.start()
-    return (
-        rest[:insert_at]
-        + hero_line
-        + "\n\n"
-        + rest[insert_at:]
-    )
+    # Excise the inline hero from the article body so it does not
+    # render below the H1 — the override template now renders it.
+    start, end = hero_line_match.span()
+    rest = markdown[:start] + markdown[end:]
+
+    # Collapse the blank-line gap left behind so the article body is
+    # tight. Two consecutive newlines remain (paragraph break).
+    rest = re.sub(r"\n{3,}", "\n\n", rest, count=1)
+    return rest

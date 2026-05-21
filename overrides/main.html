@@ -1,0 +1,47 @@
+{#-
+  Material theme override — full-grid page hero.
+
+  Pages that have a `.architecture-hero` image (whether authored
+  directly or pulled in via include-markdown) get that image promoted
+  to a page-hero banner that spans the FULL grid width (left sidebar
+  edge to right TOC edge), sitting between the top navigation tabs and
+  the main grid.
+
+  How the data gets here:
+  1. `docs/hooks/relocate_architecture_hero.py` finds the hero image in
+     the merged markdown, parses src + alt + optional link wrapper, and
+     stashes it in `page.meta["page_hero"]` as
+     `{src: str, alt: str, link: str | None}`.
+  2. The hook strips the inline image from the markdown so the article
+     body no longer renders it (avoids double-render).
+  3. This template reads `page.meta.page_hero` and renders the banner
+     in the `hero` block — which lives inside `.md-container` but
+     outside `.md-main__inner`, so the `.md-grid` width applies and
+     the banner aligns with the sidebars below it.
+-#}
+{% extends "base.html" %}
+
+{% block hero %}
+  {% if page and page.meta and page.meta.page_hero %}
+    {% set h = page.meta.page_hero %}
+    {#-
+      Hero src is taken verbatim from the markdown the hook extracted it
+      from. The markdown image was authored with a path relative to its
+      source `.md` file's directory, and mkdocs serves the rendered HTML
+      at the same URL location as the source — so the relative path
+      resolves correctly without any base_url prepending. Absolute URLs
+      (http(s)://, /, etc.) also pass through unchanged.
+    -#}
+    <section class="page-hero-region" aria-label="Page hero">
+      <div class="page-hero-grid md-grid">
+        {%- if h.link -%}
+          <a href="{{ h.link }}" class="page-hero-link" aria-label="{{ h.alt | default('Page hero') }}">
+            <img src="{{ h.src }}" alt="{{ h.alt | default('') }}" class="page-hero-image" loading="eager" />
+          </a>
+        {%- else -%}
+          <img src="{{ h.src }}" alt="{{ h.alt | default('') }}" class="page-hero-image" loading="eager" />
+        {%- endif -%}
+      </div>
+    </section>
+  {% endif %}
+{% endblock %}

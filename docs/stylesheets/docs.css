@@ -1,34 +1,105 @@
-/* Page hero (formerly architecture-hero) — renders ABOVE the H1 as a
-   wide banner that fills the content column. The
-   `relocate_architecture_hero.py` mkdocs hook moves the hero markdown
-   line to the top of each page so this CSS just styles the result.
+/* ──────────────────────────────────────────────────────────────────────
+   Page hero banner — renders ABOVE the main grid, spanning the FULL
+   grid width (left sidebar edge to right TOC edge), sitting between
+   the top navigation tabs and the page content.
 
-   The hero is the SVG itself (1600×420 viewBox), not a framed
-   thumbnail. We let it render at its natural aspect ratio so on a
-   1024px content column it lands ~270px tall, and on a 760px column
-   ~200px tall — large enough to read milestone labels but never
-   towering over the title underneath. */
+   Markup is produced by `overrides/main.html` reading
+   `page.meta.page_hero` (populated by
+   `docs/hooks/relocate_architecture_hero.py`):
+
+     <section class="page-hero-region">
+       <div class="page-hero-grid md-grid">
+         <a class="page-hero-link" href="...">
+           <img class="page-hero-image" src="..." alt="...">
+         </a>
+       </div>
+     </section>
+
+   `.md-grid` is Material's existing utility that constrains content
+   to the grid's max-width and centres it — so the banner naturally
+   aligns with the sidebar + content + TOC stack below.
+   ──────────────────────────────────────────────────────────────────── */
+
+.page-hero-region {
+  display: block;
+  padding: 1rem 0 0.25rem 0;
+  background: transparent;
+}
+
+.page-hero-grid {
+  /* Inherit md-grid width/centering; add the same horizontal padding
+     Material uses inside .md-main__inner so the hero's left edge lines
+     up with the left sidebar's left edge and the right edge with the
+     right TOC's right edge. */
+  padding-left: 1.2rem;
+  padding-right: 1.2rem;
+}
+
+.page-hero-link {
+  display: block;
+  text-decoration: none;
+  transition: opacity 0.15s ease;
+}
+.page-hero-link:hover {
+  opacity: 0.94;
+}
+
+.page-hero-image {
+  display: block;
+  width: 100%;
+  max-width: none;
+  /* Cap the hero to a banner aspect so screenshots used as heroes
+     (e.g. Azure portal captures) don't dominate the viewport. Native
+     wide-aspect SVGs (our 1600×420 generator output renders ~352px
+     tall at 1342px content width) sit comfortably within this cap.
+     object-fit: cover crops over-tall images; object-position: top
+     keeps the recognizable upper portion of UI screenshots visible. */
+  height: auto;
+  max-height: 380px;
+  object-fit: cover;
+  object-position: top center;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.04) 0%, rgba(15, 23, 42, 0.02) 100%);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+[data-md-color-scheme="slate"] .page-hero-image {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 100%);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+/* On narrow viewports where Material collapses the sidebars, tighten
+   the banner padding so it doesn't look chunky on phones. */
+@media screen and (max-width: 76.1875em) {
+  .page-hero-region {
+    padding: 0.5rem 0 0.25rem 0;
+  }
+  .page-hero-grid {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+  .page-hero-image {
+    border-radius: 10px;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   Safety net: any page that still authors `.architecture-hero` inline
+   without being processed by the hook (e.g. a draft) renders the image
+   at content-column width as a graceful fallback. The hook's normal
+   flow now strips the inline image from the markdown — this CSS only
+   takes effect when something goes wrong.
+   ──────────────────────────────────────────────────────────────────── */
 .md-typeset .architecture-hero {
   display: block;
   width: 100%;
   height: auto;
   max-width: none;
-  margin: -0.25rem 0 1.5rem 0;
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(15, 23, 42, 0.04) 0%, rgba(15, 23, 42, 0.02) 100%);
-  padding: 0;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  margin: 0.5rem 0 1.5rem 0;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.1);
   object-fit: contain;
 }
-
-[data-md-color-scheme="slate"] .md-typeset .architecture-hero {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 100%);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
-}
-
-/* The hero is wrapped by markdown's `<p>` (and sometimes `<a>`). Strip
-   the paragraph's own margin so the banner sits flush at the top of
-   the content area. */
 .md-typeset p:has(> .architecture-hero),
 .md-typeset p:has(> a > .architecture-hero) {
   margin: 0 0 1.25rem 0;
@@ -37,16 +108,23 @@
   display: block;
   text-decoration: none;
   margin: 0;
-  transition: opacity 0.15s ease;
 }
 
-.md-typeset a:has(> .architecture-hero):hover {
-  opacity: 0.92;
+/* ──────────────────────────────────────────────────────────────────────
+   CTA button row — keep buttons from stacking on top of each other on
+   narrow content columns. Material renders buttons as inline-block so
+   without explicit row/gap they pack together and can clip when the
+   row would wrap. Flex-wrap + gap fixes both.
+   ──────────────────────────────────────────────────────────────────── */
+.md-typeset p:has(> .md-button) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.6rem;
+  align-items: center;
+  margin: 1rem 0;
 }
-
-/* Tighten the hero CTA button row */
 .md-typeset .md-button + .md-button {
-  margin-left: 0.5rem;
+  margin-left: 0; /* override default — gap handles spacing now */
 }
 
 /* Card grids: slightly tighter gap so dense pages (compliance, examples) feel less sparse */
