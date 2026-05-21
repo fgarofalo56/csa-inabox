@@ -851,3 +851,30 @@
   border-color: rgba(46, 160, 67, 0.35);
   color: #6ad188;
 }
+
+/* ══════════════════════════════════════════════════════════
+   Citation source badges (e.g. Microsoft Learn)
+   Rendered next to citation titles when the source is
+   external to the csa-inabox repo (CSA-0162 Phase 2).
+   ══════════════════════════════════════════════════════════ */
+.copilot-cite-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+.copilot-cite-badge--mslearn {
+  background: rgba(0, 120, 212, 0.12);
+  color: #0078D4;
+  border: 1px solid rgba(0, 120, 212, 0.35);
+}
+[data-md-color-scheme="slate"] .copilot-cite-badge--mslearn {
+  background: rgba(34, 211, 238, 0.16);
+  color: #67E8F9;
+  border-color: rgba(34, 211, 238, 0.4);
+}

@@ -736,10 +736,19 @@
         var url = (s && s.url) || "";
         var title = (s && s.title) || url || ("Source " + n);
         var safeUrl = /^https?:\/\//i.test(url) ? url : "";
+        // External flag: the backend marks Microsoft Learn citations
+        // with `external: "true"`. Detect that OR a learn.microsoft.com
+        // URL (defense in depth) and render a small badge.
+        var isExternal =
+          (s && (s.external === true || s.external === "true")) ||
+          /^https:\/\/learn\.microsoft\.com\//i.test(safeUrl);
+        var badge = isExternal
+          ? ' <span class="copilot-cite-badge copilot-cite-badge--mslearn" title="Sourced from Microsoft Learn">Microsoft Learn</span>'
+          : "";
         if (safeUrl) {
-          html += '<li id="copilot-src-' + n + '"><a href="' + esc(safeUrl) + '" target="_blank" rel="noopener noreferrer">' + esc(title) + "</a></li>";
+          html += '<li id="copilot-src-' + n + '"><a href="' + esc(safeUrl) + '" target="_blank" rel="noopener noreferrer">' + esc(title) + "</a>" + badge + "</li>";
         } else {
-          html += '<li id="copilot-src-' + n + '">' + esc(title) + "</li>";
+          html += '<li id="copilot-src-' + n + '">' + esc(title) + badge + "</li>";
         }
       });
       html += "</ol>";
