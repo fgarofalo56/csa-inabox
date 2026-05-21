@@ -93,10 +93,10 @@ CSA-in-a-Box is not just a collection of Bicep modules — it is a working imple
 
 ```mermaid
 flowchart LR
-    classDef mesh   fill:#E3F2FD,stroke:#0078D4,color:#003E6F,stroke-width:2px
-    classDef fabric fill:#F3E5F5,stroke:#5C2D91,color:#3A1B5F,stroke-width:2px
-    classDef lake   fill:#E0F7FA,stroke:#00BCF2,color:#00576B,stroke-width:2px
-    classDef hub    fill:#FFFFFF,stroke:#323130,color:#1F1F1F,stroke-width:3px
+    classDef mesh   fill:#0078D4,stroke:#003E6F,color:#FFFFFF,stroke-width:2px,font-weight:bold
+    classDef fabric fill:#5C2D91,stroke:#3A1B5F,color:#FFFFFF,stroke-width:2px,font-weight:bold
+    classDef lake   fill:#0099BC,stroke:#005A6E,color:#FFFFFF,stroke-width:2px,font-weight:bold
+    classDef hub    fill:#FFB900,stroke:#7A3F00,color:#1F1F1F,stroke-width:3px,font-weight:bold
 
     M1[Domain-owned<br/>data products]:::mesh
     M2[Self-serve<br/>infrastructure]:::mesh

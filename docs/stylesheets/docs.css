@@ -1,28 +1,45 @@
-/* Hero diagrams / Azure screenshots — fill the content column, no
-   breakout (Material's side nav + right TOC make breakout unsafe at
-   wide viewports). Capped to keep mile-wide displays sane. */
+/* Page hero (formerly architecture-hero) — renders ABOVE the H1 as a
+   wide banner that fills the content column. The
+   `relocate_architecture_hero.py` mkdocs hook moves the hero markdown
+   line to the top of each page so this CSS just styles the result.
+
+   The hero is the SVG itself (1600×420 viewBox), not a framed
+   thumbnail. We let it render at its natural aspect ratio so on a
+   1024px content column it lands ~270px tall, and on a 760px column
+   ~200px tall — large enough to read milestone labels but never
+   towering over the title underneath. */
 .md-typeset .architecture-hero {
   display: block;
   width: 100%;
-  max-width: 1100px;
-  margin: 1.5rem auto 2rem;
-  border-radius: 10px;
-  background: #f8fafc;
-  padding: 0.75rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  height: auto;
+  max-width: none;
+  margin: -0.25rem 0 1.5rem 0;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.04) 0%, rgba(15, 23, 42, 0.02) 100%);
+  padding: 0;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  object-fit: contain;
 }
 
 [data-md-color-scheme="slate"] .md-typeset .architecture-hero {
-  background: rgba(255, 255, 255, 0.04);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 100%);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
 }
 
-/* Hover affordance on the linked hero */
+/* The hero is wrapped by markdown's `<p>` (and sometimes `<a>`). Strip
+   the paragraph's own margin so the banner sits flush at the top of
+   the content area. */
+.md-typeset p:has(> .architecture-hero),
+.md-typeset p:has(> a > .architecture-hero) {
+  margin: 0 0 1.25rem 0;
+}
 .md-typeset a:has(> .architecture-hero) {
   display: block;
   text-decoration: none;
+  margin: 0;
   transition: opacity 0.15s ease;
 }
+
 .md-typeset a:has(> .architecture-hero):hover {
   opacity: 0.92;
 }
@@ -35,4 +52,31 @@
 /* Card grids: slightly tighter gap so dense pages (compliance, examples) feel less sparse */
 .md-typeset .grid.cards {
   gap: 0.75rem;
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+   Mermaid dark-mode readability safety net.
+
+   Many diagrams across the repo were authored with light pastel fills
+   (#f3e5f5, #fff3e0, #fce4ec etc.) and rely on the default text color.
+   In slate mode, Material flips the default fg to a light gray, which
+   leaves light-on-light text that is effectively invisible. Force a
+   dark, readable text color inside Mermaid foreignObject labels that
+   did NOT specify an explicit color in their classDef. The :not()
+   selector keeps classDefs that already chose a color (white on
+   saturated fills like fill:#0078D4,color:#FFFFFF) working as-authored.
+   ──────────────────────────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] .mermaid g.node foreignObject p:not([style*="color"]),
+[data-md-color-scheme="slate"] .mermaid g.node foreignObject span:not([style*="color"]),
+[data-md-color-scheme="slate"] .mermaid g.node foreignObject div:not([style*="color"]),
+[data-md-color-scheme="slate"] .mermaid g.node .nodeLabel:not([style*="color"]) {
+  color: #0f172a;
+  fill: #0f172a;
+}
+
+/* Cluster (subgraph) titles can stay light in slate — they sit on the
+   page background, not on a colored box. */
+[data-md-color-scheme="slate"] .mermaid g.cluster .cluster-label foreignObject p,
+[data-md-color-scheme="slate"] .mermaid g.cluster .cluster-label foreignObject span {
+  color: var(--md-default-fg-color);
 }
