@@ -539,7 +539,7 @@ echo "Test: SAS connection should fail with 401..."
 az iot hub generate-sas-token --hub-name "$IOT_HUB" 2>&1 || echo "Expected: SAS token generation failed (local auth disabled)"
 ```
 
-**Rollback point (NOT recommended for compliance):** Re-enable SAS with `az iot hub update --set properties.disableLocalAuth=false`. See the [original migration guide](../iot-hub-entra.md#rollback-not-recommended--exits-fedramp-path) for full rollback procedure.
+**Rollback point (NOT recommended for compliance):** Re-enable SAS with `az iot hub update --set properties.disableLocalAuth=false`. See the [original migration guide](../iot-hub-entra.md#rollback-not-recommended-exits-fedramp-path) for full rollback procedure.
 
 ---
 

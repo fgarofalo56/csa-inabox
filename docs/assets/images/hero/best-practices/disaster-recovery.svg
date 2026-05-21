@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="t d" preserveAspectRatio="xMidYMid slice">
+  <title id="t">Disaster Recovery</title>
+  <desc id="d">Multi-region failover, RPO/RTO targets, chaos drills, and game days.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="0.7">
+      <stop offset="0%" stop-color="#022C22"/>
+      <stop offset="60%" stop-color="#065F46"/>
+      <stop offset="100%" stop-color="#022C22"/>
+    </linearGradient>
+    <linearGradient id="accent-bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="100%" stop-color="#A7F3D0"/>
+    </linearGradient>
+    <filter id="depth" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6"/>
+      <feOffset dy="4"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.45"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .h-title { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:600; font-size:64px; fill:#FFFFFF; letter-spacing:-1.2px; }
+      .h-sub   { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:400; font-size:22px; fill:#FFFFFF; fill-opacity:0.82; letter-spacing:-0.2px; }
+      .h-chip  { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:13px; letter-spacing:2.5px; fill:#FFFFFF; }
+      .g-label { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:13px; fill:#FFFFFF; letter-spacing:0.5px; }
+      .g-num   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:14px; fill:#FFFFFF; letter-spacing:0.5px; }
+      .g-cap   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:10px; fill:#FFFFFF; fill-opacity:0.6; letter-spacing:1.5px; }
+    </style>
+  </defs>
+
+  <!-- Base gradient -->
+  <rect width="1600" height="420" fill="url(#bg)"/>
+
+  <!-- Single bold vertical accent stripe on the left edge -->
+  <rect x="0" y="0" width="6" height="420" fill="#A7F3D0"/>
+  <rect x="0" y="0" width="6" height="120" fill="#10B981"/>
+
+  <!-- Subtle horizontal scan-line at bottom for structure -->
+  <rect x="0" y="408" width="1600" height="2" fill="#A7F3D0" fill-opacity="0.25"/>
+
+  <!-- Chip (top-left) -->
+  <g transform="translate(80, 60)">
+    <rect x="0" y="0" width="171" height="32" rx="0" fill="#6EE7B7" fill-opacity="0.08" stroke="#6EE7B7" stroke-opacity="0.5" stroke-width="1"/>
+    <rect x="0" y="0" width="6" height="32" fill="#6EE7B7"/>
+    <text class="h-chip" x="96.5" y="21.5" text-anchor="middle" fill="#6EE7B7">BEST PRACTICE</text>
+  </g>
+
+  <!-- Title -->
+  <text class="h-title" x="80" y="200">Disaster Recovery</text>
+
+  <!-- Subtitle -->
+  <text class="h-sub" x="80" y="248">Multi-region failover, RPO/RTO targets, chaos drills, and game days.</text>
+
+  <!-- Coordinate marker tag below subtitle (technical-drawing flavor) -->
+  <g transform="translate(80, 300)">
+    <rect x="0" y="0" width="56" height="20" fill="#6EE7B7" fill-opacity="0.1" stroke="#6EE7B7" stroke-opacity="0.3" stroke-width="1"/>
+    <text class="g-cap" x="28" y="14" text-anchor="middle" fill="#6EE7B7">CSA-IN-A-BOX</text>
+  </g>
+  <text class="g-cap" x="146" y="314" fill="#A7F3D0" fill-opacity="0.65">v0.6.9 · azure-native</text>
+
+  <!-- Schematic composition on the right (x≈960-1540, y≈70-360) -->
+  <rect x="980" y="160" width="220" height="160" fill="#6EE7B7" fill-opacity="0.18" stroke="#6EE7B7" stroke-opacity="0.7" stroke-width="1.5" filter="url(#depth)"/>
+  <rect x="980" y="160" width="6" height="160" fill="#A7F3D0"/>
+  <text class="g-label" x="1090" y="190" text-anchor="middle" fill="#FFFFFF">PRIMARY</text>
+  <text class="g-cap" x="1090" y="210" text-anchor="middle" fill="#FFFFFF" fill-opacity="0.7">eastus2</text>
+  <rect x="1000" y="225" width="180" height="14" fill="#6EE7B7" fill-opacity="0.15"/>
+  <text class="g-cap" x="1010" y="236" fill="#FFFFFF" fill-opacity="0.85" font-size="9">SYNAPSE</text>
+  <rect x="1000" y="245" width="180" height="14" fill="#6EE7B7" fill-opacity="0.15"/>
+  <text class="g-cap" x="1010" y="256" fill="#FFFFFF" fill-opacity="0.85" font-size="9">DATABRICKS</text>
+  <rect x="1000" y="265" width="180" height="14" fill="#6EE7B7" fill-opacity="0.15"/>
+  <text class="g-cap" x="1010" y="276" fill="#FFFFFF" fill-opacity="0.85" font-size="9">ADLS GEN2</text>
+  <rect x="1000" y="285" width="180" height="14" fill="#6EE7B7" fill-opacity="0.15"/>
+  <text class="g-cap" x="1010" y="296" fill="#FFFFFF" fill-opacity="0.85" font-size="9">EVENT HUB</text>
+  <rect x="1320" y="160" width="220" height="160" fill="#6EE7B7" fill-opacity="0.12" stroke="#6EE7B7" stroke-opacity="0.55" stroke-width="1.5" filter="url(#depth)"/>
+  <rect x="1320" y="160" width="6" height="160" fill="#A7F3D0" fill-opacity="0.6"/>
+  <text class="g-label" x="1430" y="190" text-anchor="middle" fill="#FFFFFF">SECONDARY</text>
+  <text class="g-cap" x="1430" y="210" text-anchor="middle" fill="#FFFFFF" fill-opacity="0.7">westus3</text>
+  <rect x="1340" y="225" width="180" height="14" fill="#6EE7B7" fill-opacity="0.1"/>
+  <text class="g-cap" x="1350" y="236" fill="#FFFFFF" fill-opacity="0.6" font-size="9">SYNAPSE</text>
+  <rect x="1340" y="245" width="180" height="14" fill="#6EE7B7" fill-opacity="0.1"/>
+  <text class="g-cap" x="1350" y="256" fill="#FFFFFF" fill-opacity="0.6" font-size="9">DATABRICKS</text>
+  <rect x="1340" y="265" width="180" height="14" fill="#6EE7B7" fill-opacity="0.1"/>
+  <text class="g-cap" x="1350" y="276" fill="#FFFFFF" fill-opacity="0.6" font-size="9">ADLS GEN2</text>
+  <rect x="1340" y="285" width="180" height="14" fill="#6EE7B7" fill-opacity="0.1"/>
+  <text class="g-cap" x="1350" y="296" fill="#FFFFFF" fill-opacity="0.6" font-size="9">EVENT HUB</text>
+  <path d="M 1200 180 Q 1260 100 1320 180" stroke="#A7F3D0" stroke-width="2" fill="none" stroke-dasharray="6 4"/>
+  <polygon points="1320,180 1310,170 1310,190" fill="#A7F3D0"/>
+  <text class="g-cap" x="1260" y="100" text-anchor="middle" fill="#A7F3D0">GEO-REPLICATION</text>
+  <text class="g-cap" x="980" y="350" fill="#A7F3D0">RTO &lt; 30 MIN</text>
+  <text class="g-cap" x="1140" y="350" fill="#A7F3D0">RPO &lt; 5 MIN</text>
+  <text class="g-cap" x="1300" y="350" fill="#A7F3D0">CHAOS Q4 DRILL</text>
+
+</svg>

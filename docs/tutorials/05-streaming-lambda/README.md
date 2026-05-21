@@ -1,5 +1,8 @@
 # Tutorial 05: Real-Time Streaming with Lambda Architecture
 
+![Real-Time Streaming with Lambda architecture — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/05-streaming-lambda.svg){ .architecture-hero loading="eager" }
+
+
 > **Estimated Time:** 5-6 hours
 > **Difficulty:** Advanced
 
@@ -1214,8 +1217,8 @@ if __name__ == "__main__":
 Your Lambda Architecture streaming pipeline is operational. Choose your next path:
 
 - **[Tutorial 03: GeoAnalytics with Open-Source Tools](../03-geoanalytics-oss/README.md)** — Add spatial analysis to your earthquake data
-- **[Tutorial 06: AI Analytics](../06-ai-analytics/)** — Apply ML for earthquake prediction and anomaly detection
-- **[Tutorial 07: Security & Compliance](../07-security-compliance/)** — Secure your streaming pipeline with Private Link and encryption
+- **[Tutorial 06: AI Analytics](../06-ai-analytics-foundry/README.md)** — Apply ML for earthquake prediction and anomaly detection
+- **[Tutorial 13: Security Zero Trust](../13-security-zero-trust/README.md)** — Secure your streaming pipeline with Private Link and encryption
 
 See the [Tutorial Index](../README.md) for all available paths.
 

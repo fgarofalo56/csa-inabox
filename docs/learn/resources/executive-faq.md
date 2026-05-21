@@ -16,10 +16,10 @@ Comprehensive answers to common executive and business questions about Azure Clo
 
 ## 📋 Table of Contents
 
-- [Strategy & Business Value](#strategy--business-value)
-- [Cost & ROI](#cost--roi)
-- [Risk & Security](#risk--security)
-- [Implementation & Timeline](#implementation--timeline)
+- [Strategy & Business Value](#strategy-business-value)
+- [Cost & ROI](#cost-roi)
+- [Risk & Security](#risk-security)
+- [Implementation & Timeline](#implementation-timeline)
 - [Competitive Positioning](#competitive-positioning)
 
 ---

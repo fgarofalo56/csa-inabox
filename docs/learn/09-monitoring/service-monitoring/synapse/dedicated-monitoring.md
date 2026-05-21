@@ -1,6 +1,6 @@
 ---
 title: "Dedicated SQL Pool Monitoring"
-description: "> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **[Synapse](../synapse)** | **Dedicated SQL Pool Monitoring**"
+description: "> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **[Synapse](../synapse/README.md)** | **Dedicated SQL Pool Monitoring**"
 tags:
   - monitoring
   - service-monitoring
@@ -8,7 +8,7 @@ tags:
 ---
 # Dedicated SQL Pool Monitoring
 
-> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **[Synapse](../synapse)** | **Dedicated SQL Pool Monitoring**
+> **[Home](../../../index.md)** | **[Monitoring](../../README.md)** | **[Synapse](../synapse/README.md)** | **Dedicated SQL Pool Monitoring**
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
 ![Service](https://img.shields.io/badge/Service-Synapse%20Dedicated%20SQL-purple?style=flat-square)

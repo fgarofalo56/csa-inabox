@@ -1,5 +1,8 @@
 # AI/ML Platform Architecture — Azure AI at Enterprise Scale
 
+
+![AI/ML platform architecture hero: clustered neural-network nodes glyph in Microsoft Azure brand purple gradient, indicating Azure AI Foundry, Azure ML, OpenAI and AI Search composing the reference architecture](../assets/images/hero/reference-architecture/ai-ml-architecture.svg){ .architecture-hero loading="eager" }
+
 > **TL;DR:** CSA-in-a-Box provides a production-grade AI/ML platform combining Azure AI Foundry, Azure OpenAI, Databricks ML, and Fabric AI capabilities. This document maps the full stack — from feature engineering through model serving and monitoring — and shows how each component wires into the platform's medallion lakehouse, identity fabric, and governance layer.
 
 ## The problem

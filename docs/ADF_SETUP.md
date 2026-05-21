@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **ADF Setup**
+[Home](../README.md) > [Docs](index.md) > **ADF Setup**
 
 # Azure Data Factory Setup Guide
 
@@ -7,16 +7,16 @@
 
 ## 📑 Table of Contents
 
-- [🏗️ Architecture](#-architecture)
-- [📎 Prerequisites](#-prerequisites)
-- [📁 Pipeline Artifacts](#-pipeline-artifacts)
-- [📦 Deployment](#-deployment)
-- [⚙️ Linked Service Configuration](#️-linked-service-configuration)
-- [⚙️ Trigger Configuration](#️-trigger-configuration)
-- [⚙️ Pipeline Parameters](#️-pipeline-parameters)
-- [🔄 CI/CD Integration](#-cicd-integration)
-- [📊 Purview Lineage](#-purview-lineage)
-- [🔧 Troubleshooting](#-troubleshooting)
+- [🏗️ Architecture](#architecture)
+- [📎 Prerequisites](#prerequisites)
+- [📁 Pipeline Artifacts](#pipeline-artifacts)
+- [📦 Deployment](#deployment)
+- [⚙️ Linked Service Configuration](#linked-service-configuration)
+- [⚙️ Trigger Configuration](#trigger-configuration)
+- [⚙️ Pipeline Parameters](#pipeline-parameters)
+- [🔄 CI/CD Integration](#cicd-integration)
+- [📊 Purview Lineage](#purview-lineage)
+- [🔧 Troubleshooting](#troubleshooting)
 
 ---
 

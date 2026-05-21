@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **Rollback**
+[Home](../README.md) > [Docs](index.md) > **Rollback**
 
 # Deployment Rollback Runbook
 
@@ -17,15 +17,15 @@ output, and only flip to a real rollback once the blast radius is clear.
 
 ## 📑 Table of Contents
 
-- [🏷️ 1. Rollback Targets](#️-1-rollback-targets)
-- [📦 2. Landing Zone (Bicep) Rollback](#-2-landing-zone-bicep-rollback)
+- [🏷️ 1. Rollback Targets](#1-rollback-targets)
+- [📦 2. Landing Zone (Bicep) Rollback](#2-landing-zone-bicep-rollback)
     - [When a rollback is the wrong tool](#when-a-rollback-is-the-wrong-tool)
-- [🔧 3. ADF Pipeline Rollback](#-3-adf-pipeline-rollback)
-- [🗄️ 4. dbt Model Rollback](#️-4-dbt-model-rollback)
-- [🔄 5. Cosmos DB Point-in-Time Restore](#-5-cosmos-db-point-in-time-restore)
-- [💾 6. Storage Account Data Recovery](#-6-storage-account-data-recovery)
-- [✅ 7. Post-Rollback Checklist](#-7-post-rollback-checklist)
-- [🧪 8. Testing Cadence](#-8-testing-cadence)
+- [🔧 3. ADF Pipeline Rollback](#3-adf-pipeline-rollback)
+- [🗄️ 4. dbt Model Rollback](#4-dbt-model-rollback)
+- [🔄 5. Cosmos DB Point-in-Time Restore](#5-cosmos-db-point-in-time-restore)
+- [💾 6. Storage Account Data Recovery](#6-storage-account-data-recovery)
+- [✅ 7. Post-Rollback Checklist](#7-post-rollback-checklist)
+- [🧪 8. Testing Cadence](#8-testing-cadence)
 
 ---
 

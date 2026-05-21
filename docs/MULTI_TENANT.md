@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **Multi-Tenant**
+[Home](../README.md) > [Docs](index.md) > **Multi-Tenant**
 
 # Multi-Tenant Deployment Guide
 
@@ -18,19 +18,19 @@ deployed once regardless of tenant count.
 
 ## 📑 Table of Contents
 
-- [🏗️ 1. Architecture Overview](#️-1-architecture-overview)
-- [📛 2. Resource Naming Convention](#-2-resource-naming-convention)
-- [🔒 3. Data Isolation Strategies](#-3-data-isolation-strategies)
+- [🏗️ 1. Architecture Overview](#1-architecture-overview)
+- [📛 2. Resource Naming Convention](#2-resource-naming-convention)
+- [🔒 3. Data Isolation Strategies](#3-data-isolation-strategies)
     - [3.1 Physical Isolation](#31-physical-isolation-recommended-for-regulated-workloads)
     - [3.2 Logical Isolation](#32-logical-isolation-shared-infrastructure-row-level-filtering)
     - [3.3 Hybrid](#33-hybrid-separate-storage-shared-compute)
-- [📦 4. Deployment Process](#-4-deployment-process)
-- [💰 5. Cost Attribution via Tags](#-5-cost-attribution-via-tags)
-- [🔑 6. Identity & Access Management per Tenant](#-6-identity--access-management-per-tenant)
-- [📈 7. Monitoring & Alerting per Tenant](#-7-monitoring--alerting-per-tenant)
-- [🗄️ 8. dbt Multi-Tenant Configuration](#️-8-dbt-multi-tenant-configuration)
-- [🚪 9. Offboarding / Tenant Decommission](#-9-offboarding--tenant-decommission)
-- [📋 10. Quick Reference](#-10-quick-reference)
+- [📦 4. Deployment Process](#4-deployment-process)
+- [💰 5. Cost Attribution via Tags](#5-cost-attribution-via-tags)
+- [🔑 6. Identity & Access Management per Tenant](#6-identity-access-management-per-tenant)
+- [📈 7. Monitoring & Alerting per Tenant](#7-monitoring-alerting-per-tenant)
+- [🗄️ 8. dbt Multi-Tenant Configuration](#8-dbt-multi-tenant-configuration)
+- [🚪 9. Offboarding / Tenant Decommission](#9-offboarding-tenant-decommission)
+- [📋 10. Quick Reference](#10-quick-reference)
 
 ---
 

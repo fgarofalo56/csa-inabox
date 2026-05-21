@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Key Rotation**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Key Rotation**
 
 # Key Rotation Runbook (CSA-0059)
 
@@ -7,9 +7,9 @@
 
 ## Before First Use — Customization Checklist
 
-- [ ] Populate the [Contact Information](#-contact-information) table.
+- [ ] Populate the [Contact Information](#8-contact-information) table.
 - [ ] Confirm the Key Vault names per environment (dev / staging / prod /
-      gov-dev / gov-prod) in [§3](#-3-inventory).
+      gov-dev / gov-prod) in [§3](#3-inventory).
 - [ ] Confirm the secret-rotation Function app name and identity under
       [§4.1](#41-automated-rotation-via-secret-rotation-function).
 - [ ] Confirm your organization's compliance cadence (NIST 800-53 SC-12
@@ -17,24 +17,24 @@
 
 ## 📑 Table of Contents
 
-- [📋 1. Scope](#-1-scope)
-- [📅 2. Cadence](#-2-cadence)
-- [📦 3. Inventory](#-3-inventory)
-- [🔒 4. Rotation Procedures](#-4-rotation-procedures)
+- [📋 1. Scope](#1-scope)
+- [📅 2. Cadence](#2-cadence)
+- [📦 3. Inventory](#3-inventory)
+- [🔒 4. Rotation Procedures](#4-rotation-procedures)
     - [4.1 Automated rotation via secret-rotation Function](#41-automated-rotation-via-secret-rotation-function)
     - [4.2 Key Vault secret (manual)](#42-key-vault-secret-manual)
     - [4.3 Storage account access keys](#43-storage-account-access-keys)
-    - [4.4 MSAL / Entra ID token-signing keys](#44-msal--entra-id-token-signing-keys)
-    - [4.5 Cosmos DB primary / secondary keys](#45-cosmos-db-primary--secondary-keys)
-    - [4.6 Azure SQL master / SA keys](#46-azure-sql-master--sa-keys)
+    - [4.4 MSAL / Entra ID token-signing keys](#44-msal-entra-id-token-signing-keys)
+    - [4.5 Cosmos DB primary / secondary keys](#45-cosmos-db-primary-secondary-keys)
+    - [4.6 Azure SQL master / SA keys](#46-azure-sql-master-sa-keys)
     - [4.7 Databricks personal access tokens](#47-databricks-personal-access-tokens)
     - [4.8 ADF linked-service credentials](#48-adf-linked-service-credentials)
-- [🚨 5. Emergency Rotation (Compromise)](#-5-emergency-rotation-compromise)
-- [✅ 6. Verification](#-6-verification)
-- [📋 7. Evidence Preservation](#-7-evidence-preservation)
-- [📎 8. Contact Information](#-8-contact-information)
-- [🗓️ 9. Drill Log](#️-9-drill-log)
-- [🔗 10. Related Documentation](#-10-related-documentation)
+- [🚨 5. Emergency Rotation (Compromise)](#5-emergency-rotation-compromise)
+- [✅ 6. Verification](#6-verification)
+- [📋 7. Evidence Preservation](#7-evidence-preservation)
+- [📎 8. Contact Information](#8-contact-information)
+- [🗓️ 9. Drill Log](#9-drill-log)
+- [🔗 10. Related Documentation](#10-related-documentation)
 
 ---
 

@@ -1,3 +1,5 @@
+![Healthcare Clinical example — themed Azure-brand hero illustrating the topic](../assets/images/hero/examples/healthcare-clinical.svg){ .architecture-hero loading="eager" }
+
 # Healthcare Clinical Analytics
 
 > **Source:** [`examples/healthcare-clinical/README.md`](https://github.com/fgarofalo56/csa-inabox/blob/main/examples/healthcare-clinical/README.md) — this page is rendered live from that file.

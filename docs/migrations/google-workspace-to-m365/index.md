@@ -157,5 +157,5 @@ For organizations with 150+ seats, FastTrack should be engaged before purchasing
 3. **Complete the playbook checklist:** [Migration Playbook](../google-workspace-to-m365.md) --- assess your environment.
 4. **Engage FastTrack:** Submit your request at [fasttrack.microsoft.com](https://fasttrack.microsoft.com).
 5. **Start the pilot:** Use the [Gmail tutorial](tutorial-gmail-to-exo.md) and [Drive tutorial](tutorial-drive-to-onedrive.md) to migrate your IT team first.
-6. **Deploy Copilot:** After migration, [Copilot adoption](best-practices.md#copilot-adoption-post-migration) is the key value driver.
-7. **Enable CSA-in-a-Box:** Extend the M365 investment into [enterprise analytics and AI](best-practices.md#csa-in-a-box-data-and-ai-enablement).
+6. **Deploy Copilot:** After migration, [Copilot adoption](best-practices.md) is the key value driver.
+7. **Enable CSA-in-a-Box:** Extend the M365 investment into [enterprise analytics and AI](best-practices.md).

@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **DR Drill**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **DR Drill**
 
 # DR Drill Runbook (CSA-0073)
 
@@ -18,19 +18,19 @@ honest instead of rotting between real incidents.
 
 ## 📑 Table of Contents
 
-- [🎯 1. Objectives](#-1-objectives)
-- [📅 2. Cadence](#-2-cadence)
-- [🔐 3. Required Azure Permissions](#-3-required-azure-permissions)
-- [🧪 4. Scenarios](#-4-scenarios)
+- [🎯 1. Objectives](#1-objectives)
+- [📅 2. Cadence](#2-cadence)
+- [🔐 3. Required Azure Permissions](#3-required-azure-permissions)
+- [🧪 4. Scenarios](#4-scenarios)
     - [4.1 cosmos-failover](#41-cosmos-failover)
     - [4.2 storage-failover](#42-storage-failover)
     - [4.3 keyvault-restore](#43-keyvault-restore)
     - [4.4 bicep-rollback](#44-bicep-rollback)
-- [🚀 5. Triggering a Drill](#-5-triggering-a-drill)
-- [📊 6. Results & Reporting](#-6-results--reporting)
-- [📐 7. RPO / RTO Expectations](#-7-rpo--rto-expectations)
-- [🧰 8. Follow-up Work](#-8-follow-up-work)
-- [🔗 9. Related Documentation](#-9-related-documentation)
+- [🚀 5. Triggering a Drill](#5-triggering-a-drill)
+- [📊 6. Results & Reporting](#6-results-reporting)
+- [📐 7. RPO / RTO Expectations](#7-rpo-rto-expectations)
+- [🧰 8. Follow-up Work](#8-follow-up-work)
+- [🔗 9. Related Documentation](#9-related-documentation)
 
 ---
 

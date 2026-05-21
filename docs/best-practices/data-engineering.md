@@ -11,6 +11,9 @@ tags:
 
 # Data Engineering Best Practices
 
+
+![Data engineering best practice hero: pipeline modules feeding a central Delta processing block in deep Azure blue](../assets/images/hero/best-practices/data-engineering.svg){ .architecture-hero loading="eager" }
+
 ## Overview
 
 CSA-in-a-Box uses a modern data engineering stack built on three pillars:

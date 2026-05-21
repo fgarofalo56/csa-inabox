@@ -1,6 +1,8 @@
-[Home](../README.md) > [Docs](./) > **Production Checklist**
+[Home](../README.md) > [Docs](index.md) > **Production Checklist**
 
 # CSA-in-a-Box: Production Checklist
+
+![CSA-in-a-Box production readiness pyramid: ten layers from Environment Promotion at the base through Infrastructure Hardening, Security, Data Platform, Observability, Disaster Recovery, Governance, Operational Readiness, Cost Management, to Compliance at the apex with a Sign-Off flag. Layered in Azure brand gradient — foundation-first ordering](assets/images/hero/production-checklist.svg){ .architecture-hero loading="eager" }
 
 !!! note
 **Quick Summary**: Comprehensive pre-production readiness checklist covering environment promotion, infrastructure hardening, security, data platform validation, observability, disaster recovery, governance, operational readiness, cost management, and compliance — with sign-off table for stakeholder approval.
@@ -11,17 +13,17 @@ where available.
 
 ## 📑 Table of Contents
 
-- [🌍 1. Environment Promotion](#-1-environment-promotion)
-- [🏗️ 2. Infrastructure Hardening](#️-2-infrastructure-hardening)
-- [🔒 3. Security](#-3-security)
-- [📊 4. Data Platform](#-4-data-platform)
-- [📈 5. Observability](#-5-observability)
-- [🔄 6. Disaster Recovery](#-6-disaster-recovery)
-- [📋 7. Governance](#-7-governance)
-- [⚙️ 8. Operational Readiness](#️-8-operational-readiness)
-- [💰 9. Cost Management](#-9-cost-management)
-- [🏛️ 10. Compliance](#️-10-compliance)
-- [✍️ Sign-Off](#️-sign-off)
+- [🌍 1. Environment Promotion](#1-environment-promotion)
+- [🏗️ 2. Infrastructure Hardening](#2-infrastructure-hardening)
+- [🔒 3. Security](#3-security)
+- [📊 4. Data Platform](#4-data-platform)
+- [📈 5. Observability](#5-observability)
+- [🔄 6. Disaster Recovery](#6-disaster-recovery)
+- [📋 7. Governance](#7-governance)
+- [⚙️ 8. Operational Readiness](#8-operational-readiness)
+- [💰 9. Cost Management](#9-cost-management)
+- [🏛️ 10. Compliance](#10-compliance)
+- [✍️ Sign-Off](#sign-off)
 
 ---
 

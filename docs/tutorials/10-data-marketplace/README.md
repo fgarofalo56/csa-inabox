@@ -1,5 +1,8 @@
 # Tutorial 10: Data Marketplace — Publish, Discover, and Consume Data Products
 
+![Data Marketplace self-service catalog — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/10-data-marketplace.svg){ .architecture-hero loading="eager" }
+
+
 > **Estimated Time:** 60 minutes | **Path:** F (Platform Operations) | **Prerequisites:** Tutorial 01
 
 ```mermaid

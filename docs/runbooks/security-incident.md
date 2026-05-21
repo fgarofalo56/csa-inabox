@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Security Incident**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Security Incident**
 
 # Incident Response Runbook — Security Events
 
@@ -12,7 +12,7 @@ in a live incident until your organisation has completed the items
 below. Check each off in a PR against this file so the runbook history
 reflects who customised which fields and when.
 
-- [ ] Populate the [Contact Information](#-contact-information) table with
+- [ ] Populate the [Contact Information](#contact-information) table with
       your Platform Team Lead, Security Officer, Data Protection
       Officer, and Legal Counsel. Remove the `*(set via ...)*` stubs.
 - [ ] Replace generic Azure Support link with your organisation's
@@ -20,11 +20,11 @@ reflects who customised which fields and when.
 - [ ] Wire up an on-call rotation in PagerDuty / OpsGenie / Teams
       Shifts — paste the on-call URL into the Contact table.
 - [ ] Confirm your SOC queue address (DL) for the internal notification
-      template under [Communication Templates](#-communication-templates).
+      template under [Communication Templates](#communication-templates).
 - [ ] Add any region-specific legal notification windows (e.g. GDPR
       72-hour DPO notification, HIPAA 60-day breach notification).
 - [ ] Update the **Last Drilled** banner above and the
-      [Drill Log](#️-drill-log-csa-0085) after each tabletop / live drill.
+      [Drill Log](#drill-log-csa-0085) after each tabletop / live drill.
 
 !!! warning
 **Do not remove this section** after first use. New operators need
@@ -32,27 +32,27 @@ the same onboarding pass on every fork / airgapped deployment.
 
 ## 📑 Table of Contents
 
-- [📋 Scope](#-scope)
-- [🔒 Severity Classification](#-severity-classification)
-- [🚀 Initial Response (All Severities)](#-initial-response-all-severities)
+- [📋 Scope](#scope)
+- [🔒 Severity Classification](#severity-classification)
+- [🚀 Initial Response (All Severities)](#initial-response-all-severities)
     - [Step 1: Assess](#step-1-assess)
     - [Step 2: Contain](#step-2-contain)
     - [Step 3: Investigate](#step-3-investigate)
     - [Step 4: Eradicate](#step-4-eradicate)
     - [Step 5: Recover](#step-5-recover)
     - [Step 6: Post-Incident](#step-6-post-incident)
-- [💡 Common Scenarios](#-common-scenarios)
+- [💡 Common Scenarios](#common-scenarios)
     - [Scenario A: Exposed Storage Account Key](#scenario-a-exposed-storage-account-key)
     - [Scenario B: Databricks Token Leaked](#scenario-b-databricks-token-leaked)
     - [Scenario C: Azure Policy Non-Compliance](#scenario-c-azure-policy-non-compliance)
     - [Scenario D: Cosmos DB Unauthorized Access](#scenario-d-cosmos-db-unauthorized-access)
     - [Scenario E: ADF Pipeline Tampering](#scenario-e-adf-pipeline-tampering)
     - [Scenario F: Key Vault Secret Expiry or Compromise](#scenario-f-key-vault-secret-expiry-or-compromise)
-- [📋 Evidence Preservation Checklist](#-evidence-preservation-checklist)
-- [📝 Communication Templates](#-communication-templates)
+- [📋 Evidence Preservation Checklist](#evidence-preservation-checklist)
+- [📝 Communication Templates](#communication-templates)
     - [Internal notification (P1/P2)](#internal-notification-p1p2)
     - [Stakeholder update](#stakeholder-update)
-- [📎 Contact Information](#-contact-information)
+- [📎 Contact Information](#contact-information)
 
 ---
 

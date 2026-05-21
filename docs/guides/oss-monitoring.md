@@ -8,7 +8,7 @@
 ## Table of Contents
 
 - [Monitoring Architecture](#monitoring-architecture)
-- [Prometheus + Grafana Deployment](#prometheus--grafana-deployment)
+- [Prometheus + Grafana Deployment](#prometheus-grafana-deployment)
 - [Service Exporters](#service-exporters)
 - [Key Metrics per Service](#key-metrics-per-service)
 - [Alerting Rules](#alerting-rules)

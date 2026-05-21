@@ -1,5 +1,8 @@
 # Reference Architecture — Identity & Secrets Flow
 
+
+![Identity & secrets flow hero: prominent lock glyph in security red gradient indicating Managed Identity + Key Vault + Entra ID](../assets/images/hero/reference-architecture/identity-secrets-flow.svg){ .architecture-hero loading="eager" }
+
 > **TL;DR:** Humans authenticate to Entra ID and get RBAC; workloads use **managed identities** (never service principals with passwords); every secret lives in **Key Vault** and is referenced by URI; nothing — _nothing_ — has a static credential in code, config, or pipeline.
 
 ## The problem

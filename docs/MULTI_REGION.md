@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **Multi-Region Deployment**
+[Home](../README.md) > [Docs](index.md) > **Multi-Region Deployment**
 
 # Multi-Region Deployment Guide
 
@@ -19,24 +19,24 @@ region) that are out of scope here.
 
 ## 📑 Table of Contents
 
-- [🏗️ 1. Architecture Overview](#️-1-architecture-overview)
-- [📊 2. Service Capability Matrix](#-2-service-capability-matrix)
-- [🔄 3. Data Replication Patterns](#-3-data-replication-patterns)
+- [🏗️ 1. Architecture Overview](#1-architecture-overview)
+- [📊 2. Service Capability Matrix](#2-service-capability-matrix)
+- [🔄 3. Data Replication Patterns](#3-data-replication-patterns)
     - [3.1 Storage: RA-GZRS Automatic Replication](#31-storage-ra-gzrs-automatic-replication)
     - [3.2 Cosmos DB: Multi-Master Writes](#32-cosmos-db-multi-master-writes)
     - [3.3 dbt Models: Idempotent, Deploy to Both Regions](#33-dbt-models-idempotent-deploy-to-both-regions)
     - [3.4 Event Hubs: Geo-DR Namespace Pairing](#34-event-hubs-geo-dr-namespace-pairing)
-- [🚀 4. Failover Procedures](#-4-failover-procedures)
+- [🚀 4. Failover Procedures](#4-failover-procedures)
     - [4.1 Automatic Failover](#41-automatic-failover-no-operator-action-required)
     - [4.2 Manual Failover](#42-manual-failover-operator-action-required)
-    - [4.3 DNS / Traffic Manager Configuration](#43-dns--traffic-manager-configuration)
-- [📋 5. RPO / RTO Targets by Service Tier](#-5-rpo--rto-targets-by-service-tier)
-- [📦 6. Deployment Process](#-6-deployment-process)
-- [🧪 7. Chaos Testing](#-7-chaos-testing)
-- [📈 8. Monitoring Multi-Region Health](#-8-monitoring-multi-region-health)
-- [💰 9. Cost Implications of Multi-Region](#-9-cost-implications-of-multi-region)
-- [🏢 10. Combining Multi-Region with Multi-Tenant](#-10-combining-multi-region-with-multi-tenant)
-- [📋 11. Quick Reference](#-11-quick-reference)
+    - [4.3 DNS / Traffic Manager Configuration](#43-dns-traffic-manager-configuration)
+- [📋 5. RPO / RTO Targets by Service Tier](#5-rpo-rto-targets-by-service-tier)
+- [📦 6. Deployment Process](#6-deployment-process)
+- [🧪 7. Chaos Testing](#7-chaos-testing)
+- [📈 8. Monitoring Multi-Region Health](#8-monitoring-multi-region-health)
+- [💰 9. Cost Implications of Multi-Region](#9-cost-implications-of-multi-region)
+- [🏢 10. Combining Multi-Region with Multi-Tenant](#10-combining-multi-region-with-multi-tenant)
+- [📋 11. Quick Reference](#11-quick-reference)
 
 ---
 

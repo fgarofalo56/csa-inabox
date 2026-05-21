@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Databricks Cost Runaway**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Databricks Cost Runaway**
 
 # Runbook — Databricks Cost Runaway
 

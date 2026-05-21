@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Cost Alert Response**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Cost Alert Response**
 
 # Runbook — Cost Alert Response
 

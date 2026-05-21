@@ -243,7 +243,7 @@ __If you scored:__
 
 __Your Path:__
 
-1. __Transition Guide__: [Software Engineer to Data Engineer](../transitions/README.md#from-software-engineering-to-data-engineering)
+1. __Transition Guide__: [Software Engineer to Data Engineer](../transitions/README.md)
 2. __Duration__: 8-10 weeks (leveraging existing skills)
 3. __Focus__: Data modeling, PySpark, Azure data services
 
@@ -265,7 +265,7 @@ __If you scored:__
 
 __Your Path:__
 
-1. __Transition Guide__: [DBA to Platform Admin](../transitions/README.md#from-database-administrator-to-platform-administrator)
+1. __Transition Guide__: [DBA to Platform Admin](../transitions/README.md)
 2. __Duration__: 6-8 weeks (many transferable skills)
 3. __Focus__: Azure platform, IaC, cloud monitoring
 
@@ -287,7 +287,7 @@ __If you scored:__
 
 __Your Path:__
 
-1. __Transition Guide__: [Business Analyst to Data Analyst](../transitions/README.md#from-business-analyst-to-data-analyst)
+1. __Transition Guide__: [Business Analyst to Data Analyst](../transitions/README.md)
 2. __Duration__: 6-8 weeks
 3. __Focus__: Advanced SQL, Power BI, Azure analytics
 
@@ -309,7 +309,7 @@ __If you scored:__
 
 __Your Path:__
 
-1. __Transition Guide__: [Data Scientist to ML Engineer](../transitions/README.md#from-data-scientist-to-ml-engineer)
+1. __Transition Guide__: [Data Scientist to ML Engineer](../transitions/README.md)
 2. __Duration__: 10-12 weeks
 3. __Focus__: MLOps, deployment, production systems
 

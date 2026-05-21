@@ -620,7 +620,7 @@ __Practice Resources:__
 
 __Ready to become a Data Analyst?__
 
-🚀 __[Start Phase 1 - Module 1.1 →](#phase-1-sql--analytics-foundation-3-4-weeks)__
+🚀 __[Start Phase 1 - Module 1.1 →](#phase-1-sql-analytics-foundation-3-4-weeks)__
 📋 __[Download SQL Cheat Sheet (PDF)](#)__
 🎯 __[Join Power BI Study Group →](#)__
 

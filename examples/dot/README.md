@@ -36,7 +36,7 @@
   - [dbt Profiles](#dbt-profiles)
   - [Environment Variables](#environment-variables)
 - [Azure Government Notes](#azure-government-notes)
-- [Monitoring & Alerts](#monitoring--alerts)
+- [Monitoring & Alerts](#monitoring-alerts)
 - [Troubleshooting](#troubleshooting)
   - [Common Issues](#common-issues)
 - [Contributing](#contributing)

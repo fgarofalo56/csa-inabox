@@ -234,8 +234,8 @@ Teams own the row for their pipeline. Update on deployment.
 - **Finding:** CSA-0138 — No standard DLQ pattern
 - **Decision:** AQ-0033 / Ballot item E9
 - **ADR:** [ADR-0005 — Event Hubs over Kafka](../adr/0005-event-hubs-over-kafka.md) (context for streaming DLQ semantics)
-- **Audit logger:** [CSA-0016 tamper-evident audit log](../../src/csa_platform/audit/) (drop-event emission)
-- **Bicep module:** [`deploy/bicep/shared/modules/deadletter/deadletter.bicep`](../../deploy/bicep/shared/modules/deadletter/deadletter.bicep)
+- **Audit logger:** [CSA-0016 tamper-evident audit log](https://github.com/fgarofalo56/csa-inabox/tree/main/src/csa_platform/audit/) (drop-event emission)
+- **Bicep module:** [`deploy/bicep/shared/modules/deadletter/deadletter.bicep`](https://github.com/fgarofalo56/csa-inabox/tree/main/deploy/bicep/shared/modules/deadletter/deadletter.bicep)
 - **Alerts:** Alert rule `csa-alert-dlq-size-<pipelineName>` fires to the pipeline's action group.
 
 ---

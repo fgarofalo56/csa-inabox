@@ -29,7 +29,7 @@ A second maintainer should satisfy at least four of the following five before be
 | **Recurring contributor** — ≥ 10 merged PRs over ≥ 60 days | Demonstrates sustained engagement, not a one-off |
 | **Crosses subsystems** — has merged PRs touching at least two of `docs/`, `csa_platform/`, `examples/`, `.github/workflows/`, `deploy/` | Reduces specialization risk |
 | **Reviews PRs effectively** — has left substantive review comments on at least 3 PRs | Confirms code-review capability, not just write capability |
-| **Operates the runbooks** — has executed at least one of the [runbooks](runbooks/) end-to-end (e.g. DR drill, key rotation) | Confirms operational competence, not just code competence |
+| **Operates the runbooks** — has executed at least one of the [runbooks](runbooks/index.md) end-to-end (e.g. DR drill, key rotation) | Confirms operational competence, not just code competence |
 | **Aligned on architectural direction** — has authored or co-authored at least one ADR | Confirms judgment alignment on big calls |
 
 When a candidate satisfies four of five, open an ADR proposing the addition. Use the existing `docs/adr/` template. The ADR captures the agreement publicly and is the audit trail.
@@ -160,4 +160,4 @@ When the first three rows flip to "Done", update this section to record the time
 - [`.github/CODEOWNERS`](https://github.com/fgarofalo56/csa-inabox/blob/main/.github/CODEOWNERS) — current ownership mapping
 - [`CONTRIBUTING.md`](https://github.com/fgarofalo56/csa-inabox/blob/main/CONTRIBUTING.md) — contributor flow
 - [ADR-0024 — Two-tier test layout](adr/0024-two-tier-test-layout.md) — example of a recent ADR shape
-- [Runbooks](runbooks/) — operational competence checklist for §1 criterion
+- [Runbooks](runbooks/index.md) — operational competence checklist for §1 criterion

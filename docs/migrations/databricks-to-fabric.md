@@ -10,7 +10,7 @@ This playbook is the core migration reference. For the complete Databricks-to-Fa
     - [Why Fabric over Databricks (Executive Brief)](databricks-to-fabric/why-fabric-over-databricks.md)
     - [Total Cost of Ownership Analysis](databricks-to-fabric/tco-analysis.md)
     - [Complete Feature Mapping (60+ features)](databricks-to-fabric/feature-mapping-complete.md)
-    - [Tutorials & Walkthroughs](databricks-to-fabric/index.md#tutorials)
+    - [Tutorials & Walkthroughs](databricks-to-fabric/index.md)
     - [Benchmarks & Performance](databricks-to-fabric/benchmarks.md)
     - [Best Practices](databricks-to-fabric/best-practices.md)
 

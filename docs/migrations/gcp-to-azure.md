@@ -15,7 +15,7 @@ This playbook is the core migration reference. For the complete GCP-to-Azure mig
     - [Total Cost of Ownership Analysis](gcp-to-azure/tco-analysis.md)
     - [Complete Feature Mapping (50+ features)](gcp-to-azure/feature-mapping-complete.md)
     - [Federal Migration Guide](gcp-to-azure/federal-migration-guide.md)
-    - [Tutorials & Walkthroughs](gcp-to-azure/index.md#tutorials)
+    - [Tutorials & Walkthroughs](gcp-to-azure/index.md)
     - [Benchmarks & Performance](gcp-to-azure/benchmarks.md)
     - [Best Practices](gcp-to-azure/best-practices.md)
 

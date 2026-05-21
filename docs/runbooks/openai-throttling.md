@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **OpenAI Throttling**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **OpenAI Throttling**
 
 # Runbook — Azure OpenAI Throttling & Quota Management
 

@@ -1193,9 +1193,9 @@ Using subscription: My Azure Subscription
 
 Your Foundation Platform is ready. Choose your next path:
 
-- **[Tutorial 02: Governance & Compliance](../02-governance/)** — Set up Purview cataloging and policy guardrails (recommended next)
-- **[Tutorial 05: Real-Time Streaming](../05-streaming/)** — Add Event Hubs and Structured Streaming
-- **[Tutorial 06: AI Analytics](../06-ai-analytics/)** — Deploy Azure OpenAI and ML pipelines
+- **[Tutorial 02: Governance & Compliance](../02-data-governance/README.md)** — Set up Purview cataloging and policy guardrails (recommended next)
+- **[Tutorial 05: Real-Time Streaming](../05-streaming-lambda/README.md)** — Add Event Hubs and Structured Streaming
+- **[Tutorial 06: AI Analytics](../06-ai-analytics-foundry/README.md)** — Deploy Azure OpenAI and ML pipelines
 
 See the [Tutorial Index](../README.md) for all available paths.
 

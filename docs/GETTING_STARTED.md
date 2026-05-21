@@ -1,5 +1,7 @@
 # Getting Started — 30-Minute Tour
 
+![CSA-in-a-Box 30-minute tour journey: six milestone nodes — Orient, Pick your path, Set up dev, First dbt run, Explore architecture, Deploy-ready — connected by a gradient path in Azure blue, purple, and teal](assets/images/hero/getting-started.svg){ .architecture-hero loading="eager" }
+
 > **Goal:** by the end of this page you will (1) understand what CSA-in-a-Box is, (2) know which deployment path matches your scenario, and (3) have a working dev environment that can run the platform locally.
 
 If you only have **5 minutes**, jump to [Quickstart](QUICKSTART.md).

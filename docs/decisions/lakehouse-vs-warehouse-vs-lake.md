@@ -73,6 +73,6 @@ flowchart TD
 
 ## Related
 
-- Architecture: [Storage — OneLake Pattern](../ARCHITECTURE.md#%EF%B8%8F-storage--onelake-pattern)
+- Architecture: [Storage — OneLake Pattern](../ARCHITECTURE.md#storage-onelake-pattern)
 - Decision: [Delta vs. Iceberg vs. Parquet](delta-vs-iceberg-vs-parquet.md)
 - Finding: CSA-0010

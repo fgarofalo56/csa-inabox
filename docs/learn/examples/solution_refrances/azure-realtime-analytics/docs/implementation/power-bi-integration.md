@@ -10,13 +10,13 @@ tags:
 
 ## Table of Contents
 - [Integration Overview](#integration-overview)
-- [Direct Lake Configuration](#direct-lake-configuration)
+- **Direct Lake Configuration**
 - [Data Source Setup](#data-source-setup)
 - [Semantic Model Development](#semantic-model-development)
 - [Report Development](#report-development)
 - [Performance Optimization](#performance-optimization)
 - [Security Implementation](#security-implementation)
-- [Deployment & Governance](#deployment--governance)
+- [Deployment & Governance](#deployment-governance)
 
 ## Integration Overview
 

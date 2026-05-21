@@ -35,7 +35,7 @@ tags:
 |-------------------|------|----------|------------------|
 | 📋 __[Security Checklist](../reference/security-checklist.md)__ | Verification checklist | Comprehensive security verification | ![Enterprise](https://img.shields.io/badge/Level-Enterprise-darkgreen) |
 | 🔒 __[Security Best Practices](../reference/security.md)__ | Implementation guide | Detailed security recommendations | ![Critical](https://img.shields.io/badge/Priority-Critical-red) |
-| 📋 __[Compliance Guide](/docs/security/compliance-guide.md)__ | Regulatory compliance | Meeting regulatory requirements | ![Required](https://img.shields.io/badge/Status-Required-blue) |
+| 📋 __[Compliance Guide](../security/compliance-guide.md)__ | Regulatory compliance | Meeting regulatory requirements | ![Required](https://img.shields.io/badge/Status-Required-blue) |
 
 ---
 
@@ -119,10 +119,10 @@ tags:
 
 | Resource | Purpose | Content Coverage | Quick Access |
 |----------|---------|------------------|--------------|
-| 🏗️ __[Architecture](/docs/architecture/README.md)__ | Reference architectures and design patterns | Lakehouse, serverless, shared metadata | [![Architecture](https://img.shields.io/badge/🏗️-Architecture-blue)](#) |
+| 🏗️ __[Architecture](../03-architecture-patterns/README.md)__ | Reference architectures and design patterns | Lakehouse, serverless, shared metadata | [![Architecture](https://img.shields.io/badge/🏗️-Architecture-blue)](#) |
 | 📋 __[Best Practices](../05-best-practices/cross-cutting-concerns/cost-optimization/README.md)__ | Implementation recommendations and guidance | Performance, security, cost, governance | [![Best Practices](https://img.shields.io/badge/📋-Best_Practices-green)](#) |
 | 🔧 __[Troubleshooting](../07-troubleshooting/README.md)__ | Common issues and resolution procedures | Error handling, performance tuning | [![Troubleshooting](https://img.shields.io/badge/🔧-Troubleshooting-red)](#) |
-| ❓ __[FAQ](/docs/faq.md)__ | Frequently asked questions and answers | Common scenarios, quick solutions | [![FAQ](https://img.shields.io/badge/❓-FAQ-yellow)](#) |
+| ❓ __[FAQ](../faq.md)__ | Frequently asked questions and answers | Common scenarios, quick solutions | [![FAQ](https://img.shields.io/badge/❓-FAQ-yellow)](#) |
 
 ---
 

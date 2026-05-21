@@ -20,7 +20,7 @@
 - [Quick Start](#quick-start)
 - [Data Pipeline](#data-pipeline)
   - [Bronze Layer](#bronze-layer-raw-ingestion)
-  - [Silver Layer](#silver-layer-normalized--enriched)
+  - [Silver Layer](#silver-layer-normalized-enriched)
   - [Gold Layer](#gold-layer-threat-intelligence)
 - [KQL Query Examples](#kql-query-examples)
 - [Notebooks](#notebooks)

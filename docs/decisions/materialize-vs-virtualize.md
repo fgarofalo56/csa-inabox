@@ -66,6 +66,6 @@ flowchart TD
 
 ## Related
 
-- Architecture: [Storage — OneLake Pattern](../ARCHITECTURE.md#%EF%B8%8F-storage--onelake-pattern)
+- Architecture: [Storage — OneLake Pattern](../ARCHITECTURE.md#storage-onelake-pattern)
 - Decision: [Lakehouse vs. Warehouse vs. Lake](lakehouse-vs-warehouse-vs-lake.md)
 - Finding: CSA-0010

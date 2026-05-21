@@ -1,5 +1,8 @@
 # Tutorial 14: Cost Optimization
 
+![Cost Optimization — FinOps practices — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/14-cost-optimization.svg){ .architecture-hero loading="eager" }
+
+
 > **Estimated Time:** 3-4 hours
 > **Difficulty:** Intermediate
 
@@ -507,8 +510,8 @@ Set a calendar reminder for the first Monday of each month to run this review.
 ## Related
 
 - [Tutorial 01: Foundation Platform](../01-foundation-platform/README.md) -- Deploy the base infrastructure this tutorial optimizes
-- [Tutorial 02: Governance & Compliance](../02-governance/) -- Policy enforcement and tagging standards
-- [Tutorial 10: Azure Monitor](../10-azure-monitor/) -- Monitoring and alerting for cost anomalies
+- [Tutorial 02: Governance & Compliance](../02-data-governance/README.md) -- Policy enforcement and tagging standards
+- [Tutorial 12: Monitoring & Observability](../12-monitoring-observability/README.md) -- Monitoring and alerting for cost anomalies
 - [Azure Cost Management documentation](https://learn.microsoft.com/en-us/azure/cost-management-billing/)
 - [Azure Advisor cost recommendations](https://learn.microsoft.com/en-us/azure/advisor/advisor-cost-recommendations)
 - [Databricks cluster best practices](https://learn.microsoft.com/en-us/azure/databricks/clusters/cluster-config-best-practices)

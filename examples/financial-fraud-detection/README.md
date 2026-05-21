@@ -19,7 +19,7 @@
 - [Quick Start](#quick-start)
 - [Data Pipeline](#data-pipeline)
   - [Bronze Layer](#bronze-layer-raw-ingestion)
-  - [Silver Layer](#silver-layer-enriched--features)
+  - [Silver Layer](#silver-layer-enriched-features)
   - [Gold Layer](#gold-layer-fraud-intelligence)
 - [Sample Analytics Scenarios](#sample-analytics-scenarios)
 - [Data Products](#data-products)

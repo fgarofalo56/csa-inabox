@@ -1,5 +1,8 @@
 # Tutorial 04: GeoAnalytics with ArcGIS Enterprise (BYOL)
 
+![GeoAnalytics with ArcGIS Enterprise on Azure — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/04-geoanalytics-arcgis.svg){ .architecture-hero loading="eager" }
+
+
 > **Estimated Time:** 3-4 hours (plus ArcGIS installation time)
 > **Difficulty:** Advanced
 
@@ -532,7 +535,7 @@ See: [ArcGIS GeoEvent Server Documentation](https://enterprise.arcgis.com/en/geo
 
 - **[Tutorial 03: GeoAnalytics with Open-Source Tools](../03-geoanalytics-oss/README.md)** — Open-source alternative (if you haven't completed it)
 - **[Tutorial 05: Real-Time Streaming](../05-streaming-lambda/README.md)** — Add streaming data pipeline with Lambda Architecture
-- **[Tutorial 06: AI Analytics](../06-ai-analytics/)** — Apply ML models for predictive geospatial analysis
+- **[Tutorial 06: AI Analytics](../06-ai-analytics-foundry/README.md)** — Apply ML models for predictive geospatial analysis
 
 See the [Tutorial Index](../README.md) for all available paths.
 

@@ -14,7 +14,7 @@ tags:
 - [Data Plane Architecture](#data-plane-architecture)
 - [Compute Layer](#compute-layer)
 - [Storage Integration](#storage-integration)
-- [Security & Networking](#security--networking)
+- [Security & Networking](#security-networking)
 - [Runtime Components](#runtime-components)
 
 ## Platform Overview
@@ -458,4 +458,4 @@ echo "spark.databricks.delta.preview.enabled true" >> /databricks/spark/conf/spa
 
 **🎯 Key Takeaway**: The Databricks architecture provides enterprise-grade security, performance, and scalability through careful separation of control and data planes, with comprehensive networking and security controls.
 
-**🔧 Implementation Ready**: Use the [deployment scripts](../../scripts/) to implement this architecture in your environment.
+**🔧 Implementation Ready**: Use the *deployment scripts (assets pending)* to implement this architecture in your environment.

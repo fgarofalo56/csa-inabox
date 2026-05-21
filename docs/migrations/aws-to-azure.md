@@ -15,7 +15,7 @@ This playbook is the core migration reference. For the complete AWS-to-Azure mig
     - [Total Cost of Ownership Analysis](aws-to-azure/tco-analysis.md)
     - [Complete Feature Mapping (100+ features)](aws-to-azure/feature-mapping-complete.md)
     - [Federal Migration Guide](aws-to-azure/federal-migration-guide.md)
-    - [Tutorials & Walkthroughs](aws-to-azure/index.md#tutorials)
+    - [Tutorials & Walkthroughs](aws-to-azure/index.md)
     - [Benchmarks & Performance](aws-to-azure/benchmarks.md)
     - [Best Practices](aws-to-azure/best-practices.md)
 

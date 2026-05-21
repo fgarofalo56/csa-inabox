@@ -16,7 +16,7 @@ tutorials, originally maintained as the separate
 [`fgarofalo56/csa-inabox-docs`](https://github.com/fgarofalo56/csa-inabox-docs)
 repository. It was merged into this repo on **2026-05-08** so the standalone
 docs repo can be retired and the platform's primary guides
-([`docs/guides/`](../guides/)) and the broader knowledge base live in one
+([`docs/guides/`](../guides/oss-ecosystem.md)) and the broader knowledge base live in one
 searchable, versioned place.
 
 !!! tip "Where to start"
@@ -26,7 +26,7 @@ searchable, versioned place.
     - **Debugging?** Use [Troubleshooting](07-troubleshooting/README.md).
     - **Looking for working code?** See [Code Examples](06-code-examples/README.md).
     - **Walking through a service?** Check the step-by-step
-      [tutorials](tutorials/) for Data Factory, Synapse, and Stream Analytics.
+      [tutorials](tutorials/README.md) for Data Factory, Synapse, and Stream Analytics.
 
 ## Layout
 
@@ -50,7 +50,7 @@ searchable, versioned place.
 
 ## Relationship to the platform guides
 
-The content in [`docs/guides/`](../guides/) at the top of this repo is the
+The content in [`docs/guides/`](../guides/oss-ecosystem.md) at the top of this repo is the
 **opinionated** CSA-in-a-Box implementation: how this specific platform
 deploys, configures, and integrates each service. The `learn/` reference
 library is **service-agnostic** — generic Azure analytics knowledge,

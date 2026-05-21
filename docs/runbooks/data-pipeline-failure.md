@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Data Pipeline Failure**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Data Pipeline Failure**
 
 # Data Pipeline Failure Runbook (CSA-0059)
 
@@ -10,7 +10,7 @@
 This runbook ships with placeholders. Populate these in a PR before your
 first real on-call rotation:
 
-- [ ] Populate the [Contact Information](#-contact-information) table with
+- [ ] Populate the [Contact Information](#8-contact-information) table with
       your Platform / Data Engineering leads.
 - [ ] Wire the Data Factory instance names in [§4.1](#41-identify-the-failed-run)
       to your real factories (dev / staging / prod).
@@ -21,22 +21,22 @@ first real on-call rotation:
 
 ## 📑 Table of Contents
 
-- [📋 1. Scope](#-1-scope)
-- [🔒 2. Severity Classification](#-2-severity-classification)
-- [🚀 3. Initial Response](#-3-initial-response)
-- [🧪 4. Common Scenarios](#-4-common-scenarios)
+- [📋 1. Scope](#1-scope)
+- [🔒 2. Severity Classification](#2-severity-classification)
+- [🚀 3. Initial Response](#3-initial-response)
+- [🧪 4. Common Scenarios](#4-common-scenarios)
     - [4.1 Identify the failed run](#41-identify-the-failed-run)
     - [4.2 Trigger did not fire](#42-trigger-did-not-fire)
-    - [4.3 Copy activity failure (source / sink)](#43-copy-activity-failure-source--sink)
+    - [4.3 Copy activity failure (source / sink)](#43-copy-activity-failure-source-sink)
     - [4.4 Databricks notebook activity failure](#44-databricks-notebook-activity-failure)
-    - [4.5 Dataflow activity OOM / skew](#45-dataflow-activity-oom--skew)
+    - [4.5 Dataflow activity OOM / skew](#45-dataflow-activity-oom-skew)
     - [4.6 Self-Hosted IR offline](#46-self-hosted-ir-offline)
-- [🔁 5. Retry vs. Backfill](#-5-retry-vs-backfill)
-- [📋 6. Evidence Preservation](#-6-evidence-preservation)
-- [📝 7. Communication Templates](#-7-communication-templates)
-- [📎 8. Contact Information](#-8-contact-information)
-- [🗓️ 9. Drill Log](#️-9-drill-log)
-- [🔗 10. Related Documentation](#-10-related-documentation)
+- [🔁 5. Retry vs. Backfill](#5-retry-vs-backfill)
+- [📋 6. Evidence Preservation](#6-evidence-preservation)
+- [📝 7. Communication Templates](#7-communication-templates)
+- [📎 8. Contact Information](#8-contact-information)
+- [🗓️ 9. Drill Log](#9-drill-log)
+- [🔗 10. Related Documentation](#10-related-documentation)
 
 ---
 

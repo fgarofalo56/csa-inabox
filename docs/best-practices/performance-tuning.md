@@ -12,6 +12,9 @@ tags:
 
 # Performance Tuning
 
+
+![Performance tuning best practice hero: speedometer with needle pointing high and 'FAST' label in Azure blue](../assets/images/hero/best-practices/performance-tuning.svg){ .architecture-hero loading="eager" }
+
 ## Overview
 
 Performance tuning in CSA-in-a-Box spans multiple layers of the data platform: **storage** (Delta Lake), **compute** (Apache Spark), and **query** (SQL, KQL). Effective tuning requires understanding how these layers interact and where bottlenecks typically emerge.

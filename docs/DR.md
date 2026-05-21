@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **Disaster Recovery**
+[Home](../README.md) > [Docs](index.md) > **Disaster Recovery**
 
 # Multi-Region Disaster Recovery Runbook
 
@@ -20,26 +20,26 @@ per-service guidance in this runbook and document their own RPO/RTO.
 
 ## 📑 Table of Contents
 
-- [📊 1. RPO / RTO Targets by Service Tier](#-1-rpo--rto-targets-by-service-tier)
-- [🌍 2. Primary / Secondary Region Pairing](#-2-primary--secondary-region-pairing)
-- [🚀 3. Failover Procedure](#-3-failover-procedure)
-    - [Step 1 — Declare the incident](#step-1--declare-the-incident)
-    - [Step 2 — Verify the scope](#step-2--verify-the-scope)
-    - [Step 3 — Cosmos DB failover](#step-3--cosmos-db-failover)
-    - [Step 4 — Storage account failover](#step-4--storage-account-failover)
-    - [Step 5 — ADF linked-service reconfiguration](#step-5--adf-linked-service-reconfiguration)
-    - [Step 6 — Databricks failover](#step-6--databricks-failover)
-    - [Step 7 — DNS, certificates, and clients](#step-7--dns-certificates-and-clients)
-    - [Step 8 — Smoke test](#step-8--smoke-test)
-- [🧪 4. Failover Readiness — Quarterly Drill](#-4-failover-readiness--quarterly-drill)
-- [🔄 5. Failback Procedure](#-5-failback-procedure)
-    - [Step 1 — Re-enable geo replication](#step-1--re-enable-geo-replication)
-    - [Step 2 — Swap Cosmos failover priorities back](#step-2--swap-cosmos-failover-priorities-back)
-    - [Step 3 — Repoint ADF and Databricks](#step-3--repoint-adf-and-databricks)
-    - [Step 4 — DNS and client reset](#step-4--dns-and-client-reset)
-    - [Step 5 — Post-incident review](#step-5--post-incident-review)
-- [⚠️ 6. Known Gaps and Roadmap](#️-6-known-gaps-and-roadmap)
-- [📋 7. Quick Reference](#-7-quick-reference)
+- [📊 1. RPO / RTO Targets by Service Tier](#1-rpo-rto-targets-by-service-tier)
+- [🌍 2. Primary / Secondary Region Pairing](#2-primary-secondary-region-pairing)
+- [🚀 3. Failover Procedure](#3-failover-procedure)
+    - [Step 1 — Declare the incident](#step-1-declare-the-incident)
+    - [Step 2 — Verify the scope](#step-2-verify-the-scope)
+    - [Step 3 — Cosmos DB failover](#step-3-cosmos-db-failover)
+    - [Step 4 — Storage account failover](#step-4-storage-account-failover)
+    - [Step 5 — ADF linked-service reconfiguration](#step-5-adf-linked-service-reconfiguration)
+    - [Step 6 — Databricks failover](#step-6-databricks-failover)
+    - [Step 7 — DNS, certificates, and clients](#step-7-dns-certificates-and-clients)
+    - [Step 8 — Smoke test](#step-8-smoke-test)
+- [🧪 4. Failover Readiness — Quarterly Drill](#4-failover-readiness-quarterly-drill)
+- [🔄 5. Failback Procedure](#5-failback-procedure)
+    - [Step 1 — Re-enable geo replication](#step-1-re-enable-geo-replication)
+    - [Step 2 — Swap Cosmos failover priorities back](#step-2-swap-cosmos-failover-priorities-back)
+    - [Step 3 — Repoint ADF and Databricks](#step-3-repoint-adf-and-databricks)
+    - [Step 4 — DNS and client reset](#step-4-dns-and-client-reset)
+    - [Step 5 — Post-incident review](#step-5-post-incident-review)
+- [⚠️ 6. Known Gaps and Roadmap](#6-known-gaps-and-roadmap)
+- [📋 7. Quick Reference](#7-quick-reference)
 
 ---
 

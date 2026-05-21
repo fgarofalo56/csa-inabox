@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Release-Please Status Bypass**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Release-Please Status Bypass**
 
 # Release-Please Status Bypass Runbook
 

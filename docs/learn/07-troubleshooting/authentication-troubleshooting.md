@@ -560,8 +560,8 @@ SynapseBuiltinSqlPoolRequestsEnded
 ## Related Topics
 
 - [Azure Synapse Security Configuration](../best-practices-extra/security/README.md)
-- [Role-Based Access Control in Synapse](../best-practices-extra/security/README.md#authorization-framework)
-- [Managed Identity Setup](../best-practices-extra/security/README.md#azure-active-directory-integration)
+- [Role-Based Access Control in Synapse](../best-practices-extra/security/README.md)
+- [Managed Identity Setup](../best-practices-extra/security/README.md)
 - [Monitoring Authentication Events](../09-monitoring/security-monitoring.md)
 
 ## External Resources

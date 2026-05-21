@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **dbt CI**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **dbt CI**
 
 # dbt CI Runbook (CSA-0089)
 
@@ -17,14 +17,14 @@ or add a new project.
 
 ## 📑 Table of Contents
 
-- [🎯 1. What the workflow does](#-1-what-the-workflow-does)
-- [🚦 2. My PR is blocked by dbt-ci — now what?](#-2-my-pr-is-blocked-by-dbt-ci--now-what)
-- [🧪 3. Reproduce locally](#-3-reproduce-locally)
-- [➕ 4. Adding a new dbt project](#-4-adding-a-new-dbt-project)
-- [🔄 5. Bumping the dbt version](#-5-bumping-the-dbt-version)
-- [📦 6. Caching](#-6-caching)
-- [🧩 7. Known limitations](#-7-known-limitations)
-- [🔗 8. Related](#-8-related)
+- [🎯 1. What the workflow does](#1-what-the-workflow-does)
+- [🚦 2. My PR is blocked by dbt-ci — now what?](#2-my-pr-is-blocked-by-dbt-ci-now-what)
+- [🧪 3. Reproduce locally](#3-reproduce-locally)
+- [➕ 4. Adding a new dbt project](#4-adding-a-new-dbt-project)
+- [🔄 5. Bumping the dbt version](#5-bumping-the-dbt-version)
+- [📦 6. Caching](#6-caching)
+- [🧩 7. Known limitations](#7-known-limitations)
+- [🔗 8. Related](#8-related)
 
 ---
 
@@ -197,6 +197,6 @@ code, bump the literal `dbt-ci-` prefix in the key.
 ## 🔗 8. Related
 
 - Workflow: [`.github/workflows/dbt-ci.yml`](../../.github/workflows/dbt-ci.yml)
-- Local smoke: [`.github/workflows/dbt-ci-smoke.sh`](../../.github/workflows/dbt-ci-smoke.sh)
-- Prod deploy: [`.github/workflows/deploy-dbt.yml`](../../.github/workflows/deploy-dbt.yml)
-- All runbooks: [`docs/runbooks/`](./)
+- Local smoke: [`.github/workflows/dbt-ci-smoke.sh`](https://github.com/fgarofalo56/csa-inabox/blob/main/.github/workflows/dbt-ci-smoke.sh)
+- Prod deploy: [`.github/workflows/deploy-dbt.yml`](https://github.com/fgarofalo56/csa-inabox/blob/main/.github/workflows/deploy-dbt.yml)
+- All runbooks: [`docs/runbooks/`](index.md)

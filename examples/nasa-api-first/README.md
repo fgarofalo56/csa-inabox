@@ -11,7 +11,7 @@
 
 ## 📋 Table of Contents
 - [Overview](#overview)
-  - [Key Features](#-key-features)
+  - [Key Features](#key-features)
   - [Data Sources (public, open-data)](#data-sources-public-open-data)
   - [The Five Pillars This Platform Implements](#the-five-pillars-this-platform-implements)
 - [Architecture Overview](#architecture-overview)
@@ -32,7 +32,7 @@
 - [Data Products](#data-products)
 - [Configuration](#configuration)
 - [Azure Government Notes](#azure-government-notes)
-- [Monitoring & Alerts](#monitoring--alerts)
+- [Monitoring & Alerts](#monitoring-alerts)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [License](#license)

@@ -15,7 +15,7 @@ This playbook is the core migration reference. For the complete Snowflake-to-Azu
     - [Total Cost of Ownership Analysis](snowflake/tco-analysis.md)
     - [Complete Feature Mapping (60+ features)](snowflake/feature-mapping-complete.md)
     - [Federal Migration Guide](snowflake/federal-migration-guide.md)
-    - [Tutorials & Walkthroughs](snowflake/index.md#tutorials)
+    - [Tutorials & Walkthroughs](snowflake/index.md)
     - [Benchmarks & Performance](snowflake/benchmarks.md)
     - [Best Practices](snowflake/best-practices.md)
 

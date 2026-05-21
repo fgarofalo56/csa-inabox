@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **Log Schema**
+[Home](../README.md) > [Docs](index.md) > **Log Schema**
 
 # Log Schema
 
@@ -13,19 +13,19 @@ it.
 
 ## 📑 Table of Contents
 
-- [📋 1. Baseline Fields](#-1-baseline-fields)
-- [⚙️ 2. Services and Their Canonical Events](#️-2-services-and-their-canonical-events)
-- [🔗 3. Trigger Bindings](#-3-trigger-bindings)
+- [📋 1. Baseline Fields](#1-baseline-fields)
+- [⚙️ 2. Services and Their Canonical Events](#2-services-and-their-canonical-events)
+- [🔗 3. Trigger Bindings](#3-trigger-bindings)
     - [HTTP triggers](#http-triggers)
     - [Blob triggers](#blob-triggers)
     - [Event Hub (batch) triggers](#event-hub-batch-triggers)
     - [Timer triggers](#timer-triggers)
     - [CLI entry points](#cli-entry-points)
-- [📊 4. Log Analytics Parsing](#-4-log-analytics-parsing)
+- [📊 4. Log Analytics Parsing](#4-log-analytics-parsing)
     - [Follow a single request end-to-end](#follow-a-single-request-end-to-end)
     - [Top error events per service in the last hour](#top-error-events-per-service-in-the-last-hour)
     - [Batch throughput for the event processor](#batch-throughput-for-the-event-processor)
-- [💻 5. Local and Console Output](#-5-local-and-console-output)
+- [💻 5. Local and Console Output](#5-local-and-console-output)
 
 ---
 

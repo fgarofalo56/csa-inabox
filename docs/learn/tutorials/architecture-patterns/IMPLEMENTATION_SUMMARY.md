@@ -276,8 +276,8 @@ All remaining 13 tutorials have stub pages with:
 
 ### Infrastructure
 
-- [Bicep Templates](../../../infrastructure/tutorials/batch/medallion-architecture/)
-- [Sample Data](../../../examples/architecture-patterns/batch/data/)
+- [Bicep Templates](https://github.com/fgarofalo56/csa-inabox/tree/main/deploy/bicep/) (repository Bicep modules)
+- [Sample Data — Architecture Patterns](../../examples/architecture-patterns/batch/data/README.md)
 
 ### Contributing
 

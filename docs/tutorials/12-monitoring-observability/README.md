@@ -1,5 +1,8 @@
 # Tutorial 12: Monitoring & Observability
 
+![Monitoring and Observability with Azure Monitor + KQL — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/12-monitoring-observability.svg){ .architecture-hero loading="eager" }
+
+
 > **Estimated Time:** 2-3 hours
 > **Difficulty:** Intermediate-Advanced
 

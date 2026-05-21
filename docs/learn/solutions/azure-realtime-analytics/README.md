@@ -25,7 +25,7 @@ Enterprise-grade real-time analytics platform built on Microsoft Azure with Data
 - [Quick Start](#quick-start)
 - [Documentation](#documentation)
 - [Performance Metrics](#performance-metrics)
-- [Security & Compliance](#security--compliance)
+- [Security & Compliance](#security-compliance)
 - [Support](#support)
 
 ---

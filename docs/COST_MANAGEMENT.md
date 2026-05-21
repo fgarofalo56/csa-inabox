@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **Cost Management**
+[Home](../README.md) > [Docs](index.md) > **Cost Management**
 
 # Cost Management Guide
 
@@ -9,36 +9,36 @@ This document covers cost estimation, budget guardrails, and FinOps practices fo
 
 ## 📑 Table of Contents
 
-- [💰 Cost Estimation Approach](#-cost-estimation-approach)
+- [💰 Cost Estimation Approach](#cost-estimation-approach)
     - [Bicep Path (Primary)](#bicep-path-primary)
-    - [Terraform Path (Future)](#terraform-path-future)
-- [🔧 Running Cost Estimates Locally](#-running-cost-estimates-locally)
+    - **Terraform Path (Future)**
+- [🔧 Running Cost Estimates Locally](#running-cost-estimates-locally)
     - [Prerequisites](#prerequisites)
     - [Basic Usage](#basic-usage)
     - [Understanding the Output](#understanding-the-output)
     - [Exit Codes](#exit-codes)
-- [🔄 CI/CD Integration](#-cicd-integration)
-    - [GitHub Actions — Cost Estimate Job](#github-actions--cost-estimate-job)
+- [🔄 CI/CD Integration](#cicd-integration)
+    - [GitHub Actions — Cost Estimate Job](#github-actions-cost-estimate-job)
     - [Adding Cost Estimates to Other Workflows](#adding-cost-estimates-to-other-workflows)
     - [Infracost (Terraform Path)](#infracost-terraform-path)
-- [🚨 Budget Thresholds and Alerts](#-budget-thresholds-and-alerts)
+- [🚨 Budget Thresholds and Alerts](#budget-thresholds-and-alerts)
     - [Policy Rules](#policy-rules)
     - [Azure Cost Management Alerts](#azure-cost-management-alerts)
-- [🏷️ Tagging Strategy](#️-tagging-strategy)
+- [🏷️ Tagging Strategy](#tagging-strategy)
     - [Required Tags](#required-tags)
     - [Enforcement](#enforcement)
-- [📉 Cost Optimization Tips](#-cost-optimization-tips)
-    - [Reserved Instances & Savings Plans](#reserved-instances--savings-plans)
+- [📉 Cost Optimization Tips](#cost-optimization-tips)
+    - [Reserved Instances & Savings Plans](#reserved-instances-savings-plans)
     - [Auto-Pause and Auto-Stop](#auto-pause-and-auto-stop)
     - [Spot VMs and Low-Priority Compute](#spot-vms-and-low-priority-compute)
     - [Storage Tiering](#storage-tiering)
     - [Right-Sizing](#right-sizing)
-- [📊 FinOps Maturity Model](#-finops-maturity-model)
+- [📊 FinOps Maturity Model](#finops-maturity-model)
     - [Stage 1: Crawl (Current)](#stage-1-crawl-current)
     - [Stage 2: Walk](#stage-2-walk)
     - [Stage 3: Run](#stage-3-run)
-- [📋 Resource-Specific Pricing Reference](#-resource-specific-pricing-reference)
-- [📚 Further Reading](#-further-reading)
+- [📋 Resource-Specific Pricing Reference](#resource-specific-pricing-reference)
+- [📚 Further Reading](#further-reading)
 
 ---
 

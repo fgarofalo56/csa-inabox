@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Tutorials](./README.md) > **Great Expectations**
+[Home](../../README.md) > [Docs](../index.md) > [Tutorials](./README.md) > **Great Expectations**
 
 # Great Expectations Tutorial (CSA-0074)
 

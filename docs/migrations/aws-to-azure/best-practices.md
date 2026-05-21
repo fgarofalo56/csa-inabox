@@ -257,7 +257,7 @@ Use dbt tests + a validation notebook (see the companion tutorials for code). Au
 
 **What happens:** Teams assume Redshift SQL is "just PostgreSQL" and that Databricks SQL is close enough. In practice, there are 25+ dialect differences that cause silent data errors or query failures.
 
-**Solution:** Use the [SQL dialect conversion table](tutorial-redshift-to-fabric.md#step-5-convert-redshift-sql-to-sparksql--databricks-sql) to systematically convert every query. Run automated regression tests comparing Redshift and Databricks results for every converted query.
+**Solution:** Use the [SQL dialect conversion table](tutorial-redshift-to-fabric.md#step-5-convert-redshift-sql-to-sparksql-databricks-sql) to systematically convert every query. Run automated regression tests comparing Redshift and Databricks results for every converted query.
 
 ### Pitfall 4: Not leveraging OneLake shortcuts for hybrid periods
 

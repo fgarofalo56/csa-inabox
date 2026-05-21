@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Quickstarts](./) > **Data Engineer**
+[Home](../../README.md) > [Docs](../index.md) > [Quickstarts](index.md) > **Data Engineer**
 
 # Data Engineer Quickstart -- Your First Pipeline in 30 Minutes
 

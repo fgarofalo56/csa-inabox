@@ -180,4 +180,4 @@ Planned additions:
 
 - [OSS Alternatives](../../csa_platform/oss_alternatives/README.md) — Helm charts and details
 - [Foundation Tutorial](../tutorials/01-foundation-platform/README.md) — base platform setup
-- [Governance Docs](governance/) — Purview configuration
+- [Microsoft Purview Guide](purview.md) — Purview configuration and data governance

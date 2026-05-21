@@ -98,7 +98,7 @@ __Week 1-2__: [Prerequisites & Setup](PREREQUISITES.md) + [Medallion Architectur
 
 __Week 3-4__: [Hub & Spoke Model](batch/hub-spoke-tutorial.md) + Start streaming with [Kappa Architecture](streaming/kappa-architecture-tutorial.md)
 
-__Week 5-6__: [Lambda Architecture](streaming/lambda-architecture-tutorial.md) + Choose your industry [Reference Architecture](reference/)
+__Week 5-6__: [Lambda Architecture](streaming/lambda-architecture-tutorial.md) + Choose your industry [Reference Architecture](reference/iot-analytics-tutorial.md)
 
 ### 🔧 Intermediate Path
 
@@ -114,7 +114,7 @@ Building production systems? Deep dive into:
 
 1. __Multi-Database__: [Polyglot Persistence](hybrid/polyglot-persistence-tutorial.md)
 2. __Real-Time Analytics__: [HTAP Patterns](hybrid/htap-patterns-tutorial.md)
-3. __Industry Solutions__: Choose your domain-specific [Reference Architecture](reference/)
+3. __Industry Solutions__: Choose your domain-specific [Reference Architecture](reference/iot-analytics-tutorial.md)
 
 ---
 

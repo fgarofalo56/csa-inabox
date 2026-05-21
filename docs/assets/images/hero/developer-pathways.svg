@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="t d" preserveAspectRatio="xMidYMid slice">
+  <title id="t">Developer Pathways</title>
+  <desc id="d">Seven role tracks into the CSA-in-a-Box monorepo.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="0.7">
+      <stop offset="0%" stop-color="#1E1B4B"/>
+      <stop offset="60%" stop-color="#312E81"/>
+      <stop offset="100%" stop-color="#1E1B4B"/>
+    </linearGradient>
+    <linearGradient id="accent-bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#818CF8"/>
+      <stop offset="100%" stop-color="#C7D2FE"/>
+    </linearGradient>
+    <filter id="depth" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6"/>
+      <feOffset dy="4"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.45"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .h-title { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:600; font-size:64px; fill:#FFFFFF; letter-spacing:-1.2px; }
+      .h-sub   { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:400; font-size:22px; fill:#FFFFFF; fill-opacity:0.82; letter-spacing:-0.2px; }
+      .h-chip  { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:13px; letter-spacing:2.5px; fill:#FFFFFF; }
+      .g-label { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:13px; fill:#FFFFFF; letter-spacing:0.5px; }
+      .g-num   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:14px; fill:#FFFFFF; letter-spacing:0.5px; }
+      .g-cap   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:10px; fill:#FFFFFF; fill-opacity:0.6; letter-spacing:1.5px; }
+    </style>
+  </defs>
+
+  <!-- Base gradient -->
+  <rect width="1600" height="420" fill="url(#bg)"/>
+
+  <!-- Single bold vertical accent stripe on the left edge -->
+  <rect x="0" y="0" width="6" height="420" fill="#C7D2FE"/>
+  <rect x="0" y="0" width="6" height="120" fill="#818CF8"/>
+
+  <!-- Subtle horizontal scan-line at bottom for structure -->
+  <rect x="0" y="408" width="1600" height="2" fill="#C7D2FE" fill-opacity="0.25"/>
+
+  <!-- Chip (top-left) -->
+  <g transform="translate(80, 60)">
+    <rect x="0" y="0" width="226" height="32" rx="0" fill="#A5B4FC" fill-opacity="0.08" stroke="#A5B4FC" stroke-opacity="0.5" stroke-width="1"/>
+    <rect x="0" y="0" width="6" height="32" fill="#A5B4FC"/>
+    <text class="h-chip" x="124.0" y="21.5" text-anchor="middle" fill="#A5B4FC">PATHWAYS · BY ROLE</text>
+  </g>
+
+  <!-- Title -->
+  <text class="h-title" x="80" y="200">Developer Pathways</text>
+
+  <!-- Subtitle -->
+  <text class="h-sub" x="80" y="248">Seven role tracks into the CSA-in-a-Box monorepo.</text>
+
+  <!-- Coordinate marker tag below subtitle (technical-drawing flavor) -->
+  <g transform="translate(80, 300)">
+    <rect x="0" y="0" width="56" height="20" fill="#A5B4FC" fill-opacity="0.1" stroke="#A5B4FC" stroke-opacity="0.3" stroke-width="1"/>
+    <text class="g-cap" x="28" y="14" text-anchor="middle" fill="#A5B4FC">CSA-IN-A-BOX</text>
+  </g>
+  <text class="g-cap" x="146" y="314" fill="#C7D2FE" fill-opacity="0.65">v0.6.9 · azure-native</text>
+
+  <!-- Schematic composition on the right (x≈960-1540, y≈70-360) -->
+  <rect x="1180" y="180" width="140" height="60" fill="#A5B4FC" fill-opacity="0.2" stroke="#A5B4FC" stroke-opacity="0.7" stroke-width="1.5" filter="url(#depth)"/>
+  <rect x="1180" y="180" width="6" height="60" fill="#C7D2FE"/>
+  <text class="g-label" x="1250" y="206" text-anchor="middle" fill="#FFFFFF">CORE</text>
+  <text class="g-cap" x="1250" y="226" text-anchor="middle" fill="#FFFFFF" fill-opacity="0.7">monorepo</text>
+  <rect x="1000" y="90" width="100" height="50" fill="#A5B4FC" fill-opacity="0.1" stroke="#A5B4FC" stroke-opacity="0.5" stroke-width="1.2"/>
+  <text class="g-label" x="1050" y="122" text-anchor="middle" fill="#C7D2FE">GOV</text>
+  <rect x="1180" y="90" width="100" height="50" fill="#A5B4FC" fill-opacity="0.1" stroke="#A5B4FC" stroke-opacity="0.5" stroke-width="1.2"/>
+  <text class="g-label" x="1230" y="122" text-anchor="middle" fill="#C7D2FE">DATA</text>
+  <rect x="1360" y="90" width="100" height="50" fill="#A5B4FC" fill-opacity="0.1" stroke="#A5B4FC" stroke-opacity="0.5" stroke-width="1.2"/>
+  <text class="g-label" x="1410" y="122" text-anchor="middle" fill="#C7D2FE">INFRA</text>
+  <rect x="1000" y="320" width="100" height="50" fill="#A5B4FC" fill-opacity="0.1" stroke="#A5B4FC" stroke-opacity="0.5" stroke-width="1.2"/>
+  <text class="g-label" x="1050" y="352" text-anchor="middle" fill="#C7D2FE">PORTAL</text>
+  <rect x="1180" y="320" width="100" height="50" fill="#A5B4FC" fill-opacity="0.1" stroke="#A5B4FC" stroke-opacity="0.5" stroke-width="1.2"/>
+  <text class="g-label" x="1230" y="352" text-anchor="middle" fill="#C7D2FE">AI/ML</text>
+  <rect x="1360" y="320" width="100" height="50" fill="#A5B4FC" fill-opacity="0.1" stroke="#A5B4FC" stroke-opacity="0.5" stroke-width="1.2"/>
+  <text class="g-label" x="1410" y="352" text-anchor="middle" fill="#C7D2FE">MONITOR</text>
+  <line x1="1050" y1="140" x2="1200" y2="180" stroke="#C7D2FE" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="1230" y1="140" x2="1240" y2="180" stroke="#C7D2FE" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="1410" y1="140" x2="1300" y2="180" stroke="#C7D2FE" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="1050" y1="320" x2="1200" y2="240" stroke="#C7D2FE" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="1230" y1="320" x2="1240" y2="240" stroke="#C7D2FE" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="1410" y1="320" x2="1300" y2="240" stroke="#C7D2FE" stroke-width="1" stroke-opacity="0.5"/>
+
+</svg>

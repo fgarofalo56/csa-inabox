@@ -247,7 +247,7 @@ See [Accessibility Guidelines](./accessibility.md#wcag-21-compliance) for full r
 - **Scripts**: AI can help with outlines and drafts, but human review is essential for quality
 - **Transcripts**: AI transcription works well for clear audio, less so for technical jargon
 
-See relevant sections in [Accessibility Guidelines](./accessibility.md#caption-services) and [Script Writing](./script-writing.md#script-development).
+See relevant sections in [Accessibility Guidelines](./accessibility.md#caption-services) and [Script Writing](./script-writing.md).
 
 ## Standards & Compliance
 

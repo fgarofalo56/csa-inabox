@@ -1285,9 +1285,9 @@ class FinancialTransactionProcessor:
 
 ### Code Examples
 
-- [Kappa Architecture Samples](../../code-examples/kappa-architecture/)
-- [Structured Streaming Examples](../../code-examples/structured-streaming/)
-- [Event Replay Patterns](../../code-examples/event-replay/)
+- [Code Examples — Index](../../06-code-examples/README.md)
+- [Delta Lake Guide](../../06-code-examples/delta-lake-guide.md)
+- [Emerging Patterns](../../06-code-examples/emerging-patterns.md)
 
 ### Related Patterns
 

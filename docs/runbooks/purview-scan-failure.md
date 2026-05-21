@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Purview Scan Failure**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Purview Scan Failure**
 
 # Runbook — Purview Scan Failure Diagnostics
 
@@ -10,7 +10,7 @@
 
 ## Before First Use — Customization Checklist
 
-- [ ] Populate the [Contact Information](#-contact-information) table.
+- [ ] Populate the [Contact Information](#8-contact-information) table.
 - [ ] Confirm the Purview account name(s) per environment.
 - [ ] Confirm which scan rule sets are assigned to each registered source.
 - [ ] Verify SHIR VM names and auto-start configuration if applicable.
@@ -18,16 +18,16 @@
 
 ## 📑 Table of Contents
 
-- [📋 1. Symptoms](#-1-symptoms)
-- [🔍 2. Triage](#-2-triage)
-- [🧪 3. Common Failure Causes](#-3-common-failure-causes)
-- [🌐 4. Connectivity Diagnostics](#-4-connectivity-diagnostics)
-- [🔑 5. Permission Verification](#-5-permission-verification)
-- [⚡ 6. Scan Optimization](#-6-scan-optimization)
-- [📊 7. Monitoring](#-7-monitoring)
-- [📎 8. Contact Information](#-8-contact-information)
-- [🗓️ 9. Drill Log](#️-9-drill-log)
-- [🔗 10. Related Documentation](#-10-related-documentation)
+- [📋 1. Symptoms](#1-symptoms)
+- [🔍 2. Triage](#2-triage)
+- [🧪 3. Common Failure Causes](#3-common-failure-causes)
+- [🌐 4. Connectivity Diagnostics](#4-connectivity-diagnostics)
+- [🔑 5. Permission Verification](#5-permission-verification)
+- [⚡ 6. Scan Optimization](#6-scan-optimization)
+- [📊 7. Monitoring](#7-monitoring)
+- [📎 8. Contact Information](#8-contact-information)
+- [🗓️ 9. Drill Log](#9-drill-log)
+- [🔗 10. Related Documentation](#10-related-documentation)
 
 ---
 

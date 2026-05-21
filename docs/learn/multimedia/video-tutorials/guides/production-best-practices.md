@@ -828,7 +828,7 @@ Layout Example:
 - **[Script Template](./templates/script-template.md)** - Standard script format
 - **[Shot List Template](./templates/shot-list.md)** - Production planning
 - **[Review Checklist](./templates/review-checklist.md)** - Quality assurance
-- **[Thumbnail Templates](./templates/thumbnail-psd)** - Photoshop templates
+- **Thumbnail Templates** - Photoshop templates *(asset bundle pending)*
 
 ### Communities
 

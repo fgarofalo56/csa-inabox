@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Copilot Studio Agent Rotation**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Copilot Studio Agent Rotation**
 
 # Copilot Studio Agent Rotation Runbook
 

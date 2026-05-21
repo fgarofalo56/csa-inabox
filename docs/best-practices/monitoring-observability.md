@@ -11,6 +11,9 @@ tags:
 
 # Monitoring & Observability
 
+
+![Monitoring & observability best practice hero: dashboard with bar chart, spark line, and title bar in green gradient](../assets/images/hero/best-practices/monitoring-observability.svg){ .architecture-hero loading="eager" }
+
 ## Overview
 
 Effective observability for data platforms rests on three pillars: **metrics**, **logs**, and **traces**. Together they answer _what happened_, _why it happened_, and _how long it took_.

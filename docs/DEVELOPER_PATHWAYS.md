@@ -1,6 +1,8 @@
-[Home](../README.md) > [Docs](./) > **Developer Pathways**
+[Home](../README.md) > [Docs](index.md) > **Developer Pathways**
 
 # Developer Pathways
+
+![Developer pathways into CSA-in-a-Box: seven role lanes — Governance Engineer, Data Engineer, Platform Engineer, Portal Developer, AI/ML Engineer, Functions Developer, and Monitoring/SRE — converging via colored arcs into the central monorepo hub in Microsoft Azure brand colors](assets/images/hero/developer-pathways.svg){ .architecture-hero loading="eager" }
 
 !!! note
 **Quick Summary**: Role-based navigation guide for the CSA-in-a-Box codebase — find your area of focus (governance, pipelines, infra, portal, AI/ML, Functions, monitoring), jump to the relevant code, and get started with key commands and directory maps.

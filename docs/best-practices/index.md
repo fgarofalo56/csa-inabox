@@ -1,5 +1,8 @@
 # Best Practices
 
+
+![Best practices index hero: nine mini card grid in Azure blue showing the full catalog of guides](../assets/images/hero/best-practices/index.svg){ .architecture-hero loading="eager" }
+
 Nine field-tested guides for running cloud-scale analytics + AI on Azure. Each one is independent — read the ones relevant to your role.
 
 | Guide                                                     | When to read                                           | Length    |

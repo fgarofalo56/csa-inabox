@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Fabric Capacity Management**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Fabric Capacity Management**
 
 # Runbook — Fabric Capacity Management
 
@@ -9,7 +9,7 @@
 
 ## Before First Use — Customization Checklist
 
-- [ ] Populate the [Contact Information](#-8-contact-information) table with
+- [ ] Populate the [Contact Information](#contact-information) table with
       your Fabric admin and platform engineering leads.
 - [ ] Replace `<capacity-name>` placeholders with your real capacity names
       (dev / staging / prod).

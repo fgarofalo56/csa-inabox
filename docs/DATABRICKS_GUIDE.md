@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **Databricks Guide**
+[Home](../README.md) > [Docs](index.md) > **Databricks Guide**
 
 # Databricks Guide
 
@@ -11,23 +11,23 @@ orchestration, dbt integration, and Unity Catalog.
 
 ## 📑 Table of Contents
 
-- [⚙️ Workspace Setup](#️-workspace-setup)
+- [⚙️ Workspace Setup](#workspace-setup)
     - [Prerequisites](#prerequisites)
     - [Cluster Configuration](#cluster-configuration)
     - [Required Spark configuration](#required-spark-configuration)
-- [📁 Notebook Inventory](#-notebook-inventory)
+- [📁 Notebook Inventory](#notebook-inventory)
     - [Naming conventions](#naming-conventions)
-- [🔄 Notebook Orchestration](#-notebook-orchestration)
+- [🔄 Notebook Orchestration](#notebook-orchestration)
     - [Pattern 1: dbutils.notebook.run() (simple)](#pattern-1-dbutilsnotebookrun-simple)
     - [Pattern 2: ADF orchestration (production)](#pattern-2-adf-orchestration-production)
     - [Pattern 3: Databricks Workflows (native)](#pattern-3-databricks-workflows-native)
-- [🗄️ dbt on Databricks](#️-dbt-on-databricks)
+- [🗄️ dbt on Databricks](#dbt-on-databricks)
     - [Profile configuration](#profile-configuration)
     - [Environment variables](#environment-variables)
     - [Running dbt from a notebook](#running-dbt-from-a-notebook)
     - [Running dbt locally](#running-dbt-locally)
-- [📊 Unity Catalog Setup](#-unity-catalog-setup)
-- [🔧 Troubleshooting](#-troubleshooting)
+- [📊 Unity Catalog Setup](#unity-catalog-setup)
+- [🔧 Troubleshooting](#troubleshooting)
 
 ---
 
@@ -38,7 +38,7 @@ orchestration, dbt integration, and Unity Catalog.
 - [ ] Databricks workspace deployed via Bicep (`deploy/bicep/DLZ/modules/databricks/`)
 - [ ] ADLS Gen2 storage with Bronze/Silver/Gold containers
 - [ ] Key Vault with access tokens and connection secrets
-- [ ] Unity Catalog metastore (see [Unity Catalog Setup](#-unity-catalog-setup))
+- [ ] Unity Catalog metastore (see [Unity Catalog Setup](#unity-catalog-setup))
 
 ### Cluster Configuration
 

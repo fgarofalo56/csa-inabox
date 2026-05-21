@@ -91,6 +91,56 @@ Four pages cover the full path from "what is this?" to "deployed in production."
 
 CSA-in-a-Box is not just a collection of Bicep modules — it is a working implementation of three converging data architecture paradigms that together define what "cloud-scale analytics" means in practice.
 
+```mermaid
+flowchart LR
+    classDef mesh   fill:#E3F2FD,stroke:#0078D4,color:#003E6F,stroke-width:2px
+    classDef fabric fill:#F3E5F5,stroke:#5C2D91,color:#3A1B5F,stroke-width:2px
+    classDef lake   fill:#E0F7FA,stroke:#00BCF2,color:#00576B,stroke-width:2px
+    classDef hub    fill:#FFFFFF,stroke:#323130,color:#1F1F1F,stroke-width:3px
+
+    M1[Domain-owned<br/>data products]:::mesh
+    M2[Self-serve<br/>infrastructure]:::mesh
+    M3[Federated<br/>governance]:::mesh
+
+    F1[Purview<br/>catalog]:::fabric
+    F2[Lineage +<br/>classification]:::fabric
+    F3[Marketplace<br/>API]:::fabric
+
+    L1[Delta Lake on<br/>ADLS Gen2]:::lake
+    L2[Medallion<br/>Bronze→Silver→Gold]:::lake
+    L3[Databricks +<br/>Synapse engines]:::lake
+
+    HUB((CSA-in-a-Box<br/>Azure platform)):::hub
+
+    M1 --> HUB
+    M2 --> HUB
+    M3 --> HUB
+    F1 --> HUB
+    F2 --> HUB
+    F3 --> HUB
+    L1 --> HUB
+    L2 --> HUB
+    L3 --> HUB
+
+    subgraph MESH["Data Mesh — domain ownership"]
+        M1
+        M2
+        M3
+    end
+    subgraph FABRIC["Data Fabric — unified governance"]
+        F1
+        F2
+        F3
+    end
+    subgraph LAKE["Data Lakehouse — Delta medallion"]
+        L1
+        L2
+        L3
+    end
+```
+
+<small>Source diagram editable in atlas-diag: `dgm_e24ec57b530af206d287` ([open in designer](http://localhost:3080/designer?diagram=dgm_e24ec57b530af206d287)).</small>
+
 ### :material-hubspot:{ .lg } Data Mesh — domain-oriented ownership
 
 Data Mesh treats data as a product owned by the domain that produces it, not a centralized team. In CSA-in-a-Box:
@@ -184,7 +234,7 @@ CSA-in-a-Box is **not** a blanket substitute for Microsoft Fabric. For most Azur
 
 For the full decision logic — including Fabric vs. Databricks vs. Synapse — see the [Fabric vs. Databricks vs. Synapse decision tree](decisions/fabric-vs-databricks-vs-synapse.md) and [ADR-0010: Fabric Strategic Target](adr/0010-fabric-strategic-target.md).
 
-For the full capability matrix and Fabric-equivalent mapping, see [Architecture → What's Included](ARCHITECTURE.md#whats-included).
+For the full capability matrix and Fabric-equivalent mapping, see [Architecture → What's Included](ARCHITECTURE.md).
 
 For deep-dive Fabric content — tutorials, feature guides, best practices, POC agendas, and ready-to-run notebooks — see the [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) companion site.
 

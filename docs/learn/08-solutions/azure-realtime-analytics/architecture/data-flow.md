@@ -21,12 +21,12 @@ This document details the end-to-end data flow architecture for the Azure Real-T
 
 - [Data Flow Overview](#data-flow-overview)
 - [Ingestion Patterns](#ingestion-patterns)
-- [Processing Stages](#processing-stages)
+- **Processing Stages**
 - [Bronze Layer Processing](#bronze-layer-processing)
 - [Silver Layer Processing](#silver-layer-processing)
 - [Gold Layer Processing](#gold-layer-processing)
 - [Streaming Patterns](#streaming-patterns)
-- [Batch Patterns](#batch-patterns)
+- **Batch Patterns**
 - [Data Quality Gates](#data-quality-gates)
 - [Consumption Patterns](#consumption-patterns)
 

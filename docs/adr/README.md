@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > **Architecture Decision Records**
+[Home](../../README.md) > [Docs](../index.md) > **Architecture Decision Records**
 
 # Architecture Decision Records (ADRs)
 

@@ -214,15 +214,15 @@ Migration timelines depend heavily on Oracle estate complexity. These are repres
 | Oracle feature                         | Conversion guide                                                  |
 | -------------------------------------- | ----------------------------------------------------------------- |
 | PL/SQL packages, procedures, functions | [Schema Migration](schema-migration.md)                           |
-| RAC (Real Application Clusters)        | [Feature Mapping](feature-mapping-complete.md#high-availability)  |
-| Data Guard                             | [Feature Mapping](feature-mapping-complete.md#disaster-recovery)  |
-| Partitioning                           | [Feature Mapping](feature-mapping-complete.md#partitioning)       |
+| RAC (Real Application Clusters)        | [Feature Mapping](feature-mapping-complete.md#oracle-to-azure-complete-feature-mapping)  |
+| Data Guard                             | [Feature Mapping](feature-mapping-complete.md#oracle-to-azure-complete-feature-mapping)  |
+| Partitioning                           | [Feature Mapping](feature-mapping-complete.md#oracle-to-azure-complete-feature-mapping)       |
 | Virtual Private Database (VPD)         | [Security Migration](security-migration.md)                       |
 | Transparent Data Encryption (TDE)      | [Security Migration](security-migration.md)                       |
-| Advanced Queuing (AQ)                  | [Feature Mapping](feature-mapping-complete.md#messaging)          |
-| Oracle Spatial                         | [Feature Mapping](feature-mapping-complete.md#spatial)            |
-| Materialized Views                     | [Feature Mapping](feature-mapping-complete.md#materialized-views) |
-| Oracle Text / Full-Text                | [Feature Mapping](feature-mapping-complete.md#full-text-search)   |
+| Advanced Queuing (AQ)                  | [Feature Mapping](feature-mapping-complete.md#oracle-to-azure-complete-feature-mapping)          |
+| Oracle Spatial                         | [Feature Mapping](feature-mapping-complete.md#oracle-to-azure-complete-feature-mapping)            |
+| Materialized Views                     | [Feature Mapping](feature-mapping-complete.md#oracle-to-azure-complete-feature-mapping) |
+| Oracle Text / Full-Text                | [Feature Mapping](feature-mapping-complete.md#oracle-to-azure-complete-feature-mapping)   |
 
 ---
 
