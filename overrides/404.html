@@ -1,0 +1,88 @@
+{% extends "main.html" %}
+
+{#- Branded 404 page. GitHub Pages serves /404.html for any path that
+    doesn't resolve, so visitors landing on a renamed or deleted page
+    get this off-ramp instead of the default white-page Material 404.
+
+    The hero is rendered manually here (instead of via page.meta) since
+    the 404 isn't a markdown page — it's a Jinja template. -#}
+
+{% block content %}
+  <section class="page-hero-region" aria-label="Page hero">
+    <div class="page-hero-grid md-grid">
+      <img
+        class="page-hero-image"
+        src="{{ base_url }}/assets/images/hero/404.svg"
+        alt="404 — page not found"
+        loading="eager"
+        decoding="async">
+    </div>
+  </section>
+
+  <article class="md-content__inner md-typeset">
+    <h1>Lost in the data mesh?</h1>
+
+    <p>The page you're looking for doesn't exist — maybe it moved, maybe
+    it was renamed, or maybe a stray Bronze table swallowed it. Either
+    way, here's where you probably want to go next:</p>
+
+    <div class="grid cards">
+      <ul>
+        <li>
+          <p><strong>🏠 Home</strong></p>
+          <p>Start at the front door — what Cloud Scale Analytics is,
+             who it's for, and how to get oriented.</p>
+          <p><a href="{{ base_url }}/">→ Home</a></p>
+        </li>
+        <li>
+          <p><strong>🚀 Get Started</strong></p>
+          <p>30-minute tour, quickstart, developer pathways, and the
+             production readiness checklist.</p>
+          <p><a href="{{ base_url }}/GETTING_STARTED/">→ Get Started</a></p>
+        </li>
+        <li>
+          <p><strong>🏛️ Architecture</strong></p>
+          <p>Four-subscription landing zone, reference architectures,
+             decision trees, ADRs, and best practices.</p>
+          <p><a href="{{ base_url }}/ARCHITECTURE/">→ Architecture</a></p>
+        </li>
+        <li>
+          <p><strong>⚙️ Build</strong></p>
+          <p>17 hands-on tutorials, end-to-end examples, patterns,
+             and Azure service guides.</p>
+          <p><a href="{{ base_url }}/tutorials/">→ Build</a></p>
+        </li>
+        <li>
+          <p><strong>🎯 Use Cases &amp; White Papers</strong></p>
+          <p>Industry verticals + government scenarios — healthcare,
+             finance, federal agency analytics, AI-first ecosystems.</p>
+          <p><a href="{{ base_url }}/use-cases/">→ Use Cases</a></p>
+        </li>
+        <li>
+          <p><strong>📚 Reference</strong></p>
+          <p>Log schema, government service matrix, Azure service
+             reference, and Learn library.</p>
+          <p><a href="{{ base_url }}/LOG_SCHEMA/">→ Reference</a></p>
+        </li>
+      </ul>
+    </div>
+
+    <hr>
+
+    <h2>Still stuck?</h2>
+    <ul>
+      <li><strong>🔍 Use the search bar</strong> at the top of the page —
+          there's a full-text index of every doc on the site.</li>
+      <li><strong>💬 Ask the CSA Copilot</strong> via the chat bubble in
+          the lower-right — it knows the entire repo plus Microsoft Learn.</li>
+      <li><strong>🐙 File an issue</strong> at
+          <a href="https://github.com/fgarofalo56/csa-inabox/issues/new">github.com</a>
+          if you think this page should exist.</li>
+    </ul>
+
+    <blockquote>
+      <p><em>"You can't unify your data platform if the docs don't unify themselves."</em><br>
+         — every platform engineer, probably</p>
+    </blockquote>
+  </article>
+{% endblock %}

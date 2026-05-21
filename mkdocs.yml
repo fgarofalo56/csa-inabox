@@ -8,6 +8,8 @@ edit_uri: edit/main/docs/
 theme:
   name: material
   custom_dir: overrides
+  logo: assets/images/logo.svg
+  favicon: assets/images/logo.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default

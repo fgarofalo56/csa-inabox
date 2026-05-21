@@ -132,6 +132,41 @@ _SECTION_DEFAULTS: dict[str, tuple[str, str]] = {
         "Architecture Decision Records — the durable rationale behind "
         "every platform choice from ADF over Airflow to APIM as integration fabric",
     ),
+    "guides": (
+        "assets/images/hero/guides/index.svg",
+        "Platform guides — Databricks, Synapse, Fabric, Cosmos, Purview, "
+        "AI Foundry, and the orchestration layer",
+    ),
+    "industries": (
+        "assets/images/hero/industries/index.svg",
+        "Industry verticals — financial services, manufacturing, retail, "
+        "energy, telecom, life sciences sector reference patterns",
+    ),
+    "migrations": (
+        "assets/images/hero/migrations/index.svg",
+        "Migration centers — AWS, GCP, Snowflake, Databricks, Teradata, "
+        "Cloudera, Informatica, Palantir, SAS, Oracle to Azure",
+    ),
+    "assessments": (
+        "assets/images/hero/assessments/index.svg",
+        "Platform assessments — migration readiness, platform maturity, "
+        "compliance gap analysis: score-then-roadmap workflows",
+    ),
+    "quickstarts": (
+        "assets/images/hero/quickstarts/index.svg",
+        "Role-based quickstarts — Data Engineer, Data Scientist, BI "
+        "Developer, Security Admin, Platform Admin tracks",
+    ),
+    "patterns": (
+        "assets/images/hero/patterns/index.svg",
+        "Architecture patterns — Cosmos DB, AKS + Container Apps, "
+        "LLMOps, networking + DNS, OpenTelemetry, streaming + CDC",
+    ),
+    "comparison": (
+        "assets/images/hero/comparison/index.svg",
+        "Comparisons — Azure side-by-side with MuleSoft, AWS API stack, "
+        "Fabric, and other major data platforms",
+    ),
 }
 
 
