@@ -3,7 +3,7 @@ title: Home
 description: CSA-in-a-Box — Azure-native reference implementation for Data Mesh, Data Fabric, and Data Lakehouse
 ---
 
-# CSA-in-a-Box
+# Cloud Scale Analytics in a Box
 
 **Azure-native reference implementation of Microsoft's "Unify your data platform" Cloud Adoption Framework guidance.**
 
@@ -15,7 +15,7 @@ Fork it, deploy it, customize it. Production-grade Bicep + reference code you ow
 [:octicons-zap-16: Quickstart (5 min)](QUICKSTART.md){ .md-button }
 [:octicons-mark-github-16: View on GitHub](https://github.com/fgarofalo56/csa-inabox){ .md-button }
 
-[![CSA-in-a-Box four-subscription landing-zone architecture: Management, Connectivity, Data Management LZ, and Data Landing Zones with Delta Lake medallion data flow and Purview governance](assets/images/architecture-hero.svg){ .architecture-hero loading="eager" }](ARCHITECTURE.md "Open the full architecture reference")
+[![Cloud Scale Analytics in a Box — Azure-native reference for Data Mesh, Data Fabric, and Data Lakehouse. Eight building blocks: domain mesh, governance fabric, Delta lakehouse, streaming, AI and ML, APIs, compliance, and infrastructure as code, on the four-subscription landing zone](assets/images/architecture-hero.svg){ .architecture-hero loading="eager" }](ARCHITECTURE.md "Open the full architecture reference")
 
 ---
 

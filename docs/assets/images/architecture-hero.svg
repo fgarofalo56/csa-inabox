@@ -1,178 +1,170 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 460" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
-  <title id="title">CSA-in-a-Box four-subscription landing-zone architecture</title>
-  <desc id="desc">Management, Connectivity, Data Management, and Data Landing Zone subscriptions. Hub-and-spoke topology with Purview governance, Delta Lake medallion data flow, and AI integration.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="csa-hero-title csa-hero-desc" font-family="'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title id="csa-hero-title">Cloud Scale Analytics in a Box — Azure-native reference platform</title>
+  <desc id="csa-hero-desc">Azure-native reference implementation of Data Mesh, Data Fabric, and Data Lakehouse paradigms. Eight building blocks: domain mesh, governance fabric, Delta lakehouse, streaming, AI and ML, APIs and integration, compliance, and infrastructure as code.</desc>
 
   <defs>
-    <linearGradient id="mgmt" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5B6CFF"/>
-      <stop offset="1" stop-color="#3F4CD8"/>
+    <linearGradient id="csa-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0A1126"/>
+      <stop offset="0.45" stop-color="#161B45"/>
+      <stop offset="1" stop-color="#0B1132"/>
     </linearGradient>
-    <linearGradient id="conn" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#34C2A4"/>
-      <stop offset="1" stop-color="#1F9D85"/>
+
+    <radialGradient id="csa-glow-title" cx="0.18" cy="0.55" r="0.45">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="csa-glow-tiles" cx="0.78" cy="0.5" r="0.4">
+      <stop offset="0" stop-color="#8B5CF6" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#8B5CF6" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="csa-tile-cyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0E2A4A"/>
+      <stop offset="1" stop-color="#0A1A33"/>
     </linearGradient>
-    <linearGradient id="dmlz" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#A05BFF"/>
-      <stop offset="1" stop-color="#7B3CD3"/>
+    <linearGradient id="csa-tile-violet" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2A1A4D"/>
+      <stop offset="1" stop-color="#170A33"/>
     </linearGradient>
-    <linearGradient id="dlz" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFB454"/>
-      <stop offset="1" stop-color="#E08B1A"/>
+    <linearGradient id="csa-tile-teal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0D3A3D"/>
+      <stop offset="1" stop-color="#0A1F26"/>
     </linearGradient>
-    <linearGradient id="bronze" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#CD7F32"/>
-      <stop offset="1" stop-color="#B8732C"/>
+    <linearGradient id="csa-tile-amber" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3D2A0D"/>
+      <stop offset="1" stop-color="#1F1505"/>
     </linearGradient>
-    <linearGradient id="silver" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#B8C2CC"/>
-      <stop offset="1" stop-color="#8E99A4"/>
+
+    <pattern id="csa-dots" x="0" y="0" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#3B4670" fill-opacity="0.35"/>
+    </pattern>
+
+    <pattern id="csa-grid-lines" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M0 0 L40 0 M0 0 L0 40" stroke="#22D3EE" stroke-opacity="0.06" stroke-width="0.5"/>
+    </pattern>
+
+    <linearGradient id="csa-chip" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#8B5CF6" stop-opacity="0.15"/>
     </linearGradient>
-    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#F1C232"/>
-      <stop offset="1" stop-color="#D4A017"/>
-    </linearGradient>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-      <path d="M0,0 L0,10 L10,5 z" fill="#94a3b8"/>
-    </marker>
-    <style>
-      .lz-title { font-size: 16px; font-weight: 700; fill: #fff; letter-spacing: 0.04em; text-transform: uppercase; }
-      .lz-sub { font-size: 13px; fill: rgba(255,255,255,0.9); }
-      .svc { font-size: 13px; font-weight: 600; fill: #fff; }
-      .layer { font-size: 15px; font-weight: 700; fill: #fff; letter-spacing: 0.06em; text-transform: uppercase; }
-      .layer-sub { font-size: 12px; fill: rgba(255,255,255,0.9); }
-      .flow { font-size: 13px; fill: #475569; font-weight: 500; }
-      .legend { font-size: 13px; fill: #64748b; }
-      .h1 { font-size: 22px; font-weight: 700; fill: #1e293b; }
-    </style>
   </defs>
 
-  <!-- Management subscription -->
-  <g transform="translate(20,30)">
-    <rect width="270" height="195" rx="10" fill="url(#mgmt)"/>
-    <text x="16" y="26" class="lz-title">Management</text>
-    <text x="16" y="44" class="lz-sub">Logging · Policy · Monitor</text>
-    <g transform="translate(14,60)">
-      <rect width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="20" class="svc">Log Analytics</text>
-      <rect x="125" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="137" y="20" class="svc">Azure Policy</text>
-      <rect y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="62" class="svc">Azure Monitor</text>
-      <rect x="125" y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="137" y="62" class="svc">Sentinel</text>
-      <rect y="84" width="240" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="104" class="svc">Cost Management · Defender for Cloud</text>
-    </g>
+  <rect width="1600" height="420" fill="url(#csa-bg)"/>
+  <rect width="1600" height="420" fill="url(#csa-dots)"/>
+  <rect width="1600" height="420" fill="url(#csa-glow-title)"/>
+  <rect width="1600" height="420" fill="url(#csa-glow-tiles)"/>
+
+  <line x1="48" y1="48" x2="200" y2="48" stroke="#22D3EE" stroke-opacity="0.5" stroke-width="1.5"/>
+
+  <g transform="translate(48, 64)">
+    <rect width="380" height="28" rx="14" fill="url(#csa-chip)" stroke="#22D3EE" stroke-opacity="0.35" stroke-width="1"/>
+    <text x="20" y="19" fill="#A5F3FC" font-size="12" font-weight="600" letter-spacing="2.5" font-family="'JetBrains Mono', ui-monospace, monospace">DATA MESH &#183; DATA FABRIC &#183; DATA LAKEHOUSE</text>
   </g>
 
-  <!-- Connectivity subscription -->
-  <g transform="translate(310,30)">
-    <rect width="270" height="195" rx="10" fill="url(#conn)"/>
-    <text x="16" y="26" class="lz-title">Connectivity</text>
-    <text x="16" y="44" class="lz-sub">Hub VNet · Firewall · Private DNS</text>
-    <g transform="translate(14,60)">
-      <rect width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="20" class="svc">Hub VNet</text>
-      <rect x="125" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="137" y="20" class="svc">Azure Firewall</text>
-      <rect y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="62" class="svc">Private DNS</text>
-      <rect x="125" y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="137" y="62" class="svc">ExpressRoute</text>
-      <rect y="84" width="240" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="104" class="svc">Application Gateway · Front Door · WAF</text>
-    </g>
+  <g transform="translate(48, 130)">
+    <text x="0" y="60" fill="#FFFFFF" font-size="60" font-weight="700" letter-spacing="-1.5">Cloud Scale Analytics</text>
+    <text x="0" y="125" fill="#FFFFFF" font-size="60" font-weight="700" letter-spacing="-1.5">in a Box</text>
   </g>
 
-  <!-- Data Management LZ -->
-  <g transform="translate(600,30)">
-    <rect width="270" height="195" rx="10" fill="url(#dmlz)"/>
-    <text x="16" y="26" class="lz-title">Data Management LZ</text>
-    <text x="16" y="44" class="lz-sub">Catalog · Secrets · Shared services</text>
-    <g transform="translate(14,60)">
-      <rect width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="20" class="svc">Microsoft Purview</text>
-      <rect x="125" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="137" y="20" class="svc">Key Vault</text>
-      <rect y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="62" class="svc">Container Registry</text>
-      <rect x="125" y="42" width="115" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="137" y="62" class="svc">AI Foundry</text>
-      <rect y="84" width="240" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="104" class="svc">Data Marketplace · Contracts · Lineage</text>
-    </g>
+  <g transform="translate(48, 290)">
+    <text x="0" y="0" fill="#94A3B8" font-size="20" font-weight="400">Azure-native reference implementation of Microsoft's</text>
+    <text x="0" y="28" fill="#94A3B8" font-size="20" font-weight="400">&quot;Unify your data platform&quot; Cloud Adoption Framework.</text>
   </g>
 
-  <!-- Data Landing Zone -->
-  <g transform="translate(890,30)">
-    <rect width="290" height="195" rx="10" fill="url(#dlz)"/>
-    <text x="16" y="26" class="lz-title">Data Landing Zone</text>
-    <text x="16" y="44" class="lz-sub">Per domain · ADLS Gen2 + compute</text>
-    <g transform="translate(14,60)">
-      <rect width="125" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="20" class="svc">ADLS Gen2 + Delta</text>
-      <rect x="135" width="125" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="147" y="20" class="svc">Databricks</text>
-      <rect y="42" width="125" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="62" class="svc">Synapse + dbt</text>
-      <rect x="135" y="42" width="125" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="147" y="62" class="svc">Data Factory</text>
-      <rect y="84" width="260" height="32" rx="6" fill="rgba(255,255,255,0.18)"/>
-      <text x="12" y="104" class="svc">Event Hubs · ADX · Cosmos DB · Azure SQL</text>
-    </g>
+  <g transform="translate(48, 372)">
+    <line x1="0" y1="0" x2="120" y2="0" stroke="#22D3EE" stroke-opacity="0.4" stroke-width="1"/>
+    <text x="0" y="22" fill="#64748B" font-size="11" font-weight="500" letter-spacing="2" font-family="'JetBrains Mono', ui-monospace, monospace">95 BICEP MODULES  &#183;  10 EXAMPLES  &#183;  17 TUTORIALS  &#183;  IL4 / IL5</text>
   </g>
 
-  <!-- Connectors between LZs -->
-  <line x1="290" y1="128" x2="310" y2="128" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="580" y1="128" x2="600" y2="128" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
-  <line x1="870" y1="128" x2="890" y2="128" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
+  <g transform="translate(870, 60)">
+    <rect x="-10" y="-10" width="700" height="320" rx="12" fill="url(#csa-grid-lines)" stroke="#22D3EE" stroke-opacity="0.18" stroke-width="1"/>
 
-  <!-- Medallion data flow band -->
-  <g transform="translate(20,260)">
-    <g transform="translate(0,0)">
-      <rect width="370" height="100" rx="10" fill="url(#bronze)"/>
-      <text x="20" y="32" class="layer">Bronze</text>
-      <text x="20" y="50" class="layer-sub">Raw ingest, schema-on-read</text>
-      <g transform="translate(20,62)">
-        <rect width="150" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
-        <text x="10" y="18" class="svc">CDC · API · file drop</text>
-        <rect x="160" width="180" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
-        <text x="170" y="18" class="svc">ADF · Event Hubs · Kafka</text>
+    <g transform="translate(10, 10)">
+      <rect width="160" height="88" rx="8" fill="url(#csa-tile-cyan)" stroke="#22D3EE" stroke-opacity="0.45" stroke-width="1"/>
+      <text x="12" y="22" fill="#67E8F9" font-size="9" font-weight="600" letter-spacing="1.5" font-family="'JetBrains Mono', monospace">01</text>
+      <text x="12" y="48" fill="#FFFFFF" font-size="14" font-weight="600">Data Mesh</text>
+      <text x="12" y="68" fill="#94A3B8" font-size="11">Domain DLZs</text>
+      <line x1="12" y1="76" x2="148" y2="76" stroke="#22D3EE" stroke-opacity="0.35"/>
+    </g>
+    <g transform="translate(180, 10)">
+      <rect width="160" height="88" rx="8" fill="url(#csa-tile-violet)" stroke="#A78BFA" stroke-opacity="0.45" stroke-width="1"/>
+      <text x="12" y="22" fill="#C4B5FD" font-size="9" font-weight="600" letter-spacing="1.5" font-family="'JetBrains Mono', monospace">02</text>
+      <text x="12" y="48" fill="#FFFFFF" font-size="14" font-weight="600">Data Fabric</text>
+      <text x="12" y="68" fill="#94A3B8" font-size="11">Purview catalog</text>
+      <line x1="12" y1="76" x2="148" y2="76" stroke="#A78BFA" stroke-opacity="0.35"/>
+    </g>
+    <g transform="translate(350, 10)">
+      <rect width="160" height="88" rx="8" fill="url(#csa-tile-teal)" stroke="#34D399" stroke-opacity="0.45" stroke-width="1"/>
+      <text x="12" y="22" fill="#6EE7B7" font-size="9" font-weight="600" letter-spacing="1.5" font-family="'JetBrains Mono', monospace">03</text>
+      <text x="12" y="48" fill="#FFFFFF" font-size="14" font-weight="600">Lakehouse</text>
+      <text x="12" y="68" fill="#94A3B8" font-size="11">Delta medallion</text>
+      <line x1="12" y1="76" x2="148" y2="76" stroke="#34D399" stroke-opacity="0.35"/>
+    </g>
+    <g transform="translate(520, 10)">
+      <rect width="160" height="88" rx="8" fill="url(#csa-tile-amber)" stroke="#FBBF24" stroke-opacity="0.45" stroke-width="1"/>
+      <text x="12" y="22" fill="#FCD34D" font-size="9" font-weight="600" letter-spacing="1.5" font-family="'JetBrains Mono', monospace">04</text>
+      <text x="12" y="48" fill="#FFFFFF" font-size="14" font-weight="600">Streaming</text>
+      <text x="12" y="68" fill="#94A3B8" font-size="11">Event Hubs &#183; ASA</text>
+      <line x1="12" y1="76" x2="148" y2="76" stroke="#FBBF24" stroke-opacity="0.35"/>
+    </g>
+
+    <g transform="translate(10, 108)">
+      <rect width="160" height="88" rx="8" fill="url(#csa-tile-violet)" stroke="#A78BFA" stroke-opacity="0.45" stroke-width="1"/>
+      <text x="12" y="22" fill="#C4B5FD" font-size="9" font-weight="600" letter-spacing="1.5" font-family="'JetBrains Mono', monospace">05</text>
+      <text x="12" y="48" fill="#FFFFFF" font-size="14" font-weight="600">AI &amp; ML</text>
+      <text x="12" y="68" fill="#94A3B8" font-size="11">Foundry &#183; OpenAI</text>
+      <line x1="12" y1="76" x2="148" y2="76" stroke="#A78BFA" stroke-opacity="0.35"/>
+    </g>
+    <g transform="translate(180, 108)">
+      <rect width="160" height="88" rx="8" fill="url(#csa-tile-cyan)" stroke="#22D3EE" stroke-opacity="0.45" stroke-width="1"/>
+      <text x="12" y="22" fill="#67E8F9" font-size="9" font-weight="600" letter-spacing="1.5" font-family="'JetBrains Mono', monospace">06</text>
+      <text x="12" y="48" fill="#FFFFFF" font-size="14" font-weight="600">APIs</text>
+      <text x="12" y="68" fill="#94A3B8" font-size="11">APIM &#183; Data API</text>
+      <line x1="12" y1="76" x2="148" y2="76" stroke="#22D3EE" stroke-opacity="0.35"/>
+    </g>
+    <g transform="translate(350, 108)">
+      <rect width="160" height="88" rx="8" fill="url(#csa-tile-amber)" stroke="#FBBF24" stroke-opacity="0.45" stroke-width="1"/>
+      <text x="12" y="22" fill="#FCD34D" font-size="9" font-weight="600" letter-spacing="1.5" font-family="'JetBrains Mono', monospace">07</text>
+      <text x="12" y="48" fill="#FFFFFF" font-size="14" font-weight="600">Compliance</text>
+      <text x="12" y="68" fill="#94A3B8" font-size="11">FedRAMP &#183; HIPAA</text>
+      <line x1="12" y1="76" x2="148" y2="76" stroke="#FBBF24" stroke-opacity="0.35"/>
+    </g>
+    <g transform="translate(520, 108)">
+      <rect width="160" height="88" rx="8" fill="url(#csa-tile-teal)" stroke="#34D399" stroke-opacity="0.45" stroke-width="1"/>
+      <text x="12" y="22" fill="#6EE7B7" font-size="9" font-weight="600" letter-spacing="1.5" font-family="'JetBrains Mono', monospace">08</text>
+      <text x="12" y="48" fill="#FFFFFF" font-size="14" font-weight="600">IaC</text>
+      <text x="12" y="68" fill="#94A3B8" font-size="11">95 Bicep modules</text>
+      <line x1="12" y1="76" x2="148" y2="76" stroke="#34D399" stroke-opacity="0.35"/>
+    </g>
+
+    <g transform="translate(10, 206)">
+      <rect width="670" height="94" rx="8" fill="#0E1733" stroke="#22D3EE" stroke-opacity="0.35" stroke-width="1"/>
+      <rect x="14" y="14" width="80" height="22" rx="11" fill="#22D3EE" fill-opacity="0.18" stroke="#22D3EE" stroke-opacity="0.5"/>
+      <text x="54" y="29" text-anchor="middle" fill="#A5F3FC" font-size="10" font-weight="600" letter-spacing="1.5" font-family="'JetBrains Mono', monospace">CORE</text>
+      <text x="14" y="58" fill="#FFFFFF" font-size="15" font-weight="600">CSA Platform &#183; 4-Subscription Landing Zone</text>
+      <text x="14" y="78" fill="#94A3B8" font-size="11">Management &#183; Connectivity &#183; Data Management LZ &#183; Data Landing Zone</text>
+      <g transform="translate(530, 14)">
+        <rect width="58" height="22" rx="11" fill="none" stroke="#34D399" stroke-opacity="0.6"/>
+        <text x="29" y="15" text-anchor="middle" fill="#6EE7B7" font-size="10" font-weight="600" font-family="'JetBrains Mono', monospace">IL4</text>
+      </g>
+      <g transform="translate(596, 14)">
+        <rect width="58" height="22" rx="11" fill="none" stroke="#A78BFA" stroke-opacity="0.6"/>
+        <text x="29" y="15" text-anchor="middle" fill="#C4B5FD" font-size="10" font-weight="600" font-family="'JetBrains Mono', monospace">IL5</text>
       </g>
     </g>
 
-    <g transform="translate(395,0)">
-      <rect width="370" height="100" rx="10" fill="url(#silver)"/>
-      <text x="20" y="32" class="layer">Silver</text>
-      <text x="20" y="50" class="layer-sub">Cleaned, conformed, validated</text>
-      <g transform="translate(20,62)">
-        <rect width="150" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
-        <text x="10" y="18" class="svc">dbt models · GE checks</text>
-        <rect x="160" width="180" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
-        <text x="170" y="18" class="svc">Spark · Synapse Serverless</text>
-      </g>
+    <g fill="#22D3EE" fill-opacity="0.4">
+      <circle cx="90" cy="103" r="2"/>
+      <circle cx="260" cy="103" r="2"/>
+      <circle cx="430" cy="103" r="2"/>
+      <circle cx="600" cy="103" r="2"/>
+      <circle cx="90" cy="201" r="2"/>
+      <circle cx="260" cy="201" r="2"/>
+      <circle cx="430" cy="201" r="2"/>
+      <circle cx="600" cy="201" r="2"/>
     </g>
-
-    <g transform="translate(770,0)">
-      <rect width="410" height="100" rx="10" fill="url(#gold)"/>
-      <text x="20" y="32" class="layer">Gold</text>
-      <text x="20" y="50" class="layer-sub">Business-ready facts &amp; dimensions</text>
-      <g transform="translate(20,62)">
-        <rect width="180" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
-        <text x="10" y="18" class="svc">Power BI · Direct Lake</text>
-        <rect x="190" width="200" height="28" rx="5" fill="rgba(255,255,255,0.20)"/>
-        <text x="200" y="18" class="svc">Data API Builder · OpenAI RAG</text>
-      </g>
-    </g>
-
-    <line x1="370" y1="50" x2="395" y2="50" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
-    <line x1="765" y1="50" x2="790" y2="50" stroke="#94a3b8" stroke-width="2" marker-end="url(#arrow)"/>
   </g>
 
-  <!-- Footer band: Purview spans all -->
-  <g transform="translate(20,400)">
-    <rect width="1160" height="40" rx="8" fill="#1e293b"/>
-    <text x="20" y="26" font-size="12" font-weight="700" fill="#fff" letter-spacing="0.04em">PURVIEW · UNIFIED CATALOG · LINEAGE · CLASSIFICATION</text>
-    <text x="660" y="26" font-size="11" fill="#cbd5e1">spans every subscription · every Bronze/Silver/Gold table · enforces sensitivity labels</text>
-  </g>
+  <line x1="830" y1="60" x2="830" y2="360" stroke="#22D3EE" stroke-opacity="0.18" stroke-width="1"/>
 </svg>
