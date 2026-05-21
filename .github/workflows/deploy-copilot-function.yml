@@ -88,6 +88,23 @@ jobs:
           scm-do-build-during-deployment: false
           enable-oryx-build: false
 
+      - name: Sync MS Learn MCP feature-flag app settings
+        # CSA-0162 Phase 2 — enable Microsoft Learn fallback grounding
+        # on the deployed Function. These settings are idempotent: re-
+        # running the workflow re-applies the same flag value, which is
+        # the desired behaviour. To roll back, set COPILOT_MS_LEARN_ENABLED
+        # to "false" here and re-run the workflow.
+        run: |
+          set -e
+          az functionapp config appsettings set \
+            --name "$FUNCTION_APP_NAME" \
+            --resource-group rg-dlz-aiml-stack-dev \
+            --settings \
+              COPILOT_MS_LEARN_ENABLED=true \
+              COPILOT_MS_LEARN_MCP_URL=https://learn.microsoft.com/api/mcp \
+            --output none
+          echo "MS Learn fallback enabled on $FUNCTION_APP_NAME"
+
       - name: Smoke test the deployed endpoint
         # Hits /api/health with a valid request token. Doesn't call the OpenAI
         # backend — only exercises origin / token / rate-limit / app-settings

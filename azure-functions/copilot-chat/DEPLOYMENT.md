@@ -172,8 +172,45 @@ az functionapp config appsettings set \
   --settings \
     "COSMOS_ENDPOINT=https://cosmos-csa-inabox-copilot-fg.documents.azure.com:443/" \
     "COSMOS_DATABASE=copilot" \
-    "COPILOT_IP_HASH_SALT=$SALT"
+    "COPILOT_IP_HASH_SALT=$SALT" \
+    "COPILOT_MS_LEARN_ENABLED=true" \
+    "COPILOT_MS_LEARN_MCP_URL=https://learn.microsoft.com/api/mcp"
 ```
+
+### MS Learn MCP fallback grounding (CSA-0162 Phase 2)
+
+When the in-repo docs index returns no grounding hits for an on-topic
+question, the chat function falls back to Microsoft Learn's hosted MCP
+server (`microsoft_docs_search`) so users still get a grounded answer.
+External Microsoft Learn citations are tagged with `external: "true"`
+in the response and rendered with a "Microsoft Learn" badge in the
+widget.
+
+App-settings keys:
+
+| Key | Default | Effect |
+|---|---|---|
+| `COPILOT_MS_LEARN_ENABLED` | unset (falsey) | When `true`/`1`/`yes`, the function calls MS Learn MCP for uncovered queries. Disabled by default; the deploy workflow sets it to `true` on every deploy. |
+| `COPILOT_MS_LEARN_MCP_URL` | `https://learn.microsoft.com/api/mcp` | Override the MCP endpoint. Only change for proxying or local testing. |
+
+Silent analytics: every MS Learn-served answer emits a
+`chat.content_gap_ms_learn` App Insights customEvent with the
+redacted question + cited MS Learn URLs. Mine the gap candidates via:
+
+```kql
+customEvents
+| where name == "chat.content_gap_ms_learn"
+| extend question = tostring(customDimensions.question_redacted),
+         urls = tostring(customDimensions.ms_learn_urls)
+| summarize hits = count(), sample_question = any(question)
+            by urls
+| order by hits desc
+| take 20
+```
+
+Each row is a candidate for new csa-inabox documentation — the URLs
+identify the Microsoft Learn pages users repeatedly land on for
+answers our corpus doesn't cover.
 
 The Function App's system-assigned MI is bound to **Cosmos DB Built-in
 Data Contributor** at the account scope by the Bicep, so no Cosmos key

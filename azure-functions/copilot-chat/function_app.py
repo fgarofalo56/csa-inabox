@@ -40,15 +40,16 @@ from collections import defaultdict
 from typing import Any
 
 import azure.functions as func
-from openai import AzureOpenAI
 
 # Azure Functions Python v2 loads ``function_app.py`` as a top-level
 # module (no package context), so absolute imports of the sibling
 # modules are correct here. The Functions host puts the function
 # directory on ``sys.path``; tests do the same via a ``conftest``.
-import redaction  # type: ignore  # noqa: E402
-import storage    # type: ignore  # noqa: E402
-import telemetry  # type: ignore  # noqa: E402
+import ms_learn  # type: ignore
+import redaction  # type: ignore
+import storage  # type: ignore
+import telemetry  # type: ignore
+from openai import AzureOpenAI
 
 app = func.FunctionApp()
 logger = logging.getLogger(__name__)
@@ -794,11 +795,28 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
             continue
         title = str(g.get("title") or "")[:200].strip()
         url = str(g.get("url") or "")[:500].strip()
+        # Only the docs site is allowed as caller-supplied grounding —
+        # external sources are sourced server-side via the MS Learn MCP
+        # fallback below, never from the request body, so an attacker
+        # cannot inject arbitrary URLs into the LLM context.
         if not url.startswith("https://fgarofalo56.github.io/csa-inabox/"):
             continue
         if not title:
             continue
         grounding_docs.append({"title": title, "url": url})
+
+    # MS Learn MCP supplemental grounding (CSA-0162 Phase 2).
+    # When the in-repo docs site returned no grounding hits for an
+    # on-topic question, fall back to Microsoft Learn's hosted MCP
+    # server so the LLM can answer Azure-platform questions our local
+    # corpus does not cover. Marks each chunk external=true so the
+    # widget can render a Microsoft Learn badge on the citation.
+    ms_learn_used = False
+    if not grounding_docs and ms_learn.is_enabled():
+        ms_learn_hits = ms_learn.search(message, top_k=3)
+        if ms_learn_hits:
+            grounding_docs.extend(ms_learn_hits)
+            ms_learn_used = True
 
     messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -854,6 +872,9 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
         })
         for i in cited_indexes:
             cited_sources.append(grounding_docs[i - 1])
+        # Pass the external flag through so the widget can render a
+        # Microsoft Learn badge on MS Learn citations.
+        ms_learn_citations = [s for s in cited_sources if s.get("external") == "true"]
 
         tokens_used = total_tokens or (len(message.split()) * 2 + len(reply.split()) * 2)
         _record_tokens(ip, tokens_used)
@@ -861,13 +882,15 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
         latency_ms = int((time.time() - started) * 1000)
 
         # Uncovered = "this is a docs gap we should fix" → only fires
-        # for on-topic questions where we found no grounding hits.
-        # Off-topic questions are never "uncovered" (they're outside
-        # the scope of the docs entirely). Ambiguous = trust the
-        # grounding-hit signal.
+        # for on-topic questions where we found no grounding hits at
+        # all (neither local docs nor MS Learn). When MS Learn was
+        # used to answer the question, ``uncovered`` stays True because
+        # the in-repo corpus still doesn't cover it — that's the signal
+        # the content-gap analytics keys off of. ``ms_learn_used``
+        # captures the orthogonal fact that we DID serve an answer.
         is_uncovered = (
             topic_class != "off_topic"
-            and len(grounding_docs) == 0
+            and len([g for g in grounding_docs if g.get("external") != "true"]) == 0
         )
 
         # ── Telemetry + persistence (best-effort, never blocks the response) ─
@@ -882,12 +905,35 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                     "tokens_used": tokens_used,
                     "grounding_count": len(grounding_docs),
                     "citation_count": len(cited_sources),
+                    "ms_learn_used": ms_learn_used,
+                    "ms_learn_citation_count": len(ms_learn_citations),
                     "topic_class": topic_class,
                     "uncovered": is_uncovered,
                     "page_url": str(page_context.get("url", ""))[:500],
                     "page_title": str(page_context.get("title", ""))[:200],
                 },
             )
+
+            # Silent content-gap signal: when MS Learn provided the
+            # grounding the in-repo docs couldn't, emit a dedicated
+            # event so the docs team can mine the KQL log for
+            # candidate pages to add to the corpus. The question text
+            # is redacted (PII / secrets) before persistence.
+            if ms_learn_used:
+                telemetry.track_event(
+                    "chat.content_gap_ms_learn",
+                    {
+                        "actor": ip_hashed,
+                        "session_id": session_id,
+                        "conversation_id": conversation_id,
+                        "question_redacted": redaction.redact(message)[:500],
+                        "ms_learn_urls": ",".join(
+                            s["url"] for s in ms_learn_citations
+                        )[:1000],
+                        "topic_class": topic_class,
+                        "page_url": str(page_context.get("url", ""))[:500],
+                    },
+                )
 
             if storage.is_enabled():
                 storage.write_conversation_turn(
@@ -924,6 +970,7 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
                     "conversation_id": conversation_id,
                     "topic_class": topic_class,
                     "uncovered": is_uncovered,
+                    "ms_learn_used": ms_learn_used,
                     "latency_ms": latency_ms,
                 },
             },
