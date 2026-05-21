@@ -37,6 +37,7 @@ Pages without a hero are returned unchanged.
 
 from __future__ import annotations
 
+import posixpath
 import re
 
 # A markdown line containing an architecture-hero image. We accept the
@@ -66,6 +67,50 @@ _HERO_LINK_RE = re.compile(
 )
 
 
+def _resolve_to_docs_root(src: str, page_src_path: str) -> str:
+    """Convert a markdown image ``src`` to a docs-root-relative path.
+
+    Markdown image paths are written relative to the source ``.md``
+    file's directory. mkdocs's body-renderer rewrites them to be valid
+    against the rendered page URL, but our hook bypasses that — we
+    extract the raw src and hand it to the Material override template.
+    The template will prepend ``base_url`` (which is relative to the
+    rendered page's URL), so the path we hand it must be relative to
+    the docs root.
+
+    Examples (with ``page_src_path`` shown after each src):
+
+    * ``assets/x.svg`` from ``index.md``                      -> ``assets/x.svg``
+    * ``assets/x.svg`` from ``GETTING_STARTED.md``            -> ``assets/x.svg``
+    * ``../../assets/x.png`` from ``tutorials/01-foo/README.md`` -> ``assets/x.png``
+
+    Absolute paths and absolute URLs pass through unchanged.
+    """
+    if not src:
+        return src
+    # Absolute (web) URL — let it through.
+    if src.startswith(("http://", "https://", "data:")):
+        return src
+    # Already root-relative (single leading slash). Strip the leading
+    # slash so the template's ``base_url + "/" + src`` doesn't double-up.
+    if src.startswith("/"):
+        return src.lstrip("/")
+    # page_src_path is repo-relative under docs/ — already without the
+    # ``docs/`` prefix. e.g. ``tutorials/01-foundation-platform/README.md``.
+    # Use posixpath.normpath so back-references resolve uniformly across
+    # platforms (mkdocs always emits forward slashes for src_path).
+    page_dir = posixpath.dirname(page_src_path.replace("\\", "/"))
+    if page_dir:
+        joined = posixpath.normpath(posixpath.join(page_dir, src))
+    else:
+        joined = posixpath.normpath(src)
+    # If the resolved path tries to escape above docs root, fall back
+    # to the original src and let mkdocs's link-checker complain.
+    if joined.startswith("..") or joined == ".":
+        return src
+    return joined
+
+
 def on_page_markdown(markdown: str, page, config, files):  # noqa: ANN001 (mkdocs API)
     hero_line_match = _HERO_LINE_RE.search(markdown)
     if not hero_line_match:
@@ -83,12 +128,16 @@ def on_page_markdown(markdown: str, page, config, files):  # noqa: ANN001 (mkdoc
     link_match = _HERO_LINK_RE.search(line)
     link = link_match.group("link") if link_match else None
 
+    # Resolve the markdown-relative src to a docs-root-relative path
+    # so the template can prepend `base_url` and produce a working
+    # link from any page URL depth.
+    page_src_path = getattr(getattr(page, "file", None), "src_path", "") or ""
+    resolved_src = _resolve_to_docs_root(src, page_src_path)
+
     # Stash on page.meta so the Material override template can find it.
-    # `page.meta` is a regular dict on mkdocs Page objects; create the
-    # key if absent rather than replacing the whole dict.
     if page.meta is None:  # pragma: no cover - defensive
         page.meta = {}
-    page.meta["page_hero"] = {"src": src, "alt": alt, "link": link}
+    page.meta["page_hero"] = {"src": resolved_src, "alt": alt, "link": link}
 
     # Excise the inline hero from the article body so it does not
     # render below the H1 — the override template now renders it.
