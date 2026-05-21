@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="t d" preserveAspectRatio="xMidYMid slice">
+  <title id="t">Cosmos DB Patterns</title>
+  <desc id="d">API selection, partition keys, change feed, multi-region writes, autoscale RU/s.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="0.7">
+      <stop offset="0%" stop-color="#250B3B"/>
+      <stop offset="60%" stop-color="#5B21B6"/>
+      <stop offset="100%" stop-color="#250B3B"/>
+    </linearGradient>
+    <linearGradient id="accent-bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#A78BFA"/>
+      <stop offset="100%" stop-color="#DDD6FE"/>
+    </linearGradient>
+    <filter id="depth" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6"/>
+      <feOffset dy="4"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.45"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .h-title { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:600; font-size:64px; fill:#FFFFFF; letter-spacing:-1.2px; }
+      .h-sub   { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:400; font-size:22px; fill:#FFFFFF; fill-opacity:0.82; letter-spacing:-0.2px; }
+      .h-chip  { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:13px; letter-spacing:2.5px; fill:#FFFFFF; }
+      .g-label { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:13px; fill:#FFFFFF; letter-spacing:0.5px; }
+      .g-num   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:14px; fill:#FFFFFF; letter-spacing:0.5px; }
+      .g-cap   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:10px; fill:#FFFFFF; fill-opacity:0.6; letter-spacing:1.5px; }
+    </style>
+  </defs>
+
+  <!-- Base gradient -->
+  <rect width="1600" height="420" fill="url(#bg)"/>
+
+  <!-- Single bold vertical accent stripe on the left edge -->
+  <rect x="0" y="0" width="6" height="420" fill="#DDD6FE"/>
+  <rect x="0" y="0" width="6" height="120" fill="#A78BFA"/>
+
+  <!-- Subtle horizontal scan-line at bottom for structure -->
+  <rect x="0" y="408" width="1600" height="2" fill="#DDD6FE" fill-opacity="0.25"/>
+
+  <!-- Chip (top-left) -->
+  <g transform="translate(80, 60)">
+    <rect x="0" y="0" width="105" height="32" rx="0" fill="#C4B5FD" fill-opacity="0.08" stroke="#C4B5FD" stroke-opacity="0.5" stroke-width="1"/>
+    <rect x="0" y="0" width="6" height="32" fill="#C4B5FD"/>
+    <text class="h-chip" x="63.5" y="21.5" text-anchor="middle" fill="#C4B5FD">PATTERN</text>
+  </g>
+
+  <!-- Title -->
+  <text class="h-title" x="80" y="200">Cosmos DB Patterns</text>
+
+  <!-- Subtitle -->
+  <text class="h-sub" x="80" y="248">API selection, partition keys, change feed, multi-region writes, autoscale RU/s.</text>
+
+  <!-- Coordinate marker tag below subtitle (technical-drawing flavor) -->
+  <g transform="translate(80, 300)">
+    <rect x="0" y="0" width="56" height="20" fill="#C4B5FD" fill-opacity="0.1" stroke="#C4B5FD" stroke-opacity="0.3" stroke-width="1"/>
+    <text class="g-cap" x="28" y="14" text-anchor="middle" fill="#C4B5FD">CSA-IN-A-BOX</text>
+  </g>
+  <text class="g-cap" x="146" y="314" fill="#DDD6FE" fill-opacity="0.65">v0.6.9 · azure-native</text>
+
+  <!-- Schematic composition on the right (x≈960-1540, y≈70-360) -->
+  <rect x="960" y="130" width="110" height="40" fill="#C4B5FD" fill-opacity="0.12" stroke="#C4B5FD" stroke-opacity="0.5" stroke-width="1.2"/>
+  <text class="g-label" x="1015" y="155" text-anchor="middle" fill="#DDD6FE">QUERY</text>
+  <rect x="960" y="200" width="110" height="40" fill="#C4B5FD" fill-opacity="0.12" stroke="#C4B5FD" stroke-opacity="0.5" stroke-width="1.2"/>
+  <text class="g-label" x="1015" y="225" text-anchor="middle" fill="#DDD6FE">RAG</text>
+  <rect x="960" y="270" width="110" height="40" fill="#C4B5FD" fill-opacity="0.12" stroke="#C4B5FD" stroke-opacity="0.5" stroke-width="1.2"/>
+  <text class="g-label" x="1015" y="295" text-anchor="middle" fill="#DDD6FE">AGENT</text>
+  <rect x="1180" y="120" width="220" height="200" fill="#C4B5FD" fill-opacity="0.18" stroke="#C4B5FD" stroke-opacity="0.7" stroke-width="1.5" filter="url(#depth)"/>
+  <rect x="1180" y="120" width="220" height="6" fill="#DDD6FE"/>
+  <text class="g-label" x="1290" y="150" text-anchor="middle" fill="#FFFFFF">ORCHESTRATOR</text>
+  <rect x="1200" y="175" width="180" height="22" fill="#C4B5FD" fill-opacity="0.15"/>
+  <text class="g-cap" x="1290" y="190" text-anchor="middle" fill="#DDD6FE" font-size="11">GPT-4o</text>
+  <rect x="1200" y="207" width="180" height="22" fill="#C4B5FD" fill-opacity="0.15"/>
+  <text class="g-cap" x="1290" y="222" text-anchor="middle" fill="#DDD6FE" font-size="11">EMBEDDINGS</text>
+  <rect x="1200" y="239" width="180" height="22" fill="#C4B5FD" fill-opacity="0.15"/>
+  <text class="g-cap" x="1290" y="254" text-anchor="middle" fill="#DDD6FE" font-size="11">OSS-LLM</text>
+  <rect x="1200" y="271" width="180" height="22" fill="#C4B5FD" fill-opacity="0.15"/>
+  <text class="g-cap" x="1290" y="286" text-anchor="middle" fill="#DDD6FE" font-size="11">VISION</text>
+  <rect x="1450" y="190" width="90" height="60" fill="#C4B5FD" fill-opacity="0.12" stroke="#C4B5FD" stroke-opacity="0.5" stroke-width="1.2"/>
+  <text class="g-label" x="1495" y="225" text-anchor="middle" fill="#DDD6FE">RESPONSE</text>
+  <line x1="1070" y1="150" x2="1180" y2="220" stroke="#DDD6FE" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="1070" y1="220" x2="1180" y2="220" stroke="#DDD6FE" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="1070" y1="290" x2="1180" y2="220" stroke="#DDD6FE" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="1400" y1="220" x2="1450" y2="220" stroke="#DDD6FE" stroke-width="1.5"/>
+
+</svg>

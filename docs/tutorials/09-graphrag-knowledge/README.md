@@ -5,7 +5,7 @@
 
 Build a GraphRAG knowledge graph that extracts entities and relationships from your data catalog, indexes them in Cosmos DB (Gremlin), and enables advanced queries like impact analysis and lineage traversal. You will combine graph-based reasoning with vector search for a hybrid retrieval system.
 
-![Cosmos DB account Overview blade — Essentials panel showing East US read/write region, Free Tier Discount Opted in, throughput limits, and the Add Container / Data Explorer / Mirroring in Fabric toolbar](../../assets/images/azure/cosmos-db-overview.png){ .architecture-hero loading="lazy" }
+![Tutorial 09 GraphRAG hero: entity and relationship graph extracted from documents, connected to LLM](../../assets/images/hero/tutorials/09-graphrag-knowledge.svg){ .architecture-hero loading="lazy" }
 
 ---
 

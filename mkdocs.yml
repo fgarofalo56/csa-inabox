@@ -59,6 +59,16 @@ plugins:
   - search
   - minify:
       minify_html: true
+  # mkdocs-material's social card plugin auto-generates per-page OG /
+  # Twitter card PNGs at build time using the site brand. The plugin
+  # depends on cairosvg + Pillow which are already installed in CI.
+  # Gated on the CSA_SOCIAL_CARDS env var so local dev builds (which
+  # don't need cards) skip the ~30s extra build cost.
+  - social:
+      enabled: !ENV [CSA_SOCIAL_CARDS, true]
+      cards_layout_options:
+        background_color: "#0A1126"
+        color: "#FFFFFF"
   - include-markdown:
       rewrite_relative_urls: true
   - glightbox:
@@ -181,7 +191,7 @@ nav:
           - API-First Multi-Model Ecosystem: reference-architecture/api-first-multi-model-ecosystem.md
           - Architecture Diagram Gallery: reference-architecture/diagram-gallery.md
       - Comparisons:
-          - CSA-in-a-Box vs Microsoft Fabric: comparison/csa-inabox-vs-fabric.md
+          - Cloud Scale Analytics in a Box vs Microsoft Fabric: comparison/csa-inabox-vs-fabric.md
           - Azure vs MuleSoft Anypoint Platform: comparison/azure-vs-mulesoft.md
           - Azure vs AWS API Stack: comparison/azure-vs-aws-api-stack.md
       - Decision Trees:
@@ -1626,45 +1636,45 @@ nav:
             - "Performance Optimization for Interactive Demos": learn/multimedia/interactive-demos/guides/performance.md
         - "Presentations":
           - "Presentation Templates & Materials": learn/multimedia/presentations/README.md
-          - "Best Practices Deck - CSA-in-a-Box": learn/multimedia/presentations/best-practices-deck.md
-          - "Conference Talks - CSA-in-a-Box": learn/multimedia/presentations/conference-talks.md
-          - "Cost-Benefit Analysis - CSA-in-a-Box": learn/multimedia/presentations/cost-benefit-analysis.md
-          - "Customer Success Stories - CSA-in-a-Box": learn/multimedia/presentations/customer-success.md
-          - "Executive Overview Presentation - CSA-in-a-Box": learn/multimedia/presentations/executive-overview.md
-          - "Industry Solutions - CSA-in-a-Box": learn/multimedia/presentations/industry-solutions.md
-          - "Migration Planning - CSA-in-a-Box": learn/multimedia/presentations/migration-planning.md
-          - "Partner Enablement - CSA-in-a-Box": learn/multimedia/presentations/partner-enablement.md
-          - "Roadmap Presentation - CSA-in-a-Box": learn/multimedia/presentations/roadmap-presentation.md
-          - "Sales Enablement - CSA-in-a-Box": learn/multimedia/presentations/sales-enablement.md
-          - "Security & Compliance - CSA-in-a-Box": learn/multimedia/presentations/security-compliance.md
-          - "Technical Deep Dive Presentation - CSA-in-a-Box": learn/multimedia/presentations/technical-deep-dive.md
-          - "Training Decks - CSA-in-a-Box": learn/multimedia/presentations/training-decks.md
-          - "Workshop Materials - CSA-in-a-Box": learn/multimedia/presentations/workshop-materials.md
+          - "Best Practices Deck": learn/multimedia/presentations/best-practices-deck.md
+          - "Conference Talks": learn/multimedia/presentations/conference-talks.md
+          - "Cost-Benefit Analysis": learn/multimedia/presentations/cost-benefit-analysis.md
+          - "Customer Success Stories": learn/multimedia/presentations/customer-success.md
+          - "Executive Overview Presentation": learn/multimedia/presentations/executive-overview.md
+          - "Industry Solutions": learn/multimedia/presentations/industry-solutions.md
+          - "Migration Planning": learn/multimedia/presentations/migration-planning.md
+          - "Partner Enablement": learn/multimedia/presentations/partner-enablement.md
+          - "Roadmap Presentation": learn/multimedia/presentations/roadmap-presentation.md
+          - "Sales Enablement": learn/multimedia/presentations/sales-enablement.md
+          - "Security & Compliance": learn/multimedia/presentations/security-compliance.md
+          - "Technical Deep Dive Presentation": learn/multimedia/presentations/technical-deep-dive.md
+          - "Training Decks": learn/multimedia/presentations/training-decks.md
+          - "Workshop Materials": learn/multimedia/presentations/workshop-materials.md
           - "Guides":
-            - "Presentation Guides - CSA-in-a-Box": learn/multimedia/presentations/guides/README.md
-            - "Presentation Accessibility Guide - CSA-in-a-Box": learn/multimedia/presentations/guides/accessibility.md
-            - "Presentation Best Practices Guide - CSA-in-a-Box": learn/multimedia/presentations/guides/best-practices.md
-            - "Brand Guidelines - CSA-in-a-Box Presentations": learn/multimedia/presentations/guides/brand-guidelines.md
-            - "Presentation Customization Guide - CSA-in-a-Box": learn/multimedia/presentations/guides/customization.md
-            - "Export Settings Guide - CSA-in-a-Box Presentations": learn/multimedia/presentations/guides/export-settings.md
+            - "Presentation Guides": learn/multimedia/presentations/guides/README.md
+            - "Presentation Accessibility Guide": learn/multimedia/presentations/guides/accessibility.md
+            - "Presentation Best Practices Guide": learn/multimedia/presentations/guides/best-practices.md
+            - "Brand Guidelines": learn/multimedia/presentations/guides/brand-guidelines.md
+            - "Presentation Customization Guide": learn/multimedia/presentations/guides/customization.md
+            - "Export Settings Guide": learn/multimedia/presentations/guides/export-settings.md
           - "Resources":
             - "Animations":
               - "Charts":
-                - "Charts Resources - CSA-in-a-Box": learn/multimedia/presentations/resources/animations/charts/README.md
+                - "Charts Resources": learn/multimedia/presentations/resources/animations/charts/README.md
               - "Objects":
-                - "Objects Resources - CSA-in-a-Box": learn/multimedia/presentations/resources/animations/objects/README.md
+                - "Objects Resources": learn/multimedia/presentations/resources/animations/objects/README.md
               - "Text":
-                - "Text Resources - CSA-in-a-Box": learn/multimedia/presentations/resources/animations/text/README.md
+                - "Text Resources": learn/multimedia/presentations/resources/animations/text/README.md
               - "Transitions":
-                - "Transitions Resources - CSA-in-a-Box": learn/multimedia/presentations/resources/animations/transitions/README.md
+                - "Transitions Resources": learn/multimedia/presentations/resources/animations/transitions/README.md
             - "Backgrounds":
-              - "Backgrounds Resources - CSA-in-a-Box": learn/multimedia/presentations/resources/backgrounds/README.md
+              - "Backgrounds Resources": learn/multimedia/presentations/resources/backgrounds/README.md
             - "Charts":
-              - "Charts Resources - CSA-in-a-Box": learn/multimedia/presentations/resources/charts/README.md
+              - "Charts Resources": learn/multimedia/presentations/resources/charts/README.md
             - "Diagrams":
-              - "Diagrams Resources - CSA-in-a-Box": learn/multimedia/presentations/resources/diagrams/README.md
+              - "Diagrams Resources": learn/multimedia/presentations/resources/diagrams/README.md
             - "Icons":
-              - "Icons Resources - CSA-in-a-Box": learn/multimedia/presentations/resources/icons/README.md
+              - "Icons Resources": learn/multimedia/presentations/resources/icons/README.md
               - "Azure":
                 - "Azure\n\n> **Note**: Resources are currently being developed.": learn/multimedia/presentations/resources/icons/azure/README.md
             - "Images":
@@ -1677,7 +1687,7 @@ nav:
               - "Technology":
                 - "Technology\n\n> **Note**: Resources are currently being developed.": learn/multimedia/presentations/resources/images/technology/README.md
             - "Layouts":
-              - "Layouts Resources - CSA-in-a-Box": learn/multimedia/presentations/resources/layouts/README.md
+              - "Layouts Resources": learn/multimedia/presentations/resources/layouts/README.md
         - "Video Tutorials":
           - "Video Tutorial Scripts & Production": learn/multimedia/video-tutorials/README.md
           - "Video Script: Advanced Azure Synapse Features": learn/multimedia/video-tutorials/advanced-features.md

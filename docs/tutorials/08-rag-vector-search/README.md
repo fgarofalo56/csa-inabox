@@ -5,7 +5,7 @@
 
 Build a Retrieval-Augmented Generation (RAG) pipeline using Azure AI Search and Azure OpenAI. You will create a search index with vector fields, build an embedding pipeline, implement hybrid search (vector + keyword + semantic reranking), and deploy a RAG chatbot that answers questions from your data catalog.
 
-![Azure AI Search service Overview blade — Essentials panel showing Free pricing tier, 1 Replica / 1 Partition, Status Running, and the Add index / Import data / Search explorer toolbar above](../../assets/images/azure/ai-search-overview.png){ .architecture-hero loading="lazy" }
+![Tutorial 08 RAG with AI Search hero: vector index, embeddings, and retrieval-augmented generation flow](../../assets/images/hero/tutorials/08-rag-vector-search.svg){ .architecture-hero loading="lazy" }
 
 ---
 

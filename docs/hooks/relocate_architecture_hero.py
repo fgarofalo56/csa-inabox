@@ -111,9 +111,59 @@ def _resolve_to_docs_root(src: str, page_src_path: str) -> str:
     return joined
 
 
+_SECTION_DEFAULTS: dict[str, tuple[str, str]] = {
+    "runbooks": (
+        "assets/images/hero/runbooks/index.svg",
+        "Operations runbooks — incident response, key rotation, DR drills, "
+        "cost-alert response, and routine platform maintenance",
+    ),
+    "decisions": (
+        "assets/images/hero/decisions/index.svg",
+        "Decision trees — side-by-side service choices for batch vs "
+        "streaming, lakehouse vs warehouse, RAG vs fine-tune, and more",
+    ),
+    "compliance": (
+        "assets/images/hero/compliance/index.svg",
+        "Compliance crosswalks — NIST 800-53, FedRAMP, CMMC, HIPAA, "
+        "SOC 2, PCI-DSS, GDPR, IL4 / IL5, CJIS, ITAR",
+    ),
+    "adr": (
+        "assets/images/hero/adr/index.svg",
+        "Architecture Decision Records — the durable rationale behind "
+        "every platform choice from ADF over Airflow to APIM as integration fabric",
+    ),
+}
+
+
+def _section_default_hero(page_src_path: str) -> dict[str, str | None] | None:
+    """Pick a section-level default hero based on the page's directory.
+
+    Returns ``None`` for pages outside the configured sections — those
+    keep "no hero" behaviour. The returned dict matches the
+    ``page_hero`` shape the template expects.
+    """
+    if not page_src_path:
+        return None
+    top = page_src_path.replace("\\", "/").split("/", 1)[0]
+    spec = _SECTION_DEFAULTS.get(top)
+    if not spec:
+        return None
+    src, alt = spec
+    return {"src": src, "alt": alt, "link": None}
+
+
 def on_page_markdown(markdown: str, page, config, files):  # noqa: ANN001 (mkdocs API)
+    page_src_path = getattr(getattr(page, "file", None), "src_path", "") or ""
+
     hero_line_match = _HERO_LINE_RE.search(markdown)
     if not hero_line_match:
+        # No inline hero — check if the page lives in a section that has
+        # a configured default hero (runbooks, decisions, compliance, ADRs).
+        default = _section_default_hero(page_src_path)
+        if default is not None:
+            if page.meta is None:  # pragma: no cover - defensive
+                page.meta = {}
+            page.meta["page_hero"] = default
         return markdown
 
     line = hero_line_match.group(0)
@@ -131,7 +181,6 @@ def on_page_markdown(markdown: str, page, config, files):  # noqa: ANN001 (mkdoc
     # Resolve the markdown-relative src to a docs-root-relative path
     # so the template can prepend `base_url` and produce a working
     # link from any page URL depth.
-    page_src_path = getattr(getattr(page, "file", None), "src_path", "") or ""
     resolved_src = _resolve_to_docs_root(src, page_src_path)
 
     # Stash on page.meta so the Material override template can find it.

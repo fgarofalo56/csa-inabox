@@ -12,7 +12,7 @@ tags:
 
 # Security & Compliance Best Practices
 
-![Azure Key Vault Overview blade — Essentials panel showing East US region, Standard pricing tier, Soft-delete enabled, Vault URI, and the Access policies / Objects / Settings left-nav. Key Vault is the canonical secrets/keys/certificates store for every CSA-in-a-Box deployment.](../assets/images/azure/key-vault-overview.png){ .architecture-hero loading="eager" }
+![Security and compliance best practice hero: lock glyph with NIST, FedRAMP, CMMC control-mapping accents](../assets/images/hero/best-practices/security-compliance.svg){ .architecture-hero loading="eager" }
 
 ## Overview
 

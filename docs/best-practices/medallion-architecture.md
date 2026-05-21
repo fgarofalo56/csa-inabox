@@ -65,7 +65,7 @@ flowchart LR
 
 ## What this looks like in Azure
 
-![Azure Storage account Overview blade — Essentials panel showing Standard performance, LRS replication, StorageV2 (general purpose v2) account kind, and the Storage browser / Data storage / Containers left-nav. ADLS Gen2 sits on top of this account; Bronze, Silver, and Gold land in three containers within it.](../assets/images/azure/storage-account-overview.png){ .architecture-hero loading="lazy" }
+![Medallion architecture best practice hero: Bronze, Silver, Gold Delta layers with quality gates between every hop](../assets/images/hero/best-practices/medallion-architecture.svg){ .architecture-hero loading="lazy" }
 
 ## Bronze Layer Best Practices
 
