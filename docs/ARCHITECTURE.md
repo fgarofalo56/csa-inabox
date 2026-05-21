@@ -174,11 +174,11 @@ graph TB
     KV --> SharedSvc
 
     %% ─── Styling ────────────────────────────────────────────────────
-    classDef source fill:#e1f5fe,stroke:#0288d1
-    classDef dmlz fill:#f3e5f5,stroke:#7b1fa2
-    classDef dlz fill:#e8f5e9,stroke:#388e3c
-    classDef platform fill:#fff3e0,stroke:#f57c00
-    classDef consumer fill:#fce4ec,stroke:#c62828
+    classDef source   fill:#0288d1,stroke:#01579b,color:#ffffff,stroke-width:2px,font-weight:bold
+    classDef dmlz     fill:#7b1fa2,stroke:#4a148c,color:#ffffff,stroke-width:2px,font-weight:bold
+    classDef dlz      fill:#2e7d32,stroke:#1b5e20,color:#ffffff,stroke-width:2px,font-weight:bold
+    classDef platform fill:#ef6c00,stroke:#bf360c,color:#ffffff,stroke-width:2px,font-weight:bold
+    classDef consumer fill:#c2185b,stroke:#880e4f,color:#ffffff,stroke-width:2px,font-weight:bold
 
     class Batch,Stream,OpenData source
     class Purview,KV,Marketplace,GovFramework,APIM dmlz
