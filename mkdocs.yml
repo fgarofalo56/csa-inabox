@@ -1,4 +1,4 @@
-site_name: CSA-in-a-Box
+site_name: Cloud Scale Analytics in a Box
 site_description: Azure-native reference implementation for Data Mesh, Data Fabric, and Data Lakehouse
 site_url: https://fgarofalo56.github.io/csa-inabox/
 repo_url: https://github.com/fgarofalo56/csa-inabox
@@ -7,6 +7,7 @@ edit_uri: edit/main/docs/
 
 theme:
   name: material
+  custom_dir: overrides
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
