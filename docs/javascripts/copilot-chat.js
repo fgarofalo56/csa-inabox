@@ -39,7 +39,7 @@
     maxBacklogTitleLength: 200,
     maxBacklogDescriptionLength: 4000,
     welcomeMessage:
-      "Hi! I'm the **CSA-in-a-Box Copilot**. Ask me anything about the codebase, architecture, deployment, or troubleshooting.",
+      "Hi! I'm the **Cloud Scale Analytics in a Box Copilot**. Ask me anything about the codebase, architecture, deployment, or troubleshooting.",
     privacyDocUrl: "https://fgarofalo56.github.io/csa-inabox/copilot-privacy/",
   };
 
@@ -486,7 +486,7 @@
     panel.innerHTML =
       '<div class="copilot-resize" title="Drag to resize"></div>' +
       '<div class="copilot-header">' +
-      "  <span>🤖 CSA-in-a-Box Copilot</span>" +
+      "  <span>🤖 CSA Copilot</span>" +
       '  <div class="copilot-header-actions">' +
       '    <button class="copilot-request" title="Request a use case or report an issue">💡</button>' +
       '    <button class="copilot-clear" title="Clear chat">↻</button>' +
@@ -502,7 +502,7 @@
       '</div>' +
       '<div class="copilot-messages"></div>' +
       '<div class="copilot-input-area">' +
-      '  <textarea class="copilot-input" placeholder="Ask about CSA-in-a-Box..." rows="1" maxlength="' + CONFIG.maxMessageLength + '"></textarea>' +
+      '  <textarea class="copilot-input" placeholder="Ask about Cloud Scale Analytics..." rows="1" maxlength="' + CONFIG.maxMessageLength + '"></textarea>' +
       '  <button class="copilot-send">Send</button>' +
       "</div>";
 

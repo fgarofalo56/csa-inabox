@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="t d" preserveAspectRatio="xMidYMid slice">
+  <title id="t">Medallion Architecture</title>
+  <desc id="d">Bronze, Silver, Gold Delta layers with quality gates between every hop.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="0.7">
+      <stop offset="0%" stop-color="#082F49"/>
+      <stop offset="60%" stop-color="#0078D4"/>
+      <stop offset="100%" stop-color="#082F49"/>
+    </linearGradient>
+    <linearGradient id="accent-bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#BAE6FD"/>
+    </linearGradient>
+    <filter id="depth" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6"/>
+      <feOffset dy="4"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.45"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .h-title { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:600; font-size:64px; fill:#FFFFFF; letter-spacing:-1.2px; }
+      .h-sub   { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:400; font-size:22px; fill:#FFFFFF; fill-opacity:0.82; letter-spacing:-0.2px; }
+      .h-chip  { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:13px; letter-spacing:2.5px; fill:#FFFFFF; }
+      .g-label { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:13px; fill:#FFFFFF; letter-spacing:0.5px; }
+      .g-num   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:14px; fill:#FFFFFF; letter-spacing:0.5px; }
+      .g-cap   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:10px; fill:#FFFFFF; fill-opacity:0.6; letter-spacing:1.5px; }
+    </style>
+  </defs>
+
+  <!-- Base gradient -->
+  <rect width="1600" height="420" fill="url(#bg)"/>
+
+  <!-- Single bold vertical accent stripe on the left edge -->
+  <rect x="0" y="0" width="6" height="420" fill="#BAE6FD"/>
+  <rect x="0" y="0" width="6" height="120" fill="#38BDF8"/>
+
+  <!-- Subtle horizontal scan-line at bottom for structure -->
+  <rect x="0" y="408" width="1600" height="2" fill="#BAE6FD" fill-opacity="0.25"/>
+
+  <!-- Chip (top-left) -->
+  <g transform="translate(80, 60)">
+    <rect x="0" y="0" width="171" height="32" rx="0" fill="#7DD3FC" fill-opacity="0.08" stroke="#7DD3FC" stroke-opacity="0.5" stroke-width="1"/>
+    <rect x="0" y="0" width="6" height="32" fill="#7DD3FC"/>
+    <text class="h-chip" x="96.5" y="21.5" text-anchor="middle" fill="#7DD3FC">BEST PRACTICE</text>
+  </g>
+
+  <!-- Title -->
+  <text class="h-title" x="80" y="200">Medallion Architecture</text>
+
+  <!-- Subtitle -->
+  <text class="h-sub" x="80" y="248">Bronze, Silver, Gold Delta layers with quality gates between every hop.</text>
+
+  <!-- Coordinate marker tag below subtitle (technical-drawing flavor) -->
+  <g transform="translate(80, 300)">
+    <rect x="0" y="0" width="56" height="20" fill="#7DD3FC" fill-opacity="0.1" stroke="#7DD3FC" stroke-opacity="0.3" stroke-width="1"/>
+    <text class="g-cap" x="28" y="14" text-anchor="middle" fill="#7DD3FC">CSA-IN-A-BOX</text>
+  </g>
+  <text class="g-cap" x="146" y="314" fill="#BAE6FD" fill-opacity="0.65">v0.6.9 · azure-native</text>
+
+  <!-- Schematic composition on the right (x≈960-1540, y≈70-360) -->
+  <rect x="980" y="110" width="560" height="62" fill="#CD7F32" fill-opacity="0.92" filter="url(#depth)"/>
+  <rect x="980" y="110" width="6" height="62" fill="#FFFFFF" fill-opacity="0.9"/>
+  <text x="1010" y="140" font-family="IBM Plex Sans" font-size="20" font-weight="700" fill="#1F1F1F">BRONZE</text>
+  <text x="1010" y="160" font-family="JetBrains Mono" font-size="11" fill="#1F1F1F" opacity="0.7">raw / append-only</text>
+  <text class="g-num" x="1525" y="140" text-anchor="end" fill="#1F1F1F">2.4B</text>
+  <text x="1525" y="160" text-anchor="end" font-family="JetBrains Mono" font-size="10" fill="#1F1F1F" opacity="0.7" letter-spacing="1.5px">EVENTS / DAY</text>
+  <rect x="980" y="200" width="560" height="62" fill="#C0C0C0" fill-opacity="0.92" filter="url(#depth)"/>
+  <rect x="980" y="200" width="6" height="62" fill="#FFFFFF" fill-opacity="0.9"/>
+  <text x="1010" y="230" font-family="IBM Plex Sans" font-size="20" font-weight="700" fill="#1F1F1F">SILVER</text>
+  <text x="1010" y="250" font-family="JetBrains Mono" font-size="11" fill="#1F1F1F" opacity="0.7">validated / dedup</text>
+  <text class="g-num" x="1525" y="230" text-anchor="end" fill="#1F1F1F">180</text>
+  <text x="1525" y="250" text-anchor="end" font-family="JetBrains Mono" font-size="10" fill="#1F1F1F" opacity="0.7" letter-spacing="1.5px">TABLES</text>
+  <rect x="980" y="290" width="560" height="62" fill="#FFD700" fill-opacity="0.92" filter="url(#depth)"/>
+  <rect x="980" y="290" width="6" height="62" fill="#FFFFFF" fill-opacity="0.9"/>
+  <text x="1010" y="320" font-family="IBM Plex Sans" font-size="20" font-weight="700" fill="#1F1F1F">GOLD</text>
+  <text x="1010" y="340" font-family="JetBrains Mono" font-size="11" fill="#1F1F1F" opacity="0.7">business-ready</text>
+  <text class="g-num" x="1525" y="320" text-anchor="end" fill="#1F1F1F">99.7%</text>
+  <text x="1525" y="340" text-anchor="end" font-family="JetBrains Mono" font-size="10" fill="#1F1F1F" opacity="0.7" letter-spacing="1.5px">SLA MET</text>
+  <path d="M 1260 173 L 1260 195 M 1255 191 L 1260 200 L 1265 191" stroke="#BAE6FD" stroke-width="2.5" fill="none"/>
+  <path d="M 1260 263 L 1260 285 M 1255 281 L 1260 290 L 1265 281" stroke="#BAE6FD" stroke-width="2.5" fill="none"/>
+
+</svg>

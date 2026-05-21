@@ -388,7 +388,7 @@ and domain-specific documentation.
 
 ## What this looks like once deployed
 
-![Azure resource group Overview — the deployed CSA-in-a-Box stack inside a single resource group: Databricks workspace, Data Factory, Application Insights, Azure AI hub + project, SQL database, AI Search, two storage accounts, Cosmos DB, Key Vault. This is the canonical "platform in a box" view.](assets/images/azure/resource-group-overview.png){ .architecture-hero loading="lazy" }
+![Azure resource group Overview — the deployed CSA-in-a-Box stack inside a single resource group: Databricks workspace, Data Factory, Application Insights, Azure AI hub + project, SQL database, AI Search, two storage accounts, Cosmos DB, Key Vault. This is the canonical "platform in a box" view.](assets/images/azure/resource-group-overview.png){ loading="lazy" }
 
 ## 📁 Repository Structure
 

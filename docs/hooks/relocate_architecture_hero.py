@@ -111,9 +111,94 @@ def _resolve_to_docs_root(src: str, page_src_path: str) -> str:
     return joined
 
 
+_SECTION_DEFAULTS: dict[str, tuple[str, str]] = {
+    "runbooks": (
+        "assets/images/hero/runbooks/index.svg",
+        "Operations runbooks — incident response, key rotation, DR drills, "
+        "cost-alert response, and routine platform maintenance",
+    ),
+    "decisions": (
+        "assets/images/hero/decisions/index.svg",
+        "Decision trees — side-by-side service choices for batch vs "
+        "streaming, lakehouse vs warehouse, RAG vs fine-tune, and more",
+    ),
+    "compliance": (
+        "assets/images/hero/compliance/index.svg",
+        "Compliance crosswalks — NIST 800-53, FedRAMP, CMMC, HIPAA, "
+        "SOC 2, PCI-DSS, GDPR, IL4 / IL5, CJIS, ITAR",
+    ),
+    "adr": (
+        "assets/images/hero/adr/index.svg",
+        "Architecture Decision Records — the durable rationale behind "
+        "every platform choice from ADF over Airflow to APIM as integration fabric",
+    ),
+    "guides": (
+        "assets/images/hero/guides/index.svg",
+        "Platform guides — Databricks, Synapse, Fabric, Cosmos, Purview, "
+        "AI Foundry, and the orchestration layer",
+    ),
+    "industries": (
+        "assets/images/hero/industries/index.svg",
+        "Industry verticals — financial services, manufacturing, retail, "
+        "energy, telecom, life sciences sector reference patterns",
+    ),
+    "migrations": (
+        "assets/images/hero/migrations/index.svg",
+        "Migration centers — AWS, GCP, Snowflake, Databricks, Teradata, "
+        "Cloudera, Informatica, Palantir, SAS, Oracle to Azure",
+    ),
+    "assessments": (
+        "assets/images/hero/assessments/index.svg",
+        "Platform assessments — migration readiness, platform maturity, "
+        "compliance gap analysis: score-then-roadmap workflows",
+    ),
+    "quickstarts": (
+        "assets/images/hero/quickstarts/index.svg",
+        "Role-based quickstarts — Data Engineer, Data Scientist, BI "
+        "Developer, Security Admin, Platform Admin tracks",
+    ),
+    "patterns": (
+        "assets/images/hero/patterns/index.svg",
+        "Architecture patterns — Cosmos DB, AKS + Container Apps, "
+        "LLMOps, networking + DNS, OpenTelemetry, streaming + CDC",
+    ),
+    "comparison": (
+        "assets/images/hero/comparison/index.svg",
+        "Comparisons — Azure side-by-side with MuleSoft, AWS API stack, "
+        "Fabric, and other major data platforms",
+    ),
+}
+
+
+def _section_default_hero(page_src_path: str) -> dict[str, str | None] | None:
+    """Pick a section-level default hero based on the page's directory.
+
+    Returns ``None`` for pages outside the configured sections — those
+    keep "no hero" behaviour. The returned dict matches the
+    ``page_hero`` shape the template expects.
+    """
+    if not page_src_path:
+        return None
+    top = page_src_path.replace("\\", "/").split("/", 1)[0]
+    spec = _SECTION_DEFAULTS.get(top)
+    if not spec:
+        return None
+    src, alt = spec
+    return {"src": src, "alt": alt, "link": None}
+
+
 def on_page_markdown(markdown: str, page, config, files):  # noqa: ANN001 (mkdocs API)
+    page_src_path = getattr(getattr(page, "file", None), "src_path", "") or ""
+
     hero_line_match = _HERO_LINE_RE.search(markdown)
     if not hero_line_match:
+        # No inline hero — check if the page lives in a section that has
+        # a configured default hero (runbooks, decisions, compliance, ADRs).
+        default = _section_default_hero(page_src_path)
+        if default is not None:
+            if page.meta is None:  # pragma: no cover - defensive
+                page.meta = {}
+            page.meta["page_hero"] = default
         return markdown
 
     line = hero_line_match.group(0)
@@ -131,7 +216,6 @@ def on_page_markdown(markdown: str, page, config, files):  # noqa: ANN001 (mkdoc
     # Resolve the markdown-relative src to a docs-root-relative path
     # so the template can prepend `base_url` and produce a working
     # link from any page URL depth.
-    page_src_path = getattr(getattr(page, "file", None), "src_path", "") or ""
     resolved_src = _resolve_to_docs_root(src, page_src_path)
 
     # Stash on page.meta so the Material override template can find it.

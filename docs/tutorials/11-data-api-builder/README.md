@@ -2,7 +2,7 @@
 
 > **Estimated Time:** 90 minutes | **Path:** F (Platform Operations) | **Prerequisites:** Azure subscription, SQL Server
 
-![Azure SQL Server Overview blade — Essentials panel with server admin, status, location, and the SQL databases / SQL elastic pools / Networking left-nav, the canonical landing point for Data API Builder back-ends](../../assets/images/azure/sql-server-overview.png){ .architecture-hero loading="lazy" }
+![Tutorial 11 Data API Builder hero: REST and GraphQL endpoints auto-generated over SQL and Cosmos schemas](../../assets/images/hero/tutorials/11-data-api-builder.svg){ .architecture-hero loading="lazy" }
 
 ```mermaid
 graph LR

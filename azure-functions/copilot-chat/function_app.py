@@ -806,13 +806,19 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
         grounding_docs.append({"title": title, "url": url})
 
     # MS Learn MCP supplemental grounding (CSA-0162 Phase 2).
-    # When the in-repo docs site returned no grounding hits for an
-    # on-topic question, fall back to Microsoft Learn's hosted MCP
-    # server so the LLM can answer Azure-platform questions our local
-    # corpus does not cover. Marks each chunk external=true so the
-    # widget can render a Microsoft Learn badge on the citation.
+    # The widget pre-searches the docs site and ships matched pages as
+    # `body.grounding`. That local match can be sparse OR poor quality
+    # — the local search ranks by lexical overlap, so a query like
+    # "Azure Container Registry geo-replication" returns "Schema
+    # Registry" and "Azure Cosmos DB" as weak matches. We supplement
+    # with Microsoft Learn whenever the local grounding is thin (≤ 1
+    # hit) so the LLM has authoritative Azure platform context to draw
+    # from. Each external chunk is marked external=true so the widget
+    # renders a Microsoft Learn badge on the citation.
+    _LOCAL_GROUNDING_THRESHOLD = 2  # supplement when fewer than this many local hits
     ms_learn_used = False
-    if not grounding_docs and ms_learn.is_enabled():
+    local_grounding_count = len(grounding_docs)
+    if local_grounding_count < _LOCAL_GROUNDING_THRESHOLD and ms_learn.is_enabled():
         ms_learn_hits = ms_learn.search(message, top_k=3)
         if ms_learn_hits:
             grounding_docs.extend(ms_learn_hits)
@@ -881,16 +887,16 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
 
         latency_ms = int((time.time() - started) * 1000)
 
-        # Uncovered = "this is a docs gap we should fix" → only fires
-        # for on-topic questions where we found no grounding hits at
-        # all (neither local docs nor MS Learn). When MS Learn was
-        # used to answer the question, ``uncovered`` stays True because
-        # the in-repo corpus still doesn't cover it — that's the signal
-        # the content-gap analytics keys off of. ``ms_learn_used``
-        # captures the orthogonal fact that we DID serve an answer.
+        # Uncovered = "this is a docs gap we should fix". Fires for
+        # on-topic questions where the local corpus was thin enough
+        # that we had to supplement with MS Learn (or had no local
+        # hits at all). When MS Learn was used, the in-repo corpus
+        # didn't have the answer — that's the content-gap signal,
+        # even if a stale lexical match landed in the grounding list.
+        local_count = len([g for g in grounding_docs if g.get("external") != "true"])
         is_uncovered = (
             topic_class != "off_topic"
-            and len([g for g in grounding_docs if g.get("external") != "true"]) == 0
+            and (local_count == 0 or ms_learn_used)
         )
 
         # ── Telemetry + persistence (best-effort, never blocks the response) ─

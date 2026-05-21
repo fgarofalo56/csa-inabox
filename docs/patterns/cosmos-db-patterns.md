@@ -2,7 +2,7 @@
 
 > **TL;DR:** Pick **NoSQL API** for greenfield, **MongoDB / Cassandra / PostgreSQL** APIs only when migrating those workloads. Use **autoscale RU/s** for spiky traffic, **provisioned RU/s** for predictable. Get the **partition key right the first time** — you can't change it without recreating the container. Enable **Synapse Link** if you need analytics over the same data without copying it.
 
-![Cosmos DB account Overview blade — Essentials panel showing East US read/write region, Free Tier Discount Opted in, throughput limits, and the Add Container / Data Explorer / Mirroring in Fabric toolbar](../assets/images/azure/cosmos-db-overview.png){ .architecture-hero loading="lazy" }
+![Cosmos DB patterns hero: API selection, partition keys, change feed, multi-region writes glyph](../assets/images/hero/patterns/cosmos-db-patterns.svg){ .architecture-hero loading="lazy" }
 
 ## Problem
 

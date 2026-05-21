@@ -2,7 +2,7 @@
 
 > **TL;DR:** **OpenTelemetry SDK** in every service, **Application Insights** as the backend, **W3C Trace Context** propagated end-to-end, **structured logs** with correlation IDs everywhere, **dashboards in Azure Workbooks**, **SLI/SLO + error budgets** to drive engineering effort. Don't roll your own.
 
-![Azure Application Insights Overview blade — Essentials panel showing instrumentation key, connection string, retention, and the Performance / Failures / Live Metrics left-nav. App Insights is the OpenTelemetry-compatible backend that every CSA-in-a-Box service ships traces, metrics, and logs to.](../assets/images/azure/application-insights-overview.png){ .architecture-hero loading="lazy" }
+![Observability with OpenTelemetry hero: OTel SDK, App Insights, distributed trace dashboard glyph](../assets/images/hero/patterns/observability-otel.svg){ .architecture-hero loading="lazy" }
 
 ## Problem
 

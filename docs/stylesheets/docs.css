@@ -158,3 +158,255 @@
 [data-md-color-scheme="slate"] .mermaid g.cluster .cluster-label foreignObject span {
   color: var(--md-default-fg-color);
 }
+
+
+/* ══════════════════════════════════════════════════════════════════════
+   BRANDING PACK — Cloud Scale Analytics in a Box
+   ════════════════════════════════════════════════════════════════════
+   Adapted from the Supercharge Microsoft Fabric branding pack
+   (https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) but
+   tuned to the deep-navy + cyan + violet palette established by the
+   homepage hero. Sections:
+
+     1. Color tokens (light + slate palette overrides)
+     2. Typography polish (H1/H2/H3, body line-length)
+     3. Architecture-diagram content image styling
+     4. Inline service icons
+     5. Badge variants (status, audience, severity)
+     6. Duration / time-to-read badges
+     7. Custom admonitions (compliance, federal, fabric)
+     8. Better tables
+     9. Mermaid container framing in slate
+    10. Auto dark mode for OS-level prefers-color-scheme
+   ════════════════════════════════════════════════════════════════════ */
+
+/* 1. Color tokens — Cloud Scale Analytics navy + cyan accent.
+      Override Material's default Indigo with our brand colors. The
+      hero SVG palette (deep navy #0A1126, cyan #22D3EE, violet
+      #8B5CF6) is the visual reference. */
+:root {
+  --csa-navy: #0A1126;
+  --csa-navy-mid: #161B45;
+  --csa-navy-soft: #1E2548;
+  --csa-cyan: #22D3EE;
+  --csa-cyan-light: #67E8F9;
+  --csa-cyan-deep: #0891B2;
+  --csa-violet: #8B5CF6;
+  --csa-violet-light: #A78BFA;
+  --csa-amber: #FBBF24;
+  --csa-emerald: #34D399;
+  --csa-rose: #F87171;
+}
+
+/* 2. Typography polish — Material's default H1/H2 read like placeholder
+      text. Bump weight + contrast so titles look like titles. */
+.md-typeset h1 {
+  color: var(--md-default-fg-color);
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  margin-top: 0.5rem;
+}
+.md-typeset h2 {
+  color: var(--md-default-fg-color);
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  border-bottom: 1px solid var(--md-default-fg-color--lightest);
+  padding-bottom: 0.4rem;
+  margin-top: 2.5rem;
+}
+.md-typeset h3 {
+  color: var(--md-default-fg-color);
+  font-weight: 600;
+  margin-top: 1.8rem;
+}
+[data-md-color-scheme="slate"] .md-typeset h1,
+[data-md-color-scheme="slate"] .md-typeset h2,
+[data-md-color-scheme="slate"] .md-typeset h3 {
+  color: #f4f6fb;
+}
+[data-md-color-scheme="slate"] .md-typeset h2 {
+  border-bottom-color: rgba(255, 255, 255, 0.10);
+}
+
+/* Body copy: cleaner reading line-length + line-height */
+.md-typeset {
+  line-height: 1.65;
+}
+[data-md-color-scheme="slate"] .md-typeset p,
+[data-md-color-scheme="slate"] .md-typeset li {
+  color: #d6dbe6;
+}
+
+/* Blockquote — the "TL;DR" line at the top of many pages — use the
+   amber accent for the left border so it reads as a callout. */
+.md-typeset blockquote {
+  border-left-color: var(--csa-amber);
+}
+[data-md-color-scheme="slate"] .md-typeset blockquote {
+  color: #c8cee0;
+  border-left-color: var(--csa-amber);
+}
+
+/* 3. Architecture-diagram — for inline diagram images (NOT heroes).
+      Heroes use .architecture-hero / .page-hero-image; in-content
+      diagrams use .architecture-diagram. Capped height so a diagram
+      doesn't dominate the viewport on long pages. Click to open
+      full size in new tab. */
+.md-typeset .architecture-diagram {
+  max-width: 100%;
+  width: 100%;
+  max-height: 560px;
+  margin: 1rem auto 1.5rem;
+  display: block;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 1rem;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08);
+  object-fit: contain;
+  cursor: zoom-in;
+}
+[data-md-color-scheme="slate"] .md-typeset .architecture-diagram {
+  background: #1f2937;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+.md-typeset a:has(> img.architecture-diagram) {
+  display: block;
+  text-decoration: none;
+}
+
+/* 4. Inline service icons — small icon glyphs used inline with text */
+.md-typeset img.service-icon {
+  width: 1.1em;
+  height: 1.1em;
+  vertical-align: -0.2em;
+  margin-right: 0.25em;
+}
+
+/* 5. Badge variants — small inline pills used for status, audience,
+      and severity. Use as <span class="badge badge-fed">FED</span>. */
+.md-typeset .badge {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  border-radius: 999px;
+  margin-right: 0.25rem;
+  vertical-align: 1px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+.md-typeset .badge-csa {
+  background-color: rgba(34, 211, 238, 0.16);
+  color: var(--csa-cyan-deep);
+  border: 1px solid rgba(34, 211, 238, 0.5);
+}
+[data-md-color-scheme="slate"] .md-typeset .badge-csa {
+  background-color: rgba(34, 211, 238, 0.18);
+  color: var(--csa-cyan-light);
+}
+.md-typeset .badge-fed {
+  background-color: rgba(139, 92, 246, 0.16);
+  color: #6D28D9;
+  border: 1px solid rgba(139, 92, 246, 0.45);
+}
+[data-md-color-scheme="slate"] .md-typeset .badge-fed {
+  color: var(--csa-violet-light);
+}
+.md-typeset .badge-compliance {
+  background-color: rgba(248, 113, 113, 0.16);
+  color: #B91C1C;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+}
+[data-md-color-scheme="slate"] .md-typeset .badge-compliance {
+  color: #FCA5A5;
+}
+.md-typeset .badge-ga {
+  background-color: rgba(52, 211, 153, 0.16);
+  color: #047857;
+  border: 1px solid rgba(52, 211, 153, 0.45);
+}
+[data-md-color-scheme="slate"] .md-typeset .badge-ga {
+  color: #6EE7B7;
+}
+.md-typeset .badge-preview {
+  background-color: rgba(251, 191, 36, 0.16);
+  color: #92400E;
+  border: 1px solid rgba(251, 191, 36, 0.45);
+}
+[data-md-color-scheme="slate"] .md-typeset .badge-preview {
+  color: var(--csa-amber);
+}
+
+/* 6. Duration — tutorial / read-time pills */
+.md-typeset .duration {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  background-color: var(--csa-amber);
+  color: #1F2937;
+  border-radius: 16px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+/* 7. Custom admonitions — compliance + federal */
+.md-typeset .admonition.compliance,
+.md-typeset details.compliance {
+  border-color: var(--csa-violet);
+}
+.md-typeset .compliance > .admonition-title,
+.md-typeset .compliance > summary {
+  background-color: rgba(139, 92, 246, 0.10);
+}
+.md-typeset .compliance > .admonition-title::before,
+.md-typeset .compliance > summary::before {
+  background-color: var(--csa-violet);
+  -webkit-mask-image: var(--md-admonition-icon--warning);
+  mask-image: var(--md-admonition-icon--warning);
+}
+.md-typeset .admonition.federal,
+.md-typeset details.federal {
+  border-color: var(--csa-cyan-deep);
+}
+.md-typeset .federal > .admonition-title,
+.md-typeset .federal > summary {
+  background-color: rgba(8, 145, 178, 0.10);
+}
+.md-typeset .federal > .admonition-title::before,
+.md-typeset .federal > summary::before {
+  background-color: var(--csa-cyan-deep);
+  -webkit-mask-image: var(--md-admonition-icon--info);
+  mask-image: var(--md-admonition-icon--info);
+}
+
+/* 8. Better tables — colored header band, hover row in dark */
+.md-typeset table:not([class]) {
+  font-size: 0.85rem;
+}
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) tr:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) td,
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* 9. Mermaid container framing in slate — soft tint + rounded border so
+      the diagram doesn't look like a floating white card on dark */
+[data-md-color-scheme="slate"] .mermaid {
+  background: rgba(34, 211, 238, 0.04);
+  border: 1px solid rgba(34, 211, 238, 0.10);
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+
+/* 10. Auto dark mode — fallback when JS hasn't run yet */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-md-color-switching]) body:not([data-md-color-scheme="default"]) {
+    --md-default-bg-color: #1e1e1e;
+    --md-default-fg-color: #e0e0e0;
+    --md-code-bg-color: #2d2d2d;
+  }
+}
