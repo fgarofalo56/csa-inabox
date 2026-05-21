@@ -10,6 +10,33 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.7.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.9...csa-inabox-v0.7.0) (2026-05-21)
+
+
+### Features
+
+* **copilot:** MS Learn MCP fallback grounding live in chat Function (Phase 2) ([#264](https://github.com/fgarofalo56/csa-inabox/issues/264)) ([3b6c00d](https://github.com/fgarofalo56/csa-inabox/commit/3b6c00de264fce420021a3cbee58574246f1d703))
+* **copilot:** MS Learn MCP search tool for external grounding (Phase 1) ([#261](https://github.com/fgarofalo56/csa-inabox/issues/261)) ([9c4991d](https://github.com/fgarofalo56/csa-inabox/commit/9c4991d0f8deb07e1f4b5953abcc9a5ee1f32178))
+* **docs:** hero spans full grid width above sidebars + site brand rename ([#263](https://github.com/fgarofalo56/csa-inabox/issues/263)) ([6d1b5a8](https://github.com/fgarofalo56/csa-inabox/commit/6d1b5a85846bca6992162b7e7fbed48244016214))
+* **docs:** redesigned homepage hero + spell-out H1 ([#259](https://github.com/fgarofalo56/csa-inabox/issues/259)) ([2f1b79c](https://github.com/fgarofalo56/csa-inabox/commit/2f1b79c78f5e8392526d315b0af43ae13b313705))
+
+
+### Bug Fixes
+
+* **docs:** hero banners above H1, fix Mermaid dark-mode readability ([#258](https://github.com/fgarofalo56/csa-inabox/issues/258)) ([c414ca4](https://github.com/fgarofalo56/csa-inabox/commit/c414ca4bcde16f9c6f2555f51aecb47acd5af6be))
+* **docs:** hero images 404 on nested pages — resolve src + prepend base_url ([#265](https://github.com/fgarofalo56/csa-inabox/issues/265)) ([9661c88](https://github.com/fgarofalo56/csa-inabox/commit/9661c8887535531f797a0459ac28392b07c22be3))
+* **docs:** un-ignore docs/learn/examples/architecture-patterns/batch/data/ ([#257](https://github.com/fgarofalo56/csa-inabox/issues/257)) ([20559cf](https://github.com/fgarofalo56/csa-inabox/commit/20559cf4802f2618c6e11b2a598184749f66f994))
+
+
+### Code Refactoring
+
+* **nav:** redistribute Additional Content (auto-indexed) into main categories ([#260](https://github.com/fgarofalo56/csa-inabox/issues/260)) ([8c0306e](https://github.com/fgarofalo56/csa-inabox/commit/8c0306e4ced034981db1f9c9efb86c9886e07d3c))
+
+
+### Documentation
+
+* visual redesign + nav cleanup (58 hero SVGs, A-grade audit) ([#255](https://github.com/fgarofalo56/csa-inabox/issues/255)) ([c15da9d](https://github.com/fgarofalo56/csa-inabox/commit/c15da9d359e29bb07fb8457110717ebeb60aa686))
+
 ## [0.6.9](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.8...csa-inabox-v0.6.9) (2026-05-18)
 
 
