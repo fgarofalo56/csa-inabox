@@ -13,6 +13,9 @@ status: published
 
 # Data Governance Best Practices
 
+
+![Data governance best practice hero: large shield glyph with checkmark in Microsoft purple, indicating Purview + classifications + lineage](../assets/images/hero/best-practices/data-governance.svg){ .architecture-hero loading="eager" }
+
 ## Overview
 
 Data governance is an **enabler**, not a blocker. When implemented correctly, governance accelerates

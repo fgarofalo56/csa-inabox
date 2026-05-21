@@ -1,5 +1,8 @@
 # Tutorial 07: Building AI Agents with Semantic Kernel
 
+![AI Agents with Azure AI Foundry + Semantic Kernel — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/07-agents-foundry-sk.svg){ .architecture-hero loading="eager" }
+
+
 > **Estimated Time:** 75-90 minutes
 > **Difficulty:** Advanced
 

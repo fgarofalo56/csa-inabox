@@ -1,5 +1,8 @@
 # Tutorial: Data Governance with Microsoft Purview
 
+![Data Governance with Purview — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/02-data-governance.svg){ .architecture-hero loading="eager" }
+
+
 This tutorial walks you through setting up complete data governance for the
 CSA-in-a-Box platform using Microsoft Purview. By the end, you will have a
 fully configured data catalog with automated scanning, business glossary,

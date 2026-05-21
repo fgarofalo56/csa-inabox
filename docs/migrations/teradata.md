@@ -10,7 +10,7 @@ This playbook is the core migration reference. For the complete Teradata-to-Azur
     - [Why Azure over Teradata (Executive Brief)](teradata/why-azure-over-teradata.md)
     - [Total Cost of Ownership Analysis](teradata/tco-analysis.md)
     - [Complete Feature Mapping (40+ features)](teradata/feature-mapping-complete.md)
-    - [Tutorials & Walkthroughs](teradata/index.md#tutorials)
+    - [Tutorials & Walkthroughs](teradata/index.md)
     - [Benchmarks & Performance](teradata/benchmarks.md)
     - [Best Practices](teradata/best-practices.md)
 

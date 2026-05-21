@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **Troubleshooting**
+[Home](../README.md) > [Docs](index.md) > **Troubleshooting**
 
 # Troubleshooting Guide
 
@@ -7,20 +7,20 @@
 
 ## 📑 Table of Contents
 
-- [📦 Bicep Deployment Issues](#-bicep-deployment-issues)
-- [🗄️ dbt Issues](#️-dbt-issues)
-- [📊 Data Quality Issues](#-data-quality-issues)
-- [⚙️ Azure Functions Issues](#️-azure-functions-issues)
-- [🔄 Deployment Rollback](#-deployment-rollback)
-- [🏗️ Regional Outage / Disaster Recovery](#️-regional-outage--disaster-recovery)
-- [🔧 ADF Pipeline Issues](#-adf-pipeline-issues)
-- [📊 Stream Analytics Issues](#-stream-analytics-issues)
-- [⚡ Databricks Issues](#-databricks-issues)
-- [📊 Purview Issues](#-purview-issues)
-- [🧪 Great Expectations Issues](#-great-expectations-issues)
-- [🔒 Key Vault Issues](#-key-vault-issues)
-- [🗄️ Cosmos DB Issues](#️-cosmos-db-issues)
-- [🔄 CI/CD Workflow Issues](#-cicd-workflow-issues)
+- [📦 Bicep Deployment Issues](#bicep-deployment-issues)
+- [🗄️ dbt Issues](#dbt-issues)
+- [📊 Data Quality Issues](#data-quality-issues)
+- [⚙️ Azure Functions Issues](#azure-functions-issues)
+- [🔄 Deployment Rollback](#deployment-rollback)
+- [🏗️ Regional Outage / Disaster Recovery](#regional-outage-disaster-recovery)
+- [🔧 ADF Pipeline Issues](#adf-pipeline-issues)
+- [📊 Stream Analytics Issues](#stream-analytics-issues)
+- [⚡ Databricks Issues](#databricks-issues)
+- [📊 Purview Issues](#purview-issues)
+- [🧪 Great Expectations Issues](#great-expectations-issues)
+- [🔒 Key Vault Issues](#key-vault-issues)
+- [🗄️ Cosmos DB Issues](#cosmos-db-issues)
+- [🔄 CI/CD Workflow Issues](#cicd-workflow-issues)
 
 ---
 

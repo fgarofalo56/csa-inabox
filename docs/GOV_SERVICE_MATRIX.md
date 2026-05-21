@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **Gov Service Matrix**
+[Home](../README.md) > [Docs](index.md) > **Gov Service Matrix**
 
 # Azure Government Service Availability Matrix
 
@@ -27,18 +27,18 @@ for the latest status.
 
 ## 📑 Table of Contents
 
-- [☁️ Core Services](#️-core-services)
-- [💻 Compute & Hosting](#-compute--hosting)
-- [🤖 AI & ML](#-ai--ml)
-- [🗄️ Databases](#️-databases)
-- [🔒 Identity & Security](#-identity--security)
-- [📊 Monitoring & Management](#-monitoring--management)
-- [🌐 Endpoint URL Differences](#-endpoint-url-differences)
-- [⚙️ API Version Differences](#️-api-version-differences)
-- [📦 Bicep Configuration for Government](#-bicep-configuration-for-government)
-- [🏛️ Compliance Requirements by Vertical](#️-compliance-requirements-by-vertical)
-- [🔓 Open-Source Alternatives for Government Gaps](#-open-source-alternatives-for-government-gaps)
-- [📚 References](#-references)
+- [☁️ Core Services](#core-services)
+- [💻 Compute & Hosting](#compute-hosting)
+- [🤖 AI & ML](#ai-ml)
+- [🗄️ Databases](#databases)
+- [🔒 Identity & Security](#identity-security)
+- [📊 Monitoring & Management](#monitoring-management)
+- [🌐 Endpoint URL Differences](#endpoint-url-differences)
+- [⚙️ API Version Differences](#api-version-differences)
+- [📦 Bicep Configuration for Government](#bicep-configuration-for-government)
+- [🏛️ Compliance Requirements by Vertical](#compliance-requirements-by-vertical)
+- [🔓 Open-Source Alternatives for Government Gaps](#open-source-alternatives-for-government-gaps)
+- [📚 References](#references)
 
 ---
 

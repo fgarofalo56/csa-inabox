@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **Platform Services**
+[Home](../README.md) > [Docs](index.md) > **Platform Services**
 
 # Platform Services Guide
 
@@ -13,19 +13,19 @@ cloud/region.
 
 ## 📑 Table of Contents
 
-- [🏗️ Services Overview](#️-services-overview)
-- [1. 🗄️ Unity Catalog Pattern](#1-️-unity-catalog-pattern)
-- [2. ⚡ Data Activator](#2--data_activator)
-- [3. 📊 Semantic Model](#3--semantic-model)
-- [4. 🛒 Data Marketplace](#4--data-marketplace)
-- [5. 📋 Governance Framework](#5--governance-framework)
-- [6. 🔄 Multi-Synapse](#6--multi_synapse)
-- [7. ⚙️ Metadata Framework](#7-️-metadata_framework)
-- [8. 🤖 AI Integration](#8--ai-integration)
-- [9. 🔧 Shared Services](#9--shared-services)
-- [10. 🔓 OSS Alternatives](#10--oss_alternatives)
-- [📦 Service Dependency Map](#-service-dependency-map)
-- [⚙️ Configuration](#️-configuration)
+- [🏗️ Services Overview](#services-overview)
+- [1. 🗄️ Unity Catalog Pattern](#1-unity-catalog-pattern)
+- [2. ⚡ Data Activator](#2-data-activator)
+- [3. 📊 Semantic Model](#3-semantic-model)
+- [4. 🛒 Data Marketplace](#4-data-marketplace)
+- [5. 📋 Governance Framework](#5-governance-framework)
+- [6. 🔄 Multi-Synapse](#6-multi-synapse)
+- [7. ⚙️ Metadata Framework](#7-metadata-framework)
+- [8. 🤖 AI Integration](#8-ai-integration)
+- [9. 🔧 Shared Services](#9-shared-services)
+- [10. 🔓 OSS Alternatives](#10-oss-alternatives)
+- [📦 Service Dependency Map](#service-dependency-map)
+- [⚙️ Configuration](#configuration)
 
 ---
 

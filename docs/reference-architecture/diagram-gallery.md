@@ -1,5 +1,8 @@
 # Architecture Diagram Gallery — CSA-in-a-Box Visual Reference
 
+
+![Architecture diagram gallery hero: nine mini cards in a 3x3 grid in Azure blue gradient](../assets/images/hero/reference-architecture/diagram-gallery.svg){ .architecture-hero loading="eager" }
+
 Presentation-ready Mermaid diagrams for architects, engineers, and stakeholders. Every diagram diffs cleanly in git, renders natively in MkDocs Material, and can be customized to match your organization's naming conventions, regions, or service selections. Copy any diagram into a design document, architecture decision record, or slide deck and adjust the labels to fit your context.
 
 ---

@@ -3,6 +3,9 @@ title: End-to-End Examples
 description: 18 industry-vertical implementations of CSA-in-a-Box — federal agencies, tribal organizations, healthcare, financial services, AI, IoT, and more.
 ---
 
+![Index example hero — themed Microsoft Azure brand illustration of the index vertical](../assets/images/hero/examples/index.svg){ .architecture-hero loading="eager" }
+
+
 # End-to-End Examples
 
 **Industry vertical implementations of CSA-in-a-Box.** Each example is a self-contained, working deployment for a specific federal agency, tribal organization, or commercial sector — with real or synthetic data, dbt medallion models, data product contracts, deployment scripts, and analytics notebooks.

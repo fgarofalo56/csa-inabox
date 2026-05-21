@@ -178,9 +178,9 @@ necessary.
 - Marketplace router —
   [`portal/shared/api/routers/marketplace.py`](../../portal/shared/api/routers/marketplace.py)
 - Access router (classification caps) —
-  [`portal/shared/api/routers/access.py`](../../portal/shared/api/routers/access.py)
+  [`portal/shared/api/routers/access.py`](https://github.com/fgarofalo56/csa-inabox/blob/main/portal/shared/api/routers/access.py)
 - Contract files —
-  [`domains/`](../../domains/)` <domain>/data-products/<product>/contract.yaml`
+  [`domains/`](https://github.com/fgarofalo56/csa-inabox/tree/main/domains/)` <domain>/data-products/<product>/contract.yaml`
 - Contract validator —
   [`csa_platform/governance/contracts/contract_validator.py`](../../csa_platform/governance/contracts/contract_validator.py)
 - Purview automation —

@@ -36,7 +36,7 @@
 - [Configuration](#configuration)
   - [dbt Profiles](#dbt-profiles)
   - [Environment Variables](#environment-variables)
-- [Monitoring & Alerts](#monitoring--alerts)
+- [Monitoring & Alerts](#monitoring-alerts)
 - [Development](#development)
   - [Adding New Data Sources](#adding-new-data-sources)
   - [Testing](#testing)

@@ -120,9 +120,9 @@ This presentation covers:
 - [Presentation Guides](guides/README.md)
 
 ### Templates
-- PowerPoint template: [Download](../templates/)
-- PDF handout template: [Download](../templates/)
-- Speaker notes template: [Download](../templates/)
+- PowerPoint template: (template file pending)
+- PDF handout template: (template file pending)
+- Speaker notes template: (template file pending)
 
 ## 💬 Feedback
 

@@ -26,22 +26,22 @@ as an authoritative source for new work.
 
 ## 📑 Table of Contents
 
-- [🏗️ High-Level Architecture](#️-high-level-architecture)
-- [🏗️ Architecture Layers](#️-architecture-layers)
+- [🏗️ High-Level Architecture](#high-level-architecture)
+- [🏗️ Architecture Layers](#architecture-layers)
     - [1. Data Management Landing Zone (DMLZ)](#1-data-management-landing-zone-dmlz)
     - [2. Data Landing Zone (DLZ)](#2-data-landing-zone-dlz)
     - [3. Platform Services](#3-platform-services)
     - [4. Consumer Layer](#4-consumer-layer)
     - [5. Azure Government Parallel](#5-azure-government-parallel)
-- [🔄 Data Flow](#-data-flow)
+- [🔄 Data Flow](#data-flow)
     - [Batch Data Flow](#batch-data-flow)
     - [Streaming Data Flow](#streaming-data-flow)
     - [Data Governance Flow](#data-governance-flow)
-- [💡 Vertical Examples](#-vertical-examples)
-- [📁 Repository Structure](#-repository-structure)
-- [⚙️ Primary Tech Choices](#️-primary-tech-choices)
-- [🔒 Security Architecture](#-security-architecture)
-- [🚀 Next Steps](#-next-steps)
+- [💡 Vertical Examples](#vertical-examples)
+- [📁 Repository Structure](#repository-structure)
+- [⚙️ Primary Tech Choices](#primary-tech-choices)
+- [🔒 Security Architecture](#security-architecture)
+- [🚀 Next Steps](#next-steps)
 
 ---
 
@@ -453,7 +453,7 @@ csa-inabox/
 
 ## ⚙️ Primary Tech Choices
 
-This table is a **cheat sheet** of the default pick for each concern. For branching decisions with scenario-specific tradeoffs (cost, latency, compliance, skill match, anti-patterns), see the 8 decision trees at [`docs/decisions/`](decisions/README.md) (machine-readable source of truth at [`decision-trees/`](../decision-trees/)).
+This table is a **cheat sheet** of the default pick for each concern. For branching decisions with scenario-specific tradeoffs (cost, latency, compliance, skill match, anti-patterns), see the 8 decision trees at [`docs/decisions/`](decisions/README.md) (machine-readable YAML source of truth at [`decision-trees/`](https://github.com/fgarofalo56/csa-inabox/tree/main/decision-trees/)).
 
 | Concern             | Primary Choice        | Alternative       | Rationale                                        |
 | ------------------- | --------------------- | ----------------- | ------------------------------------------------ |
@@ -490,7 +490,7 @@ All deployments enforce:
 - [PLATFORM_SERVICES.md](PLATFORM_SERVICES.md) — Platform component deep-dive
 - [GOV_SERVICE_MATRIX.md](GOV_SERVICE_MATRIX.md) — Azure Government compatibility
 - **Fabric migration path** — See the
-  [`fabric-vs-databricks-vs-synapse` decision tree](../decision-trees/fabric-vs-databricks-vs-synapse/),
+  [`fabric-vs-databricks-vs-synapse` decision tree](decisions/fabric-vs-databricks-vs-synapse.md),
   [ADR-0010 (positioning)](adr/0010-fabric-strategic-target.md), and the
   Palantir migration playbook in [`migrations/`](migrations/README.md) for guidance on
   when to stay on CSA-in-a-Box, when to adopt Microsoft Fabric, and how

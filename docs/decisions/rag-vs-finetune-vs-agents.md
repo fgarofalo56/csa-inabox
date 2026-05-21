@@ -75,6 +75,6 @@ flowchart TD
 
 ## Related
 
-- Architecture: [AI / ML Layer](../ARCHITECTURE.md#-ai--ml-layer)
+- Architecture: [AI / ML Layer](../ARCHITECTURE.md#ai-ml-layer)
 - Finding: CSA-0010
 - Finding: CSA-0016 (tamper-evident audit logging for agent tool use)

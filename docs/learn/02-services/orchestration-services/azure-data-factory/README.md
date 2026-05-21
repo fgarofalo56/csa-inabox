@@ -532,7 +532,7 @@ __[📖 Integration Examples →](../../../06-code-examples/integration-guide.md
 ### 🔧 __Advanced Topics__
 
 - [__Custom Activities__](https://docs.microsoft.com/azure/data-factory/transform-data-using-dotnet-custom-activity)
-- [__SSIS Package Migration__](integration-runtime/README.md#azure-ssis-ir)
+- [__SSIS Package Migration__](integration-runtime/README.md)
 - [__Global Parameters__](https://docs.microsoft.com/azure/data-factory/author-global-parameters)
 
 ---

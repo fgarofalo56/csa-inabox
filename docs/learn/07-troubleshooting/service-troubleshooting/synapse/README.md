@@ -172,11 +172,11 @@ Before diving into specific guides, collect this information:
 
 | Error Code/Message | Likely Cause | Quick Fix | Detailed Guide |
 |:-------------------|:-------------|:----------|:---------------|
-| `Error 40613` | Resource limit reached | Scale up or wait | [Scaling](scaling.md#resource-limits) |
-| `Error 40501` | Service busy | Retry with backoff | [Query Performance](query-performance.md#service-busy) |
+| `Error 40613` | Resource limit reached | Scale up or wait | [Scaling](scaling.md#manual-scaling) |
+| `Error 40501` | Service busy | Retry with backoff | [Query Performance](query-performance.md) |
 | `Error 18456` | Authentication failed | Check credentials | [Security](../../authentication-troubleshooting.md) |
-| `Timeout expired` | Query too slow | Optimize query | [Query Performance](query-performance.md#timeout-errors) |
-| `Connection failed` | Network issue | Check firewall | [Connectivity](connectivity.md#firewall-issues) |
+| `Timeout expired` | Query too slow | Optimize query | [Query Performance](query-performance.md) |
+| `Connection failed` | Network issue | Check firewall | [Connectivity](connectivity.md#5-test-private-endpoint-connectivity) |
 
 ---
 

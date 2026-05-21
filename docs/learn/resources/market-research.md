@@ -20,11 +20,11 @@ Comprehensive market research on cloud analytics trends, Azure positioning, indu
 - [Industry Trends](#industry-trends)
 - [Technology Evolution](#technology-evolution)
 - [Azure Market Position](#azure-market-position)
-- [Buyer Behavior & Decision Criteria](#buyer-behavior--decision-criteria)
+- [Buyer Behavior & Decision Criteria](#buyer-behavior-decision-criteria)
 - [Industry Adoption Patterns](#industry-adoption-patterns)
-- [Competitive Landscape](#competitive-landscape)
+- **Competitive Landscape**
 - [Future Outlook 2025-2030](#future-outlook-2025-2030)
-- [Investment & M&A Activity](#investment--ma-activity)
+- [Investment & M&A Activity](#investment-ma-activity)
 - [Recommendations](#recommendations)
 
 ---

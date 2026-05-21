@@ -151,7 +151,7 @@ __[📖 Detailed Guide →](spark-pools/README.md)__
 
 ---
 
-### 📊 [Data Explorer Pools](data-explorer-pools/)
+### 📊 [Data Explorer Pools](data-explorer-pools/README.md)
 
 ![Time Series](https://img.shields.io/badge/Specialty-Time%20Series-orange?style=flat-square)
 

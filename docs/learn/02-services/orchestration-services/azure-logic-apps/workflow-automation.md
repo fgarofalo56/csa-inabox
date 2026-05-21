@@ -26,7 +26,7 @@ This guide provides practical patterns and examples for implementing workflow au
 - [Common Workflow Patterns](#common-workflow-patterns)
 - [Business Process Automation](#business-process-automation)
 - [System Integration Patterns](#system-integration-patterns)
-- [Error Handling & Retry Patterns](#error-handling--retry-patterns)
+- [Error Handling & Retry Patterns](#error-handling-retry-patterns)
 - [Best Practices](#best-practices)
 
 ---

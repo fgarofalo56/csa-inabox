@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Research](./) > **Enterprise Data Platforms 2026**
+[Home](../../README.md) > [Docs](../index.md) > [Research](index.md) > **Enterprise Data Platforms 2026**
 
 # Enterprise Data Platforms — 2026 State of the Market
 

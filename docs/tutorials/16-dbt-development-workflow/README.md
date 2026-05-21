@@ -1,5 +1,8 @@
 # Tutorial 16: dbt Development Workflow
 
+![dbt Development Workflow — local, packages, tests, CI/CD — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/16-dbt-development-workflow.svg){ .architecture-hero loading="eager" }
+
+
 > **Estimated Time:** 2-3 hours
 > **Difficulty:** Intermediate
 
@@ -1187,9 +1190,9 @@ See the [Tutorial Index](../README.md) for all available paths.
 
 ## Reference
 
-- [CSA-in-a-Box Sales Domain dbt Project](../../../domains/sales/dbt/)
-- [CSA-in-a-Box Shared dbt Macros](../../../domains/shared/dbt/macros/)
-- [dbt Project Template](../../../templates/data-product/scaffold/dbt/)
+- [CSA-in-a-Box Sales Domain dbt Project](https://github.com/fgarofalo56/csa-inabox/tree/main/domains/sales/dbt/)
+- [CSA-in-a-Box Shared dbt Macros](https://github.com/fgarofalo56/csa-inabox/tree/main/domains/shared/dbt/macros/)
+- [dbt Project Template](https://github.com/fgarofalo56/csa-inabox/tree/main/templates/data-product/scaffold/dbt/)
 - [dbt Documentation](https://docs.getdbt.com/)
 - [dbt-databricks Adapter](https://github.com/databricks/dbt-databricks)
 - [Databricks SQL Warehouse Docs](https://learn.microsoft.com/en-us/azure/databricks/sql/)

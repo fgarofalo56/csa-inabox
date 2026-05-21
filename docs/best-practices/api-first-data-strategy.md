@@ -7,6 +7,9 @@ last_updated: 2026-05-15
 
 # Best Practice — API-First Data Strategy
 
+
+![API-first data strategy best practice hero: APIM gateway with inbound/outbound stream arrows in Azure cyan](../assets/images/hero/best-practices/api-first-data-strategy.svg){ .architecture-hero loading="eager" }
+
 ## What "API-first" actually means
 
 API-first is not "we have some APIs." API-first is the architectural choice that **every dataset, model, and system is consumed exclusively through stable, versioned, machine-readable, identity-grounded contracts**. The data is the API. The model is the API. The system is the API. No exceptions, no side channels, no "just this once" direct database access.

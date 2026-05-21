@@ -40,7 +40,7 @@
   - [Azure Government (GovCloud)](#azure-government-govcloud)
   - [FISMA Compliance](#fisma-compliance)
   - [Data Sensitivity](#data-sensitivity)
-- [Monitoring & Alerts](#monitoring--alerts)
+- [Monitoring & Alerts](#monitoring-alerts)
 - [Troubleshooting](#troubleshooting)
   - [Common Issues](#common-issues)
   - [Logs](#logs)

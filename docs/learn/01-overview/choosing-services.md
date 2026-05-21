@@ -580,7 +580,7 @@ flowchart TD
 
 - [Getting Started Tutorials](../tutorials/README.md)
 - [Code Examples](../06-code-examples/README.md)
-- [Reference Architectures](../03-architecture-patterns/reference-architectures/)
+- [Reference Architectures](../03-architecture-patterns/reference-architectures/README.md)
 
 ### Cost Management
 

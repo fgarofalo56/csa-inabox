@@ -173,12 +173,12 @@ We welcome contributions to improve the architecture and documentation:
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/fgarofalo56/csa-inabox/blob/main/LICENSE) file for details.
 
 ---
 
 **🚀 Ready to get started?** Begin with the [Architecture Overview](docs/architecture/overview.md) or jump directly to the Quick Start Guide.
 
-**📊 Want to see it in action?** Explore the [Interactive Diagrams](diagrams/) or view the Live Monitoring Dashboard.
+**📊 Want to see it in action?** Explore the *Interactive Diagrams (asset bundle pending)* or view the Live Monitoring Dashboard.
 
 **🔒 Security focused?** Review our [Zero Trust Implementation](docs/architecture/security.md) and Compliance Framework.

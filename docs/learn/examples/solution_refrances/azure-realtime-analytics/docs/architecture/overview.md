@@ -11,8 +11,8 @@ tags:
 ## Table of Contents
 - [Executive Summary](#executive-summary)
 - [System Architecture](#system-architecture)
-- [Core Components](#core-components)
-- [Data Flow Architecture](#data-flow-architecture)
+- **Core Components**
+- **Data Flow Architecture**
 - [Technology Stack](#technology-stack)
 - [Performance Characteristics](#performance-characteristics)
 - [Scalability Design](#scalability-design)
@@ -255,6 +255,6 @@ Topics    Functions     AI Enrichment → Delta Lake Silver
 
 ---
 
-**📊 Interactive Diagrams**: Explore the [complete architecture diagrams](../../diagrams/) for detailed visual representations.
+**📊 Interactive Diagrams**: Explore the *complete architecture diagrams (assets pending)* for detailed visual representations.
 
 **🔧 Implementation Ready**: Follow the deployment guide to build this architecture in your environment.

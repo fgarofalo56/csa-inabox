@@ -11,11 +11,11 @@ tags:
 ## Table of Contents
 - [Security Overview](#security-overview)
 - [Zero Trust Architecture](#zero-trust-architecture)
-- [Network Security](#network-security)
-- [Identity & Access Management](#identity--access-management)
+- **Network Security**
+- **Identity & Access Management**
 - [Data Protection](#data-protection)
 - [Compliance Framework](#compliance-framework)
-- [Monitoring & Threat Detection](#monitoring--threat-detection)
+- [Monitoring & Threat Detection](#monitoring-threat-detection)
 - [Security Operations](#security-operations)
 
 ## Security Overview

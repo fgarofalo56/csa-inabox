@@ -507,7 +507,7 @@ __Key Services__:
 
 - [Detailed Architecture Patterns](../03-architecture-patterns/README.md) - Complete pattern catalog
 - [Service Selection Guide](choosing-services.md) - Choose the right Azure services
-- [Reference Architectures](../03-architecture-patterns/reference-architectures/) - Industry-specific implementations
+- [Reference Architectures](../03-architecture-patterns/reference-architectures/README.md) - Industry-specific implementations
 
 ### Implementation Guides
 

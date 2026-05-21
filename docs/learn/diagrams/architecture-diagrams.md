@@ -16,7 +16,7 @@ The Delta Lakehouse architecture combines the best features of data lakes and da
 
 ### 🏗️ Our Delta Lakehouse Architecture
 
-![Delta Lakehouse Architecture](../images/README.md)
+![Delta Lakehouse Architecture](../images/delta-lakehouse-diagram.png)
 
 ### 🔗 Microsoft Reference Architecture
 
@@ -36,7 +36,7 @@ The Serverless SQL architecture enables on-demand, scalable analytics without pr
 
 ### 🏗️ Our Serverless SQL Architecture
 
-![Serverless SQL Architecture](../images/README.md)
+![Serverless SQL Architecture](../images/serverless-sql-architecture.png)
 
 ### 🔗 Microsoft Reference Architecture
 
@@ -56,7 +56,7 @@ The Shared Metadata architecture enables consistent data access across Spark and
 
 ### 🏗️ Our Shared Metadata Architecture
 
-![Shared Metadata Architecture](../images/README.md)
+![Shared Metadata Architecture](../images/shared-metadata-architecture.png)
 
 ### 🔗 Microsoft Reference Architecture
 

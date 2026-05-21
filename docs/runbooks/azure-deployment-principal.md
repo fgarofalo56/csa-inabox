@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Azure Deployment Service Principal**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Azure Deployment Service Principal**
 
 # Azure Deployment Service Principal Runbook
 
@@ -12,7 +12,7 @@
 - [3. Subscription scope and role assignments](#3-subscription-scope-and-role-assignments)
 - [4. Secret storage and rotation](#4-secret-storage-and-rotation)
 - [5. Rotation procedure](#5-rotation-procedure)
-- [6. Recovery — SP credentials lost or compromised](#6-recovery--sp-credentials-lost-or-compromised)
+- [6. Recovery — SP credentials lost or compromised](#6-recovery-sp-credentials-lost-or-compromised)
 - [7. Audit and observability](#7-audit-and-observability)
 - [8. Escalation contacts](#8-escalation-contacts)
 
@@ -81,7 +81,7 @@ az role assignment list --assignee $SP_ID --all -o table
 | Client secret (if used) | GitHub secret `AZURE_CLIENT_SECRET` + Key Vault backup | 90 days (NIST 800-53 SC-12) |
 
 > [!CAUTION]
-> **Never commit the client secret to the repo.** The `.gitleaks.toml` config will flag any leak; the `gitleaks` pre-commit hook will block the commit; CI's Secret Scan workflow will fail the build. If a secret is accidentally committed, follow [§6](#6-recovery--sp-credentials-lost-or-compromised) immediately.
+> **Never commit the client secret to the repo.** The `.gitleaks.toml` config will flag any leak; the `gitleaks` pre-commit hook will block the commit; CI's Secret Scan workflow will fail the build. If a secret is accidentally committed, follow [§6](#6-recovery-sp-credentials-lost-or-compromised) immediately.
 
 The repository's preferred posture is **OIDC federation** — no client secret on disk, GitHub Actions exchanges a short-lived OIDC token for an Azure access token at run time. Client-secret auth is supported as a fallback for legacy workflows.
 

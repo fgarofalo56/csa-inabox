@@ -1,5 +1,8 @@
 # Tutorial 15: Multi-Tenant Onboarding
 
+![Multi-Tenant Tenant Onboarding workflow — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/15-multi-tenant-onboarding.svg){ .architecture-hero loading="eager" }
+
+
 > **Estimated Time:** 3-4 hours
 > **Difficulty:** Advanced
 

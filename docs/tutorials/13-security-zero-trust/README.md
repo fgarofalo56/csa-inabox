@@ -1,5 +1,8 @@
 # Tutorial 13: Security — Zero Trust Configuration
 
+![Zero Trust Security with Private Link + Managed Identity — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/13-security-zero-trust.svg){ .architecture-hero loading="eager" }
+
+
 > **Estimated Time:** 4-6 hours
 > **Difficulty:** Advanced
 

@@ -1,5 +1,8 @@
 # Reference Architecture — Data Flow (Medallion)
 
+
+![Medallion data flow hero: three stacked Bronze, Silver, Gold layers depicting Delta Lake medallion progression](../assets/images/hero/reference-architecture/data-flow-medallion.svg){ .architecture-hero loading="eager" }
+
 > **TL;DR:** Bronze stores raw, silver stores cleaned-and-conformed, gold stores business-ready. Every transition is a **dbt** (or Spark) job with tests, version control, and lineage to Purview. Don't skip layers; don't denormalize bronze.
 
 ## The problem

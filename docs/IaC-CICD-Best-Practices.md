@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **IaC & CI/CD Best Practices**
+[Home](../README.md) > [Docs](index.md) > **IaC & CI/CD Best Practices**
 
 # Infrastructure-as-Code & CI/CD Best Practices for CSA-in-a-Box
 
@@ -23,7 +23,7 @@ are preserved for historical cross-reference only. For authoritative
 
 ## 📑 Table of Contents
 
-- [🏗️ 1. Bicep Best Practices for Large-Scale Azure Deployments](#️-1-bicep-best-practices-for-large-scale-azure-deployments)
+- [🏗️ 1. Bicep Best Practices for Large-Scale Azure Deployments](#1-bicep-best-practices-for-large-scale-azure-deployments)
     - [1.1 Module Organization and Naming Conventions](#11-module-organization-and-naming-conventions)
     - [1.2 Parameter Files per Environment](#12-parameter-files-per-environment)
     - [1.3 Bicep Module Registry (ACR)](#13-bicep-module-registry-azure-container-registry)
@@ -32,7 +32,7 @@ are preserved for historical cross-reference only. For authoritative
     - [1.6 Cross-Subscription and Cross-Resource-Group Deployments](#16-cross-subscription-and-cross-resource-group-deployments)
     - [1.7 Conditional Deployment Patterns](#17-conditional-deployment-patterns)
     - [1.8 User-Defined Types and Compile-Time Imports](#18-user-defined-types-and-compile-time-imports)
-- [🔄 2. GitHub Actions CI/CD for Azure IaC](#-2-github-actions-cicd-for-azure-iac)
+- [🔄 2. GitHub Actions CI/CD for Azure IaC](#2-github-actions-cicd-for-azure-iac)
     - [2.1 Workflow Organization for Multi-Subscription Deploys](#21-workflow-organization-for-multi-subscription-deploys)
     - [2.2 OIDC Authentication (Federated Credentials)](#22-oidc-authentication-federated-credentials)
     - [2.3 Environment Protection Rules and Approvals](#23-environment-protection-rules-and-approvals)
@@ -41,34 +41,34 @@ are preserved for historical cross-reference only. For authoritative
     - [2.6 Bicep Lint, Validate, What-If in PR Checks](#26-bicep-lint-validate-what-if-in-pr-checks)
     - [2.7 Deployment Gates and Rollback Strategies](#27-deployment-gates-and-rollback-strategies)
     - [2.8 Matrix Deployments for Multiple Subscriptions](#28-matrix-deployments-for-multiple-subscriptions)
-- [🧪 3. Testing Infrastructure-as-Code](#-3-testing-infrastructure-as-code)
+- [🧪 3. Testing Infrastructure-as-Code](#3-testing-infrastructure-as-code)
     - [3.1 Bicep Linting with Linter Rules](#31-bicep-linting-with-linter-rules)
     - [3.2 PSRule for Azure (Policy Compliance Testing)](#32-psrule-for-azure-policy-compliance-testing)
     - [3.3 Checkov (IaC Security Scanning)](#33-checkov-iac-security-scanning)
     - [3.4 Additional Security Scanning Tools](#34-additional-security-scanning-tools)
     - [3.5 Cost Estimation in CI Pipelines](#35-cost-estimation-in-ci-pipelines)
-- [🏛️ 4. Azure Landing Zone Accelerators](#️-4-azure-landing-zone-accelerators)
+- [🏛️ 4. Azure Landing Zone Accelerators](#4-azure-landing-zone-accelerators)
     - [4.1 ALZ-Bicep vs Azure Verified Modules (AVM)](#41-alz-bicep-vs-azure-verified-modules-avm)
     - [4.2 Extending ALZ for Data Platforms](#42-extending-alz-for-data-platforms)
     - [4.3 Custom Policy Definitions for Data Governance](#43-custom-policy-definitions-for-data-governance)
-- [🌍 5. Multi-Environment Deployment Patterns](#-5-multi-environment-deployment-patterns)
+- [🌍 5. Multi-Environment Deployment Patterns](#5-multi-environment-deployment-patterns)
     - [5.1 Recommended: Progressive Deployment (Ring-Based)](#51-recommended-progressive-deployment-ring-based)
     - [5.2 Feature Flags for Infrastructure](#52-feature-flags-for-infrastructure)
     - [5.3 Blue-Green for Infrastructure](#53-blue-green-for-infrastructure)
     - [5.4 Canary Deployments for Data Pipelines](#54-canary-deployments-for-data-pipelines)
-- [🔒 6. Secret Scanning and Security in CI/CD](#-6-secret-scanning-and-security-in-cicd)
+- [🔒 6. Secret Scanning and Security in CI/CD](#6-secret-scanning-and-security-in-cicd)
     - [6.1 Gitleaks Integration](#61-gitleaks-integration)
     - [6.2 GitHub Advanced Security](#62-github-advanced-security)
     - [6.3 Pre-Commit Hooks for Secret Detection](#63-pre-commit-hooks-for-secret-detection)
     - [6.4 Policy-as-Code with Azure Policy](#64-policy-as-code-with-azure-policy)
-- [📋 7. Recommended Implementation Plan for CSA-in-a-Box](#-7-recommended-implementation-plan-for-csa-in-a-box)
+- [📋 7. Recommended Implementation Plan for CSA-in-a-Box](#7-recommended-implementation-plan-for-csa-in-a-box)
     - [7.1 Current State Assessment](#71-current-state-assessment)
     - [7.2 Recommended Improvements (Priority Order)](#72-recommended-improvements-priority-order)
     - [7.3 Tool Matrix Summary](#73-tool-matrix-summary)
     - [7.4 CI/CD Pipeline Architecture (Target State)](#74-cicd-pipeline-architecture-target-state)
-- [📎 Appendix A: Complete bicepconfig.json](#-appendix-a-complete-bicepconfinjson)
-- [🔑 Appendix B: GitHub Secrets Required](#-appendix-b-github-secrets-required)
-- [📚 Appendix C: Key Microsoft Documentation References](#-appendix-c-key-microsoft-documentation-references)
+- [📎 Appendix A: Complete bicepconfig.json](#appendix-a-complete-bicepconfigjson)
+- [🔑 Appendix B: GitHub Secrets Required](#appendix-b-github-secrets-required)
+- [📚 Appendix C: Key Microsoft Documentation References](#appendix-c-key-microsoft-documentation-references)
 
 ---
 

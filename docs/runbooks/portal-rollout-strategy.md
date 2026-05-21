@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Portal Rollout Strategy**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Portal Rollout Strategy**
 
 # Portal Backend Rollout Strategy
 

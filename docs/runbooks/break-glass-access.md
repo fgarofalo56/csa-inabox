@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Break-Glass Access**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Break-Glass Access**
 
 # Break-Glass Access Runbook (CSA-0059)
 
@@ -14,31 +14,31 @@ violation regardless of intent.
 
 ## Before First Use — Customization Checklist
 
-- [ ] Populate the [Contact Information](#-contact-information) table.
+- [ ] Populate the [Contact Information](#9-contact-information) table.
 - [ ] Create two named break-glass accounts per tenant (A + B — never one).
 - [ ] Physically store the break-glass credentials in a sealed
       envelope in a locked safe (or equivalent organization procedure).
       Digital-only storage is forbidden.
 - [ ] Confirm the two-person control requirement with your CISO — in
       some organizations this is three-person.
-- [ ] Wire the [alerting KQL](#-7-audit--detection-kql) queries into a
+- [ ] Wire the [alerting KQL](#7-audit-detection-kql) queries into a
       Sentinel analytic rule that pages Security in real time.
 - [ ] Confirm the break-glass accounts are exempt from Conditional Access
       policies that could themselves lock them out (e.g. MFA during outage).
 
 ## 📑 Table of Contents
 
-- [📋 1. Scope](#-1-scope)
-- [🚨 2. Activation Preconditions](#-2-activation-preconditions)
-- [👥 3. Two-Person Control](#-3-two-person-control)
-- [🚀 4. Activation Steps](#-4-activation-steps)
-- [🛡️ 5. Safe Operations While Active](#️-5-safe-operations-while-active)
-- [🔚 6. Deactivation Steps](#-6-deactivation-steps)
-- [🕵️ 7. Audit & Detection KQL](#️-7-audit--detection-kql)
-- [📋 8. Mandatory Post-Incident Review](#-8-mandatory-post-incident-review)
-- [📎 9. Contact Information](#-9-contact-information)
-- [🗓️ 10. Drill Log](#️-10-drill-log)
-- [🔗 11. Related Documentation](#-11-related-documentation)
+- [📋 1. Scope](#1-scope)
+- [🚨 2. Activation Preconditions](#2-activation-preconditions)
+- [👥 3. Two-Person Control](#3-two-person-control)
+- [🚀 4. Activation Steps](#4-activation-steps)
+- [🛡️ 5. Safe Operations While Active](#5-safe-operations-while-active)
+- [🔚 6. Deactivation Steps](#6-deactivation-steps)
+- [🕵️ 7. Audit & Detection KQL](#7-audit-detection-kql)
+- [📋 8. Mandatory Post-Incident Review](#8-mandatory-post-incident-review)
+- [📎 9. Contact Information](#9-contact-information)
+- [🗓️ 10. Drill Log](#10-drill-log)
+- [🔗 11. Related Documentation](#11-related-documentation)
 
 ---
 

@@ -7,6 +7,9 @@ last_updated: 2026-05-15
 
 # Best Practice — Zero-Move Data Architecture
 
+
+![Zero-move data architecture best practice hero: two storage blocks linked by a dashed line crossed out with a red X, indicating 'NO COPY' query-in-place pattern](../assets/images/hero/best-practices/zero-move-data-architecture.svg){ .architecture-hero loading="eager" }
+
 ## The principle
 
 > **Compute travels to the data. Data does not travel to the compute. Materialize only when freshness, governance, and cost analysis justify it — not by default.**

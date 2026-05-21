@@ -1,4 +1,4 @@
-[Home](../README.md) > [Docs](./) > **Environment Protection**
+[Home](../README.md) > [Docs](index.md) > **Environment Protection**
 
 # GitHub Environment Protection Rules
 
@@ -7,12 +7,12 @@
 
 ## 📑 Table of Contents
 
-- [🌍 1. Environments to Create](#-1-environments-to-create)
-- [⚙️ 2. Per-environment Configuration](#️-2-per-environment-configuration)
-- [🔒 3. Repository-level Branch Protection on main](#-3-repository-level-branch-protection-on-main)
-- [✅ 4. Verification Checklist](#-4-verification-checklist)
-- [📝 5. Why This Lives in Docs, Not Bicep / YAML](#-5-why-this-lives-in-docs-not-bicep--yaml)
-- [🔗 6. Related](#-6-related)
+- [🌍 1. Environments to Create](#1-environments-to-create)
+- [⚙️ 2. Per-environment Configuration](#2-per-environment-configuration)
+- [🔒 3. Repository-level Branch Protection on main](#3-repository-level-branch-protection-on-main)
+- [✅ 4. Verification Checklist](#4-verification-checklist)
+- [📝 5. Why This Lives in Docs, Not Bicep / YAML](#5-why-this-lives-in-docs-not-bicep-yaml)
+- [🔗 6. Related](#6-related)
 
 ---
 

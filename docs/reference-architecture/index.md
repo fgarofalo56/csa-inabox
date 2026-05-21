@@ -1,5 +1,8 @@
 # Reference Architectures
 
+
+![Reference architectures index hero: nine mini card grid in Azure blue indicating the catalog of building-block architectures](../assets/images/hero/reference-architecture/index.svg){ .architecture-hero loading="eager" }
+
 Visual reference architectures for the most common deployment scenarios. All diagrams are **mermaid source** so they render natively in the docs site, GitHub, and any markdown viewer — and they stay diff-friendly in git.
 
 ## Available

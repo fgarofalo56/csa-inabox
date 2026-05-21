@@ -7,6 +7,9 @@ last_updated: 2026-05-15
 
 # Reference Architecture — API-First Multi-Model AI Ecosystem
 
+
+![API-first multi-model ecosystem hero: APIM gateway glyph with inbound and outbound stream arrows in Azure cyan gradient](../assets/images/hero/reference-architecture/api-first-multi-model-ecosystem.svg){ .architecture-hero loading="eager" }
+
 ## Purpose
 
 This is the canonical Azure reference architecture for an organization that:

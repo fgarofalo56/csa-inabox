@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Certificate Expiration**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Certificate Expiration**
 
 # Runbook — Certificate Expiration & Rotation
 
@@ -9,7 +9,7 @@
 
 ## Before First Use — Customization Checklist
 
-- [ ] Populate the [Contact Information](#-contact-information) table.
+- [ ] Populate the [Contact Information](#7-contact-information) table.
 - [ ] Confirm Key Vault names per environment (dev / staging / prod).
 - [ ] Confirm App Gateway resource names and listener bindings.
 - [ ] Confirm APIM instance names and custom domain mappings.
@@ -18,15 +18,15 @@
 
 ## 📑 Table of Contents
 
-- [📋 1. Symptoms](#-1-symptoms)
-- [🔍 2. Triage](#-2-triage)
-- [📦 3. Certificate Inventory](#-3-certificate-inventory)
-- [🔒 4. Rotation Procedures](#-4-rotation-procedures)
-- [⚙️ 5. Automation](#️-5-automation)
-- [🛡️ 6. Preventive Controls](#️-6-preventive-controls)
-- [📎 7. Contact Information](#-7-contact-information)
-- [🗓️ 8. Drill Log](#️-8-drill-log)
-- [🔗 9. Related Documentation](#-9-related-documentation)
+- [📋 1. Symptoms](#1-symptoms)
+- [🔍 2. Triage](#2-triage)
+- [📦 3. Certificate Inventory](#3-certificate-inventory)
+- [🔒 4. Rotation Procedures](#4-rotation-procedures)
+- [⚙️ 5. Automation](#5-automation)
+- [🛡️ 6. Preventive Controls](#6-preventive-controls)
+- [📎 7. Contact Information](#7-contact-information)
+- [🗓️ 8. Drill Log](#8-drill-log)
+- [🔗 9. Related Documentation](#9-related-documentation)
 
 ---
 
@@ -83,7 +83,7 @@ az ad app credential list --id <app-id> \
 
 !!! danger
 If a credential is already expired and causing production failures,
-skip to [§4 Rotation Procedures](#-4-rotation-procedures) immediately.
+skip to [§4 Rotation Procedures](#4-rotation-procedures) immediately.
 
 ---
 

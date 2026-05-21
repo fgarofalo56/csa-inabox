@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Runbooks](./) > **Tenant Onboarding**
+[Home](../../README.md) > [Docs](../index.md) > [Runbooks](index.md) > **Tenant Onboarding**
 
 # Tenant Onboarding Runbook (CSA-0059)
 
@@ -7,7 +7,7 @@
 
 ## Before First Use — Customization Checklist
 
-- [ ] Populate the [Contact Information](#-contact-information) table.
+- [ ] Populate the [Contact Information](#9-contact-information) table.
 - [ ] Confirm which management groups + subscriptions a new tenant gets
       (ALZ → Platform / LandingZones / Corp / Online).
 - [ ] Confirm the CSA-in-a-Box naming convention file
@@ -19,25 +19,25 @@
 
 ## 📑 Table of Contents
 
-- [📋 1. Scope](#-1-scope)
-- [🔒 2. Severity & SLA](#-2-severity--sla)
-- [🧭 3. Prerequisites](#-3-prerequisites)
-- [🚀 4. Onboarding Steps](#-4-onboarding-steps)
+- [📋 1. Scope](#1-scope)
+- [🔒 2. Severity & SLA](#2-severity-sla)
+- [🧭 3. Prerequisites](#3-prerequisites)
+- [🚀 4. Onboarding Steps](#4-onboarding-steps)
     - [4.1 Collect tenant intake form](#41-collect-tenant-intake-form)
-    - [4.2 Register the domain / custom DNS](#42-register-the-domain--custom-dns)
+    - [4.2 Register the domain / custom DNS](#42-register-the-domain-custom-dns)
     - [4.3 Create the Entra ID app registration](#43-create-the-entra-id-app-registration)
     - [4.4 Wire OIDC federated credentials for CI](#44-wire-oidc-federated-credentials-for-ci)
     - [4.5 Provision the Data Landing Zone (DLZ)](#45-provision-the-data-landing-zone-dlz)
     - [4.6 Assign RBAC from governance matrix](#46-assign-rbac-from-governance-matrix)
     - [4.7 Seed the marketplace](#47-seed-the-marketplace)
     - [4.8 Wire the Purview collection](#48-wire-the-purview-collection)
-- [🪖 5. Azure Government Variations](#-5-azure-government-variations)
-- [✅ 6. Post-Onboarding Verification](#-6-post-onboarding-verification)
-- [🧹 7. Offboarding](#-7-offboarding)
-- [📋 8. Evidence Preservation](#-8-evidence-preservation)
-- [📎 9. Contact Information](#-9-contact-information)
-- [🗓️ 10. Drill Log](#️-10-drill-log)
-- [🔗 11. Related Documentation](#-11-related-documentation)
+- [🪖 5. Azure Government Variations](#5-azure-government-variations)
+- [✅ 6. Post-Onboarding Verification](#6-post-onboarding-verification)
+- [🧹 7. Offboarding](#7-offboarding)
+- [📋 8. Evidence Preservation](#8-evidence-preservation)
+- [📎 9. Contact Information](#9-contact-information)
+- [🗓️ 10. Drill Log](#10-drill-log)
+- [🔗 11. Related Documentation](#11-related-documentation)
 
 ---
 

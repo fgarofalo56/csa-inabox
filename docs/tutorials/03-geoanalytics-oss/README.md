@@ -1,5 +1,8 @@
 # Tutorial 03: GeoAnalytics with Open-Source Tools
 
+![GeoAnalytics with open-source GIS tooling — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/03-geoanalytics-oss.svg){ .architecture-hero loading="eager" }
+
+
 > **Estimated Time:** 4-5 hours
 > **Difficulty:** Intermediate-Advanced
 
@@ -1294,7 +1297,7 @@ Your GeoAnalytics pipeline is operational. Choose your next path:
 
 - **[Tutorial 04: GeoAnalytics with ArcGIS Enterprise](../04-geoanalytics-arcgis/README.md)** — Add ArcGIS Enterprise for advanced cartography and web maps (BYOL)
 - **[Tutorial 05: Real-Time Streaming](../05-streaming-lambda/README.md)** — Stream earthquake data in real time with Lambda Architecture
-- **[Tutorial 06: AI Analytics](../06-ai-analytics/)** — Apply ML models to predict seismic risk
+- **[Tutorial 06: AI Analytics](../06-ai-analytics-foundry/README.md)** — Apply ML models to predict seismic risk
 
 See the [Tutorial Index](../README.md) for all available paths.
 

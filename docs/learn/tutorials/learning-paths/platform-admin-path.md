@@ -701,7 +701,7 @@ __Relevant Skills:__
 
 __Ready to become a Platform Administrator?__
 
-🚀 __[Start Phase 1 - Module 1.1 →](#phase-1-security--governance-3-4-weeks)__
+🚀 __[Start Phase 1 - Module 1.1 →](#phase-1-security-governance-3-4-weeks)__
 📋 __[Download Admin Checklist (PDF)](#)__
 🎯 __[Join Admin Study Group →](#)__
 

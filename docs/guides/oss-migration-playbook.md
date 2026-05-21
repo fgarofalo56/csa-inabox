@@ -10,12 +10,12 @@ This playbook provides detailed migration procedures for each Azure-to-OSS servi
 ## Table of Contents
 
 - [Migration Overview](#migration-overview)
-- [Purview → Apache Atlas](#purview--apache-atlas)
-- [ADF → Apache NiFi](#adf--apache-nifi)
-- [Synapse Serverless → Trino](#synapse-serverless--trino)
-- [Power BI → Apache Superset](#power-bi--apache-superset)
-- [Azure AI Search → OpenSearch](#azure-ai-search--opensearch)
-- [ADF Orchestration → Apache Airflow](#adf-orchestration--apache-airflow)
+- [Purview → Apache Atlas](#purview-apache-atlas)
+- [ADF → Apache NiFi](#adf-apache-nifi)
+- [Synapse Serverless → Trino](#synapse-serverless-trino)
+- [Power BI → Apache Superset](#power-bi-apache-superset)
+- [Azure AI Search → OpenSearch](#azure-ai-search-opensearch)
+- [ADF Orchestration → Apache Airflow](#adf-orchestration-apache-airflow)
 - [Post-Migration Validation](#post-migration-validation)
 
 ---

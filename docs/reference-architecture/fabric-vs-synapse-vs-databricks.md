@@ -1,5 +1,8 @@
 # Reference Architecture — Fabric vs Synapse vs Databricks
 
+
+![Fabric vs Synapse vs Databricks comparison hero: three stacked panels labelled Fabric, Databricks, Synapse in Microsoft purple gradient](../assets/images/hero/reference-architecture/fabric-vs-synapse-vs-databricks.svg){ .architecture-hero loading="eager" }
+
 > **TL;DR (2026):** **Synapse + Databricks** is the production backbone today; **Fabric** is the strategic forward path for new workloads, especially **Real-Time Intelligence** and **Direct Lake** semantic models. The right answer is usually "both, sequenced over 18–36 months." Don't pick one universally; pick per-workload using the decision tree below.
 
 ## The decision

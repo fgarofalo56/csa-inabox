@@ -62,6 +62,32 @@ Get a working Cloud-Scale Analytics platform deployed and flowing data in **60�
 !!! warning "Cost safety"
     CSA-in-a-Box provisions Synapse, Databricks, ADX, Event Hub, and other billable services. **A forgotten demo environment can accrue $1,000+/day.** Always run [Teardown](#teardown) when you're done.
 
+## The 7-step path at a glance
+
+```mermaid
+flowchart LR
+    classDef step    fill:#0078D4,stroke:#003E6F,color:#FFFFFF,stroke-width:2px,font-weight:bold
+    classDef io      fill:#F3F2F1,stroke:#605E5C,color:#1F1F1F
+    classDef done    fill:#107C10,stroke:#054B05,color:#FFFFFF,stroke-width:2px
+
+    S1[1 Prereqs<br/>5 min]:::step
+    S2[2 Login<br/>2 min]:::step
+    S3[3 Deploy IaC<br/>25 min]:::step
+    S4[4 Seed data<br/>10 min]:::step
+    S5[5 dbt build<br/>15 min]:::step
+    S6[6 Streaming<br/>10 min]:::step
+    S7[7 Purview<br/>10 min]:::step
+    OK[Working<br/>platform]:::done
+
+    S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> OK
+
+    A[Azure CLI<br/>Bicep<br/>Python 3.11+]:::io --> S1
+    B[Subscription<br/>Tenant ID]:::io --> S2
+    C[Bronze→Silver→<br/>Gold tables]:::io --> S5
+```
+
+<small>Source diagram editable in atlas-diag: `dgm_2e1fd7792f3e35c52116` ([open in designer](http://localhost:3080/designer?diagram=dgm_2e1fd7792f3e35c52116)).</small>
+
 ---
 
 ## Prerequisites

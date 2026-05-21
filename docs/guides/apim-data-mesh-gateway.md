@@ -333,4 +333,4 @@ APIM instances take 30-45 minutes to provision. The Developer SKU is fastest. If
 - [Azure APIM documentation](https://learn.microsoft.com/en-us/azure/api-management/)
 - [APIM policies reference](https://learn.microsoft.com/en-us/azure/api-management/api-management-policies)
 - [Data API Builder documentation](https://learn.microsoft.com/en-us/azure/data-api-builder/)
-- [CSA-in-a-Box Architecture](../architecture/)
+- [CSA-in-a-Box Architecture](../ARCHITECTURE.md)

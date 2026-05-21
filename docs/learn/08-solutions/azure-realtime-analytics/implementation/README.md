@@ -15,12 +15,12 @@ Comprehensive implementation guides for deploying and configuring the Azure Real
 
 ## 📑 Table of Contents
 
-- [Deployment Guide](#deployment-guide)
-- [Databricks Setup](#databricks-setup)
-- [Stream Processing](#stream-processing)
-- [Power BI Integration](#power-bi-integration)
-- [MLflow Configuration](#mlflow-configuration)
-- [Security Setup](#security-setup)
+- **Deployment Guide**
+- **Databricks Setup**
+- **Stream Processing**
+- **Power BI Integration**
+- **MLflow Configuration**
+- **Security Setup**
 
 ---
 

@@ -1,5 +1,8 @@
 # Reference Architecture — Hub-Spoke Topology for Analytics
 
+
+![Hub-spoke topology hero: central hub node with four radiating spoke nodes in Azure blue gradient](../assets/images/hero/reference-architecture/hub-spoke-topology.svg){ .architecture-hero loading="eager" }
+
 > **TL;DR:** Use **hub-spoke** for everything up to ~5 spokes/regions. Use **Virtual WAN** above that, or when you have global / cross-region transitive routing needs. Default to hub-spoke for analytics workloads — the routing is simpler and the management plane is one fewer thing to break.
 
 ## The problem

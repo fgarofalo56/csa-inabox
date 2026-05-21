@@ -1,5 +1,8 @@
 # Tutorial 17: Copilot & AI Integration
 
+![Copilot Integration into docs and operator workflows — TUTORIAL hero showing themed visual identity in Microsoft Azure brand colors](../../assets/images/hero/tutorials/17-copilot-integration.svg){ .architecture-hero loading="eager" }
+
+
 > **Estimated Time:** 3-4 hours
 > **Difficulty:** Advanced
 

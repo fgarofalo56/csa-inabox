@@ -10,6 +10,9 @@ tags:
 
 # Disaster Recovery Best Practices
 
+
+![Disaster recovery best practice hero: two datacenter racks (Primary and Secondary) linked by a dashed failover arc in green gradient](../assets/images/hero/best-practices/disaster-recovery.svg){ .architecture-hero loading="eager" }
+
 ## Overview
 
 Disaster recovery (DR) for analytics platforms goes far beyond "turn on GRS." A resilient CSA-in-a-Box deployment must protect **data, compute, metadata, and orchestration** — and prove that protection works through regular drills.

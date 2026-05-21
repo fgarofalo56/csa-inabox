@@ -2,7 +2,7 @@
 
 Scenario-driven decision trees for the recurring architecture questions on CSA-in-a-Box. Each tree is a branching flowchart that leads to a specific recommendation with rationale, tradeoffs (cost / latency / compliance / skill match), anti-patterns, and a linked working example.
 
-For the **machine-readable YAML source of truth** (consumed by the future Copilot `walk_tree` skill), see [`decision-trees/`](../../decision-trees/) at the repo root. Both shapes are kept in sync.
+For the **machine-readable YAML source of truth** (consumed by the future Copilot `walk_tree` skill), see [`decision-trees/`](https://github.com/fgarofalo56/csa-inabox/tree/main/decision-trees/) at the repo root. Both shapes are kept in sync.
 
 ## How to use these
 
@@ -27,12 +27,12 @@ For the **machine-readable YAML source of truth** (consumed by the future Copilo
 ## Conventions
 
 - **Last Updated** is always explicit.
-- **Linked examples** always point to a real directory under [`examples/`](../../examples/). If a recommendation has no matching vertical, the tree notes that gap.
+- **Linked examples** always point to a real directory under [`examples/`](../examples/index.md). If a recommendation has no matching vertical, the tree notes that gap.
 - **Anti-patterns** are prescriptive — they block common misuses, not rare edge cases.
 - **Tradeoffs** always cover the same four axes: cost, latency, compliance, skill match. Missing axes are an authoring bug.
 
 ## Related
 
-- Machine-readable source of truth: [`decision-trees/`](../../decision-trees/)
-- Primary tech cheat sheet: [ARCHITECTURE.md#Primary Tech Choices](../ARCHITECTURE.md#%EF%B8%8F-primary-tech-choices)
+- Machine-readable source of truth: [`decision-trees/`](https://github.com/fgarofalo56/csa-inabox/tree/main/decision-trees/)
+- Primary tech cheat sheet: [ARCHITECTURE.md#Primary Tech Choices](../ARCHITECTURE.md#primary-tech-choices)
 - Finding: CSA-0010

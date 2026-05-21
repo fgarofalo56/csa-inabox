@@ -12,6 +12,9 @@ tags:
 
 # Cost Optimization Best Practices
 
+
+![Cost optimization best practice hero: dollar-marked coin stack with downward optimization arrow in amber gradient](../assets/images/hero/best-practices/cost-optimization.svg){ .architecture-hero loading="eager" }
+
 ## Overview
 
 Cost optimization is a **first-class architecture concern** in CSA-in-a-Box. Every design decision — from cluster sizing to storage tiering — carries a direct cost implication. This guide provides concrete, actionable strategies to minimize spend without sacrificing performance or reliability.
@@ -298,7 +301,7 @@ DESCRIBE DETAIL silver.customer_transactions;
 | GCP → Azure (cross-cloud)   | $0.12       |
 
 !!! warning "Cross-cloud egress adds up fast"
-Transferring 10 TB/month from AWS to Azure costs ~$900/month in egress alone. For multi-cloud scenarios, see the [Multi-Cloud Data Virtualization](../use-cases/) use case.
+Transferring 10 TB/month from AWS to Azure costs ~$900/month in egress alone. For multi-cloud scenarios, see the [Multi-Cloud Data Virtualization](../use-cases/index.md) use case.
 
 ### Strategies to Minimize Egress
 

@@ -12,6 +12,9 @@ tags:
 
 # Infrastructure as Code & CI/CD Best Practices
 
+
+![Infrastructure as Code and CI/CD best practice hero: two interlocking gears in Azure blue, indicating Bicep + GitHub Actions pipelines](../assets/images/hero/best-practices/iac-cicd.svg){ .architecture-hero loading="eager" }
+
 ## Overview
 
 CSA-in-a-Box uses **Azure Bicep** for infrastructure definitions and **GitHub Actions** for continuous integration and deployment. This combination provides type-safe, declarative infrastructure with automated validation, security scanning, and multi-environment promotion.

@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="t d" preserveAspectRatio="xMidYMid slice">
+  <title id="t">Cost Optimization</title>
+  <desc id="d">FinOps practices: reserved capacity, auto-pause, spot, and cost guardrails.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="0.7">
+      <stop offset="0%" stop-color="#1C0E03"/>
+      <stop offset="60%" stop-color="#92400E"/>
+      <stop offset="100%" stop-color="#1C0E03"/>
+    </linearGradient>
+    <linearGradient id="accent-bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#FBBF24"/>
+      <stop offset="100%" stop-color="#FDE68A"/>
+    </linearGradient>
+    <filter id="depth" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6"/>
+      <feOffset dy="4"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.45"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .h-title { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:600; font-size:64px; fill:#FFFFFF; letter-spacing:-1.2px; }
+      .h-sub   { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:400; font-size:22px; fill:#FFFFFF; fill-opacity:0.82; letter-spacing:-0.2px; }
+      .h-chip  { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:13px; letter-spacing:2.5px; fill:#FFFFFF; }
+      .g-label { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:13px; fill:#FFFFFF; letter-spacing:0.5px; }
+      .g-num   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:14px; fill:#FFFFFF; letter-spacing:0.5px; }
+      .g-cap   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:10px; fill:#FFFFFF; fill-opacity:0.6; letter-spacing:1.5px; }
+    </style>
+  </defs>
+
+  <!-- Base gradient -->
+  <rect width="1600" height="420" fill="url(#bg)"/>
+
+  <!-- Single bold vertical accent stripe on the left edge -->
+  <rect x="0" y="0" width="6" height="420" fill="#FDE68A"/>
+  <rect x="0" y="0" width="6" height="120" fill="#FBBF24"/>
+
+  <!-- Subtle horizontal scan-line at bottom for structure -->
+  <rect x="0" y="408" width="1600" height="2" fill="#FDE68A" fill-opacity="0.25"/>
+
+  <!-- Chip (top-left) -->
+  <g transform="translate(80, 60)">
+    <rect x="0" y="0" width="171" height="32" rx="0" fill="#FCD34D" fill-opacity="0.08" stroke="#FCD34D" stroke-opacity="0.5" stroke-width="1"/>
+    <rect x="0" y="0" width="6" height="32" fill="#FCD34D"/>
+    <text class="h-chip" x="96.5" y="21.5" text-anchor="middle" fill="#FCD34D">BEST PRACTICE</text>
+  </g>
+
+  <!-- Title -->
+  <text class="h-title" x="80" y="200">Cost Optimization</text>
+
+  <!-- Subtitle -->
+  <text class="h-sub" x="80" y="248">FinOps practices: reserved capacity, auto-pause, spot, and cost guardrails.</text>
+
+  <!-- Coordinate marker tag below subtitle (technical-drawing flavor) -->
+  <g transform="translate(80, 300)">
+    <rect x="0" y="0" width="56" height="20" fill="#FCD34D" fill-opacity="0.1" stroke="#FCD34D" stroke-opacity="0.3" stroke-width="1"/>
+    <text class="g-cap" x="28" y="14" text-anchor="middle" fill="#FCD34D">CSA-IN-A-BOX</text>
+  </g>
+  <text class="g-cap" x="146" y="314" fill="#FDE68A" fill-opacity="0.65">v0.6.9 · azure-native</text>
+
+  <!-- Schematic composition on the right (x≈960-1540, y≈70-360) -->
+  <rect x="980" y="80" width="560" height="100" fill="#FCD34D" fill-opacity="0.15" stroke="#FCD34D" stroke-opacity="0.6" stroke-width="1.2"/>
+  <rect x="980" y="80" width="560" height="6" fill="#FDE68A"/>
+  <text class="g-cap" x="996" y="108" fill="#FFFFFF" fill-opacity="0.7">MTD SPEND</text>
+  <text x="996" y="155" font-family="IBM Plex Sans" font-weight="700" font-size="38" fill="#FFFFFF">$ 28,420</text>
+  <text class="g-cap" x="1525" y="108" text-anchor="end" fill="#FDE68A">VS LAST MONTH</text>
+  <text x="1525" y="155" text-anchor="end" font-family="IBM Plex Sans" font-weight="700" font-size="34" fill="#6EE7B7">−32.4%</text>
+  <rect x="980" y="210" width="120" height="20" fill="#FCD34D" fill-opacity="0.08"/>
+  <text class="g-cap" x="996" y="224" fill="#FFFFFF" fill-opacity="0.7">DATABRICKS</text>
+  <rect x="1110" y="210" width="184" height="20" fill="#FDE68A" fill-opacity="0.85"/>
+  <text class="g-cap" x="1302" y="224" fill="#FDE68A">42%</text>
+  <rect x="980" y="238" width="120" height="20" fill="#FCD34D" fill-opacity="0.08"/>
+  <text class="g-cap" x="996" y="252" fill="#FFFFFF" fill-opacity="0.7">ADLS</text>
+  <rect x="1110" y="238" width="79" height="20" fill="#FDE68A" fill-opacity="0.85"/>
+  <text class="g-cap" x="1197" y="252" fill="#FDE68A">18%</text>
+  <rect x="980" y="266" width="120" height="20" fill="#FCD34D" fill-opacity="0.08"/>
+  <text class="g-cap" x="996" y="280" fill="#FFFFFF" fill-opacity="0.7">SYNAPSE</text>
+  <rect x="1110" y="266" width="61" height="20" fill="#FDE68A" fill-opacity="0.85"/>
+  <text class="g-cap" x="1179" y="280" fill="#FDE68A">14%</text>
+  <rect x="980" y="294" width="120" height="20" fill="#FCD34D" fill-opacity="0.08"/>
+  <text class="g-cap" x="996" y="308" fill="#FFFFFF" fill-opacity="0.7">OPENAI</text>
+  <rect x="1110" y="294" width="52" height="20" fill="#FDE68A" fill-opacity="0.85"/>
+  <text class="g-cap" x="1170" y="308" fill="#FDE68A">12%</text>
+  <rect x="980" y="322" width="120" height="20" fill="#FCD34D" fill-opacity="0.08"/>
+  <text class="g-cap" x="996" y="336" fill="#FFFFFF" fill-opacity="0.7">OTHER</text>
+  <rect x="1110" y="322" width="61" height="20" fill="#FDE68A" fill-opacity="0.85"/>
+  <text class="g-cap" x="1179" y="336" fill="#FDE68A">14%</text>
+
+</svg>

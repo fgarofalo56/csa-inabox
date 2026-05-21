@@ -1,4 +1,4 @@
-[Home](../../README.md) > [Docs](../) > [Quickstarts](./) > **Index**
+[Home](../../README.md) > [Docs](../index.md) > **Quickstarts** > **Index**
 
 # Role-Based Quickstarts -- Your First 30 Minutes
 

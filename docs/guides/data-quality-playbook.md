@@ -513,4 +513,4 @@ Check every box before declaring a domain "production-ready."
   Step-by-step GE setup with the CSA governance runner
 - [Streaming & CDC Patterns](../patterns/streaming-cdc.md) --
   Real-time ingestion patterns that feed into DQ checks
-- [dbt domain models](../../dbt_project/) -- 64 core domain models and ~100 examples
+- [dbt domain models](https://github.com/fgarofalo56/csa-inabox/tree/main/dbt_project/) -- 64 core domain models and ~100 examples
