@@ -212,6 +212,19 @@ nav:
           - API-First Data Strategy: best-practices/api-first-data-strategy.md
           - Zero-Move Data Architecture: best-practices/zero-move-data-architecture.md
           - Multi-Model AI Orchestration: best-practices/multi-model-ai-orchestration.md
+          - Extended Topics:
+              - Data Quality (extended): learn/best-practices-extra/data-quality.md
+              - Global Distribution: learn/best-practices-extra/global-distribution.md
+              - Migration Strategies: learn/best-practices-extra/migration-strategies.md
+              - Power BI Optimization: learn/best-practices-extra/power-bi-optimization.md
+              - Cost Optimization (extended): learn/best-practices-extra/cost-optimization/README.md
+              - Data Governance (extended): learn/best-practices-extra/data-governance/README.md
+              - ML Operations: learn/best-practices-extra/ml-operations/README.md
+              - Network Security: learn/best-practices-extra/network-security/README.md
+              - Performance Optimization: learn/best-practices-extra/performance-optimization/README.md
+              - Security (extended): learn/best-practices-extra/security/README.md
+              - Serverless SQL: learn/best-practices-extra/serverless-sql-best-practices/README.md
+              - SQL Performance: learn/best-practices-extra/sql-performance/README.md
       - ADRs:
           - Overview: adr/README.md
           - "0001: ADF + dbt over Airflow": adr/0001-adf-dbt-over-airflow.md
@@ -236,7 +249,16 @@ nav:
           - "0020: Portal Observability": adr/0020-portal-observability-and-rate-limiting.md
           - "0021: Two Rate Limiters": adr/0021-two-rate-limiters-not-duplicates.md
           - "0022: Copilot Surfaces vs Docs Widget": adr/0022-copilot-surfaces-vs-docs-widget.md
+          - "0023: Release-please PRs auto-pass required status checks": adr/0023-release-please-status-bypass.md
+          - "0024: Two-tier test layout — per-package units + central integration": adr/0024-two-tier-test-layout.md
           - "0025: APIM as the Integration Fabric": adr/0025-apim-as-integration-fabric.md
+      - Governance:
+          - Data Access: governance/DATA_ACCESS.md
+          - Data Cataloging: governance/DATA_CATALOGING.md
+          - Data Lineage: governance/DATA_LINEAGE.md
+          - Data Quality: governance/DATA_QUALITY.md
+          - Metadata Management: governance/METADATA_MANAGEMENT.md
+          - Purview Setup Guide: governance/PURVIEW_SETUP.md
       - Multi-Region: MULTI_REGION.md
       - Multi-Tenant: MULTI_TENANT.md
       - Disaster Recovery: DR.md
@@ -333,6 +355,13 @@ nav:
               - OSS Ecosystem: guides/oss-ecosystem.md
               - OSS Migration Playbook: guides/oss-migration-playbook.md
               - OSS Monitoring: guides/oss-monitoring.md
+      - DevOps:
+          - Overview: learn/10-devops/README.md
+          - DevOps Documentation: learn/10-devops/devops-overview.md
+          - Automated Testing for Synapse Analytics: learn/10-devops/automated-testing.md
+          - Databricks CI/CD: learn/10-devops/databricks-cicd.md
+          - CI/CD for Azure Synapse Analytics: learn/10-devops/pipeline-ci-cd.md
+          - Security Best Practices for DevOps: learn/10-devops/security-best-practices.md
 
   # ============================================================
   # 4. USE CASES & WHITE PAPERS — by sector / scenario
@@ -389,6 +418,47 @@ nav:
           - Data Mesh Maturity Model: research/data-mesh-maturity-model.md
           - Federal Cloud Adoption Trends: research/federal-cloud-adoption-trends.md
           - API-First Data Strategy Whitepaper: research/api-first-data-strategy-whitepaper.md
+      - Solutions:
+          - Overview: learn/08-solutions/README.md
+          - Azure Real-Time Analytics:
+              - Solution Overview: learn/08-solutions/azure-realtime-analytics/README.md
+              - Architecture:
+                  - Architecture Documentation: learn/08-solutions/azure-realtime-analytics/architecture/README.md
+                  - Solution Components Overview: learn/08-solutions/azure-realtime-analytics/architecture/components.md
+                  - Data Flow Architecture: learn/08-solutions/azure-realtime-analytics/architecture/data-flow.md
+                  - Network Architecture: learn/08-solutions/azure-realtime-analytics/architecture/network.md
+                  - Security Architecture: learn/08-solutions/azure-realtime-analytics/architecture/security.md
+              - Implementation:
+                  - Implementation Guides: learn/08-solutions/azure-realtime-analytics/implementation/README.md
+                  - Azure OpenAI Integration: learn/08-solutions/azure-realtime-analytics/implementation/azure-openai.md
+                  - Batch Processing Setup: learn/08-solutions/azure-realtime-analytics/implementation/batch-processing.md
+                  - Data Quality Implementation: learn/08-solutions/azure-realtime-analytics/implementation/data-quality.md
+                  - Databricks Workspace Setup: learn/08-solutions/azure-realtime-analytics/implementation/databricks-setup.md
+                  - Deployment Guide: learn/08-solutions/azure-realtime-analytics/implementation/deployment.md
+                  - Identity Setup: learn/08-solutions/azure-realtime-analytics/implementation/identity-setup.md
+                  - Kafka Setup: learn/08-solutions/azure-realtime-analytics/implementation/kafka-setup.md
+                  - MLflow Setup: learn/08-solutions/azure-realtime-analytics/implementation/mlflow.md
+                  - Network Setup: learn/08-solutions/azure-realtime-analytics/implementation/network-setup.md
+                  - Power BI Setup: learn/08-solutions/azure-realtime-analytics/implementation/power-bi.md
+                  - Security Setup: learn/08-solutions/azure-realtime-analytics/implementation/security-setup.md
+                  - Storage Setup: learn/08-solutions/azure-realtime-analytics/implementation/storage-setup.md
+                  - Stream Processing: learn/08-solutions/azure-realtime-analytics/implementation/stream-processing.md
+              - Operations:
+                  - Operations Documentation: learn/08-solutions/azure-realtime-analytics/operations/README.md
+                  - Dashboards: learn/08-solutions/azure-realtime-analytics/operations/dashboards.md
+                  - Disaster Recovery: learn/08-solutions/azure-realtime-analytics/operations/disaster-recovery.md
+                  - Incident Management: learn/08-solutions/azure-realtime-analytics/operations/incident-management.md
+                  - Log Analysis: learn/08-solutions/azure-realtime-analytics/operations/log-analysis.md
+                  - Maintenance: learn/08-solutions/azure-realtime-analytics/operations/maintenance.md
+                  - Monitoring Setup Guide: learn/08-solutions/azure-realtime-analytics/operations/monitoring.md
+                  - Performance: learn/08-solutions/azure-realtime-analytics/operations/performance.md
+                  - Security Monitoring: learn/08-solutions/azure-realtime-analytics/operations/security-monitoring.md
+                  - Troubleshooting: learn/08-solutions/azure-realtime-analytics/operations/troubleshooting.md
+          - Change Feed Processor: learn/08-solutions/change-feed-processor/README.md
+          - Data Lineage Solution: learn/08-solutions/data-governance/lineage.md
+          - Logic Apps Integration: learn/08-solutions/logic-apps-integration/README.md
+          - ML Pipeline: learn/08-solutions/ml-pipeline/README.md
+          - Real-Time Dashboards: learn/08-solutions/real-time-dashboards/README.md
 
   # ============================================================
   # 5. OPERATE — Day-2 ops, runbooks, compliance, migrations
@@ -1048,6 +1118,30 @@ nav:
       - Rollback: ROLLBACK.md
       - Troubleshooting: TROUBLESHOOTING.md
       - Supply Chain Security: SUPPLY_CHAIN.md
+      - Monitoring:
+          - Overview: learn/09-monitoring/README.md
+          - Deployment Monitoring: learn/09-monitoring/deployment-monitoring.md
+          - Logging and Monitoring in Azure Synapse Analytics: learn/09-monitoring/logging-monitoring-guide.md
+          - Monitoring Setup Guide: learn/09-monitoring/monitoring-setup.md
+          - Security Monitoring: learn/09-monitoring/security-monitoring.md
+          - Spark Monitoring: learn/09-monitoring/spark-monitoring.md
+          - SQL Monitoring: learn/09-monitoring/sql-monitoring.md
+          - Service Monitoring:
+              - Databricks:
+                  - Databricks Monitoring: learn/09-monitoring/service-monitoring/databricks/README.md
+                  - Delta Live Tables Monitoring: learn/09-monitoring/service-monitoring/databricks/dlt-monitoring.md
+              - HDInsight:
+                  - HDInsight Monitoring: learn/09-monitoring/service-monitoring/hdinsight/README.md
+              - Storage:
+                  - Storage Monitoring: learn/09-monitoring/service-monitoring/storage/README.md
+              - Synapse:
+                  - Azure Synapse Analytics Monitoring: learn/09-monitoring/service-monitoring/synapse/README.md
+                  - Dedicated SQL Pool Monitoring: learn/09-monitoring/service-monitoring/synapse/dedicated-monitoring.md
+      - Security Guides:
+          - Overview: learn/security/README.md
+          - Synapse Security Best Practices: learn/security/best-practices.md
+          - Synapse Security & Compliance Guide: learn/security/compliance-guide.md
+      - Deployment Guide: learn/deployment/README.md
 
   # ============================================================
   # 6. REFERENCE — lookup material, schemas, matrices
@@ -1057,6 +1151,32 @@ nav:
       - Environment Protection: ENVIRONMENT_PROTECTION.md
       - Government Service Matrix: GOV_SERVICE_MATRIX.md
       - Microsoft Fabric in Azure Government: fabric-in-gov-cloud.md
+      - FAQ: learn/faq.md
+      - Quick Guides:
+          - Delta Lake Guide: learn/delta-lake-guide.md
+          - Serverless SQL Guide: learn/serverless-sql-guide.md
+      - Azure Service Reference:
+          - Overview: learn/reference/README.md
+          - Azure Analytics Glossary: learn/reference/glossary.md
+          - Azure Regions Reference for Synapse: learn/reference/azure-regions.md
+          - KQL Reference: learn/reference/kql-reference.md
+          - Regional Compliance and Data Governance: learn/reference/regional-compliance.md
+          - Synapse Security Checklist: learn/reference/security-checklist.md
+          - Synapse Security Reference: learn/reference/security.md
+          - Spark Configuration: learn/reference/spark-configuration.md
+          - Cosmos DB:
+              - Cosmos DB Reference: learn/reference/cosmosdb/README.md
+              - Cosmos DB Global Distribution: learn/reference/cosmosdb/global-distribution.md
+          - Security Checklist (extended): learn/reference/security-checklist/README.md
+          - Storage:
+              - Azure Storage Reference: learn/reference/storage/README.md
+              - Custom Domains: learn/reference/storage/custom-domains.md
+              - Geo-Replication: learn/reference/storage/geo-replication.md
+          - Synapse:
+              - Custom Connectors: learn/reference/synapse/custom-connectors.md
+              - Environment Setup: learn/synapse/01-environment-setup.md
+          - Stream Analytics:
+              - Stream Analytics Documentation: learn/stream-analytics/README.md
   - "Learn (reference library)":
       - "Overview": learn/index.md
       - "Setup Guide": learn/setup.md
@@ -1813,141 +1933,4 @@ nav:
           - "Azure Synapse Analytics Complete Tutorial Series": learn/tutorials/synapse/README.md
       - "Best Practices (extra)": learn/best-practices-extra/index.md
       - "Code Labs — PySpark Fundamentals": learn/code-labs/pyspark-fundamentals.md
-  - "Additional Content (auto-indexed)":
-      - "Additional ADRs":
-        - "ADR 0023 — Release-please PRs auto-pass required status checks": adr/0023-release-please-status-bypass.md
-        - "ADR 0024 — Two-tier test layout: per-package units + central integration": adr/0024-two-tier-test-layout.md
-      - "Governance":
-        - "Data Access — CSA-in-a-Box": governance/DATA_ACCESS.md
-        - "Data Cataloging — CSA-in-a-Box": governance/DATA_CATALOGING.md
-        - "Data Lineage — CSA-in-a-Box": governance/DATA_LINEAGE.md
-        - "Data Quality — CSA-in-a-Box": governance/DATA_QUALITY.md
-        - "Metadata Management — CSA-in-a-Box": governance/METADATA_MANAGEMENT.md
-        - "Purview Setup Guide — CSA-in-a-Box": governance/PURVIEW_SETUP.md
-      - "Additional Learn Content":
-        - "Delta Lake Guide": learn/delta-lake-guide.md
-        - "Frequently Asked Questions": learn/faq.md
-        - "Serverless SQL Guide": learn/serverless-sql-guide.md
-        - "08 Solutions":
-          - "Cloud Scale Analytics Solutions": learn/08-solutions/README.md
-          - "Azure Realtime Analytics":
-            - "Azure Real-Time Analytics Solution": learn/08-solutions/azure-realtime-analytics/README.md
-            - "Architecture":
-              - "Architecture Documentation": learn/08-solutions/azure-realtime-analytics/architecture/README.md
-              - "Solution Components Overview": learn/08-solutions/azure-realtime-analytics/architecture/components.md
-              - "Data Flow Architecture": learn/08-solutions/azure-realtime-analytics/architecture/data-flow.md
-              - "Network Architecture": learn/08-solutions/azure-realtime-analytics/architecture/network.md
-              - "Security Architecture": learn/08-solutions/azure-realtime-analytics/architecture/security.md
-            - "Implementation":
-              - "Implementation Guides": learn/08-solutions/azure-realtime-analytics/implementation/README.md
-              - "Azure OpenAI Integration": learn/08-solutions/azure-realtime-analytics/implementation/azure-openai.md
-              - "Batch Processing Setup": learn/08-solutions/azure-realtime-analytics/implementation/batch-processing.md
-              - "Data Quality Implementation": learn/08-solutions/azure-realtime-analytics/implementation/data-quality.md
-              - "Databricks Workspace Setup": learn/08-solutions/azure-realtime-analytics/implementation/databricks-setup.md
-              - "Deployment Guide": learn/08-solutions/azure-realtime-analytics/implementation/deployment.md
-              - "Identity Setup": learn/08-solutions/azure-realtime-analytics/implementation/identity-setup.md
-              - "Kafka Setup": learn/08-solutions/azure-realtime-analytics/implementation/kafka-setup.md
-              - "Mlflow": learn/08-solutions/azure-realtime-analytics/implementation/mlflow.md
-              - "Network Setup": learn/08-solutions/azure-realtime-analytics/implementation/network-setup.md
-              - "Power Bi": learn/08-solutions/azure-realtime-analytics/implementation/power-bi.md
-              - "Security Setup": learn/08-solutions/azure-realtime-analytics/implementation/security-setup.md
-              - "Storage Setup": learn/08-solutions/azure-realtime-analytics/implementation/storage-setup.md
-              - "Stream Processing": learn/08-solutions/azure-realtime-analytics/implementation/stream-processing.md
-            - "Operations":
-              - "Operations Documentation": learn/08-solutions/azure-realtime-analytics/operations/README.md
-              - "Dashboards": learn/08-solutions/azure-realtime-analytics/operations/dashboards.md
-              - "Disaster Recovery": learn/08-solutions/azure-realtime-analytics/operations/disaster-recovery.md
-              - "Incident Management": learn/08-solutions/azure-realtime-analytics/operations/incident-management.md
-              - "Log Analysis": learn/08-solutions/azure-realtime-analytics/operations/log-analysis.md
-              - "Maintenance": learn/08-solutions/azure-realtime-analytics/operations/maintenance.md
-              - "Monitoring Setup Guide": learn/08-solutions/azure-realtime-analytics/operations/monitoring.md
-              - "Performance": learn/08-solutions/azure-realtime-analytics/operations/performance.md
-              - "Security Monitoring": learn/08-solutions/azure-realtime-analytics/operations/security-monitoring.md
-              - "Troubleshooting": learn/08-solutions/azure-realtime-analytics/operations/troubleshooting.md
-          - "Change Feed Processor":
-            - "Change Feed Processor Solution": learn/08-solutions/change-feed-processor/README.md
-          - "Data Governance":
-            - "Data Lineage Solution": learn/08-solutions/data-governance/lineage.md
-          - "Logic Apps Integration":
-            - "Logic Apps Integration Solution": learn/08-solutions/logic-apps-integration/README.md
-          - "ML Pipeline":
-            - "ML Pipeline Solution": learn/08-solutions/ml-pipeline/README.md
-          - "Real Time Dashboards":
-            - "Real-Time Dashboards Solution": learn/08-solutions/real-time-dashboards/README.md
-        - "09 Monitoring":
-          - "Monitoring & Observability": learn/09-monitoring/README.md
-          - "Deployment Monitoring": learn/09-monitoring/deployment-monitoring.md
-          - "Logging and Monitoring in Azure Synapse Analytics": learn/09-monitoring/logging-monitoring-guide.md
-          - "Monitoring Setup Guide": learn/09-monitoring/monitoring-setup.md
-          - "Security Monitoring": learn/09-monitoring/security-monitoring.md
-          - "Spark Monitoring": learn/09-monitoring/spark-monitoring.md
-          - "Sql Monitoring": learn/09-monitoring/sql-monitoring.md
-          - "Service Monitoring":
-            - "Databricks":
-              - "Databricks Monitoring": learn/09-monitoring/service-monitoring/databricks/README.md
-              - "Delta Live Tables Monitoring": learn/09-monitoring/service-monitoring/databricks/dlt-monitoring.md
-            - "Hdinsight":
-              - "HDInsight Monitoring": learn/09-monitoring/service-monitoring/hdinsight/README.md
-            - "Storage":
-              - "Storage Monitoring": learn/09-monitoring/service-monitoring/storage/README.md
-            - "Synapse":
-              - "Azure Synapse Analytics Monitoring": learn/09-monitoring/service-monitoring/synapse/README.md
-              - "Dedicated SQL Pool Monitoring": learn/09-monitoring/service-monitoring/synapse/dedicated-monitoring.md
-        - "10 Devops":
-          - "DevOps": learn/10-devops/README.md
-          - "Automated Testing for Synapse Analytics": learn/10-devops/automated-testing.md
-          - "Databricks CI/CD": learn/10-devops/databricks-cicd.md
-          - "DevOps Documentation": learn/10-devops/devops-overview.md
-          - "CI/CD for Azure Synapse Analytics": learn/10-devops/pipeline-ci-cd.md
-          - "Security Best Practices for DevOps": learn/10-devops/security-best-practices.md
-        - "Best Practices Extra":
-          - "Data Quality Best Practices": learn/best-practices-extra/data-quality.md
-          - "Global Distribution Best Practices": learn/best-practices-extra/global-distribution.md
-          - "Migration Strategies": learn/best-practices-extra/migration-strategies.md
-          - "Power BI Optimization Best Practices": learn/best-practices-extra/power-bi-optimization.md
-          - "Cost Optimization":
-            - "Cost Optimization Best Practices": learn/best-practices-extra/cost-optimization/README.md
-          - "Data Governance":
-            - "Data Governance Best Practices": learn/best-practices-extra/data-governance/README.md
-          - "ML Operations":
-            - "ML Operations Best Practices": learn/best-practices-extra/ml-operations/README.md
-          - "Network Security":
-            - "Network Security Best Practices": learn/best-practices-extra/network-security/README.md
-          - "Performance Optimization":
-            - "Performance Optimization Best Practices": learn/best-practices-extra/performance-optimization/README.md
-          - "Security":
-            - "Security Best Practices": learn/best-practices-extra/security/README.md
-          - "Serverless SQL Best Practices":
-            - "Serverless SQL Best Practices": learn/best-practices-extra/serverless-sql-best-practices/README.md
-          - "SQL Performance":
-            - "SQL Performance Best Practices": learn/best-practices-extra/sql-performance/README.md
-        - "Deployment":
-          - "Deployment Documentation": learn/deployment/README.md
-        - "Reference":
-          - "Azure Synapse Analytics Reference": learn/reference/README.md
-          - "Azure Regions Reference for Synapse Analytics": learn/reference/azure-regions.md
-          - "Azure Analytics Glossary": learn/reference/glossary.md
-          - "KQL (Kusto Query Language) Reference": learn/reference/kql-reference.md
-          - "Regional Compliance and Data Governance": learn/reference/regional-compliance.md
-          - "Azure Synapse Analytics Security Checklist": learn/reference/security-checklist.md
-          - "Azure Synapse Analytics Security Reference": learn/reference/security.md
-          - "Spark Configuration": learn/reference/spark-configuration.md
-          - "Cosmosdb":
-            - "Azure Cosmos DB Reference": learn/reference/cosmosdb/README.md
-            - "Azure Cosmos DB Global Distribution Reference": learn/reference/cosmosdb/global-distribution.md
-          - "Security Checklist":
-            - "Azure Security Checklist Reference": learn/reference/security-checklist/README.md
-          - "Storage":
-            - "Azure Storage Reference": learn/reference/storage/README.md
-            - "Azure Storage Custom Domains Reference": learn/reference/storage/custom-domains.md
-            - "Azure Storage Geo-Replication Reference": learn/reference/storage/geo-replication.md
-          - "Synapse":
-            - "Custom Connectors for Azure Synapse Analytics": learn/reference/synapse/custom-connectors.md
-        - "Security":
-          - "Security Guide": learn/security/README.md
-          - "Azure Synapse Analytics Security Best Practices": learn/security/best-practices.md
-          - "Azure Synapse Analytics Security and Compliance Guide": learn/security/compliance-guide.md
-        - "Stream Analytics":
-          - "Stream Analytics Documentation": learn/stream-analytics/README.md
-        - "Synapse":
-          - "Synapse Environment Setup": learn/synapse/01-environment-setup.md
+
