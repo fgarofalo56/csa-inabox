@@ -1,0 +1,67 @@
+# CSA Loom — azd project definition
+#
+# Status: SCAFFOLDED — real services land via PRP-02 (Bicep) + PRP-03
+# (Console) + PRP-04 (Setup Orchestrator) + PRP-05 (MCP server) +
+# PRP-06/07/08 (parity services).
+
+name: csa-loom
+metadata:
+  template: csa-loom@v1.0
+  description: CSA Loom — Microsoft Fabric parity layer for Azure tenants
+
+infra:
+  provider: bicep
+  path: ../bicep
+  module: main
+
+services:
+  console:
+    project: ../../apps/fiab-console
+    language: ts
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+
+  setup-orchestrator:
+    project: ../../apps/fiab-setup-orchestrator
+    language: csharp
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+
+  mcp-server:
+    project: ../../apps/fiab-mcp-config
+    language: ts
+    host: containerapp
+    docker:
+      path: ./Dockerfile.wrapper
+
+  activator-engine:
+    project: ../../apps/fiab-activator-engine
+    language: csharp
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+
+  mirroring-engine:
+    project: ../../apps/fiab-mirroring-engine
+    language: java
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+
+  direct-lake-shim:
+    project: ../../apps/fiab-direct-lake-shim
+    language: csharp
+    host: containerapp
+    docker:
+      path: ./Dockerfile
+
+# Per-environment variables defined via:
+# azd env set CSA_LOOM_BOUNDARY <Commercial|GCC|GCC-High|IL5>
+# azd env set CSA_LOOM_DEPLOYMENT_MODE <single-sub|multi-sub>
+# azd env set CSA_LOOM_CAPACITY_SKU <F2|F4|F8|F32|F64|F128|F512>
+# azd env set CSA_LOOM_ADMIN_GROUP_ID <Entra group object ID>
+# azd env set CSA_LOOM_HUB_VNET_CIDR <CIDR>
+# azd env set CSA_LOOM_DLZ_SUB_IDS <comma-separated sub IDs for multi-sub>
+# azd env set CSA_LOOM_DLZ_NAMES <comma-separated domain names>

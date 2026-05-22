@@ -1,0 +1,92 @@
+name: deploy-fiab-commercial
+
+# CSA Loom — nightly deploy validation against Azure Commercial
+# Per PRP-11. Uses the existing `limitlessdata_deploy` SP
+# (see memory: azure-deployment-principal).
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC daily
+  pull_request:
+    paths:
+      - 'platform/fiab/bicep/**'
+      - 'platform/fiab/azd/**'
+      - 'apps/fiab-*/**'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_CLOUD: AzureCloud
+  AZURE_LOCATION: eastus2
+  CSA_LOOM_BOUNDARY: Commercial
+  CSA_LOOM_DEPLOYMENT_MODE: single-sub
+  CSA_LOOM_CAPACITY_SKU: F8
+
+jobs:
+  deploy-validate:
+    name: Deploy + validate CSA Loom in Commercial
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (Commercial)
+        uses: Azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup azd
+        uses: Azure/setup-azd@v2
+
+      - name: Setup Bicep
+        run: az bicep install
+
+      - name: Bicep what-if (preview)
+        run: |
+          az deployment sub what-if \
+            --name csa-loom-ci-${{ github.run_id }} \
+            --location $AZURE_LOCATION \
+            --template-file platform/fiab/bicep/main.bicep \
+            --parameters platform/fiab/bicep/params/commercial.bicepparam \
+            --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }}
+
+      - name: Provision (idempotent)
+        run: |
+          azd env new csa-loom-ci-${{ github.run_id }} --no-prompt
+          azd env set AZURE_CLOUD $AZURE_CLOUD
+          azd env set AZURE_LOCATION $AZURE_LOCATION
+          azd env set CSA_LOOM_BOUNDARY $CSA_LOOM_BOUNDARY
+          azd env set CSA_LOOM_DEPLOYMENT_MODE $CSA_LOOM_DEPLOYMENT_MODE
+          azd env set CSA_LOOM_CAPACITY_SKU $CSA_LOOM_CAPACITY_SKU
+          azd env set CSA_LOOM_ADMIN_GROUP_ID ${{ secrets.FIAB_ADMIN_GROUP_ID }}
+          azd provision --no-prompt
+        working-directory: platform/fiab/azd
+
+      - name: Smoke test
+        run: bash .github/scripts/fiab-smoke-test.sh
+        env:
+          CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
+
+      - name: Teardown (on success)
+        if: success()
+        run: bash .github/scripts/fiab-teardown.sh
+        env:
+          RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
+
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: 279,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `❌ Nightly deploy-fiab-commercial failed in run ${context.runId}. Check workflow logs.`
+            })
