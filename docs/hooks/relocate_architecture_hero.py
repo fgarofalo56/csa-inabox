@@ -111,6 +111,98 @@ def _resolve_to_docs_root(src: str, page_src_path: str) -> str:
     return joined
 
 
+# File-level default heroes for the standalone root-level markdown
+# pages (ADF_SETUP.md, COST_MANAGEMENT.md, etc.). Keyed by the page's
+# src_path (always forward-slash, no leading docs/). When a page has
+# no inline hero AND no section default, we check this map.
+_FILE_DEFAULTS: dict[str, tuple[str, str]] = {
+    "ADF_SETUP.md": (
+        "assets/images/hero/adf-setup.svg",
+        "Azure Data Factory setup — linked services, integration runtime, pipelines",
+    ),
+    "COST_MANAGEMENT.md": (
+        "assets/images/hero/cost-management.svg",
+        "FinOps + cost management — budgets, alerts, reserved capacity, auto-pause",
+    ),
+    "DATABRICKS_GUIDE.md": (
+        "assets/images/hero/databricks-guide.svg",
+        "Azure Databricks — workspaces, clusters, jobs, Unity Catalog, MLflow",
+    ),
+    "DR.md": (
+        "assets/images/hero/disaster-recovery.svg",
+        "Disaster recovery — multi-region failover, RPO / RTO targets, chaos drills",
+    ),
+    "ENVIRONMENT_PROTECTION.md": (
+        "assets/images/hero/environment-protection.svg",
+        "Environment protection — required reviewers, deployment gates, branch policies",
+    ),
+    "GOV_SERVICE_MATRIX.md": (
+        "assets/images/hero/gov-service-matrix.svg",
+        "Azure Government service matrix — IL4 / IL5 / GCC / GCC-High availability",
+    ),
+    "IaC-CICD-Best-Practices.md": (
+        "assets/images/hero/iac-cicd-best-practices.svg",
+        "Infrastructure as Code + CI/CD — Bicep, GitHub Actions, environment promotion",
+    ),
+    "LOG_SCHEMA.md": (
+        "assets/images/hero/log-schema.svg",
+        "Log schema reference — Azure Monitor, App Insights, KQL field catalog",
+    ),
+    "MULTI_REGION.md": (
+        "assets/images/hero/multi-region.svg",
+        "Multi-region topology — paired regions, traffic manager, geo-replication",
+    ),
+    "MULTI_TENANT.md": (
+        "assets/images/hero/multi-tenant.svg",
+        "Multi-tenant isolation — per-tenant landing zones, governance, networking",
+    ),
+    "PLATFORM_SERVICES.md": (
+        "assets/images/hero/platform-services.svg",
+        "Platform services — shared identity, Key Vault, monitoring, networking",
+    ),
+    "ROLLBACK.md": (
+        "assets/images/hero/rollback.svg",
+        "Rollback playbook — feature-flag flip, version pinning, blue-green back",
+    ),
+    "SELF_HOSTED_IR.md": (
+        "assets/images/hero/self-hosted-ir.svg",
+        "Self-hosted Integration Runtime — on-prem connectivity for ADF / Synapse",
+    ),
+    "SUCCESSION.md": (
+        "assets/images/hero/succession.svg",
+        "Maintainer succession plan — roles, escalation paths, knowledge transfer",
+    ),
+    "SUPPLY_CHAIN.md": (
+        "assets/images/hero/supply-chain.svg",
+        "Supply-chain security — SBOM, signing, dependency scanning, OIDC",
+    ),
+    "TROUBLESHOOTING.md": (
+        "assets/images/hero/troubleshooting.svg",
+        "Troubleshooting flowcharts — diagnostics, common errors, escalation",
+    ),
+    "chat.md": (
+        "assets/images/hero/chat.svg",
+        "CSA Copilot chat — ask the docs with citations + MS Learn fallback",
+    ),
+    "cloud-shell-snippets.md": (
+        "assets/images/hero/cloud-shell-snippets.svg",
+        "Cloud Shell snippets — copy-runnable Azure CLI for every quickstart",
+    ),
+    "copilot-analytics.md": (
+        "assets/images/hero/copilot-analytics.svg",
+        "Copilot analytics — KQL queries, content-gap signals, operator runbook",
+    ),
+    "copilot-privacy.md": (
+        "assets/images/hero/copilot-privacy.svg",
+        "Copilot privacy notice — redaction, opt-out, retention, data handling",
+    ),
+    "fabric-in-gov-cloud.md": (
+        "assets/images/hero/fabric-in-gov-cloud.svg",
+        "Microsoft Fabric in Azure Government — capacity, parity, gap analysis",
+    ),
+}
+
+
 _SECTION_DEFAULTS: dict[str, tuple[str, str]] = {
     "runbooks": (
         "assets/images/hero/runbooks/index.svg",
@@ -167,24 +259,75 @@ _SECTION_DEFAULTS: dict[str, tuple[str, str]] = {
         "Comparisons — Azure side-by-side with MuleSoft, AWS API stack, "
         "Fabric, and other major data platforms",
     ),
+    "learn": (
+        "assets/images/hero/learn/index.svg",
+        "Learn — Azure analytics reference library covering services, "
+        "architecture patterns, tutorials, solutions, monitoring, DevOps",
+    ),
+    "use-cases": (
+        "assets/images/hero/use-cases/index.svg",
+        "Use cases — industry verticals, government scenarios, API-first "
+        "ecosystems, legal, healthcare, financial services, cybersecurity",
+    ),
+    "research": (
+        "assets/images/hero/research/index.svg",
+        "Research — enterprise data platform trends, AI readiness, data "
+        "mesh maturity, federal cloud adoption, API-first whitepaper",
+    ),
+    "governance": (
+        "assets/images/hero/governance/index.svg",
+        "Governance — data access, cataloging, lineage, quality, metadata "
+        "management, Purview setup",
+    ),
+    "solution-store": (
+        "assets/images/hero/solution-store/index.svg",
+        "Solution store — Azure API-first accelerator catalog: pre-built "
+        "Bicep + ARM templates, sample apps, integration patterns",
+    ),
+    # Section-level default for tutorial pages that don't have their own
+    # numbered hero (tutorials/index.md, tutorials/great-expectations.md,
+    # and any future legacy / unnumbered tutorial). The numbered
+    # tutorials (01-17) carry their own inline hero via markdown.
+    "tutorials": (
+        "assets/images/hero/tutorials/index.svg",
+        "Tutorials — 17 hands-on numbered tutorials plus legacy guides "
+        "covering foundation deploy through Copilot integration",
+    ),
 }
 
 
-def _section_default_hero(page_src_path: str) -> dict[str, str | None] | None:
-    """Pick a section-level default hero based on the page's directory.
+def _default_hero(page_src_path: str) -> dict[str, str | None] | None:
+    """Pick a default hero for the page.
 
-    Returns ``None`` for pages outside the configured sections — those
-    keep "no hero" behaviour. The returned dict matches the
-    ``page_hero`` shape the template expects.
+    Resolution order:
+      1. File-level default (``_FILE_DEFAULTS`` keyed by full ``src_path``)
+      2. Section default (``_SECTION_DEFAULTS`` keyed by top-level dir)
+
+    Returns ``None`` if neither matches — the page renders without a
+    hero. The returned dict matches the ``page_hero`` shape the
+    template expects.
     """
     if not page_src_path:
         return None
-    top = page_src_path.replace("\\", "/").split("/", 1)[0]
+    normalized = page_src_path.replace("\\", "/")
+
+    # 1. Exact file match (root-level standalone pages).
+    file_spec = _FILE_DEFAULTS.get(normalized)
+    if file_spec is not None:
+        src, alt = file_spec
+        return {"src": src, "alt": alt, "link": None}
+
+    # 2. Top-level directory match.
+    top = normalized.split("/", 1)[0]
     spec = _SECTION_DEFAULTS.get(top)
     if not spec:
         return None
     src, alt = spec
     return {"src": src, "alt": alt, "link": None}
+
+
+# Backward-compat alias — the public surface used to be _section_default_hero
+_section_default_hero = _default_hero
 
 
 def on_page_markdown(markdown: str, page, config, files):  # noqa: ANN001 (mkdocs API)
