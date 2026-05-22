@@ -95,10 +95,15 @@ defensible options the rules permit.
 | **1. Stand up a separate Azure Commercial tenant** with a non-GCC home region. Run Fabric there. | Data flowing into that tenant is no longer in the GCC boundary. Apply Microsoft Purview cross-tenant scan to maintain catalog visibility from the GCC side. Won't satisfy compliance requirements that mandate GCC residency. |
 | **2. Wait for Fabric Gov GA**, then migrate. | Time. ADR-0010 covers what to build *today* so the migration is forward-only. |
 | **3. Use the interim stack** (Synapse + ADF + Databricks + Purview + Power BI) inside the existing Azure Government subscription. | This is what CSA-in-a-Box deploys. Gov-compatible today; Fabric-parity at the table-format and SQL layer for forward migration. |
+| **3a. Use [CSA Loom](fiab/index.md) — the productized form of Option 3.** | Productized SaaS-feel deployment of the Option 3 stack: Loom Console (Fabric workspace experience), Setup Wizard (conversational deploy), parity services (Activator, Mirroring, Direct-Lake-Shim, Data Agents). Free in v1; deploys into your own Azure Gov subscription in 60-100 min. **The recommended path for federal customers wanting the Fabric experience today.** See [CSA Loom](fiab/index.md). |
 
-**Recommendation:** Option 3 unless you have a specific Power BI Direct
-Lake or Fabric-only feature requirement (Reflex / Data Agents / Data
-Activator) that would justify Option 1's compliance cost.
+**Recommendation:** **Option 3a (CSA Loom)** for federal customers
+wanting the Microsoft Fabric workspace experience inside their
+existing tenant — the productized form of the legacy Option 3.
+Use Option 1 only if you have a specific Power BI Direct Lake or
+Fabric-only feature requirement that Loom's parity services can't
+meet (note: CSA Loom delivers Direct Lake parity via warm-cache
+materializer with 5-30s freshness — see [Direct Lake parity](fiab/workloads/direct-lake-parity.md) for the honest gap).
 
 ## Capability gaps in Gov today
 
