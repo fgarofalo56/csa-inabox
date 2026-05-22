@@ -807,19 +807,24 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
 
     # MS Learn MCP supplemental grounding (CSA-0162 Phase 2).
     # The widget pre-searches the docs site and ships matched pages as
-    # `body.grounding`. That local match can be sparse OR poor quality
-    # — the local search ranks by lexical overlap, so a query like
-    # "Azure Container Registry geo-replication" returns "Schema
-    # Registry" and "Azure Cosmos DB" as weak matches. We supplement
-    # with Microsoft Learn whenever the local grounding is thin (≤ 1
-    # hit) so the LLM has authoritative Azure platform context to draw
-    # from. Each external chunk is marked external=true so the widget
-    # renders a Microsoft Learn badge on the citation.
-    _LOCAL_GROUNDING_THRESHOLD = 2  # supplement when fewer than this many local hits
+    # `body.grounding`. That local match is unreliable as a coverage
+    # signal — the docs search ranks by lexical overlap, so a query
+    # like "Azure Container Registry geo-replication" can return five
+    # weak matches ("Schema Registry", "Cosmos DB RU Optimization"…)
+    # that aren't actually relevant. Counting them as "we have
+    # grounding" suppressed MS Learn and let the LLM answer with
+    # tangential cites or refuse outright.
+    #
+    # New rule: ALWAYS query MS Learn when the flag is on. Cap external
+    # results at 2 when local grounding is rich (≥2 hits) and 3 when
+    # local is thin, so the prompt stays within budget. The LLM picks
+    # which citations to surface — irrelevant MS Learn hits stay in
+    # context but won't be cited.
     ms_learn_used = False
     local_grounding_count = len(grounding_docs)
-    if local_grounding_count < _LOCAL_GROUNDING_THRESHOLD and ms_learn.is_enabled():
-        ms_learn_hits = ms_learn.search(message, top_k=3)
+    if ms_learn.is_enabled():
+        external_top_k = 2 if local_grounding_count >= 2 else 3
+        ms_learn_hits = ms_learn.search(message, top_k=external_top_k)
         if ms_learn_hits:
             grounding_docs.extend(ms_learn_hits)
             ms_learn_used = True
