@@ -17,6 +17,9 @@ param adxClusterRgName string
 @description('Existing ADX cluster sub ID (defaults to current)')
 param adxClusterSubId string = subscription().subscriptionId
 
+@description('ADX cluster location (must match cluster). Typically same as DLZ location.')
+param adxClusterLocation string
+
 @description('Soft delete period (days)')
 param softDeletePeriodDays int = 365
 
@@ -39,6 +42,7 @@ module inner 'adx-db-inner.bicep' = {
   scope: resourceGroup(adxClusterSubId, adxClusterRgName)
   params: {
     adxClusterName: adxClusterName
+    adxClusterLocation: adxClusterLocation
     dbName: dbName
     softDeletePeriodDays: softDeletePeriodDays
     hotCachePeriodDays: hotCachePeriodDays

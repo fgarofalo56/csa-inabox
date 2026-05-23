@@ -7,6 +7,9 @@ targetScope = 'resourceGroup'
 @description('ADX cluster name (in this RG)')
 param adxClusterName string
 
+@description('ADX cluster location (must match cluster)')
+param adxClusterLocation string
+
 @description('Database name')
 param dbName string
 
@@ -29,7 +32,7 @@ resource adxCluster 'Microsoft.Kusto/clusters@2024-04-13' existing = {
 resource adxDb 'Microsoft.Kusto/clusters/databases@2024-04-13' = {
   parent: adxCluster
   name: dbName
-  location: adxCluster.location
+  location: adxClusterLocation
   kind: 'ReadWrite'
   properties: {
     softDeletePeriod: 'P${softDeletePeriodDays}D'

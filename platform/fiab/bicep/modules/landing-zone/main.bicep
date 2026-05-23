@@ -157,6 +157,7 @@ module adx 'adx.bicep' = {
     domainName: domainName
     adxClusterName: adminPlaneAdxClusterName
     adxClusterRgName: adminPlaneAdxClusterRgName
+    adxClusterLocation: location
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: activatorPrincipalId
     complianceTags: complianceTags

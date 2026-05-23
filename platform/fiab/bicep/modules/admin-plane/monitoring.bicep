@@ -137,6 +137,8 @@ AppRequests
     queryPeriod: 'PT10M'
     triggerOperator: 'GreaterThan'
     triggerThreshold: 0
+    suppressionEnabled: false
+    suppressionDuration: 'PT1H'
     tactics: ['Impact']
   }
   dependsOn: [ sentinel ]
