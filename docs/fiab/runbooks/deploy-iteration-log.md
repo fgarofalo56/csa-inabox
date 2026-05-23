@@ -81,9 +81,17 @@ All 6 builds failed with `CONNECTIVITY_REFRESH_TOKEN_ERROR` at ACR login.
 
 **Fix paths** (operator chooses):
 
-- **A — ACR Tasks** (recommended): build inside Azure, reaches ACR via internal network. Per-app: `az acr build --registry $ACR --image loom-console:v0.1 ./apps/fiab-console`. Wrap in `build-fiab-images-acr-tasks.yml`.
-- **B — Self-hosted GitHub runner inside Hub VNet**: VM- or AKS-based runner with VNet access; tag workflow to use it.
-- **C — Temporarily enable ACR public access**: less secure but fastest first-time unblocker.
+- **A — ACR Tasks** (`build-fiab-images-acr-tasks.yml`): ATTEMPTED in iter #10 (run 26331140630) — also failed. Even ACR Tasks runs as Microsoft service infrastructure OUTSIDE the customer VNet, so it gets the same firewall-deny when `publicNetworkAccess: Disabled`. The `networkRuleBypassOptions: AzureServices` bypass is overridden when public access is fully disabled.
+- **B — Self-hosted GitHub runner inside Hub VNet** (recommended for production): VM-based runner in `snet-workloads` with VNet access to the ACR private endpoint; tag the build workflow to `runs-on: [self-hosted, csa-loom-hub]`.
+- **C — Temporarily enable ACR public access** for the initial build pull:
+  ```bash
+  az acr update --name $ACR --public-network-enabled true
+  gh workflow run build-fiab-images --ref main -f tag_override=v0.1
+  # After build completes:
+  az acr update --name $ACR --public-network-enabled false
+  ```
+  This is the fastest unblock for first-time deploys. The window of public access is bounded to the duration of the build (~10-15 min) and the ACR still requires SP auth, so the risk is bounded.
+- **D — Operator builds locally + pushes via Bastion**: developer machine inside a Bastion-jumpbox session has VNet access to ACR.
 
 ## Outstanding follow-ups
 
