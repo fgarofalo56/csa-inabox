@@ -1,0 +1,50 @@
+[
+  {
+    "id": "fraud-merchant-score-spike",
+    "workspaceId": "ws-fraud-example",
+    "name": "Merchant fraud-score spike",
+    "enabled": true,
+    "primitive": "IncreasesAbove",
+    "objectFilter": "*",
+    "property": "fraud_score_ma_5min",
+    "threshold": 0.75,
+    "targetValue": null,
+    "duration": "PT5M",
+    "everyNthInterval": null,
+    "action": "Teams",
+    "actionTarget": "https://outlook.office.com/webhook/...kv-ref://fraud-ops-teams-webhook",
+    "suppressionDuration": "PT1H"
+  },
+  {
+    "id": "fraud-payment-pipeline-silence",
+    "workspaceId": "ws-fraud-example",
+    "name": "Payment pipeline silence",
+    "enabled": true,
+    "primitive": "NoPresenceOfData",
+    "objectFilter": "*",
+    "property": "fraud_score_ma_5min",
+    "threshold": null,
+    "targetValue": null,
+    "duration": "PT10M",
+    "everyNthInterval": null,
+    "action": "LogicApp",
+    "actionTarget": "https://prod-eastus2.logic.azure.com:443/workflows/.../triggers/manual/paths/invoke?api-version=2016-10-01",
+    "suppressionDuration": "PT30M"
+  },
+  {
+    "id": "fraud-status-changes-to-blocked",
+    "workspaceId": "ws-fraud-example",
+    "name": "Card status changes to blocked",
+    "enabled": true,
+    "primitive": "ChangesTo",
+    "objectFilter": "*",
+    "property": "card_status",
+    "threshold": null,
+    "targetValue": "blocked",
+    "duration": null,
+    "everyNthInterval": null,
+    "action": "Webhook",
+    "actionTarget": "https://fraud-ops-internal/api/card-blocked",
+    "suppressionDuration": "PT15M"
+  }
+]

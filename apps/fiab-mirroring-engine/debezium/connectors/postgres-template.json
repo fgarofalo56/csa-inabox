@@ -1,0 +1,32 @@
+{
+  "name": "${MIRROR_ID}-postgres",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+
+    "database.hostname": "${PG_HOST}",
+    "database.port": "5432",
+    "database.user": "${PG_USER}",
+    "database.password": "${PG_PASSWORD_KV_REF}",
+    "database.dbname": "${PG_DATABASE}",
+    "database.sslmode": "require",
+
+    "plugin.name": "pgoutput",
+    "publication.name": "csa_loom_${MIRROR_ID}",
+    "publication.autocreate.mode": "filtered",
+    "slot.name": "csa_loom_${MIRROR_ID}",
+
+    "topic.prefix": "csa-loom-mirror.${MIRROR_ID}",
+    "table.include.list": "${TABLE_INCLUDE_LIST}",
+
+    "decimal.handling.mode": "double",
+    "time.precision.mode": "adaptive_time_microseconds",
+    "tombstones.on.delete": "false",
+
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "transforms.unwrap.add.fields": "op,ts_ms,source.schema,source.table,source.lsn"
+  }
+}

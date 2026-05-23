@@ -1,0 +1,25 @@
+[project]
+name = "csa-loom-setup-orchestrator"
+version = "0.1.0"
+description = "CSA Loom Setup Orchestrator — two-tier conversational deploy backend"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "pydantic>=2.9.0",
+  "httpx>=0.28.0",
+  "azure-identity>=1.19.0",
+  "azure-mgmt-resource>=23.2.0",
+  "azure-mgmt-authorization>=4.0.0",
+  "openai>=1.55.0",
+  "azure-monitor-opentelemetry>=1.6.0",
+  "opentelemetry-instrumentation-fastapi>=0.49b0",
+  "opentelemetry-instrumentation-httpx>=0.49b0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3.0", "pytest-asyncio>=0.24.0", "ruff>=0.7.0", "mypy>=1.13.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

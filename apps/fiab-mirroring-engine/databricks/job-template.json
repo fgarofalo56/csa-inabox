@@ -1,0 +1,71 @@
+{
+  "name": "csa-loom-mirror-${MIRROR_ID}",
+  "tasks": [
+    {
+      "task_key": "replicator",
+      "spark_python_task": {
+        "python_file": "${DBFS_REPLICATOR_PATH}",
+        "parameters": []
+      },
+      "job_cluster_key": "loom-mirror-cluster",
+      "libraries": [
+        {
+          "maven": {
+            "coordinates": "io.delta:delta-spark_2.13:3.2.0"
+          }
+        },
+        {
+          "maven": {
+            "coordinates": "com.azure.cosmos.spark:azure-cosmos-spark_3-5_2-13:4.34.0"
+          }
+        }
+      ],
+      "timeout_seconds": 0,
+      "max_retries": 3,
+      "min_retry_interval_millis": 60000,
+      "retry_on_timeout": false
+    }
+  ],
+  "job_clusters": [
+    {
+      "job_cluster_key": "loom-mirror-cluster",
+      "new_cluster": {
+        "spark_version": "15.4.x-photon-scala2.13",
+        "node_type_id": "Standard_D8ds_v5",
+        "num_workers": 0,
+        "autoscale": {
+          "min_workers": 1,
+          "max_workers": 4
+        },
+        "spark_conf": {
+          "spark.databricks.cluster.profile": "singleNode",
+          "spark.databricks.io.cache.enabled": "true",
+          "spark.databricks.delta.merge.repartitionBeforeWrite.enabled": "true",
+          "spark.databricks.delta.optimizeWrite.enabled": "true",
+          "spark.databricks.delta.autoCompact.enabled": "true"
+        },
+        "azure_attributes": {
+          "availability": "SPOT_AZURE",
+          "first_on_demand": 1
+        },
+        "custom_tags": {
+          "csa-loom": "mirroring-engine",
+          "mirror_id": "${MIRROR_ID}"
+        },
+        "data_security_mode": "SINGLE_USER",
+        "single_user_name": "${SERVICE_PRINCIPAL_APPID}",
+        "init_scripts": []
+      }
+    }
+  ],
+  "schedule": {
+    "quartz_cron_expression": "0 */1 * * * ?",
+    "timezone_id": "UTC",
+    "pause_status": "UNPAUSED"
+  },
+  "max_concurrent_runs": 1,
+  "tags": {
+    "csa-loom": "mirror",
+    "mirror_id": "${MIRROR_ID}"
+  }
+}
