@@ -11,7 +11,7 @@ param location string
 param domainName string
 
 @description('Spoke VNet CIDR')
-param spokeVnetCidr string = '10.${(uniqueString(resourceGroup().id) == uniqueString(resourceGroup().id) ? 100 : 100)}.0.0/16'
+param spokeVnetCidr string = '10.100.0.0/16'
 
 @description('Admin Plane hub VNet ID for peering')
 param adminPlaneHubVnetId string

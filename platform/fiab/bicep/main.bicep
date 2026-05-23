@@ -117,6 +117,9 @@ param apimEnabled bool = false
 @description('Deploy AI Search. Default off — capacity in eastus2 is intermittent.')
 param aiSearchEnabled bool = false
 
+@description('Deploy ADX database in DLZ. Requires admin-plane ADX cluster to already exist (provisioned out-of-band today). Default off.')
+param adxEnabled bool = false
+
 // =====================================================================
 // Resource group for Admin Plane
 // =====================================================================
@@ -196,6 +199,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     adminPlaneAppInsightsConnectionString: adminPlane.outputs.appInsightsConnectionString
     adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
+    adxEnabled: adxEnabled
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
@@ -226,6 +230,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     adminPlaneAppInsightsConnectionString: adminPlane.outputs.appInsightsConnectionString
     adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
+    adxEnabled: adxEnabled
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     catalogEndpoint: adminPlane.outputs.catalogEndpoint

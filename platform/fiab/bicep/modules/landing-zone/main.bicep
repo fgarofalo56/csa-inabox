@@ -65,8 +65,8 @@ param storageCmkIdentityId string = ''
 @description('Power BI SKU')
 param powerBiSku string
 
-@description('Spoke VNet CIDR (must not overlap Admin Plane hub)')
-param spokeVnetCidr string = '10.${take(uniqueString(resourceGroup().id), 2)}.0.0/16'
+@description('Spoke VNet CIDR (must not overlap Admin Plane hub which is 10.0.0.0/16). Default is 10.100.0.0/16 for the single-sub DLZ; operator overrides for multi-DLZ deployments.')
+param spokeVnetCidr string = '10.100.0.0/16'
 
 @description('Compliance tags')
 param complianceTags object
@@ -161,7 +161,10 @@ module eventhubs 'eventhubs.bicep' = {
 // 6. ADX database (on the Admin Plane shared cluster)
 // =====================================================================
 
-module adx 'adx.bicep' = {
+@description('Deploy ADX database (requires admin-plane ADX cluster to exist). Default off until ADX cluster is provisioned.')
+param adxEnabled bool = false
+
+module adx 'adx.bicep' = if (adxEnabled) {
   name: 'dlz-adx-db'
   params: {
     domainName: domainName
@@ -198,7 +201,7 @@ output spokeVnetId string = network.outputs.spokeVnetId
 output databricksWorkspaceUrl string = databricks.outputs.workspaceUrl
 output databricksWorkspaceId string = databricks.outputs.workspaceId
 output synapseEndpoint string = synapse.outputs.synapseServerlessSqlEndpoint
-output adxDatabaseUrl string = adx.outputs.databaseUri
+output adxDatabaseUrl string = adxEnabled ? adx!.outputs.databaseUri : ''
 output lakehouseDfsEndpoint string = storage.outputs.dfsEndpoint
 output bronzeContainerUrl string = storage.outputs.bronzeContainerUrl
 output silverContainerUrl string = storage.outputs.silverContainerUrl
