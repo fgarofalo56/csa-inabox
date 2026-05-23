@@ -74,4 +74,4 @@ az role assignment list --assignee <mcp-mi-client-id>
 - ADR: [fiab-0009 Copilot orchestration](../adr/0009-copilot-orchestration.md)
 - PRP: PRP-05 (MCP server)
 - Console: [Setup Wizard](../console/setup-wizard.md)
-- Research: [`temp/fiab-research/06-copilot-driven-deploy.md` §2.1](../../../temp/fiab-research/06-copilot-driven-deploy.md)
+- Research: [`temp/fiab-research/06-copilot-driven-deploy.md` §2.1](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/06-copilot-driven-deploy.md)

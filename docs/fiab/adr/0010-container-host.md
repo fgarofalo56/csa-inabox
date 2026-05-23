@@ -108,7 +108,7 @@ module deploys either:
 
 ## References
 
-- PRD: [`temp/fiab-prd/04-reference-architecture.md`](../../../temp/fiab-prd/04-reference-architecture.md) §4.3
-- Research: [`temp/fiab-research/02-gov-boundary-availability.md`](../../../temp/fiab-research/02-gov-boundary-availability.md) §7.11
+- PRD: [`temp/fiab-prd/04-reference-architecture.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/04-reference-architecture.md) §4.3
+- Research: [`temp/fiab-research/02-gov-boundary-availability.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/02-gov-boundary-availability.md) §7.11
 - External: [Azure services in FedRAMP/DoD audit scope](https://learn.microsoft.com/azure/azure-government/compliance/azure-services-in-fedramp-auditscope)
 - Build: PRP-02 — `platform/fiab/bicep/modules/admin-plane/container-platform.bicep`

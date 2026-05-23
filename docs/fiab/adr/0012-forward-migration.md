@@ -138,7 +138,7 @@ rather than a forced cutover. Documented in
 
 ## References
 
-- PRD: [`temp/fiab-prd/09-forward-migration.md`](../../../temp/fiab-prd/09-forward-migration.md)
-- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](../../../temp/fiab-prd/AMENDMENTS.md) §A14
+- PRD: [`temp/fiab-prd/09-forward-migration.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/09-forward-migration.md)
+- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md) §A14
 - Parent ADR: [`docs/adr/0010-fabric-strategic-target.md`](../../adr/0010-fabric-strategic-target.md) — Loom refines for the Gov-interim case
 - Build: PRP-104 — `platform/fiab-migrate/` (v1.1)

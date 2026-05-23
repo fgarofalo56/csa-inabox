@@ -121,8 +121,8 @@ Open Mirroring landing-zone protocol (identical to Fabric's):
 
 ## References
 
-- PRD: [`temp/fiab-prd/05-workload-parity.md`](../../../temp/fiab-prd/05-workload-parity.md) §5.8, [`06-custom-apps.md`](../../../temp/fiab-prd/06-custom-apps.md) §6.4
-- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](../../../temp/fiab-prd/AMENDMENTS.md) §A10
-- Research: [`temp/fiab-research/03-fabric-only-internals.md`](../../../temp/fiab-research/03-fabric-only-internals.md) §5
+- PRD: [`temp/fiab-prd/05-workload-parity.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/05-workload-parity.md) §5.8, [`06-custom-apps.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/06-custom-apps.md) §6.4
+- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md) §A10
+- Research: [`temp/fiab-research/03-fabric-only-internals.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/03-fabric-only-internals.md) §5
 - External: [Microsoft Learn — Open Mirroring landing-zone format](https://learn.microsoft.com/fabric/mirroring/open-mirroring-landing-zone-format), [Debezium docs](https://debezium.io/documentation/)
 - Build: PRP-07 — `apps/fiab-mirroring-engine/`

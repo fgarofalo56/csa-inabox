@@ -91,7 +91,7 @@ Loom **does** deploy as supporting compute:
 
 ## References
 
-- PRD: [`temp/fiab-prd/04-reference-architecture.md`](../../../temp/fiab-prd/04-reference-architecture.md) §4.3
-- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](../../../temp/fiab-prd/AMENDMENTS.md) §A1
-- Research: [`temp/fiab-research/02-gov-boundary-availability.md`](../../../temp/fiab-research/02-gov-boundary-availability.md) §7.1 (Databricks UC/SQL Warehouse not in Gov)
+- PRD: [`temp/fiab-prd/04-reference-architecture.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/04-reference-architecture.md) §4.3
+- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md) §A1
+- Research: [`temp/fiab-research/02-gov-boundary-availability.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/02-gov-boundary-availability.md) §7.1 (Databricks UC/SQL Warehouse not in Gov)
 - Parent ADRs: [`docs/adr/0002-databricks-over-oss-spark.md`](../../adr/0002-databricks-over-oss-spark.md), [`docs/adr/0003-delta-lake-over-iceberg-and-parquet.md`](../../adr/0003-delta-lake-over-iceberg-and-parquet.md)

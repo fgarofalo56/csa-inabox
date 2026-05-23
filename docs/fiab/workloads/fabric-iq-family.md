@@ -88,4 +88,4 @@ migration format.
 - ADR: [fiab-0001 Fabric feature scope](../adr/0001-fabric-feature-scope.md)
   (documents v1 OUT)
 - Build PRPs (v2): PRP-201, PRP-202, PRP-203
-- Research: [`temp/fiab-research/01-fabric-capability-surface.md` §21](../../../temp/fiab-research/01-fabric-capability-surface.md) — Item type enumeration
+- Research: [`temp/fiab-research/01-fabric-capability-surface.md` §21](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/01-fabric-capability-surface.md) — Item type enumeration

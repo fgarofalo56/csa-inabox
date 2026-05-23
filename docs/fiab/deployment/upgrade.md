@@ -34,7 +34,7 @@ What `azd up` does on upgrade:
 
 ## Upgrade via Console "Updates" pane
 
-Per the MCP-as-update-channel pattern from [PRP-05](../../../PRPs/active/csa-loom/PRP-05-mcp-server.md):
+Per the MCP-as-update-channel pattern from [PRP-05](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/PRPs/active/csa-loom/PRP-05-mcp-server.md):
 
 1. Console "Admin → Updates" pane shows current version + available
    updates (polled from Microsoft public release feed)

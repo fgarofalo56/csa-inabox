@@ -10,7 +10,7 @@ narrated post-deploy.
 ## Where it lives
 
 Per [ADR fiab-0008 deployment shape](../adr/0008-deployment-shape.md)
-+ [AMENDMENTS A8](../../../temp/fiab-prd/AMENDMENTS.md), the Wizard
++ [AMENDMENTS A8](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md), the Wizard
 is a route inside the deployed Loom Console at `/setup` — reached
 **after** the initial `azd up` or Deploy-to-Azure button install
 completes.

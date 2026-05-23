@@ -131,7 +131,7 @@ Fabric workloads / capabilities with v1 parity:
 
 ## References
 
-- PRD: [`temp/fiab-prd/03-scope.md`](../../../temp/fiab-prd/03-scope.md)
-- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](../../../temp/fiab-prd/AMENDMENTS.md) §A2
-- Research: [`temp/fiab-research/01-fabric-capability-surface.md`](../../../temp/fiab-research/01-fabric-capability-surface.md), [`02-gov-boundary-availability.md`](../../../temp/fiab-research/02-gov-boundary-availability.md), [`03-fabric-only-internals.md`](../../../temp/fiab-research/03-fabric-only-internals.md)
+- PRD: [`temp/fiab-prd/03-scope.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/03-scope.md)
+- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md) §A2
+- Research: [`temp/fiab-research/01-fabric-capability-surface.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/01-fabric-capability-surface.md), [`02-gov-boundary-availability.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/02-gov-boundary-availability.md), [`03-fabric-only-internals.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/03-fabric-only-internals.md)
 - Parent ADR: [`docs/adr/0010-fabric-strategic-target.md`](../../adr/0010-fabric-strategic-target.md)

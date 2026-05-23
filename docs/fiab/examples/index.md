@@ -104,7 +104,7 @@ Each example follows the structure:
 6. **Cost estimate** — sample $/month
 7. **Source code** — link to `examples/fiab-<name>/` folder
 
-Per [PRP-14](../../../PRPs/active/csa-loom/PRP-14-examples-port-wave1.md)
+Per [PRP-14](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/PRPs/active/csa-loom/PRP-14-examples-port-wave1.md)
 for the build plan.
 
 ## Source code

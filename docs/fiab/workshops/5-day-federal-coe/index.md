@@ -29,7 +29,7 @@ FedRAMP / IL4 / IL5 / ITAR / CMMC compliance.
 
 ## Five days
 
-### [Day 1 — Foundation & Deploy](day-1-foundation.md)
+### Day 1 — Foundation & Deploy
 
 Kickoff. Loom overview + per-boundary matrix walkthrough. Customer
 environment readiness verification. Marketplace install (recorded
@@ -38,7 +38,7 @@ Validation: Console operational.
 
 **Homework**: Read `docs/fiab/governance/` overview.
 
-### [Day 2 — Ingest & Mirroring & Catalog](day-2-ingest.md)
+### Day 2 — Ingest & Mirroring & Catalog
 
 Ingest patterns review. Mirroring Engine deep-dive (Debezium + Spark
 Structured Streaming + Delta MERGE). Catalog overlay (UC tags or
@@ -47,7 +47,7 @@ Purview-primary in Gov-IL4). Workspace identity + RBAC patterns.
 **Homework**: Identify a real customer workload to use as week's case
 study.
 
-### [Day 3 — Transform & Lakehouse & Warehouse](day-3-transform.md)
+### Day 3 — Transform & Lakehouse & Warehouse
 
 Databricks notebook tour + dbt integration. Medallion (Bronze →
 Silver → Gold) on customer's chosen workload — hands-on. Synapse
@@ -56,7 +56,7 @@ Gov). KQL exploration on real-time data.
 
 **Homework**: Customer commits workload transform notebooks to Git.
 
-### [Day 4 — BI & AI & Direct Lake & Data Agents](day-4-bi-ai.md)
+### Day 4 — BI & AI & Direct Lake & Data Agents
 
 Semantic model authoring in Power BI Desktop. TMDL Git workflow.
 Direct-Lake-Shim configuration + refresh latency demo (honest
@@ -65,7 +65,7 @@ Activator rule design. Loom Copilot tour.
 
 **Homework**: Customer prepares Day-5 readout slides.
 
-### [Day 5 — Operate & Govern & Forward-Migrate](day-5-operate.md)
+### Day 5 — Operate & Govern & Forward-Migrate
 
 Monitoring Hub. Cost management patterns. DR drill (simulated region
 failover). Forward migration planning (`fiab-migrate snapshot` demo,

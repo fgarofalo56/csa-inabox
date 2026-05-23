@@ -103,8 +103,8 @@ Backlog items revisited after Loom v1 + v1.1 mature:
 
 ## References
 
-- PRD: [`temp/fiab-prd/07-deployment.md`](../../../temp/fiab-prd/07-deployment.md)
-- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](../../../temp/fiab-prd/AMENDMENTS.md) §A4
-- Research: [`temp/fiab-research/05-eslz-marketplace.md`](../../../temp/fiab-research/05-eslz-marketplace.md) (kept for v1.1 reference)
+- PRD: [`temp/fiab-prd/07-deployment.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/07-deployment.md)
+- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md) §A4
+- Research: [`temp/fiab-research/05-eslz-marketplace.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/05-eslz-marketplace.md) (kept for v1.1 reference)
 - Backlog: PRP-10 (Marketplace Managed App package) — deferred
 - Build: PRP-02 (Platform Bicep) + PRP-11 (Deploy validation workflows)

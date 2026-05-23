@@ -131,7 +131,7 @@ When UC managed reaches Gov-GA, ship the **catalog migration tool**
 
 ## References
 
-- PRD: [`temp/fiab-prd/04-reference-architecture.md`](../../../temp/fiab-prd/04-reference-architecture.md) §4.4
-- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](../../../temp/fiab-prd/AMENDMENTS.md) §A1-A5
-- Research: [`temp/fiab-research/04-catalog-strategy.md`](../../../temp/fiab-research/04-catalog-strategy.md)
+- PRD: [`temp/fiab-prd/04-reference-architecture.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/04-reference-architecture.md) §4.4
+- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md) §A1-A5
+- Research: [`temp/fiab-research/04-catalog-strategy.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/04-catalog-strategy.md)
 - Parent ADR: [`docs/adr/0006-purview-over-atlas.md`](../../adr/0006-purview-over-atlas.md) — refined here for the Loom-in-Gov context

@@ -31,7 +31,7 @@ the existing csa-inabox copilot scaffold.
 - **Inference**: Azure OpenAI per boundary
 - **Chat backend**: extended `azure-functions/copilot-chat/function_app.py`
   with `/api/loom-chat` and per-context endpoints
-- **Identity**: OBO throughout (per [AMENDMENTS A15](../../../temp/fiab-prd/AMENDMENTS.md))
+- **Identity**: OBO throughout (per [AMENDMENTS A15](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md))
 - **Security**: rate limiting, PII redaction, content safety,
   telemetry, feedback loops — all inherited from existing
   copilot-chat infrastructure

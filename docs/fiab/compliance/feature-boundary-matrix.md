@@ -123,6 +123,6 @@ Legend: ✅ available · ⚠ available with workaround · ❌ not available
 ## Related
 
 - Reference: [Per-boundary dispatch matrix](../architecture.md#per-boundary-dispatch-matrix)
-- Source: [`temp/fiab-research/02-gov-boundary-availability.md`](../../../temp/fiab-research/02-gov-boundary-availability.md)
+- Source: [`temp/fiab-research/02-gov-boundary-availability.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/02-gov-boundary-availability.md)
 - Compliance: [Commercial](commercial.md), [GCC](gcc.md), [GCC-H](gcc-high.md), [IL5](dod-il5.md)
 - Defender workaround: [Defender AI workaround](defender-ai-workaround.md)

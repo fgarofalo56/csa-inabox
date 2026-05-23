@@ -107,4 +107,4 @@ or CLI (v1):
 - Workload: [Direct Lake parity](../workloads/direct-lake-parity.md)
 - Build PRP: PRP-08
 - Tutorial: [Tutorial 03 — Direct Lake parity](../tutorials/03-direct-lake-parity.md)
-- Research: [`temp/fiab-research/03-fabric-only-internals.md` §1](../../../temp/fiab-research/03-fabric-only-internals.md)
+- Research: [`temp/fiab-research/03-fabric-only-internals.md` §1](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/03-fabric-only-internals.md)

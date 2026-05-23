@@ -89,7 +89,7 @@ Per PRP-09:
 ### Identity passthrough (OBO)
 
 Per [ADR fiab-0009](../adr/0009-copilot-orchestration.md) and
-[AMENDMENTS A15](../../../temp/fiab-prd/AMENDMENTS.md): every tool
+[AMENDMENTS A15](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md): every tool
 call carries the caller's Entra token. RLS / CLS / object-level
 security apply naturally because the underlying engine (Databricks
 SQL, Synapse Serverless, ADX, Power BI XMLA) honors caller identity.

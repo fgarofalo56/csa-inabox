@@ -66,7 +66,7 @@ underneath:
 
 ## How CSA Loom relates to other CSA accelerators
 
-The [API-First Data Strategy accelerator](../api-first/index.md)
+The **API-First Data Strategy accelerator** (see [solution-store index](../index.md))
 covers the integration layer (APIM + Dataverse + cross-platform
 APIs). CSA Loom covers the analytics + lakehouse + BI layer for
 audit-boundary-blocked customers.

@@ -127,8 +127,8 @@ v1.1 panes:
 
 ## References
 
-- PRD: [`temp/fiab-prd/06-custom-apps.md`](../../../temp/fiab-prd/06-custom-apps.md) §6.1
-- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](../../../temp/fiab-prd/AMENDMENTS.md) §A3
+- PRD: [`temp/fiab-prd/06-custom-apps.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/06-custom-apps.md) §6.1
+- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md) §A3
 - Parent ADR: [`docs/adr/0014-msal-bff-auth-pattern.md`](../../adr/0014-msal-bff-auth-pattern.md) — Loom inherits this pattern
 - External: [Fluent UI v9 docs](https://react.fluentui.dev/), [Next.js 14 App Router](https://nextjs.org/docs)
 - Build: PRP-03 — `apps/fiab-console/`

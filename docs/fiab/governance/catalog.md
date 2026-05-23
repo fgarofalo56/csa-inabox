@@ -61,5 +61,5 @@ reverse-sync job (Logic App + Function — community pattern).
 
 - ADR: [fiab-0003 Catalog layering](../adr/0003-catalog-layering.md)
 - Build PRP: PRP-12 — Catalog wiring
-- Research: [`temp/fiab-research/04-catalog-strategy.md`](../../../temp/fiab-research/04-catalog-strategy.md)
+- Research: [`temp/fiab-research/04-catalog-strategy.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/04-catalog-strategy.md)
 - Parent: [Microsoft Purview Guide](../../guides/purview.md), [Unity Catalog Guide](../../guides/databricks-unity-catalog.md)

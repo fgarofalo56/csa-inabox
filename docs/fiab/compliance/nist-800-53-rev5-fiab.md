@@ -83,7 +83,7 @@ specific NIST 800-53 Rev 5 control families. Extends parent
 
 ### IR-4 Incident Handling
 
-- Runbook library at [`docs/fiab/runbooks/`](../runbooks/)
+- Runbook library at [runbooks section](../runbooks/deploy-failure.md)
 - Sentinel automation rules can trigger Logic App responses
 
 ### SC-7 Boundary Protection

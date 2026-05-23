@@ -2,7 +2,7 @@
 
 Day-2 operations for CSA Loom: capacity management, monitoring, cost,
 DR, upgrades, forward migration. Customer ops teams can run Loom in
-production using this section + the [runbooks](../runbooks).
+production using this section + the [runbooks](../runbooks/deploy-failure.md).
 
 ## Topics
 
@@ -54,7 +54,7 @@ production using this section + the [runbooks](../runbooks).
 
 ## Runbook index
 
-The full runbook library is at [`docs/fiab/runbooks/`](../runbooks/).
+The full runbook library is at [runbooks section](../runbooks/deploy-failure.md).
 Common patterns:
 
 | Runbook | When to use |

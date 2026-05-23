@@ -105,7 +105,7 @@ in azd CLI prompts):
 
 ## References
 
-- PRD: [`temp/fiab-prd/04-reference-architecture.md`](../../../temp/fiab-prd/04-reference-architecture.md) §4.2
-- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](../../../temp/fiab-prd/AMENDMENTS.md) §A5
+- PRD: [`temp/fiab-prd/04-reference-architecture.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/04-reference-architecture.md) §4.2
+- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md) §A5
 - External: [Microsoft CAF Data Landing Zones](https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/data-landing-zone), [Azure/data-management-zone](https://github.com/Azure/data-management-zone), [Azure/data-landing-zone](https://github.com/Azure/data-landing-zone)
 - Build: PRP-02 — `platform/fiab/bicep/modules/admin-plane/` + `landing-zone/`

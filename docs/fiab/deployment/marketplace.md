@@ -2,7 +2,7 @@
 
 > **CSA Loom v1 does NOT ship an Azure Marketplace Managed Application
 > listing.** Per [ADR fiab-0008](../adr/0008-deployment-shape.md) and
-> [AMENDMENTS A4](../../../temp/fiab-prd/AMENDMENTS.md), the Marketplace
+> [AMENDMENTS A4](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md), the Marketplace
 > surface + pricing model are explicitly deferred to backlog. v1 ships
 > as `azd up` + Deploy-to-Azure button only.
 
@@ -78,6 +78,6 @@ re-architecture.
 ## Related
 
 - ADR: [fiab-0008 Deployment shape](../adr/0008-deployment-shape.md)
-- Amendments: [`temp/fiab-prd/AMENDMENTS.md` §A4](../../../temp/fiab-prd/AMENDMENTS.md)
+- Amendments: [`temp/fiab-prd/AMENDMENTS.md` §A4](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md)
 - Backlog PRP: PRP-10 (Marketplace Managed App package)
-- Research: [`temp/fiab-research/05-eslz-marketplace.md`](../../../temp/fiab-research/05-eslz-marketplace.md) (kept for v1.1+ reference)
+- Research: [`temp/fiab-research/05-eslz-marketplace.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/05-eslz-marketplace.md) (kept for v1.1+ reference)

@@ -117,8 +117,8 @@ OR tables marked "DirectQuery only" by the customer.
 
 ## References
 
-- PRD: [`temp/fiab-prd/05-workload-parity.md`](../../../temp/fiab-prd/05-workload-parity.md) §5.9, [`06-custom-apps.md`](../../../temp/fiab-prd/06-custom-apps.md) §6.5
-- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](../../../temp/fiab-prd/AMENDMENTS.md) §A6
-- Research: [`temp/fiab-research/03-fabric-only-internals.md`](../../../temp/fiab-research/03-fabric-only-internals.md) §1
+- PRD: [`temp/fiab-prd/05-workload-parity.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/05-workload-parity.md) §5.9, [`06-custom-apps.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/06-custom-apps.md) §6.5
+- Amendments: [`temp/fiab-prd/AMENDMENTS.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md) §A6
+- Research: [`temp/fiab-research/03-fabric-only-internals.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/03-fabric-only-internals.md) §1
 - External: [Microsoft Learn — Direct Lake overview](https://learn.microsoft.com/fabric/fundamentals/direct-lake-overview), [SQLBI Direct Lake deep-dives](https://www.sqlbi.com/blog/marco/2025/05/13/direct-lake-vs-import-vs-direct-lakeimport-fabric-semantic-models-may-2025/)
 - Build: PRP-08 — `apps/fiab-direct-lake-shim/`

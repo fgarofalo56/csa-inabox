@@ -123,7 +123,7 @@ on boundary.
 
 ## References
 
-- PRD: [`temp/fiab-prd/06-custom-apps.md`](../../../temp/fiab-prd/06-custom-apps.md) §6.2, [`07-deployment.md`](../../../temp/fiab-prd/07-deployment.md)
-- Research: [`temp/fiab-research/06-copilot-driven-deploy.md`](../../../temp/fiab-research/06-copilot-driven-deploy.md)
+- PRD: [`temp/fiab-prd/06-custom-apps.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/06-custom-apps.md) §6.2, [`07-deployment.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/07-deployment.md)
+- Research: [`temp/fiab-research/06-copilot-driven-deploy.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/06-copilot-driven-deploy.md)
 - External: [Foundry Agent Service overview](https://learn.microsoft.com/azure/foundry/agents/overview), [MAF launch](https://devblogs.microsoft.com/agent-framework/), [Foundry region support](https://learn.microsoft.com/azure/foundry/reference/region-support)
 - Build: PRP-04 — `apps/fiab-setup-orchestrator/` + Console `/setup` route

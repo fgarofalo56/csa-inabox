@@ -117,7 +117,7 @@ Latency target: 5-30 s end-to-end (matches Fabric Reflex).
 
 ## References
 
-- PRD: [`temp/fiab-prd/05-workload-parity.md`](../../../temp/fiab-prd/05-workload-parity.md) §5.6, [`06-custom-apps.md`](../../../temp/fiab-prd/06-custom-apps.md) §6.3
-- Research: [`temp/fiab-research/03-fabric-only-internals.md`](../../../temp/fiab-research/03-fabric-only-internals.md) §3
+- PRD: [`temp/fiab-prd/05-workload-parity.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/05-workload-parity.md) §5.6, [`06-custom-apps.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/06-custom-apps.md) §6.3
+- Research: [`temp/fiab-research/03-fabric-only-internals.md`](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-research/03-fabric-only-internals.md) §3
 - External: [Microsoft Learn — Activator overview](https://learn.microsoft.com/fabric/real-time-intelligence/data-activator/activator-introduction), [NRules docs](https://github.com/NRules/NRules)
 - Build: PRP-06 — `apps/fiab-activator-engine/`
