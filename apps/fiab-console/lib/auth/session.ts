@@ -16,7 +16,9 @@ const TAG_LEN = 16;
 function getKey(): Buffer {
   const secret = process.env.SESSION_SECRET;
   if (!secret) throw new Error('SESSION_SECRET is not configured');
-  return crypto.hkdfSync('sha256', Buffer.from(secret, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32) as Buffer;
+  // hkdfSync returns ArrayBuffer in newer @types/node; wrap in Buffer for AES.
+  const ab = crypto.hkdfSync('sha256', Buffer.from(secret, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32);
+  return Buffer.from(ab as ArrayBuffer);
 }
 
 interface SessionPayload {
