@@ -24,10 +24,21 @@ import logging
 from dataclasses import dataclass
 from typing import Iterator
 
-from azure.identity import DefaultAzureCredential
-from azure.storage.filedatalake import DataLakeServiceClient
-import pyarrow as pa
-import pyarrow.parquet as pq
+try:
+    from azure.identity import DefaultAzureCredential
+    from azure.storage.filedatalake import DataLakeServiceClient
+except ImportError:
+    # Test environments + linters may not have the Azure SDK installed.
+    # Raised at instantiation time, not import.
+    DefaultAzureCredential = None  # type: ignore[assignment,misc]
+    DataLakeServiceClient = None  # type: ignore[assignment,misc]
+
+try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+except ImportError:
+    pa = None  # type: ignore[assignment]
+    pq = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +72,11 @@ class LandingZonePublisher:
 
     def __init__(self, target: LandingZoneTarget, credential: object | None = None):
         self.target = target
+        if DataLakeServiceClient is None:
+            raise RuntimeError(
+                "azure-storage-file-datalake not installed. "
+                "Install with `pip install azure-storage-file-datalake azure-identity`."
+            )
         self.cred = credential or DefaultAzureCredential()
         suffix = "core.windows.net"  # production resolves per cloud
         self.dfs = DataLakeServiceClient(
@@ -72,8 +88,15 @@ class LandingZonePublisher:
     def ensure_metadata(self) -> None:
         """Write _metadata.json once (no-op if it exists with same keys)."""
         path = f"{self.target.base_path()}/_metadata.json"
+        existing = None
         try:
             existing = self.fs.get_file_client(path).download_file().readall()
+        except Exception:
+            # File doesn't exist (or read failed for transient reasons);
+            # fall through to write a fresh metadata file below.
+            pass
+
+        if existing is not None:
             parsed = json.loads(existing)
             if parsed.get("keyColumns") == self.target.key_columns:
                 return
@@ -82,16 +105,17 @@ class LandingZonePublisher:
                 f"({parsed.get('keyColumns')}) than declared "
                 f"({self.target.key_columns}). Manual reconciliation required."
             )
-        except Exception:
-            metadata = {
-                "keyColumns": self.target.key_columns,
-                "protocolVersion": "1.0",
-                "publisher": "csa-loom-publisher-sdk",
-            }
-            client = self.fs.get_file_client(path)
-            payload = json.dumps(metadata, indent=2).encode("utf-8")
-            client.upload_data(payload, overwrite=True)
-            logger.info("Wrote metadata to %s", path)
+
+        # Write fresh metadata
+        metadata = {
+            "keyColumns": self.target.key_columns,
+            "protocolVersion": "1.0",
+            "publisher": "csa-loom-publisher-sdk",
+        }
+        client = self.fs.get_file_client(path)
+        payload = json.dumps(metadata, indent=2).encode("utf-8")
+        client.upload_data(payload, overwrite=True)
+        logger.info("Wrote metadata to %s", path)
 
     def next_sequence(self) -> int:
         """Find the highest existing sequence number and return the next one.

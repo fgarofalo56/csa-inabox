@@ -31,8 +31,31 @@ env:
   CSA_LOOM_CAPACITY_SKU: F8
 
 jobs:
+  precheck:
+    name: Verify Gov secrets are configured
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          C: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+          S: ${{ secrets.AZURE_GOV_CLIENT_SECRET }}
+          T: ${{ secrets.AZURE_GOV_TENANT_ID }}
+          U: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" ]]; then
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "::warning::AZURE_GOV_* secrets not configured — skipping."
+            echo "::warning::Bootstrap per docs/fiab/runbooks/secrets-bootstrap.md"
+          else
+            echo "configured=true" >> $GITHUB_OUTPUT
+          fi
+
   deploy-validate:
     name: Deploy + validate CSA Loom in GCC-High
+    needs: precheck
+    if: needs.precheck.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: gcc-high-deploy   # requires manual approval
