@@ -5,7 +5,7 @@
 # Build: docker build -t loom-mcp .
 # Run: docker run -p 8080:8080 -e AZURE_CLOUD=AzureCloud loom-mcp
 
-FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0-preview AS build
 WORKDIR /src
 
 # Vendor the Microsoft Azure MCP server source.
@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 WORKDIR /src/ms-mcp/servers/Azure.Mcp.Server
 RUN dotnet publish -c Release -o /app --no-self-contained
 
-FROM mcr.microsoft.com/dotnet/aspnet:9.0
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-preview
 WORKDIR /app
 COPY --from=build /app .
 COPY ./config/ /app/config/
