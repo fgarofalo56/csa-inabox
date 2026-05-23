@@ -243,7 +243,10 @@ module aiDefense 'ai-defense.bicep' = {
     defenderForAIEnabled: defenderForAIEnabled
     lawId: monitoring.outputs.lawId
     lawName: monitoring.outputs.lawName
-    notificationWebhookKvRef: '@Microsoft.KeyVault(VaultName=${last(split(keyvault.outputs.keyVaultUri, \'/\'))};SecretName=ops-teams-webhook)'
+    // Key Vault reference syntax (operator stores `ops-teams-webhook`
+    // secret in the Loom Key Vault). Vault name passed in directly to
+    // avoid Bicep string-escape issues with the split expression.
+    notificationWebhookKvRef: '@Microsoft.KeyVault(VaultName=${keyvault.outputs.keyVaultName};SecretName=ops-teams-webhook)'
     complianceTags: complianceTags
   }
 }
