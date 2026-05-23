@@ -267,5 +267,6 @@ up with hybrid topologies.
 ## See also
 
 - ← Previous: [Microsoft Fabric Platform Guide](../guides/microsoft-fabric.md)
+- → Sibling: [**CSA Loom vs Microsoft Fabric**](csa-loom-vs-fabric.md) — the productized form of csa-inabox (this is the page federal customers should read first)
 - → Next: [Migration paths](../migrations/README.md)
 - ⌂ Index: [Documentation home](../index.md)

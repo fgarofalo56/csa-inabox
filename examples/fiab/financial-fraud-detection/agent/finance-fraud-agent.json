@@ -1,0 +1,52 @@
+{
+  "id": "agent-fraud-analyst",
+  "workspaceId": "ws-fraud-example",
+  "name": "Fraud Analyst Agent",
+  "description": "Answers questions about fraud signals, scored transactions, and merchant risk over the silver.fraud_scored Delta table.",
+  "instructions": "You are an analyst working in a financial-crimes operations team. Your scope is the silver.fraud_scored table (per-transaction with fraud_score) and the silver.fraud_score_ma_5min ADX table (per-merchant rolling 5-minute average). When the user asks 'which merchants spiked', filter ADX rows where Value > 0.75 in the last hour and return merchant_id + max Value + amount_total. Always return a brief explanatory sentence ABOVE the data. If the user asks for PII you cannot return (cardholder names), refuse politely and suggest aggregating by merchant_id instead.",
+  "dataSources": [
+    {
+      "type": "lakehouse",
+      "id": "loom-fraud-lakehouse",
+      "engine": "databricks-sql",
+      "schemaRef": "silver.fraud_scored",
+      "instructions": "silver.fraud_scored has columns: txn_id, merchant_id, card_id, amount, mcc, txn_ts, country_iso, fraud_score (0-1)."
+    },
+    {
+      "type": "adx",
+      "cluster": "adx-csa-loom-shared.eastus2",
+      "database": "loomdb-default",
+      "instructions": "ADX has table fraud_score_ma_5min with columns: merchant_id, Timestamp, Value (the MA), amount_total."
+    }
+  ],
+  "exampleQueries": [
+    {
+      "question": "Which merchants spiked in the last hour?",
+      "language": "kql",
+      "query": "fraud_score_ma_5min | where Timestamp > ago(1h) and Value > 0.75 | summarize max_score = max(Value), total_amount = sum(amount_total) by merchant_id | order by max_score desc | take 50"
+    },
+    {
+      "question": "What's the daily fraud-score average for the last 7 days?",
+      "language": "sql",
+      "query": "SELECT DATE(txn_ts) AS day, AVG(fraud_score) AS avg_score, COUNT(*) AS txn_count, SUM(amount) AS total_amount FROM silver.fraud_scored WHERE txn_ts >= CURRENT_DATE - INTERVAL 7 DAY GROUP BY DATE(txn_ts) ORDER BY day DESC"
+    },
+    {
+      "question": "Top 10 risky merchants by total scored amount this week",
+      "language": "sql",
+      "query": "SELECT merchant_id, SUM(amount) AS total_amount, AVG(fraud_score) AS avg_score, COUNT(*) AS txn_count FROM silver.fraud_scored WHERE txn_ts >= CURRENT_DATE - INTERVAL 7 DAY AND fraud_score > 0.5 GROUP BY merchant_id ORDER BY total_amount DESC LIMIT 10"
+    }
+  ],
+  "verifiedAnswers": [
+    {
+      "question": "How many transactions did we score yesterday?",
+      "language": "sql",
+      "query": "SELECT COUNT(*) AS txn_count FROM silver.fraud_scored WHERE txn_ts >= CURRENT_DATE - INTERVAL 1 DAY AND txn_ts < CURRENT_DATE"
+    }
+  ],
+  "fieldDescriptions": {
+    "silver.fraud_scored.fraud_score": "Probability of fraud (0=safe, 1=certain fraud). Threshold for action review is 0.5; threshold for auto-block is 0.9.",
+    "silver.fraud_scored.mcc": "Merchant category code per ISO 18245. mcc=4111 means transportation, mcc=5411 means grocery.",
+    "fraud_score_ma_5min.Value": "5-minute rolling average of fraud_score per merchant; activator rule fires when > 0.75."
+  },
+  "sensitivityPolicy": "Block agent on tables/columns tagged 'PII-restricted' (card_pan, ssn, cardholder_name). For aggregate queries, allow grouping by merchant_id, card_bin, country_iso. For row-level queries, require justification."
+}
