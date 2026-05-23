@@ -1,0 +1,157 @@
+'use client';
+
+import { useState } from 'react';
+import {
+  Title2,
+  Body1,
+  makeStyles,
+  tokens,
+  Button,
+  Textarea,
+  Dropdown,
+  Option,
+} from '@fluentui/react-components';
+import { Add24Regular, Play24Filled, Delete24Regular } from '@fluentui/react-icons';
+
+interface Cell {
+  id: string;
+  kind: 'code' | 'markdown';
+  language: 'python' | 'scala' | 'sql' | 'r';
+  source: string;
+  output?: string;
+  running?: boolean;
+}
+
+const useStyles = makeStyles({
+  root: { display: 'flex', flexDirection: 'column', gap: '12px' },
+  header: { display: 'flex', alignItems: 'center', gap: '12px' },
+  spacer: { flex: 1 },
+  cell: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '4px',
+    overflow: 'hidden',
+  },
+  cellHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '6px 12px',
+    backgroundColor: tokens.colorNeutralBackground2,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  cellSrc: {
+    fontFamily: 'Cascadia Code, Consolas, monospace',
+    border: 'none',
+    width: '100%',
+    padding: '12px',
+  },
+  cellOut: {
+    fontFamily: 'Cascadia Code, Consolas, monospace',
+    fontSize: '13px',
+    padding: '12px',
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+    whiteSpace: 'pre-wrap',
+  },
+});
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+export function NotebookPane() {
+  const styles = useStyles();
+  const [cells, setCells] = useState<Cell[]>([
+    {
+      id: uid(),
+      kind: 'code',
+      language: 'python',
+      source: '# Read bronze.orders into a Spark DataFrame\ndf = spark.read.table("bronze.orders")\ndf.show(5)',
+    },
+  ]);
+
+  function addCell() {
+    setCells((c) => [...c, { id: uid(), kind: 'code', language: 'python', source: '' }]);
+  }
+
+  function updateCell(id: string, patch: Partial<Cell>) {
+    setCells((c) => c.map((cell) => (cell.id === id ? { ...cell, ...patch } : cell)));
+  }
+
+  function deleteCell(id: string) {
+    setCells((c) => c.filter((cell) => cell.id !== id));
+  }
+
+  async function runCell(cell: Cell) {
+    updateCell(cell.id, { running: true });
+    try {
+      const res = await fetch('/api/notebook/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: cell.language, source: cell.source }),
+      });
+      const data = await res.json();
+      updateCell(cell.id, { output: data.output ?? data.error, running: false });
+    } catch (e) {
+      updateCell(cell.id, { output: String(e), running: false });
+    }
+  }
+
+  return (
+    <div className={styles.root}>
+      <div className={styles.header}>
+        <Title2>Notebook</Title2>
+        <div className={styles.spacer} />
+        <Button appearance="primary" icon={<Add24Regular />} onClick={addCell}>
+          Add cell
+        </Button>
+      </div>
+
+      {cells.map((cell) => (
+        <div key={cell.id} className={styles.cell}>
+          <div className={styles.cellHeader}>
+            <Dropdown
+              size="small"
+              value={cell.language}
+              selectedOptions={[cell.language]}
+              onOptionSelect={(_, d) =>
+                updateCell(cell.id, { language: d.optionValue as Cell['language'] })
+              }
+            >
+              <Option value="python">Python</Option>
+              <Option value="scala">Scala</Option>
+              <Option value="sql">SQL</Option>
+              <Option value="r">R</Option>
+            </Dropdown>
+            <div style={{ flex: 1 }} />
+            <Button
+              size="small"
+              icon={<Play24Filled />}
+              appearance="primary"
+              onClick={() => runCell(cell)}
+              disabled={cell.running}
+            >
+              {cell.running ? 'Running...' : 'Run'}
+            </Button>
+            <Button
+              size="small"
+              icon={<Delete24Regular />}
+              appearance="transparent"
+              onClick={() => deleteCell(cell.id)}
+              aria-label="Delete cell"
+            />
+          </div>
+          <Textarea
+            className={styles.cellSrc}
+            value={cell.source}
+            onChange={(_, d) => updateCell(cell.id, { source: d.value })}
+            rows={6}
+            spellCheck={false}
+          />
+          {cell.output && <pre className={styles.cellOut}>{cell.output}</pre>}
+        </div>
+      ))}
+    </div>
+  );
+}

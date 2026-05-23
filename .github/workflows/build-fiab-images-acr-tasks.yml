@@ -1,0 +1,104 @@
+name: build-fiab-images-acr-tasks
+
+# CSA Loom — image build via Azure Container Registry Tasks.
+#
+# Why this exists alongside build-fiab-images.yml: the customer's
+# Loom ACR is provisioned with publicNetworkAccess=Disabled (private
+# endpoint only), so external GitHub runners can't reach it for
+# `docker push`. ACR Tasks run *inside* Azure and reach ACR via
+# its internal network — this avoids the chicken-and-egg of needing
+# a self-hosted runner inside the VNet just to push images.
+#
+# Each app is built via `az acr build`. The source is uploaded as a
+# tar archive to the Task and Docker builds inside ACR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_override:
+        description: 'Image tag (default: v0.1)'
+        type: string
+        default: v0.1
+      apps:
+        description: 'Comma-separated app list, or "all"'
+        type: string
+        default: all
+  push:
+    branches: [main]
+    paths:
+      - 'apps/fiab-*/**'
+      - '.github/workflows/build-fiab-images-acr-tasks.yml'
+
+permissions:
+  contents: read
+
+env:
+  AZURE_LOCATION: eastus2
+
+jobs:
+  resolve:
+    name: Resolve ACR + filter apps
+    runs-on: ubuntu-latest
+    outputs:
+      acr_name: ${{ steps.acr.outputs.acr_name }}
+      app_matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - id: acr
+        run: |
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          ACR=$(az acr list --resource-group "$RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv)
+          if [[ -z "$ACR" ]]; then echo "::error::ACR not found"; exit 1; fi
+          echo "acr_name=$ACR" >> "$GITHUB_OUTPUT"
+      - id: matrix
+        run: |
+          INPUT="${{ inputs.apps || 'all' }}"
+          if [[ "$INPUT" == "all" ]]; then
+            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"}]'
+          else
+            APPS=$(echo "$INPUT" | jq -R 'split(",") | map({name: ., ctx: ("./apps/fiab-" + (sub("^loom-"; "") | sub("loom-mcp"; "mcp-config") | sub("loom-setup-orchestrator"; "setup-orchestrator") | sub("loom-activator"; "activator-engine") | sub("loom-mirroring"; "mirroring-engine") | sub("loom-direct-lake-shim"; "direct-lake-shim")))})')
+          fi
+          echo "matrix={\"include\":$APPS}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.name }} via ACR Tasks
+    needs: resolve
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.resolve.outputs.app_matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Build + push via ACR Tasks
+        run: |
+          set -e
+          TAG="${{ inputs.tag_override || 'v0.1' }}"
+          az acr build \
+            --registry "${{ needs.resolve.outputs.acr_name }}" \
+            --image "${{ matrix.name }}:${TAG}" \
+            --image "${{ matrix.name }}:${{ github.sha }}" \
+            --image "${{ matrix.name }}:latest" \
+            --file "${{ matrix.ctx }}/Dockerfile" \
+            "${{ matrix.ctx }}"
+          echo "::notice::Built ${{ matrix.name }}:${TAG} via ACR Tasks"
