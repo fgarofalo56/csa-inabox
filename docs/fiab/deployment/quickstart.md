@@ -29,15 +29,15 @@ azd auth login
 az account set --subscription <YOUR-SUBSCRIPTION-ID>
 ```
 
-## Step 2 — Create the Entra group for FiaB Admins (5 min)
+## Step 2 — Create the Entra group for Loom Admins (5 min)
 
 ```bash
 az ad group create \
-  --display-name "FiaB Admins" \
+  --display-name "Loom Admins" \
   --mail-nickname "fiab-admins"
 
 # Add yourself
-GROUP_ID=$(az ad group show --group "FiaB Admins" --query id -o tsv)
+GROUP_ID=$(az ad group show --group "Loom Admins" --query id -o tsv)
 USER_ID=$(az ad signed-in-user show --query id -o tsv)
 az ad group member add --group $GROUP_ID --member-id $USER_ID
 ```

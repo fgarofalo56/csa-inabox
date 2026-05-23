@@ -4,11 +4,11 @@
 
 | Role | Scope | Permissions |
 |---|---|---|
-| FiaB Admins | Org-level Entra group | Full access; manage Admin Plane + all DLZs |
-| FiaB Domain Stewards | Per-domain Entra group | Govern a domain's workspaces |
-| FiaB Workspace Admins | Per-workspace Entra group | Manage a workspace (members, settings) |
-| FiaB Workspace Members | Per-workspace Entra group | Read + write within a workspace |
-| FiaB Workspace Viewers | Per-workspace Entra group | Read-only within a workspace |
+| Loom Admins | Org-level Entra group | Full access; manage Admin Plane + all DLZs |
+| Loom Domain Stewards | Per-domain Entra group | Govern a domain's workspaces |
+| Loom Workspace Admins | Per-workspace Entra group | Manage a workspace (members, settings) |
+| Loom Workspace Members | Per-workspace Entra group | Read + write within a workspace |
+| Loom Workspace Viewers | Per-workspace Entra group | Read-only within a workspace |
 | Custom roles | Composed | Grants on specific items + RLS / CLS predicates |
 
 All roles are **Entra groups** managed by the customer's Entra

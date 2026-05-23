@@ -5,7 +5,7 @@ Create your first CSA Loom workspace via the Console. **15 minutes.**
 ## Prerequisites
 
 - Loom deployed (see [Quick Start](../deployment/quickstart.md))
-- You are a member of the `FiaB Admins` Entra group OR have
+- You are a member of the `Loom Admins` Entra group OR have
   `Workspace Creator` role
 - Console URL open in your browser
 
@@ -26,7 +26,7 @@ Fill the form:
 - **Domain**: Select an existing domain or `<unassigned>`
 - **Primary use case**: `Data Engineering` (drives default settings)
 - **Admin Entra group**: pick the group whose members should admin
-  this workspace (you can use `FiaB Admins` for the tutorial)
+  this workspace (you can use `Loom Admins` for the tutorial)
 - **Capacity allocation**: `Small (F2-equivalent)` for the tutorial
 
 Click **Create**.

@@ -69,7 +69,7 @@ Purview (Gov-IL4) or Atlas (IL5).
 ## Honest gaps
 
 - **No engine-agnostic enforcement.** Fabric's OneLake Security
-  enforces RLS/CLS in the storage protocol; FiaB enforces at the
+  enforces RLS/CLS in the storage protocol; CSA Loom enforces at the
   engine layer. A user reading raw ABFS bypasses row/column filters.
   Mitigation: network-isolate storage (PE-only) + gate access through
   engines.

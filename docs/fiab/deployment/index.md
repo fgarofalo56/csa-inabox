@@ -95,7 +95,7 @@ Before you start, you need:
 | Item | Notes |
 |---|---|
 | Azure subscription with **Contributor + User Access Administrator** on the target sub | Single-sub mode needs one sub; multi-sub needs one per DLZ |
-| Microsoft Entra tenant with admin rights to create Entra groups + role assignments | Loom uses Entra groups for FiaB Admins / Workspace Admins / Domain Stewards |
+| Microsoft Entra tenant with admin rights to create Entra groups + role assignments | Loom uses Entra groups for Loom Admins / Workspace Admins / Domain Stewards |
 | Available **/16 IP range per DLZ** (private address space, peerable to Admin Plane hub) | Hub default `10.0.0.0/16`; DLZ defaults `10.N.0.0/16` |
 | `az` CLI installed (latest) | For `azd up` path |
 | `azd` CLI installed | For `azd up` path |

@@ -11,7 +11,7 @@ internal Marketplace so other workspaces / DLZs can request access.
 ## Prerequisites
 
 - Workspace with `noaa_silver_daily` table from Tutorial 02
-- Member of `FiaB Domain Stewards` group (or workspace Admin)
+- Member of `Loom Domain Stewards` group (or workspace Admin)
 - Another workspace in a different DLZ to request access from
   (for testing)
 

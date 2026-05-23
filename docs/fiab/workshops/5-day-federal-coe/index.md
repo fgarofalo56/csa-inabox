@@ -24,7 +24,7 @@ FedRAMP / IL4 / IL5 / ITAR / CMMC compliance.
 - M365 GCC-High tenant (for IL4) OR GCC tenant (for GCC mode)
 - Power BI Premium F-SKU capacity (or P-SKU for GCC)
 - Available CIDR ranges + ER/VPN connectivity
-- FiaB Admins Entra group created
+- Loom Admins Entra group created
 - ATO documentation reviewer available remotely Day 5
 
 ## Five days
