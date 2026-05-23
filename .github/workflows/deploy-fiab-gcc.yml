@@ -12,6 +12,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  issues: write
 
 env:
   AZURE_CLOUD: AzureCloud   # GCC = Azure public + GCC M365 identity

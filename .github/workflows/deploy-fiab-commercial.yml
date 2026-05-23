@@ -7,16 +7,12 @@ name: deploy-fiab-commercial
 on:
   schedule:
     - cron: '0 6 * * *'   # 06:00 UTC daily
-  pull_request:
-    paths:
-      - 'platform/fiab/bicep/**'
-      - 'platform/fiab/azd/**'
-      - 'apps/fiab-*/**'
   workflow_dispatch:
 
 permissions:
   id-token: write
   contents: read
+  issues: write
 
 env:
   AZURE_CLOUD: AzureCloud
