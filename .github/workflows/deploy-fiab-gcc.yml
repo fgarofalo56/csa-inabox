@@ -29,8 +29,31 @@ env:
   CSA_LOOM_CAPACITY_SKU: F8
 
 jobs:
+  precheck:
+    name: Verify GCC secrets are configured
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          C: ${{ secrets.AZURE_GCC_CLIENT_ID }}
+          S: ${{ secrets.AZURE_GCC_CLIENT_SECRET }}
+          T: ${{ secrets.AZURE_GCC_TENANT_ID }}
+          U: ${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}
+        run: |
+          if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" ]]; then
+            echo "configured=false" >> $GITHUB_OUTPUT
+            echo "::warning::AZURE_GCC_* secrets not configured — skipping."
+            echo "::warning::Bootstrap per docs/fiab/runbooks/secrets-bootstrap.md"
+          else
+            echo "configured=true" >> $GITHUB_OUTPUT
+          fi
+
   deploy-validate:
     name: Deploy + validate CSA Loom in GCC
+    needs: precheck
+    if: needs.precheck.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
