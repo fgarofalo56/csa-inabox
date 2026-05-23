@@ -21,6 +21,9 @@ param privateEndpointSubnetId string
 @description('Private DNS zone ID for vault')
 param privateDnsZoneVaultId string
 
+@description('Log Analytics workspace ID for diagnostic settings')
+param workspaceId string
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -122,6 +125,37 @@ resource hsm 'Microsoft.KeyVault/managedHSMs@2024-11-01' = if (hsmIsolated) {
 // =====================================================================
 // Outputs
 // =====================================================================
+
+// Diagnostic settings → standardized Loom LAW
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  scope: keyVault
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { categoryGroup: 'allLogs', enabled: true }
+      { categoryGroup: 'audit', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
+  }
+}
+
+resource diagHsm 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (hsmIsolated) {
+  scope: hsm
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { categoryGroup: 'allLogs', enabled: true }
+      { categoryGroup: 'audit', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
+  }
+}
 
 output keyVaultId string = keyVault.id
 output keyVaultName string = keyVault.name

@@ -23,6 +23,9 @@ param publicSubnetName string
 @allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
 param boundary string
 
+@description('Log Analytics workspace ID for diagnostic settings')
+param workspaceId string
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -67,6 +70,41 @@ resource workspace 'Microsoft.Databricks/workspaces@2024-09-01-preview' = {
 // - UC metastore wiring (if ucSupported)
 // - SQL Warehouse provisioning (via Databricks REST API post-deploy)
 // - Job + cluster definitions (deployed via dbx or asset bundles)
+
+// =====================================================================
+// Diagnostic settings → standardized Loom LAW
+// =====================================================================
+
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  scope: workspace
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { category: 'dbfs', enabled: true }
+      { category: 'clusters', enabled: true }
+      { category: 'accounts', enabled: true }
+      { category: 'jobs', enabled: true }
+      { category: 'notebook', enabled: true }
+      { category: 'ssh', enabled: true }
+      { category: 'workspace', enabled: true }
+      { category: 'secrets', enabled: true }
+      { category: 'sqlPermissions', enabled: true }
+      { category: 'instancePools', enabled: true }
+      { category: 'sqlanalytics', enabled: true }
+      { category: 'genie', enabled: true }
+      { category: 'globalInitScripts', enabled: true }
+      { category: 'iamRole', enabled: true }
+      { category: 'mlflowExperiment', enabled: true }
+      { category: 'featureStore', enabled: true }
+      { category: 'RemoteHistoryService', enabled: true }
+      { category: 'modelRegistry', enabled: true }
+      { category: 'repos', enabled: true }
+      { category: 'unityCatalog', enabled: true }
+      { category: 'gitCredentials', enabled: true }
+    ]
+  }
+}
 
 output workspaceId string = workspace.id
 output workspaceUrl string = 'https://${workspace.properties.workspaceUrl}'

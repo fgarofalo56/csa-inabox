@@ -28,6 +28,9 @@ param privateDnsZoneBlobId string
 @description('Private DNS zone ID for dfs')
 param privateDnsZoneDfsId string
 
+@description('Log Analytics workspace ID for diagnostic settings')
+param workspaceId string
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -158,6 +161,38 @@ resource peDfsDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@
   properties: {
     privateDnsZoneConfigs: [
       { name: 'dfs-zone', properties: { privateDnsZoneId: privateDnsZoneDfsId } }
+    ]
+  }
+}
+
+// =====================================================================
+// Diagnostic settings → standardized Loom LAW
+// =====================================================================
+
+resource diagAccount 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  scope: sa
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    metrics: [
+      { category: 'Transaction', enabled: true }
+      { category: 'Capacity', enabled: true }
+    ]
+  }
+}
+
+resource diagBlob 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  scope: bs
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { category: 'StorageRead', enabled: true }
+      { category: 'StorageWrite', enabled: true }
+      { category: 'StorageDelete', enabled: true }
+    ]
+    metrics: [
+      { category: 'Transaction', enabled: true }
     ]
   }
 }

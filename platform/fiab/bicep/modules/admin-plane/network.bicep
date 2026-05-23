@@ -19,6 +19,9 @@ param boundary string
 @allowed(['containerApps', 'aks'])
 param containerPlatform string
 
+@description('Log Analytics workspace ID for diagnostic settings (optional in first-pass deploy; re-apply once monitoring is provisioned)')
+param workspaceId string = ''
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -277,6 +280,46 @@ resource dnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06
 // =====================================================================
 // Outputs
 // =====================================================================
+
+// Diagnostic settings → standardized Loom LAW
+resource diagVnet 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
+  scope: hubVnet
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { category: 'VMProtectionAlerts', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
+  }
+}
+
+resource diagFw 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
+  scope: firewall
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { categoryGroup: 'allLogs', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
+  }
+}
+
+resource diagBastion 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
+  scope: bastion
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { category: 'BastionAuditLogs', enabled: true }
+    ]
+  }
+}
 
 output hubVnetId string = hubVnet.id
 output hubVnetName string = hubVnet.name

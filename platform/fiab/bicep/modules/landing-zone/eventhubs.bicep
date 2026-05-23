@@ -31,6 +31,9 @@ param privateEndpointSubnetId string
 @description('Private DNS zone ID for Service Bus / Event Hubs')
 param privateDnsZoneServicebusId string
 
+@description('Log Analytics workspace ID for diagnostic settings')
+param workspaceId string
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -87,6 +90,29 @@ resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@202
   properties: {
     privateDnsZoneConfigs: [
       { name: 'sb-zone', properties: { privateDnsZoneId: privateDnsZoneServicebusId } }
+    ]
+  }
+}
+
+// Diagnostic settings → standardized Loom LAW
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  scope: ns
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { category: 'ArchiveLogs', enabled: true }
+      { category: 'OperationalLogs', enabled: true }
+      { category: 'AutoScaleLogs', enabled: true }
+      { category: 'KafkaCoordinatorLogs', enabled: true }
+      { category: 'KafkaUserErrorLogs', enabled: true }
+      { category: 'EventHubVNetConnectionEvent', enabled: true }
+      { category: 'CustomerManagedKeyUserLogs', enabled: true }
+      { category: 'RuntimeAuditLogs', enabled: true }
+      { category: 'ApplicationMetricsLogs', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
     ]
   }
 }

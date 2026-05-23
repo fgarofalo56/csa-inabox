@@ -12,8 +12,9 @@ dependencies = [
   "azure-mgmt-resource>=23.2.0",
   "azure-mgmt-authorization>=4.0.0",
   "openai>=1.55.0",
-  "applicationinsights>=0.11.10",
-  "opencensus-ext-azure>=1.1.13",
+  "azure-monitor-opentelemetry>=1.6.0",
+  "opentelemetry-instrumentation-fastapi>=0.49b0",
+  "opentelemetry-instrumentation-httpx>=0.49b0",
 ]
 
 [project.optional-dependencies]

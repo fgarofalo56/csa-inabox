@@ -23,6 +23,12 @@ param capacitySku string
 @description('Admin Plane hub VNet ID for spoke peering')
 param adminPlaneHubVnetId string
 
+@description('Admin Plane Log Analytics workspace ID — every DLZ resource ships diagnostic settings here')
+param adminPlaneLawId string
+
+@description('Admin Plane App Insights connection string — every DLZ app emits telemetry here')
+param adminPlaneAppInsightsConnectionString string = ''
+
 @description('Admin Plane private DNS zones object (from network module outputs)')
 param adminPlanePrivateDnsZoneIds object = {}
 
@@ -95,6 +101,7 @@ module storage 'storage.bicep' = {
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     privateDnsZoneBlobId: adminPlanePrivateDnsZoneIds.blob
     privateDnsZoneDfsId: adminPlanePrivateDnsZoneIds.dfs
+    workspaceId: adminPlaneLawId
     complianceTags: complianceTags
   }
 }
@@ -113,6 +120,7 @@ module databricks 'databricks.bicep' = {
     publicSubnetName: network.outputs.databricksPublicSubnetName
     boundary: boundary
     storageCmkKeyUri: storageCmkKeyUri
+    workspaceId: adminPlaneLawId
     complianceTags: complianceTags
   }
 }
@@ -128,6 +136,7 @@ module synapse 'synapse.bicep' = {
     domainName: domainName
     defaultStorageAccountName: storage.outputs.storageAccountName
     adminEntraGroupId: adminEntraGroupId
+    workspaceId: adminPlaneLawId
     complianceTags: complianceTags
   }
 }
@@ -143,6 +152,7 @@ module eventhubs 'eventhubs.bicep' = {
     domainName: domainName
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     privateDnsZoneServicebusId: adminPlanePrivateDnsZoneIds.servicebus
+    workspaceId: adminPlaneLawId
     complianceTags: complianceTags
   }
 }
@@ -175,6 +185,7 @@ module cosmos 'cosmos.bicep' = {
     domainName: domainName
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     privateDnsZoneCosmosId: adminPlanePrivateDnsZoneIds.cosmos
+    workspaceId: adminPlaneLawId
     complianceTags: complianceTags
   }
 }
