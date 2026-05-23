@@ -279,7 +279,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
     apps: [
       {
         name: 'loom-console'
-        image: 'loom/console:v0.1'
+        image: 'loom-console:v0.1'
         uamiId: identity.outputs.uamiConsoleId
         uamiClientId: identity.outputs.uamiConsoleClientId
         ingressPort: 3000
@@ -290,7 +290,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
       }
       {
         name: 'loom-mcp'
-        image: 'loom/mcp:v0.1'
+        image: 'loom-mcp:v0.1'
         uamiId: identity.outputs.uamiMcpId
         uamiClientId: identity.outputs.uamiMcpClientId
         ingressPort: 8080
@@ -300,8 +300,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         maxReplicas: 3
       }
       {
-        name: 'loom-orchestrator'
-        image: 'loom/setup-orchestrator:v0.1'
+        name: 'loom-setup-orchestrator'
+        image: 'loom-setup-orchestrator:v0.1'
         uamiId: identity.outputs.uamiOrchestratorId
         uamiClientId: identity.outputs.uamiOrchestratorClientId
         ingressPort: 8000
@@ -315,19 +315,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         ]
       }
       {
-        name: 'loom-copilot'
-        image: 'loom/copilot:v0.1'
-        uamiId: identity.outputs.uamiCopilotId
-        uamiClientId: identity.outputs.uamiCopilotClientId
-        ingressPort: 8000
-        healthPath: '/api/health'
-        tier: 'copilot'
-        minReplicas: 2
-        maxReplicas: 6
-      }
-      {
         name: 'loom-activator'
-        image: 'loom/activator-engine:v0.1'
+        image: 'loom-activator:v0.1'
         uamiId: identity.outputs.uamiActivatorId
         uamiClientId: identity.outputs.uamiActivatorClientId
         ingressPort: 8080
@@ -338,18 +327,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
       }
       {
         name: 'loom-mirroring'
-        image: 'loom/mirroring-engine:v0.1'
+        image: 'loom-mirroring:v0.1'
         uamiId: identity.outputs.uamiMirroringId
         uamiClientId: identity.outputs.uamiMirroringClientId
-        ingressPort: 8080
-        healthPath: '/health'
+        ingressPort: 8083
+        healthPath: '/connectors'
         tier: 'mirroring'
         minReplicas: 1
         maxReplicas: 2
       }
       {
         name: 'loom-direct-lake-shim'
-        image: 'loom/direct-lake-shim:v0.1'
+        image: 'loom-direct-lake-shim:v0.1'
         uamiId: identity.outputs.uamiDirectLakeId
         uamiClientId: identity.outputs.uamiDirectLakeId
         ingressPort: 8080
