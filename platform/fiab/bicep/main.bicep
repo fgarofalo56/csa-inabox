@@ -149,6 +149,16 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
 }
 
 // =====================================================================
+// Data Landing Zone resource groups (created here so DLZ modules can target them)
+// =====================================================================
+
+resource singleDlzRg 'Microsoft.Resources/resourceGroups@2024-03-01' = if (deploymentMode == 'single-sub') {
+  name: 'rg-csa-loom-dlz-single-${location}'
+  location: location
+  tags: complianceTags
+}
+
+// =====================================================================
 // Data Landing Zone(s)
 //
 // Single-sub mode: 1 DLZ in same sub as Admin Plane
@@ -158,7 +168,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
 // Single-sub: 1 DLZ in same sub
 module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'single-sub') {
   name: 'dlz-single'
-  scope: resourceGroup('rg-csa-loom-dlz-single-${location}')
+  scope: singleDlzRg
   params: {
     location: location
     boundary: boundary
@@ -166,6 +176,10 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     containerPlatform: containerPlatform
     capacitySku: capacitySku
     adminPlaneHubVnetId: adminPlane.outputs.hubVnetId
+    adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
+    adminPlaneAdxClusterRgName: adminPlaneRgName
+    adminEntraGroupId: adminEntraGroupId
+    activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
@@ -176,6 +190,9 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
 }
 
 // Multi-sub: per-DLZ in separate subs
+// NOTE: caller is responsible for creating the per-DLZ RGs in the
+// target subs before this deployment runs (typically via a bootstrap
+// PowerShell or az CLI script — see scripts/csa-loom/bootstrap-dlz-rgs.sh).
 @batchSize(1)
 module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptionIds: if (deploymentMode == 'multi-sub') {
   name: 'dlz-${i}'
@@ -187,6 +204,10 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     containerPlatform: containerPlatform
     capacitySku: capacitySku
     adminPlaneHubVnetId: adminPlane.outputs.hubVnetId
+    adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
+    adminPlaneAdxClusterRgName: adminPlaneRgName
+    adminEntraGroupId: adminEntraGroupId
+    activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
