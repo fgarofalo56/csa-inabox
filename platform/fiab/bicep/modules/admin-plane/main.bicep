@@ -74,6 +74,9 @@ param aiFoundryEnabled bool = false
 @description('Deploy APIM. Premium V2 takes 30+ min; default off so initial provision iterates quickly.')
 param apimEnabled bool = false
 
+@description('Deploy AI Search. Capacity in certain regions is intermittent; default off so first deploy succeeds even when AI Search SKUs are over-subscribed.')
+param aiSearchEnabled bool = false
+
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
 // because every other module wires diagnostic settings to it.
@@ -160,6 +163,7 @@ module containerPlatformModule 'container-platform.bicep' = {
     containerSubnetId: network.outputs.containerPlatformSubnetId
     lawId: monitoring.outputs.lawId
     lawCustomerId: monitoring.outputs.lawCustomerId
+    lawSharedKey: monitoring.outputs.lawSharedKey
     complianceTags: complianceTags
   }
 }
@@ -168,7 +172,7 @@ module containerPlatformModule 'container-platform.bicep' = {
 // 7. AI Search
 // =====================================================================
 
-module aiSearch 'ai-search.bicep' = {
+module aiSearch 'ai-search.bicep' = if (aiSearchEnabled) {
   name: 'ai-search'
   params: {
     location: location

@@ -151,6 +151,8 @@ AppRequests
 output lawId string = law.id
 output lawName string = law.name
 output lawCustomerId string = law.properties.customerId
+@description('Primary shared key — required by Container Apps Env. Marked secure so it isn\'t logged.')
+output lawSharedKey string = law.listKeys().primarySharedKey
 output appInsightsId string = appInsights.id
 output appInsightsConnectionString string = appInsights.properties.ConnectionString
 output appInsightsInstrumentationKey string = appInsights.properties.InstrumentationKey
