@@ -71,7 +71,7 @@ jobs:
           echo "::notice::ACR=$ACR login=$SERVER rg=$RG"
 
   open-acr:
-    name: Temporarily open ACR public access
+    name: Temporarily open ACR public access + grant AcrPush
     needs: resolve
     if: ${{ !inputs.skip_build }}
     runs-on: ubuntu-latest
@@ -91,6 +91,21 @@ jobs:
           az acr update --name "${{ needs.resolve.outputs.acr_name }}" \
             --public-network-enabled true --default-action Allow
           echo "::warning::ACR ${{ needs.resolve.outputs.acr_name }} public access OPENED for build."
+      - name: Grant AcrPush to deploy SP (idempotent)
+        run: |
+          ACR_ID=$(az acr show --name "${{ needs.resolve.outputs.acr_name }}" --query id -o tsv)
+          # The SP's principalId is its objectId in the directory
+          SP_OID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
+          # AcrPush role: 8311e382-0749-4cb8-b61a-304f252e45ec
+          az role assignment create \
+            --assignee-object-id "$SP_OID" \
+            --assignee-principal-type ServicePrincipal \
+            --role 8311e382-0749-4cb8-b61a-304f252e45ec \
+            --scope "$ACR_ID" \
+            2>&1 | grep -v "already exists" || true
+          echo "::notice::AcrPush role granted to SP $SP_OID on ACR."
+          # Propagation delay
+          sleep 30
 
   build:
     name: Build ${{ matrix.app }} via Docker push

@@ -8,15 +8,15 @@
  *   csa-loom.tier = "console"
  *
  * No-op if APPLICATIONINSIGHTS_CONNECTION_STRING is unset (dev / test).
+ *
+ * Implementation note: lazy-import @azure/monitor-opentelemetry so dev
+ * builds don't fail when the dep tree is incomplete. Errors are
+ * swallowed so a misconfigured environment doesn't crash app boot.
  */
-
-import { useAzureMonitor, AzureMonitorOpenTelemetryOptions } from '@azure/monitor-opentelemetry';
-import { resourceFromAttributes } from '@opentelemetry/resources';
-import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 
 let _configured = false;
 
-export function configureTelemetry(): void {
+export async function configureTelemetry(): Promise<void> {
   if (_configured) return;
   const conn = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
   if (!conn) {
@@ -24,19 +24,24 @@ export function configureTelemetry(): void {
     return;
   }
 
-  const options: AzureMonitorOpenTelemetryOptions = {
-    azureMonitorExporterOptions: { connectionString: conn },
-    resource: resourceFromAttributes({
-      [ATTR_SERVICE_NAME]: 'loom-console',
-      [ATTR_SERVICE_VERSION]: process.env.npm_package_version || '0.1.0',
-      'deployment.environment': process.env.CSA_LOOM_BOUNDARY || 'Unknown',
-      'csa-loom.tier': 'console',
-      'csa-loom.app': 'fiab-console',
-    }),
-    enableLiveMetrics: true,
-  };
-
-  useAzureMonitor(options);
-  _configured = true;
-  console.log('[telemetry] App Insights configured for loom-console');
+  try {
+    const { useAzureMonitor } = await import('@azure/monitor-opentelemetry');
+    useAzureMonitor({
+      azureMonitorExporterOptions: { connectionString: conn },
+      resource: {
+        attributes: {
+          'service.name': 'loom-console',
+          'service.version': process.env.npm_package_version || '0.1.0',
+          'deployment.environment': process.env.CSA_LOOM_BOUNDARY || 'Unknown',
+          'csa-loom.tier': 'console',
+          'csa-loom.app': 'fiab-console',
+        },
+      } as any,
+      enableLiveMetrics: true,
+    });
+    _configured = true;
+    console.log('[telemetry] App Insights configured for loom-console');
+  } catch (err) {
+    console.warn('[telemetry] @azure/monitor-opentelemetry init failed:', err);
+  }
 }

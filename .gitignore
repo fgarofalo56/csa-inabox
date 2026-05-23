@@ -335,3 +335,7 @@ temp/atlas-tools/__pycache__/
 /*.swp
 /tmpclaude-*
 
+
+# Next.js build artifacts in apps/
+apps/*/.next/
+apps/*/node_modules/
