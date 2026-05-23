@@ -19,6 +19,10 @@ param lawId string
 @description('Log Analytics customer ID')
 param lawCustomerId string
 
+@description('Log Analytics shared key (required by Container Apps Env when destination=log-analytics; passed in from monitoring module)')
+@secure()
+param lawSharedKey string
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -51,6 +55,7 @@ resource cae 'Microsoft.App/managedEnvironments@2025-02-02-preview' = if (contai
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
         customerId: lawCustomerId
+        sharedKey: lawSharedKey
       }
     }
     zoneRedundant: true

@@ -54,7 +54,10 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
 // Admin group gets Key Vault Administrator role
 var keyVaultAdministratorRoleId = '00482a5a-887f-4fb3-b363-3b7fe8e74483'
 
-resource adminKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+// Role assignment skipped when adminEntraGroupId not configured —
+// operator runs `scripts/csa-loom/grant-admin-kv-access.sh` post-
+// deploy once they've identified the admin group.
+resource adminKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adminEntraGroupId)) {
   scope: keyVault
   name: guid(keyVault.id, adminEntraGroupId, keyVaultAdministratorRoleId)
   properties: {
@@ -100,7 +103,7 @@ resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@202
 // HSM-isolated mode (IL5) — also deploy a managed HSM
 // =====================================================================
 
-resource hsm 'Microsoft.KeyVault/managedHSMs@2024-11-01' = if (hsmIsolated) {
+resource hsm 'Microsoft.KeyVault/managedHSMs@2024-11-01' = if (hsmIsolated && !empty(adminEntraGroupId)) {
   name: take('hsm-loom-${uniqueString(resourceGroup().id)}', 24)
   location: location
   tags: complianceTags

@@ -114,6 +114,9 @@ param aiFoundryEnabled bool = false
 @description('Deploy APIM. Premium V2 takes 30+ min; default off for fast iteration.')
 param apimEnabled bool = false
 
+@description('Deploy AI Search. Default off — capacity in eastus2 is intermittent.')
+param aiSearchEnabled bool = false
+
 // =====================================================================
 // Resource group for Admin Plane
 // =====================================================================
@@ -157,6 +160,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: aiFoundryEnabled
     apimEnabled: apimEnabled
+    aiSearchEnabled: aiSearchEnabled
   }
 }
 
