@@ -89,8 +89,11 @@ resource fwAllowAzure 'Microsoft.Synapse/workspaces/firewallRules@2021-06-01' = 
   }
 }
 
+// Firewall rules — only when public network access is enabled.
+// publicNetworkAccess=Disabled (the default here) blocks the
+// firewall-rules API entirely; VNet does the isolation instead.
 @batchSize(1)
-resource fw 'Microsoft.Synapse/workspaces/firewallRules@2021-06-01' = [for rule in firewallRules: {
+resource fw 'Microsoft.Synapse/workspaces/firewallRules@2021-06-01' = [for rule in firewallRules: if (managedVnet == false) {
   parent: synapseWs
   name: rule.name
   properties: {
@@ -100,10 +103,10 @@ resource fw 'Microsoft.Synapse/workspaces/firewallRules@2021-06-01' = [for rule 
 }]
 
 // =====================================================================
-// AAD admin assignment
+// AAD admin assignment (skipped when admin group not configured)
 // =====================================================================
 
-resource roleAssignment 'Microsoft.Synapse/workspaces/administrators@2021-06-01' = {
+resource roleAssignment 'Microsoft.Synapse/workspaces/administrators@2021-06-01' = if (!empty(adminEntraGroupId)) {
   parent: synapseWs
   name: 'activeDirectory'
   properties: {
@@ -128,13 +131,13 @@ resource roleAssignment 'Microsoft.Synapse/workspaces/administrators@2021-06-01'
 // extension) that calls the Synapse REST API. The block below
 // templates the assignment intent so DSC tooling can detect drift.
 
-@description('Synapse data-plane RBAC role assignments to apply post-deploy. Names map to known role IDs.')
-param synapseDataPlaneRoles array = [
-  'Synapse Administrator'
-  'Synapse SQL Administrator'
-]
+@description('Synapse data-plane RBAC role assignments to apply post-deploy via deployment-script. Requires synapseRoleAssignmentUamiId to be a valid UAMI resource ID.')
+param synapseDataPlaneRoles array = []
 
-resource roleAssignmentScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (length(synapseDataPlaneRoles) > 0) {
+@description('UAMI resource ID with Synapse Administrator role pre-assigned, used by the role-assignment deployment script. When empty, the script is skipped.')
+param synapseRoleAssignmentUamiId string = ''
+
+resource roleAssignmentScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (length(synapseDataPlaneRoles) > 0 && !empty(synapseRoleAssignmentUamiId) && !empty(adminEntraGroupId)) {
   name: 'apply-synapse-roles-${domainName}'
   location: location
   tags: complianceTags
@@ -142,10 +145,7 @@ resource roleAssignmentScript 'Microsoft.Resources/deploymentScripts@2023-08-01'
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
-      // Operator wires in the Admin Plane UAMI with `Synapse Administrator`
-      // pre-assigned to the workspace. For brevity, we use the workspace's
-      // own SAMI which is implicitly Workspace Admin.
-      '${synapseWs.id}': {}
+      '${synapseRoleAssignmentUamiId}': {}
     }
   }
   properties: {
