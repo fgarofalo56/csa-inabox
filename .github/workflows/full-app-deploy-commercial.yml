@@ -91,21 +91,31 @@ jobs:
           az acr update --name "${{ needs.resolve.outputs.acr_name }}" \
             --public-network-enabled true --default-action Allow
           echo "::warning::ACR ${{ needs.resolve.outputs.acr_name }} public access OPENED for build."
-      - name: Grant AcrPush to deploy SP (idempotent)
+      - name: Grant AcrPush to deploy SP + AcrPull to all app UAMIs (idempotent)
         run: |
+          set +e
           ACR_ID=$(az acr show --name "${{ needs.resolve.outputs.acr_name }}" --query id -o tsv)
-          # The SP's principalId is its objectId in the directory
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+
+          # AcrPush to deploy SP (push images)
           SP_OID=$(az ad sp show --id "${{ secrets.AZURE_CLIENT_ID }}" --query id -o tsv)
-          # AcrPush role: 8311e382-0749-4cb8-b61a-304f252e45ec
-          az role assignment create \
-            --assignee-object-id "$SP_OID" \
+          az role assignment create --assignee-object-id "$SP_OID" \
             --assignee-principal-type ServicePrincipal \
             --role 8311e382-0749-4cb8-b61a-304f252e45ec \
-            --scope "$ACR_ID" \
-            2>&1 | grep -v "already exists" || true
-          echo "::notice::AcrPush role granted to SP $SP_OID on ACR."
-          # Propagation delay
-          sleep 30
+            --scope "$ACR_ID" 2>&1 | grep -vi "already" || true
+
+          # AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) to every Loom UAMI
+          for UAMI in $(az identity list --resource-group "$RG" \
+              --query "[?starts_with(name, 'uami-loom-')].principalId" -o tsv); do
+            az role assignment create --assignee-object-id "$UAMI" \
+              --assignee-principal-type ServicePrincipal \
+              --role 7f951dda-4ed3-4680-a7ca-43fe172d538d \
+              --scope "$ACR_ID" 2>&1 | grep -vi "already" || true
+          done
+
+          echo "::notice::AcrPush + AcrPull roles granted."
+          # 90s for Azure RBAC propagation across all assignments
+          sleep 90
 
   build:
     name: Build ${{ matrix.app }} via Docker push
@@ -141,8 +151,18 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
-      - name: ACR login
-        run: az acr login --name "${{ needs.resolve.outputs.acr_name }}"
+      - name: ACR login (with retry for RBAC propagation)
+        run: |
+          for i in 1 2 3 4 5; do
+            if az acr login --name "${{ needs.resolve.outputs.acr_name }}"; then
+              echo "ACR login succeeded on attempt $i"
+              exit 0
+            fi
+            echo "ACR login attempt $i failed; waiting 30s..."
+            sleep 30
+          done
+          echo "::error::ACR login failed after 5 attempts"
+          exit 1
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Build + push
