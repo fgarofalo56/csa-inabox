@@ -6,7 +6,101 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-05-06
+## Current Session — 2026-05-22
+
+**Focus:** CSA Loom pillar v0.1 — productized Microsoft Fabric parity
+layer for Azure Gov tenants. Complete docs + planning + engineering
+scaffold shipped on branch `csa-loom-pillar`.
+
+**Branch:** `csa-loom-pillar` (PR #282 → main)
+
+**Public brand:** CSA Loom (`fiab` remains repo-internal nickname).
+Tagline: *"The loom that weaves your sovereign data fabric."*
+
+### What landed (10 commits, 173 files, 18,152 lines)
+
+**Docs (DONE — 114 pages under `docs/fiab/`)**
+- Foundation: index, what-is, whitepaper, parity-matrix, architecture
+- 12 ADRs (fiab-0001..0012) — full architecture decision set
+- 11 workload parity pages (OneLake, Direct Lake, Mirroring, Real-Time
+  Intelligence, Activator, Data Agents, Copilot, Data Engineering,
+  Data Warehouse, Data Science, Fabric IQ family)
+- Console (3) + Services (3) + Governance (6) pages
+- Deployment (9), Operations (7) + Runbooks (12)
+- Compliance (11) — FedRAMP High, DoD SRG IL4/IL5/IL6 maps, ATO
+- Tutorials (8), Marketing kit (7), Workshops (3 — Federal + Commercial
+  5-day CoE), Use cases (5), Examples (9)
+- Sister comparison page `docs/comparison/csa-loom-vs-fabric.md`
+
+**Planning (DONE)**
+- 7 research reports `temp/fiab-research/01..07.md` (~3,200 lines)
+- 14 PRD section files + AMENDMENTS `temp/fiab-prd/` (~7,000 lines)
+- 25 PRPs `PRPs/active/csa-loom/PRP-00..25.md` (PRP-10 deferred)
+
+**Engineering (SCAFFOLDED — real impl tracked in PRPs)**
+- `platform/fiab/bicep/main.bicep` + 3 `.bicepparam` (commercial,
+  gcc, gcc-high) + admin-plane + landing-zone module stubs
+- `platform/fiab/azd/azure.yaml` (6 services registered)
+- 6 service scaffolds `apps/fiab-{console,setup-orchestrator,
+  mcp-config,activator-engine,mirroring-engine,direct-lake-shim}/`
+  (README + Dockerfile; console also has package.json + Next.js 14
+  + Fluent v9 + MSAL deps)
+- 3 nightly CI workflows `.github/workflows/deploy-fiab-{commercial,
+  gcc,gcch}.yml` (gcch with `environment: gcc-high-deploy` gate)
+- 2 CI scripts `.github/scripts/fiab-{smoke-test,teardown}.sh`
+
+**Validation**
+- `mkdocs build --strict` clean ✓ (exit 0; confirmed by two
+  background runs: br9b52bq0, bitd2cwsv)
+- 61 link warnings fixed by converting internal cross-refs to absolute
+  GitHub URLs on `csa-loom-pillar` branch
+
+### 15 locked decisions
+
+Full text in `temp/fiab-prd/AMENDMENTS.md`. Brand split is critical:
+**CSA Loom** is the public brand; **FiaB** is repo-internal only.
+Marketplace deferred. v1 scope = Commercial + GCC + GCC-High; IL5 in
+v1.1; IL6 explicitly out.
+
+### GitHub issues opened
+
+- **Epic #279** — CSA Loom v1 build roadmap (updated with full wave map)
+- **PR #282** — pillar v0.1 ship
+- Wave 0 (closed via PR #282): #280 PRP-01, #281 PRP-19
+- **Wave 1 (OPEN — 8 issues):** #283 PRP-02 Bicep, #284 PRP-03 Console,
+  #285 PRP-04 Setup Wizard, #286 PRP-05 MCP Server, #287 PRP-06
+  Activator Engine, #288 PRP-07 Mirroring Engine, #289 PRP-08
+  Direct-Lake Shim, #290 PRP-09 Data Agents
+
+### Honest gaps documented openly
+
+- **Direct Lake**: no clean OSS parity. CSA Loom = Premium Import +
+  warm-cache, 5-30s freshness vs Fabric's sub-second. See
+  `docs/fiab/workloads/direct-lake-parity.md`
+- **GCC structural gap**: no F-SKU = no Direct Lake parity in GCC
+  (timing-independent)
+- **Fabric IQ family** (Ontology, Graph, Plan, Maps): v2 deferred;
+  Operations Agent in v1.1
+
+### Next priorities
+
+1. Get PR #282 reviewed + merged
+2. Submit "CSA Loom" brand to legal review (TapestryOne fallback per LD-1)
+3. Pick first Wave 1 issue to execute — recommend #283 (Bicep platform)
+   since it unblocks Wave 2 deploy validation (PRP-11)
+4. Build 2026 (Jun 2-3) freshness rescan — week of Jun 8 — before
+   Wave 2 starts
+
+### Critical context
+
+- [[fiab-pillar]] memory has full state for future sessions
+- [[writing-voice-no-customer-framing]] applies to all Loom docs
+- Direct Lake parity is the hardest single workload (LD-7); engineer
+  accordingly when picking up PRP-08
+
+---
+
+## Previous Session — 2026-05-06
 
 **Focus:** Wire production telemetry / feedback / backlog-with-autonomous-fix
 flow into the live Copilot chat surface, fronted by a security audit of the
