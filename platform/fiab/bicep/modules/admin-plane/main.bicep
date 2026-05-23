@@ -65,6 +65,15 @@ param hubVnetCidr string
 @description('Compliance tags')
 param complianceTags object
 
+@description('Deploy the Loom apps (Console, MCP, Orchestrator, Copilot, Activator, Mirroring, Direct-Lake Shim). Requires the container images to exist in ACR first — set false on initial provision, then true after images are built + pushed (PRP-16).')
+param deployAppsEnabled bool = false
+
+@description('Deploy AI Foundry Hub. Requires explicit storage-account strategy; default off so initial provision succeeds before operator picks Hub strategy.')
+param aiFoundryEnabled bool = false
+
+@description('Deploy APIM. Premium V2 takes 30+ min; default off so initial provision iterates quickly.')
+param apimEnabled bool = false
+
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
 // because every other module wires diagnostic settings to it.
@@ -175,7 +184,7 @@ module aiSearch 'ai-search.bicep' = {
 // 8. AI Foundry Hub (or Azure ML classic in boundaries without Foundry)
 // =====================================================================
 
-module aiFoundry 'ai-foundry.bicep' = {
+module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled) {
   name: 'ai-foundry'
   params: {
     location: location
@@ -199,7 +208,7 @@ module aiFoundry 'ai-foundry.bicep' = {
 // 9. APIM (Premium V2 or classic Premium per boundary)
 // =====================================================================
 
-module apim 'apim.bicep' = {
+module apim 'apim.bicep' = if (apimEnabled) {
   name: 'apim'
   params: {
     location: location
@@ -256,7 +265,7 @@ module aiDefense 'ai-defense.bicep' = {
 //                     Mirroring, Direct-Lake Shim, Presidio if Gov)
 // =====================================================================
 
-module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'containerApps') {
+module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled) {
   name: 'app-deployments'
   params: {
     location: location
@@ -270,7 +279,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
     apps: [
       {
         name: 'loom-console'
-        image: 'loom/console:v0.1'
+        image: 'loom-console:v0.1'
         uamiId: identity.outputs.uamiConsoleId
         uamiClientId: identity.outputs.uamiConsoleClientId
         ingressPort: 3000
@@ -281,7 +290,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
       }
       {
         name: 'loom-mcp'
-        image: 'loom/mcp:v0.1'
+        image: 'loom-mcp:v0.1'
         uamiId: identity.outputs.uamiMcpId
         uamiClientId: identity.outputs.uamiMcpClientId
         ingressPort: 8080
@@ -291,8 +300,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         maxReplicas: 3
       }
       {
-        name: 'loom-orchestrator'
-        image: 'loom/setup-orchestrator:v0.1'
+        name: 'loom-setup-orchestrator'
+        image: 'loom-setup-orchestrator:v0.1'
         uamiId: identity.outputs.uamiOrchestratorId
         uamiClientId: identity.outputs.uamiOrchestratorClientId
         ingressPort: 8000
@@ -306,19 +315,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         ]
       }
       {
-        name: 'loom-copilot'
-        image: 'loom/copilot:v0.1'
-        uamiId: identity.outputs.uamiCopilotId
-        uamiClientId: identity.outputs.uamiCopilotClientId
-        ingressPort: 8000
-        healthPath: '/api/health'
-        tier: 'copilot'
-        minReplicas: 2
-        maxReplicas: 6
-      }
-      {
         name: 'loom-activator'
-        image: 'loom/activator-engine:v0.1'
+        image: 'loom-activator:v0.1'
         uamiId: identity.outputs.uamiActivatorId
         uamiClientId: identity.outputs.uamiActivatorClientId
         ingressPort: 8080
@@ -329,18 +327,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
       }
       {
         name: 'loom-mirroring'
-        image: 'loom/mirroring-engine:v0.1'
+        image: 'loom-mirroring:v0.1'
         uamiId: identity.outputs.uamiMirroringId
         uamiClientId: identity.outputs.uamiMirroringClientId
-        ingressPort: 8080
-        healthPath: '/health'
+        ingressPort: 8083
+        healthPath: '/connectors'
         tier: 'mirroring'
         minReplicas: 1
         maxReplicas: 2
       }
       {
         name: 'loom-direct-lake-shim'
-        image: 'loom/direct-lake-shim:v0.1'
+        image: 'loom-direct-lake-shim:v0.1'
         uamiId: identity.outputs.uamiDirectLakeId
         uamiClientId: identity.outputs.uamiDirectLakeId
         ingressPort: 8080
@@ -354,7 +352,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
 }
 
 // Presidio sidecars — Gov only (where Content Safety isn't available)
-module presidio 'presidio-sidecar.bicep' = if (containerPlatform == 'containerApps' && (boundary == 'GCC-High' || boundary == 'IL5')) {
+module presidio 'presidio-sidecar.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled && (boundary == 'GCC-High' || boundary == 'IL5')) {
   name: 'presidio'
   params: {
     location: location

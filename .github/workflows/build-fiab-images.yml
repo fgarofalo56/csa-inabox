@@ -1,0 +1,178 @@
+name: build-fiab-images
+
+# CSA Loom — build + push container images for every Loom service.
+# Per PRP-16. Targets the customer's Loom ACR (provisioned by
+# platform/fiab/bicep/modules/admin-plane/registry.bicep).
+#
+# Trigger:
+#   - workflow_dispatch (manual)
+#   - push to main with changes under apps/fiab-*
+#
+# Requires:
+#   - The Admin Plane (and therefore ACR) to already be provisioned.
+#   - Secret AZURE_CLIENT_ID + AZURE_CLIENT_SECRET + AZURE_TENANT_ID +
+#     AZURE_SUBSCRIPTION_ID (Commercial path; per-boundary variants
+#     for GCC + Gov follow the deploy-fiab-* secret naming convention).
+#
+# Outputs:
+#   - Per-app image tagged ${ACR}/loom/<service>:<sha> + :v0.1 + :latest
+#   - Image digests in workflow summary for SBOM/audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      boundary:
+        description: 'Which boundary ACR to push to'
+        type: choice
+        default: Commercial
+        options:
+          - Commercial
+          - GCC
+          - GCC-High
+      tag_override:
+        description: 'Override the version tag (default: v0.1)'
+        type: string
+        default: v0.1
+  push:
+    branches: [main]
+    paths:
+      - 'apps/fiab-console/**'
+      - 'apps/fiab-mcp-config/**'
+      - 'apps/fiab-setup-orchestrator/**'
+      - 'apps/copilot/**'
+      - 'apps/fiab-activator-engine/**'
+      - 'apps/fiab-mirroring-engine/**'
+      - 'apps/fiab-direct-lake-shim/**'
+      - '.github/workflows/build-fiab-images.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  precheck:
+    name: Precheck — ACR + secrets available
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+      acr_name: ${{ steps.check.outputs.acr_name }}
+    steps:
+      - id: check
+        env:
+          C: ${{ secrets.AZURE_CLIENT_ID }}
+          S: ${{ secrets.AZURE_CLIENT_SECRET }}
+          T: ${{ secrets.AZURE_TENANT_ID }}
+          U: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::AZURE_* secrets not configured — skipping."
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+  resolve-acr:
+    name: Resolve ACR login server
+    needs: precheck
+    if: needs.precheck.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      login_server: ${{ steps.acr.outputs.login_server }}
+    steps:
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - id: acr
+        env:
+          LOCATION: ${{ inputs.boundary == 'GCC-High' && 'usgovvirginia' || (inputs.boundary == 'GCC' && 'eastus' || 'eastus2') }}
+        run: |
+          RG="rg-csa-loom-admin-${LOCATION}"
+          ACR=$(az acr list --resource-group "$RG" --query "[?starts_with(name, 'acrloom')]|[0].loginServer" -o tsv 2>/dev/null || echo "")
+          if [[ -z "$ACR" ]]; then
+            echo "::error::No ACR found in $RG. Run the deploy workflow first."
+            exit 1
+          fi
+          echo "login_server=$ACR" >> "$GITHUB_OUTPUT"
+          echo "::notice::ACR: $ACR"
+
+  build:
+    name: Build ${{ matrix.app }}
+    needs: [precheck, resolve-acr]
+    if: needs.precheck.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - app: loom-console
+            context: ./apps/fiab-console
+            dockerfile: Dockerfile
+          - app: loom-setup-orchestrator
+            context: ./apps/fiab-setup-orchestrator
+            dockerfile: Dockerfile
+          - app: loom-mcp
+            context: ./apps/fiab-mcp-config
+            dockerfile: Dockerfile
+          - app: loom-activator
+            context: ./apps/fiab-activator-engine
+            dockerfile: Dockerfile
+          - app: loom-mirroring
+            context: ./apps/fiab-mirroring-engine
+            dockerfile: Dockerfile
+          - app: loom-direct-lake-shim
+            context: ./apps/fiab-direct-lake-shim
+            dockerfile: Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: ACR login
+        run: |
+          ACR="${{ needs.resolve-acr.outputs.login_server }}"
+          ACR_NAME="${ACR%%.*}"
+          az acr login --name "$ACR_NAME"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ needs.resolve-acr.outputs.login_server }}/${{ matrix.app }}:${{ inputs.tag_override || 'v0.1' }}
+            ${{ needs.resolve-acr.outputs.login_server }}/${{ matrix.app }}:${{ github.sha }}
+            ${{ needs.resolve-acr.outputs.login_server }}/${{ matrix.app }}:latest
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.repository.updated_at }}
+            csa.loom.component=${{ matrix.app }}
+
+      - name: Image digest to summary
+        run: |
+          echo "### ${{ matrix.app }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Tag: ${{ needs.resolve-acr.outputs.login_server }}/${{ matrix.app }}:${{ inputs.tag_override || 'v0.1' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- SHA: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
