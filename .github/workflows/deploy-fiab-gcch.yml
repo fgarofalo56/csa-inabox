@@ -12,7 +12,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
   issues: write
 
@@ -36,9 +35,18 @@ jobs:
       - name: Azure login (Gov sub) — limitlessdata_deploy SP
         uses: Azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_GOV_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_GOV_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
           environment: AzureUSGovernment
 
       - name: Set Azure cloud to Gov

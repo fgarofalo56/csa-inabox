@@ -10,7 +10,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
   issues: write
 
@@ -33,9 +32,13 @@ jobs:
       - name: Azure login (GCC sub)
         uses: Azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_GCC_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_GCC_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GCC_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GCC_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GCC_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}"
+            }
 
       - name: Setup azd
         uses: Azure/setup-azd@v2
