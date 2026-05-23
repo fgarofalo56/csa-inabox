@@ -1,6 +1,7 @@
-// CSA Loom DLZ — Azure Data Explorer database (on shared cluster)
-// Per LD-10: shared ADX cluster lives in Admin Plane; one database
-// per DLZ. This module creates only the database, not the cluster.
+// CSA Loom DLZ — Azure Data Explorer database (cross-RG wrapper)
+// Per LD-10: shared ADX cluster lives in Admin Plane RG; this module
+// targets the Admin Plane RG via a nested module to create the
+// database + principal assignments.
 
 targetScope = 'resourceGroup'
 
@@ -25,57 +26,30 @@ param hotCachePeriodDays int = 31
 @description('Admin Entra group object ID for AllDatabasesAdmin')
 param adminEntraGroupId string
 
+@description('Activator Engine UAMI principal ID for Viewer role')
+param activatorPrincipalId string = ''
+
 @description('Compliance tags (note: ADX databases inherit cluster tags)')
 param complianceTags object
 
 var dbName = 'loomdb-${domainName}'
 
-// We reference the cluster as an existing resource so we can declare
-// a child database resource.
-resource adxCluster 'Microsoft.Kusto/clusters@2024-04-13' existing = {
+module inner 'adx-db-inner.bicep' = {
+  name: 'adx-db-${domainName}'
   scope: resourceGroup(adxClusterSubId, adxClusterRgName)
-  name: adxClusterName
-}
-
-resource adxDb 'Microsoft.Kusto/clusters/databases@2024-04-13' = {
-  parent: adxCluster
-  name: dbName
-  location: adxCluster.location
-  kind: 'ReadWrite'
-  properties: {
-    softDeletePeriod: 'P${softDeletePeriodDays}D'
-    hotCachePeriod: 'P${hotCachePeriodDays}D'
-  }
-  tags: complianceTags
-}
-
-// Admin assignment — Database principal
-resource adxDbAdmin 'Microsoft.Kusto/clusters/databases/principalAssignments@2024-04-13' = {
-  parent: adxDb
-  name: 'admins-group'
-  properties: {
-    principalId: adminEntraGroupId
-    principalType: 'Group'
-    role: 'Admin'
-    tenantId: subscription().tenantId
+  params: {
+    adxClusterName: adxClusterName
+    dbName: dbName
+    softDeletePeriodDays: softDeletePeriodDays
+    hotCachePeriodDays: hotCachePeriodDays
+    adminEntraGroupId: adminEntraGroupId
+    activatorPrincipalId: activatorPrincipalId
   }
 }
 
-// Activator Engine uses Viewer role to query the database (read-only)
-@description('Activator Engine UAMI principal ID for Viewer role')
-param activatorPrincipalId string = ''
+@description('Compliance tags are inherited from the cluster; this output is a passthrough for caller convenience')
+output appliedTags object = complianceTags
 
-resource adxDbActivatorViewer 'Microsoft.Kusto/clusters/databases/principalAssignments@2024-04-13' = if (!empty(activatorPrincipalId)) {
-  parent: adxDb
-  name: 'activator-viewer'
-  properties: {
-    principalId: activatorPrincipalId
-    principalType: 'App'
-    role: 'Viewer'
-    tenantId: subscription().tenantId
-  }
-}
-
-output databaseId string = adxDb.id
-output databaseName string = adxDb.name
-output databaseUri string = '${adxCluster.properties.uri}/${dbName}'
+output databaseId string = inner.outputs.databaseId
+output databaseName string = inner.outputs.databaseName
+output databaseUri string = inner.outputs.databaseUri

@@ -86,7 +86,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2025-04-01' = if (conta
         mode: 'System'
         osType: 'Linux'
         osSKU: 'AzureLinux'
-        vnetSubnetId: containerSubnetId
+        vnetSubnetID: containerSubnetId
         availabilityZones: ['1', '2', '3']
         enableAutoScaling: true
         minCount: 3
@@ -99,7 +99,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2025-04-01' = if (conta
         mode: 'User'
         osType: 'Linux'
         osSKU: 'AzureLinux'
-        vnetSubnetId: containerSubnetId
+        vnetSubnetID: containerSubnetId
         availabilityZones: ['1', '2', '3']
         enableAutoScaling: true
         minCount: 3
@@ -115,9 +115,13 @@ resource aks 'Microsoft.ContainerService/managedClusters@2025-04-01' = if (conta
     }
     azureMonitorProfile: {
       metrics: { enabled: true }
-      containerInsights: {
+    }
+    addonProfiles: {
+      omsagent: {
         enabled: true
-        logAnalyticsWorkspaceResourceId: lawId
+        config: {
+          logAnalyticsWorkspaceResourceID: lawId
+        }
       }
     }
     securityProfile: {
@@ -139,11 +143,11 @@ resource aks 'Microsoft.ContainerService/managedClusters@2025-04-01' = if (conta
 // Outputs (one of two; caller picks based on containerPlatform)
 // =====================================================================
 
-output caeId string = containerPlatform == 'containerApps' ? cae.id : ''
-output caeName string = containerPlatform == 'containerApps' ? cae.name : ''
-output caeDefaultDomain string = containerPlatform == 'containerApps' ? cae.properties.defaultDomain : ''
-output caeStaticIp string = containerPlatform == 'containerApps' ? cae.properties.staticIp : ''
+output caeId string = containerPlatform == 'containerApps' ? cae!.id : ''
+output caeName string = containerPlatform == 'containerApps' ? cae!.name : ''
+output caeDefaultDomain string = containerPlatform == 'containerApps' ? cae!.properties.defaultDomain : ''
+output caeStaticIp string = containerPlatform == 'containerApps' ? cae!.properties.staticIp : ''
 
-output aksId string = containerPlatform == 'aks' ? aks.id : ''
-output aksName string = containerPlatform == 'aks' ? aks.name : ''
-output aksOidcIssuer string = containerPlatform == 'aks' ? aks.properties.oidcIssuerProfile.issuerURL : ''
+output aksId string = containerPlatform == 'aks' ? aks!.id : ''
+output aksName string = containerPlatform == 'aks' ? aks!.name : ''
+output aksOidcIssuer string = containerPlatform == 'aks' ? aks!.properties.oidcIssuerProfile.issuerURL : ''
