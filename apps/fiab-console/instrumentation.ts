@@ -5,6 +5,6 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     const { configureTelemetry } = await import('./lib/telemetry/app-insights');
-    configureTelemetry();
+    await configureTelemetry();
   }
 }
