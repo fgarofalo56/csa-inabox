@@ -34,10 +34,14 @@ resource acr 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
         status: 'enabled'
         days: 30
       }
-      quarantinePolicy: { status: 'enabled' }
+      // quarantinePolicy + trustPolicy disabled for v1 — operator
+      // enables once content-signing pipeline (Notary v2 + SBOM
+      // scanning) is in place. Enabling these blocks read of any
+      // unsigned/unscanned image.
+      quarantinePolicy: { status: 'disabled' }
       trustPolicy: {
         type: 'Notary'
-        status: 'enabled'
+        status: 'disabled'
       }
     }
   }
