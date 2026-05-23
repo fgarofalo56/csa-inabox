@@ -86,11 +86,12 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
-      - name: Enable ACR public access
+      - name: Enable ACR public access + admin user
         run: |
           az acr update --name "${{ needs.resolve.outputs.acr_name }}" \
-            --public-network-enabled true --default-action Allow
-          echo "::warning::ACR ${{ needs.resolve.outputs.acr_name }} public access OPENED for build."
+            --public-network-enabled true --default-action Allow \
+            --admin-enabled true
+          echo "::warning::ACR ${{ needs.resolve.outputs.acr_name }} public access + admin user OPENED for build."
       - name: Grant AcrPush to deploy SP + AcrPull to all app UAMIs (idempotent)
         run: |
           set +e
@@ -151,18 +152,15 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
-      - name: ACR login (with retry for RBAC propagation)
+      - name: Docker login via ACR admin user (reliable for build window)
         run: |
-          for i in 1 2 3 4 5; do
-            if az acr login --name "${{ needs.resolve.outputs.acr_name }}"; then
-              echo "ACR login succeeded on attempt $i"
-              exit 0
-            fi
-            echo "ACR login attempt $i failed; waiting 30s..."
-            sleep 30
-          done
-          echo "::error::ACR login failed after 5 attempts"
-          exit 1
+          # ACR admin user was enabled in open-acr job; use those creds
+          # directly with docker login. More reliable than az acr login
+          # which caches SP tokens and may not pick up newly-granted roles.
+          ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
+          ACR_USER=$(az acr credential show --name "$ACR_NAME" --query username -o tsv)
+          ACR_PASS=$(az acr credential show --name "$ACR_NAME" --query 'passwords[0].value' -o tsv)
+          echo "$ACR_PASS" | docker login "${{ needs.resolve.outputs.acr_login_server }}" --username "$ACR_USER" --password-stdin
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Build + push
@@ -194,11 +192,12 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
-      - name: Disable ACR public access
+      - name: Disable ACR public access + admin user
         run: |
           az acr update --name "${{ needs.resolve.outputs.acr_name }}" \
-            --public-network-enabled false --default-action Deny
-          echo "::notice::ACR ${{ needs.resolve.outputs.acr_name }} re-locked (private endpoint only)."
+            --public-network-enabled false --default-action Deny \
+            --admin-enabled false
+          echo "::notice::ACR ${{ needs.resolve.outputs.acr_name }} re-locked (private endpoint only, no admin user)."
 
   redeploy-with-apps:
     name: Re-deploy Bicep with deployAppsEnabled=true
