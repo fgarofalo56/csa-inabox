@@ -25,15 +25,73 @@ and what remains as known intermittent issues.
 | 5 | 26326256884 | (a) Event Hubs CG referenced `$default` event hub that didn't exist; (b) Storage versioning incompatible with HNS; (c) Cosmos zonal account capacity in eastus2 | (a) Removed manual CG; (b) `isVersioningEnabled = false`; (c) `zoneRedundant` param default false | #301 |
 | 6 | 26327020669 | Cosmos containers used slash-path nested name pattern → what-if BadRequest | Refactored to `parent: dbs[i]` array-index reference | #302 |
 
-## Outstanding (post-#302 merge)
+## Continued iteration after #302
 
-After the Cosmos parent: fix lands, the next iteration is expected to surface
-issues in:
-- Databricks workspace creation (custom VNet validation, managed RG conflicts)
-- Synapse workspace (managed VNet provisioning latency, default storage account naming)
-- Event Grid system topic on a private-endpoint-only storage account
-- Any remaining state from prior partial deploys (the teardown script polls
-  for completion which can take 15-30 min for Cosmos accounts)
+| # | Run ID | Failure | Fix | PR |
+|---|---|---|---|---|
+| 7 | 26328703349 | Synapse — 3 issues: AAD admin needs SID; firewall rules need public access; deployment-script needs valid UAMI | Gate AAD admin on `!empty()`; gate firewall on `managedVnet=false`; new `synapseRoleAssignmentUamiId` param | #304 |
+| 8 | 26329796598 | Databricks: NSG `ConflictWithNetworkIntentPolicy` — vnet-injected ADB needs specific worker outbound rules | Added 4 required NSG security rules (worker→Sql, worker→Storage, worker→EventHub, intra-vnet inbound) | #305 |
+
+## 🎉 Iter #8 SUCCESS
+
+**Run [26330578932](https://github.com/fgarofalo56/csa-inabox/actions/runs/26330578932)** — first full successful deploy against Azure Commercial.
+
+- Bicep what-if: ✅
+- Provision: ✅ in 10m21s
+- Post-provision validation (from inside cluster): ✅
+- External smoke test (best-effort): ✅
+- Resources kept per `keep_resources=true`
+
+**Console URL emitted**: `https://loom-console.delightfulmoss-96202bfd.eastus2.azurecontainerapps.io`
+(VNet-internal — requires Bastion to browse)
+
+**Resources successfully provisioned** in `rg-csa-loom-admin-eastus2` + `rg-csa-loom-dlz-single-eastus2`:
+
+- Hub VNet + 7 subnets + Bastion Standard + Azure Firewall + 17 private DNS zones
+- 7 UAMIs
+- Key Vault Premium + private endpoint
+- LAW + AppInsights + Sentinel + 2 AI threat-detection rules
+- ACR Premium + private endpoint
+- Container Apps Env (internal, zone-redundant)
+- Catalog stub + AI defense playbook
+- DLZ: spoke VNet + ADB-compliant NSG + peering
+- DLZ storage (ADLS Gen2 + HNS + 5 containers + EG topic + PEs)
+- DLZ Databricks workspace (Premium, VNet-injected)
+- DLZ Synapse workspace (Serverless SQL + managed VNet + audit)
+- DLZ Event Hubs (Kafka surface + PE)
+- DLZ Cosmos DB (5 workload databases + PE)
+
+**Gated off per first-deploy convention** (operator opts in module-by-module):
+
+- AI Foundry Hub (`aiFoundryEnabled`)
+- APIM (`apimEnabled`)
+- AI Search (`aiSearchEnabled` — regional capacity)
+- ADX DB (`adxEnabled` — needs cluster pre-provisioned)
+- App deployments (`deployAppsEnabled` — needs container images in ACR)
+- Synapse data-plane RBAC script (`synapseRoleAssignmentUamiId`)
+- Purview (`purviewEnabled` — tenant collision per iter #1)
+
+## Iter #9 — image build (separate iteration cycle)
+
+**Run [26330782170](https://github.com/fgarofalo56/csa-inabox/actions/runs/26330782170)** — image build via GitHub runners.
+
+All 6 builds failed with `CONNECTIVITY_REFRESH_TOKEN_ERROR` at ACR login.
+
+**Root cause**: ACR has `publicNetworkAccess: Disabled` (correct per security posture) — unreachable from external GitHub runners.
+
+**Fix paths** (operator chooses):
+
+- **A — ACR Tasks** (recommended): build inside Azure, reaches ACR via internal network. Per-app: `az acr build --registry $ACR --image loom-console:v0.1 ./apps/fiab-console`. Wrap in `build-fiab-images-acr-tasks.yml`.
+- **B — Self-hosted GitHub runner inside Hub VNet**: VM- or AKS-based runner with VNet access; tag workflow to use it.
+- **C — Temporarily enable ACR public access**: less secure but fastest first-time unblocker.
+
+## Outstanding follow-ups
+
+1. **Image build via ACR Tasks** — add `.github/workflows/build-fiab-images-acr-tasks.yml`
+2. **Re-dispatch with `deployAppsEnabled=true`** once images exist
+3. **Front-end UI validation**: requires Bastion + jumpbox in hub VNet; per [first-deploy.md](first-deploy.md) Phase 4
+4. **GCC + GCC-High validation**: per [secrets-bootstrap.md](secrets-bootstrap.md), needs SP credentials in those tenants
+5. **Build 2026 freshness rescan**: auto-fires Jun 8
 
 ## Recommended next-step pattern
 
