@@ -65,6 +65,15 @@ param hubVnetCidr string
 @description('Compliance tags')
 param complianceTags object
 
+@description('Deploy the Loom apps (Console, MCP, Orchestrator, Copilot, Activator, Mirroring, Direct-Lake Shim). Requires the container images to exist in ACR first — set false on initial provision, then true after images are built + pushed (PRP-16).')
+param deployAppsEnabled bool = false
+
+@description('Deploy AI Foundry Hub. Requires explicit storage-account strategy; default off so initial provision succeeds before operator picks Hub strategy.')
+param aiFoundryEnabled bool = false
+
+@description('Deploy APIM. Premium V2 takes 30+ min; default off so initial provision iterates quickly.')
+param apimEnabled bool = false
+
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
 // because every other module wires diagnostic settings to it.
@@ -175,7 +184,7 @@ module aiSearch 'ai-search.bicep' = {
 // 8. AI Foundry Hub (or Azure ML classic in boundaries without Foundry)
 // =====================================================================
 
-module aiFoundry 'ai-foundry.bicep' = {
+module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled) {
   name: 'ai-foundry'
   params: {
     location: location
@@ -199,7 +208,7 @@ module aiFoundry 'ai-foundry.bicep' = {
 // 9. APIM (Premium V2 or classic Premium per boundary)
 // =====================================================================
 
-module apim 'apim.bicep' = {
+module apim 'apim.bicep' = if (apimEnabled) {
   name: 'apim'
   params: {
     location: location
@@ -256,7 +265,7 @@ module aiDefense 'ai-defense.bicep' = {
 //                     Mirroring, Direct-Lake Shim, Presidio if Gov)
 // =====================================================================
 
-module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'containerApps') {
+module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled) {
   name: 'app-deployments'
   params: {
     location: location
@@ -354,7 +363,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
 }
 
 // Presidio sidecars — Gov only (where Content Safety isn't available)
-module presidio 'presidio-sidecar.bicep' = if (containerPlatform == 'containerApps' && (boundary == 'GCC-High' || boundary == 'IL5')) {
+module presidio 'presidio-sidecar.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled && (boundary == 'GCC-High' || boundary == 'IL5')) {
   name: 'presidio'
   params: {
     location: location

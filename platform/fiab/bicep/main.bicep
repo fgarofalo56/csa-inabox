@@ -105,6 +105,15 @@ param hubVnetCidr string = '10.0.0.0/16'
 @description('Compliance tags applied to every resource')
 param complianceTags object
 
+@description('Deploy Loom apps (Container Apps for Console/MCP/etc.). Requires container images in ACR — set false on initial provision, then true after CI image-build pipeline runs (PRP-16).')
+param deployAppsEnabled bool = false
+
+@description('Deploy AI Foundry Hub. Requires storage-account strategy; default off.')
+param aiFoundryEnabled bool = false
+
+@description('Deploy APIM. Premium V2 takes 30+ min; default off for fast iteration.')
+param apimEnabled bool = false
+
 // =====================================================================
 // Resource group for Admin Plane
 // =====================================================================
@@ -145,6 +154,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     adminEntraGroupId: adminEntraGroupId
     hubVnetCidr: hubVnetCidr
     complianceTags: complianceTags
+    deployAppsEnabled: deployAppsEnabled
+    aiFoundryEnabled: aiFoundryEnabled
+    apimEnabled: apimEnabled
   }
 }
 

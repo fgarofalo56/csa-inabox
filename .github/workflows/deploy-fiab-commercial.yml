@@ -1,8 +1,7 @@
 name: deploy-fiab-commercial
 
-# CSA Loom — nightly deploy validation against Azure Commercial
-# Per PRP-11. Uses the existing `limitlessdata_deploy` SP
-# (see memory: azure-deployment-principal).
+# CSA Loom — deploy validation against Azure Commercial.
+# Per PRP-11. Uses the existing `limitlessdata_deploy` SP.
 
 on:
   schedule:
@@ -10,12 +9,16 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: 'Run mode — whatif-only validates Bicep + auth without provisioning; full does provision + smoke + teardown.'
+        description: 'whatif-only validates Bicep + auth (no spend); full provisions + smokes + (conditionally) tears down.'
         type: choice
         default: whatif-only
         options:
           - whatif-only
           - full
+      keep_resources:
+        description: 'Keep resources up after smoke test (full mode only). USE WITH CAUTION — incurs ongoing spend until manually torn down.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,13 +43,6 @@ jobs:
       - name: Azure login (Commercial)
         uses: Azure/login@v2
         with:
-          # Client-secret auth — the limitlessdata_deploy SP has no
-          # federated credentials configured. Per repo memory the
-          # secret lives in GitHub secret AZURE_CLIENT_SECRET. To
-          # switch to OIDC, configure federated creds for subject
-          # `repo:fgarofalo56/csa-inabox:ref:refs/heads/main` (and
-          # `workflow_dispatch`) on the SP in Entra ID, then drop
-          # `client-secret` below.
           creds: |
             {
               "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
@@ -62,6 +58,7 @@ jobs:
         run: az bicep install
 
       - name: Bicep what-if (preview)
+        id: whatif
         run: |
           az deployment sub what-if \
             --name csa-loom-ci-${{ github.run_id }} \
@@ -71,35 +68,64 @@ jobs:
             --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }}
 
       - name: Provision (idempotent)
+        id: provision
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: |
-          azd env new csa-loom-ci-${{ github.run_id }} --no-prompt
-          azd env set AZURE_CLOUD $AZURE_CLOUD
-          azd env set AZURE_LOCATION $AZURE_LOCATION
-          azd env set CSA_LOOM_BOUNDARY $CSA_LOOM_BOUNDARY
-          azd env set CSA_LOOM_DEPLOYMENT_MODE $CSA_LOOM_DEPLOYMENT_MODE
-          azd env set CSA_LOOM_CAPACITY_SKU $CSA_LOOM_CAPACITY_SKU
-          azd env set CSA_LOOM_ADMIN_GROUP_ID ${{ secrets.FIAB_ADMIN_GROUP_ID }}
-          azd provision --no-prompt
-        working-directory: platform/fiab/azd
+          set -e
+          DEPLOY_NAME="csa-loom-ci-${{ github.run_id }}"
+          # az deployment sub create — directly provisions Bicep. azd up
+          # would also need pre-built container images for the service
+          # deploy phase, which we don't have in CI yet (PRP-16 builds
+          # them). Infra-only validates the entire Bicep stack end-to-end.
+          az deployment sub create \
+            --name "$DEPLOY_NAME" \
+            --location "$AZURE_LOCATION" \
+            --template-file platform/fiab/bicep/main.bicep \
+            --parameters platform/fiab/bicep/params/commercial.bicepparam \
+            --parameters adminEntraGroupId=${{ secrets.FIAB_ADMIN_GROUP_ID }}
+          CONSOLE_URL=$(az deployment sub show --name "$DEPLOY_NAME" --query "properties.outputs.consoleUrl.value" -o tsv 2>/dev/null || echo "")
+          echo "console_url=$CONSOLE_URL" >> "$GITHUB_OUTPUT"
+          echo "deploy_name=$DEPLOY_NAME" >> "$GITHUB_OUTPUT"
+          echo "::notice::Console URL (VNet-internal): $CONSOLE_URL"
 
-      - name: Smoke test
-        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
+      - name: Post-provision validation (from inside cluster)
+        id: validate
+        if: steps.provision.outcome == 'success'
+        continue-on-error: true
+        run: bash .github/scripts/fiab-post-provision-validate.sh
+        env:
+          RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
+          BOUNDARY: ${{ env.CSA_LOOM_BOUNDARY }}
+
+      - name: External smoke test
+        id: smoke
+        if: steps.provision.outcome == 'success'
+        continue-on-error: true   # Console ingress is VNet-internal; external smoke is best-effort
         run: bash .github/scripts/fiab-smoke-test.sh
         env:
-          CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
+          CONSOLE_URL: ${{ steps.provision.outputs.console_url }}
 
-      - name: Teardown (on success)
-        if: success() && (github.event_name == 'schedule' || inputs.run_mode == 'full')
+      - name: Teardown (full mode, unless keep_resources)
+        id: teardown
+        if: |
+          always()
+          && steps.provision.outcome == 'success'
+          && (github.event_name == 'schedule' || (inputs.run_mode == 'full' && !inputs.keep_resources))
         run: bash .github/scripts/fiab-teardown.sh
         env:
           RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
 
+      - name: Note resources kept (manual teardown required)
+        if: steps.provision.outcome == 'success' && inputs.run_mode == 'full' && inputs.keep_resources
+        run: |
+          echo "::warning::Resources KEPT per workflow input. Tear down manually when done:"
+          echo "::warning::  RG_NAME=rg-csa-loom-admin-${AZURE_LOCATION} bash .github/scripts/fiab-teardown.sh"
+          echo "::warning::Daily spend estimate at F8 capacity SKU: \$200-500."
+
       - name: Note dry-run completion
         if: success() && inputs.run_mode == 'whatif-only'
         run: |
-          echo "✅ whatif-only run complete. Bicep + auth validated; no resources provisioned."
-          echo "Re-run with 'run_mode=full' to actually provision Azure resources."
+          echo "✅ whatif-only complete. Bicep + auth validated; no spend."
 
       - name: Notify on failure
         if: failure()
@@ -110,5 +136,5 @@ jobs:
               issue_number: 279,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `❌ Nightly deploy-fiab-commercial failed in run ${context.runId}. Check workflow logs.`
+              body: `❌ deploy-fiab-commercial failed in run ${context.runId}. Check workflow logs.`
             })
