@@ -11,8 +11,10 @@ FROM node:20-alpine AS deps
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml* ./
+# Use --no-frozen-lockfile until pnpm-lock.yaml is committed
+# (pnpm install --lockfile-only generates it).
 RUN npm install -g pnpm@9 && \
-    pnpm install --frozen-lockfile
+    pnpm install --no-frozen-lockfile
 
 # ============================================================
 # Stage 2 — builder
