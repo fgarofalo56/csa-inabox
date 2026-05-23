@@ -23,6 +23,10 @@ param lawId string
 @description('Sentinel workspace name')
 param lawName string
 
+resource law 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
+  name: lawName
+}
+
 @description('Teams / email destination for security alerts (Key Vault secret reference for the Logic App)')
 param notificationWebhookKvRef string
 
@@ -136,7 +140,7 @@ resource playbook 'Microsoft.Logic/workflows@2019-05-01' = if (!defenderForAIEna
 // =====================================================================
 
 resource automationRule 'Microsoft.SecurityInsights/automationRules@2024-09-01' = if (!defenderForAIEnabled) {
-  scope: resourceId('Microsoft.OperationalInsights/workspaces', lawName)
+  scope: law
   name: 'csa-loom-ai-automation'
   properties: {
     displayName: 'CSA Loom — fire AI alert playbook on AI rule incidents'
