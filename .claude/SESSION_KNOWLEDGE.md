@@ -6,9 +6,59 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-05-22
+## Current Session — 2026-05-22 (continued, late evening)
 
-**Focus:** CSA Loom pillar v0.1 — productized Microsoft Fabric parity
+**Focus:** Execute all 4 outstanding items from earlier in session:
+(1) merge PR #282; (2) brand legal package; (3) all-PRP real
+implementation; (4) Build 2026 rescan automation.
+
+**Branches:** v0.1 merged to `main` via PR #282 (commit 91537687).
+Wave 1 real implementations land via PR #291 on branch
+`csa-loom-wave1-impl` (~8,170 LOC across 12 PRPs).
+
+### Items 1-4 outcomes
+1. ✅ PR #282 merged to main after fixing CI (dropped PR trigger from
+   deploy-fiab-commercial.yml; deploys would have spent real Azure $
+   on every PR and the SP's federated creds aren't configured for PR
+   subject; also added issues:write permission for failure-notify step)
+2. ✅ Brand legal package authored: `docs/fiab/brand/legal-review-package.md`
+   — complete handoff packet (clearance checklist, prior-art incl.
+   Loom.com/Atlassian, fallback chain TapestryOne, brand split rules,
+   visual brand, approval timeline). Added to mkdocs nav.
+3. ✅ Wave 1 real implementations in PR #291. See DEVELOPMENT_LOG for
+   per-PRP breakdown.
+4. ✅ Build 2026 rescan: scripts/csa-loom/build2026-rescan.sh (date-
+   gated, refuses pre-2026-06-08) + .github/workflows/csa-loom-
+   build2026-rescan-reminder.yml (cron auto-opens tracking issue
+   2026-06-08 13:00 UTC).
+
+### Wave 1 commits on csa-loom-wave1-impl (8 implementation + fixes)
+- PRP-02 real Bicep modules (admin-plane + DLZ)
+- PRP-03 + PRP-04 Loom Console (8 panes + Setup Wizard)
+- PRP-09 Loom Data Agents extension
+- PRP-06 Activator Engine (.NET 8 + tests)
+- PRP-07 Mirroring Engine (Debezium + Spark + Open Mirroring SDK)
+- PRP-08 Direct-Lake Shim (.NET 8 Event Grid + TOM)
+- PRP-04 + PRP-05 Setup Orchestrator + self-hosted MCP
+- PRP-11 + PRP-12 + PRP-13 + PRP-14 wave 1
+- + Bicep Lint fixes (adx cross-scope; container-platform casing)
+- + smoke tests for Loom Data Agents (5 passing)
+
+### Open issues post-session
+- Wave 1 issues #283-#290 stay open until PR #291 merges + nightly
+  deploy validation runs green
+- `limitlessdata_deploy` SP needs federated credentials for `workflow`
+  subject (currently has `pull_request` and probably push but not the
+  generic `workflow` claim) before nightly deploys validate
+- 11 Admin Plane sub-modules still scaffolded (ai-foundry, ai-search,
+  APIM, Sentinel base, Presidio sidecar, per-service deployments)
+- 5 Mirroring source connectors still TODO (Oracle, Cosmos, Snowflake,
+  SAP, partner publishers wiring)
+- Synapse Serverless executor needs dedicated pyodbc module
+
+### Original Wave 0 session content (preserved below)
+
+**Original focus:** CSA Loom pillar v0.1 — productized Microsoft Fabric parity
 layer for Azure Gov tenants. Complete docs + planning + engineering
 scaffold shipped on branch `csa-loom-pillar`.
 

@@ -5,6 +5,248 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-05-22 (continued) — CSA Loom Wave 1 real implementations
+
+**Branch:** `csa-loom-wave1-impl` — PR #291 — Epic #279
+
+Executes 4 user-authorized outstanding items: merge PR #282, prep
+brand legal package, implement all PRPs as real working code, and
+automate the Build 2026 freshness rescan.
+
+### Item 1: PR #282 merged
+
+After fix for deploy workflow CI (dropped PR trigger; added issues:write
+permission), PR #282 merged to main as squash commit 91537687. 175
+files, +18,350 / -6 lines now on main.
+
+### Item 2: brand legal package
+
+`docs/fiab/brand/legal-review-package.md` — complete handoff packet
+for counsel. Clearance checklist (USPTO TESS, WIPO, EUIPO, common-
+law, domain, social handles, Microsoft co-branding rules), prior-art
+analysis (Loom.com/Atlassian — different category, low risk; Loom
+Systems — adjacent SaaS, MEDIUM risk that counsel must verify), TM
+fallback chain (TapestryOne → CSA Tapestry → CSA Warp → CSA Weave),
+brand split rules, visual brand spec, 4-step approval timeline.
+Added to mkdocs nav under "Brand" subsection of CSA Loom.
+
+### Item 4: Build 2026 freshness rescan automation
+
+`scripts/csa-loom/build2026-rescan.sh` — date-gated driver (refuses
+to run before 2026-06-08). Scaffolds `temp/fiab-research/rescan-
+build2026/` with per-report delta templates and a RESCAN-RESULTS.md
+master document listing critical questions to answer post-Build.
+
+`.github/workflows/csa-loom-build2026-rescan-reminder.yml` — cron
+`0 13 8 6 *` (Monday June 8 13:00 UTC) auto-opens a GitHub issue
+reminding the team to run the rescan. Includes detection of an
+already-open rescan issue so repeated runs are no-ops.
+
+### Item 3: real implementations across 12 PRPs
+
+Wave 1 ~8,170 LOC across 82 files.
+
+**PRP-02 Platform Bicep — replaced 100% stub modules with real Bicep:**
+
+Admin Plane (`platform/fiab/bicep/modules/admin-plane/`):
+- `network.bicep`: hub VNet + 7 subnets (Firewall, Bastion, Container,
+  Functions, APIM, PrivateEndpoints, Reserved), NSGs, Bastion Standard,
+  Azure Firewall (Premium tier in Gov for TLS inspection),
+  17 private DNS zones with boundary-aware suffixes (core.windows.net
+  vs core.usgovcloudapi.net)
+- `identity.bicep`: 7 UAMIs (one per service component)
+- `keyvault.bicep`: Premium with RBAC, private endpoint, soft-delete +
+  purge protection; Managed HSM if IL5
+- `monitoring.bicep`: LAW + workspace-based AppInsights + Sentinel
+  solution + 2 AI threat-detection Scheduled Analytics Rules
+  (PRP-13 Defender for AI workaround, gated on !defenderForAIEnabled)
+- `registry.bicep`: ACR Premium with retention/quarantine/Notary trust
+- `container-platform.bicep`: Container Apps Env (Commercial/GCC)
+  OR private AKS with Cilium dataplane + Workload Identity + Defender
+  (GCC-H/IL5)
+- `catalog.bicep`: Purview Standard SKU (private network access
+  disabled, managed Event Hub for lineage); Atlas-on-AKS namespace
+  placeholder for IL5
+- `ai-defense.bicep`: Logic App playbook (Adaptive Card to Teams) +
+  Sentinel automation rule routing AI incidents to the playbook
+
+DLZ (`platform/fiab/bicep/modules/landing-zone/`):
+- `network.bicep`: spoke VNet with ADB-required public + private
+  subnets + delegations + auto-peer to Admin Plane hub
+- `storage.bicep`: ADLS Gen2 with HNS, 5 containers (bronze/silver/
+  gold/landing-zone/checkpoints), CMK encryption at IL5, Event Grid
+  system topic for Direct-Lake Shim subscription, blob + dfs PEs
+- `databricks.bicep`: Premium workspace VNet-injected, public IP
+  disabled, infrastructure encryption required
+- `synapse.bicep`: workspace with Serverless SQL pool, managed VNet
+  with exfil prevention, AAD admin assignment
+- `eventhubs.bicep`: namespace with Kafka surface, auto-inflate,
+  per-mirror consumer group, private endpoint
+- `adx.bicep` + `adx-db-inner.bicep`: cross-RG module pattern for
+  database + Admin/Viewer principal assignments on shared cluster
+- `cosmos.bicep`: 5 workload databases (mirroring-config, activator-
+  state, direct-lake-config, data-agents-config, workspace-registry)
+
+Top-level:
+- `main.bicep` creates DLZ RG in single-sub mode; documents multi-
+  sub bootstrap requirement
+- `scripts/csa-loom/bootstrap-dlz-rgs.sh` pre-creates RGs in target
+  subs for multi-sub mode
+
+**PRP-03 Loom Console (apps/fiab-console/):**
+
+Project setup:
+- `tsconfig.json` with `@/*` path aliases + strict mode
+- `next.config.mjs` with full security headers (CSP, HSTS, X-Frame-
+  Options, Permissions-Policy) + standalone output for container
+- `providers.tsx`: QueryClient + FluentProvider + auto dark-mode
+- `globals.css`: CSA Loom brand palette tokens (navy/indigo/amber/paper)
+
+App shell:
+- `app-shell.tsx`: brand top bar (woven motif) + 224px left nav
+- `left-nav.tsx`: 8 nav items with active-state highlight
+
+MSAL BFF auth:
+- `lib/auth/msal.ts`: cloud-aware authority (login.microsoftonline.us
+  in Gov), OBO token acquisition helper
+- `lib/auth/session.ts`: AES-256-GCM encrypted session cookie with
+  HKDF-derived key from SESSION_SECRET, 8h expiry, httpOnly+Secure+SameSite
+
+API routes:
+- `/api/workspaces` GET (RLS by oid/group via Cosmos query) + POST
+
+8 panes (all real interactive components):
+- WorkspacesPane: grid of workspace cards with capacity/region/items
+- LakehousePane: table tree explorer + tabbed metadata viewer
+- WarehousePane: SQL editor + results + engine indicator
+- NotebookPane: multi-cell editor (Python/Scala/SQL/R), per-cell run
+- SemanticModelPane: per-table refresh policy editor; honest gap Badge
+- ActivatorPane: rule list + 8-primitive editor + 4 action types
+- DataAgentPane: chat UI with citation rendering
+- SetupWizardPane (PRP-04): 7-step state machine with live Bicep
+  preview + simulated deploy progress stream
+
+**PRP-04 Setup Orchestrator (apps/fiab-setup-orchestrator/):**
+
+- `pyproject.toml`: FastAPI + Pydantic + Azure SDK + AOAI
+- `main.py`: 2-tier orchestrator dispatch (AGENT_ORCHESTRATOR env);
+  `/api/setup/deploy` + `/api/setup/{id}` + SSE progress stream;
+  BFF-injected `x-loom-caller-oid` for identity passthrough
+- `orchestrator.py`:
+  - `FoundryOrchestrator`: Foundry Agent Service backend with MCP
+    tool registration (Commercial/GCC)
+  - `MafOrchestrator`: MAF + AOAI direct backend (Gov-H/IL5)
+  - Shared `run_bicep_deploy`: 6-stage progress driver
+- `deployment_state.py`: Cosmos-backed state store with in-memory
+  fallback for dev
+
+**PRP-05 Self-hosted Azure MCP (apps/fiab-mcp-config/):**
+
+- `Dockerfile`: vendors `microsoft/mcp/servers/Azure.Mcp.Server`,
+  builds with .NET 8 SDK, runs non-root, exposes /well-known/health
+  HEALTHCHECK
+- `config/loom-mcp.json`: tool allowlist scoped to Setup Wizard +
+  Copilot operations (no *.delete, no *.purge); managed-identity
+  auth; PIM-for-Groups elevation; AppInsights audit; rate limit
+
+**PRP-06 Activator Engine (apps/fiab-activator-engine/):**
+
+- `.NET 8 Worker SDK` with NRules, Kusto.Data, Cosmos, Redis, OpenTelemetry
+- Models, PrimitiveEvaluator (all 8 Fabric primitives with first-
+  crossing semantics + AndStays hold-start + EveryNthTime counter +
+  NoPresenceOfData silence sweep + suppression-window enforcement)
+- Redis-backed ObjectStateStore + Cosmos-backed RuleStore (30s cache)
+- ActionDispatcher: 4 sinks (Teams adaptive card, email via Logic App,
+  Logic App HTTP, generic webhook)
+- AdxRulePoller BackgroundService: per-rule KQL polling, per-object
+  evaluation loop with state persistence
+- 10 xUnit tests covering each primitive's fire/no-fire semantics
+
+**PRP-07 Mirroring Engine (apps/fiab-mirroring-engine/):**
+
+- 3 Debezium connector templates (Azure SQL, Postgres, MySQL) with
+  Event Hubs Kafka surface + ExtractNewRecordState transform
+- PySpark Structured Streaming replicator:
+  - 2 ingestion paths (Event Hubs Kafka, Open Mirroring landing-zone)
+  - Per-microbatch dedup by (key, ts_ms) keeping latest
+  - Delta MERGE with op-aware handling (insert/update/delete via
+    __rowMarker__)
+- Open Mirroring publisher SDK (Python reference impl): 20-digit
+  zero-padded sequence filenames, _metadata.json with keyColumns,
+  __rowMarker__ append helper
+- Databricks job template: Photon cluster autoscale 1-4, SPOT VMs
+
+**PRP-08 Direct-Lake Shim (apps/fiab-direct-lake-shim/):**
+
+- `.NET 8 Worker SDK` with TOM (Microsoft.AnalysisServices.NetCore),
+  Service Bus, Cosmos, Azure.Identity
+- Models: RefreshPolicyKind (Partition/Full/DirectQueryFallback/Composite)
+- TomRefreshClient: partition + table-scoped refresh via XMLA, timing
+  telemetry for SLA monitoring
+- DeltaLogEventHandler BackgroundService: Service Bus PeekLock processor;
+  parses `/\<schema\>/\<table\>/_delta_log/\<commit\>.json` paths;
+  per-policy dispatch; partition name derived from commit URL
+- SemanticModelConfigStore: Cosmos-backed config loader with 60s cache
+
+**PRP-09 Loom Data Agents (extends apps/copilot/):**
+
+- 5 new read-class tools in `loom_data_agents.py`:
+  NL2SQL, NL2DAX, NL2KQL, GraphSearch, CustomSearch
+- Pluggable executor interfaces (EngineDispatcher, XMLAExecutor,
+  ADXExecutor, DataAgentsConfigStore)
+- Concrete executors in `loom_executors.py`:
+  - DatabricksOrSynapseDispatcher: per-data-source engine routing,
+    Databricks SQL Statement Execution API with OBO bearer + polling
+  - PowerBIRestXMLAExecutor: Power BI REST executeQueries with OBO
+  - KustoADXExecutor: ADX v1/rest/query with OBO, boundary-aware scope
+  - CosmosDataAgentsConfigStore: loads schema + examples + verified
+    answers + TMDL
+- 5 smoke tests covering happy path + extractor edge cases (passing)
+
+**PRP-11 deploy validation:**
+
+- `.github/scripts/fiab-smoke-test.sh`: 7 real test families with
+  pass/fail counters (Console health, auth gate, authed create,
+  MCP health, Orchestrator health, Direct-Lake-Shim health [skipped
+  in GCC per LD-7], Activator + Mirroring health). Non-zero exit on
+  any failure.
+- `.github/scripts/fiab-teardown.sh`: multi-sub-aware teardown — purges
+  Key Vaults + Managed HSMs before RG delete; polls until completion
+
+**PRP-12 + PRP-13:** see Admin Plane modules above
+
+**PRP-14 examples wave 1:**
+
+- `examples/fiab/financial-fraud-detection/`: full runnable example —
+  Spark scoring notebook (per-row UDF + per-merchant rolling MA → ADX),
+  3 activator rules (IncreasesAbove/NoPresenceOfData/ChangesTo),
+  full Loom Data Agent definition matching PRP-09 Cosmos schema
+
+### CI failures encountered + fixed
+- Bicep Lint: BCP165 cross-scope errors in adx.bicep (existing cluster
+  in another RG) → extracted DB + role assignments into adx-db-inner.bicep
+  deployed at cluster RG scope; outer adx.bicep wraps via module call
+- Bicep Lint: BCP089 vnetSubnetId casing → vnetSubnetID
+- Bicep Lint: BCP037 containerInsights field → moved to addonProfiles.
+  omsagent (correct AKS ARM shape)
+- Bicep Lint: BCP318 null-access on conditional resource outputs →
+  added `!` non-null assertion
+
+### Memory updates
+
+- [[fiab-pillar]] updated with Wave 1 ship state
+
+### Next priorities
+
+- Review + merge PR #291
+- Configure `limitlessdata_deploy` SP federated credentials for
+  `workflow` subject so nightly deploys validate
+- Wave 2: real Azure validation, remaining 11 Admin Plane sub-modules,
+  remaining 5 Mirroring connectors, Synapse Serverless executor
+- Build 2026 (Jun 2-3) freshness rescan — automated reminder fires Jun 8
+
+---
+
 ## 2026-05-22 — CSA Loom pillar v0.1 — Fabric parity for Azure Gov
 
 **Branch:** `csa-loom-pillar` — PR #282 — Epic #279
