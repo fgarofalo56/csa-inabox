@@ -1,0 +1,80 @@
+{
+  "$schema": "https://schemas.modelcontextprotocol.io/loom-mcp-config.json",
+  "server": {
+    "name": "csa-loom-azure-mcp",
+    "version": "0.1.0",
+    "description": "Self-hosted Azure MCP server for the CSA Loom Setup Wizard + Copilot. Boundary-aware: configured per-tenant at deploy time."
+  },
+  "auth": {
+    "mode": "managed-identity",
+    "identityClientIdEnv": "AZURE_CLIENT_ID",
+    "audienceEnv": "MCP_AUDIENCE"
+  },
+  "cloud": {
+    "$comment": "Set via env var AZURE_CLOUD: AzureCloud | AzureUSGovernment",
+    "resolveAtStartup": true
+  },
+  "tools": {
+    "$comment": "Tool catalog scoped to operations the Setup Wizard + Copilot need. Anything not listed here is unreachable through this MCP instance.",
+    "allow": [
+      "azure.resources.list",
+      "azure.resources.get",
+      "azure.resources.deployment.create",
+      "azure.resources.deployment.whatIf",
+      "azure.resources.deployment.show",
+      "azure.resourcegroup.list",
+      "azure.resourcegroup.create",
+      "azure.subscription.list",
+      "azure.subscription.show",
+      "azure.role.list",
+      "azure.role.assignment.create",
+      "azure.role.assignment.delete",
+      "azure.keyvault.secret.get",
+      "azure.keyvault.secret.list",
+      "azure.storage.account.list",
+      "azure.storage.account.show",
+      "azure.cosmos.account.list",
+      "azure.cosmos.database.list",
+      "azure.databricks.workspace.list",
+      "azure.databricks.workspace.show",
+      "azure.powerbi.workspace.list",
+      "azure.powerbi.dataset.list",
+      "azure.eventhubs.namespace.list",
+      "azure.adx.cluster.list",
+      "azure.adx.database.list"
+    ],
+    "deny": [
+      "*.delete",
+      "*.purge",
+      "azure.keyvault.secret.set",
+      "azure.keyvault.key.delete"
+    ]
+  },
+  "elevation": {
+    "$comment": "JIT Contributor via PIM-for-Groups. Setup Wizard requests elevation only when a deployment is needed.",
+    "mode": "pim-for-groups",
+    "groupObjectIdEnv": "PIM_CONTRIBUTOR_GROUP_ID",
+    "ticketJustification": "CSA Loom Setup Wizard — automated DLZ provisioning",
+    "ticketDurationMinutes": 60
+  },
+  "audit": {
+    "destination": "application-insights",
+    "connectionStringEnv": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+    "includeCaller": true,
+    "includeRequestBody": false,
+    "includeResponseBody": false
+  },
+  "rateLimit": {
+    "callsPerCallerPerMinute": 60,
+    "callsTotalPerMinute": 600
+  },
+  "transport": {
+    "type": "http",
+    "host": "0.0.0.0",
+    "port": 8080,
+    "tls": {
+      "$comment": "TLS is terminated at the ingress (Container App ingress or AKS ingress with cert-manager)",
+      "mode": "ingress-terminated"
+    }
+  }
+}

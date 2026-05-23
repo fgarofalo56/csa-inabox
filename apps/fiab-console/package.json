@@ -1,0 +1,54 @@
+{
+  "name": "@csa-loom/fiab-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CSA Loom Console — Microsoft Fabric workspace experience for Azure Government tenants",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:a11y": "playwright test --grep @a11y"
+  },
+  "dependencies": {
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "@fluentui/react-components": "^9.54.0",
+    "@fluentui/react-icons": "^2.0.245",
+    "@azure/msal-node": "^2.16.0",
+    "@azure/msal-browser": "^3.27.0",
+    "@azure/identity": "^4.5.0",
+    "@azure/cosmos": "^4.2.0",
+    "@azure/arm-resources": "^6.0.0",
+    "@azure/arm-databricks": "^3.0.0",
+    "@tanstack/react-query": "^5.59.0",
+    "zustand": "^5.0.0",
+    "@azure/monitor-opentelemetry": "^1.10.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/semantic-conventions": "^1.28.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^20.16.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "eslint": "^9.13.0",
+    "eslint-config-next": "^14.2.0",
+    "@playwright/test": "^1.48.0",
+    "vitest": "^2.1.0",
+    "@vitest/ui": "^2.1.0",
+    "@axe-core/playwright": "^4.10.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "comments": {
+    "status": "SCAFFOLDED — real implementation per PRP-03",
+    "branding": "Public brand: Loom Console; repo-internal: fiab-console (per AMENDMENTS A1)"
+  }
+}

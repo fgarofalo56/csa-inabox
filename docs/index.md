@@ -9,6 +9,14 @@ description: CSA-in-a-Box — Azure-native reference implementation for Data Mes
 
 CSA-in-a-Box assembles Azure PaaS services and open-source tooling into an opinionated, end-to-end data platform that delivers Data Mesh, Data Fabric, and Data Lakehouse capabilities today — designed for environments where Microsoft Fabric is not yet GA (Azure Government), and as an incremental on-ramp for teams building toward Fabric adoption.
 
+!!! tip "New: **CSA Loom** — the productized Microsoft Fabric parity layer"
+    For federal / DoD / IC / state + local customers blocked from
+    Microsoft Fabric: **[CSA Loom](fiab/index.md)** is the productized
+    SaaS-feel deployment of CSA-in-a-Box. Loom Console (Fabric
+    workspace experience), Loom Setup Wizard (conversational deploy),
+    parity services for Direct Lake / Activator / Mirroring / Data
+    Agents. Free in v1. **[Learn more →](fiab/index.md)**
+
 Fork it, deploy it, customize it. Production-grade Bicep + reference code you own and operate.
 
 [:octicons-rocket-16: Start the 30-min tour](GETTING_STARTED.md){ .md-button .md-button--primary }
