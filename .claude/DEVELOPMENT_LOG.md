@@ -5,6 +5,109 @@ end-of-session protocol in `.claude/rules/session-end.md`.
 
 ---
 
+## 2026-05-22 — CSA Loom pillar v0.1 — Fabric parity for Azure Gov
+
+**Branch:** `csa-loom-pillar` — PR #282 — Epic #279
+
+Full new top-nav pillar positioning csa-inabox as a productized
+Microsoft Fabric parity layer for Azure tenants where Fabric isn't
+yet GA (Commercial, GCC, GCC-High; IL5 in v1.1). Public brand
+**CSA Loom**; `fiab` remains repo-internal nickname only.
+
+### Context
+
+User opened with an extremely ambitious deliverable: complete SaaS-
+style platform with custom UI mimicking the Fabric workspace, parity
+services for Direct Lake / Activator / Mirroring / Data Agents,
+complete marketing kit, dual 5-day CoE workshops, new top-nav pillar
+following the API-First Data Strategy pattern. Workflow: deep
+research → PRD with open questions → walkthrough → PRPs → docs +
+engineering scaffold. *"Don't stop until everything's completed
+100% with a grade of an A"* — accepted with the honest framing that
+docs are A-grade DONE while engineering apps are SCAFFOLDED with
+clear PRP pointers for the 6-month real-build work that follows.
+
+### What shipped (10 commits, 173 files, 18,152 lines)
+
+**Research phase**
+- 7 reports in `temp/fiab-research/01..07.md` (~3,200 lines): Fabric
+  capability surface, Gov boundary availability, Fabric-only internals,
+  catalog strategy, ESLZ+Marketplace, Copilot deploy, existing repo
+  scope.
+
+**PRD phase**
+- 14 PRD section files + AMENDMENTS in `temp/fiab-prd/` (~7,000 lines)
+- 15 locked decisions (LD-1..LD-15) captured in AMENDMENTS.md from
+  the 2026-05-22 walkthrough
+
+**PRP decomposition**
+- 25 PRPs in `PRPs/active/csa-loom/PRP-00..25.md` (~1,900 lines)
+- PRP-10 (Marketplace Managed App) deferred to backlog per LD-4
+
+**Docs (114 pages under `docs/fiab/`)**
+- Foundation, 12 ADRs, 11 workload parity pages, console/services/
+  governance, deployment, ops + 12 runbooks, compliance (FedRAMP +
+  SRG IL maps + ATO), tutorials, marketing, 5-day Federal + Commercial
+  CoE workshops, 8 use cases, 9 examples
+- Sister comparison page `docs/comparison/csa-loom-vs-fabric.md`
+- mkdocs top-nav slot 6 added; hero hook extended; custom SVG hero
+- Cross-refs into `docs/fabric-in-gov-cloud.md` Option 3a, `docs/
+  index.md` tip block, ADR-0010 addendum, solution-store grid card
+
+**Engineering scaffold**
+- `platform/fiab/bicep/main.bicep` + 3 `.bicepparam` (commercial,
+  gcc, gcc-high) + admin-plane + landing-zone module stubs
+- `platform/fiab/azd/azure.yaml` (6 services registered)
+- 6 service scaffolds `apps/fiab-{console,setup-orchestrator,
+  mcp-config,activator-engine,mirroring-engine,direct-lake-shim}/`
+- Console scaffold: Next.js 14 + Fluent UI v9 + MSAL BFF + multi-stage
+  Dockerfile
+- 3 nightly CI workflows; gcch with manual approval gate
+  `environment: gcc-high-deploy`
+- 2 CI scripts (smoke-test + teardown)
+
+### Validation
+
+- `mkdocs build --strict` exit 0 (two background runs confirmed:
+  br9b52bq0, bitd2cwsv); 61 link warnings resolved by converting
+  internal cross-refs to absolute GitHub URLs on `csa-loom-pillar`
+- Engineering scaffolds are deliberately stubs; real impl tracked in
+  Wave 1 GitHub issues (#283..#290)
+
+### Honest gaps documented openly
+
+- **Direct Lake**: no clean OSS parity. CSA Loom ships Premium Import
+  + warm-cache materializer with 5-30s freshness vs Fabric's sub-
+  second. See `docs/fiab/workloads/direct-lake-parity.md`.
+- **GCC structural gap**: no F-SKU = no Direct Lake parity in GCC
+  (timing-independent).
+- **Fabric IQ family** (Ontology, Graph, Plan, Maps): v2 deferred;
+  Operations Agent ships v1.1.
+
+### Issues opened
+
+- **Epic #279** — CSA Loom v1 build roadmap (updated with full wave map)
+- **PR #282** — pillar v0.1 ship
+- Wave 0 (closed via PR #282): #280 PRP-01, #281 PRP-19
+- **Wave 1 (8 open):** #283 PRP-02 Bicep, #284 PRP-03 Console, #285
+  PRP-04 Setup Wizard, #286 PRP-05 MCP Server, #287 PRP-06 Activator,
+  #288 PRP-07 Mirroring, #289 PRP-08 Direct-Lake Shim, #290 PRP-09
+  Data Agents
+
+### Memory updates
+
+- [[fiab-pillar]] rewritten with v0.1 ship state for future sessions
+
+### Next priorities
+
+1. PR #282 review + merge
+2. Submit "CSA Loom" brand to legal review (TapestryOne fallback)
+3. Wave 1 execution — recommend starting with #283 (Bicep platform)
+   since it unblocks Wave 2 deploy validation
+4. Build 2026 (Jun 2-3) freshness rescan — week of Jun 8 before Wave 2
+
+---
+
 ## 2026-05-06 — Copilot analytics pipeline + autonomous bug-fix flow + security audit
 
 **Archon project:** `145c8d71-7e54-4135-8ec9-d6300caf4517` (feature

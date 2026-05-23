@@ -1,0 +1,74 @@
+name: csa-loom-build2026-rescan-reminder
+
+# Auto-opens a tracking issue on 2026-06-08 (Monday after Microsoft
+# Build 2026) reminding the team to run the freshness rescan.
+# After the issue is created, the cron is harmless — repeated runs
+# detect the existing issue and no-op.
+
+on:
+  schedule:
+    - cron: '0 13 8 6 *'   # 2026-06-08 13:00 UTC (09:00 ET Monday)
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  open-rescan-issue:
+    name: Open Build 2026 freshness rescan issue
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'CSA Loom — Build 2026 freshness rescan';
+            const { data: existing } = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`,
+            });
+            if (existing.total_count > 0) {
+              core.info(`Rescan issue already open: #${existing.items[0].number}`);
+              return;
+            }
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              labels: ['csa-loom'],
+              body: [
+                '## Trigger',
+                '',
+                'Microsoft Build 2026 wrapped on 2026-06-03. Time to re-validate the assumptions',
+                'captured in `temp/fiab-research/01..07.md` before Wave 2 engineering (PRP-11/12/13)',
+                'begins.',
+                '',
+                '## Run',
+                '',
+                '```bash',
+                'scripts/csa-loom/build2026-rescan.sh',
+                '```',
+                '',
+                'This scaffolds `temp/fiab-research/rescan-build2026/` with per-report delta',
+                'templates. Fill them in and update affected PRPs.',
+                '',
+                '## Critical questions',
+                '',
+                '1. Did Microsoft announce Fabric for Gov? When? (GCC → GCC-H → IL5 timeline)',
+                '2. Foundry Agent Service Gov-GA? (simplifies PRP-04 Setup Wizard)',
+                '3. UC in usgovaz/usgovva? (simplifies PRP-12 catalog wiring)',
+                '4. Defender for Cloud AI Threat Protection Gov-GA? (retires PRP-13 workaround)',
+                '5. Direct Lake on OneLake (no-fallback) in Gov? (mitigates PRP-08 honest gap)',
+                '6. Any Fabric IQ items GA? (accelerates v2 roadmap)',
+                '',
+                '## Definition of done',
+                '',
+                '- [ ] All 6 delta files filled in (`temp/fiab-research/rescan-build2026/`)',
+                '- [ ] `RESCAN-RESULTS.md` updated with PRP impact summary',
+                '- [ ] Affected PRPs revised',
+                '- [ ] AMENDMENTS section added to `temp/fiab-prd/AMENDMENTS.md`',
+                '- [ ] If LD decisions need to change → schedule walkthrough',
+                '',
+                'Epic: #279',
+              ].join('\n'),
+            });
+            core.info(`Opened rescan issue #${issue.number}`);

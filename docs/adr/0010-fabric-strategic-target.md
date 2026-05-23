@@ -140,3 +140,27 @@ We will know this decision is right if:
   (configuration management plan — ADRs are part of the plan). See
   `governance/compliance/nist-800-53-rev5.yaml`.
 - Discussion: CSA-0087, CSA-0010
+
+## Addendum — 2026-05-22: Productized as CSA Loom
+
+This ADR's "Fabric-parity on Azure PaaS" decision has been
+**productized** as the **CSA Loom** pillar. CSA Loom packages the
+reference architecture into a deployable platform with:
+
+- Loom Console (Next.js + Fluent UI v9) that mimics the Fabric
+  workspace experience
+- Loom Setup Wizard (conversational deploy via Azure MCP)
+- Parity services for Fabric-only items (Direct-Lake Shim, Activator
+  Engine, Mirroring Engine, Data Agents)
+- Two-tier deployment (azd CLI + Deploy-to-Azure button); Marketplace
+  deferred to backlog per ADR fiab-0008
+
+Full Loom-specific ADRs at [`docs/fiab/adr/`](../fiab/adr/README.md)
+(numbered `fiab-0001` through `fiab-0012`).
+
+Loom is **the recommended path forward** for federal customers
+wanting the Fabric experience today. The legacy csa-inabox reference
+architecture (described in ADRs 0001-0026) remains the foundation
+Loom is built on.
+
+See [CSA Loom — overview](../fiab/index.md) for the pillar.

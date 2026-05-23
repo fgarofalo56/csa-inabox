@@ -1,0 +1,89 @@
+name: deploy-fiab-gcc
+
+# CSA Loom — nightly deploy validation against GCC (Azure Commercial
+# under M365 GCC identity). GCC limitations: no F-SKU, no Direct
+# Lake parity.
+
+on:
+  schedule:
+    - cron: '0 8 * * *'   # 08:00 UTC daily (after Commercial run)
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+env:
+  AZURE_CLOUD: AzureCloud   # GCC = Azure public + GCC M365 identity
+  AZURE_LOCATION: eastus
+  CSA_LOOM_BOUNDARY: GCC
+  CSA_LOOM_DEPLOYMENT_MODE: single-sub
+  CSA_LOOM_CAPACITY_SKU: F8
+
+jobs:
+  deploy-validate:
+    name: Deploy + validate CSA Loom in GCC
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (GCC sub)
+        uses: Azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_GCC_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_GCC_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_GCC_SUBSCRIPTION_ID }}
+
+      - name: Setup azd
+        uses: Azure/setup-azd@v2
+
+      - name: Setup Bicep
+        run: az bicep install
+
+      - name: Bicep what-if
+        run: |
+          az deployment sub what-if \
+            --name csa-loom-gcc-ci-${{ github.run_id }} \
+            --location $AZURE_LOCATION \
+            --template-file platform/fiab/bicep/main.bicep \
+            --parameters platform/fiab/bicep/params/gcc.bicepparam \
+            --parameters adminEntraGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }}
+
+      - name: Provision
+        run: |
+          azd env new csa-loom-gcc-ci-${{ github.run_id }} --no-prompt
+          azd env set AZURE_CLOUD $AZURE_CLOUD
+          azd env set AZURE_LOCATION $AZURE_LOCATION
+          azd env set CSA_LOOM_BOUNDARY $CSA_LOOM_BOUNDARY
+          azd env set CSA_LOOM_DEPLOYMENT_MODE $CSA_LOOM_DEPLOYMENT_MODE
+          azd env set CSA_LOOM_CAPACITY_SKU $CSA_LOOM_CAPACITY_SKU
+          azd env set CSA_LOOM_ADMIN_GROUP_ID ${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }}
+          azd provision --no-prompt
+        working-directory: platform/fiab/azd
+
+      - name: Smoke test (GCC-specific — no Direct Lake)
+        run: bash .github/scripts/fiab-smoke-test.sh
+        env:
+          CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
+          SKIP_DIRECT_LAKE_TEST: true   # No F-SKU in GCC
+
+      - name: Teardown
+        if: success()
+        run: bash .github/scripts/fiab-teardown.sh
+        env:
+          RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
+
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: 279,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `❌ Nightly deploy-fiab-gcc failed in run ${context.runId}.`
+            })
