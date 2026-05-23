@@ -1,0 +1,47 @@
+{
+  "name": "${MIRROR_ID}-oracle",
+  "config": {
+    "connector.class": "io.debezium.connector.oracle.OracleConnector",
+    "tasks.max": "1",
+
+    "database.hostname": "${ORACLE_HOST}",
+    "database.port": "1521",
+    "database.user": "${ORACLE_USER}",
+    "database.password": "${ORACLE_PASSWORD_KV_REF}",
+    "database.dbname": "${ORACLE_SID}",
+    "database.pdb.name": "${ORACLE_PDB}",
+
+    "topic.prefix": "csa-loom-mirror.${MIRROR_ID}",
+    "table.include.list": "${TABLE_INCLUDE_LIST}",
+
+    "schema.history.internal.kafka.bootstrap.servers": "${EVENTHUBS_BOOTSTRAP}",
+    "schema.history.internal.kafka.topic": "csa-loom-schema-history.${MIRROR_ID}",
+    "schema.history.internal.consumer.security.protocol": "SASL_SSL",
+    "schema.history.internal.consumer.sasl.mechanism": "PLAIN",
+    "schema.history.internal.consumer.sasl.jaas.config": "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$ConnectionString\" password=\"${EVENTHUBS_CONNECTION_KV_REF}\";",
+    "schema.history.internal.producer.security.protocol": "SASL_SSL",
+    "schema.history.internal.producer.sasl.mechanism": "PLAIN",
+    "schema.history.internal.producer.sasl.jaas.config": "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$ConnectionString\" password=\"${EVENTHUBS_CONNECTION_KV_REF}\";",
+
+    "log.mining.strategy": "online_catalog",
+    "log.mining.continuous.mine": "true",
+    "log.mining.batch.size.default": "20000",
+
+    "snapshot.mode": "initial",
+    "snapshot.isolation.mode": "read_committed",
+    "snapshot.fetch.size": "10000",
+
+    "decimal.handling.mode": "double",
+    "time.precision.mode": "adaptive",
+    "tombstones.on.delete": "false",
+
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "transforms.unwrap.add.fields": "op,ts_ms,source.schema,source.table,source.scn,source.commit_scn",
+
+    "errors.tolerance": "none",
+    "errors.log.enable": "true"
+  }
+}

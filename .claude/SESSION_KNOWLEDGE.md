@@ -6,7 +6,151 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-05-06
+## Current Session — 2026-05-22 (continued, late evening)
+
+**Focus:** Execute all 4 outstanding items from earlier in session:
+(1) merge PR #282; (2) brand legal package; (3) all-PRP real
+implementation; (4) Build 2026 rescan automation.
+
+**Branches:** v0.1 merged to `main` via PR #282 (commit 91537687).
+Wave 1 real implementations land via PR #291 on branch
+`csa-loom-wave1-impl` (~8,170 LOC across 12 PRPs).
+
+### Items 1-4 outcomes
+1. ✅ PR #282 merged to main after fixing CI (dropped PR trigger from
+   deploy-fiab-commercial.yml; deploys would have spent real Azure $
+   on every PR and the SP's federated creds aren't configured for PR
+   subject; also added issues:write permission for failure-notify step)
+2. ✅ Brand legal package authored: `docs/fiab/brand/legal-review-package.md`
+   — complete handoff packet (clearance checklist, prior-art incl.
+   Loom.com/Atlassian, fallback chain TapestryOne, brand split rules,
+   visual brand, approval timeline). Added to mkdocs nav.
+3. ✅ Wave 1 real implementations in PR #291. See DEVELOPMENT_LOG for
+   per-PRP breakdown.
+4. ✅ Build 2026 rescan: scripts/csa-loom/build2026-rescan.sh (date-
+   gated, refuses pre-2026-06-08) + .github/workflows/csa-loom-
+   build2026-rescan-reminder.yml (cron auto-opens tracking issue
+   2026-06-08 13:00 UTC).
+
+### Wave 1 commits on csa-loom-wave1-impl (8 implementation + fixes)
+- PRP-02 real Bicep modules (admin-plane + DLZ)
+- PRP-03 + PRP-04 Loom Console (8 panes + Setup Wizard)
+- PRP-09 Loom Data Agents extension
+- PRP-06 Activator Engine (.NET 8 + tests)
+- PRP-07 Mirroring Engine (Debezium + Spark + Open Mirroring SDK)
+- PRP-08 Direct-Lake Shim (.NET 8 Event Grid + TOM)
+- PRP-04 + PRP-05 Setup Orchestrator + self-hosted MCP
+- PRP-11 + PRP-12 + PRP-13 + PRP-14 wave 1
+- + Bicep Lint fixes (adx cross-scope; container-platform casing)
+- + smoke tests for Loom Data Agents (5 passing)
+
+### Open issues post-session
+- Wave 1 issues #283-#290 stay open until PR #291 merges + nightly
+  deploy validation runs green
+- `limitlessdata_deploy` SP needs federated credentials for `workflow`
+  subject (currently has `pull_request` and probably push but not the
+  generic `workflow` claim) before nightly deploys validate
+- 11 Admin Plane sub-modules still scaffolded (ai-foundry, ai-search,
+  APIM, Sentinel base, Presidio sidecar, per-service deployments)
+- 5 Mirroring source connectors still TODO (Oracle, Cosmos, Snowflake,
+  SAP, partner publishers wiring)
+- Synapse Serverless executor needs dedicated pyodbc module
+
+### Original Wave 0 session content (preserved below)
+
+**Original focus:** CSA Loom pillar v0.1 — productized Microsoft Fabric parity
+layer for Azure Gov tenants. Complete docs + planning + engineering
+scaffold shipped on branch `csa-loom-pillar`.
+
+**Branch:** `csa-loom-pillar` (PR #282 → main)
+
+**Public brand:** CSA Loom (`fiab` remains repo-internal nickname).
+Tagline: *"The loom that weaves your sovereign data fabric."*
+
+### What landed (10 commits, 173 files, 18,152 lines)
+
+**Docs (DONE — 114 pages under `docs/fiab/`)**
+- Foundation: index, what-is, whitepaper, parity-matrix, architecture
+- 12 ADRs (fiab-0001..0012) — full architecture decision set
+- 11 workload parity pages (OneLake, Direct Lake, Mirroring, Real-Time
+  Intelligence, Activator, Data Agents, Copilot, Data Engineering,
+  Data Warehouse, Data Science, Fabric IQ family)
+- Console (3) + Services (3) + Governance (6) pages
+- Deployment (9), Operations (7) + Runbooks (12)
+- Compliance (11) — FedRAMP High, DoD SRG IL4/IL5/IL6 maps, ATO
+- Tutorials (8), Marketing kit (7), Workshops (3 — Federal + Commercial
+  5-day CoE), Use cases (5), Examples (9)
+- Sister comparison page `docs/comparison/csa-loom-vs-fabric.md`
+
+**Planning (DONE)**
+- 7 research reports `temp/fiab-research/01..07.md` (~3,200 lines)
+- 14 PRD section files + AMENDMENTS `temp/fiab-prd/` (~7,000 lines)
+- 25 PRPs `PRPs/active/csa-loom/PRP-00..25.md` (PRP-10 deferred)
+
+**Engineering (SCAFFOLDED — real impl tracked in PRPs)**
+- `platform/fiab/bicep/main.bicep` + 3 `.bicepparam` (commercial,
+  gcc, gcc-high) + admin-plane + landing-zone module stubs
+- `platform/fiab/azd/azure.yaml` (6 services registered)
+- 6 service scaffolds `apps/fiab-{console,setup-orchestrator,
+  mcp-config,activator-engine,mirroring-engine,direct-lake-shim}/`
+  (README + Dockerfile; console also has package.json + Next.js 14
+  + Fluent v9 + MSAL deps)
+- 3 nightly CI workflows `.github/workflows/deploy-fiab-{commercial,
+  gcc,gcch}.yml` (gcch with `environment: gcc-high-deploy` gate)
+- 2 CI scripts `.github/scripts/fiab-{smoke-test,teardown}.sh`
+
+**Validation**
+- `mkdocs build --strict` clean ✓ (exit 0; confirmed by two
+  background runs: br9b52bq0, bitd2cwsv)
+- 61 link warnings fixed by converting internal cross-refs to absolute
+  GitHub URLs on `csa-loom-pillar` branch
+
+### 15 locked decisions
+
+Full text in `temp/fiab-prd/AMENDMENTS.md`. Brand split is critical:
+**CSA Loom** is the public brand; **FiaB** is repo-internal only.
+Marketplace deferred. v1 scope = Commercial + GCC + GCC-High; IL5 in
+v1.1; IL6 explicitly out.
+
+### GitHub issues opened
+
+- **Epic #279** — CSA Loom v1 build roadmap (updated with full wave map)
+- **PR #282** — pillar v0.1 ship
+- Wave 0 (closed via PR #282): #280 PRP-01, #281 PRP-19
+- **Wave 1 (OPEN — 8 issues):** #283 PRP-02 Bicep, #284 PRP-03 Console,
+  #285 PRP-04 Setup Wizard, #286 PRP-05 MCP Server, #287 PRP-06
+  Activator Engine, #288 PRP-07 Mirroring Engine, #289 PRP-08
+  Direct-Lake Shim, #290 PRP-09 Data Agents
+
+### Honest gaps documented openly
+
+- **Direct Lake**: no clean OSS parity. CSA Loom = Premium Import +
+  warm-cache, 5-30s freshness vs Fabric's sub-second. See
+  `docs/fiab/workloads/direct-lake-parity.md`
+- **GCC structural gap**: no F-SKU = no Direct Lake parity in GCC
+  (timing-independent)
+- **Fabric IQ family** (Ontology, Graph, Plan, Maps): v2 deferred;
+  Operations Agent in v1.1
+
+### Next priorities
+
+1. Get PR #282 reviewed + merged
+2. Submit "CSA Loom" brand to legal review (TapestryOne fallback per LD-1)
+3. Pick first Wave 1 issue to execute — recommend #283 (Bicep platform)
+   since it unblocks Wave 2 deploy validation (PRP-11)
+4. Build 2026 (Jun 2-3) freshness rescan — week of Jun 8 — before
+   Wave 2 starts
+
+### Critical context
+
+- [[fiab-pillar]] memory has full state for future sessions
+- [[writing-voice-no-customer-framing]] applies to all Loom docs
+- Direct Lake parity is the hardest single workload (LD-7); engineer
+  accordingly when picking up PRP-08
+
+---
+
+## Previous Session — 2026-05-06
 
 **Focus:** Wire production telemetry / feedback / backlog-with-autonomous-fix
 flow into the live Copilot chat surface, fronted by a security audit of the

@@ -1,0 +1,50 @@
+{
+  "name": "${MIRROR_ID}-azure-sql",
+  "config": {
+    "connector.class": "io.debezium.connector.sqlserver.SqlServerConnector",
+    "tasks.max": "1",
+
+    "database.hostname": "${SQL_SERVER_HOST}",
+    "database.port": "1433",
+    "database.user": "${SQL_USER}",
+    "database.password": "${SQL_PASSWORD_KV_REF}",
+    "database.names": "${SQL_DATABASE}",
+    "database.encrypt": "true",
+    "database.trustServerCertificate": "false",
+
+    "topic.prefix": "csa-loom-mirror.${MIRROR_ID}",
+    "table.include.list": "${TABLE_INCLUDE_LIST}",
+
+    "schema.history.internal.kafka.bootstrap.servers": "${EVENTHUBS_BOOTSTRAP}",
+    "schema.history.internal.kafka.topic": "csa-loom-schema-history.${MIRROR_ID}",
+    "schema.history.internal.consumer.security.protocol": "SASL_SSL",
+    "schema.history.internal.consumer.sasl.mechanism": "PLAIN",
+    "schema.history.internal.consumer.sasl.jaas.config": "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$ConnectionString\" password=\"${EVENTHUBS_CONNECTION_KV_REF}\";",
+    "schema.history.internal.producer.security.protocol": "SASL_SSL",
+    "schema.history.internal.producer.sasl.mechanism": "PLAIN",
+    "schema.history.internal.producer.sasl.jaas.config": "org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$ConnectionString\" password=\"${EVENTHUBS_CONNECTION_KV_REF}\";",
+
+    "snapshot.mode": "initial",
+    "snapshot.isolation.mode": "snapshot",
+    "snapshot.fetch.size": "10000",
+
+    "decimal.handling.mode": "double",
+    "time.precision.mode": "adaptive",
+    "tombstones.on.delete": "false",
+
+    "include.schema.changes": "true",
+    "provide.transaction.metadata": "true",
+
+    "transforms": "unwrap,addOpKind",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "transforms.unwrap.add.fields": "op,ts_ms,source.schema,source.table,source.lsn",
+    "transforms.addOpKind.type": "org.apache.kafka.connect.transforms.InsertField$Value",
+    "transforms.addOpKind.static.field": "__rowMarker__",
+    "transforms.addOpKind.static.value": "1",
+
+    "errors.tolerance": "none",
+    "errors.log.enable": "true"
+  }
+}

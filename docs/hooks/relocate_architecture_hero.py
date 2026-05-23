@@ -284,6 +284,16 @@ _SECTION_DEFAULTS: dict[str, tuple[str, str]] = {
         "Solution store — Azure API-first accelerator catalog: pre-built "
         "Bicep + ARM templates, sample apps, integration patterns",
     ),
+    # CSA Loom — Microsoft Fabric parity layer for Azure tenants where
+    # Fabric isn't yet available. Repo-internal directory: fiab/.
+    # Public brand throughout customer-facing copy is "CSA Loom".
+    "fiab": (
+        "assets/images/hero/fiab/index.svg",
+        "CSA Loom — the Microsoft Fabric experience for Azure tenants "
+        "where Fabric isn't yet available: lakehouses, warehouses, "
+        "notebooks, semantic models, Activator rules, Data Agents, "
+        "across Commercial, GCC, GCC-High, and DoD IL5",
+    ),
     # Section-level default for tutorial pages that don't have their own
     # numbered hero (tutorials/index.md, tutorials/great-expectations.md,
     # and any future legacy / unnumbered tutorial). The numbered
