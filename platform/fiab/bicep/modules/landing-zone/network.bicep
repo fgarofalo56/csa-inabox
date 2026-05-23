@@ -84,7 +84,65 @@ resource nsgDbx 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   location: location
   tags: complianceTags
   properties: {
-    securityRules: []
+    // Databricks Network Intent Policy requires these specific
+    // outbound rules — without them, vnet-injected workspaces fail
+    // with ConflictWithNetworkIntentPolicy on the worker subnets.
+    // Source: https://learn.microsoft.com/azure/databricks/security/network/secure-cluster/dbcc/network
+    securityRules: [
+      {
+        name: 'databricks-worker-to-sql'
+        properties: {
+          priority: 100
+          access: 'Allow'
+          direction: 'Outbound'
+          protocol: 'Tcp'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'Sql'
+          destinationPortRange: '3306'
+        }
+      }
+      {
+        name: 'databricks-worker-to-storage'
+        properties: {
+          priority: 101
+          access: 'Allow'
+          direction: 'Outbound'
+          protocol: 'Tcp'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'Storage'
+          destinationPortRange: '443'
+        }
+      }
+      {
+        name: 'databricks-worker-to-eventhub'
+        properties: {
+          priority: 102
+          access: 'Allow'
+          direction: 'Outbound'
+          protocol: 'Tcp'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'EventHub'
+          destinationPortRange: '9093'
+        }
+      }
+      // Required intra-worker SSH (host→worker) per ADB docs
+      {
+        name: 'databricks-workers-inbound'
+        properties: {
+          priority: 100
+          access: 'Allow'
+          direction: 'Inbound'
+          protocol: 'Tcp'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'VirtualNetwork'
+          destinationPortRange: '*'
+        }
+      }
+    ]
   }
 }
 
