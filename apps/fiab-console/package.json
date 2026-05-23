@@ -13,7 +13,7 @@
     "test:a11y": "playwright test --grep @a11y"
   },
   "dependencies": {
-    "next": "^14.2.0",
+    "next": "^15.5.18",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "@fluentui/react-components": "^9.54.0",
