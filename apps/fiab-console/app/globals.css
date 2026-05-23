@@ -1,0 +1,31 @@
+:root {
+  /* CSA Loom brand palette */
+  --loom-navy: #0f2a4a;
+  --loom-indigo: #3d2e80;
+  --loom-amber: #d89f3d;
+  --loom-paper: #faf8f2;
+
+  --loom-nav-width: 224px;
+  --loom-topbar-height: 48px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+#__next {
+  height: 100%;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}

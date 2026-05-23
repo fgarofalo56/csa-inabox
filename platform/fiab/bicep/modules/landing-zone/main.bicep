@@ -1,9 +1,5 @@
 // CSA Loom — Data Landing Zone orchestrator
 // Deployment scope: resource group (rg-csa-loom-dlz-<domain>-<region>)
-// Per-DLZ; one instance per domain in multi-sub mode
-//
-// Status: SCAFFOLDED — module stubs in this folder; real Bicep
-// implementations land via PRP-02.
 
 targetScope = 'resourceGroup'
 
@@ -11,12 +7,14 @@ targetScope = 'resourceGroup'
 param location string
 
 @description('Cloud boundary')
+@allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
 param boundary string
 
 @description('Domain name (Finance / Procurement / Mission Ops / etc.)')
 param domainName string
 
 @description('Container platform')
+@allowed(['containerApps', 'aks'])
 param containerPlatform string
 
 @description('Capacity SKU')
@@ -24,6 +22,21 @@ param capacitySku string
 
 @description('Admin Plane hub VNet ID for spoke peering')
 param adminPlaneHubVnetId string
+
+@description('Admin Plane private DNS zones object (from network module outputs)')
+param adminPlanePrivateDnsZoneIds object = {}
+
+@description('Admin Plane ADX cluster name (for ADX database creation)')
+param adminPlaneAdxClusterName string = 'adx-csa-loom-shared'
+
+@description('Admin Plane ADX cluster RG')
+param adminPlaneAdxClusterRgName string
+
+@description('Admin Entra group object ID')
+param adminEntraGroupId string
+
+@description('Activator UAMI principal ID (from Admin Plane)')
+param activatorPrincipalId string = ''
 
 @description('Catalog endpoint from Admin Plane')
 param catalogEndpoint string
@@ -37,49 +50,149 @@ param databricksSqlWarehouseEnabled bool
 @description('Storage requires CMK (IL5)')
 param storageRequireCmk bool
 
+@description('Storage CMK key URI (required if storageRequireCmk)')
+param storageCmkKeyUri string = ''
+
+@description('Storage CMK UAMI ID (required if storageRequireCmk)')
+param storageCmkIdentityId string = ''
+
 @description('Power BI SKU')
 param powerBiSku string
+
+@description('Spoke VNet CIDR (must not overlap Admin Plane hub)')
+param spokeVnetCidr string = '10.${take(uniqueString(resourceGroup().id), 2)}.0.0/16'
 
 @description('Compliance tags')
 param complianceTags object
 
 // =====================================================================
-// Module stubs — each placeholder; real implementations land via PRP-02
+// 1. Spoke VNet (peered to Admin Plane hub)
 // =====================================================================
 
-// 1. Spoke VNet (peered to Admin Plane hub)
+module network 'network.bicep' = {
+  name: 'dlz-network'
+  params: {
+    location: location
+    domainName: domainName
+    spokeVnetCidr: spokeVnetCidr
+    adminPlaneHubVnetId: adminPlaneHubVnetId
+    complianceTags: complianceTags
+  }
+}
 
-// 2. Databricks workspace (Premium; UC managed conditional on boundary)
+// =====================================================================
+// 2. ADLS Gen2 storage account (the actual lakehouse)
+// =====================================================================
 
-// 3. Synapse workspace (Serverless SQL pool only)
+module storage 'storage.bicep' = {
+  name: 'dlz-storage'
+  params: {
+    location: location
+    domainName: domainName
+    requireCmk: storageRequireCmk
+    cmkKeyUri: storageCmkKeyUri
+    cmkIdentityId: storageCmkIdentityId
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    privateDnsZoneBlobId: adminPlanePrivateDnsZoneIds.blob
+    privateDnsZoneDfsId: adminPlanePrivateDnsZoneIds.dfs
+    complianceTags: complianceTags
+  }
+}
 
-// 4. ADX database (on the shared cluster in Admin Plane)
+// =====================================================================
+// 3. Databricks workspace
+// =====================================================================
 
-// 5. ADLS Gen2 storage accounts (per-workspace; HSM-CMK at IL5)
+module databricks 'databricks.bicep' = {
+  name: 'dlz-databricks'
+  params: {
+    location: location
+    domainName: domainName
+    spokeVnetName: network.outputs.spokeVnetName
+    privateSubnetName: network.outputs.databricksPrivateSubnetName
+    publicSubnetName: network.outputs.databricksPublicSubnetName
+    boundary: boundary
+    storageCmkKeyUri: storageCmkKeyUri
+    complianceTags: complianceTags
+  }
+}
 
-// 6. Power BI workspace (via Power BI REST — no ARM provider)
+// =====================================================================
+// 4. Synapse workspace (Serverless SQL pool)
+// =====================================================================
 
-// 7. Activator Engine (Container App or AKS workload)
+module synapse 'synapse.bicep' = {
+  name: 'dlz-synapse'
+  params: {
+    location: location
+    domainName: domainName
+    defaultStorageAccountName: storage.outputs.storageAccountName
+    adminEntraGroupId: adminEntraGroupId
+    complianceTags: complianceTags
+  }
+}
 
-// 8. Mirroring Engine (Container App or AKS workload)
+// =====================================================================
+// 5. Event Hubs namespace (Kafka surface for Mirroring CDC)
+// =====================================================================
 
-// 9. Direct-Lake Shim (Container App or AKS workload)
+module eventhubs 'eventhubs.bicep' = {
+  name: 'dlz-eventhubs'
+  params: {
+    location: location
+    domainName: domainName
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    privateDnsZoneServicebusId: adminPlanePrivateDnsZoneIds.servicebus
+    complianceTags: complianceTags
+  }
+}
 
-// 10. Workspace identity (UAMI for workspace items)
+// =====================================================================
+// 6. ADX database (on the Admin Plane shared cluster)
+// =====================================================================
 
-// 11. Metadata (KV + SQL DB for orchestration state) — reuse from
-//     Azure/data-landing-zone/modules/metadata.bicep
+module adx 'adx.bicep' = {
+  name: 'dlz-adx-db'
+  params: {
+    domainName: domainName
+    adxClusterName: adminPlaneAdxClusterName
+    adxClusterRgName: adminPlaneAdxClusterRgName
+    adxClusterLocation: location
+    adminEntraGroupId: adminEntraGroupId
+    activatorPrincipalId: activatorPrincipalId
+    complianceTags: complianceTags
+  }
+}
 
-// 12. Logging (LAW workspace) — reuse from
-//     Azure/data-landing-zone/modules/logging.bicep
+// =====================================================================
+// 7. Cosmos DB for application state
+// =====================================================================
 
-// 13. Runtimes (SHIR for on-prem connectivity — opt-in)
+module cosmos 'cosmos.bicep' = {
+  name: 'dlz-cosmos'
+  params: {
+    location: location
+    domainName: domainName
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    privateDnsZoneCosmosId: adminPlanePrivateDnsZoneIds.cosmos
+    complianceTags: complianceTags
+  }
+}
 
 // =====================================================================
 // Outputs
 // =====================================================================
 
-output spokeVnetId string = 'PLACEHOLDER-spoke-vnet-resource-id'
-output databricksWorkspaceUrl string = 'https://PLACEHOLDER.azuredatabricks.net'
-output synapseEndpoint string = 'PLACEHOLDER-synapse-serverless-endpoint'
-output adxDatabaseUrl string = 'PLACEHOLDER-adx-database'
+output spokeVnetId string = network.outputs.spokeVnetId
+output databricksWorkspaceUrl string = databricks.outputs.workspaceUrl
+output databricksWorkspaceId string = databricks.outputs.workspaceId
+output synapseEndpoint string = synapse.outputs.synapseServerlessSqlEndpoint
+output adxDatabaseUrl string = adx.outputs.databaseUri
+output lakehouseDfsEndpoint string = storage.outputs.dfsEndpoint
+output bronzeContainerUrl string = storage.outputs.bronzeContainerUrl
+output silverContainerUrl string = storage.outputs.silverContainerUrl
+output goldContainerUrl string = storage.outputs.goldContainerUrl
+output landingZoneContainerUrl string = storage.outputs.landingZoneContainerUrl
+output eventHubsNamespaceFqdn string = eventhubs.outputs.namespaceFqdn
+output cosmosEndpoint string = cosmos.outputs.endpoint
+output storageEventGridTopicId string = storage.outputs.eventGridTopicId
