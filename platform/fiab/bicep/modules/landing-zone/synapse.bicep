@@ -213,28 +213,9 @@ resource extendedAudit 'Microsoft.Synapse/workspaces/extendedAuditingSettings@20
 // Diagnostic settings → standardized Loom LAW
 // =====================================================================
 
-module diag '../shared/diagnostic-settings.bicep' = {
-  name: 'diag-synapse-${domainName}'
-  scope: resourceGroup()
-  params: {
-    workspaceId: workspaceId
-    supportedLogCategories: [
-      'SynapseRbacOperations'
-      'GatewayApiRequests'
-      'BuiltinSqlReqsEnded'
-      'IntegrationPipelineRuns'
-      'IntegrationActivityRuns'
-      'IntegrationTriggerRuns'
-      'SQLSecurityAuditEvents'
-    ]
-    supportedMetricCategories: ['AllMetrics']
-  }
-}
-
-// Note: the diag module above scopes to the RG; the Synapse-specific
-// approach is to scope to the workspace. Bicep limitation: cross-scope
-// `existing` + `scope:` requires the resource to be in this module's
-// scope. Workaround: declare a thin diagnosticSettings resource here.
+// Diagnostic settings on the Synapse workspace — applied via inline
+// resource (not via shared helper module, because the helper would
+// need a `scope:` extension we can't pass through Bicep cleanly).
 
 resource diagInner 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   scope: synapseWs
