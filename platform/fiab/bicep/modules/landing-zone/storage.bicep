@@ -92,7 +92,10 @@ resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
       enabled: true
       days: 30
     }
-    isVersioningEnabled: true
+    // Blob versioning conflicts with HNS (ADLS Gen2) — disable.
+    // Delta Lake's _delta_log/ already gives us per-commit time travel,
+    // which is the use case versioning would have served.
+    isVersioningEnabled: false
     changeFeed: { enabled: true }
   }
 }

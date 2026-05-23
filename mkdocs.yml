@@ -548,6 +548,7 @@ nav:
           - Secrets Bootstrap (per boundary): fiab/runbooks/secrets-bootstrap.md
           - Purview Tenant-Existing Reuse: fiab/runbooks/purview-tenant-reuse.md
           - First Deploy (operator playbook): fiab/runbooks/first-deploy.md
+          - Deploy Iteration Log (live): fiab/runbooks/deploy-iteration-log.md
       - Workshops:
           - Index: fiab/workshops/index.md
           - 5-Day Federal CoE Workshop: fiab/workshops/5-day-federal-coe/index.md
