@@ -547,6 +547,8 @@ nav:
           - Index: fiab/workshops/index.md
           - 5-Day Federal CoE Workshop: fiab/workshops/5-day-federal-coe/index.md
           - 5-Day Commercial CoE Workshop: fiab/workshops/5-day-commercial-coe/index.md
+      - Brand:
+          - Legal Review Package: fiab/brand/legal-review-package.md
       - Marketing & Sales:
           - Pitch Deck: fiab/marketing/pitch-deck.md
           - Seller Playbook: fiab/marketing/seller-playbook.md
