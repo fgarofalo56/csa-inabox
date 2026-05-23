@@ -7,7 +7,7 @@ using Kusto.Data;
 using Kusto.Data.Common;
 using Kusto.Data.Net.Client;
 using System.Collections.Concurrent;
-using System.Data;
+using IDataReader = System.Data.IDataReader;
 
 namespace CsaLoom.Activator.Polling;
 
