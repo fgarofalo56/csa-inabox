@@ -8,6 +8,14 @@ on:
   schedule:
     - cron: '0 8 * * *'   # 08:00 UTC daily (after Commercial run)
   workflow_dispatch:
+    inputs:
+      run_mode:
+        description: 'Run mode — whatif-only validates Bicep + auth without provisioning; full does provision + smoke + teardown.'
+        type: choice
+        default: whatif-only
+        options:
+          - whatif-only
+          - full
 
 permissions:
   contents: read
@@ -56,6 +64,7 @@ jobs:
             --parameters adminEntraGroupId=${{ secrets.FIAB_GCC_ADMIN_GROUP_ID }}
 
       - name: Provision
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: |
           azd env new csa-loom-gcc-ci-${{ github.run_id }} --no-prompt
           azd env set AZURE_CLOUD $AZURE_CLOUD
@@ -68,16 +77,22 @@ jobs:
         working-directory: platform/fiab/azd
 
       - name: Smoke test (GCC-specific — no Direct Lake)
+        if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: bash .github/scripts/fiab-smoke-test.sh
         env:
           CONSOLE_URL: $(azd env get-values | grep CONSOLE_URL | cut -d= -f2)
           SKIP_DIRECT_LAKE_TEST: true   # No F-SKU in GCC
 
       - name: Teardown
-        if: success()
+        if: success() && (github.event_name == 'schedule' || inputs.run_mode == 'full')
         run: bash .github/scripts/fiab-teardown.sh
         env:
           RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
+
+      - name: Note dry-run completion
+        if: success() && inputs.run_mode == 'whatif-only'
+        run: |
+          echo "✅ whatif-only run complete. Bicep + auth validated; no resources provisioned."
 
       - name: Notify on failure
         if: failure()
