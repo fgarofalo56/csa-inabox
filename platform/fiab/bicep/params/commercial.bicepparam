@@ -31,7 +31,11 @@ param databricksSqlWarehouseEnabled = true
 
 // Security
 param defenderForAIEnabled = true
-param purviewEnabled = true
+// Purview defaults OFF — many Microsoft tenants already have an
+// Enterprise-tier tenant-level Purview account (only one allowed per
+// tenant). Operator opts in once they've decided whether to reuse the
+// existing account (preferred) or scope a new one.
+param purviewEnabled = false
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false
 
