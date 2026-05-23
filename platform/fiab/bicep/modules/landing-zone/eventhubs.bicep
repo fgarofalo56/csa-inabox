@@ -57,13 +57,11 @@ resource ns 'Microsoft.EventHub/namespaces@2024-05-01-preview' = {
   }
 }
 
-// Mirroring CDC consumer group (Spark Structured Streaming reads here)
-resource cdcConsumerGroup 'Microsoft.EventHub/namespaces/eventhubs/consumergroups@2024-05-01-preview' = {
-  name: '${ns.name}/$default/csa-loom-mirroring-replicator'
-  properties: {
-    userMetadata: 'CSA Loom Mirroring Engine — Spark Structured Streaming consumer'
-  }
-}
+// Per-mirror Event Hubs (event hub + consumer group) are created at
+// mirror-registration time, not at namespace deploy time. The
+// Mirroring Engine setup wizard creates them via the Kafka Connect
+// REST API when a new mirror config is registered. See
+// docs/fiab/services/mirroring-engine.md for the registration flow.
 
 // Private endpoint
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {

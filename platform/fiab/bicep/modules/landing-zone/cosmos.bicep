@@ -32,6 +32,9 @@ param complianceTags object
 @allowed(['Strong', 'BoundedStaleness', 'Session', 'ConsistentPrefix', 'Eventual'])
 param defaultConsistency string = 'Session'
 
+@description('Zone-redundant write region. Off by default — zonal Cosmos capacity is constrained in eastus2 (per first deploy validation).')
+param zoneRedundant bool = false
+
 var accountName = take('cosmos-loom-${domainName}-${uniqueString(resourceGroup().id)}', 44)
 
 resource account 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
@@ -44,7 +47,7 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
     databaseAccountOfferType: 'Standard'
     consistencyPolicy: { defaultConsistencyLevel: defaultConsistency }
     locations: [
-      { locationName: location, failoverPriority: 0, isZoneRedundant: true }
+      { locationName: location, failoverPriority: 0, isZoneRedundant: zoneRedundant }
     ]
     enableAutomaticFailover: false
     publicNetworkAccess: 'Disabled'
