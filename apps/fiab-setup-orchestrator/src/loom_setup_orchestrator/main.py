@@ -26,9 +26,18 @@ from pydantic import BaseModel, Field
 
 from .orchestrator import OrchestratorBase, FoundryOrchestrator, MafOrchestrator
 from .deployment_state import DeploymentStateStore
+from .telemetry import configure_telemetry
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
+
+# Configure App Insights at module import (idempotent; no-op if env unset)
+configure_telemetry(
+    service_name="loom-setup-orchestrator",
+    extra_resource_attrs={
+        "csa-loom.app": "setup-orchestrator",
+    },
+)
 
 
 # =====================================================================

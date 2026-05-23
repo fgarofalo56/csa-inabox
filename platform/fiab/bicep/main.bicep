@@ -176,6 +176,8 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     containerPlatform: containerPlatform
     capacitySku: capacitySku
     adminPlaneHubVnetId: adminPlane.outputs.hubVnetId
+    adminPlaneLawId: adminPlane.outputs.lawId
+    adminPlaneAppInsightsConnectionString: adminPlane.outputs.appInsightsConnectionString
     adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adminEntraGroupId: adminEntraGroupId
@@ -204,6 +206,8 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     containerPlatform: containerPlatform
     capacitySku: capacitySku
     adminPlaneHubVnetId: adminPlane.outputs.hubVnetId
+    adminPlaneLawId: adminPlane.outputs.lawId
+    adminPlaneAppInsightsConnectionString: adminPlane.outputs.appInsightsConnectionString
     adminPlanePrivateDnsZoneIds: adminPlane.outputs.privateDnsZoneIds
     adminPlaneAdxClusterRgName: adminPlaneRgName
     adminEntraGroupId: adminEntraGroupId

@@ -10,7 +10,6 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
   contents: read
   issues: write
 
@@ -33,9 +32,20 @@ jobs:
       - name: Azure login (Commercial)
         uses: Azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # Client-secret auth — the limitlessdata_deploy SP has no
+          # federated credentials configured. Per repo memory the
+          # secret lives in GitHub secret AZURE_CLIENT_SECRET. To
+          # switch to OIDC, configure federated creds for subject
+          # `repo:fgarofalo56/csa-inabox:ref:refs/heads/main` (and
+          # `workflow_dispatch`) on the SP in Entra ID, then drop
+          # `client-secret` below.
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
 
       - name: Setup azd
         uses: Azure/setup-azd@v2

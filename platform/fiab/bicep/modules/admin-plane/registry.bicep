@@ -11,6 +11,9 @@ param privateEndpointSubnetId string
 @description('Private DNS zone ID for ACR')
 param privateDnsZoneAcrId string
 
+@description('Log Analytics workspace ID for diagnostic settings')
+param workspaceId string
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -67,6 +70,21 @@ resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@202
         name: 'acr-zone'
         properties: { privateDnsZoneId: privateDnsZoneAcrId }
       }
+    ]
+  }
+}
+
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  scope: acr
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { category: 'ContainerRegistryRepositoryEvents', enabled: true }
+      { category: 'ContainerRegistryLoginEvents', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
     ]
   }
 }

@@ -22,6 +22,9 @@ param privateEndpointSubnetId string
 @description('Private DNS zone ID for cosmos')
 param privateDnsZoneCosmosId string
 
+@description('Log Analytics workspace ID for diagnostic settings')
+param workspaceId string
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -134,6 +137,29 @@ resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@202
   properties: {
     privateDnsZoneConfigs: [
       { name: 'cosmos-zone', properties: { privateDnsZoneId: privateDnsZoneCosmosId } }
+    ]
+  }
+}
+
+// Diagnostic settings → standardized Loom LAW
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  scope: account
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { category: 'DataPlaneRequests', enabled: true }
+      { category: 'MongoRequests', enabled: true }
+      { category: 'QueryRuntimeStatistics', enabled: true }
+      { category: 'PartitionKeyStatistics', enabled: true }
+      { category: 'PartitionKeyRUConsumption', enabled: true }
+      { category: 'ControlPlaneRequests', enabled: true }
+      { category: 'CassandraRequests', enabled: true }
+      { category: 'GremlinRequests', enabled: true }
+      { category: 'TableApiRequests', enabled: true }
+    ]
+    metrics: [
+      { category: 'Requests', enabled: true }
     ]
   }
 }

@@ -5,6 +5,7 @@ const nextConfig = {
   poweredByHeader: false,
   experimental: {
     serverActions: { allowedOrigins: ['localhost:3000', 'loom-console.*'] },
+    instrumentationHook: true,
   },
   async headers() {
     return [

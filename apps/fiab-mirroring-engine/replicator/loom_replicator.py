@@ -37,6 +37,40 @@ logger = logging.getLogger("loom-replicator")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 
 
+def _configure_telemetry() -> None:
+    """App Insights telemetry — same pattern as setup-orchestrator.
+
+    On Databricks, the driver-side App Insights export ships job-level
+    events; per-task metrics flow via the Databricks-AppInsights
+    integration (configured in cluster init script outside this code).
+    """
+    conn = os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING")
+    if not conn:
+        logger.info("APPLICATIONINSIGHTS_CONNECTION_STRING not set; telemetry disabled")
+        return
+    try:
+        from azure.monitor.opentelemetry import configure_azure_monitor
+    except ImportError:
+        logger.warning("azure-monitor-opentelemetry not installed; telemetry disabled")
+        return
+    configure_azure_monitor(
+        connection_string=conn,
+        resource_attributes={
+            "service.name": "loom-mirroring-engine",
+            "service.version": "0.1.0",
+            "deployment.environment": os.environ.get("CSA_LOOM_BOUNDARY", "Unknown"),
+            "csa-loom.tier": "replicator",
+            "csa-loom.app": "fiab-mirroring-engine",
+            "csa-loom.mirror_id": os.environ.get("MIRROR_ID", "unknown"),
+        },
+        enable_live_metrics=True,
+    )
+    logger.info("App Insights telemetry configured for loom-mirroring-engine")
+
+
+_configure_telemetry()
+
+
 # =====================================================================
 # Mirror config — loaded from Cosmos DB at job start
 # =====================================================================
