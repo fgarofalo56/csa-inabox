@@ -102,6 +102,8 @@ pip-delete-this-directory.txt
 # ---------------------------
 node_modules/
 **/node_modules/
+.cache/
+**/.cache/
 # Defensive: any nested venv inside source tree (e.g. csa_platform/functions/*/.venv)
 **/functions/**/.venv/
 # Build artifacts (zips, deploy bundles) inside source tree
