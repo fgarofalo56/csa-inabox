@@ -9,7 +9,7 @@
 # The replicator side (PySpark) deploys via Databricks Bundle (azd-style),
 # not as a Container App.
 
-FROM quay.io/debezium/connect:2.7.0
+FROM quay.io/debezium/connect:3.0.0.Final
 
 USER root
 
