@@ -9,14 +9,14 @@ code, sample data, and step-by-step documentation.
 
 <div class="grid cards" markdown>
 
--   :material-cart: **Retail E2E** *(already FiaB-shaped)*
+-   :material-cart: **Retail E2E** *(already Loom-shaped)*
 
     Lakehouse + warehouse + semantic model + Direct-Lake-Shim refresh
     + Power BI report end-to-end.
 
     [→ Retail E2E](retail-e2e.md)
 
--   :material-robot: **Fabric Data Agent** *(already FiaB-shaped)*
+-   :material-robot: **Fabric Data Agent** *(already Loom-shaped)*
 
     Read-only Q&A pattern over a lakehouse with per-source few-shot
     examples + identity passthrough.

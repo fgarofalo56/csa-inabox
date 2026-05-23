@@ -50,7 +50,7 @@ central governance plane.
 |---|---|---|
 | Department CIO | Org-level | Reads everything; sets tenant-level policy |
 | Department CDO | Org-level | Catalog governance; cross-domain data product approval |
-| FiaB Admins (department-wide) | Org-level | Deploy + manage Admin Plane |
+| Loom Admins (department-wide) | Org-level | Deploy + manage Admin Plane |
 | Domain Stewards (per-agency) | Per-DLZ | Manage agency's DLZ; approve cross-domain access requests |
 | Workspace Admins (per-workspace) | Per-workspace | Manage individual analytics workspaces |
 | Workspace Members | Per-workspace | RW within their workspace |

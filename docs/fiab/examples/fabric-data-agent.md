@@ -1,6 +1,6 @@
 # Fabric Data Agent on CSA Loom
 
-Already FiaB-shaped from `examples/fabric-data-agent/` — the read-only
+Already Loom-shaped from `examples/fabric-data-agent/` — the read-only
 Q&A pattern over a lakehouse lifts directly into Loom Data Agents.
 
 ## What you'll build

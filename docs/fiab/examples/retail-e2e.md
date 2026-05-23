@@ -1,6 +1,6 @@
 # Retail E2E on CSA Loom
 
-End-to-end retail sales analytics. Already FiaB-shaped from the
+End-to-end retail sales analytics. Already Loom-shaped from the
 existing `examples/fabric-e2e/` — lifts directly into Loom Tutorial
 + Example pattern.
 

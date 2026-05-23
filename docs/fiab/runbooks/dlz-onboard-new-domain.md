@@ -18,7 +18,7 @@ deployment.
 
 ## Procedure (Console / Setup Wizard path)
 
-1. **Sign in to Loom Console** as a FiaB Admin
+1. **Sign in to Loom Console** as a Loom Admin
 2. Navigate to **Setup Wizard** (`/setup`)
 3. Click **Add Data Landing Zone**
 4. Wizard interviews:

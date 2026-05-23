@@ -484,6 +484,7 @@ nav:
       - Whitepaper: fiab/whitepaper.md
       - Parity Matrix: fiab/parity-matrix.md
       - Reference Architecture: fiab/architecture.md
+      - PRP Delivery Audit: fiab/prp-audit.md
       - Deployment:
           - Index: fiab/deployment/index.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md

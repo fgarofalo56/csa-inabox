@@ -1,0 +1,222 @@
+name: full-app-deploy-commercial
+
+# CSA Loom — end-to-end deploy of container apps into a provisioned
+# Admin Plane. Unblocks the chicken-and-egg ACR private-endpoint
+# problem by temporarily enabling public access, building + pushing
+# all images, then locking it back down. Finally re-deploys the
+# Bicep with deployAppsEnabled=true so the Container Apps come up
+# pointing at the new images.
+#
+# REQUIRES: a successful first deploy (run_mode=full) has already
+# provisioned the Admin Plane RG with ACR + Container Apps Env.
+#
+# Spend warning: each app build runs ~3-8 min in ACR Tasks; the
+# Container Apps stay up after the deploy (~$10-30/hr at F8).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (default v0.1)'
+        type: string
+        default: v0.1
+      skip_build:
+        description: 'Skip build phase (images already in ACR)'
+        type: boolean
+        default: false
+      enable_apps_after:
+        description: 'Re-run deploy with deployAppsEnabled=true after build'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  AZURE_LOCATION: eastus2
+
+jobs:
+  resolve:
+    name: Resolve ACR + admin RG
+    runs-on: ubuntu-latest
+    outputs:
+      acr_name: ${{ steps.acr.outputs.acr_name }}
+      acr_login_server: ${{ steps.acr.outputs.acr_login_server }}
+      rg: ${{ steps.acr.outputs.rg }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - id: acr
+        run: |
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          ACR=$(az acr list --resource-group "$RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv)
+          if [[ -z "$ACR" ]]; then
+            echo "::error::ACR not found in $RG — run deploy-fiab-commercial first."
+            exit 1
+          fi
+          SERVER=$(az acr show --name "$ACR" --query "loginServer" -o tsv)
+          echo "acr_name=$ACR" >> "$GITHUB_OUTPUT"
+          echo "acr_login_server=$SERVER" >> "$GITHUB_OUTPUT"
+          echo "rg=$RG" >> "$GITHUB_OUTPUT"
+          echo "::notice::ACR=$ACR login=$SERVER rg=$RG"
+
+  open-acr:
+    name: Temporarily open ACR public access
+    needs: resolve
+    if: ${{ !inputs.skip_build }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: Enable ACR public access
+        run: |
+          az acr update --name "${{ needs.resolve.outputs.acr_name }}" \
+            --public-network-enabled true --default-action Allow
+          echo "::warning::ACR ${{ needs.resolve.outputs.acr_name }} public access OPENED for build."
+
+  build:
+    name: Build ${{ matrix.app }} via Docker push
+    needs: [resolve, open-acr]
+    if: ${{ !inputs.skip_build }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - app: loom-console
+            ctx: ./apps/fiab-console
+          - app: loom-setup-orchestrator
+            ctx: ./apps/fiab-setup-orchestrator
+          - app: loom-mcp
+            ctx: ./apps/fiab-mcp-config
+          - app: loom-activator
+            ctx: ./apps/fiab-activator-engine
+          - app: loom-mirroring
+            ctx: ./apps/fiab-mirroring-engine
+          - app: loom-direct-lake-shim
+            ctx: ./apps/fiab-direct-lake-shim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: ACR login
+        run: az acr login --name "${{ needs.resolve.outputs.acr_name }}"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.ctx }}
+          file: ${{ matrix.ctx }}/Dockerfile
+          push: true
+          tags: |
+            ${{ needs.resolve.outputs.acr_login_server }}/${{ matrix.app }}:${{ inputs.tag || 'v0.1' }}
+            ${{ needs.resolve.outputs.acr_login_server }}/${{ matrix.app }}:${{ github.sha }}
+            ${{ needs.resolve.outputs.acr_login_server }}/${{ matrix.app }}:latest
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  close-acr:
+    name: Re-lock ACR (private endpoint only)
+    needs: [resolve, build]
+    if: always() && !inputs.skip_build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: Disable ACR public access
+        run: |
+          az acr update --name "${{ needs.resolve.outputs.acr_name }}" \
+            --public-network-enabled false --default-action Deny
+          echo "::notice::ACR ${{ needs.resolve.outputs.acr_name }} re-locked (private endpoint only)."
+
+  redeploy-with-apps:
+    name: Re-deploy Bicep with deployAppsEnabled=true
+    needs: [resolve, close-acr]
+    if: always() && inputs.enable_apps_after && needs.close-acr.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: Setup Bicep
+        run: az bicep install
+      - name: Deploy with apps enabled
+        run: |
+          set -e
+          DEPLOY_NAME="csa-loom-apps-${{ github.run_id }}"
+          az deployment sub create \
+            --name "$DEPLOY_NAME" \
+            --location "$AZURE_LOCATION" \
+            --template-file platform/fiab/bicep/main.bicep \
+            --parameters platform/fiab/bicep/params/commercial.bicepparam \
+            --parameters adminEntraGroupId='${{ secrets.FIAB_ADMIN_GROUP_ID }}' \
+            --parameters deployAppsEnabled=true
+          CONSOLE_URL=$(az deployment sub show --name "$DEPLOY_NAME" --query "properties.outputs.consoleUrl.value" -o tsv 2>/dev/null || echo "")
+          echo "::notice::Apps deployed. Console URL: $CONSOLE_URL"
+      - name: From-cluster app health
+        run: bash .github/scripts/fiab-post-provision-validate.sh
+        env:
+          RG_NAME: ${{ needs.resolve.outputs.rg }}
+          BOUNDARY: Commercial
+
+  notify:
+    name: Notify final state
+    needs: [resolve, build, close-acr, redeploy-with-apps]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const conclusion = '${{ needs.redeploy-with-apps.result }}';
+            const emoji = conclusion === 'success' ? '🎉' : '⚠️';
+            github.rest.issues.createComment({
+              issue_number: 279,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `${emoji} full-app-deploy-commercial run ${context.runId}: build=${'${{ needs.build.result }}'}, close-acr=${'${{ needs.close-acr.result }}'}, redeploy=${conclusion}`
+            });

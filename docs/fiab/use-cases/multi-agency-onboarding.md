@@ -28,7 +28,7 @@ Per [DLZ onboard new domain runbook](../runbooks/dlz-onboard-new-domain.md).
 
 ### Procedure
 
-1. Sign in to Loom Console as a FiaB Admin
+1. Sign in to Loom Console as a Loom Admin
 2. Navigate to **Setup Wizard** (`/setup`)
 3. Click **Add Data Landing Zone**
 4. Wizard interviews:

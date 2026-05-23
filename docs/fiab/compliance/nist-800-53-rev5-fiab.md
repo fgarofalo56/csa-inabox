@@ -34,7 +34,7 @@ specific NIST 800-53 Rev 5 control families. Extends parent
 
 - Per-workspace Entra groups created by customer
 - Loom Console "Admin → Workspaces → Members" surfaces all groups
-- PIM-eligible activation for FiaB Admins role (recommended)
+- PIM-eligible activation for Loom Admins role (recommended)
 - Quarterly access reviews via Entra ID
 
 ### AC-3 Access Enforcement
@@ -78,7 +78,7 @@ specific NIST 800-53 Rev 5 control families. Extends parent
 
 ### IA-2 Identification + Authentication
 
-- Entra ID mandatory; MFA enforced for FiaB Admins
+- Entra ID mandatory; MFA enforced for Loom Admins
 - Workspace identities (UAMI) for non-human auth
 
 ### IR-4 Incident Handling

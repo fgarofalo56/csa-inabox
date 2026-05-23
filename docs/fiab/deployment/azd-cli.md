@@ -22,7 +22,7 @@ parameter customization; suitable for production deploys.
 | `az` CLI ≥ 2.60 | `az --version` |
 | Bicep CLI (auto-installs) | `az bicep version` |
 | Contributor + User Access Administrator on target sub | `az role assignment list --assignee <upn>` |
-| Admin Entra group object ID (FiaB Admins) | See [Quickstart Step 2](quickstart.md) |
+| Admin Entra group object ID (Loom Admins) | See [Quickstart Step 2](quickstart.md) |
 
 ## Project layout
 
@@ -102,7 +102,7 @@ azd up
     subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
 - uses: azure/setup-azd@v2
-- name: Deploy FiaB
+- name: Deploy CSA Loom
   run: |
     azd env new ${{ github.run_id }}
     azd env set CSA_LOOM_BOUNDARY Commercial
