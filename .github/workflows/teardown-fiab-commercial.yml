@@ -1,0 +1,43 @@
+name: teardown-fiab-commercial
+
+# CSA Loom — manual teardown of partial / leftover deploy state.
+# Triggered when an iteration leaves resources behind that block
+# subsequent what-if or provision runs.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DELETE to confirm — this is irreversible.'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  AZURE_LOCATION: eastus2
+
+jobs:
+  teardown:
+    name: Teardown CSA Loom resources in Commercial
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'DELETE'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Run teardown
+        run: bash .github/scripts/fiab-teardown.sh
+        env:
+          RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}

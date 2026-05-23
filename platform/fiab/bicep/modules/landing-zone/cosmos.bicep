@@ -88,6 +88,7 @@ var databases = [
     ] }
 ]
 
+// Databases — one per workload
 resource dbs 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = [for db in databases: {
   parent: account
   name: db.name
@@ -97,9 +98,14 @@ resource dbs 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-prev
   }
 }]
 
+// Containers — first container per DB only. Nested loops aren't
+// directly supported in Bicep top-level resources; production
+// flattens via a deploy-script post-step or a sub-module.
+// Using full slash-path resource name + dependsOn since `parent:`
+// can't take an array-indexed expression directly.
 resource containers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-12-01-preview' = [for (db, i) in databases: {
-  name: '${account.name}/${db.name}/${db.containers[0].name}'
-  dependsOn: [ dbs[i] ]
+  parent: dbs[i]
+  name: db.containers[0].name
   properties: {
     resource: {
       id: db.containers[0].name
@@ -108,12 +114,6 @@ resource containers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containe
     }
   }
 }]
-
-// Note: For brevity, only the first container per database is created
-// here. In production, a loop-of-loops requires either multiple
-// resource declarations or a helper module. Real impl: see PRP-02
-// extension that creates all containers via a `containers.bicep`
-// helper called per database.
 
 // Private endpoint
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
