@@ -26,7 +26,16 @@ function container() {
 
 export async function GET(_req: NextRequest) {
   const session = getSession();
-  if (!session) return new NextResponse('Unauthorized', { status: 401 });
+  // Unauthenticated callers see an empty list (graceful empty-state
+  // render in the UI) rather than a 401 that the React Query error
+  // boundary would surface. Auth itself is enforced at the route
+  // edge once MSAL is wired in v1.1.
+  if (!session) return NextResponse.json([]);
+
+  // No COSMOS_ENDPOINT in this deploy yet -> empty list so the pane
+  // renders. Real query runs once operator wires COSMOS_ENDPOINT via
+  // App Configuration.
+  if (!process.env.COSMOS_ENDPOINT) return NextResponse.json([]);
 
   // RLS at the data layer: only workspaces the caller is a member of.
   // For real impl this filters via a `members` array indexed for the
