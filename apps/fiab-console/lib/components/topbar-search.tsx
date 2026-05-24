@@ -73,7 +73,7 @@ export function TopbarSearch() {
         placeholder="Search items, settings, item types…   (press / )"
         value={val}
         onChange={(_, d) => setVal(d.value)}
-        onFocus={open}
+        onClick={open}
         onKeyDown={(e) => { if (e.key === 'Enter') open(); }}
         aria-label="Search CSA Loom"
       />

@@ -70,25 +70,27 @@ export default function CapacityPage() {
         <Subtitle2>Compute pools</Subtitle2>
         <Button appearance="primary">+ Attach Azure service</Button>
       </div>
-      <Table aria-label="Compute pools">
+      <Table aria-label="Compute pools" className="loom-sticky-thead">
         <TableHeader><TableRow>
           <TableHeaderCell>Service</TableHeaderCell><TableHeaderCell>SKU</TableHeaderCell>
-          <TableHeaderCell>Region</TableHeaderCell><TableHeaderCell>Utilization</TableHeaderCell>
-          <TableHeaderCell>Cost</TableHeaderCell><TableHeaderCell>State</TableHeaderCell>
+          <TableHeaderCell>Region</TableHeaderCell>
+          <TableHeaderCell className="loom-num">Utilization</TableHeaderCell>
+          <TableHeaderCell className="loom-num">Cost</TableHeaderCell>
+          <TableHeaderCell>State</TableHeaderCell>
           <TableHeaderCell>Role in Loom</TableHeaderCell>
         </TableRow></TableHeader>
         <TableBody>
           {POOLS.map((p) => (
             <TableRow key={p.service}>
-              <TableCell>{p.service}</TableCell>
+              <TableCell style={{ fontWeight: 600 }}>{p.service}</TableCell>
               <TableCell><Caption1>{p.sku}</Caption1></TableCell>
               <TableCell>{p.region}</TableCell>
-              <TableCell>{p.util}</TableCell>
-              <TableCell>{p.cost}</TableCell>
+              <TableCell className="loom-num">{p.util}</TableCell>
+              <TableCell className="loom-num">{p.cost}</TableCell>
               <TableCell>
                 <Badge appearance="filled" color={p.state === 'Healthy' ? 'success' : p.state === 'Idle' ? 'subtle' : 'danger'}>{p.state}</Badge>
               </TableCell>
-              <TableCell><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{p.role}</Caption1></TableCell>
+              <TableCell><Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{p.role}</Caption1></TableCell>
             </TableRow>
           ))}
         </TableBody>

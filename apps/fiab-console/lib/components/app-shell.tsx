@@ -1,10 +1,18 @@
 'use client';
 
+/**
+ * AppShell — v1.12 topbar redesign per docs/fiab/ui-audit-v1.10.md §3.6.
+ * Brand (logo + wordmark only) | workspace context | search | action cluster.
+ * Tagline dropped from topbar; it lives in the home hero. Brand subtitle
+ * "Cloud Scale Analytics" moved to the brand tooltip / aria-label so screen
+ * readers + clipboard don't get "CSA LoomCloud Scale Analytics".
+ */
+
 import { ReactNode, useEffect, useState } from 'react';
 import {
   makeStyles, tokens, Avatar, Button,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
-  Divider,
+  Divider, Tooltip,
 } from '@fluentui/react-components';
 import {
   SignOut24Regular, Settings24Regular, Person24Regular,
@@ -39,49 +47,49 @@ const useStyles = makeStyles({
     color: 'white',
     display: 'flex',
     alignItems: 'center',
-    paddingLeft: '16px',
-    paddingRight: '12px',
-    gap: '8px',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.18)',
+    paddingLeft: 'var(--loom-space-4)',
+    paddingRight: 'var(--loom-space-3)',
+    gap: 'var(--loom-space-3)',
+    boxShadow: 'var(--loom-elev-2)',
     zIndex: 10,
     minHeight: 'var(--loom-topbar-height)',
   },
-  /* Brand block — uses fixed widths so it doesn't push out the search */
   brand: {
-    display: 'flex', alignItems: 'center', gap: 12,
+    display: 'flex', alignItems: 'center',
+    gap: 'var(--loom-space-2)',
     color: 'white',
     flexShrink: 0,
-    width: 'calc(var(--loom-nav-width) - 16px)',
-    minWidth: 'calc(var(--loom-nav-width) - 16px)',
-    overflow: 'hidden',
+    width: 'calc(var(--loom-nav-width) - var(--loom-space-4))',
     textDecoration: 'none',
+    padding: 'var(--loom-space-1) var(--loom-space-2)',
+    borderRadius: 'var(--loom-radius-md)',
+    transition: 'background-color var(--loom-motion-fast) var(--loom-motion-ease)',
+    ':hover': { backgroundColor: 'rgba(255,255,255,0.08)' },
+    ':focus-visible': { outline: '2px solid white', outlineOffset: '2px' },
   },
-  brandText: {
-    display: 'flex', flexDirection: 'column', minWidth: 0,
-    lineHeight: 1.15,
-  },
-  brandLine1: {
+  wordmark: {
     fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em',
     whiteSpace: 'nowrap',
   },
-  brandLine2: {
-    fontSize: 10, letterSpacing: '0.12em', fontWeight: 600,
-    textTransform: 'uppercase', opacity: 0.7,
-    whiteSpace: 'nowrap',
+  ctxChip: {
+    flex: '0 1 240px', minWidth: 0,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    border: '1px solid rgba(255,255,255,0.18)',
+    borderRadius: 'var(--loom-radius-full)',
+    padding: '4px 12px',
+    fontSize: 12, color: 'rgba(255,255,255,0.92)',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    cursor: 'pointer',
+    transition: 'background-color var(--loom-motion-fast) var(--loom-motion-ease)',
+    ':hover': { backgroundColor: 'rgba(255,255,255,0.16)' },
   },
-  divider: {
-    width: 1, height: 32, marginLeft: 4, marginRight: 8,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+  iconBtn: {
+    color: 'white',
+    transition: 'background-color var(--loom-motion-fast) var(--loom-motion-ease)',
+    ':hover': { backgroundColor: 'rgba(255,255,255,0.10)' },
     flexShrink: 0,
   },
-  taglineWrap: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 12, lineHeight: 1.3,
-    flex: '0 1 280px', minWidth: 0,
-    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-  },
-  iconBtn: { color: 'white !important', flexShrink: 0 },
-  actions: { display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 },
+  actions: { display: 'flex', alignItems: 'center', gap: 'var(--loom-space-1)', flexShrink: 0 },
   nav: {
     gridColumn: '1', gridRow: '2',
     backgroundColor: tokens.colorNeutralBackground1,
@@ -91,17 +99,15 @@ const useStyles = makeStyles({
   },
   navMain: { flex: 1 },
   navFooter: {
-    padding: '8px 12px',
+    padding: 'var(--loom-space-2) var(--loom-space-3)',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: 'flex', flexDirection: 'column', gap: 4,
+    display: 'flex', flexDirection: 'column', gap: 'var(--loom-space-1)',
   },
-  navFooterBtn: {
-    justifyContent: 'flex-start', width: '100%',
-  },
+  navFooterBtn: { justifyContent: 'flex-start', width: '100%' },
   main: {
     gridColumn: '2', gridRow: '2',
     overflow: 'auto',
-    padding: '20px 24px',
+    padding: 'var(--loom-space-5) var(--loom-space-5) var(--loom-space-6)',
     backgroundColor: 'var(--loom-app-bg)',
   },
 });
@@ -109,6 +115,7 @@ const useStyles = makeStyles({
 export function AppShell({ children }: { children: ReactNode }) {
   const styles = useStyles();
   const [me, setMe] = useState<MeResponse | null>(null);
+  const [workspace] = useState<string>('My workspace');
 
   useEffect(() => {
     let cancelled = false;
@@ -120,31 +127,41 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className={styles.root}>
-      <header className={styles.topbar}>
-        <Link href="/" className={styles.brand} aria-label="CSA Loom home">
-          <LoomLogo variant="icon" size={36} />
-          <div className={styles.brandText}>
-            <span className={styles.brandLine1}>CSA Loom</span>
-            <span className={styles.brandLine2}>Cloud Scale Analytics</span>
-          </div>
-        </Link>
-        <div className={styles.divider} />
-        <div className={styles.taglineWrap}>Weaving every Azure data service into one experience</div>
+      <header className={styles.topbar} role="banner">
+        <Tooltip content="CSA Loom — Cloud Scale Analytics · Weaving every Azure data service into one experience" relationship="label">
+          <Link href="/" className={styles.brand} aria-label="CSA Loom (Cloud Scale Analytics) — home">
+            <LoomLogo variant="icon" size={32} />
+            <span className={styles.wordmark}>CSA Loom</span>
+          </Link>
+        </Tooltip>
+        <Tooltip content="Switch workspace" relationship="label">
+          <button className={styles.ctxChip} aria-label="Current workspace">
+            <span style={{ opacity: 0.65, marginRight: 6 }}>Workspace ·</span>{workspace}
+          </button>
+        </Tooltip>
         <TopbarSearch />
-        <div className={styles.actions}>
-          <Button appearance="transparent" className={styles.iconBtn} icon={<ChatHelp24Regular />}
-            onClick={openFeedback} aria-label="Send feedback" title="Send feedback" />
-          <Button appearance="transparent" className={styles.iconBtn} icon={<Sparkle24Regular />}
-            onClick={openCopilot} aria-label="Open Copilot" title="Copilot (Ctrl+/)" />
+        <div className={styles.actions} role="toolbar" aria-label="Global actions">
+          <Tooltip content="Copilot (Ctrl+/)" relationship="label">
+            <Button appearance="transparent" className={styles.iconBtn} icon={<Sparkle24Regular />}
+              onClick={openCopilot} aria-label="Open Copilot" />
+          </Tooltip>
+          <Tooltip content="Send feedback" relationship="label">
+            <Button appearance="transparent" className={styles.iconBtn} icon={<ChatHelp24Regular />}
+              onClick={openFeedback} aria-label="Send feedback" />
+          </Tooltip>
           <ThemeToggle color="white" />
-          <Button appearance="transparent" className={styles.iconBtn} icon={<Question24Regular />}
-            aria-label="Help" title="Help" />
-          <Button appearance="transparent" className={styles.iconBtn} icon={<Settings24Regular />}
-            as="a" href="/admin" aria-label="Admin & settings" title="Admin" />
+          <Tooltip content="Help" relationship="label">
+            <Button appearance="transparent" className={styles.iconBtn} icon={<Question24Regular />}
+              aria-label="Help" />
+          </Tooltip>
+          <Tooltip content="Admin & settings" relationship="label">
+            <Button appearance="transparent" className={styles.iconBtn} icon={<Settings24Regular />}
+              as="a" href="/admin" aria-label="Admin and settings" />
+          </Tooltip>
           {me?.authenticated && me.user ? (
             <Menu>
               <MenuTrigger disableButtonEnhancement>
-                <Button appearance="transparent" className={styles.iconBtn} aria-label="Account">
+                <Button appearance="transparent" className={styles.iconBtn} aria-label={`Account · ${me.user.name}`}>
                   <Avatar name={me.user.name} size={28} color="colorful" />
                 </Button>
               </MenuTrigger>

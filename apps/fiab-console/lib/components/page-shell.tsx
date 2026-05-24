@@ -8,20 +8,21 @@
  */
 
 import { ReactNode } from 'react';
-import { Title2, Body1, makeStyles, tokens } from '@fluentui/react-components';
+import { LargeTitle, Body1, makeStyles, tokens } from '@fluentui/react-components';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '16px' },
+  root: { display: 'flex', flexDirection: 'column', gap: 'var(--loom-space-4)' },
   header: {
     display: 'flex',
-    alignItems: 'center',
-    gap: '16px',
-    paddingBottom: '12px',
+    alignItems: 'flex-start',
+    gap: 'var(--loom-space-4)',
+    paddingBottom: 'var(--loom-space-3)',
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  titleCol: { display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, minWidth: 0 },
-  subtitle: { color: tokens.colorNeutralForeground3 },
-  actions: { display: 'flex', alignItems: 'center', gap: '8px' },
+  titleCol: { display: 'flex', flexDirection: 'column', gap: 'var(--loom-space-1)', flex: 1, minWidth: 0 },
+  title: { fontFamily: 'var(--loom-font-display)', letterSpacing: '-0.01em' },
+  subtitle: { color: tokens.colorNeutralForeground2, maxWidth: '900px' },
+  actions: { display: 'flex', alignItems: 'center', gap: 'var(--loom-space-2)', paddingTop: 'var(--loom-space-1)' },
   body: { flex: 1, minHeight: 0 },
 });
 
@@ -38,7 +39,7 @@ export function PageShell({ title, subtitle, actions, children }: Props) {
     <div className={styles.root}>
       <header className={styles.header}>
         <div className={styles.titleCol}>
-          <Title2 as="h1">{title}</Title2>
+          <LargeTitle as="h1" className={styles.title}>{title}</LargeTitle>
           {subtitle && <Body1 className={styles.subtitle}>{subtitle}</Body1>}
         </div>
         {actions && <div className={styles.actions}>{actions}</div>}

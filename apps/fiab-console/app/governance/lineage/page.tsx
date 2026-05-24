@@ -80,7 +80,7 @@ export default function LineagePage() {
                   stroke="#7d6cff" strokeWidth="2" opacity="0.65" markerEnd="url(#arrow)" />
                 {e.cols && (
                   <text x={(a.x + 200 + b.x) / 2} y={(a.y + b.y) / 2 + 22}
-                    fontSize="10" fill="#666" textAnchor="middle">{e.cols}</text>
+                    fontSize="10" fill="#4b5563" textAnchor="middle">{e.cols}</text>
                 )}
               </g>
             );
@@ -94,8 +94,8 @@ export default function LineagePage() {
             <g key={n.id} transform={`translate(${n.x},${n.y})`}>
               <rect width="200" height="60" rx="8" fill="#fff" stroke={TYPE_COLOR[n.type]} strokeWidth="2" />
               <rect width="6" height="60" rx="2" fill={TYPE_COLOR[n.type]} />
-              <text x="16" y="22" fontSize="11" fill="#999" textTransform="uppercase">{n.type}</text>
-              <text x="16" y="42" fontSize="13" fontWeight="600" fill="#111">{n.label}</text>
+              <text x="16" y="22" fontSize="11" fill="#525252" textTransform="uppercase" fontWeight="600">{n.type}</text>
+              <text x="16" y="42" fontSize="13" fontWeight="600" fill="#1a1a1a">{n.label}</text>
             </g>
           ))}
         </svg>

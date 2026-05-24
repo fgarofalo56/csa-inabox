@@ -1,24 +1,122 @@
+/* CSA Loom — design system tokens (v1.12)
+   ---------------------------------------------------------------
+   Spacing / type / radius / elevation / motion scales per the v1.10
+   UI audit (docs/fiab/ui-audit-v1.10.md §3). Components consume these
+   via `var(--loom-…)` from inside makeStyles or directly in CSS.
+
+   Rule of thumb: never write a raw px gap/padding in a `makeStyles`
+   block. Always go through the scale.
+*/
+
 :root {
-  /* CSA Loom brand palette */
-  --loom-navy: #0f2a4a;
-  --loom-indigo: #3d2e80;
-  --loom-blue: #1f6feb;
-  --loom-amber: #d89f3d;
-  --loom-paper: #faf8f2;
+  /* Brand palette — decomposed from the prior gradient-only definitions */
+  --loom-navy-900:   #0f2a4a;
+  --loom-navy-800:   #1a1342;
+  --loom-indigo-700: #3d2e80;    /* primary brand */
+  --loom-indigo-600: #5e4dc0;
+  --loom-indigo-500: #7d6cff;
+  --loom-indigo-300: #aea0ff;
+  --loom-indigo-100: #ece8fa;
+  --loom-azure-700:  #0050b3;
+  --loom-azure-600:  #1f6feb;    /* secondary brand */
+  --loom-azure-500:  #4c8ef0;
+  --loom-amber-500:  #d89f3d;    /* accent */
+  --loom-amber-400:  #e6b566;
+  --loom-magenta-500:#e94b8a;
+  --loom-teal-500:   #28d2c2;
+  --loom-paper:      #faf8f2;
 
-  --loom-nav-width: 240px;
-  --loom-topbar-height: 56px;
+  /* Semantic surfaces (theme-aware) */
+  --loom-surface-canvas:  #f4f4f6;
+  --loom-surface-raised:  #ffffff;
+  --loom-surface-sunken:  #ebebef;
+  --loom-stroke-subtle:   #e1e1e6;
 
-  /* Topbar bg per theme (dark gradient in light mode, slightly different in dark) */
-  --loom-topbar-bg: linear-gradient(90deg, #0f2a4a 0%, #1a1342 50%, #3d2e80 100%);
-  --loom-hero-bg: linear-gradient(135deg, #3d2e80 0%, #1f6feb 55%, #d89f3d 130%);
-  --loom-app-bg: #f4f4f6;
+  /* Status — AA-tuned for both themes */
+  --loom-status-success:  #117865;
+  --loom-status-warning:  #ad6800;
+  --loom-status-danger:   #b91c4b;
+  --loom-status-info:     #0050b3;
+
+  /* Composed surfaces */
+  --loom-topbar-bg: linear-gradient(90deg, var(--loom-navy-900) 0%, var(--loom-navy-800) 50%, var(--loom-indigo-700) 100%);
+  --loom-hero-bg:   linear-gradient(135deg, var(--loom-indigo-700) 0%, var(--loom-azure-600) 55%, var(--loom-amber-500) 130%);
+  --loom-app-bg:    var(--loom-surface-canvas);
+
+  /* Layout primitives */
+  --loom-nav-width:      240px;
+  --loom-topbar-height:  56px;
+
+  /* Spacing scale */
+  --loom-space-1:  4px;
+  --loom-space-2:  8px;
+  --loom-space-3: 12px;
+  --loom-space-4: 16px;
+  --loom-space-5: 24px;
+  --loom-space-6: 32px;
+  --loom-space-7: 48px;
+  --loom-space-8: 64px;
+
+  /* Type scale (size / line-height — components apply font-weight) */
+  --loom-type-display-size: 32px;  --loom-type-display-lh: 1.2;
+  --loom-type-h1-size:      28px;  --loom-type-h1-lh:      1.25;
+  --loom-type-h2-size:      22px;  --loom-type-h2-lh:      1.3;
+  --loom-type-h3-size:      18px;  --loom-type-h3-lh:      1.35;
+  --loom-type-body-size:    14px;  --loom-type-body-lh:    1.5;
+  --loom-type-caption-size: 12px;  --loom-type-caption-lh: 1.4;
+  --loom-type-overline-size:11px;  --loom-type-overline-lh:1;
+  --loom-type-mono-size:    13px;  --loom-type-mono-lh:    1.45;
+
+  /* Radius scale */
+  --loom-radius-xs:   2px;
+  --loom-radius-sm:   4px;
+  --loom-radius-md:   6px;
+  --loom-radius-lg:  10px;
+  --loom-radius-xl:  16px;
+  --loom-radius-full: 9999px;
+
+  /* Elevation scale */
+  --loom-elev-0: none;
+  --loom-elev-1: 0 1px 2px rgba(0,0,0,0.06), 0 0 0 1px rgba(0,0,0,0.04);
+  --loom-elev-2: 0 2px 8px rgba(0,0,0,0.10);
+  --loom-elev-3: 0 8px 24px rgba(15,42,74,0.14);
+  --loom-elev-4: 0 16px 40px rgba(31,111,235,0.18);
+
+  /* Motion */
+  --loom-motion-fast:  120ms;
+  --loom-motion-base:  180ms;
+  --loom-motion-slow:  280ms;
+  --loom-motion-ease:  cubic-bezier(0.2, 0.0, 0.2, 1);
+  --loom-motion-emph:  cubic-bezier(0.3, 0.0, 0.1, 1);
+
+  /* Font stacks */
+  --loom-font-base: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --loom-font-display: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  --loom-font-mono: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
 }
 
 html[data-theme='dark'] {
+  --loom-surface-canvas:  #15131c;
+  --loom-surface-raised:  #1f1c2a;
+  --loom-surface-sunken:  #100e17;
+  --loom-stroke-subtle:   #2a2735;
+
   --loom-topbar-bg: linear-gradient(90deg, #060814 0%, #0b0a26 50%, #1a1342 100%);
-  --loom-hero-bg: linear-gradient(135deg, #1a1342 0%, #3d2e80 55%, #d89f3d 140%);
-  --loom-app-bg: #15131c;
+  --loom-hero-bg:   linear-gradient(135deg, #1a1342 0%, #3d2e80 55%, #d89f3d 140%);
+
+  /* Elevations are pulled stronger in dark to actually read */
+  --loom-elev-1: 0 1px 2px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
+  --loom-elev-2: 0 2px 8px rgba(0,0,0,0.45);
+  --loom-elev-3: 0 8px 24px rgba(0,0,0,0.55);
+  --loom-elev-4: 0 16px 40px rgba(0,0,0,0.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --loom-motion-fast: 0ms;
+    --loom-motion-base: 0ms;
+    --loom-motion-slow: 0ms;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -27,32 +125,39 @@ html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: var(--loom-font-base);
   background: var(--loom-app-bg);
-  /* Smooth theme transitions */
-  transition: background-color 0.2s ease;
+  transition: background-color var(--loom-motion-base) var(--loom-motion-ease);
 }
 
 #__next { height: 100%; }
 
 a { color: inherit; text-decoration: none; }
 
-/* Custom scrollbar — subtle, matches Fabric */
+/* Custom scrollbar — theme-aware */
 *::-webkit-scrollbar { width: 10px; height: 10px; }
 *::-webkit-scrollbar-thumb {
-  background-color: rgba(125, 108, 255, 0.25);
-  border-radius: 6px;
+  background-color: rgba(125, 108, 255, 0.30);
+  border-radius: var(--loom-radius-md);
   border: 2px solid transparent;
   background-clip: content-box;
 }
-*::-webkit-scrollbar-thumb:hover { background-color: rgba(125, 108, 255, 0.45); }
+*::-webkit-scrollbar-thumb:hover { background-color: rgba(125, 108, 255, 0.55); }
 *::-webkit-scrollbar-track { background: transparent; }
+html[data-theme='dark'] *::-webkit-scrollbar-thumb { background-color: rgba(174, 160, 255, 0.32); }
+html[data-theme='dark'] *::-webkit-scrollbar-thumb:hover { background-color: rgba(174, 160, 255, 0.55); }
 
-/* Subtle dot grid background for the main pane in light mode — Fabric-like depth */
+/* Subtle dot grid background for the main pane — Fabric-like depth */
 .loom-app-grid-bg {
-  background-image: radial-gradient(rgba(125, 108, 255, 0.10) 1px, transparent 1px);
+  background-image: radial-gradient(rgba(125, 108, 255, 0.08) 1px, transparent 1px);
   background-size: 24px 24px;
 }
 html[data-theme='dark'] .loom-app-grid-bg {
-  background-image: radial-gradient(rgba(125, 108, 255, 0.16) 1px, transparent 1px);
+  background-image: radial-gradient(rgba(125, 108, 255, 0.14) 1px, transparent 1px);
 }
+
+/* Right-aligned numeric cells (Capacity / Monitor tables) */
+.loom-num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Sticky table header */
+.loom-sticky-thead thead { position: sticky; top: 0; z-index: 1; background-color: var(--loom-surface-raised); box-shadow: 0 1px 0 var(--loom-stroke-subtle); }
