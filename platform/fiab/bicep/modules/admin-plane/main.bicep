@@ -298,6 +298,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         uamiId: identity.outputs.uamiMcpId
         uamiClientId: identity.outputs.uamiMcpClientId
         ingressPort: 8080
+        ingressExternal: false
         healthPath: '/.well-known/health'
         tier: 'mcp'
         minReplicas: 1
@@ -309,6 +310,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         uamiId: identity.outputs.uamiOrchestratorId
         uamiClientId: identity.outputs.uamiOrchestratorClientId
         ingressPort: 8000
+        ingressExternal: false
         healthPath: '/health'
         tier: 'orchestrator'
         minReplicas: 1
@@ -324,6 +326,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         uamiId: identity.outputs.uamiActivatorId
         uamiClientId: identity.outputs.uamiActivatorClientId
         ingressPort: 8080
+        ingressExternal: false
         healthPath: '/health'
         tier: 'activator'
         minReplicas: 1
@@ -335,6 +338,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         uamiId: identity.outputs.uamiMirroringId
         uamiClientId: identity.outputs.uamiMirroringClientId
         ingressPort: 8083
+        ingressExternal: false
         healthPath: '/connectors'
         tier: 'mirroring'
         minReplicas: 1
@@ -346,6 +350,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         uamiId: identity.outputs.uamiDirectLakeId
         uamiClientId: identity.outputs.uamiDirectLakeId
         ingressPort: 8080
+        ingressExternal: false
         healthPath: '/health'
         tier: 'direct-lake-shim'
         minReplicas: 1

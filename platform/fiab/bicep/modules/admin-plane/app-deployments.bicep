@@ -57,7 +57,13 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: contains(app, 'ingressPort') ? {
-        external: false   // VNet-only; cross-app via internal DNS
+        // External ingress on an INTERNAL env keeps traffic inside the
+        // VNet (env LB has no public IP) but lets the app's Envoy proxy
+        // accept requests from peered VNets — required for Bastion/
+        // jumpbox / WAF App Gateway / Front Door Premium scenarios.
+        // Apps that opt-in via `ingressExternal: false` (workers like
+        // MCP, Activator, Mirroring) stay sibling-only.
+        external: contains(app, 'ingressExternal') ? app.ingressExternal : true
         targetPort: app.ingressPort
         transport: 'http'
         allowInsecure: false
