@@ -75,6 +75,12 @@ var subnets = [
   {
     name: 'snet-apim'
     addressPrefix: '${prefix}.4.0/24'
+    delegations: [
+      {
+        name: 'Microsoft.Web/hostingEnvironments'
+        properties: { serviceName: 'Microsoft.Web/hostingEnvironments' }
+      }
+    ]
   }
   {
     name: 'snet-private-endpoints'

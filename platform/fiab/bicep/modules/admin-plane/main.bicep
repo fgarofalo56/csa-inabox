@@ -277,7 +277,7 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled) {
     location: location
     boundary: boundary
     foundryPortalEnabled: foundryPortalEnabled
-    hubStorageAccountId: aiFoundryEnabled ? foundryHubStorage.id : ''
+    hubStorageAccountId: foundryHubStorage!.id
     hubKeyVaultId: keyvault.outputs.keyVaultId
     hubContainerRegistryId: registry.outputs.acrId
     hubAppInsightsId: monitoring.outputs.appInsightsId
