@@ -70,7 +70,6 @@ export async function GET(req: NextRequest) {
       upn: account.username,
     };
     const cookieValue = encodeSessionCookie({
-      oboAssertion: result.accessToken,
       claims,
       exp: Math.floor((result.expiresOn?.getTime() ?? Date.now() + 3600_000) / 1000),
     });

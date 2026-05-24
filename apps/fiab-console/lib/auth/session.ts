@@ -1,9 +1,20 @@
 /**
- * Cookie-backed session for the BFF — v1.17.
- * Exports encode/decode primitives + cookie name + max age so route
- * handlers can build the raw Set-Cookie themselves on Web Response
- * (avoids Next.js cookie-jar abstraction that was stripping the
- * header — confirmed via live network inspection in v1.13-v1.16).
+ * Cookie-backed session for the BFF — v1.18.
+ *
+ * Cookie payload is intentionally MINIMAL: just the user's identity
+ * claims (oid, name, email, upn) + expiry. ~100 bytes encoded.
+ *
+ * Why: MSAL's access token is ~3KB which inflates the encrypted
+ * + base64-encoded cookie value past Front Door's per-header size
+ * limit (~4KB) and FD silently drops the Set-Cookie header. The
+ * resulting cookie was never reaching the browser even though every
+ * other layer of the stack was emitting it correctly.
+ *
+ * When the BFF needs an access token for downstream OBO calls (Graph,
+ * Synapse, etc.), it acquires one on demand via the MSAL confidential-
+ * client cache keyed by the user's homeAccountId — MSAL handles
+ * refresh transparently. No need to round-trip the token through the
+ * browser cookie.
  */
 
 import { cookies } from 'next/headers';
@@ -24,8 +35,9 @@ function getKey(): Buffer {
 }
 
 export interface SessionPayload {
-  oboAssertion: string;
+  /** Claims are the only thing in the cookie. Small + sufficient for /api/me + UI. */
   claims: UserClaims;
+  /** Unix seconds. */
   exp: number;
 }
 
@@ -57,7 +69,6 @@ export function getSession(): SessionPayload | null {
   }
 }
 
-/** Returns a raw Set-Cookie header value to clear the session. */
 export function clearSessionCookieHeader(): string {
   return `${COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 }
