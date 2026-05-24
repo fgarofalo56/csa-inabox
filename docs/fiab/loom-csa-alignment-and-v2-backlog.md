@@ -124,3 +124,80 @@ Per the user's "unleashing of CSA Loom" ask. Anything in this section is bigger 
 ### "Unleashed" copilot
 - Cross-item Copilot that can author multi-service workflows in one prompt ("ingest the SAP S/4 orders nightly, transform via dbt into a gold revenue Lakehouse table, train a churn model on it, publish as an APIM-fronted data product, alert me on accuracy drift"). Generates the pipeline + notebook + model + APIM API + Activator rule end to end.
 
+---
+
+## v2 add — Azure AI Foundry tab (the AI workbench surface)
+
+User-requested top-level surface. Foundry is the modern Azure AI dev platform — Loom should surface every Foundry capability natively so users never have to leave for `ai.azure.com`.
+
+**New top-level left-nav entry: `/foundry`** with these subpages:
+
+- **Hub & projects** — list all Foundry hubs the user can access across all subscriptions, drill into projects, switch between projects. Same picker UX as Foundry studio.
+- **Models catalog** — browse the Foundry model catalog (OpenAI, Llama, Mistral, Phi, Cohere, custom) with filters by modality / context / cost. One-click deploy to a project.
+- **Deployments** — list active model deployments per project, RU/s, throughput, capacity, deployment type (Standard / GlobalStandard / DataZone / Provisioned). Toggle PTU vs PAYG. Surface real cost.
+- **Prompt flow editor** — visual canvas for prompt-flow authoring (parallel to ADF / Synapse pipelines but for LLM chains). Variants, evaluation, deploy to endpoint.
+- **Evaluations** — built-in evaluators (groundedness, relevance, fluency, harm, custom) running over a held-out set. Compare runs side-by-side.
+- **Datasets** — manage the project's curated evaluation + grounding datasets. Connect to OneLake / ADLS / Blob.
+- **Indexes** — manage Azure AI Search vector indexes used by Foundry RAG flows. Embedding model picker, chunking strategy, refresh schedule.
+- **Connections** — Foundry connections to external resources (Azure OpenAI, Cosmos, AI Search, Content Safety, custom REST). Loom unifies these with its own connection registry.
+- **Content safety** — content filters per deployment, jailbreak detection, prompt shield config.
+- **Tracing & monitoring** — Foundry's built-in tracing UI for prompt-flow runs (per-span latency + token cost). Hooks into Loom's `/monitor` hub for unified observability.
+- **Agents (Foundry-native)** — Foundry's agent service primitives, distinct from Loom Data agents (which sit on top of Foundry agent infra). Tool registration, file search, code interpreter, OpenAPI tool plug-ins.
+- **Compute** — managed compute instances + clusters for fine-tuning + custom training. Surfaces in `/admin/capacity` rollup too.
+
+**Deployment requirements wired into the Loom Setup wizard:**
+- Provision a Foundry hub at first-run (or attach an existing one).
+- Per-project: assign storage account, key vault, AI Search, Application Insights, content-safety resource.
+- IL5 / FedRAMP variant: use the Gov-cloud Foundry endpoints (`*.api.azure.us`).
+- Cost-cap per project (so a runaway prompt flow can't blow the budget).
+
+**Item types added to the +New item dialog** (under a new `AI Foundry` workload category):
+- `foundry-project`, `foundry-deployment`, `foundry-prompt-flow`, `foundry-evaluation`,
+  `foundry-index`, `foundry-connection`, `foundry-agent`, `foundry-content-filter`,
+  `foundry-fine-tune-job`.
+
+**Why v2 (not v2.5):** Loom already surfaces ML model + ML experiment + Data agent + Copilot. Foundry is the umbrella those all sit under in 2026 — it's a coherence move, not net-new scope. The implementation effort is medium (a lot of REST proxying to `*.api.cognitive.microsoft.com` + `*.api.azureml.ms`).
+
+---
+
+## v3 — Power Platform + Copilot Studio direct integrations
+
+The next coherence layer after AI Foundry. Targets the no-code / fusion-team audience that consumes Loom's data products from Power Apps, Power Automate, Power BI, and Copilot Studio. Goal: same "never leave Loom" promise extended to the Power Platform stack.
+
+### Power Platform surfaces (new `/power-platform` top-level entry)
+
+- **Environments** — list Power Platform environments + Dataverse instances across the tenant. Region, SKU, capacity, who owns what.
+- **Solutions** — managed + unmanaged solutions per environment, with import / export / version diff (parallels Loom's deployment-pipelines for ALM symmetry).
+- **Dataverse tables** — surface every Dataverse table as a first-class item type alongside Loom's Lakehouses. Schema editor, relationships, business rules, security roles. Backed by the Dataverse Web API.
+- **Power Apps** — canvas + model-driven apps registered in each environment. One-click "Open in maker portal" passthrough, plus an in-Loom preview iframe.
+- **Power Automate** — cloud flows + desktop flows + business process flows. Run history surfaced into Loom's `/monitor` hub.
+- **Power Pages** — sites + branding + custom code. Edit / publish / deploy passthrough.
+- **AI Builder** — prebuilt + custom AI models registered with Power Platform. Cross-pollinates with the Foundry surface.
+- **Connectors** — full connector library (1100+) with custom-connector authoring. APIM-fronted Loom data products auto-published as Power Platform connectors here (closing the loop with the API marketplace).
+
+### Copilot Studio surfaces (new `/copilot-studio` top-level entry)
+
+- **Agents** — list, author, publish Copilot Studio agents per environment. Topic editor, knowledge-source picker, generative-AI grounding settings, channel publishing (Teams, Web, M365, custom).
+- **Knowledge sources** — manage SharePoint / Dataverse / OneDrive / public-website / file-upload knowledge sources per agent. Loom's OneLake + Lakehouse + Warehouse + API marketplace items become **first-class knowledge sources** for Copilot Studio agents.
+- **Topics & flows** — visual topic + dialog editor.
+- **Actions** — register Power Automate flows, REST APIs (via APIM), and Foundry agents as Copilot Studio actions.
+- **Analytics** — agent engagement, top topics, escalation rate, satisfaction.
+- **Publishing channels** — Teams app, M365 Copilot extension, web embed, IVR, custom Bot Framework channel.
+- **Templates** — Microsoft-shipped templates (HR, IT helpdesk, sales assistant) plus a CSA-curated library aligned with the v2.5 data-products library.
+
+### Why v3 (not v2)
+
+These are out-of-tenant-data-plane surfaces — Power Platform + Copilot Studio both have their own admin centers, identity model, and licensing. Wiring them needs:
+- Separate ADAL/MSAL token paths (`https://service.flow.microsoft.com`, `https://api.bap.microsoft.com`, etc.)
+- Per-environment connection management (Loom's current "workspace" primitive doesn't 1:1 map to PP environments — needs a new abstraction).
+- Solution / agent ALM that runs in parallel with Loom's existing deployment pipelines (don't want two competing release stories).
+
+Designing this right is a quarter, not a sprint — call it v3.
+
+### Cross-cutting in v3
+
+- **Unified ALM**: a single "Deploy" UI that promotes a coherent slice across Loom workspace items + Power Platform solution + Foundry deployment + Copilot Studio agent. One PR, one approval, one promotion — across data + AI + apps.
+- **Unified observability**: `/monitor` hub absorbs Power Automate flow runs, Copilot Studio session logs, and Foundry trace spans alongside Loom's existing pipeline / notebook / dataflow runs.
+- **Unified governance**: `/governance` Purview embed expands to register Power Platform connectors, Copilot Studio knowledge sources, and Foundry indexes as catalog assets with lineage to the underlying Lakehouses + Warehouses.
+
+
