@@ -53,9 +53,9 @@ param hubVnetCidr = '10.0.0.0/16'
 param adminEntraGroupId = '716f5ec5-20d0-4713-9e42-57ef931cd665'
 
 // Loom version + image tags — preserves currently deployed images
-param loomVersion = readEnvironmentVariable('LOOM_VERSION', 'v2.0')
+param loomVersion = readEnvironmentVariable('LOOM_VERSION', 'v2.1')
 param appImageTags = {
-  console: readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v2.0')
+  console: readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v2.1')
   mcp: readEnvironmentVariable('LOOM_MCP_TAG', 'v0.7')
   orchestrator: readEnvironmentVariable('LOOM_ORCHESTRATOR_TAG', 'v0.7')
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
