@@ -79,6 +79,10 @@ param dedicatedPoolCollation string = 'SQL_Latin1_General_CP1_CI_AS'
 @description('Provision the Dedicated pool paused on creation (recommended — Loom resumes on demand from the editor).')
 param dedicatedPoolStartPaused bool = true
 
+@description('Dedicated pool backup storage redundancy. Some subscriptions block GRS via policy (Azure SQL Database Block Geo-redundant Backup Storage); LRS works everywhere.')
+@allowed(['LRS', 'ZRS', 'GRS'])
+param dedicatedPoolStorageRedundancy string = 'LRS'
+
 // =====================================================================
 // v2.0 — Private endpoint params
 // =====================================================================
@@ -130,7 +134,7 @@ resource dedicatedPool 'Microsoft.Synapse/workspaces/sqlPools@2021-06-01' = if (
   properties: {
     collation: dedicatedPoolCollation
     createMode: 'Default'
-    storageAccountType: 'GRS'
+    storageAccountType: dedicatedPoolStorageRedundancy
   }
 }
 
