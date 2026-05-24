@@ -21,21 +21,27 @@ import {
 
 const POOLS = [
   { service: 'Container Apps environment', sku: 'Consumption + Dedicated D4 plan', region: 'East US 2',
-    util: '38% CPU avg / 24h',  cost: '$612 / mo (proj.)', state: 'Healthy' },
+    util: '38% CPU avg / 24h',  cost: '$612 / mo (proj.)', state: 'Healthy', role: 'Loom console + worker apps' },
+  { service: 'Azure API Management', sku: 'StandardV2 · 2 units · csa-loom-apim', region: 'East US 2',
+    util: '4,820 req/min peak · 0.42% errors', cost: '$1,180 / mo', state: 'Healthy', role: 'API-first glue: every Loom-managed function, ML endpoint, GraphQL API, and data product is fronted here' },
   { service: 'Azure Databricks workspace', sku: 'Premium · ml-jobs-cluster (i3.xlarge x4)', region: 'East US 2',
-    util: '64% DBU avg / 24h',  cost: '$2,840 / mo (proj.)', state: 'Healthy' },
+    util: '64% DBU avg / 24h',  cost: '$2,840 / mo (proj.)', state: 'Healthy', role: 'Spark notebooks, ML training, Unity Catalog' },
   { service: 'Azure Synapse workspace', sku: 'Dedicated SQL DW400c + Serverless + Spark Medium pool', region: 'East US 2',
-    util: '42% DWU avg / 24h',  cost: '$3,920 / mo (proj.)', state: 'Healthy' },
+    util: '42% DWU avg / 24h',  cost: '$3,920 / mo (proj.)', state: 'Healthy', role: 'Dedicated + serverless T-SQL, Spark pools' },
   { service: 'Azure Data Factory', sku: 'AutoResolveIR + Self-hosted IR (sap-onprem)', region: 'East US 2',
-    util: '180 DIUs · 14h / 24h', cost: '$412 / mo (proj.)', state: 'Healthy' },
+    util: '180 DIUs · 14h / 24h', cost: '$412 / mo (proj.)', state: 'Healthy', role: 'Pipelines, mapping data flows, on-prem ingress' },
   { service: 'Azure Data Lake Analytics', sku: 'ADLA legacy · 10 AUs reserved', region: 'East US 2',
-    util: '0% — legacy U-SQL only', cost: '$48 / mo (idle)', state: 'Idle' },
+    util: '0% — legacy U-SQL only', cost: '$48 / mo (idle)', state: 'Idle', role: 'Legacy U-SQL workloads' },
   { service: 'Azure Machine Learning', sku: 'Compute cluster (Standard_DS3_v2 x0-6)', region: 'East US 2',
-    util: '12% / 24h', cost: '$214 / mo (proj.)', state: 'Healthy' },
+    util: '12% / 24h', cost: '$214 / mo (proj.)', state: 'Healthy', role: 'AML pipelines, registered models (APIM-fronted)' },
   { service: 'Azure Cosmos DB',  sku: 'Serverless · workspace-registry', region: 'East US 2',
-    util: '4,120 RU/s peak',  cost: '$36 / mo (proj.)', state: 'Healthy' },
+    util: '4,120 RU/s peak',  cost: '$36 / mo (proj.)', state: 'Healthy', role: 'Loom metadata, workspace registry' },
   { service: 'Azure Container Registry', sku: 'Premium · acrloomm56yejezt7bjo', region: 'East US 2',
-    util: '12.4 GB / 100 GB', cost: '$167 / mo', state: 'Healthy' },
+    util: '12.4 GB / 100 GB', cost: '$167 / mo', state: 'Healthy', role: 'Container images for Loom apps + custom workloads' },
+  { service: 'Microsoft Purview', sku: 'Standard · contoso-purview', region: 'East US 2',
+    util: '38 sources · 5.4 GB metadata', cost: '$280 / mo (proj.)', state: 'Healthy', role: 'Catalog, lineage, classifications, sensitivity labels' },
+  { service: 'Azure Event Hubs', sku: 'Standard · 4 TUs · csa-loom-ingest-eh', region: 'East US 2',
+    util: '2.1M events/min', cost: '$94 / mo', state: 'Healthy', role: 'Streaming ingest backing Loom Eventstreams' },
 ];
 
 const useStyles = makeStyles({
@@ -69,6 +75,7 @@ export default function CapacityPage() {
           <TableHeaderCell>Service</TableHeaderCell><TableHeaderCell>SKU</TableHeaderCell>
           <TableHeaderCell>Region</TableHeaderCell><TableHeaderCell>Utilization</TableHeaderCell>
           <TableHeaderCell>Cost</TableHeaderCell><TableHeaderCell>State</TableHeaderCell>
+          <TableHeaderCell>Role in Loom</TableHeaderCell>
         </TableRow></TableHeader>
         <TableBody>
           {POOLS.map((p) => (
@@ -81,6 +88,7 @@ export default function CapacityPage() {
               <TableCell>
                 <Badge appearance="filled" color={p.state === 'Healthy' ? 'success' : p.state === 'Idle' ? 'subtle' : 'danger'}>{p.state}</Badge>
               </TableCell>
+              <TableCell><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{p.role}</Caption1></TableCell>
             </TableRow>
           ))}
         </TableBody>

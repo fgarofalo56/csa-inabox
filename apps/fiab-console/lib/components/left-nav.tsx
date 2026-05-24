@@ -17,6 +17,7 @@ import {
   Settings24Regular,
   Bot24Regular,
   Notebook24Regular,
+  Connector24Regular,
 } from '@fluentui/react-icons';
 
 // Fabric-parity left nav: top-level surfaces only, like the real
@@ -27,6 +28,7 @@ const navItems = [
   { href: '/workspaces', icon: Building24Regular, label: 'Workspaces' },
   { href: '/browse', icon: Apps24Regular, label: 'Browse' },
   { href: '/onelake', icon: Database24Regular, label: 'OneLake catalog' },
+  { href: '/api-marketplace', icon: Connector24Regular, label: 'API marketplace' },
   { href: '/governance', icon: ShieldCheckmark24Regular, label: 'Governance' },
   { href: '/monitor', icon: ChartMultiple24Regular, label: 'Monitor' },
   { href: '/realtime-hub', icon: Flash24Regular, label: 'Real-Time hub' },

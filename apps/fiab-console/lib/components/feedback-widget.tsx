@@ -1,35 +1,29 @@
 'use client';
 
 /**
- * FeedbackWidget — floating "Send feedback" button bottom-right.
- * Opens a Dialog with two tabs: Bug / Feature. Captures the current
- * URL, browser UA, and Loom version, scrubs everything client-side,
- * POSTs to /api/feedback. Shows the resulting upstream issue link
- * when configured.
+ * FeedbackWidget — dialog opened by the topbar 'Send feedback' icon
+ * AND the 'Send feedback' button pinned at the bottom of the left
+ * nav. Two tabs (Bug / Feature). Privacy block visible in-dialog.
+ * No floating button (it overlapped the brand and content).
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Button, Textarea, Input, Tab, TabList, Caption1, Body1, Badge,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Bug24Regular, Lightbulb24Regular, ChatHelp24Regular } from '@fluentui/react-icons';
+import { Bug24Regular, Lightbulb24Regular } from '@fluentui/react-icons';
 import { redact, scrubEnv } from '@/lib/feedback/redaction';
 
 const LOOM_VERSION = process.env.NEXT_PUBLIC_LOOM_VERSION || 'dev';
+const EVT_OPEN = 'csaloom:open-feedback';
+
+export function openFeedback() {
+  window.dispatchEvent(new Event(EVT_OPEN));
+}
 
 const useStyles = makeStyles({
-  toggle: {
-    // v1.8: moved to bottom-left so it never overlaps the Copilot
-    // right rail or the topbar brand. Lives at the bottom of the
-    // left navigation column, Linear / Slack style.
-    position: 'fixed', left: 16, bottom: 16,
-    zIndex: 900,
-    borderRadius: 999,
-    paddingLeft: 16, paddingRight: 16,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
-  },
   surface: { maxWidth: 560, width: '95vw' },
   form: { display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 },
   privacy: {
@@ -51,6 +45,12 @@ export function FeedbackWidget() {
   const [desc, setDesc] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
+
+  useEffect(() => {
+    const o = () => { reset(); setOpen(true); };
+    window.addEventListener(EVT_OPEN, o);
+    return () => window.removeEventListener(EVT_OPEN, o);
+  }, []);
 
   async function send() {
     setSubmitting(true);
@@ -84,18 +84,8 @@ export function FeedbackWidget() {
   }
 
   return (
-    <>
-      <Button
-        className={s.toggle}
-        appearance="primary"
-        icon={<ChatHelp24Regular />}
-        onClick={() => { reset(); setOpen(true); }}
-        aria-label="Send feedback"
-      >
-        Feedback
-      </Button>
-      <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) reset(); }}>
-        <DialogSurface className={s.surface}>
+    <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) reset(); }}>
+      <DialogSurface className={s.surface}>
           <DialogBody>
             <DialogTitle>Send feedback</DialogTitle>
             <DialogContent>
@@ -155,6 +145,5 @@ export function FeedbackWidget() {
           </DialogBody>
         </DialogSurface>
       </Dialog>
-    </>
   );
 }

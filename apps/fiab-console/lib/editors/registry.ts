@@ -71,6 +71,12 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'adf-dataset':                 reg(() => import('./azure-services-editors'), 'AdfDatasetEditor'),
   'adf-trigger':                 reg(() => import('./azure-services-editors'), 'AdfTriggerEditor'),
   'usql-job':                    reg(() => import('./azure-services-editors'), 'UsqlJobEditor'),
+
+  // v1.9 — APIM-first surface (API-first methodology, data product marketplace)
+  'apim-api':                    reg(() => import('./apim-editors'),           'ApimApiEditor'),
+  'apim-product':                reg(() => import('./apim-editors'),           'ApimProductEditor'),
+  'apim-policy':                 reg(() => import('./apim-editors'),           'ApimPolicyEditor'),
+  'data-product':                reg(() => import('./apim-editors'),           'DataProductEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {

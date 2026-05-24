@@ -167,6 +167,16 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   // Azure Data Lake Analytics
   { slug: 'usql-job',                    displayName: 'U-SQL job',                   restType: 'UsqlJob',                   category: 'Azure Data Lake Analytics',
     description: 'U-SQL script over ADLS Gen1/Gen2 with C# UDFs. Legacy ADLA workloads, native in Loom.' },
+
+  // --- API-first surfacing: APIM is the runtime glue for every Loom-managed function, ML endpoint, and data product ---
+  { slug: 'apim-api',                    displayName: 'APIM API',                    restType: 'ApimApi',                   category: 'APIs and functions',
+    description: 'A versioned API on Azure API Management. Auto-imports OpenAPI / GraphQL / WSDL; ties to Loom items as backends.' },
+  { slug: 'apim-product',                displayName: 'APIM product',                restType: 'ApimProduct',               category: 'APIs and functions',
+    description: 'Bundles APIs into a subscribable offering: rate limits, quotas, terms, publisher portal landing.' },
+  { slug: 'apim-policy',                 displayName: 'APIM policy',                 restType: 'ApimPolicy',                category: 'APIs and functions',
+    description: 'Inbound / backend / outbound / on-error XML policy: JWT validation, rate-limit, cache, transform, mock.' },
+  { slug: 'data-product',                displayName: 'Data product',                restType: 'DataProduct',               category: 'APIs and functions',
+    description: 'Data-mesh-aligned package: dataset + semantic contract + APIM API + access policy + owner. Listed in the marketplace.' },
 ];
 
 export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
