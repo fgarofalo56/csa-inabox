@@ -2,8 +2,10 @@
 
 import { ReactNode, useEffect, useState } from 'react';
 import { makeStyles, tokens, Title3, Avatar, Button, Menu, MenuTrigger, MenuPopover, MenuList, MenuItem } from '@fluentui/react-components';
-import { SignOut24Regular, Settings24Regular, Person24Regular } from '@fluentui/react-icons';
+import { SignOut24Regular, Settings24Regular, Person24Regular, Search24Regular } from '@fluentui/react-icons';
 import { LeftNav } from './left-nav';
+import { CommandPalette } from './command-palette';
+import { CopilotPane } from './copilot-pane';
 
 interface MeResponse {
   authenticated: boolean;
@@ -70,6 +72,14 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
         <Button
           appearance="transparent"
+          icon={<Search24Regular />}
+          style={{ color: 'white' }}
+          aria-label="Search (Ctrl+K)"
+          title="Search (Ctrl+K)"
+          onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))}
+        />
+        <Button
+          appearance="transparent"
           icon={<Settings24Regular />}
           style={{ color: 'white' }}
           aria-label="Settings"
@@ -108,6 +118,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <LeftNav />
       </nav>
       <main className={styles.main}>{children}</main>
+      <CommandPalette />
+      <CopilotPane />
     </div>
   );
 }
