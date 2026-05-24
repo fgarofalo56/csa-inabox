@@ -1,11 +1,10 @@
 /**
  * Sign-out: clears the loom_session cookie and bounces home.
- * Also kicks off AAD federated sign-out so a different user can
- * sign in from the same browser without leaking the previous session.
+ * Also kicks off AAD federated sign-out. v1.17: raw Web Response.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { clearSession } from '@/lib/auth/session';
+import { NextRequest } from 'next/server';
+import { clearSessionCookieHeader } from '@/lib/auth/session';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,9 +25,15 @@ function logoutUrl(req: NextRequest): string {
 }
 
 export async function GET(req: NextRequest) {
-  const response = NextResponse.redirect(logoutUrl(req));
-  clearSession(response);
-  return response;
+  const target = logoutUrl(req);
+  const body = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${target}"><title>Signing out…</title></head><body><script>window.location.replace(${JSON.stringify(target)});</script></body></html>`;
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'set-cookie': clearSessionCookieHeader(),
+    },
+  });
 }
 
 export const POST = GET;

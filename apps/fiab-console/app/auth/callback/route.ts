@@ -1,19 +1,12 @@
 /**
- * MSAL redirect target. Exchanges the auth code for an id_token +
- * access_token, decodes claims, and stores them in the encrypted
- * loom_session cookie. On error, bounces to /?auth_error=<reason>.
- *
- * v1.16: Azure Front Door was confirmed via live network inspection to
- * strip the Set-Cookie header from 307 redirect responses (the cookie
- * was set correctly on the origin response, present in container logs,
- * but absent from the browser-received response headers). Workaround:
- * return a 200 HTML page with the Set-Cookie header AND a meta-refresh
- * / inline-script redirect to '/'. FD preserves Set-Cookie on 2xx.
+ * MSAL redirect target. v1.17: dropped NextResponse entirely — returns
+ * a raw Web Response so the Set-Cookie header passes through every
+ * layer without Next.js cookie-jar abstraction interference.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getMsalClient } from '@/lib/auth/msal';
-import { setSession } from '@/lib/auth/session';
+import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS } from '@/lib/auth/session';
 import type { UserClaims } from '@/lib/auth/msal';
 
 export const runtime = 'nodejs';
@@ -27,10 +20,8 @@ function origin(req: NextRequest): string {
   return `${proto}://${host}`;
 }
 
-/** Return a 200 HTML response that redirects to the given URL via meta-refresh + JS.
- *  Front Door strips Set-Cookie from 3xx responses, so we use 200 to keep the cookie. */
-function htmlRedirect(url: string): NextResponse {
-  const body = `<!DOCTYPE html>
+function htmlBody(url: string): string {
+  return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta http-equiv="refresh" content="0;url=${url}">
@@ -41,10 +32,14 @@ function htmlRedirect(url: string): NextResponse {
 <div>Signing you in…</div>
 <script>window.location.replace(${JSON.stringify(url)});</script>
 </body></html>`;
-  return new NextResponse(body, {
-    status: 200,
-    headers: { 'content-type': 'text/html; charset=utf-8' },
-  });
+}
+
+function htmlRedirect(url: string, cookieValue?: string): Response {
+  const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
+  if (cookieValue) {
+    headers['set-cookie'] = `${COOKIE_NAME}=${cookieValue}; Path=/; Max-Age=${MAX_AGE_SECS}; HttpOnly; Secure; SameSite=Lax`;
+  }
+  return new Response(htmlBody(url), { status: 200, headers });
 }
 
 export async function GET(req: NextRequest) {
@@ -52,23 +47,13 @@ export async function GET(req: NextRequest) {
   const code = url.searchParams.get('code');
   const aadError = url.searchParams.get('error');
   if (aadError) {
-    console.error('[auth/callback] AAD returned error', aadError, url.searchParams.get('error_description'));
+    console.error('[auth/callback] AAD error', aadError, url.searchParams.get('error_description'));
     return htmlRedirect(`/?auth_error=aad_${aadError}`);
   }
-  if (!code) {
-    return htmlRedirect(`/?auth_error=missing_code`);
-  }
-  if (!process.env.AZURE_CLIENT_ID || !process.env.AZURE_TENANT_ID) {
-    return htmlRedirect(`/?auth_error=not_configured`);
-  }
-  if (!process.env.AZURE_CLIENT_SECRET) {
-    console.error('[auth/callback] AZURE_CLIENT_SECRET missing');
-    return htmlRedirect(`/?auth_error=no_client_secret`);
-  }
-  if (!process.env.SESSION_SECRET) {
-    console.error('[auth/callback] SESSION_SECRET missing');
-    return htmlRedirect(`/?auth_error=no_session_secret`);
-  }
+  if (!code) return htmlRedirect(`/?auth_error=missing_code`);
+  if (!process.env.AZURE_CLIENT_ID || !process.env.AZURE_TENANT_ID) return htmlRedirect(`/?auth_error=not_configured`);
+  if (!process.env.AZURE_CLIENT_SECRET) return htmlRedirect(`/?auth_error=no_client_secret`);
+  if (!process.env.SESSION_SECRET) return htmlRedirect(`/?auth_error=no_session_secret`);
   try {
     const client = getMsalClient();
     const result = await client.acquireTokenByCode({
@@ -76,10 +61,7 @@ export async function GET(req: NextRequest) {
       scopes: SCOPES,
       redirectUri: `${origin(req)}/auth/callback`,
     });
-    if (!result?.account || !result.accessToken) {
-      console.error('[auth/callback] no account or accessToken in MSAL response');
-      return htmlRedirect(`/?auth_error=no_token`);
-    }
+    if (!result?.account || !result.accessToken) return htmlRedirect(`/?auth_error=no_token`);
     const account = result.account;
     const claims: UserClaims = {
       oid: account.homeAccountId.split('.')[0],
@@ -87,20 +69,16 @@ export async function GET(req: NextRequest) {
       email: account.username,
       upn: account.username,
     };
-    const response = htmlRedirect('/');
-    setSession(
-      {
-        oboAssertion: result.accessToken,
-        claims,
-        exp: Math.floor((result.expiresOn?.getTime() ?? Date.now() + 3600_000) / 1000),
-      },
-      response,
-    );
-    console.log('[auth/callback] session set for', claims.upn, 'via 200-HTML-redirect');
-    return response;
+    const cookieValue = encodeSessionCookie({
+      oboAssertion: result.accessToken,
+      claims,
+      exp: Math.floor((result.expiresOn?.getTime() ?? Date.now() + 3600_000) / 1000),
+    });
+    console.log('[auth/callback] session encoded for', claims.upn, '— cookie length', cookieValue.length);
+    return htmlRedirect('/', cookieValue);
   } catch (e) {
     const msg = (e as Error).message ?? 'unknown';
-    console.error('[auth/callback] exception during token exchange:', msg);
+    console.error('[auth/callback] exception:', msg);
     return htmlRedirect(`/?auth_error=exchange_failed&detail=${encodeURIComponent(msg.slice(0, 80))}`);
   }
 }
