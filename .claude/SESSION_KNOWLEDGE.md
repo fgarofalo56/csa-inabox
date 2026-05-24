@@ -6,7 +6,40 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-05-22 (continued, late evening)
+## Current Session — 2026-05-23 (UAT iteration 1)
+
+**Focus:** End-to-end UAT against the live deploy. Provisioned + deployed
+the UAT jumpbox, set up DNS/peering plumbing for the internal ACA env,
+ran Playwright smoke test against all 8 Console panes.
+
+**Outcome:** Blocked at ACA ingress (returns 404 for every hostname despite
+revisions Healthy + replicas Running). Console probes were the original
+blocker — `/api/health` route doesn't exist in the BFF; stripped probes
+via REST PUT and `loom-console--0000001` came up Healthy. Same probe
+misconfig affects MCP/Activator/Mirroring/Direct-Lake-Shim. Root cause
+of the ingress 404 not yet identified — see `docs/fiab/uat-report.md`.
+
+### What landed this session
+- `apps/fiab-console/tests/uat-console-smoke.mjs` — Playwright smoke test
+- `uat-runner-final.sh` — base64 runner for `az vm run-command invoke`
+- `docs/fiab/uat-report.md` — iteration 1 UAT report (in PR #325)
+- Private DNS zone `delightfulmoss-96202bfd.eastus2.azurecontainerapps.io`
+  manually created in `rg-csa-loom-admin-eastus2` with wildcard A records
+  for both `*` and `*.internal`, linked to hub + DLZ VNets
+- Container App `loom-console` probes stripped via REST PUT
+
+### Open follow-ups for next session
+1. Fix ACA ingress 404 — try `az containerapp revision restart` on each app
+   or force-bump via env var; if still 404, open ACA support ticket
+2. Add `/api/health` routes to MCP, Activator, Mirroring, Direct-Lake-Shim
+   OR strip probes from each app's container template
+3. Re-run UAT once routing works; capture screenshots; write iteration 2 report
+4. PR #310 (Next.js 15 major bump) needs review
+5. PR #276 (@azure/msal-browser dependabot conflict) needs resolution
+
+---
+
+## Previous Session — 2026-05-22 (continued, late evening)
 
 **Focus:** Execute all 4 outstanding items from earlier in session:
 (1) merge PR #282; (2) brand legal package; (3) all-PRP real
