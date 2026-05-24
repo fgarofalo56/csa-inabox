@@ -37,6 +37,8 @@ param complianceTags object
 // 10.0.4.0/24    - APIM internal
 // 10.0.5.0/24    - Private Endpoints
 // 10.0.6.0/24    - Reserved (future agent runtimes)
+// 10.0.7.0/27    - GatewaySubnet (P2S/S2S VPN; /27 is the AzureRM minimum)
+// 10.0.8.0/24    - snet-appgw (App Gateway v2 + WAF)
 
 var firstOctets = take(split(hubVnetCidr, '.'), 2)
 var prefix = '${firstOctets[0]}.${firstOctets[1]}'
@@ -82,6 +84,14 @@ var subnets = [
   {
     name: 'snet-reserved'
     addressPrefix: '${prefix}.6.0/24'
+  }
+  {
+    name: 'GatewaySubnet'
+    addressPrefix: '${prefix}.7.0/27'
+  }
+  {
+    name: 'snet-appgw'
+    addressPrefix: '${prefix}.8.0/24'
   }
 ]
 
@@ -329,6 +339,8 @@ output containerPlatformSubnetId string = '${hubVnet.id}/subnets/snet-container-
 output functionsSubnetId string = '${hubVnet.id}/subnets/snet-functions'
 output apimSubnetId string = '${hubVnet.id}/subnets/snet-apim'
 output privateEndpointsSubnetId string = '${hubVnet.id}/subnets/snet-private-endpoints'
+output gatewaySubnetId string = '${hubVnet.id}/subnets/GatewaySubnet'
+output appGatewaySubnetId string = '${hubVnet.id}/subnets/snet-appgw'
 output privateDnsZoneIds object = {
   keyvault: privateDnsZones[0].id
   acr: privateDnsZones[1].id
