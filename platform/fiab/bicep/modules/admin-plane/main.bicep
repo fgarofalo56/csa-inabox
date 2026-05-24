@@ -77,6 +77,17 @@ param apimEnabled bool = false
 @description('Deploy AI Search. Capacity in certain regions is intermittent; default off so first deploy succeeds even when AI Search SKUs are over-subscribed.')
 param aiSearchEnabled bool = false
 
+// ---------- User access patterns (Bastion is always-on; these add reach) ----------
+
+@description('Deploy a P2S VPN Gateway in the hub VNet (AAD auth, OpenVPN). ~30 min provisioning, ~$30/mo. Lets admin laptops reach the internal Console without Bastion. Default off — set true when ready.')
+param vpnGatewayEnabled bool = false
+
+@description('Deploy Application Gateway v2 + WAF v2 in front of the Console (public IP, in-VNet backend). ~15 min provisioning, ~$250/mo. Default off.')
+param appGatewayEnabled bool = false
+
+@description('Deploy Front Door Premium with a Private Link tunnel to the ACA env (global edge, managed cert, WAF). ~5 min provisioning, ~$330/mo. PE approval required after first deploy. Default off.')
+param frontDoorEnabled bool = false
+
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
 // because every other module wires diagnostic settings to it.
@@ -376,6 +387,44 @@ module presidio 'presidio-sidecar.bicep' = if (containerPlatform == 'containerAp
 }
 
 // =====================================================================
+// User access patterns (Bastion is always-on via network.bicep).
+// Each module is flag-gated so operators can pick the right path
+// without rewriting Bicep. See docs/fiab/access-patterns.md.
+// =====================================================================
+
+module vpnGateway 'vpn-gateway.bicep' = if (vpnGatewayEnabled) {
+  name: 'vpn-gateway'
+  params: {
+    location: location
+    gatewaySubnetId: network.outputs.gatewaySubnetId
+    complianceTags: complianceTags
+  }
+}
+
+module appGateway 'app-gateway.bicep' = if (appGatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled) {
+  name: 'app-gateway'
+  params: {
+    location: location
+    appGatewaySubnetId: network.outputs.appGatewaySubnetId
+    consoleFqdn: 'loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
+    consoleBackendIp: containerPlatformModule.outputs.caeStaticIp
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+module frontDoor 'front-door.bicep' = if (frontDoorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled) {
+  name: 'front-door'
+  params: {
+    location: location
+    caeId: containerPlatformModule.outputs.caeId
+    caeDefaultDomain: containerPlatformModule.outputs.caeDefaultDomain
+    consoleFqdn: 'loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // Outputs
 // =====================================================================
 
@@ -411,3 +460,8 @@ output uamiDirectLakeId string = identity.outputs.uamiDirectLakeId
 output privateDnsZoneIds object = network.outputs.privateDnsZoneIds
 output lawId string = monitoring.outputs.lawId
 output appInsightsId string = monitoring.outputs.appInsightsId
+
+// Access-pattern outputs (only meaningful when their flag is on)
+output vpnGatewayPublicIp string = vpnGatewayEnabled ? vpnGateway.outputs.vpnPublicIp : ''
+output appGatewayPublicFqdn string = (appGatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled) ? appGateway.outputs.publicFqdn : ''
+output frontDoorPublicUrl string = (frontDoorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled) ? frontDoor.outputs.frontDoorPublicUrl : ''

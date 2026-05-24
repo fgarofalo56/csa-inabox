@@ -490,6 +490,8 @@ nav:
       - Live Deploy Status (2026-05-23): fiab/live-deploy-status.md
       - UAT Report (Iteration 1 - blocked): fiab/uat-report.md
       - UAT Report (Iteration 2 - GREEN): fiab/uat-report-iter2.md
+      - Console Access Patterns: fiab/access-patterns.md
+      - v1 Final Status + v2 Plan: fiab/v1-final-status-and-v2-plan.md
       - Deployment:
           - Index: fiab/deployment/index.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
@@ -614,7 +616,7 @@ nav:
           - GCC: fiab/compliance/gcc.md
           - GCC-High / IL4: fiab/compliance/gcc-high.md
           - DoD IL5 (v1.1): fiab/compliance/dod-il5.md
-          - Feature Ã- Boundary Matrix: fiab/compliance/feature-boundary-matrix.md
+          - Feature ï¿½- Boundary Matrix: fiab/compliance/feature-boundary-matrix.md
           - Defender AI Workaround: fiab/compliance/defender-ai-workaround.md
           - NIST 800-53 r5 (extension): fiab/compliance/nist-800-53-rev5-fiab.md
           - CMMC 2.0 L2 (extension): fiab/compliance/cmmc-2.0-l2-fiab.md
@@ -2094,4 +2096,3 @@ nav:
           - "Azure Synapse Analytics Complete Tutorial Series": learn/tutorials/synapse/README.md
       - "Best Practices (extra)": learn/best-practices-extra/index.md
       - "Code Labs - PySpark Fundamentals": learn/code-labs/pyspark-fundamentals.md
-

@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>loom-direct-lake-shim</UserSecretsId>
     <RootNamespace>CsaLoom.DirectLakeShim</RootNamespace>
+    <AssemblyName>CsaLoom.DirectLakeShim</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />

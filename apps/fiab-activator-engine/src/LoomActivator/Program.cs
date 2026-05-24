@@ -18,20 +18,26 @@ if (!string.IsNullOrEmpty(appConfigEndpoint))
             .ConfigureKeyVault(kv => kv.SetCredential(new DefaultAzureCredential())));
 }
 
-// Cosmos DB client (workspace + rule + state config)
+// Cosmos DB client (workspace + rule + state config).
+// CosmosClient construction is lazy (no network until first request) so
+// it's safe to register even before COSMOS_ENDPOINT lands via App Config.
 builder.Services.AddSingleton(_ =>
 {
     var endpoint = builder.Configuration["COSMOS_ENDPOINT"]
-        ?? throw new InvalidOperationException("COSMOS_ENDPOINT not set");
+        ?? "https://placeholder.documents.azure.com:443/";
     return new CosmosClient(endpoint, new DefaultAzureCredential());
 });
 
-// Redis connection (object state)
+// Redis connection (object state).
+// Use abortConnect=false so missing/unreachable Redis surfaces at first
+// command, not at host startup.
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
 {
     var conn = builder.Configuration["REDIS_CONNECTION"]
-        ?? throw new InvalidOperationException("REDIS_CONNECTION not set");
-    return ConnectionMultiplexer.Connect(conn);
+        ?? "localhost:6379";
+    var options = ConfigurationOptions.Parse(conn);
+    options.AbortOnConnectFail = false;
+    return ConnectionMultiplexer.Connect(options);
 });
 
 builder.Services.AddHttpClient("action-dispatcher", c =>
