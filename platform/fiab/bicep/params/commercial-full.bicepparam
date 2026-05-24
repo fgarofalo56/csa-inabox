@@ -52,6 +52,21 @@ param hubVnetCidr = '10.0.0.0/16'
 // Identity — real Loom Admins group
 param adminEntraGroupId = '716f5ec5-20d0-4713-9e42-57ef931cd665'
 
+// Loom version + image tags — preserves currently deployed images
+param loomVersion = readEnvironmentVariable('LOOM_VERSION', 'v2.0')
+param appImageTags = {
+  console: readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v2.0')
+  mcp: readEnvironmentVariable('LOOM_MCP_TAG', 'v0.7')
+  orchestrator: readEnvironmentVariable('LOOM_ORCHESTRATOR_TAG', 'v0.7')
+  activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
+  mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
+  directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+}
+
+// MSAL — passed from env vars (don't commit secrets to disk)
+param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '9844c28c-3b3a-4949-8d63-9eefa3b50a9d')
+param loomMsalClientSecret = readEnvironmentVariable('LOOM_MSAL_CLIENT_SECRET', '')
+
 // Multi-sub mode (empty for single-sub)
 param dlzSubscriptionIds = []
 param dlzDomainNames = []

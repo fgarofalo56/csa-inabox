@@ -11,11 +11,16 @@
  * Both use the same TDS connection shape — only the FQDN and database differ.
  */
 
-import { DefaultAzureCredential } from '@azure/identity';
+import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
 import sql from 'mssql';
 
 const SQL_SCOPE = 'https://database.windows.net/.default';
-const credential = new DefaultAzureCredential();
+// Prefer explicit UAMI when LOOM_UAMI_CLIENT_ID is set (Container App
+// runtime). Fall back to the default chain for local dev (az CLI).
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
+  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
+  : new DefaultAzureCredential();
 
 let pools: Map<string, sql.ConnectionPool> = new Map();
 

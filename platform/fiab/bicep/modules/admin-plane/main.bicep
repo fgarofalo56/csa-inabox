@@ -121,6 +121,9 @@ param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
 @description('Loom Storage account name (for ADLS Gen2 lake URLs). When empty, env vars omitted and the Lakehouse editor surfaces a config message.')
 param loomStorageAccount string = ''
 
+@description('Loom Cosmos account name. When empty, Cosmos env vars omitted.')
+param loomCosmosAccount string = ''
+
 @description('Azure AD tenant ID for MSAL on the Console.')
 param loomMsalTenantId string = subscription().tenantId
 
@@ -374,7 +377,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             { name: 'AZURE_CLOUD', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud' }
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
-            { name: 'LOOM_COSMOS_ENDPOINT', value: 'https://cosmos-loom-default-${uniqueString(loomDlzRg)}.documents.azure.com:443/' }
+            { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
           ],
           !empty(loomStorageAccount) ? [
@@ -384,13 +387,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LANDING_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/landing' }
           ] : [],
           !empty(loomMsalClientId) ? [
-            { name: 'AZURE_CLIENT_ID', value: loomMsalClientId }
-            { name: 'AZURE_CLIENT_SECRET', secretRef: 'azure-client-secret' }
+            { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }
+            { name: 'LOOM_MSAL_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             { name: 'SESSION_SECRET', secretRef: 'session-secret' }
-          ] : []
+            { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+          ] : [
+            { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+          ]
         )
         secrets: !empty(loomMsalClientId) ? [
-          { name: 'azure-client-secret', value: loomMsalClientSecret }
+          { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
           { name: 'session-secret', value: loomSessionSecret }
         ] : []
       }

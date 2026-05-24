@@ -200,6 +200,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
     loomStorageAccount: take('saloomdefault${uniqueString(singleDlzRg.id)}', 24)
+    loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
     loomVersion: loomVersion

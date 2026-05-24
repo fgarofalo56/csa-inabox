@@ -4,11 +4,14 @@
  * MI must hold Synapse Administrator (or equivalent) at the workspace.
  */
 
-import { DefaultAzureCredential } from '@azure/identity';
+import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
 
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const ARM_API = '2021-06-01';
-const credential = new DefaultAzureCredential();
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
+  ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
+  : new DefaultAzureCredential();
 
 function required(k: string): string {
   const v = process.env[k];
