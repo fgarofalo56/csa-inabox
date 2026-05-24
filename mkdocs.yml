@@ -487,6 +487,7 @@ nav:
       - PRP Delivery Audit: fiab/prp-audit.md
       - Portal Architecture (where admins + users go): fiab/portal-architecture.md
       - V2 Scope Expansion (2026-05-23 walkthrough): fiab/v2-scope-expansion.md
+      - Live Deploy Status (2026-05-23): fiab/live-deploy-status.md
       - Deployment:
           - Index: fiab/deployment/index.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
