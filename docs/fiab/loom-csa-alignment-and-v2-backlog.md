@@ -76,3 +76,51 @@ The v1.5 editors mock the studio UX. v2 should make them functional:
 - BFF routes that proxy to real Azure REST APIs (currently many return sample data).
 - Real Purview iframe (today shows config + placeholder) — needs the X-Frame-Options work from ADR 0019.
 - Per-page "Source of truth" link to the relevant CSA-in-a-Box doc / ADR so users can drill into the rationale.
+
+---
+
+## v2.5 — "Unleashed Loom" (the go-beyond-Fabric scope)
+
+Per the user's "unleashing of CSA Loom" ask. Anything in this section is bigger than 1:1 Fabric parity — it's where Loom surpasses Fabric by surfacing things Fabric doesn't touch.
+
+### Full-stack data governance
+- **Data quality services** — rule authoring (completeness / uniqueness / range / referential / format), per-dataset DQ score, profile diffs, alerting on regressions. Backed by Soda Core or Great Expectations behind APIM.
+- **Master data management (MDM)** — golden-record store with survivorship rules, fuzzy match config, steward review queue. Build on Microsoft MDM or open source (Talend MDM / Apache Atlas + custom).
+- **Metadata management** — beyond Purview lineage: business glossary CRUD, term-to-asset binding, term approval workflow, stewardship assignments.
+- **Automated data onboarding** — wizard that takes a source (SMB / SFTP / S3 / SQL / SaaS) → registers in Purview → spawns ADF/Synapse pipeline → lands in bronze → applies default classifications + label → publishes to OneLake catalog. Push-button.
+
+### SQL Server 2025 + Azure SQL family — first-class
+- Mirrored database editor: SQL Server 2025 source type with the new in-database mirroring + zero-ETL flow.
+- Direct integrations: Azure SQL DB, Azure SQL MI, SQL Server on VM, SQL Server on Arc — all browsable as native item types.
+- Replication topology editor (transactional / merge / snapshot) with health monitoring.
+- Hyperscale + zone-redundant management surfaces.
+
+### Geoanalytics platform (built-in)
+- Map item type evolves into a full geo workbench: layer composer (vector tiles, raster, real-time pins), spatial query editor (ST_* functions over Synapse + Lakehouse), routing + isochrone via Azure Maps, demographic enrichment.
+- Spatial index management (H3 / S2) per Lakehouse table.
+- Map-based dashboards as a Power-BI-equivalent.
+
+### Graph + knowledge store
+- Native Graph DB item type expands to support Gremlin (Cosmos DB), Cypher (Neo4j AuraDB on Azure), and GQL (Fabric Graph).
+- Knowledge-store item type — ingest unstructured docs → AI Search + vector store + graph extraction → query via APIM.
+- Graph notebook with visual traversal results.
+
+### Pre-built data products library (push-button)
+- Marketplace of CSA-curated solution templates:
+  - Modern data warehouse (Synapse + Power BI)
+  - Lambda architecture (Event Hubs + Stream Analytics + Synapse)
+  - Kappa / streaming-only (Eventstream + KQL + Activator)
+  - Lakehouse medallion (Databricks + Unity Catalog + Delta Sharing)
+  - IoT analytics (IoT Hub + Stream Analytics + ADX + Maps)
+  - Federated data mesh (multi-domain APIM + Purview policy + cross-tenant Delta Sharing)
+  - RAG + agent (AI Search + Azure OpenAI + APIM LLM policies)
+  - Geospatial mission analytics (Azure Maps + ADX geo + Power BI)
+- Each is one-click deployable into the customer's landing zone via the existing Loom deploy workflow + Bicep modules. Loom surfaces management + monitoring after deploy.
+
+### Truly-everything-in-Loom
+- Loom should never push users to: Synapse Studio, Databricks Workspace, ADF Studio, AML Studio, APIM portal, ADX Web, Stream Analytics editor, Logic Apps designer, Functions portal, Event Grid topic page, Service Bus explorer, IoT Hub device twin, Maps account, AI Foundry / OpenAI Studio, Cognitive Search admin, Purview portal (only as embed), Power BI Service. Every one of those gets a native Loom editor or an embedded iframe with token passthrough.
+- Federated identity passthrough so Loom's MSAL session unlocks each backend without re-auth.
+
+### "Unleashed" copilot
+- Cross-item Copilot that can author multi-service workflows in one prompt ("ingest the SAP S/4 orders nightly, transform via dbt into a gold revenue Lakehouse table, train a churn model on it, publish as an APIM-fronted data product, alert me on accuracy drift"). Generates the pipeline + notebook + model + APIM API + Activator rule end to end.
+
