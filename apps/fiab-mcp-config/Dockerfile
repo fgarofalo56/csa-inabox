@@ -43,4 +43,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
 # microsoft/mcp occasionally renames the published assembly. Falling
 # back to a glob-and-exec keeps us building against `main` without
 # pinning to a specific assembly name.
-ENTRYPOINT ["/bin/sh", "-c", "dll=$(ls /app/Azure.Mcp.Server*.dll /app/Microsoft.Mcp.Server*.dll 2>/dev/null | head -1); if [ -z \"$dll\" ]; then echo 'ERROR: no MCP server dll found in /app:'; ls /app; exit 1; fi; exec dotnet \"$dll\""]
+ENTRYPOINT ["/bin/sh", "-c", "dll=$(ls /app/azmcp.dll /app/Azure.Mcp.Server*.dll 2>/dev/null | head -1); if [ -z \"$dll\" ]; then echo 'ERROR: no MCP server dll found in /app:'; ls /app; exit 1; fi; exec dotnet \"$dll\""]

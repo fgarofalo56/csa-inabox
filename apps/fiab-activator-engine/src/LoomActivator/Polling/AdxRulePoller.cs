@@ -47,16 +47,29 @@ public class AdxRulePoller : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var workspaceId = _config["WORKSPACE_ID"] ?? throw new InvalidOperationException("WORKSPACE_ID not set");
-        var adxCluster = _config["ADX_CLUSTER_URI"] ?? throw new InvalidOperationException("ADX_CLUSTER_URI not set");
-        var adxDatabase = _config["ADX_DATABASE"] ?? throw new InvalidOperationException("ADX_DATABASE not set");
+        var workspaceId = _config["WORKSPACE_ID"];
+        var adxCluster = _config["ADX_CLUSTER_URI"];
+        var adxDatabase = _config["ADX_DATABASE"];
         var intervalSeconds = int.Parse(_config["POLL_INTERVAL_SECONDS"] ?? "30");
+
+        // Soft-idle when not fully configured. Container stays Healthy;
+        // poller spins up once an operator wires the env vars via App
+        // Configuration / Key Vault.
+        if (string.IsNullOrEmpty(workspaceId) || string.IsNullOrEmpty(adxCluster) || string.IsNullOrEmpty(adxDatabase))
+        {
+            _log.LogWarning("AdxRulePoller idling - WORKSPACE_ID/ADX_CLUSTER_URI/ADX_DATABASE not set");
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+            }
+            return;
+        }
 
         var kcsb = new KustoConnectionStringBuilder(adxCluster).WithAadAzureTokenCredentialsAuthentication(
             new DefaultAzureCredential());
         using var kusto = KustoClientFactory.CreateCslQueryProvider(kcsb);
 
-        _log.LogInformation("AdxRulePoller starting — workspace={Workspace} interval={Interval}s", workspaceId, intervalSeconds);
+        _log.LogInformation("AdxRulePoller starting - workspace={Workspace} interval={Interval}s", workspaceId, intervalSeconds);
 
         while (!stoppingToken.IsCancellationRequested)
         {
