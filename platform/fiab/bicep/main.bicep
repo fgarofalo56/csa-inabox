@@ -120,6 +120,17 @@ param aiSearchEnabled bool = false
 @description('Deploy ADX database in DLZ. Requires admin-plane ADX cluster to already exist (provisioned out-of-band today). Default off.')
 param adxEnabled bool = false
 
+// ---------- User access patterns ----------
+
+@description('Deploy a P2S VPN Gateway (AAD-auth, OpenVPN) in the hub VNet. ~30 min provisioning, ~$30/mo. Default off.')
+param vpnGatewayEnabled bool = false
+
+@description('Deploy Application Gateway v2 + WAF in front of the Console. ~15 min provisioning, ~$250/mo. Default off.')
+param appGatewayEnabled bool = false
+
+@description('Deploy Front Door Premium with Private Link to the ACA env. ~5 min provisioning + manual PE approval, ~$330/mo. Default off.')
+param frontDoorEnabled bool = false
+
 // =====================================================================
 // Resource group for Admin Plane
 // =====================================================================
@@ -164,6 +175,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     aiFoundryEnabled: aiFoundryEnabled
     apimEnabled: apimEnabled
     aiSearchEnabled: aiSearchEnabled
+    vpnGatewayEnabled: vpnGatewayEnabled
+    appGatewayEnabled: appGatewayEnabled
+    frontDoorEnabled: frontDoorEnabled
   }
 }
 
@@ -250,3 +264,8 @@ output consoleUrl string = adminPlane.outputs.consoleUrl
 output mcpServerUrl string = adminPlane.outputs.mcpServerUrl
 output adminPlaneHubVnetId string = adminPlane.outputs.hubVnetId
 output adminPlaneRgName string = adminPlaneRgName
+
+// Access-pattern outputs (empty unless their flag is on)
+output vpnGatewayPublicIp string = adminPlane.outputs.vpnGatewayPublicIp
+output appGatewayPublicFqdn string = adminPlane.outputs.appGatewayPublicFqdn
+output frontDoorPublicUrl string = adminPlane.outputs.frontDoorPublicUrl

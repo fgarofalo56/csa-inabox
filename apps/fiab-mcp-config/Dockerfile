@@ -39,4 +39,8 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
   CMD wget -q -O /dev/null http://localhost:8080/.well-known/health || exit 1
 
-ENTRYPOINT ["dotnet", "Azure.Mcp.Server.dll"]
+# Resolve the actual server entry-point dll at runtime — upstream
+# microsoft/mcp occasionally renames the published assembly. Falling
+# back to a glob-and-exec keeps us building against `main` without
+# pinning to a specific assembly name.
+ENTRYPOINT ["/bin/sh", "-c", "dll=$(ls /app/azmcp.dll /app/Azure.Mcp.Server*.dll 2>/dev/null | head -1); if [ -z \"$dll\" ]; then echo 'ERROR: no MCP server dll found in /app:'; ls /app; exit 1; fi; exec dotnet \"$dll\""]
