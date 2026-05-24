@@ -26,8 +26,9 @@ function logoutUrl(req: NextRequest): string {
 }
 
 export async function GET(req: NextRequest) {
-  clearSession();
-  return NextResponse.redirect(logoutUrl(req));
+  const response = NextResponse.redirect(logoutUrl(req));
+  clearSession(response);
+  return response;
 }
 
 export const POST = GET;
