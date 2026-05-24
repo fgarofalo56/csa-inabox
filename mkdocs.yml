@@ -156,7 +156,7 @@ nav:
   - Home: index.md
 
   # ============================================================
-  # 1. GET STARTED — first 30 minutes for any new visitor
+  # 1. GET STARTED - first 30 minutes for any new visitor
   # ============================================================
   - Get Started:
       - Welcome: index.md
@@ -177,7 +177,7 @@ nav:
           - Platform Admin: quickstarts/platform-admin.md
 
   # ============================================================
-  # 2. ARCHITECTURE — how the platform is designed and why
+  # 2. ARCHITECTURE - how the platform is designed and why
   # ============================================================
   - Architecture:
       - Overview: ARCHITECTURE.md
@@ -263,7 +263,7 @@ nav:
           - "0021: Two Rate Limiters": adr/0021-two-rate-limiters-not-duplicates.md
           - "0022: Copilot Surfaces vs Docs Widget": adr/0022-copilot-surfaces-vs-docs-widget.md
           - "0023: Release-please PRs auto-pass required status checks": adr/0023-release-please-status-bypass.md
-          - "0024: Two-tier test layout — per-package units + central integration": adr/0024-two-tier-test-layout.md
+          - "0024: Two-tier test layout - per-package units + central integration": adr/0024-two-tier-test-layout.md
           - "0025: APIM as the Integration Fabric": adr/0025-apim-as-integration-fabric.md
           - "0026: MS Learn MCP as External Grounding": adr/0026-ms-learn-mcp-as-external-grounding.md
       - Governance:
@@ -278,7 +278,7 @@ nav:
       - Disaster Recovery: DR.md
 
   # ============================================================
-  # 3. BUILD — hands-on tutorials, examples, patterns
+  # 3. BUILD - hands-on tutorials, examples, patterns
   # ============================================================
   - Build:
       - Tutorials:
@@ -319,7 +319,7 @@ nav:
           - "IoT Streaming": examples/iot-streaming.md
           - "Manufacturing IoT": examples/manufacturing-iot.md
           - "ML Lifecycle (Loan Default)": examples/ml-lifecycle.md
-          - "NASA — API-First Multi-Model": examples/nasa-api-first.md
+          - "NASA - API-First Multi-Model": examples/nasa-api-first.md
           - "NOAA Climate & Ocean": examples/noaa.md
           - "Retail Demand Forecasting": examples/retail-demand-forecasting.md
           - "Streaming": examples/streaming.md
@@ -378,7 +378,7 @@ nav:
           - Security Best Practices for DevOps: learn/10-devops/security-best-practices.md
 
   # ============================================================
-  # 4. USE CASES & WHITE PAPERS — by sector / scenario
+  # 4. USE CASES & WHITE PAPERS - by sector / scenario
   # ============================================================
   - Use Cases & White Papers:
       - Overview: use-cases/index.md
@@ -419,12 +419,12 @@ nav:
       - Multi-Cloud:
           - Data Virtualization with Azure: use-cases/multi-cloud-data-virtualization.md
       - API-First Data Strategy:
-          - Whitepaper — API-First Data Strategy on Azure: research/api-first-data-strategy-whitepaper.md
+          - Whitepaper - API-First Data Strategy on Azure: research/api-first-data-strategy-whitepaper.md
           - API-First Multi-Model AI Ecosystem: use-cases/api-first-multi-model-ai-ecosystem.md
           - Dataverse API Integration: use-cases/dataverse-api-integration.md
           - Enterprise Asset Management through APIM: use-cases/enterprise-asset-management-apim.md
           - Cross-Platform Integration (Connective Tissue): use-cases/cross-platform-integration-fabric.md
-          - Solution Store — Azure API-First Accelerators: solution-store/index.md
+          - Solution Store - Azure API-First Accelerators: solution-store/index.md
       - Research:
           - Index: research/index.md
           - Enterprise Data Platforms 2026: research/enterprise-data-platforms-2026.md
@@ -475,7 +475,7 @@ nav:
           - Real-Time Dashboards: learn/08-solutions/real-time-dashboards/README.md
 
   # ============================================================
-  # 5. CSA LOOM — Microsoft Fabric parity layer (Gov tenants)
+  # 5. CSA LOOM - Microsoft Fabric parity layer (Gov tenants)
   # Public brand: CSA Loom. Repo-internal directory: docs/fiab/.
   # ============================================================
   - CSA Loom:
@@ -488,8 +488,8 @@ nav:
       - Portal Architecture (where admins + users go): fiab/portal-architecture.md
       - V2 Scope Expansion (2026-05-23 walkthrough): fiab/v2-scope-expansion.md
       - Live Deploy Status (2026-05-23): fiab/live-deploy-status.md
-      - UAT Report (Iteration 1 — blocked): fiab/uat-report.md
-      - UAT Report (Iteration 2 — GREEN): fiab/uat-report-iter2.md
+      - UAT Report (Iteration 1 - blocked): fiab/uat-report.md
+      - UAT Report (Iteration 2 - GREEN): fiab/uat-report-iter2.md
       - Deployment:
           - Index: fiab/deployment/index.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
@@ -576,14 +576,14 @@ nav:
           - Sovereign AI Agents: fiab/use-cases/sovereign-ai-agents.md
           - Hybrid Fabric Commercial + CSA Loom Gov: fiab/use-cases/hybrid-topology.md
       - Tutorials:
-          - "01 — First Workspace": fiab/tutorials/01-first-workspace.md
-          - "02 — First Lakehouse + Delta tables": fiab/tutorials/02-first-lakehouse.md
-          - "03 — Direct Lake parity (warm-cache materializer)": fiab/tutorials/03-direct-lake-parity.md
-          - "04 — Activator rules over IoT stream": fiab/tutorials/04-activator-rules.md
-          - "05 — Data Agent over Lakehouse": fiab/tutorials/05-data-agent.md
-          - "06 — Mirroring from Cosmos DB to Lakehouse": fiab/tutorials/06-mirroring-cosmos.md
-          - "07 — Marketplace data product publishing": fiab/tutorials/07-marketplace-data-product.md
-          - "08 — Forward-migrate a Lakehouse to Fabric": fiab/tutorials/08-forward-migrate-to-fabric.md
+          - "01 - First Workspace": fiab/tutorials/01-first-workspace.md
+          - "02 - First Lakehouse + Delta tables": fiab/tutorials/02-first-lakehouse.md
+          - "03 - Direct Lake parity (warm-cache materializer)": fiab/tutorials/03-direct-lake-parity.md
+          - "04 - Activator rules over IoT stream": fiab/tutorials/04-activator-rules.md
+          - "05 - Data Agent over Lakehouse": fiab/tutorials/05-data-agent.md
+          - "06 - Mirroring from Cosmos DB to Lakehouse": fiab/tutorials/06-mirroring-cosmos.md
+          - "07 - Marketplace data product publishing": fiab/tutorials/07-marketplace-data-product.md
+          - "08 - Forward-migrate a Lakehouse to Fabric": fiab/tutorials/08-forward-migrate-to-fabric.md
       - Industry Examples:
           - Index: fiab/examples/index.md
           - Retail E2E: fiab/examples/retail-e2e.md
@@ -596,25 +596,25 @@ nav:
           - GeoAnalytics: fiab/examples/geoanalytics.md
       - ADRs:
           - Overview: fiab/adr/README.md
-          - "fiab-0001 — Fabric feature scope": fiab/adr/0001-fabric-feature-scope.md
-          - "fiab-0002 — Hybrid compute": fiab/adr/0002-compute-hybrid.md
-          - "fiab-0003 — Catalog layering": fiab/adr/0003-catalog-layering.md
-          - "fiab-0004 — Direct Lake parity": fiab/adr/0004-direct-lake-parity.md
-          - "fiab-0005 — Activator engine": fiab/adr/0005-activator-engine.md
-          - "fiab-0006 — Mirroring engine": fiab/adr/0006-mirroring-engine.md
-          - "fiab-0007 — Console framework": fiab/adr/0007-console-framework.md
-          - "fiab-0008 — Deployment shape": fiab/adr/0008-deployment-shape.md
-          - "fiab-0009 — Copilot orchestration": fiab/adr/0009-copilot-orchestration.md
-          - "fiab-0010 — Container host": fiab/adr/0010-container-host.md
-          - "fiab-0011 — Tenancy model": fiab/adr/0011-tenancy-model.md
-          - "fiab-0012 — Forward migration": fiab/adr/0012-forward-migration.md
+          - "fiab-0001 - Fabric feature scope": fiab/adr/0001-fabric-feature-scope.md
+          - "fiab-0002 - Hybrid compute": fiab/adr/0002-compute-hybrid.md
+          - "fiab-0003 - Catalog layering": fiab/adr/0003-catalog-layering.md
+          - "fiab-0004 - Direct Lake parity": fiab/adr/0004-direct-lake-parity.md
+          - "fiab-0005 - Activator engine": fiab/adr/0005-activator-engine.md
+          - "fiab-0006 - Mirroring engine": fiab/adr/0006-mirroring-engine.md
+          - "fiab-0007 - Console framework": fiab/adr/0007-console-framework.md
+          - "fiab-0008 - Deployment shape": fiab/adr/0008-deployment-shape.md
+          - "fiab-0009 - Copilot orchestration": fiab/adr/0009-copilot-orchestration.md
+          - "fiab-0010 - Container host": fiab/adr/0010-container-host.md
+          - "fiab-0011 - Tenancy model": fiab/adr/0011-tenancy-model.md
+          - "fiab-0012 - Forward migration": fiab/adr/0012-forward-migration.md
       - Compliance:
           - Index: fiab/compliance/index.md
           - Commercial baseline: fiab/compliance/commercial.md
           - GCC: fiab/compliance/gcc.md
           - GCC-High / IL4: fiab/compliance/gcc-high.md
           - DoD IL5 (v1.1): fiab/compliance/dod-il5.md
-          - Feature × Boundary Matrix: fiab/compliance/feature-boundary-matrix.md
+          - Feature �- Boundary Matrix: fiab/compliance/feature-boundary-matrix.md
           - Defender AI Workaround: fiab/compliance/defender-ai-workaround.md
           - NIST 800-53 r5 (extension): fiab/compliance/nist-800-53-rev5-fiab.md
           - CMMC 2.0 L2 (extension): fiab/compliance/cmmc-2.0-l2-fiab.md
@@ -622,7 +622,7 @@ nav:
           - ITAR (extension): fiab/compliance/itar-fiab.md
 
   # ============================================================
-  # 6. OPERATE — Day-2 ops, runbooks, compliance, migrations
+  # 6. OPERATE - Day-2 ops, runbooks, compliance, migrations
   # ============================================================
   - Operate:
       - Runbooks:
@@ -1305,7 +1305,7 @@ nav:
       - Deployment Guide: learn/deployment/README.md
 
   # ============================================================
-  # 6. REFERENCE — lookup material, schemas, matrices
+  # 6. REFERENCE - lookup material, schemas, matrices
   # ============================================================
   - Reference:
       - Log Schema: LOG_SCHEMA.md
@@ -2093,5 +2093,5 @@ nav:
           - "Tutorial 14: CI/CD Setup": learn/tutorials/synapse/14-cicd-setup.md
           - "Azure Synapse Analytics Complete Tutorial Series": learn/tutorials/synapse/README.md
       - "Best Practices (extra)": learn/best-practices-extra/index.md
-      - "Code Labs — PySpark Fundamentals": learn/code-labs/pyspark-fundamentals.md
+      - "Code Labs - PySpark Fundamentals": learn/code-labs/pyspark-fundamentals.md
 
