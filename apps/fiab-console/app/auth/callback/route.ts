@@ -51,8 +51,10 @@ export async function GET(req: NextRequest) {
     return htmlRedirect(`/?auth_error=aad_${aadError}`);
   }
   if (!code) return htmlRedirect(`/?auth_error=missing_code`);
-  if (!process.env.AZURE_CLIENT_ID || !process.env.AZURE_TENANT_ID) return htmlRedirect(`/?auth_error=not_configured`);
-  if (!process.env.AZURE_CLIENT_SECRET) return htmlRedirect(`/?auth_error=no_client_secret`);
+  const msalClientId = process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID;
+  const msalClientSecret = process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET;
+  if (!msalClientId || !process.env.AZURE_TENANT_ID) return htmlRedirect(`/?auth_error=not_configured`);
+  if (!msalClientSecret) return htmlRedirect(`/?auth_error=no_client_secret`);
   if (!process.env.SESSION_SECRET) return htmlRedirect(`/?auth_error=no_session_secret`);
   try {
     const client = getMsalClient();
