@@ -57,6 +57,20 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'map':                  reg(() => import('./phase4-editors'),           'MapEditor'),
   'operations-agent':     reg(() => import('./phase4-editors'),           'OperationsAgentEditor'),
   'data-agent':           reg(() => import('./phase4-editors'),           'DataAgentEditor'),
+
+  // v1.5 — Native Azure-service editors (Synapse, Databricks, ADF, U-SQL)
+  'synapse-dedicated-sql-pool':  reg(() => import('./azure-services-editors'), 'SynapseDedicatedSqlPoolEditor'),
+  'synapse-serverless-sql-pool': reg(() => import('./azure-services-editors'), 'SynapseServerlessSqlPoolEditor'),
+  'synapse-spark-pool':          reg(() => import('./azure-services-editors'), 'SynapseSparkPoolEditor'),
+  'synapse-pipeline':            reg(() => import('./azure-services-editors'), 'SynapsePipelineEditor'),
+  'databricks-notebook':         reg(() => import('./azure-services-editors'), 'DatabricksNotebookEditor'),
+  'databricks-job':              reg(() => import('./azure-services-editors'), 'DatabricksJobEditor'),
+  'databricks-cluster':          reg(() => import('./azure-services-editors'), 'DatabricksClusterEditor'),
+  'databricks-sql-warehouse':    reg(() => import('./azure-services-editors'), 'DatabricksSqlWarehouseEditor'),
+  'adf-pipeline':                reg(() => import('./azure-services-editors'), 'AdfPipelineEditor'),
+  'adf-dataset':                 reg(() => import('./azure-services-editors'), 'AdfDatasetEditor'),
+  'adf-trigger':                 reg(() => import('./azure-services-editors'), 'AdfTriggerEditor'),
+  'usql-job':                    reg(() => import('./azure-services-editors'), 'UsqlJobEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {

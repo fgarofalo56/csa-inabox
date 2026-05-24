@@ -22,7 +22,11 @@ export type WorkloadCategory =
   | 'Data Science'
   | 'Fabric IQ'
   | 'Power BI'
-  | 'APIs and functions';
+  | 'APIs and functions'
+  | 'Synapse Analytics'
+  | 'Azure Databricks'
+  | 'Azure Data Factory'
+  | 'Azure Data Lake Analytics';
 
 export interface FabricItemType {
   /** Route slug — used at /items/[slug]/[id] */
@@ -133,6 +137,36 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     description: 'Python functions with bindings to Fabric items and external connections.' },
   { slug: 'variable-library', displayName: 'Variable library', restType: 'VariableLibrary', category: 'APIs and functions',
     description: 'Centralized variables with value sets per environment (dev / test / prod).' },
+
+  // --- Azure-native services, surfaced 1:1 in Loom (no studio jumps) ---
+  // Synapse Analytics
+  { slug: 'synapse-dedicated-sql-pool',  displayName: 'Synapse dedicated SQL pool',  restType: 'SynapseDedicatedSqlPool',  category: 'Synapse Analytics',
+    description: 'Provisioned, MPP T-SQL warehouse. Query editor, monitoring, scaling — native in Loom.' },
+  { slug: 'synapse-serverless-sql-pool', displayName: 'Synapse serverless SQL pool', restType: 'SynapseServerlessSqlPool', category: 'Synapse Analytics',
+    description: 'Pay-per-query T-SQL over ADLS. OPENROWSET, external tables, ad-hoc analytics.' },
+  { slug: 'synapse-spark-pool',          displayName: 'Synapse Spark pool',          restType: 'SynapseSparkPool',          category: 'Synapse Analytics',
+    description: 'Apache Spark notebooks + job definitions on Synapse-managed clusters.' },
+  { slug: 'synapse-pipeline',            displayName: 'Synapse pipeline',            restType: 'SynapsePipeline',           category: 'Synapse Analytics',
+    description: 'Synapse Integrate canvas — pipelines, dataflows, triggers native to Synapse.' },
+  // Azure Databricks
+  { slug: 'databricks-notebook',         displayName: 'Databricks notebook',         restType: 'DatabricksNotebook',        category: 'Azure Databricks',
+    description: 'Databricks notebook cells (PySpark / SQL / R / Scala) with cluster attach.' },
+  { slug: 'databricks-job',              displayName: 'Databricks job',              restType: 'DatabricksJob',             category: 'Azure Databricks',
+    description: 'Multi-task Databricks job — notebooks, JARs, Python wheels, dbt, SQL.' },
+  { slug: 'databricks-cluster',          displayName: 'Databricks cluster',          restType: 'DatabricksCluster',         category: 'Azure Databricks',
+    description: 'All-purpose or job cluster — node types, autoscale, init scripts, libraries.' },
+  { slug: 'databricks-sql-warehouse',    displayName: 'Databricks SQL warehouse',    restType: 'DatabricksSqlWarehouse',    category: 'Azure Databricks',
+    description: 'Serverless / classic SQL warehouse with Unity Catalog and Photon.' },
+  // Azure Data Factory (separate from Fabric Data Factory)
+  { slug: 'adf-pipeline',                displayName: 'ADF pipeline',                restType: 'AdfPipeline',               category: 'Azure Data Factory',
+    description: 'Classic ADF pipeline — 90+ activities, IR-aware, on-prem via Self-hosted IR.' },
+  { slug: 'adf-dataset',                 displayName: 'ADF dataset',                 restType: 'AdfDataset',                category: 'Azure Data Factory',
+    description: 'Typed dataset over linked services — JSON, Parquet, Delimited, SQL, REST, etc.' },
+  { slug: 'adf-trigger',                 displayName: 'ADF trigger',                 restType: 'AdfTrigger',                category: 'Azure Data Factory',
+    description: 'Schedule, tumbling window, storage event, or custom event trigger.' },
+  // Azure Data Lake Analytics
+  { slug: 'usql-job',                    displayName: 'U-SQL job',                   restType: 'UsqlJob',                   category: 'Azure Data Lake Analytics',
+    description: 'U-SQL script over ADLS Gen1/Gen2 with C# UDFs. Legacy ADLA workloads, native in Loom.' },
 ];
 
 export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
@@ -145,6 +179,10 @@ export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
   'Fabric IQ',
   'Power BI',
   'APIs and functions',
+  'Synapse Analytics',
+  'Azure Databricks',
+  'Azure Data Factory',
+  'Azure Data Lake Analytics',
 ];
 
 export function itemsByCategory(category: WorkloadCategory): FabricItemType[] {

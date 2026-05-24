@@ -87,8 +87,18 @@ export function CommandPalette() {
         setOpen(false);
       }
     }
+    function onOpen(e: Event) {
+      const ce = e as CustomEvent<{ prefill?: string }>;
+      setOpen(true);
+      setQ(ce.detail?.prefill ?? '');
+      setCursor(0);
+    }
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('csaloom:open-palette', onOpen);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('csaloom:open-palette', onOpen);
+    };
   }, [open]);
 
   const items: Cmd[] = useMemo(() => {

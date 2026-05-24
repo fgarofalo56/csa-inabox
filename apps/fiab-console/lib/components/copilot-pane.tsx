@@ -1,12 +1,12 @@
 'use client';
 
 /**
- * CopilotPane — collapsible right rail with a Copilot chat surface.
- * Renders on every page. Phase 6 "Copilot side-pane in every editor"
- * scope. Floating button toggles open/close.
+ * CopilotPane — collapsible right rail. v1.5 change: no floating
+ * button (it covered the brand). Toggled exclusively via the topbar
+ * Sparkle button, the openCopilot() export, or Ctrl+/.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Button, Input, makeStyles, tokens, Caption1, Body1, Subtitle2,
 } from '@fluentui/react-components';
@@ -18,47 +18,56 @@ const SEED: Msg[] = [
   { who: 'copilot', text: 'Hi! I can help you build pipelines, write KQL or T-SQL, summarize a report, or set up an Activator rule. What are we working on?' },
 ];
 
+const EVT_OPEN = 'csaloom:open-copilot';
+const EVT_TOGGLE = 'csaloom:toggle-copilot';
+
+/** Imperative API for non-React triggers (topbar button etc.). */
+export function openCopilot() {
+  window.dispatchEvent(new Event(EVT_OPEN));
+}
+export function toggleCopilot() {
+  window.dispatchEvent(new Event(EVT_TOGGLE));
+}
+
 const useStyles = makeStyles({
-  toggle: {
-    position: 'fixed',
-    right: 16,
-    bottom: 16,
-    zIndex: 1000,
-    boxShadow: tokens.shadow16,
-    borderRadius: '50%',
-    width: 48,
-    height: 48,
-    minWidth: 48,
-  },
   panel: {
     position: 'fixed',
     right: 0,
     top: 'var(--loom-topbar-height)',
     bottom: 0,
-    width: 360,
+    width: 380,
     backgroundColor: tokens.colorNeutralBackground1,
     borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
-    boxShadow: tokens.shadow16,
+    boxShadow: '-8px 0 24px rgba(0,0,0,0.10)',
     display: 'flex',
     flexDirection: 'column',
-    zIndex: 999,
+    zIndex: 1000,
   },
   header: {
     padding: 12,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     display: 'flex', alignItems: 'center', gap: 8,
+    background: 'linear-gradient(90deg, rgba(125,108,255,0.10), transparent)',
   },
   body: {
     flex: 1, overflowY: 'auto', padding: 12,
     display: 'flex', flexDirection: 'column', gap: 8,
   },
   msg: {
-    padding: '8px 12px',
-    borderRadius: 12,
-    maxWidth: '85%',
+    padding: '10px 14px',
+    borderRadius: 14,
+    maxWidth: '88%',
   },
-  msgCopilot: { backgroundColor: tokens.colorNeutralBackground2, alignSelf: 'flex-start' },
-  msgYou: { backgroundColor: tokens.colorBrandBackground2, alignSelf: 'flex-end' },
+  msgCopilot: {
+    backgroundColor: tokens.colorNeutralBackground2,
+    alignSelf: 'flex-start',
+    borderTopLeftRadius: 4,
+  },
+  msgYou: {
+    backgroundColor: tokens.colorBrandBackground2,
+    alignSelf: 'flex-end',
+    borderTopRightRadius: 4,
+  },
   composer: {
     padding: 12, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     display: 'flex', gap: 8,
@@ -71,6 +80,22 @@ export function CopilotPane() {
   const [msgs, setMsgs] = useState<Msg[]>(SEED);
   const [draft, setDraft] = useState('');
 
+  useEffect(() => {
+    const o = () => setOpen(true);
+    const t = () => setOpen((x) => !x);
+    const k = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); t(); }
+    };
+    window.addEventListener(EVT_OPEN, o);
+    window.addEventListener(EVT_TOGGLE, t);
+    window.addEventListener('keydown', k);
+    return () => {
+      window.removeEventListener(EVT_OPEN, o);
+      window.removeEventListener(EVT_TOGGLE, t);
+      window.removeEventListener('keydown', k);
+    };
+  }, []);
+
   function send() {
     const t = draft.trim();
     if (!t) return;
@@ -80,30 +105,19 @@ export function CopilotPane() {
     setTimeout(() => {
       setMsgs((m) => [...m, {
         who: 'copilot' as const,
-        text: `Sure — for "${t.substring(0, 60)}", here's what I'd try:\n\n• Open the most relevant item editor.\n• Draft the KQL / DAX / T-SQL.\n• Wire an Activator rule if you want alerts.\n\n(Wire me to a real LLM by setting AZURE_OPENAI_ENDPOINT.)`,
+        text: `For "${t.substring(0, 80)}", here's what I'd try:\n\n• Open the most relevant item editor.\n• Draft the KQL / DAX / T-SQL.\n• Wire an Activator rule if you want alerts.\n\n(Wire me to a real LLM by setting AZURE_OPENAI_ENDPOINT.)`,
       }]);
     }, 400);
   }
 
-  if (!open) {
-    return (
-      <Button
-        className={s.toggle}
-        appearance="primary"
-        icon={<Sparkle24Regular />}
-        aria-label="Open Copilot"
-        title="Copilot (Ctrl+/)"
-        onClick={() => setOpen(true)}
-      />
-    );
-  }
+  if (!open) return null;
 
   return (
     <aside className={s.panel} aria-label="Copilot">
       <div className={s.header}>
-        <Sparkle24Regular />
+        <Sparkle24Regular style={{ color: tokens.colorBrandForeground1 }} />
         <Subtitle2>Copilot</Subtitle2>
-        <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 'auto' }}>preview</Caption1>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 'auto' }}>Ctrl + /</Caption1>
         <Button appearance="subtle" icon={<Dismiss20Regular />} onClick={() => setOpen(false)} aria-label="Close Copilot" />
       </div>
       <div className={s.body}>

@@ -2,30 +2,57 @@
   /* CSA Loom brand palette */
   --loom-navy: #0f2a4a;
   --loom-indigo: #3d2e80;
+  --loom-blue: #1f6feb;
   --loom-amber: #d89f3d;
   --loom-paper: #faf8f2;
 
-  --loom-nav-width: 224px;
-  --loom-topbar-height: 48px;
+  --loom-nav-width: 240px;
+  --loom-topbar-height: 56px;
+
+  /* Topbar bg per theme (dark gradient in light mode, slightly different in dark) */
+  --loom-topbar-bg: linear-gradient(90deg, #0f2a4a 0%, #1a1342 50%, #3d2e80 100%);
+  --loom-hero-bg: linear-gradient(135deg, #3d2e80 0%, #1f6feb 55%, #d89f3d 130%);
+  --loom-app-bg: #f4f4f6;
 }
 
-* {
-  box-sizing: border-box;
+html[data-theme='dark'] {
+  --loom-topbar-bg: linear-gradient(90deg, #060814 0%, #0b0a26 50%, #1a1342 100%);
+  --loom-hero-bg: linear-gradient(135deg, #1a1342 0%, #3d2e80 55%, #d89f3d 140%);
+  --loom-app-bg: #15131c;
 }
 
-html,
-body {
+* { box-sizing: border-box; }
+
+html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: var(--loom-app-bg);
+  /* Smooth theme transitions */
+  transition: background-color 0.2s ease;
 }
 
-#__next {
-  height: 100%;
-}
+#__next { height: 100%; }
 
-a {
-  color: inherit;
-  text-decoration: none;
+a { color: inherit; text-decoration: none; }
+
+/* Custom scrollbar — subtle, matches Fabric */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(125, 108, 255, 0.25);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: rgba(125, 108, 255, 0.45); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* Subtle dot grid background for the main pane in light mode — Fabric-like depth */
+.loom-app-grid-bg {
+  background-image: radial-gradient(rgba(125, 108, 255, 0.10) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+html[data-theme='dark'] .loom-app-grid-bg {
+  background-image: radial-gradient(rgba(125, 108, 255, 0.16) 1px, transparent 1px);
 }
