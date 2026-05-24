@@ -66,6 +66,8 @@ param appImageTags = {
 // MSAL — passed from env vars (don't commit secrets to disk)
 param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '9844c28c-3b3a-4949-8d63-9eefa3b50a9d')
 param loomMsalClientSecret = readEnvironmentVariable('LOOM_MSAL_CLIENT_SECRET', '')
+// Stable session secret — pass via env to preserve sign-ins across deploys
+param loomSessionSecret = readEnvironmentVariable('LOOM_SESSION_SECRET', newGuid())
 
 // Multi-sub mode (empty for single-sub)
 param dlzSubscriptionIds = []

@@ -134,7 +134,7 @@ param loomMsalClientId string = ''
 @secure()
 param loomMsalClientSecret string = ''
 
-@description('Session cookie secret (HKDF input). Stored in Key Vault as "loom-session-secret". Generated random by default.')
+@description('Session cookie secret (HKDF input). Stored in Key Vault as "loom-session-secret". When empty, a fresh GUID is generated PER DEPLOY — this invalidates all existing sessions. Pass a stable value via env var to preserve sign-ins across deploys.')
 @secure()
 param loomSessionSecret string = newGuid()
 
@@ -411,6 +411,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           !empty(loomMsalClientId) ? [
             { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }
             { name: 'LOOM_MSAL_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
+            // Back-compat alias for legacy code paths still reading AZURE_*
+            { name: 'AZURE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             { name: 'SESSION_SECRET', secretRef: 'session-secret' }
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
           ] : [
