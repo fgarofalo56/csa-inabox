@@ -216,6 +216,9 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     adxEnabled: adxEnabled
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
+    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    consoleUamiName: adminPlane.outputs.uamiConsoleName
+    synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
@@ -247,6 +250,9 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     adxEnabled: adxEnabled
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
+    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    consoleUamiName: adminPlane.outputs.uamiConsoleName
+    synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
@@ -255,6 +261,11 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     complianceTags: complianceTags
   }
 }]
+
+output dlzSynapseWorkspaceName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseWorkspaceName : ''
+output dlzSynapseDedicatedPoolName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseDedicatedPoolName : ''
+output dlzResourceGroupName string = deploymentMode == 'single-sub' ? singleDlz.outputs.dlzResourceGroupName : ''
+output dlzStorageAccountName string = deploymentMode == 'single-sub' ? singleDlz.outputs.storageAccountName : ''
 
 // =====================================================================
 // Outputs

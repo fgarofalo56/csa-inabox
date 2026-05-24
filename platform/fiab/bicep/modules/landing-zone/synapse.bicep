@@ -1,12 +1,12 @@
-// CSA Loom DLZ — Synapse workspace (Serverless SQL pool only)
-// Per LD-2: Synapse Serverless is the SQL-over-Delta engine in Gov.
+// CSA Loom DLZ — Synapse workspace (Serverless + Dedicated SQL pools)
+// Per LD-2 + v2.0: Serverless is the always-on engine; Dedicated is
+// provisioned + auto-paused by Loom for on-demand MPP workloads.
 //
 // Telemetry / DSC posture (per repo-wide standard):
 //  - Diagnostic settings → standardized Loom LAW
 //  - Workspace audit policy → SAME LAW (SQL audit events)
-//  - Server-level firewall rules (configurable; default = VNet-only)
-//  - Synapse RBAC roles (Workspace Admin, SQL Admin, Data Plane Admin)
-//    assigned to the admin Entra group
+//  - Private endpoints for both Sql + SqlOnDemand on spoke PE subnet
+//  - Synapse RBAC roles assigned to admin Entra group + Console UAMI
 //  - Managed VNet with exfil prevention enabled
 //  - All deployments idempotent (Bicep ARM declarative = DSC)
 
@@ -26,6 +26,12 @@ param defaultFileSystemName string = 'synapse'
 
 @description('Admin Entra group object ID (Workspace Admin)')
 param adminEntraGroupId string
+
+@description('Loom Console UAMI principal ID — set as Synapse AAD admin so the BFF can query SQL via DefaultAzureCredential.')
+param consolePrincipalId string = ''
+
+@description('Loom Console UAMI client ID — used for the SQL admin login name (must be valid AAD object).')
+param consoleUamiName string = ''
 
 @description('Managed VNet enabled')
 param managedVnet bool = true
@@ -54,6 +60,39 @@ param auditRetentionDays int = 90
 param complianceTags object
 
 // =====================================================================
+// v2.0 — Dedicated SQL pool params
+// =====================================================================
+
+@description('Deploy a Dedicated SQL pool on the workspace. Default true so the Loom Dedicated editor works out of the box.')
+param deployDedicatedPool bool = true
+
+@description('Dedicated SQL pool name (must match a SQL identifier; no dashes).')
+param dedicatedPoolName string = 'loompool'
+
+@description('Dedicated SQL pool SKU. DW100c = ~$1.20/hr running, storage only when paused.')
+@allowed(['DW100c', 'DW200c', 'DW300c', 'DW400c', 'DW500c', 'DW1000c', 'DW1500c'])
+param dedicatedPoolSku string = 'DW100c'
+
+@description('Collation for the Dedicated pool.')
+param dedicatedPoolCollation string = 'SQL_Latin1_General_CP1_CI_AS'
+
+@description('Provision the Dedicated pool paused on creation (recommended — Loom resumes on demand from the editor).')
+param dedicatedPoolStartPaused bool = true
+
+// =====================================================================
+// v2.0 — Private endpoint params
+// =====================================================================
+
+@description('Spoke private-endpoint subnet ID (snet-private-endpoints).')
+param privateEndpointSubnetId string = ''
+
+@description('Private DNS zone resource ID for privatelink.sql.azuresynapse.net. Must be linked to both spoke + hub VNets.')
+param synapseSqlPrivateDnsZoneId string = ''
+
+@description('Private DNS zone resource ID for privatelink.dev.azuresynapse.net (used by Synapse Studio embed). Optional.')
+param synapseDevPrivateDnsZoneId string = ''
+
+// =====================================================================
 // Workspace
 // =====================================================================
 
@@ -73,6 +112,45 @@ resource synapseWs 'Microsoft.Synapse/workspaces@2021-06-01' = {
       preventDataExfiltration: true
       allowedAadTenantIdsForLinking: [subscription().tenantId]
     } : null
+  }
+}
+
+// =====================================================================
+// Dedicated SQL pool (v2.0)
+// =====================================================================
+
+resource dedicatedPool 'Microsoft.Synapse/workspaces/sqlPools@2021-06-01' = if (deployDedicatedPool) {
+  parent: synapseWs
+  name: dedicatedPoolName
+  location: location
+  tags: complianceTags
+  sku: {
+    name: dedicatedPoolSku
+  }
+  properties: {
+    collation: dedicatedPoolCollation
+    createMode: 'Default'
+    storageAccountType: 'GRS'
+  }
+}
+
+// Diagnostic settings on the Dedicated pool — separate from workspace
+// because pool-level diagnostic categories differ from workspace.
+resource dedicatedPoolDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (deployDedicatedPool) {
+  scope: dedicatedPool
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { category: 'SqlRequests', enabled: true }
+      { category: 'RequestSteps', enabled: true }
+      { category: 'ExecRequests', enabled: true }
+      { category: 'DmsWorkers', enabled: true }
+      { category: 'Waits', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
   }
 }
 
@@ -103,10 +181,26 @@ resource fw 'Microsoft.Synapse/workspaces/firewallRules@2021-06-01' = [for rule 
 }]
 
 // =====================================================================
-// AAD admin assignment (skipped when admin group not configured)
+// AAD admin assignment
+//   - Entra admin group (browser/portal access)
+//   - OR Loom Console UAMI (so the BFF can authenticate via
+//     DefaultAzureCredential). Workspace-level `administrators` resource
+//     only supports ONE entry, so we pick the Console UAMI when set
+//     (BFF requires it for v2.0) and fall back to the admin group.
 // =====================================================================
 
-resource roleAssignment 'Microsoft.Synapse/workspaces/administrators@2021-06-01' = if (!empty(adminEntraGroupId)) {
+resource consoleAadAdmin 'Microsoft.Synapse/workspaces/administrators@2021-06-01' = if (!empty(consolePrincipalId) && !empty(consoleUamiName)) {
+  parent: synapseWs
+  name: 'activeDirectory'
+  properties: {
+    administratorType: 'ServicePrincipal'
+    login: consoleUamiName
+    sid: consolePrincipalId
+    tenantId: subscription().tenantId
+  }
+}
+
+resource groupAadAdmin 'Microsoft.Synapse/workspaces/administrators@2021-06-01' = if (empty(consolePrincipalId) && !empty(adminEntraGroupId)) {
   parent: synapseWs
   name: 'activeDirectory'
   properties: {
@@ -117,19 +211,23 @@ resource roleAssignment 'Microsoft.Synapse/workspaces/administrators@2021-06-01'
   }
 }
 
+// Console UAMI needs ARM Contributor on the workspace so the BFF can
+// call /sqlPools/<pool>/pause and /resume (and read pool state) for
+// the resume-on-demand UX from the Dedicated editor.
+resource consoleArmContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId)) {
+  scope: synapseWs
+  name: guid(synapseWs.id, consolePrincipalId, 'contributor')
+  properties: {
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+    // Contributor — covers sqlPools/pause + /resume + read
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')
+  }
+}
+
 // =====================================================================
 // Synapse RBAC roles (data plane) — Workspace Admin + SQL Admin
 // =====================================================================
-// Synapse data-plane roles are managed via a workspace-scoped role
-// assignment with the RBAC role ID. Three commonly-needed roles:
-//   Synapse Administrator           6e4bf58a-b8e1-4cc3-bbf9-d73143322b78
-//   Synapse SQL Administrator       7af0c69a-a548-47d6-aea3-d00e69bd83aa
-//   Synapse Compute Operator        6e4bf58a-... (see Microsoft docs)
-//
-// Bicep doesn't have a first-class type for Synapse role assignments;
-// the operator runs a post-deploy script (via deployment script
-// extension) that calls the Synapse REST API. The block below
-// templates the assignment intent so DSC tooling can detect drift.
 
 @description('Synapse data-plane RBAC role assignments to apply post-deploy via deployment-script. Requires synapseRoleAssignmentUamiId to be a valid UAMI resource ID.')
 param synapseDataPlaneRoles array = []
@@ -174,9 +272,6 @@ done
 // =====================================================================
 // Server-level SQL audit (sends events to LAW)
 // =====================================================================
-// Synapse SQL audit policy at the workspace level. Logs are written
-// to LAW via diagnostic settings (configured below), not to a storage
-// account — keeps everything in one place.
 
 resource audit 'Microsoft.Synapse/workspaces/auditingSettings@2021-06-01' = {
   parent: synapseWs
@@ -197,7 +292,6 @@ resource audit 'Microsoft.Synapse/workspaces/auditingSettings@2021-06-01' = {
   }
 }
 
-// Extended auditing (DML/DDL classification)
 resource extendedAudit 'Microsoft.Synapse/workspaces/extendedAuditingSettings@2021-06-01' = {
   parent: synapseWs
   name: 'default'
@@ -210,12 +304,108 @@ resource extendedAudit 'Microsoft.Synapse/workspaces/extendedAuditingSettings@20
 }
 
 // =====================================================================
-// Diagnostic settings → standardized Loom LAW
+// Private endpoints (v2.0) — Sql (Dedicated) + SqlOnDemand (Serverless)
+//   On spoke snet-private-endpoints; DNS auto-registered into the shared
+//   privatelink.sql.azuresynapse.net zone (linked to hub + spoke).
+//   Reachable from Loom Console via hub→spoke VNet peering.
 // =====================================================================
 
-// Diagnostic settings on the Synapse workspace — applied via inline
-// resource (not via shared helper module, because the helper would
-// need a `scope:` extension we can't pass through Bicep cleanly).
+resource peSql 'Microsoft.Network/privateEndpoints@2024-03-01' = if (!empty(privateEndpointSubnetId)) {
+  name: 'pe-syn-loom-${domainName}-sql'
+  location: location
+  tags: complianceTags
+  properties: {
+    subnet: { id: privateEndpointSubnetId }
+    privateLinkServiceConnections: [
+      {
+        name: 'syn-sql'
+        properties: {
+          privateLinkServiceId: synapseWs.id
+          groupIds: [ 'Sql' ]
+        }
+      }
+    ]
+  }
+}
+
+resource peSqlOnDemand 'Microsoft.Network/privateEndpoints@2024-03-01' = if (!empty(privateEndpointSubnetId)) {
+  name: 'pe-syn-loom-${domainName}-sqlondemand'
+  location: location
+  tags: complianceTags
+  properties: {
+    subnet: { id: privateEndpointSubnetId }
+    privateLinkServiceConnections: [
+      {
+        name: 'syn-sql-ondemand'
+        properties: {
+          privateLinkServiceId: synapseWs.id
+          groupIds: [ 'SqlOnDemand' ]
+        }
+      }
+    ]
+  }
+}
+
+resource peDev 'Microsoft.Network/privateEndpoints@2024-03-01' = if (!empty(privateEndpointSubnetId) && !empty(synapseDevPrivateDnsZoneId)) {
+  name: 'pe-syn-loom-${domainName}-dev'
+  location: location
+  tags: complianceTags
+  properties: {
+    subnet: { id: privateEndpointSubnetId }
+    privateLinkServiceConnections: [
+      {
+        name: 'syn-dev'
+        properties: {
+          privateLinkServiceId: synapseWs.id
+          groupIds: [ 'Dev' ]
+        }
+      }
+    ]
+  }
+}
+
+resource peSqlDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-03-01' = if (!empty(privateEndpointSubnetId) && !empty(synapseSqlPrivateDnsZoneId)) {
+  parent: peSql
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'privatelink-sql-azuresynapse-net'
+        properties: { privateDnsZoneId: synapseSqlPrivateDnsZoneId }
+      }
+    ]
+  }
+}
+
+resource peSqlOnDemandDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-03-01' = if (!empty(privateEndpointSubnetId) && !empty(synapseSqlPrivateDnsZoneId)) {
+  parent: peSqlOnDemand
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'privatelink-sql-azuresynapse-net'
+        properties: { privateDnsZoneId: synapseSqlPrivateDnsZoneId }
+      }
+    ]
+  }
+}
+
+resource peDevDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-03-01' = if (!empty(privateEndpointSubnetId) && !empty(synapseDevPrivateDnsZoneId)) {
+  parent: peDev
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'privatelink-dev-azuresynapse-net'
+        properties: { privateDnsZoneId: synapseDevPrivateDnsZoneId }
+      }
+    ]
+  }
+}
+
+// =====================================================================
+// Diagnostic settings → standardized Loom LAW
+// =====================================================================
 
 resource diagInner 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   scope: synapseWs
@@ -240,5 +430,8 @@ resource diagInner 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = 
 output synapseWorkspaceId string = synapseWs.id
 output synapseWorkspaceName string = synapseWs.name
 output synapseServerlessSqlEndpoint string = synapseWs.properties.connectivityEndpoints.sqlOnDemand
+output synapseSqlEndpoint string = synapseWs.properties.connectivityEndpoints.sql
 output synapseDevEndpoint string = synapseWs.properties.connectivityEndpoints.dev
 output synapseManagedIdentityPrincipalId string = synapseWs.identity.principalId
+output dedicatedPoolName string = deployDedicatedPool ? dedicatedPool.name : ''
+output dedicatedPoolId string = deployDedicatedPool ? dedicatedPool.id : ''

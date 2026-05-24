@@ -275,6 +275,9 @@ var dnsZones = [
   'privatelink.api.azureml.ms'
   'privatelink.notebooks.azure.net'
   'privatelink.${location}.kusto.windows.net'
+  // v2.0 — Synapse SQL + Dev endpoints (Dedicated + Serverless + Studio)
+  'privatelink.sql.azuresynapse.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'net'}'
+  'privatelink.dev.azuresynapse.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'net'}'
 ]
 
 resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in dnsZones: {
@@ -365,4 +368,6 @@ output privateDnsZoneIds object = {
   azuremlapi: privateDnsZones[14].id
   notebooks: privateDnsZones[15].id
   kusto: privateDnsZones[16].id
+  synapseSql: privateDnsZones[17].id
+  synapseDev: privateDnsZones[18].id
 }

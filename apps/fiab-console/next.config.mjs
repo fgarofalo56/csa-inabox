@@ -9,6 +9,10 @@ const nextConfig = {
   // v0.2 cleanup.
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
+  // mssql + tedious use dynamic requires that break Next.js bundling.
+  // Externalize so they load from node_modules at runtime in the
+  // standalone server output.
+  serverExternalPackages: ['mssql', 'tedious'],
   experimental: {
     serverActions: { allowedOrigins: ['localhost:3000', 'loom-console.*'] },
     instrumentationHook: true,

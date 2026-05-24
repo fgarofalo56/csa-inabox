@@ -59,8 +59,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'data-agent':           reg(() => import('./phase4-editors'),           'DataAgentEditor'),
 
   // v1.5 — Native Azure-service editors (Synapse, Databricks, ADF, U-SQL)
-  'synapse-dedicated-sql-pool':  reg(() => import('./azure-services-editors'), 'SynapseDedicatedSqlPoolEditor'),
-  'synapse-serverless-sql-pool': reg(() => import('./azure-services-editors'), 'SynapseServerlessSqlPoolEditor'),
+  // v2.0 — Synapse Dedicated + Serverless are real-REST wired (TDS over PE + AAD MI)
+  'synapse-dedicated-sql-pool':  reg(() => import('./synapse-sql-editors'),    'SynapseDedicatedSqlPoolEditor'),
+  'synapse-serverless-sql-pool': reg(() => import('./synapse-sql-editors'),    'SynapseServerlessSqlPoolEditor'),
   'synapse-spark-pool':          reg(() => import('./azure-services-editors'), 'SynapseSparkPoolEditor'),
   'synapse-pipeline':            reg(() => import('./azure-services-editors'), 'SynapsePipelineEditor'),
   'databricks-notebook':         reg(() => import('./azure-services-editors'), 'DatabricksNotebookEditor'),

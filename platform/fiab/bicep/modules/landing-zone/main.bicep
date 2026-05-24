@@ -32,6 +32,15 @@ param adminPlaneAppInsightsConnectionString string = ''
 @description('Admin Plane private DNS zones object (from network module outputs)')
 param adminPlanePrivateDnsZoneIds object = {}
 
+@description('Loom Console UAMI principal ID — set as Synapse SQL admin so the BFF can query via DefaultAzureCredential.')
+param consolePrincipalId string = ''
+
+@description('Loom Console UAMI name — used for the SQL admin login (must match the UAMI resource).')
+param consoleUamiName string = ''
+
+@description('Admin Plane spoke private DNS zone ID for privatelink.sql.azuresynapse.net. Required for the Synapse SQL PE to register DNS.')
+param synapseSqlPrivateDnsZoneId string = ''
+
 @description('Admin Plane ADX cluster name (for ADX database creation)')
 param adminPlaneAdxClusterName string = 'adx-csa-loom-shared'
 
@@ -136,7 +145,26 @@ module synapse 'synapse.bicep' = {
     domainName: domainName
     defaultStorageAccountName: storage.outputs.storageAccountName
     adminEntraGroupId: adminEntraGroupId
+    consolePrincipalId: consolePrincipalId
+    consoleUamiName: consoleUamiName
     workspaceId: adminPlaneLawId
+    complianceTags: complianceTags
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    synapseSqlPrivateDnsZoneId: synapseSqlPrivateDnsZoneId
+  }
+}
+
+// =====================================================================
+// 4b. Synapse Dedicated SQL pool auto-pause (Logic App)
+// =====================================================================
+
+module synapseAutoPause 'synapse-auto-pause.bicep' = {
+  name: 'dlz-synapse-autopause'
+  params: {
+    location: location
+    domainName: domainName
+    synapseWorkspaceName: synapse.outputs.synapseWorkspaceName
+    dedicatedPoolName: synapse.outputs.dedicatedPoolName
     complianceTags: complianceTags
   }
 }
@@ -201,6 +229,11 @@ output spokeVnetId string = network.outputs.spokeVnetId
 output databricksWorkspaceUrl string = databricks.outputs.workspaceUrl
 output databricksWorkspaceId string = databricks.outputs.workspaceId
 output synapseEndpoint string = synapse.outputs.synapseServerlessSqlEndpoint
+output synapseSqlEndpoint string = synapse.outputs.synapseSqlEndpoint
+output synapseWorkspaceName string = synapse.outputs.synapseWorkspaceName
+output synapseDedicatedPoolName string = synapse.outputs.dedicatedPoolName
+output storageAccountName string = storage.outputs.storageAccountName
+output dlzResourceGroupName string = resourceGroup().name
 output adxDatabaseUrl string = adxEnabled ? adx!.outputs.databaseUri : ''
 output lakehouseDfsEndpoint string = storage.outputs.dfsEndpoint
 output bronzeContainerUrl string = storage.outputs.bronzeContainerUrl
