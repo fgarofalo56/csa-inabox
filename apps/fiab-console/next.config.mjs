@@ -12,7 +12,7 @@ const nextConfig = {
   // mssql + tedious use dynamic requires that break Next.js bundling.
   // Externalize so they load from node_modules at runtime in the
   // standalone server output.
-  serverExternalPackages: ['mssql', 'tedious'],
+  serverExternalPackages: ['mssql', 'tedious', '@azure/storage-file-datalake'],
   experimental: {
     serverActions: { allowedOrigins: ['localhost:3000', 'loom-console.*'] },
     instrumentationHook: true,
