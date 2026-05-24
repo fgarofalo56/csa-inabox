@@ -15,6 +15,7 @@ const SECTIONS: { href: string; label: string; description: string }[] = [
   { href: '/admin/usage', label: 'Usage metrics', description: 'Feature usage & adoption report, item inventory, item details.' },
   { href: '/admin/users', label: 'Users & licenses', description: 'Power BI / Fabric license assignments and user inventory.' },
   { href: '/admin/workspaces', label: 'Workspaces', description: 'Tenant-wide inventory: every workspace, owner, capacity, state.' },
+  { href: '/admin/updates', label: 'Updates & version sync', description: 'See your running version vs latest upstream; pull bug fixes and new features.' },
 ];
 
 const useStyles = makeStyles({

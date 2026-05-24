@@ -16,6 +16,8 @@ import { CopilotPane, openCopilot } from './copilot-pane';
 import { LoomLogo } from './loom-logo';
 import { ThemeToggle } from './theme-toggle';
 import { TopbarSearch } from './topbar-search';
+import { FeedbackWidget } from './feedback-widget';
+import { GlobalErrorBoundary, GlobalErrorListeners } from './error-boundary';
 
 interface MeResponse {
   authenticated: boolean;
@@ -122,9 +124,13 @@ export function AppShell({ children }: { children: ReactNode }) {
       <nav className={styles.nav}>
         <LeftNav />
       </nav>
-      <main className={`${styles.main} loom-app-grid-bg`}>{children}</main>
+      <main className={`${styles.main} loom-app-grid-bg`}>
+        <GlobalErrorBoundary>{children}</GlobalErrorBoundary>
+      </main>
       <CommandPalette />
       <CopilotPane />
+      <FeedbackWidget />
+      <GlobalErrorListeners />
     </div>
   );
 }
