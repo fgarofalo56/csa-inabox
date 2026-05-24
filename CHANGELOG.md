@@ -10,6 +10,68 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.8.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.7.0...csa-inabox-v0.8.0) (2026-05-24)
+
+
+### Features
+
+* **brand:** heroes on every page — 27 new defaults close the last gaps ([#270](https://github.com/fgarofalo56/csa-inabox/issues/270)) ([cf22e43](https://github.com/fgarofalo56/csa-inabox/commit/cf22e431154d1fbd3179731fc7505d2fd1183d6a))
+* **csa-loom:** ACR Tasks image build + iteration log final ([#306](https://github.com/fgarofalo56/csa-inabox/issues/306)) ([b7c381d](https://github.com/fgarofalo56/csa-inabox/commit/b7c381d627924640d9d3648b5fce9bd3644042bf))
+* **csa-loom:** brand cleanup + PRP audit + full-app-deploy workflow ([#308](https://github.com/fgarofalo56/csa-inabox/issues/308)) ([a63db5d](https://github.com/fgarofalo56/csa-inabox/commit/a63db5d9f7b504994869df4a6dc7dc8353fb9b40))
+* **csa-loom:** deploy workflow iteration + image-build pipeline ([#296](https://github.com/fgarofalo56/csa-inabox/issues/296)) ([631894c](https://github.com/fgarofalo56/csa-inabox/commit/631894c1d86e9dd4cdbfe18b5607d0a985dac926))
+* **csa-loom:** pillar v0.1 — Microsoft Fabric parity for Azure Gov ([#282](https://github.com/fgarofalo56/csa-inabox/issues/282)) ([9153768](https://github.com/fgarofalo56/csa-inabox/commit/915376879b70f5f5efddef152e01ec7b7c4f5d57))
+* **csa-loom:** UAT jumpbox deploy workflow ([#323](https://github.com/fgarofalo56/csa-inabox/issues/323)) ([ebdcb29](https://github.com/fgarofalo56/csa-inabox/commit/ebdcb291c44a6eabb8bb640a6ccdc21a7a3c7a01))
+* **csa-loom:** v2 PRP backlog scaffold ([#321](https://github.com/fgarofalo56/csa-inabox/issues/321)) ([487881c](https://github.com/fgarofalo56/csa-inabox/commit/487881c545e1d421d511b071a27f468a06e86f7f))
+* **csa-loom:** Wave 1 — real implementation for PRP-02..09 + 11/12/13/14 ([#291](https://github.com/fgarofalo56/csa-inabox/issues/291)) ([c6737ac](https://github.com/fgarofalo56/csa-inabox/commit/c6737ac4c6b11d07dd84101407131cf270112297))
+* **csa-loom:** Wave 2 — telemetry-everywhere + Synapse hardening + remaining sub-modules + deploy SP auth ([#292](https://github.com/fgarofalo56/csa-inabox/issues/292)) ([a6dfd9f](https://github.com/fgarofalo56/csa-inabox/commit/a6dfd9fa7bdf84b4b30764321da6ca4ce22a77e5))
+* **csa-loom:** Wave 3 — workflow dry-run + Synapse audit + LAW monitoring playbooks ([#293](https://github.com/fgarofalo56/csa-inabox/issues/293)) ([02fa684](https://github.com/fgarofalo56/csa-inabox/commit/02fa684066017da4c8878c8587066045f78d5901))
+* **csa-loom:** Wave 3 follow-ups — secret precheck + 3 operator runbooks + tests ([#295](https://github.com/fgarofalo56/csa-inabox/issues/295)) ([2e1e6b1](https://github.com/fgarofalo56/csa-inabox/commit/2e1e6b1eb680cb78b0a95492db7a4a6e72190c23))
+* **visual:** branding cleanup, social cards, MS Learn fix, section heroes, raster→SVG ([#266](https://github.com/fgarofalo56/csa-inabox/issues/266)) ([5b2d38a](https://github.com/fgarofalo56/csa-inabox/commit/5b2d38a1ba89be02e58a563472ffd19f6b30ff15))
+
+
+### Bug Fixes
+
+* **brand+copilot:** ship og-card.png + MS Learn always supplements on-topic ([#269](https://github.com/fgarofalo56/csa-inabox/issues/269)) ([7a490bc](https://github.com/fgarofalo56/csa-inabox/commit/7a490bca98df75178dff4da415d0d7f9d9099b0e))
+* **ci:** install mkdocs-material[imaging] for social plugin ([#268](https://github.com/fgarofalo56/csa-inabox/issues/268)) ([bf973f7](https://github.com/fgarofalo56/csa-inabox/commit/bf973f795e060887fd512bfcf9d9e4b980c3b26c))
+* **csa-loom:** 3 build-time code errors in full-app-deploy iter D ([#314](https://github.com/fgarofalo56/csa-inabox/issues/314)) ([027f2dc](https://github.com/fgarofalo56/csa-inabox/commit/027f2dc567177f7728e87a2ae8057cf56cb9f69c))
+* **csa-loom:** AcrPush role + Console telemetry + pnpm-lock ([#309](https://github.com/fgarofalo56/csa-inabox/issues/309)) ([e312cd2](https://github.com/fgarofalo56/csa-inabox/commit/e312cd22c0d93e02a7e646b7ebf2e78af5d670d8))
+* **csa-loom:** default Commercial purviewEnabled to false ([#294](https://github.com/fgarofalo56/csa-inabox/issues/294)) ([1a4a657](https://github.com/fgarofalo56/csa-inabox/commit/1a4a6572a2177e5bcd552e8b5e800b01e48b4b26))
+* **csa-loom:** full-app-deploy — Debezium tag + AcrPull UAMIs + login retry ([#312](https://github.com/fgarofalo56/csa-inabox/issues/312)) ([82103c6](https://github.com/fgarofalo56/csa-inabox/commit/82103c6074c7c5b88b37da6a61e2670fba155ed4))
+* **csa-loom:** iter [#5](https://github.com/fgarofalo56/csa-inabox/issues/5) — cosmos containers parent: + teardown helper ([#302](https://github.com/fgarofalo56/csa-inabox/issues/302)) ([9183d7a](https://github.com/fgarofalo56/csa-inabox/commit/9183d7a3ebfd6778da52d9cd78ede43a9133e5d1))
+* **csa-loom:** iter [#7](https://github.com/fgarofalo56/csa-inabox/issues/7) — Databricks NSG Network Intent Policy rules ([#305](https://github.com/fgarofalo56/csa-inabox/issues/305)) ([42535f2](https://github.com/fgarofalo56/csa-inabox/commit/42535f2d0a2eb62dcdc5e25b90e1a3c6d4974bb0))
+* **csa-loom:** iter F — buildx-integrated login + MCP .NET 10 preview ([#315](https://github.com/fgarofalo56/csa-inabox/issues/315)) ([150d6b4](https://github.com/fgarofalo56/csa-inabox/commit/150d6b4647cdca97f707dac14f39d2f2244ed627))
+* **csa-loom:** iter G — disable quarantine + Notary trust on ACR ([#316](https://github.com/fgarofalo56/csa-inabox/issues/316)) ([2a4e587](https://github.com/fgarofalo56/csa-inabox/commit/2a4e58772feec8df253a9d12a7cd68e461fe9405))
+* **csa-loom:** iter H — MCP src/ path + Console Buffer cast ([#317](https://github.com/fgarofalo56/csa-inabox/issues/317)) ([f2d5182](https://github.com/fgarofalo56/csa-inabox/commit/f2d5182c861e99647f30acf79398d019d981b4b4))
+* **csa-loom:** iter I — Console next.config skip TS/ESLint ([#319](https://github.com/fgarofalo56/csa-inabox/issues/319)) ([7bd939f](https://github.com/fgarofalo56/csa-inabox/commit/7bd939ff4c414c93bd3c53c55e2006399266e55a))
+* **csa-loom:** iter J — Console public/ + v2 scope doc ([#320](https://github.com/fgarofalo56/csa-inabox/issues/320)) ([0c1a964](https://github.com/fgarofalo56/csa-inabox/commit/0c1a964bf740f4ce2db7476d4090720115e6fd42))
+* **csa-loom:** jumpbox AAD-SSH only ([#324](https://github.com/fgarofalo56/csa-inabox/issues/324)) ([3ff8f9b](https://github.com/fgarofalo56/csa-inabox/commit/3ff8f9b82344679a5da04c59b4229028a6835196))
+* **csa-loom:** provision iter [#2](https://github.com/fgarofalo56/csa-inabox/issues/2) — CIDR + ADX gate ([#299](https://github.com/fgarofalo56/csa-inabox/issues/299)) ([2c2aaf4](https://github.com/fgarofalo56/csa-inabox/commit/2c2aaf4b98239e0e0e964a969f89613b831c45c0))
+* **csa-loom:** provision iter [#3](https://github.com/fgarofalo56/csa-inabox/issues/3) — remove broken diag-settings module call ([#300](https://github.com/fgarofalo56/csa-inabox/issues/300)) ([494c185](https://github.com/fgarofalo56/csa-inabox/commit/494c185a0f5dc67de758cf0637253fbd4bb94b21))
+* **csa-loom:** provision iter [#4](https://github.com/fgarofalo56/csa-inabox/issues/4) — EH CG + storage versioning + Cosmos zonal ([#301](https://github.com/fgarofalo56/csa-inabox/issues/301)) ([6316ec5](https://github.com/fgarofalo56/csa-inabox/commit/6316ec5a4f218336055fee13bc6f30df1ce18d50))
+* **csa-loom:** provision iter [#6](https://github.com/fgarofalo56/csa-inabox/issues/6) — synapse gates ([#304](https://github.com/fgarofalo56/csa-inabox/issues/304)) ([7547a90](https://github.com/fgarofalo56/csa-inabox/commit/7547a90009f2e968f8eef87feb755ac95d3a459b))
+* **csa-loom:** provision iteration [#1](https://github.com/fgarofalo56/csa-inabox/issues/1) — KV principal + AI Search + container apps log config ([#297](https://github.com/fgarofalo56/csa-inabox/issues/297)) ([4655b64](https://github.com/fgarofalo56/csa-inabox/commit/4655b64c78dd1ba0fad39f16ff2cca6e4d5210b1))
+* **csa-loom:** use ACR admin user for build push ([#313](https://github.com/fgarofalo56/csa-inabox/issues/313)) ([5709af2](https://github.com/fgarofalo56/csa-inabox/commit/5709af2b460114e748d9abf0e70678877ac1171f))
+
+
+### Documentation
+
+* **csa-loom:** deploy iteration log ([#303](https://github.com/fgarofalo56/csa-inabox/issues/303)) ([bfb7023](https://github.com/fgarofalo56/csa-inabox/commit/bfb70237f56bc67fda1b93937f0ab2bd5a35b30e))
+* **csa-loom:** iteration log — ACR Tasks also blocked ([#307](https://github.com/fgarofalo56/csa-inabox/issues/307)) ([c0abefc](https://github.com/fgarofalo56/csa-inabox/commit/c0abefc4725337f892d771b77bc15d80dec0a517))
+* **csa-loom:** live deploy status + UAT jumpbox Bicep ([#322](https://github.com/fgarofalo56/csa-inabox/issues/322)) ([37df4bd](https://github.com/fgarofalo56/csa-inabox/commit/37df4bd68ac8f31b710a47132b2684fc5ee7453c))
+* **csa-loom:** portal architecture page ([#311](https://github.com/fgarofalo56/csa-inabox/issues/311)) ([7b0347f](https://github.com/fgarofalo56/csa-inabox/commit/7b0347f9947a41ac858ad1a5c651bd9839c56cb0))
+* **csa-loom:** UAT report iter 1 + smoke test plumbing ([#325](https://github.com/fgarofalo56/csa-inabox/issues/325)) ([51c2b44](https://github.com/fgarofalo56/csa-inabox/commit/51c2b4438f35196cf75b201238afb8c9e72fb207))
+
+
+### Miscellaneous
+
+* **deps-dev:** Bump @types/node in /portal/react-webapp ([#271](https://github.com/fgarofalo56/csa-inabox/issues/271)) ([d592352](https://github.com/fgarofalo56/csa-inabox/commit/d592352e6f16942bda9511c23de0ad8af462affe))
+* **deps-dev:** Bump ts-jest in /portal/react-webapp ([#274](https://github.com/fgarofalo56/csa-inabox/issues/274)) ([ff40d24](https://github.com/fgarofalo56/csa-inabox/commit/ff40d246123dfb218ad8880fd3093d4ab981abef))
+* **deps-dev:** Update azure-mgmt-storage requirement ([#278](https://github.com/fgarofalo56/csa-inabox/issues/278)) ([1e6e41d](https://github.com/fgarofalo56/csa-inabox/commit/1e6e41d0de74a211a4c85fe73a3ddd28caef4a37))
+* **deps:** Bump @azure/msal-browser in /portal/react-webapp ([#273](https://github.com/fgarofalo56/csa-inabox/issues/273)) ([9c84017](https://github.com/fgarofalo56/csa-inabox/commit/9c840175b4f76838259c9b53b4a36abcd674ca9b))
+* **deps:** Bump @tanstack/react-query in /portal/react-webapp ([#275](https://github.com/fgarofalo56/csa-inabox/issues/275)) ([b133b10](https://github.com/fgarofalo56/csa-inabox/commit/b133b10483c6a569de4f4ac7d23510e11934209e))
+* **deps:** Bump react-hook-form in /portal/react-webapp ([#277](https://github.com/fgarofalo56/csa-inabox/issues/277)) ([43dc5c8](https://github.com/fgarofalo56/csa-inabox/commit/43dc5c8e1804798cc85d237dfc23e07a13433c91))
+* **session:** SESSION_KNOWLEDGE — UAT iter 1 outcome + follow-ups ([#326](https://github.com/fgarofalo56/csa-inabox/issues/326)) ([2c45c59](https://github.com/fgarofalo56/csa-inabox/commit/2c45c59e2a8b4257ce80373bde8d2a7a9d4dcc08))
+
 ## [0.7.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.6.9...csa-inabox-v0.7.0) (2026-05-21)
 
 
