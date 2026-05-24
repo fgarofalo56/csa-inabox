@@ -5,32 +5,39 @@ import { usePathname } from 'next/navigation';
 import { makeStyles, tokens } from '@fluentui/react-components';
 import {
   Home24Regular,
-  Database24Regular,
-  TableSimple24Regular,
-  Notebook24Regular,
+  Building24Regular,
+  Apps24Regular,
   ChartMultiple24Regular,
   Flash24Regular,
-  Bot24Regular,
+  Database24Regular,
+  CloudArrowUp24Regular,
+  PuzzlePiece24Regular,
+  ShieldKeyhole24Regular,
   Settings24Regular,
+  Bot24Regular,
+  Notebook24Regular,
 } from '@fluentui/react-icons';
 
+// Fabric-parity left nav: top-level surfaces only, like the real
+// Fabric portal. Item types are reached from inside a workspace via
+// the "+ New" item dialog.
 const navItems = [
-  { href: '/', icon: Home24Regular, label: 'Workspaces' },
-  { href: '/lakehouse', icon: Database24Regular, label: 'Lakehouse' },
-  { href: '/warehouse', icon: TableSimple24Regular, label: 'Warehouse' },
-  { href: '/notebook', icon: Notebook24Regular, label: 'Notebook' },
-  { href: '/semantic-model', icon: ChartMultiple24Regular, label: 'Semantic Model' },
-  { href: '/activator', icon: Flash24Regular, label: 'Activator' },
-  { href: '/data-agent', icon: Bot24Regular, label: 'Data Agent' },
-  { href: '/setup', icon: Settings24Regular, label: 'Setup Wizard' },
+  { href: '/', icon: Home24Regular, label: 'Home' },
+  { href: '/workspaces', icon: Building24Regular, label: 'Workspaces' },
+  { href: '/browse', icon: Apps24Regular, label: 'Browse' },
+  { href: '/onelake', icon: Database24Regular, label: 'OneLake catalog' },
+  { href: '/monitor', icon: ChartMultiple24Regular, label: 'Monitor' },
+  { href: '/realtime-hub', icon: Flash24Regular, label: 'Real-Time hub' },
+  { href: '/data-agent', icon: Bot24Regular, label: 'Data agent' },
+  { href: '/copilot', icon: Notebook24Regular, label: 'Copilot' },
+  { href: '/workload-hub', icon: PuzzlePiece24Regular, label: 'Workload hub' },
+  { href: '/deployment-pipelines', icon: CloudArrowUp24Regular, label: 'Deployment' },
+  { href: '/admin', icon: ShieldKeyhole24Regular, label: 'Admin portal' },
+  { href: '/setup', icon: Settings24Regular, label: 'Setup wizard' },
 ];
 
 const useStyles = makeStyles({
-  root: {
-    display: 'flex',
-    flexDirection: 'column',
-    padding: '8px 0',
-  },
+  root: { display: 'flex', flexDirection: 'column', padding: '8px 0' },
   item: {
     display: 'flex',
     alignItems: 'center',
@@ -40,6 +47,7 @@ const useStyles = makeStyles({
     cursor: 'pointer',
     transition: 'background-color 0.15s',
     fontSize: '14px',
+    textDecoration: 'none',
   },
   itemActive: {
     backgroundColor: tokens.colorBrandBackground2,
@@ -49,9 +57,7 @@ const useStyles = makeStyles({
     paddingLeft: '13px',
   },
   itemHover: {
-    ':hover': {
-      backgroundColor: tokens.colorNeutralBackground2Hover,
-    },
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
 });
 
@@ -59,10 +65,10 @@ export function LeftNav() {
   const styles = useStyles();
   const pathname = usePathname();
   return (
-    <div className={styles.root}>
+    <nav className={styles.root} aria-label="Primary">
       {navItems.map((item) => {
         const Icon = item.icon;
-        const active = pathname === item.href;
+        const active = pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href));
         return (
           <Link
             key={item.href}
@@ -75,6 +81,6 @@ export function LeftNav() {
           </Link>
         );
       })}
-    </div>
+    </nav>
   );
 }
