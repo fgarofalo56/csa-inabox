@@ -1,3 +1,5 @@
+'use client';
+
 import { PageShell } from '@/lib/components/page-shell';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import {

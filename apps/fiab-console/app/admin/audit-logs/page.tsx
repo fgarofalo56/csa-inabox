@@ -1,11 +1,9 @@
 import { AdminShell } from '@/lib/components/admin-shell';
 import { EmptyState } from '@/lib/components/empty-state';
-import { Title3 } from '@fluentui/react-components';
 
 export default function AuditLogsPage() {
   return (
-    <AdminShell>
-      <Title3 as="h2" style={{ marginBottom: 16 }}>Audit logs</Title3>
+    <AdminShell sectionTitle="Audit logs">
       <EmptyState
         icon="◐"
         title="Audit feed will appear here"

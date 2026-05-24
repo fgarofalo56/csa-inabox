@@ -1,11 +1,9 @@
 import { AdminShell } from '@/lib/components/admin-shell';
 import { EmptyState } from '@/lib/components/empty-state';
-import { Title3 } from '@fluentui/react-components';
 
 export default function AdminWorkspacesPage() {
   return (
-    <AdminShell>
-      <Title3 as="h2" style={{ marginBottom: 16 }}>Workspaces (tenant-wide)</Title3>
+    <AdminShell sectionTitle="Workspaces (tenant-wide)">
       <EmptyState
         icon="◒"
         title="Tenant workspace inventory"

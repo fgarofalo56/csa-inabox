@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ReactNode } from 'react';
 import { PageShell } from '@/lib/components/page-shell';
-import { makeStyles, tokens, Subtitle2 } from '@fluentui/react-components';
+import { makeStyles, tokens, Subtitle2, Title3 } from '@fluentui/react-components';
 
 const SECTIONS: { href: string; label: string; description: string }[] = [
   { href: '/admin/tenant-settings', label: 'Tenant settings', description: 'Per-area switches (Power BI, Fabric, OneLake, Real-Time, AI, Mirroring, Git).' },
@@ -38,7 +38,7 @@ const useStyles = makeStyles({
   body: { minHeight: 0 },
 });
 
-export function AdminShell({ children }: { children: ReactNode }) {
+export function AdminShell({ sectionTitle, children }: { sectionTitle?: string; children: ReactNode }) {
   const styles = useStyles();
   const pathname = usePathname();
   return (
@@ -58,7 +58,10 @@ export function AdminShell({ children }: { children: ReactNode }) {
             );
           })}
         </nav>
-        <div className={styles.body}>{children}</div>
+        <div className={styles.body}>
+          {sectionTitle && <Title3 as="h2" style={{ marginBottom: 16 }}>{sectionTitle}</Title3>}
+          {children}
+        </div>
       </div>
     </PageShell>
   );

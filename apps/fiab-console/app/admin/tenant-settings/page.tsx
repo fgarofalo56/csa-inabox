@@ -1,11 +1,9 @@
 import { AdminShell } from '@/lib/components/admin-shell';
 import { EmptyState } from '@/lib/components/empty-state';
-import { Title3 } from '@fluentui/react-components';
 
 export default function TenantSettingsPage() {
   return (
-    <AdminShell>
-      <Title3 as="h2" style={{ marginBottom: 16 }}>Tenant settings</Title3>
+    <AdminShell sectionTitle="Tenant settings">
       <EmptyState
         icon="⚙"
         title="Tenant switches will land here"
