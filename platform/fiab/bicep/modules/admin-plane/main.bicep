@@ -249,13 +249,35 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled) {
 // 8. AI Foundry Hub (or Azure ML classic in boundaries without Foundry)
 // =====================================================================
 
+// Storage account for the AI Foundry Hub workspace (required dependency).
+// Plain LRS Standard_v2, geo-redundancy off (matches DLZ policy), public
+// network disabled, only the Foundry MI gets access via system role assignment.
+resource foundryHubStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (aiFoundryEnabled) {
+  name: take('safoundryhub${uniqueString(resourceGroup().id)}', 24)
+  location: location
+  tags: complianceTags
+  kind: 'StorageV2'
+  sku: { name: 'Standard_LRS' }
+  properties: {
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    publicNetworkAccess: 'Disabled'
+    supportsHttpsTrafficOnly: true
+    networkAcls: {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
 module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled) {
   name: 'ai-foundry'
   params: {
     location: location
     boundary: boundary
     foundryPortalEnabled: foundryPortalEnabled
-    hubStorageAccountId: ''   // Operator wires hub storage post-deploy
+    hubStorageAccountId: aiFoundryEnabled ? foundryHubStorage.id : ''
     hubKeyVaultId: keyvault.outputs.keyVaultId
     hubContainerRegistryId: registry.outputs.acrId
     hubAppInsightsId: monitoring.outputs.appInsightsId

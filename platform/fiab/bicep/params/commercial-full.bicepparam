@@ -72,10 +72,12 @@ param dlzSubscriptionIds = []
 param dlzDomainNames = []
 
 // Feature flags — ALL ON for full push-button deploy
+// AI Search currently OFF — eastus2 capacity exhausted (InsufficientResourcesAvailable).
+// Re-enable in next iteration when capacity refreshes OR switch region.
 param deployAppsEnabled = true
 param aiFoundryEnabled = true
 param apimEnabled = true
-param aiSearchEnabled = true
+param aiSearchEnabled = false
 param adxEnabled = true
 param vpnGatewayEnabled = true
 param appGatewayEnabled = true

@@ -128,7 +128,21 @@ resource hubVnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
 // Network Security Groups (per non-system subnet)
 // =====================================================================
 
-var nsgSubnets = filter(subnets, s => !startsWith(s.name, 'Azure'))
+var nsgSubnets = filter(subnets, s => !startsWith(s.name, 'Azure') && s.name != 'GatewaySubnet')
+
+// Associate NSGs with their corresponding subnets (required by APIM,
+// recommended for all workload subnets). One subnet/NSG update per
+// non-system subnet — runs after both VNet and NSG resources exist.
+@batchSize(1)
+resource subnetNsgAttach 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = [for (s, i) in nsgSubnets: {
+  parent: hubVnet
+  name: s.name
+  properties: union(
+    { addressPrefix: s.addressPrefix, networkSecurityGroup: { id: nsgs[i].id } },
+    contains(s, 'delegations') ? { delegations: s.delegations } : {},
+    contains(s, 'privateEndpointNetworkPolicies') ? { privateEndpointNetworkPolicies: s.privateEndpointNetworkPolicies } : {}
+  )
+}]
 
 resource nsgs 'Microsoft.Network/networkSecurityGroups@2024-05-01' = [for s in nsgSubnets: {
   name: 'nsg-${s.name}'
