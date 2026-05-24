@@ -70,3 +70,35 @@ Recommended next step: restart each Container App via
 Tracked for the next iteration. Console v0.2 should add proper
 `/api/health` routes to every app + correct probe configuration in the
 Bicep templates so this doesn't recur.
+
+## Addendum — iteration 1.5 (same session, deeper dive)
+
+Pushed harder on the ACA ingress 404. Confirmed it is **not**:
+
+- a probe issue (probes stripped on all 6 apps via REST PUT; Console + Setup-Orchestrator now report `healthState: Healthy`)
+- a stale-revision issue (forced new revision via `--set-env-vars FORCE_REDEPLOY=$(date +%s)` → `loom-console--0000002` Healthy, still 404)
+- an ingress disable/enable issue (toggled both ways, still 404)
+- a TLS/SNI issue (cert SAN includes `*.internal.<env-domain>`, `*.ext.<env-domain>`, `*.scm.<env-domain>`)
+- a hostname-form issue (tried `loom-console.internal.<env-domain>`, `loom-console.ext.<env-domain>`, `loom-console.<env-domain>` — all 404)
+- a DNS issue (resolves correctly to env static IP `10.0.2.85`; LB returns the ACA "stopped/does not exist" page, meaning request did reach the LB)
+- a workload-profile issue (`Consumption` profile, env has both `Consumption` and `D8`)
+- an env-identity issue (env has no managed identity, but internal-mode envs don't auto-manage DNS — customer-created zone is correct)
+
+Discovered the 4 worker apps (MCP, Activator, Mirroring, Direct-Lake-Shim)
+have **real application-level bugs** unrelated to ingress:
+
+- `loom-mcp` + `loom-direct-lake-shim`: ".NET SDKs were not found" — runtime/SDK target framework mismatch in the published binaries vs `aspnet:10.0` runtime base. Need to rebuild with explicit `--framework net8.0` (or match runtime version).
+- `loom-activator`: DI registration failure in `Program.cs:56` — a required service isn't wired in `LoomActivator`. App-side fix.
+- `loom-mirroring`: Debezium Connect needs Kafka brokers + `CONFIG_STORAGE_TOPIC` env var; the env scaffold ships without those — needs a Kafka deployment or refactor to use Azure Event Hubs Kafka surface.
+
+These are normal v0.1 → v0.2 punch-list items, not blockers to the env
+itself.
+
+Real ingress blocker remains an ACA env-level issue. Path forward (next
+iteration):
+
+1. Open an ACA support ticket with run ID + env name; or
+2. Tear down + redeploy the env (forces fresh ingress map registration); or
+3. Provision a fresh env in parallel and migrate apps over.
+
+Time-boxed this iteration. State committed across PRs #325 / #326.
