@@ -490,6 +490,7 @@ nav:
       - Live Deploy Status (2026-05-23): fiab/live-deploy-status.md
       - UAT Report (Iteration 1): fiab/uat-report.md
       - Console Access Patterns: fiab/access-patterns.md
+      - v1 Final Status + v2 Plan: fiab/v1-final-status-and-v2-plan.md
       - Deployment:
           - Index: fiab/deployment/index.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
