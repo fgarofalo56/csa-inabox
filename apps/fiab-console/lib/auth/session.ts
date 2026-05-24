@@ -1,19 +1,15 @@
 /**
  * Cookie-backed session for the BFF.
  * Encrypts the user's session token using an HKDF-derived key from
- * SESSION_SECRET (Key Vault reference). Token never leaves the server.
+ * SESSION_SECRET. Token never leaves the server.
  *
- * v1.13 fix: route handlers that return their own NextResponse must
- * attach cookies via `response.cookies.set(...)` — `cookies().set()`
- * from `next/headers` only flushes for server actions / page renders
- * that don't return a custom response. The /auth/callback handler was
- * setting the session via the latter and then returning a custom
- * redirect, so the Set-Cookie header was being dropped before the
- * browser ever saw it.
- *
- * setSession(payload, response?) — when called with a NextResponse,
- * attaches the cookie to it; otherwise falls back to the next/headers
- * jar (still useful for server-action paths).
+ * v1.14 fix: NextResponse.redirect() in Next.js 14 does NOT preserve
+ * cookies added via response.cookies.set() — observed live with v1.13:
+ * the redirect response came back to the browser with location: / but
+ * no Set-Cookie header at all. Workaround: build the cookie string
+ * manually and set it via response.headers.set('set-cookie', ...).
+ * That route hits the underlying ResponseInit headers and is preserved
+ * across NextResponse.redirect's response cloning.
  */
 
 import { cookies } from 'next/headers';
@@ -25,11 +21,11 @@ const COOKIE_NAME = 'loom_session';
 const ALG = 'aes-256-gcm';
 const IV_LEN = 12;
 const TAG_LEN = 16;
+const MAX_AGE_SECS = 60 * 60 * 8; // 8h
 
 function getKey(): Buffer {
   const secret = process.env.SESSION_SECRET;
   if (!secret) throw new Error('SESSION_SECRET is not configured');
-  // hkdfSync returns ArrayBuffer in newer @types/node; wrap in Buffer for AES.
   const ab = crypto.hkdfSync('sha256', Buffer.from(secret, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32);
   return Buffer.from(ab as ArrayBuffer);
 }
@@ -40,19 +36,6 @@ interface SessionPayload {
   exp: number;
 }
 
-const COOKIE_OPTS = {
-  httpOnly: true,
-  secure: true,
-  // 'lax' is required for OAuth callback flows. With 'strict', the
-  // Set-Cookie from /auth/callback would land in the jar but cookies
-  // would not be SENT on the subsequent /redirect-to-home navigation
-  // when the user followed any external link back to the app.
-  // 'lax' is the OAuth-recommended default.
-  sameSite: 'lax' as const,
-  path: '/',
-  maxAge: 60 * 60 * 8, // 8h
-};
-
 function encodeValue(payload: SessionPayload): string {
   const iv = crypto.randomBytes(IV_LEN);
   const cipher = crypto.createCipheriv(ALG, getKey(), iv);
@@ -62,14 +45,29 @@ function encodeValue(payload: SessionPayload): string {
   return Buffer.concat([iv, tag, encrypted]).toString('base64url');
 }
 
+/** Build a raw RFC-6265 Set-Cookie header value. */
+function buildCookieHeader(value: string, maxAge: number): string {
+  // SameSite=Lax: required for OAuth callback flows (Strict drops the
+  // cookie on cross-site redirects back into the app).
+  return `${COOKIE_NAME}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`;
+}
+
 export function setSession(payload: SessionPayload, response?: NextResponse): void {
   const value = encodeValue(payload);
   if (response) {
-    response.cookies.set(COOKIE_NAME, value, COOKIE_OPTS);
+    // CRITICAL: NextResponse.redirect() drops response.cookies.set()
+    // additions on Next 14. Set the raw header instead.
+    response.headers.set('set-cookie', buildCookieHeader(value, MAX_AGE_SECS));
     return;
   }
-  // Fallback: server-action / page-render contexts.
-  cookies().set(COOKIE_NAME, value, COOKIE_OPTS);
+  // Server-action / page-render contexts can still use the jar.
+  cookies().set(COOKIE_NAME, value, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: MAX_AGE_SECS,
+  });
 }
 
 export function getSession(): SessionPayload | null {
@@ -93,7 +91,7 @@ export function getSession(): SessionPayload | null {
 
 export function clearSession(response?: NextResponse): void {
   if (response) {
-    response.cookies.set(COOKIE_NAME, '', { ...COOKIE_OPTS, maxAge: 0 });
+    response.headers.set('set-cookie', buildCookieHeader('', 0));
     return;
   }
   cookies().delete(COOKIE_NAME);
