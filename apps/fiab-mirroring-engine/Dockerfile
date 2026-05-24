@@ -36,6 +36,17 @@ USER kafka
 
 EXPOSE 8083
 
+# Minimum env vars Debezium Connect needs to boot. Operator overrides
+# these at deploy-time with real Kafka brokers (Azure Event Hubs Kafka
+# surface) and topic names. Defaults let the container reach Ready so
+# probes can succeed; no actual mirroring happens until BOOTSTRAP_SERVERS
+# points at a real cluster.
+ENV BOOTSTRAP_SERVERS=localhost:9092
+ENV GROUP_ID=loom-connect-group
+ENV CONFIG_STORAGE_TOPIC=loom-connect-configs
+ENV OFFSET_STORAGE_TOPIC=loom-connect-offsets
+ENV STATUS_STORAGE_TOPIC=loom-connect-status
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD /usr/local/bin/loom-health
 

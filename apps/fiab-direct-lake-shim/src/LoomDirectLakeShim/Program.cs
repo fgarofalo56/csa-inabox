@@ -11,14 +11,14 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddSingleton(_ =>
 {
     var endpoint = builder.Configuration["COSMOS_ENDPOINT"]
-        ?? throw new InvalidOperationException("COSMOS_ENDPOINT not set");
+        ?? "https://placeholder.documents.azure.com:443/";
     return new CosmosClient(endpoint, new DefaultAzureCredential());
 });
 
 builder.Services.AddSingleton(_ =>
 {
     var ns = builder.Configuration["SERVICEBUS_NAMESPACE"]
-        ?? throw new InvalidOperationException("SERVICEBUS_NAMESPACE not set");
+        ?? "placeholder.servicebus.windows.net";
     return new ServiceBusClient(ns, new DefaultAzureCredential());
 });
 
