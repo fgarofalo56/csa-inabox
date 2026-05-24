@@ -47,8 +47,16 @@ public class DeltaLogEventHandler : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var queueName = _config["EVENTGRID_QUEUE"]
-            ?? throw new InvalidOperationException("EVENTGRID_QUEUE not set");
+        var queueName = _config["EVENTGRID_QUEUE"];
+        if (string.IsNullOrEmpty(queueName))
+        {
+            _log.LogWarning("DeltaLogEventHandler idling - EVENTGRID_QUEUE not set");
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+            }
+            return;
+        }
 
         await using var processor = _sb.CreateProcessor(queueName, new ServiceBusProcessorOptions
         {

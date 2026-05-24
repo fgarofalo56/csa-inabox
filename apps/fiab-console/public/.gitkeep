@@ -1,0 +1,2 @@
+# Reserved for Next.js public assets (favicons, og-images, etc.).
+# Dockerfile COPY --from=builder /app/public ./public expects this dir.

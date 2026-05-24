@@ -5,7 +5,7 @@
 # Build: docker build -t loom-mcp .
 # Run: docker run -p 8080:8080 -e AZURE_CLOUD=AzureCloud loom-mcp
 
-FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Vendor the Microsoft Azure MCP server source.
@@ -15,10 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
     && git clone --depth 1 --branch ${MS_MCP_REF} https://github.com/microsoft/mcp.git ms-mcp \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /src/ms-mcp/servers/Azure.Mcp.Server
+# The .csproj lives under servers/Azure.Mcp.Server/src/, not in the
+# server root. global.json (at repo root) pins SDK 10.0.201+.
+WORKDIR /src/ms-mcp/servers/Azure.Mcp.Server/src
 RUN dotnet publish -c Release -o /app --no-self-contained
 
-FROM mcr.microsoft.com/dotnet/aspnet:9.0
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app .
 COPY ./config/ /app/config/
@@ -37,4 +39,8 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
   CMD wget -q -O /dev/null http://localhost:8080/.well-known/health || exit 1
 
-ENTRYPOINT ["dotnet", "Azure.Mcp.Server.dll"]
+# Resolve the actual server entry-point dll at runtime — upstream
+# microsoft/mcp occasionally renames the published assembly. Falling
+# back to a glob-and-exec keeps us building against `main` without
+# pinning to a specific assembly name.
+ENTRYPOINT ["/bin/sh", "-c", "dll=$(ls /app/azmcp.dll /app/Azure.Mcp.Server*.dll 2>/dev/null | head -1); if [ -z \"$dll\" ]; then echo 'ERROR: no MCP server dll found in /app:'; ls /app; exit 1; fi; exec dotnet \"$dll\""]
