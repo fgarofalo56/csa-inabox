@@ -1,9 +1,14 @@
 'use client';
 
-import { ReactNode } from 'react';
-import { makeStyles, tokens, Title3, Avatar, Button } from '@fluentui/react-components';
-import { SignOut24Regular, Settings24Regular } from '@fluentui/react-icons';
+import { ReactNode, useEffect, useState } from 'react';
+import { makeStyles, tokens, Title3, Avatar, Button, Menu, MenuTrigger, MenuPopover, MenuList, MenuItem } from '@fluentui/react-components';
+import { SignOut24Regular, Settings24Regular, Person24Regular } from '@fluentui/react-icons';
 import { LeftNav } from './left-nav';
+
+interface MeResponse {
+  authenticated: boolean;
+  user: null | { name: string; email?: string; upn: string; oid: string };
+}
 
 const useStyles = makeStyles({
   root: {
@@ -23,12 +28,7 @@ const useStyles = makeStyles({
     paddingRight: '16px',
     gap: '12px',
   },
-  brand: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    marginRight: 'auto',
-  },
+  brand: { display: 'flex', alignItems: 'center', gap: '8px', marginRight: 'auto' },
   weave: {
     width: '24px',
     height: '24px',
@@ -37,10 +37,7 @@ const useStyles = makeStyles({
     backgroundSize: '8px 8px',
     borderRadius: '4px',
   },
-  brandText: {
-    color: tokens.colorNeutralForegroundInverted,
-    fontWeight: '600',
-  },
+  brandText: { color: tokens.colorNeutralForegroundInverted, fontWeight: '600' },
   nav: {
     gridColumn: '1',
     gridRow: '2',
@@ -48,16 +45,22 @@ const useStyles = makeStyles({
     borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
     overflowY: 'auto',
   },
-  main: {
-    gridColumn: '2',
-    gridRow: '2',
-    overflow: 'auto',
-    padding: '24px',
-  },
+  main: { gridColumn: '2', gridRow: '2', overflow: 'auto', padding: '24px' },
+  userText: { color: 'white', fontSize: '13px', marginRight: '4px' },
 });
 
 export function AppShell({ children }: { children: ReactNode }) {
   const styles = useStyles();
+  const [me, setMe] = useState<MeResponse | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/me').then((r) => r.json()).then((d: MeResponse) => {
+      if (!cancelled) setMe(d);
+    }).catch(() => {/* unauthenticated render */});
+    return () => { cancelled = true; };
+  }, []);
+
   return (
     <div className={styles.root}>
       <header className={styles.topbar}>
@@ -70,14 +73,36 @@ export function AppShell({ children }: { children: ReactNode }) {
           icon={<Settings24Regular />}
           style={{ color: 'white' }}
           aria-label="Settings"
+          as="a"
+          href="/admin"
         />
-        <Avatar name="User" size={32} />
-        <Button
-          appearance="transparent"
-          icon={<SignOut24Regular />}
-          style={{ color: 'white' }}
-          aria-label="Sign out"
-        />
+        {me?.authenticated && me.user ? (
+          <Menu>
+            <MenuTrigger disableButtonEnhancement>
+              <Button appearance="transparent" style={{ color: 'white' }}>
+                <Avatar name={me.user.name} size={28} />
+                <span className={styles.userText} style={{ marginLeft: 8 }}>{me.user.name}</span>
+              </Button>
+            </MenuTrigger>
+            <MenuPopover>
+              <MenuList>
+                <MenuItem icon={<Person24Regular />} disabled>{me.user.email ?? me.user.upn}</MenuItem>
+                <MenuItem icon={<SignOut24Regular />} onClick={() => { window.location.href = '/auth/sign-out'; }}>
+                  Sign out
+                </MenuItem>
+              </MenuList>
+            </MenuPopover>
+          </Menu>
+        ) : (
+          <Button
+            appearance="primary"
+            as="a"
+            href="/auth/sign-in"
+            aria-label="Sign in"
+          >
+            Sign in
+          </Button>
+        )}
       </header>
       <nav className={styles.nav}>
         <LeftNav />
