@@ -22,9 +22,9 @@ param vpnClientAddressPool string = '172.16.201.0/24'
 @description('Entra (Azure AD) tenant ID for VPN client auth')
 param tenantId string = subscription().tenantId
 
-@description('SKU — VpnGw1 is cheapest. Bump to VpnGw2 for >10 concurrent users.')
-@allowed(['VpnGw1', 'VpnGw2', 'VpnGw3'])
-param sku string = 'VpnGw1'
+@description('SKU - VpnGw1AZ is the smallest zone-redundant SKU. Non-AZ VpnGw1-5 are no longer accepted (Azure deprecation 2026).')
+@allowed(['VpnGw1AZ', 'VpnGw2AZ', 'VpnGw3AZ'])
+param sku string = 'VpnGw1AZ'
 
 @description('Compliance tags')
 param complianceTags object

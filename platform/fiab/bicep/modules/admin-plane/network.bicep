@@ -92,6 +92,12 @@ var subnets = [
   {
     name: 'snet-appgw'
     addressPrefix: '${prefix}.8.0/24'
+    delegations: [
+      {
+        name: 'Microsoft.Network/applicationGateways'
+        properties: { serviceName: 'Microsoft.Network/applicationGateways' }
+      }
+    ]
   }
 ]
 
