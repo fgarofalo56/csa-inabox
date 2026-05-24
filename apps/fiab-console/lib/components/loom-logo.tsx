@@ -3,35 +3,31 @@
 /**
  * LoomLogo — CSA Loom brand mark + wordmark.
  *
- * Visual concept (Fabric-inspired, branded for CSA):
- *   - Hex outer frame (Fabric uses hex)
- *   - Interlocked weave inside: 3 horizontal "warp" threads + 3 diagonal
- *     "weft" threads forming a stylized L (for Loom)
- *   - CSA brand: indigo + amber gradient
- *   - Wordmark: "CSA Loom" in semibold + small-caps "Cloud Scale Analytics"
- *     subtitle, with tagline.
+ * v1.8 redesign: more Fluid / Microsoft Power Platform feel.
+ *   - Hex frame (still Fabric-inspired) in deep navy
+ *   - THREE overlapping gradient ribbons / "petals" rotated 120° apart,
+ *     each with its own jewel gradient (indigo→azure, magenta→amber,
+ *     teal→cyan). Creates the "woven" Loom feel via translucent
+ *     overlap blending.
+ *   - Central white sparkle for that Microsoft-design polish.
+ *   - SVG <defs> use a stable + unique-per-instance ID so multiple
+ *     logos on the same page don't fight over gradient definitions.
  *
- * Why "Loom": the platform weaves every Azure data service (Synapse,
- * Databricks, ADF, U-SQL, Fabric workloads) into one experience —
- * threads of compute, storage, and governance pulled through a single
- * shuttle. Tagline reinforces this.
+ * Why this aesthetic: matches the new Microsoft Fabric / Power BI /
+ * Power Platform / Copilot art direction — fluid overlapping shapes,
+ * multi-color gradients, soft frame, central highlight. Distinctive
+ * for CSA Loom but visually at home next to Fabric items.
  */
 
-import { tokens } from '@fluentui/react-components';
+import { useId } from 'react';
 
 export interface LoomLogoProps {
-  /** "icon" = just the hex mark, "horizontal" = mark + wordmark inline,
-   *  "stacked" = mark above wordmark. */
   variant?: 'icon' | 'horizontal' | 'stacked';
-  /** px height of the mark. Wordmark scales proportionally. */
   size?: number;
-  /** Show the "Cloud Scale Analytics" subtitle + tagline. */
   showTagline?: boolean;
-  /** Override mark colors (e.g. all-white for dark topbars). */
+  /** When true, render the mark in pure white for use on dark gradient backgrounds. */
   monochromeColor?: string;
 }
-
-const GRADIENT_ID = 'csa-loom-mark-grad';
 
 export function LoomLogo({
   variant = 'horizontal',
@@ -39,46 +35,90 @@ export function LoomLogo({
   showTagline = false,
   monochromeColor,
 }: LoomLogoProps) {
+  const uid = useId().replace(/:/g, '');
+  const id = (k: string) => `csa-loom-${uid}-${k}`;
+
   const mark = (
     <svg
       width={size}
       height={size}
-      viewBox="0 0 32 32"
+      viewBox="0 0 64 64"
       role="img"
       aria-label="CSA Loom"
+      xmlns="http://www.w3.org/2000/svg"
       style={{ display: 'block', flexShrink: 0 }}
     >
       <defs>
-        <linearGradient id={GRADIENT_ID} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#3d2e80" />
+        {/* Three jewel ribbon gradients (Microsoft Fluid palette) */}
+        <linearGradient id={id('ribA')} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#5e2ed1" />
           <stop offset="55%" stopColor="#1f6feb" />
-          <stop offset="100%" stopColor="#d89f3d" />
+          <stop offset="100%" stopColor="#28d2c2" />
         </linearGradient>
+        <linearGradient id={id('ribB')} x1="100%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#e94b8a" />
+          <stop offset="60%" stopColor="#f08a3c" />
+          <stop offset="100%" stopColor="#f5c93e" />
+        </linearGradient>
+        <linearGradient id={id('ribC')} x1="50%" y1="0%" x2="50%" y2="100%">
+          <stop offset="0%" stopColor="#0078d4" />
+          <stop offset="100%" stopColor="#742774" />
+        </linearGradient>
+        {/* Hex backdrop gradient */}
+        <linearGradient id={id('hex')} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#0b1228" />
+          <stop offset="100%" stopColor="#1a1042" />
+        </linearGradient>
+        {/* Soft inner glow filter */}
+        <filter id={id('soft')} x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="0.3" />
+        </filter>
+        {/* Center highlight radial */}
+        <radialGradient id={id('spark')} cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#ffffff" stopOpacity="1" />
+          <stop offset="60%" stopColor="#ffffff" stopOpacity="0.55" />
+          <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+        </radialGradient>
       </defs>
+
       {/* Hex frame */}
       <polygon
-        points="16,1.5 29,9 29,23 16,30.5 3,23 3,9"
-        fill={monochromeColor ?? `url(#${GRADIENT_ID})`}
-        opacity={monochromeColor ? 1 : 0.95}
+        points="32,2.5 58.5,17 58.5,47 32,61.5 5.5,47 5.5,17"
+        fill={monochromeColor ?? `url(#${id('hex')})`}
       />
-      {/* Inner hex cutout for depth */}
+      {/* Subtle inner hex outline for depth */}
       <polygon
-        points="16,4.5 26.4,10.5 26.4,21.5 16,27.5 5.6,21.5 5.6,10.5"
+        points="32,7 53.5,19.5 53.5,44.5 32,57 10.5,44.5 10.5,19.5"
         fill="none"
-        stroke="rgba(255,255,255,0.18)"
-        strokeWidth="0.6"
+        stroke="rgba(255,255,255,0.08)"
+        strokeWidth="0.7"
       />
-      {/* Weave: 3 horizontal warp + 3 diagonal weft, forming an implied L */}
-      <g stroke={monochromeColor ? 'white' : 'white'} strokeWidth="1.6" strokeLinecap="round" opacity="0.95">
-        <line x1="9" y1="11" x2="23" y2="11" />
-        <line x1="9" y1="16" x2="23" y2="16" />
-        <line x1="9" y1="21" x2="23" y2="21" />
+
+      {/* Three overlapping ribbon-petals, rotated 120° apart */}
+      <g transform="translate(32 32)" filter={`url(#${id('soft')})`}>
+        <ellipse
+          cx="0" cy="-10" rx="9" ry="16"
+          fill={monochromeColor ?? `url(#${id('ribA')})`}
+          opacity={monochromeColor ? 0.85 : 0.92}
+          transform="rotate(0)"
+        />
+        <ellipse
+          cx="0" cy="-10" rx="9" ry="16"
+          fill={monochromeColor ?? `url(#${id('ribB')})`}
+          opacity={monochromeColor ? 0.75 : 0.82}
+          transform="rotate(120)"
+        />
+        <ellipse
+          cx="0" cy="-10" rx="9" ry="16"
+          fill={monochromeColor ?? `url(#${id('ribC')})`}
+          opacity={monochromeColor ? 0.65 : 0.78}
+          transform="rotate(240)"
+        />
       </g>
-      <g stroke={monochromeColor ? 'white' : 'white'} strokeWidth="1.6" strokeLinecap="round" opacity="0.55">
-        <line x1="11" y1="9" x2="20" y2="23" />
-        <line x1="14" y1="9" x2="23" y2="23" />
-        <line x1="9" y1="13" x2="17" y2="23" />
-      </g>
+
+      {/* Center sparkle */}
+      <circle cx="32" cy="32" r="5" fill={`url(#${id('spark')})`} />
+      <circle cx="32" cy="32" r="1.8" fill="#ffffff" opacity="0.95" />
     </svg>
   );
 

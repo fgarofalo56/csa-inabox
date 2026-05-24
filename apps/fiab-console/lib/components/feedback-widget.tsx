@@ -21,7 +21,10 @@ const LOOM_VERSION = process.env.NEXT_PUBLIC_LOOM_VERSION || 'dev';
 
 const useStyles = makeStyles({
   toggle: {
-    position: 'fixed', right: 16, bottom: 16,
+    // v1.8: moved to bottom-left so it never overlaps the Copilot
+    // right rail or the topbar brand. Lives at the bottom of the
+    // left navigation column, Linear / Slack style.
+    position: 'fixed', left: 16, bottom: 16,
     zIndex: 900,
     borderRadius: 999,
     paddingLeft: 16, paddingRight: 16,
