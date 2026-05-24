@@ -72,16 +72,10 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-11-01' = {
     osProfile: {
       computerName: vmName
       adminUsername: 'loomops'
+      // Random unused password — AAD-SSH extension is the real auth path
+      adminPassword: 'P@ssw0rd-${uniqueString(resourceGroup().id, deployment().name)}!aA1'
       linuxConfiguration: {
-        disablePasswordAuthentication: true
-        ssh: {
-          publicKeys: [
-            {
-              path: '/home/loomops/.ssh/authorized_keys'
-              keyData: 'ssh-rsa AAAAB3NzaC1yc2EplaceholderPubKeyForBicepCompile loomops@bicep'
-            }
-          ]
-        }
+        disablePasswordAuthentication: false
       }
     }
     networkProfile: {
