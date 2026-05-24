@@ -3,11 +3,11 @@ import { EmptyState } from '@/lib/components/empty-state';
 
 export default function UsersPage() {
   return (
-    <AdminShell sectionTitle="Users & licenses">
+    <AdminShell sectionTitle="Users, roles & licenses">
       <EmptyState
         icon="◓"
-        title="License assignments"
-        body="View and assign Power BI Pro, Power BI Premium Per-User, and Fabric capacity licenses. Sourced from Microsoft 365 admin center via Microsoft Graph."
+        title="Entra ID seats & Loom roles"
+        body="Manage Loom workspace roles (Admin / Member / Contributor / Viewer) and the downstream Azure roles Loom requires per service (Synapse SQL admin, Databricks workspace admin, ADF contributor, ADLS Storage Blob Data Contributor, etc.). License costs roll up from Microsoft 365 admin center for Microsoft-licensed users and from Databricks / Synapse billing for service-licensed seats."
       />
     </AdminShell>
   );

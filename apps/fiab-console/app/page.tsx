@@ -106,12 +106,13 @@ export default function HomePage() {
         <div className={s.heroPattern} aria-hidden />
         <div style={{ position: 'relative' }}><LoomLogo variant="icon" size={96} /></div>
         <div className={s.heroCopy}>
-          <Title2 as="h2" className={s.heroTitle}>One thread across every Azure data service.</Title2>
+          <Title2 as="h2" className={s.heroTitle}>The Microsoft Fabric experience, on top of Azure-native services.</Title2>
           <Body1 className={s.heroSub}>
-            <b>CSA Loom</b> — <b>Cloud Scale Analytics Loom</b> — weaves Fabric, Synapse, Databricks,
-            Data Factory, U-SQL, OneLake, and Purview into a single console. Build a Lakehouse,
-            query a Synapse SQL pool, run a Databricks notebook, set an Activator alert, and
-            promote across Dev → Test → Prod — without leaving Loom or learning four different studios.
+            <b>CSA Loom</b> — <b>Cloud Scale Analytics Loom</b> — delivers the Microsoft Fabric experience
+            for Azure tenants where Fabric isn&apos;t available (Azure Government, sovereign clouds, regulated
+            environments). Lakehouses ride on ADLS + Databricks. Warehouses ride on Synapse SQL pools.
+            Notebooks ride on Databricks / Synapse Spark. Pipelines ride on ADF. Governance rides on
+            Purview. Loom weaves it all into one console — no studio jumps, no learning four UIs.
           </Body1>
           <div className={s.heroChips}>
             {WORKLOADS.map((w) => <span key={w} className={s.chip}>{w}</span>)}
