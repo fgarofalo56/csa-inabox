@@ -16,7 +16,7 @@ import {
   ShieldCheckmark24Regular,
   Settings24Regular,
   Bot24Regular,
-  Notebook24Regular,
+  Sparkle24Regular,
   Connector24Regular,
 } from '@fluentui/react-icons';
 
@@ -32,8 +32,8 @@ const navItems = [
   { href: '/governance', icon: ShieldCheckmark24Regular, label: 'Governance' },
   { href: '/monitor', icon: ChartMultiple24Regular, label: 'Monitor' },
   { href: '/realtime-hub', icon: Flash24Regular, label: 'Real-Time hub' },
-  { href: '/data-agent', icon: Bot24Regular, label: 'Data agent' },
-  { href: '/copilot', icon: Notebook24Regular, label: 'Copilot' },
+  { href: '/data-agent', icon: Bot24Regular, label: 'Data agents' },
+  { href: '/copilot', icon: Sparkle24Regular, label: 'Copilot' },
   { href: '/workload-hub', icon: PuzzlePiece24Regular, label: 'Workload hub' },
   { href: '/deployment-pipelines', icon: CloudArrowUp24Regular, label: 'Deployment' },
   { href: '/admin', icon: ShieldKeyhole24Regular, label: 'Admin portal' },
