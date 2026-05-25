@@ -689,7 +689,7 @@ ORDER BY revenue DESC;`} aria-label="Databricks SQL editor" />
 }
 
 // ============================================================
-// Azure Data Factory — Pipeline
+// Azure Data Factory — Pipeline (real-REST against adf-loom-*)
 // ============================================================
 const ADF_PIPE_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
@@ -697,57 +697,424 @@ const ADF_PIPE_RIBBON: RibbonTab[] = [
     { label: 'Debug & run', actions: [{ label: 'Debug' }, { label: 'Add trigger' }, { label: 'Publish all' }] },
   ]},
 ];
+
+interface AdfPipelineDTO {
+  name: string;
+  properties: { activities?: unknown[]; description?: string; parameters?: Record<string, { type: string; defaultValue?: unknown }> };
+}
+interface AdfPipelineRunDTO {
+  runId: string;
+  pipelineName: string;
+  status?: string;
+  runStart?: string;
+  runEnd?: string;
+  durationInMs?: number;
+  message?: string;
+  invokedBy?: { name?: string; invokedByType?: string };
+}
+
 export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const [pipelines, setPipelines] = useState<AdfPipelineDTO[]>([]);
+  const [selected, setSelected] = useState<string>(id);
+  const [spec, setSpec] = useState<string>('');
+  const [origSpec, setOrigSpec] = useState<string>('');
+  const [runs, setRuns] = useState<AdfPipelineRunDTO[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<'json' | 'runs'>('json');
+
+  const loadList = useCallback(async () => {
+    setError(null);
+    try {
+      const r = await fetch('/api/items/adf-pipeline');
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'list failed');
+      setPipelines(j.pipelines || []);
+      if (j.pipelines?.length && !j.pipelines.find((p: AdfPipelineDTO) => p.name === selected)) {
+        setSelected(j.pipelines[0].name);
+      }
+    } catch (e: any) { setError(e?.message || String(e)); }
+  }, [selected]);
+
+  const loadPipeline = useCallback(async (name: string) => {
+    setError(null);
+    try {
+      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(name)}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'get failed');
+      const txt = JSON.stringify(j.pipeline, null, 2);
+      setSpec(txt); setOrigSpec(txt);
+    } catch (e: any) { setError(e?.message || String(e)); }
+  }, []);
+
+  const loadRuns = useCallback(async (name: string) => {
+    try {
+      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(name)}/runs`);
+      const j = await r.json();
+      if (!j.ok) { setRuns([]); return; }
+      setRuns(j.runs || []);
+    } catch { setRuns([]); }
+  }, []);
+
+  useEffect(() => { loadList(); }, [loadList]);
+  useEffect(() => { if (selected) { loadPipeline(selected); loadRuns(selected); } }, [selected, loadPipeline, loadRuns]);
+
+  const save = useCallback(async () => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const parsed = JSON.parse(spec);
+      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(selected)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(parsed),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'save failed');
+      setOrigSpec(spec);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, spec]);
+
+  const run = useCallback(async () => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(selected)}/run`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ params: {} }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'run failed');
+      setTimeout(() => loadRuns(selected), 1500);
+      setTab('runs');
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, loadRuns]);
+
+  const createNew = useCallback(async () => {
+    const name = window.prompt('New pipeline name (letters, digits, _ -)');
+    if (!name) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch('/api/items/adf-pipeline', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, properties: { activities: [] } }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'create failed');
+      await loadList();
+      setSelected(name);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [loadList]);
+
+  const dirty = spec !== origSpec;
+  const activityCount = (() => {
+    try { return (JSON.parse(spec)?.properties?.activities || []).length; } catch { return 0; }
+  })();
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ADF_PIPE_RIBBON} main={
-      <div className={s.pad}>
-        <Subtitle2>Pipeline canvas (classic ADF)</Subtitle2>
-        <Body1>Native ADF authoring inside Loom. Linked services, datasets, mapping data flows, and the full 90+ activity palette. Runs on your existing AutoResolveIntegrationRuntime or self-hosted IR — Loom does not move execution.</Body1>
-        <div className={s.cardGrid}>
-          {['Copy data', 'Lookup', 'GetMetadata', 'ForEach', 'IfCondition', 'Switch', 'Filter', 'Until', 'Wait', 'Web', 'WebHook', 'SetVariable', 'AppendVariable', 'ExecutePipeline', 'Validation', 'Delete', 'Script', 'ExecuteSSISPackage', 'DataLakeAnalyticsU-SQL', 'AzureFunction', 'Databricks Notebook', 'HDInsight Hive', 'AzureML', 'MappingDataFlow'].map((a) => (
-            <div key={a} className={s.card}>{a}</div>
-          ))}
+    <ItemEditorChrome item={item} id={id} ribbon={ADF_PIPE_RIBBON}
+      leftPanel={
+        <div style={{ padding: 8 }}>
+          <Tree aria-label="ADF pipelines" defaultOpenItems={['p']}>
+            <TreeItem itemType="branch" value="p">
+              <TreeItemLayout iconBefore={<Server20Regular />}>Pipelines ({pipelines.length})</TreeItemLayout>
+              <Tree>
+                {pipelines.map((p) => (
+                  <TreeItem key={p.name} itemType="leaf" value={`pl-${p.name}`} onClick={() => setSelected(p.name)}>
+                    <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{p.name} {selected === p.name && '·'}</TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+          </Tree>
+          <Button size="small" appearance="outline" onClick={createNew} style={{ marginTop: 8 }}>+ New pipeline</Button>
         </div>
-        <Caption1>24 of 90+ ADF activities shown.</Caption1>
-      </div>
-    } />
+      }
+      main={
+        <div className={s.pad}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Badge appearance="filled" color="brand">{selected || '(no pipeline)'}</Badge>
+            <Badge appearance="outline">{activityCount} activities</Badge>
+            {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+            <Button appearance="outline" icon={<Save20Regular />} disabled={busy || !dirty} onClick={save}>Save</Button>
+            <Button appearance="primary" icon={<Play20Regular />} disabled={busy || !selected || dirty} onClick={run}>Run</Button>
+            <Button appearance="outline" onClick={() => { if (selected) { loadPipeline(selected); loadRuns(selected); } }} style={{ marginLeft: 'auto' }}>Refresh</Button>
+          </div>
+          {error && (
+            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ADF Pipeline API error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+          )}
+          <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'json' | 'runs')}>
+              <Tab value="json">Spec (JSON)</Tab>
+              <Tab value="runs">Run history ({runs.length})</Tab>
+            </TabList>
+          </div>
+          {tab === 'json' && (
+            <textarea
+              className={s.monaco}
+              spellCheck={false}
+              value={spec}
+              onChange={(e) => setSpec(e.target.value)}
+              aria-label="ADF pipeline spec editor"
+              style={{ minHeight: 360 }}
+            />
+          )}
+          {tab === 'runs' && (
+            <div style={{ overflow: 'auto' }}>
+              <Table aria-label="ADF pipeline runs" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Run ID</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Start</TableHeaderCell>
+                  <TableHeaderCell>Duration</TableHeaderCell>
+                  <TableHeaderCell>Invoked by</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {runs.length === 0 && (
+                    <TableRow><TableCell colSpan={5}><Caption1>No runs in last 7 days.</Caption1></TableCell></TableRow>
+                  )}
+                  {runs.map((r) => (
+                    <TableRow key={r.runId}>
+                      <TableCell><code style={{ fontSize: 11 }}>{r.runId.slice(0, 8)}…</code></TableCell>
+                      <TableCell>
+                        <Badge appearance="filled" color={r.status === 'Succeeded' ? 'success' : r.status === 'Failed' ? 'danger' : r.status === 'InProgress' ? 'warning' : 'informative'}>{r.status || '—'}</Badge>
+                      </TableCell>
+                      <TableCell>{r.runStart ? new Date(r.runStart).toLocaleString() : '—'}</TableCell>
+                      <TableCell>{r.durationInMs != null ? `${(r.durationInMs / 1000).toFixed(1)}s` : '—'}</TableCell>
+                      <TableCell>{r.invokedBy?.name || '—'} <Caption1>({r.invokedBy?.invokedByType || '—'})</Caption1></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+      }
+    />
   );
 }
 
 // ============================================================
-// Azure Data Factory — Dataset
+// Azure Data Factory — Dataset (real-REST)
 // ============================================================
 const ADF_DS_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
     { label: 'Schema', actions: [{ label: 'Import schema' }, { label: 'Preview data' }] },
   ]},
 ];
+
+interface AdfDatasetDTO {
+  name: string;
+  properties: {
+    type: string;
+    linkedServiceName?: { referenceName: string; type: 'LinkedServiceReference' };
+    schema?: Array<{ name?: string; type?: string }>;
+    typeProperties?: Record<string, any>;
+  };
+}
+interface AdfLinkedServiceDTO { name: string; properties: { type: string } }
+
+const ADF_DATASET_TYPES = ['Parquet', 'DelimitedText', 'Json', 'Avro', 'AzureSqlTable', 'AzureBlob'];
+
 export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const [datasets, setDatasets] = useState<AdfDatasetDTO[]>([]);
+  const [linkedServices, setLinkedServices] = useState<AdfLinkedServiceDTO[]>([]);
+  const [selected, setSelected] = useState<string>(id);
+  const [ds, setDs] = useState<AdfDatasetDTO | null>(null);
+  const [type, setType] = useState<string>('Parquet');
+  const [linkedService, setLinkedService] = useState<string>('');
+  const [path, setPath] = useState<string>('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const loadList = useCallback(async () => {
+    setError(null);
+    try {
+      const r = await fetch('/api/items/adf-dataset');
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'list failed');
+      setDatasets(j.datasets || []);
+      if (j.datasets?.length && !j.datasets.find((d: AdfDatasetDTO) => d.name === selected)) {
+        setSelected(j.datasets[0].name);
+      }
+    } catch (e: any) { setError(e?.message || String(e)); }
+  }, [selected]);
+
+  const loadLinkedServices = useCallback(async () => {
+    try {
+      const r = await fetch('/api/adf/linked-services');
+      const j = await r.json();
+      if (j.ok) setLinkedServices(j.linkedServices || []);
+    } catch { /* ignore */ }
+  }, []);
+
+  const loadDataset = useCallback(async (name: string) => {
+    setError(null);
+    try {
+      const r = await fetch(`/api/items/adf-dataset/${encodeURIComponent(name)}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'get failed');
+      setDs(j.dataset);
+      setType(j.dataset?.properties?.type || 'Parquet');
+      setLinkedService(j.dataset?.properties?.linkedServiceName?.referenceName || '');
+      const tp = j.dataset?.properties?.typeProperties || {};
+      setPath(
+        tp?.location?.folderPath
+        ?? tp?.location?.fileName
+        ?? tp?.tableName
+        ?? tp?.fileName
+        ?? '',
+      );
+    } catch (e: any) { setError(e?.message || String(e)); }
+  }, []);
+
+  useEffect(() => { loadList(); loadLinkedServices(); }, [loadList, loadLinkedServices]);
+  useEffect(() => { if (selected) loadDataset(selected); }, [selected, loadDataset]);
+
+  const save = useCallback(async () => {
+    if (!selected || !linkedService) {
+      setError('Pick a linked service.');
+      return;
+    }
+    setBusy(true); setError(null);
+    try {
+      // Build a sensible typeProperties block per type
+      let typeProperties: Record<string, any> = {};
+      if (type === 'AzureSqlTable') {
+        typeProperties = { schema: 'dbo', table: path };
+      } else if (path) {
+        // file-based: split folder / file if there's a slash
+        const ix = path.lastIndexOf('/');
+        const folder = ix >= 0 ? path.slice(0, ix) : '';
+        const file = ix >= 0 ? path.slice(ix + 1) : path;
+        typeProperties = {
+          location: {
+            type: 'AzureBlobFSLocation',
+            fileName: file,
+            folderPath: folder,
+          },
+        };
+      }
+      const body: AdfDatasetDTO = {
+        name: selected,
+        properties: {
+          type,
+          linkedServiceName: { referenceName: linkedService, type: 'LinkedServiceReference' },
+          schema: ds?.properties.schema || [],
+          typeProperties,
+        },
+      };
+      const r = await fetch(`/api/items/adf-dataset/${encodeURIComponent(selected)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'save failed');
+      await loadDataset(selected);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, linkedService, type, path, ds, loadDataset]);
+
+  const createNew = useCallback(async () => {
+    const name = window.prompt('New dataset name');
+    if (!name || !linkedServices.length) {
+      if (!linkedServices.length) setError('No linked services found. Create one in ADF Studio first.');
+      return;
+    }
+    setBusy(true); setError(null);
+    try {
+      const body: AdfDatasetDTO = {
+        name,
+        properties: {
+          type: 'Parquet',
+          linkedServiceName: { referenceName: linkedServices[0].name, type: 'LinkedServiceReference' },
+          typeProperties: { location: { type: 'AzureBlobFSLocation', fileName: '', folderPath: '' } },
+        },
+      };
+      const r = await fetch('/api/items/adf-dataset', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'create failed');
+      await loadList();
+      setSelected(name);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [linkedServices, loadList]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ADF_DS_RIBBON} main={
-      <div className={s.form}>
-        <Subtitle2>Dataset configuration</Subtitle2>
-        <div className={s.row}>
-          <div className={s.field}><Caption1>Type</Caption1><Dropdown defaultValue="Parquet" defaultSelectedOptions={['Parquet']}><Option>Parquet</Option><Option>DelimitedText</Option><Option>JSON</Option><Option>Avro</Option><Option>AzureSqlTable</Option></Dropdown></div>
-          <div className={s.field}><Caption1>Linked service</Caption1><Dropdown defaultValue="ls-adls-gen2-raw" defaultSelectedOptions={['ls-adls-gen2-raw']}><Option>ls-adls-gen2-raw</Option><Option>ls-azuresql-prod</Option></Dropdown></div>
+    <ItemEditorChrome item={item} id={id} ribbon={ADF_DS_RIBBON}
+      leftPanel={
+        <div style={{ padding: 8 }}>
+          <Tree aria-label="ADF datasets" defaultOpenItems={['d']}>
+            <TreeItem itemType="branch" value="d">
+              <TreeItemLayout iconBefore={<Database20Regular />}>Datasets ({datasets.length})</TreeItemLayout>
+              <Tree>
+                {datasets.map((d) => (
+                  <TreeItem key={d.name} itemType="leaf" value={`ds-${d.name}`} onClick={() => setSelected(d.name)}>
+                    <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{d.name} {selected === d.name && '·'}</TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+          </Tree>
+          <Button size="small" appearance="outline" onClick={createNew} style={{ marginTop: 8 }}>+ New dataset</Button>
         </div>
-        <div className={s.field}><Caption1>Path / table</Caption1><Input placeholder="raw/orders/year=2026/month=05/*.parquet" /></div>
-        <Subtitle2 style={{ marginTop: 8 }}>Schema (12 columns)</Subtitle2>
-        <Table aria-label="Schema">
-          <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell></TableRow></TableHeader>
-          <TableBody>{[['order_id','int'],['customer_id','string'],['amount','decimal(18,2)'],['order_date','timestamp']].map((r) =>
-            <TableRow key={r[0]}><TableCell><code>{r[0]}</code></TableCell><TableCell>{r[1]}</TableCell></TableRow>)}
-          </TableBody>
-        </Table>
-      </div>
-    } />
+      }
+      main={
+        <div className={s.form}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <Badge appearance="filled" color="brand">{selected || '(no dataset)'}</Badge>
+            <Badge appearance="outline">{type}</Badge>
+            <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !selected} onClick={save} style={{ marginLeft: 'auto' }}>Save</Button>
+          </div>
+          {error && (
+            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ADF Dataset API error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+          )}
+          <Subtitle2>Dataset configuration</Subtitle2>
+          <div className={s.row}>
+            <div className={s.field}>
+              <Caption1>Type</Caption1>
+              <Dropdown value={type} selectedOptions={[type]} onOptionSelect={(_, d) => setType(d.optionValue || 'Parquet')}>
+                {ADF_DATASET_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
+              </Dropdown>
+            </div>
+            <div className={s.field}>
+              <Caption1>Linked service ({linkedServices.length} available)</Caption1>
+              <Dropdown value={linkedService} selectedOptions={[linkedService]} onOptionSelect={(_, d) => setLinkedService(d.optionValue || '')}>
+                {linkedServices.map((ls) => <Option key={ls.name} value={ls.name}>{`${ls.name} (${ls.properties.type})`}</Option>)}
+              </Dropdown>
+            </div>
+          </div>
+          <div className={s.field}>
+            <Caption1>{type === 'AzureSqlTable' ? 'Table name' : 'Path (folder/file or wildcard)'}</Caption1>
+            <Input value={path} onChange={(_, d) => setPath(d.value)} placeholder={type === 'AzureSqlTable' ? 'dbo.FactSales' : 'raw/orders/year=2026/*.parquet'} />
+          </div>
+          <Subtitle2 style={{ marginTop: 8 }}>Schema ({ds?.properties.schema?.length || 0} columns)</Subtitle2>
+          <Table aria-label="Schema" size="small">
+            <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell></TableRow></TableHeader>
+            <TableBody>
+              {(ds?.properties.schema || []).length === 0 && (
+                <TableRow><TableCell colSpan={2}><Caption1>No schema imported. Use ADF Studio "Import schema" to populate.</Caption1></TableCell></TableRow>
+              )}
+              {(ds?.properties.schema || []).map((c, i) => (
+                <TableRow key={i}><TableCell><code>{c.name || '—'}</code></TableCell><TableCell>{c.type || '—'}</TableCell></TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      }
+    />
   );
 }
 
 // ============================================================
-// Azure Data Factory — Trigger
+// Azure Data Factory — Trigger (real-REST)
 // ============================================================
 const ADF_TR_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
@@ -755,20 +1122,239 @@ const ADF_TR_RIBBON: RibbonTab[] = [
     { label: 'Edit', actions: [{ label: 'Recurrence' }, { label: 'Parameters' }] },
   ]},
 ];
+
+interface AdfTriggerDTO {
+  name: string;
+  properties: {
+    type: string;
+    runtimeState?: 'Started' | 'Stopped' | 'Disabled';
+    pipelines?: Array<{ pipelineReference: { referenceName: string; type: 'PipelineReference' }; parameters?: Record<string, unknown> }>;
+    typeProperties?: Record<string, any>;
+  };
+}
+
+const ADF_TRIGGER_TYPES = ['ScheduleTrigger', 'TumblingWindowTrigger', 'BlobEventsTrigger'];
+
 export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const [triggers, setTriggers] = useState<AdfTriggerDTO[]>([]);
+  const [pipelines, setPipelines] = useState<AdfPipelineDTO[]>([]);
+  const [selected, setSelected] = useState<string>(id);
+  const [tr, setTr] = useState<AdfTriggerDTO | null>(null);
+  const [type, setType] = useState<string>('ScheduleTrigger');
+  const [frequency, setFrequency] = useState<string>('Hour');
+  const [interval, setIntervalMin] = useState<string>('1');
+  const [timeZone, setTimeZone] = useState<string>('UTC');
+  const [targetPipeline, setTargetPipeline] = useState<string>('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const loadList = useCallback(async () => {
+    setError(null);
+    try {
+      const r = await fetch('/api/items/adf-trigger');
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'list failed');
+      setTriggers(j.triggers || []);
+      if (j.triggers?.length && !j.triggers.find((t: AdfTriggerDTO) => t.name === selected)) {
+        setSelected(j.triggers[0].name);
+      }
+    } catch (e: any) { setError(e?.message || String(e)); }
+  }, [selected]);
+
+  const loadPipelines = useCallback(async () => {
+    try {
+      const r = await fetch('/api/items/adf-pipeline');
+      const j = await r.json();
+      if (j.ok) setPipelines(j.pipelines || []);
+    } catch { /* ignore */ }
+  }, []);
+
+  const loadTrigger = useCallback(async (name: string) => {
+    setError(null);
+    try {
+      const r = await fetch(`/api/items/adf-trigger/${encodeURIComponent(name)}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'get failed');
+      setTr(j.trigger);
+      const p = j.trigger?.properties || {};
+      setType(p.type || 'ScheduleTrigger');
+      const recur = p.typeProperties?.recurrence;
+      if (recur) {
+        setFrequency(recur.frequency || 'Hour');
+        setIntervalMin(String(recur.interval ?? '1'));
+        setTimeZone(recur.timeZone || 'UTC');
+      }
+      setTargetPipeline(p.pipelines?.[0]?.pipelineReference?.referenceName || '');
+    } catch (e: any) { setError(e?.message || String(e)); }
+  }, []);
+
+  useEffect(() => { loadList(); loadPipelines(); }, [loadList, loadPipelines]);
+  useEffect(() => { if (selected) loadTrigger(selected); }, [selected, loadTrigger]);
+
+  const save = useCallback(async () => {
+    if (!selected || !targetPipeline) {
+      setError('Pick a target pipeline.');
+      return;
+    }
+    setBusy(true); setError(null);
+    try {
+      let typeProperties: Record<string, any> = {};
+      if (type === 'ScheduleTrigger') {
+        typeProperties = {
+          recurrence: {
+            frequency,
+            interval: Number(interval) || 1,
+            timeZone,
+            startTime: new Date().toISOString(),
+          },
+        };
+      } else if (type === 'TumblingWindowTrigger') {
+        typeProperties = {
+          frequency,
+          interval: Number(interval) || 1,
+          startTime: new Date().toISOString(),
+          delay: '00:00:00',
+          maxConcurrency: 1,
+        };
+      } else if (type === 'BlobEventsTrigger') {
+        typeProperties = {
+          blobPathBeginsWith: '/container/blobs/',
+          events: ['Microsoft.Storage.BlobCreated'],
+          scope: '',
+        };
+      }
+      const body: AdfTriggerDTO = {
+        name: selected,
+        properties: {
+          type,
+          pipelines: [{
+            pipelineReference: { referenceName: targetPipeline, type: 'PipelineReference' },
+            parameters: {},
+          }],
+          typeProperties,
+        },
+      };
+      const r = await fetch(`/api/items/adf-trigger/${encodeURIComponent(selected)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'save failed');
+      await loadTrigger(selected);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, targetPipeline, type, frequency, interval, timeZone, loadTrigger]);
+
+  const setState = useCallback(async (action: 'start' | 'stop') => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch(`/api/items/adf-trigger/${encodeURIComponent(selected)}/state`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `${action} failed`);
+      await loadTrigger(selected);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, loadTrigger]);
+
+  const createNew = useCallback(async () => {
+    const name = window.prompt('New trigger name');
+    if (!name || !pipelines.length) {
+      if (!pipelines.length) setError('No pipelines to attach to. Create one first.');
+      return;
+    }
+    setBusy(true); setError(null);
+    try {
+      const body: AdfTriggerDTO = {
+        name,
+        properties: {
+          type: 'ScheduleTrigger',
+          pipelines: [{ pipelineReference: { referenceName: pipelines[0].name, type: 'PipelineReference' }, parameters: {} }],
+          typeProperties: { recurrence: { frequency: 'Hour', interval: 1, timeZone: 'UTC', startTime: new Date().toISOString() } },
+        },
+      };
+      const r = await fetch('/api/items/adf-trigger', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'create failed');
+      await loadList();
+      setSelected(name);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [pipelines, loadList]);
+
+  const runtimeState = tr?.properties.runtimeState || 'Stopped';
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ADF_TR_RIBBON} main={
-      <div className={s.form}>
-        <Subtitle2>Trigger type</Subtitle2>
-        <Dropdown defaultValue="Schedule" defaultSelectedOptions={['Schedule']}><Option>Schedule</Option><Option>Tumbling window</Option><Option>Storage event</Option><Option>Custom event</Option></Dropdown>
-        <div className={s.row}>
-          <div className={s.field}><Caption1>Cadence</Caption1><Input defaultValue="Every 1 hour, on the hour" /></div>
-          <div className={s.field}><Caption1>Time zone</Caption1><Input defaultValue="UTC" /></div>
+    <ItemEditorChrome item={item} id={id} ribbon={ADF_TR_RIBBON}
+      leftPanel={
+        <div style={{ padding: 8 }}>
+          <Tree aria-label="ADF triggers" defaultOpenItems={['t']}>
+            <TreeItem itemType="branch" value="t">
+              <TreeItemLayout iconBefore={<Server20Regular />}>Triggers ({triggers.length})</TreeItemLayout>
+              <Tree>
+                {triggers.map((t) => (
+                  <TreeItem key={t.name} itemType="leaf" value={`tr-${t.name}`} onClick={() => setSelected(t.name)}>
+                    <TreeItemLayout iconBefore={<ArrowSync20Regular />}>{t.name} {selected === t.name && '·'}</TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+          </Tree>
+          <Button size="small" appearance="outline" onClick={createNew} style={{ marginTop: 8 }}>+ New trigger</Button>
         </div>
-        <Caption1>Linked pipelines: 3 · Last fired: 32 min ago · State: Running</Caption1>
-      </div>
-    } />
+      }
+      main={
+        <div className={s.form}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <Badge appearance="filled" color="brand">{selected || '(no trigger)'}</Badge>
+            <Badge appearance="filled" color={runtimeState === 'Started' ? 'success' : 'informative'}>{runtimeState}</Badge>
+            <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !selected} onClick={save}>Save</Button>
+            <Button appearance="outline" icon={<Play20Regular />} disabled={busy || !selected || runtimeState === 'Started'} onClick={() => setState('start')}>Start</Button>
+            <Button appearance="outline" icon={<Pause20Regular />} disabled={busy || !selected || runtimeState !== 'Started'} onClick={() => setState('stop')}>Stop</Button>
+          </div>
+          {error && (
+            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ADF Trigger API error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+          )}
+          <Subtitle2>Trigger configuration</Subtitle2>
+          <div className={s.row}>
+            <div className={s.field}>
+              <Caption1>Type</Caption1>
+              <Dropdown value={type} selectedOptions={[type]} onOptionSelect={(_, d) => setType(d.optionValue || 'ScheduleTrigger')}>
+                {ADF_TRIGGER_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
+              </Dropdown>
+            </div>
+            <div className={s.field}>
+              <Caption1>Target pipeline ({pipelines.length} available)</Caption1>
+              <Dropdown value={targetPipeline} selectedOptions={[targetPipeline]} onOptionSelect={(_, d) => setTargetPipeline(d.optionValue || '')}>
+                {pipelines.map((p) => <Option key={p.name} value={p.name}>{p.name}</Option>)}
+              </Dropdown>
+            </div>
+          </div>
+          {(type === 'ScheduleTrigger' || type === 'TumblingWindowTrigger') && (
+            <div className={s.row}>
+              <div className={s.field}>
+                <Caption1>Frequency</Caption1>
+                <Dropdown value={frequency} selectedOptions={[frequency]} onOptionSelect={(_, d) => setFrequency(d.optionValue || 'Hour')}>
+                  {['Minute', 'Hour', 'Day', 'Week', 'Month'].map((f) => <Option key={f} value={f}>{f}</Option>)}
+                </Dropdown>
+              </div>
+              <div className={s.field}><Caption1>Interval</Caption1><Input value={interval} onChange={(_, d) => setIntervalMin(d.value)} /></div>
+              <div className={s.field}><Caption1>Time zone</Caption1><Input value={timeZone} onChange={(_, d) => setTimeZone(d.value)} /></div>
+            </div>
+          )}
+          <Caption1>
+            Linked pipelines: {tr?.properties.pipelines?.length || 0}
+          </Caption1>
+        </div>
+      }
+    />
   );
 }
 

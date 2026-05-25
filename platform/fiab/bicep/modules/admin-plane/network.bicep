@@ -298,6 +298,8 @@ var dnsZones = [
   // v2.0 — Synapse SQL + Dev endpoints (Dedicated + Serverless + Studio)
   'privatelink.sql.azuresynapse.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'net'}'
   'privatelink.dev.azuresynapse.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'net'}'
+  // v2 — Azure Data Factory (Pipeline / Dataset / Trigger editors)
+  'privatelink.${boundary == 'GCC-High' || boundary == 'IL5' ? 'datafactory.azure.us' : 'adf.azure.com'}'
 ]
 
 resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in dnsZones: {
