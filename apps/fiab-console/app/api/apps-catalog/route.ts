@@ -18,9 +18,28 @@ export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const c = await appsCatalogContainer();
-  const { resources } = await c.items
+  let { resources } = await c.items
     .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name', parameters: [{ name: '@t', value: s.claims.oid }] })
     .fetchAll();
+
+  // First-sign-in seed copy: if this tenant has nothing, copy from GLOBAL.
+  if (resources.length === 0) {
+    const { resources: global } = await c.items
+      .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t', parameters: [{ name: '@t', value: 'GLOBAL' }] })
+      .fetchAll();
+    if (global.length > 0) {
+      const now = new Date().toISOString();
+      for (const src of global) {
+        const copy = { ...src, tenantId: s.claims.oid, copiedFromGlobalAt: now, _etag: undefined, _rid: undefined, _self: undefined, _ts: undefined, _attachments: undefined };
+        delete (copy as any)._etag; delete (copy as any)._rid; delete (copy as any)._self; delete (copy as any)._ts; delete (copy as any)._attachments;
+        await c.items.upsert(copy).catch(() => {});
+      }
+      const refetched = await c.items
+        .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name', parameters: [{ name: '@t', value: s.claims.oid }] })
+        .fetchAll();
+      resources = refetched.resources;
+    }
+  }
   return NextResponse.json({ ok: true, apps: resources });
 }
 

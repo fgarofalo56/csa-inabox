@@ -14,9 +14,27 @@ export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const c = await workloadsCatalogContainer();
-  const { resources } = await c.items
+  let { resources } = await c.items
     .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name', parameters: [{ name: '@t', value: s.claims.oid }] })
     .fetchAll();
+
+  if (resources.length === 0) {
+    const { resources: global } = await c.items
+      .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t', parameters: [{ name: '@t', value: 'GLOBAL' }] })
+      .fetchAll();
+    if (global.length > 0) {
+      const now = new Date().toISOString();
+      for (const src of global) {
+        const copy: any = { ...src, tenantId: s.claims.oid, copiedFromGlobalAt: now };
+        delete copy._etag; delete copy._rid; delete copy._self; delete copy._ts; delete copy._attachments;
+        await c.items.upsert(copy).catch(() => {});
+      }
+      const refetched = await c.items
+        .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name', parameters: [{ name: '@t', value: s.claims.oid }] })
+        .fetchAll();
+      resources = refetched.resources;
+    }
+  }
   return NextResponse.json({ ok: true, workloads: resources });
 }
 
