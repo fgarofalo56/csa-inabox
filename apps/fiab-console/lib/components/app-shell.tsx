@@ -1,11 +1,12 @@
 'use client';
 
 /**
- * AppShell — v1.12 topbar redesign per docs/fiab/ui-audit-v1.10.md §3.6.
- * Brand (logo + wordmark only) | workspace context | search | action cluster.
- * Tagline dropped from topbar; it lives in the home hero. Brand subtitle
- * "Cloud Scale Analytics" moved to the brand tooltip / aria-label so screen
- * readers + clipboard don't get "CSA LoomCloud Scale Analytics".
+ * AppShell — v3 topbar (Fabric parity). Order:
+ *   Brand | AppLauncher | TabStrip | SavedStatus | TopbarSearch | actions
+ * Action cluster: Copilot, Notifications, Feedback, ThemeToggle, Help,
+ * Admin/Settings, Account/SignIn. Brand subtitle "Cloud Scale Analytics"
+ * lives in the brand tooltip / aria-label so screen readers + clipboard
+ * don't get "CSA LoomCloud Scale Analytics".
  */
 
 import { ReactNode, useEffect, useState } from 'react';
@@ -27,6 +28,10 @@ import { ThemeToggle } from './theme-toggle';
 import { TopbarSearch } from './topbar-search';
 import { FeedbackWidget, openFeedback } from './feedback-widget';
 import { GlobalErrorBoundary, GlobalErrorListeners } from './error-boundary';
+import { AppLauncher } from './app-launcher';
+import { TabStrip } from './tab-strip';
+import { SavedStatus } from './saved-status';
+import { NotificationsButton } from './notifications-button';
 
 interface MeResponse {
   authenticated: boolean;
@@ -71,18 +76,6 @@ const useStyles = makeStyles({
     fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em',
     whiteSpace: 'nowrap',
   },
-  ctxChip: {
-    flex: '0 1 240px', minWidth: 0,
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    border: '1px solid rgba(255,255,255,0.18)',
-    borderRadius: 'var(--loom-radius-full)',
-    padding: '4px 12px',
-    fontSize: 12, color: 'rgba(255,255,255,0.92)',
-    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-    cursor: 'pointer',
-    transition: 'background-color var(--loom-motion-fast) var(--loom-motion-ease)',
-    ':hover': { backgroundColor: 'rgba(255,255,255,0.16)' },
-  },
   iconBtn: {
     color: 'white',
     transition: 'background-color var(--loom-motion-fast) var(--loom-motion-ease)',
@@ -115,7 +108,6 @@ const useStyles = makeStyles({
 export function AppShell({ children }: { children: ReactNode }) {
   const styles = useStyles();
   const [me, setMe] = useState<MeResponse | null>(null);
-  const [workspace] = useState<string>('My workspace');
 
   useEffect(() => {
     let cancelled = false;
@@ -134,17 +126,16 @@ export function AppShell({ children }: { children: ReactNode }) {
             <span className={styles.wordmark}>CSA Loom</span>
           </Link>
         </Tooltip>
-        <Tooltip content="Switch workspace" relationship="label">
-          <button className={styles.ctxChip} aria-label="Current workspace">
-            <span style={{ opacity: 0.65, marginRight: 6 }}>Workspace ·</span>{workspace}
-          </button>
-        </Tooltip>
+        <AppLauncher />
+        <TabStrip />
+        <SavedStatus />
         <TopbarSearch />
         <div className={styles.actions} role="toolbar" aria-label="Global actions">
           <Tooltip content="Copilot (Ctrl+/)" relationship="label">
             <Button appearance="transparent" className={styles.iconBtn} icon={<Sparkle24Regular />}
               onClick={openCopilot} aria-label="Open Copilot" />
           </Tooltip>
+          <NotificationsButton />
           <Tooltip content="Send feedback" relationship="label">
             <Button appearance="transparent" className={styles.iconBtn} icon={<ChatHelp24Regular />}
               onClick={openFeedback} aria-label="Send feedback" />
