@@ -300,7 +300,7 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   const load = () =>
-    fetch(`/api/workspaces/${workspaceId}/git`).then(r => r.json())
+    fetch(`/api/workspaces/${workspaceId}/scm`).then(r => r.json())
       .then(d => {
         setBinding(d?.git ?? null);
         if (d?.git) {
@@ -316,7 +316,7 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
 
   const save = async () => {
     setBusy(true); setError(null);
-    const r = await fetch(`/api/workspaces/${workspaceId}/git`, {
+    const r = await fetch(`/api/workspaces/${workspaceId}/scm`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider, repoUrl, branch, directory: directory || undefined,
         pat: pat || undefined }),
@@ -327,7 +327,7 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
   };
 
   const disconnect = async () => {
-    await fetch(`/api/workspaces/${workspaceId}/git`, { method: 'DELETE' });
+    await fetch(`/api/workspaces/${workspaceId}/scm`, { method: 'DELETE' });
     setBinding(null); setRepoUrl(''); setDirectory('');
   };
 

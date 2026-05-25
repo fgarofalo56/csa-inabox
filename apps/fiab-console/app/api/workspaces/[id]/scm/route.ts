@@ -1,13 +1,13 @@
 /**
- * Workspace Git integration.
+ * Workspace SCM binding (a.k.a. Git integration).
  *
- * GET    /api/workspaces/[id]/git              → current Git binding (or null)
- * POST   /api/workspaces/[id]/git              → upsert binding {provider, repoUrl, branch, directory?, pat?}
- * DELETE /api/workspaces/[id]/git              → disconnect
+ * GET    /api/workspaces/[id]/scm              → current binding (or null)
+ * POST   /api/workspaces/[id]/scm              → upsert binding {provider, repoUrl, branch, directory?, pat?}
+ * DELETE /api/workspaces/[id]/scm              → disconnect
  *
- * (PUT would be the conventional verb here, but Front Door's default WAF
- * profile rejects PUT on dynamic paths with a 403 — POST upsert is the
- * pragmatic choice.)
+ * Path was originally `/git` but Front Door's default OWASP ruleset 403s
+ * POST on any path containing the segment `git` (it's a `.git`-exposure
+ * guard). `/scm` carries no such trigger and is otherwise identical.
  *
  * Backed by Cosmos `workspace-git` (PK /workspaceId). Doc shape:
  *   { id: workspaceId, workspaceId, provider:'github'|'ado', repoUrl,

@@ -204,16 +204,16 @@ async function main() {
   });
 
   // ---- Chunk 5b git ----
-  await step('POST + GET /api/workspaces/[id]/git (Chunk 5b)', async () => {
-    const put = await call('POST', `/api/workspaces/${ws.id}/git`, {
+  await step('POST + GET /api/workspaces/[id]/scm (Chunk 5b)', async () => {
+    const put = await call('POST', `/api/workspaces/${ws.id}/scm`, {
       provider: 'github', repoUrl: 'https://github.com/example/repo', branch: 'main',
     });
     expect(put.status, s => s === 200, `post status=${put.status}`);
-    const { body } = await call('GET', `/api/workspaces/${ws.id}/git`);
+    const { body } = await call('GET', `/api/workspaces/${ws.id}/scm`);
     expect(body.git?.repoUrl, u => u === 'https://github.com/example/repo');
   });
-  await step('DELETE /api/workspaces/[id]/git', async () => {
-    const { status } = await call('DELETE', `/api/workspaces/${ws.id}/git`);
+  await step('DELETE /api/workspaces/[id]/scm', async () => {
+    const { status } = await call('DELETE', `/api/workspaces/${ws.id}/scm`);
     expect(status, s => s === 200);
   });
 
