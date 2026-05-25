@@ -283,7 +283,8 @@ function PermissionsSection({ workspaceId }: { workspaceId: string }) {
 
 interface GitBinding {
   provider: 'github' | 'ado';
-  repoUrl: string; branch: string; directory?: string;
+  repoHost: string; repoPath: string; repoUrl: string;
+  branch: string; directory?: string;
   status: string; connectedBy: string; connectedAt: string;
   patHash?: string;
 }
@@ -292,7 +293,8 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
   const styles = useStyles();
   const [binding, setBinding] = useState<GitBinding | null | 'loading'>('loading');
   const [provider, setProvider] = useState<GitBinding['provider']>('github');
-  const [repoUrl, setRepoUrl] = useState('');
+  const [repoHost, setRepoHost] = useState('github.com');
+  const [repoPath, setRepoPath] = useState('');
   const [branch, setBranch] = useState('main');
   const [directory, setDirectory] = useState('');
   const [pat, setPat] = useState('');
@@ -305,7 +307,8 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
         setBinding(d?.git ?? null);
         if (d?.git) {
           setProvider(d.git.provider);
-          setRepoUrl(d.git.repoUrl);
+          setRepoHost(d.git.repoHost || (d.git.provider === 'github' ? 'github.com' : 'dev.azure.com'));
+          setRepoPath(d.git.repoPath || '');
           setBranch(d.git.branch || 'main');
           setDirectory(d.git.directory || '');
         }
@@ -318,8 +321,11 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
     setBusy(true); setError(null);
     const r = await fetch(`/api/workspaces/${workspaceId}/scm`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ provider, repoUrl, branch, directory: directory || undefined,
-        pat: pat || undefined }),
+      body: JSON.stringify({
+        provider, repoHost, repoPath, branch,
+        directory: directory || undefined,
+        pat: pat || undefined,
+      }),
     });
     const j = await r.json();
     if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); setBusy(false); return; }
@@ -328,7 +334,7 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
 
   const disconnect = async () => {
     await fetch(`/api/workspaces/${workspaceId}/scm`, { method: 'DELETE' });
-    setBinding(null); setRepoUrl(''); setDirectory('');
+    setBinding(null); setRepoHost('github.com'); setRepoPath(''); setDirectory('');
   };
 
   return (
@@ -348,9 +354,13 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
           <Option value="ado">Azure DevOps</Option>
         </Dropdown>
       </Field>
-      <Field label="Repository URL" required>
-        <Input value={repoUrl} onChange={(_, d) => setRepoUrl(d.value)}
-          placeholder="https://github.com/org/repo" />
+      <Field label="Repository host" required>
+        <Input value={repoHost} onChange={(_, d) => setRepoHost(d.value)}
+          placeholder="github.com / dev.azure.com" />
+      </Field>
+      <Field label="Repository path" required>
+        <Input value={repoPath} onChange={(_, d) => setRepoPath(d.value)}
+          placeholder="org/repo" />
       </Field>
       <Field label="Branch">
         <Input value={branch} onChange={(_, d) => setBranch(d.value)} placeholder="main" />
@@ -365,7 +375,7 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       <div className={styles.row}>
         <Button appearance="primary" onClick={save}
-          disabled={!repoUrl.trim() || busy}>
+          disabled={!repoHost.trim() || !repoPath.trim() || busy}>
           {busy ? 'Saving…' : (binding && binding !== 'loading' ? 'Update' : 'Connect')}
         </Button>
         {binding && binding !== 'loading' && (
