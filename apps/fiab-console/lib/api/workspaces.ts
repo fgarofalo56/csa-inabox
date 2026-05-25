@@ -9,6 +9,8 @@ export interface Workspace {
   description?: string;
   capacity?: string;
   domain?: string;
+  /** Derived: LOOM_ONELAKE_BASE + name. Only present on GET /api/workspaces/[id]. */
+  oneLake?: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;

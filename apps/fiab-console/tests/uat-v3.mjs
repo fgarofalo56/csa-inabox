@@ -188,6 +188,42 @@ async function main() {
     expect(body.description, d => d === 'updated via UAT v3');
   });
 
+  // ---- Chunk 5b permissions ----
+  await step('POST + GET /api/workspaces/[id]/permissions (Chunk 5b)', async () => {
+    const post = await call('POST', `/api/workspaces/${ws.id}/permissions`,
+      { upn: 'uat-member@example.com', role: 'contributor' });
+    expect(post.status, s => s === 201, `add status=${post.status}`);
+    const { body } = await call('GET', `/api/workspaces/${ws.id}/permissions`);
+    const found = (body.permissions || []).find((p) => p.upn === 'uat-member@example.com');
+    expect(found?.role, r => r === 'contributor', 'role not contributor');
+  });
+  await step('DELETE /api/workspaces/[id]/permissions', async () => {
+    const { status } = await call('DELETE',
+      `/api/workspaces/${ws.id}/permissions?upn=uat-member@example.com`);
+    expect(status, s => s === 200);
+  });
+
+  // ---- Chunk 5b git ----
+  await step('PUT + GET /api/workspaces/[id]/git (Chunk 5b)', async () => {
+    const put = await call('PUT', `/api/workspaces/${ws.id}/git`, {
+      provider: 'github', repoUrl: 'https://github.com/example/repo', branch: 'main',
+    });
+    expect(put.status, s => s === 200, `put status=${put.status}`);
+    const { body } = await call('GET', `/api/workspaces/${ws.id}/git`);
+    expect(body.git?.repoUrl, u => u === 'https://github.com/example/repo');
+  });
+  await step('DELETE /api/workspaces/[id]/git', async () => {
+    const { status } = await call('DELETE', `/api/workspaces/${ws.id}/git`);
+    expect(status, s => s === 200);
+  });
+
+  // ---- Chunk 5b OneLake (derived field) ----
+  await step('GET /api/workspaces/[id] includes oneLake (derived)', async () => {
+    const { body } = await call('GET', `/api/workspaces/${ws.id}`);
+    // oneLake may be null when LOOM_ONELAKE_BASE not set — both shapes accepted.
+    expect('oneLake' in body, present => present === true, 'oneLake field missing');
+  });
+
   await step('DELETE /api/workspaces/[id] (Chunk 5 danger)', async () => {
     const { status } = await call('DELETE', `/api/workspaces/${ws.id}`);
     expect(status, s => s === 200 || s === 204);

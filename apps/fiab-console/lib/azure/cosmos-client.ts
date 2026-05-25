@@ -30,6 +30,8 @@ let _shares: Container | null = null;
 let _folders: Container | null = null;
 let _downloads: Container | null = null;
 let _searchHistory: Container | null = null;
+let _wsPermissions: Container | null = null;
+let _wsGit: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -91,6 +93,8 @@ async function ensure() {
   _folders = await mk('folders', '/workspaceId');
   _downloads = await mk('downloads', '/userId');
   _searchHistory = await mk('search-history', '/userId');
+  _wsPermissions = await mk('workspace-permissions', '/workspaceId');
+  _wsGit = await mk('workspace-git', '/workspaceId');
   _ensured = true;
 }
 
@@ -120,3 +124,5 @@ export async function sharesContainer(): Promise<Container> { await ensure(); re
 export async function foldersContainer(): Promise<Container> { await ensure(); return _folders!; }
 export async function downloadsContainer(): Promise<Container> { await ensure(); return _downloads!; }
 export async function searchHistoryContainer(): Promise<Container> { await ensure(); return _searchHistory!; }
+export async function workspacePermissionsContainer(): Promise<Container> { await ensure(); return _wsPermissions!; }
+export async function workspaceGitContainer(): Promise<Container> { await ensure(); return _wsGit!; }

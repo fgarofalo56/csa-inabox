@@ -30,7 +30,15 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   try {
     const ws = await loadWorkspace(params.id, session.claims.oid);
     if (!ws) return err('Workspace not found', 404, 'not_found');
-    return NextResponse.json(ws);
+    // OneLake path: derived from LOOM_ONELAKE_BASE env + workspace name.
+    // Read-only; consumers use this to surface the abfss:// URL in the
+    // settings drawer. Workspaces without LOOM_ONELAKE_BASE configured
+    // get `oneLake = null`.
+    const base = process.env.LOOM_ONELAKE_BASE;
+    const oneLake = base
+      ? `${base.replace(/\/$/, '')}/${encodeURIComponent(ws.name)}`
+      : null;
+    return NextResponse.json({ ...ws, oneLake });
   } catch (e: any) {
     return err(e?.message || 'Failed to fetch workspace', 500, 'cosmos_error');
   }
