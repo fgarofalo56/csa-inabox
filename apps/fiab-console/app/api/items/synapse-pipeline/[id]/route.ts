@@ -1,0 +1,39 @@
+/**
+ * GET /api/items/synapse-pipeline/[id]   — fetch pipeline spec
+ * PUT /api/items/synapse-pipeline/[id]   — upsert pipeline spec
+ *
+ * `id` is the pipeline name in the Synapse workspace.
+ */
+
+import { NextRequest, NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth/session';
+import { getPipeline, upsertPipeline, type SynapsePipeline } from '@/lib/azure/synapse-dev-client';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  try {
+    const pipeline = await getPipeline(ctx.params.id);
+    return NextResponse.json({ ok: true, pipeline });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+  }
+}
+
+export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  const body = (await req.json().catch(() => null)) as SynapsePipeline | null;
+  if (!body || !body.properties) {
+    return NextResponse.json({ error: 'body must be { name?, properties: {...} }' }, { status: 400 });
+  }
+  try {
+    const pipeline = await upsertPipeline(ctx.params.id, { ...body, name: ctx.params.id });
+    return NextResponse.json({ ok: true, pipeline });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+  }
+}

@@ -57,7 +57,7 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: contains(app, 'ingressPort') ? {
-        external: false   // VNet-only; cross-app via internal DNS
+        external: contains(app, 'external') ? app.external : false
         targetPort: app.ingressPort
         transport: 'http'
         allowInsecure: false
@@ -69,7 +69,7 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
           identity: app.uamiId
         }
       ]
-      secrets: []
+      secrets: contains(app, 'secrets') ? app.secrets : []
     }
     template: {
       containers: [

@@ -131,6 +131,26 @@ param appGatewayEnabled bool = false
 @description('Deploy Front Door Premium with Private Link to the ACA env. ~5 min provisioning + manual PE approval, ~$330/mo. Default off.')
 param frontDoorEnabled bool = false
 
+@description('Entra app client ID for Loom Console MSAL. When empty, Console runs unauth.')
+param loomMsalClientId string = ''
+
+@description('Entra app client secret for Loom Console MSAL. Stored in Container App secret store.')
+@secure()
+param loomMsalClientSecret string = ''
+
+@description('Loom version label shown in the UI + on /api/version.')
+param loomVersion string = 'v0.1'
+
+@description('Container image tag per app (overridable per release).')
+param appImageTags object = {
+  console: 'v0.1'
+  mcp: 'v0.1'
+  orchestrator: 'v0.1'
+  activator: 'v0.1'
+  mirroring: 'v0.1'
+  directLake: 'v0.1'
+}
+
 // =====================================================================
 // Resource group for Admin Plane
 // =====================================================================
@@ -175,9 +195,16 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     aiFoundryEnabled: aiFoundryEnabled
     apimEnabled: apimEnabled
     aiSearchEnabled: aiSearchEnabled
+    adxEnabled: adxEnabled
     vpnGatewayEnabled: vpnGatewayEnabled
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
+    loomStorageAccount: take('saloomdefault${uniqueString(singleDlzRg.id)}', 24)
+    loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
+    loomMsalClientId: loomMsalClientId
+    loomMsalClientSecret: loomMsalClientSecret
+    loomVersion: loomVersion
+    appImageTags: appImageTags
   }
 }
 
@@ -216,6 +243,9 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     adxEnabled: adxEnabled
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
+    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    consoleUamiName: adminPlane.outputs.uamiConsoleName
+    synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
@@ -247,6 +277,9 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     adxEnabled: adxEnabled
     adminEntraGroupId: adminEntraGroupId
     activatorPrincipalId: adminPlane.outputs.uamiActivatorPrincipalId
+    consolePrincipalId: adminPlane.outputs.uamiConsolePrincipalId
+    consoleUamiName: adminPlane.outputs.uamiConsoleName
+    synapseSqlPrivateDnsZoneId: adminPlane.outputs.privateDnsZoneIds.synapseSql
     catalogEndpoint: adminPlane.outputs.catalogEndpoint
     databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     databricksSqlWarehouseEnabled: databricksSqlWarehouseEnabled
@@ -255,6 +288,11 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     complianceTags: complianceTags
   }
 }]
+
+output dlzSynapseWorkspaceName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseWorkspaceName : ''
+output dlzSynapseDedicatedPoolName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseDedicatedPoolName : ''
+output dlzResourceGroupName string = deploymentMode == 'single-sub' ? singleDlz.outputs.dlzResourceGroupName : ''
+output dlzStorageAccountName string = deploymentMode == 'single-sub' ? singleDlz.outputs.storageAccountName : ''
 
 // =====================================================================
 // Outputs

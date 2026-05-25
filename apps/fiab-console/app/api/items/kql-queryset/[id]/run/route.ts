@@ -1,0 +1,57 @@
+/**
+ * POST /api/items/kql-queryset/[id]/run
+ * Body: { queryIdx: number } OR { kql: string, database?: string }
+ * Executes the indexed saved query (or an ad-hoc kql).
+ */
+
+import { NextRequest, NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth/session';
+import {
+  executeQuery, executeMgmtCommand, loadKustoItem, resolveDatabase, KustoError,
+} from '@/lib/azure/kusto-client';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  const body = await req.json().catch(() => ({}));
+  try {
+    const item = await loadKustoItem(ctx.params.id, 'kql-queryset', session.claims.oid);
+    if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+
+    let kql: string;
+    let database: string;
+    const saved: Array<{ kql: string; database?: string }> = Array.isArray(item.state?.queries) ? item.state!.queries : [];
+    if (typeof body?.queryIdx === 'number') {
+      const q = saved[body.queryIdx];
+      if (!q) return NextResponse.json({ ok: false, error: 'queryIdx out of range' }, { status: 400 });
+      kql = q.kql;
+      database = q.database || resolveDatabase(item);
+    } else if (typeof body?.kql === 'string' && body.kql.trim()) {
+      kql = body.kql.trim();
+      database = (body?.database && String(body.database)) || resolveDatabase(item);
+    } else {
+      return NextResponse.json({ ok: false, error: 'queryIdx or kql is required' }, { status: 400 });
+    }
+
+    if (kql.length > 65_536) return NextResponse.json({ ok: false, error: 'kql too large (>64KB)' }, { status: 413 });
+
+    const isMgmt = kql.startsWith('.');
+    const result = isMgmt
+      ? await executeMgmtCommand(database, kql)
+      : await executeQuery(database, kql);
+    return NextResponse.json({
+      ok: true,
+      database,
+      mode: isMgmt ? 'mgmt' : 'query',
+      ...result,
+      executedBy: session.claims.upn,
+    });
+  } catch (e: any) {
+    const status = e instanceof KustoError ? e.status : 502;
+    return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
+  }
+}

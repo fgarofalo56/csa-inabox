@@ -24,13 +24,12 @@ function getAuthority(): string {
 
 const config: Configuration = {
   auth: {
-    clientId: process.env.AZURE_CLIENT_ID || '',
+    // Prefer LOOM_MSAL_CLIENT_ID (separate from AZURE_CLIENT_ID which is
+    // the UAMI client id for DefaultAzureCredential). Fall back to
+    // AZURE_CLIENT_ID for v1.x compat.
+    clientId: process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID || '',
     authority: getAuthority(),
-    // Federated identity via UAMI: no client secret on disk
-    clientCertificate: process.env.AZURE_FEDERATED_TOKEN
-      ? undefined
-      : undefined,
-    clientSecret: process.env.AZURE_CLIENT_SECRET,
+    clientSecret: process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET,
   },
   system: {
     loggerOptions: {

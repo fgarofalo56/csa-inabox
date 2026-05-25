@@ -77,6 +77,12 @@ param apimEnabled bool = false
 @description('Deploy AI Search. Capacity in certain regions is intermittent; default off so first deploy succeeds even when AI Search SKUs are over-subscribed.')
 param aiSearchEnabled bool = false
 
+@description('Deploy shared ADX cluster in the admin plane. Each DLZ then attaches its own database to this single cluster.')
+param adxEnabled bool = false
+
+@description('ADX cluster SKU. Dev SKU is ~$140/mo.')
+param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
+
 // ---------- User access patterns (Bastion is always-on; these add reach) ----------
 
 @description('Deploy a P2S VPN Gateway in the hub VNet (AAD auth, OpenVPN). ~30 min provisioning, ~$30/mo. Lets admin laptops reach the internal Console without Bastion. Default off — set true when ready.')
@@ -85,8 +91,55 @@ param vpnGatewayEnabled bool = false
 @description('Deploy Application Gateway v2 + WAF v2 in front of the Console (public IP, in-VNet backend). ~15 min provisioning, ~$250/mo. Default off.')
 param appGatewayEnabled bool = false
 
-@description('Deploy Front Door Premium with a Private Link tunnel to the ACA env (global edge, managed cert, WAF). ~5 min provisioning, ~$330/mo. PE approval required after first deploy. Default off.')
+@description('Front Door Premium with a Private Link tunnel to the ACA env (global edge, managed cert, WAF). ~5 min provisioning, ~$330/mo. PE approval required after first deploy. Default off.')
 param frontDoorEnabled bool = false
+
+// ---------- Container image tags + Loom Console env-var wiring ----------
+
+@description('Container image tag per app (loom-console, loom-mcp, loom-orchestrator, loom-activator, loom-mirroring, loom-direct-lake-shim). Default v0.1; override per release.')
+param appImageTags object = {
+  console: 'v0.1'
+  mcp: 'v0.1'
+  orchestrator: 'v0.1'
+  activator: 'v0.1'
+  mirroring: 'v0.1'
+  directLake: 'v0.1'
+}
+
+@description('Loom version label shown in the UI (matches console image tag by convention).')
+param loomVersion string = 'v0.1'
+
+@description('Loom Synapse workspace name (for env-var wiring on loom-console). Default uses the single-sub DLZ convention.')
+param loomSynapseWorkspace string = 'syn-loom-default-${location}'
+
+@description('Loom Synapse Dedicated SQL pool name.')
+param loomSynapseDedicatedPool string = 'loompool'
+
+@description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
+param loomAdfName string = 'adf-loom-default-${location}'
+
+@description('Loom DLZ resource group (for ARM REST pause/resume from the Console BFF).')
+param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
+
+@description('Loom Storage account name (for ADLS Gen2 lake URLs). When empty, env vars omitted and the Lakehouse editor surfaces a config message.')
+param loomStorageAccount string = ''
+
+@description('Loom Cosmos account name. When empty, Cosmos env vars omitted.')
+param loomCosmosAccount string = ''
+
+@description('Azure AD tenant ID for MSAL on the Console.')
+param loomMsalTenantId string = subscription().tenantId
+
+@description('Azure AD app (client) ID of the Entra app registration backing MSAL. When empty, MSAL env vars omitted (Console runs unauth).')
+param loomMsalClientId string = ''
+
+@description('Azure AD app client secret stored in Key Vault as secret "loom-msal-client-secret". When empty, MSAL env vars omitted.')
+@secure()
+param loomMsalClientSecret string = ''
+
+@description('Session cookie secret (HKDF input). Stored in Key Vault as "loom-session-secret". When empty, a fresh GUID is generated PER DEPLOY — this invalidates all existing sessions. Pass a stable value via env var to preserve sign-ins across deploys.')
+@secure()
+param loomSessionSecret string = newGuid()
 
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
@@ -199,13 +252,35 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled) {
 // 8. AI Foundry Hub (or Azure ML classic in boundaries without Foundry)
 // =====================================================================
 
+// Storage account for the AI Foundry Hub workspace (required dependency).
+// Plain LRS Standard_v2, geo-redundancy off (matches DLZ policy), public
+// network disabled, only the Foundry MI gets access via system role assignment.
+resource foundryHubStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (aiFoundryEnabled) {
+  name: take('safoundryhub${uniqueString(resourceGroup().id)}', 24)
+  location: location
+  tags: complianceTags
+  kind: 'StorageV2'
+  sku: { name: 'Standard_LRS' }
+  properties: {
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    publicNetworkAccess: 'Disabled'
+    supportsHttpsTrafficOnly: true
+    networkAcls: {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
 module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled) {
   name: 'ai-foundry'
   params: {
     location: location
     boundary: boundary
     foundryPortalEnabled: foundryPortalEnabled
-    hubStorageAccountId: ''   // Operator wires hub storage post-deploy
+    hubStorageAccountId: foundryHubStorage!.id
     hubKeyVaultId: keyvault.outputs.keyVaultId
     hubContainerRegistryId: registry.outputs.acrId
     hubAppInsightsId: monitoring.outputs.appInsightsId
@@ -232,6 +307,20 @@ module apim 'apim.bicep' = if (apimEnabled) {
     apimSubnetId: network.outputs.apimSubnetId
     appInsightsId: monitoring.outputs.appInsightsId
     appInsightsInstrumentationKey: monitoring.outputs.appInsightsInstrumentationKey
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// 9b. Shared ADX cluster (admin-plane scope). DLZ databases attach here.
+// =====================================================================
+
+module adxCluster 'adx-cluster.bicep' = if (adxEnabled) {
+  name: 'adx-cluster'
+  params: {
+    location: location
+    skuName: adxSkuName
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
   }
@@ -294,21 +383,58 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
     apps: [
       {
         name: 'loom-console'
-        image: 'loom-console:v0.1'
+        image: 'loom-console:${appImageTags.console}'
         uamiId: identity.outputs.uamiConsoleId
         uamiClientId: identity.outputs.uamiConsoleClientId
         ingressPort: 3000
+        external: true
         healthPath: '/api/health'
         tier: 'console'
         minReplicas: 2
         maxReplicas: 6
+        env: concat(
+          [
+            { name: 'LOOM_VERSION', value: loomVersion }
+            { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
+            { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
+            { name: 'LOOM_DLZ_RG', value: loomDlzRg }
+            { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
+            { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
+            { name: 'LOOM_ADF_NAME', value: loomAdfName }
+            { name: 'AZURE_CLOUD', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud' }
+            { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
+            { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
+            { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
+          ],
+          !empty(loomStorageAccount) ? [
+            { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }
+            { name: 'LOOM_SILVER_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/silver' }
+            { name: 'LOOM_GOLD_URL',    value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/gold' }
+            { name: 'LOOM_LANDING_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/landing' }
+          ] : [],
+          !empty(loomMsalClientId) ? [
+            { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }
+            { name: 'LOOM_MSAL_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
+            // Back-compat alias for legacy code paths still reading AZURE_*
+            { name: 'AZURE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
+            { name: 'SESSION_SECRET', secretRef: 'session-secret' }
+            { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+          ] : [
+            { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+          ]
+        )
+        secrets: !empty(loomMsalClientId) ? [
+          { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
+          { name: 'session-secret', value: loomSessionSecret }
+        ] : []
       }
       {
         name: 'loom-mcp'
-        image: 'loom-mcp:v0.1'
+        image: 'loom-mcp:${appImageTags.mcp}'
         uamiId: identity.outputs.uamiMcpId
         uamiClientId: identity.outputs.uamiMcpClientId
         ingressPort: 8080
+        external: false
         healthPath: '/.well-known/health'
         tier: 'mcp'
         minReplicas: 1
@@ -316,10 +442,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
       }
       {
         name: 'loom-setup-orchestrator'
-        image: 'loom-setup-orchestrator:v0.1'
+        image: 'loom-setup-orchestrator:${appImageTags.orchestrator}'
         uamiId: identity.outputs.uamiOrchestratorId
         uamiClientId: identity.outputs.uamiOrchestratorClientId
         ingressPort: 8000
+        external: false
         healthPath: '/health'
         tier: 'orchestrator'
         minReplicas: 1
@@ -331,10 +458,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
       }
       {
         name: 'loom-activator'
-        image: 'loom-activator:v0.1'
+        image: 'loom-activator:${appImageTags.activator}'
         uamiId: identity.outputs.uamiActivatorId
         uamiClientId: identity.outputs.uamiActivatorClientId
         ingressPort: 8080
+        external: false
         healthPath: '/health'
         tier: 'activator'
         minReplicas: 1
@@ -342,10 +470,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
       }
       {
         name: 'loom-mirroring'
-        image: 'loom-mirroring:v0.1'
+        image: 'loom-mirroring:${appImageTags.mirroring}'
         uamiId: identity.outputs.uamiMirroringId
         uamiClientId: identity.outputs.uamiMirroringClientId
         ingressPort: 8083
+        external: false
         healthPath: '/connectors'
         tier: 'mirroring'
         minReplicas: 1
@@ -353,10 +482,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
       }
       {
         name: 'loom-direct-lake-shim'
-        image: 'loom-direct-lake-shim:v0.1'
+        image: 'loom-direct-lake-shim:${appImageTags.directLake}'
         uamiId: identity.outputs.uamiDirectLakeId
         uamiClientId: identity.outputs.uamiDirectLakeId
         ingressPort: 8080
+        external: false
         healthPath: '/health'
         tier: 'direct-lake-shim'
         minReplicas: 1
@@ -443,6 +573,8 @@ output keyVaultUri string = keyvault.outputs.keyVaultUri
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
 output acrLoginServer string = registry.outputs.acrLoginServer
 output uamiConsoleId string = identity.outputs.uamiConsoleId
+output uamiConsolePrincipalId string = identity.outputs.uamiConsolePrincipalId
+output uamiConsoleName string = identity.outputs.uamiConsoleName
 output uamiOrchestratorId string = identity.outputs.uamiOrchestratorId
 output uamiCopilotId string = identity.outputs.uamiCopilotId
 output uamiMcpId string = identity.outputs.uamiMcpId

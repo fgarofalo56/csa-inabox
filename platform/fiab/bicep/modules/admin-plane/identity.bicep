@@ -63,6 +63,7 @@ resource uamiDirectLake 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-1
 output uamiConsoleId string = uamiConsole.id
 output uamiConsoleClientId string = uamiConsole.properties.clientId
 output uamiConsolePrincipalId string = uamiConsole.properties.principalId
+output uamiConsoleName string = uamiConsole.name
 
 output uamiMcpId string = uamiMcp.id
 output uamiMcpClientId string = uamiMcp.properties.clientId
