@@ -10,6 +10,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.9.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.8.0...csa-inabox-v0.9.0) (2026-05-24)
+
+
+### Features
+
+* **csa-loom:** VPN + App Gateway + Front Door access patterns ([#329](https://github.com/fgarofalo56/csa-inabox/issues/329)) ([fd6c9c7](https://github.com/fgarofalo56/csa-inabox/commit/fd6c9c7289549ca7638fbb2dd4979125a9a480ee))
+
+
+### Bug Fixes
+
+* **csa-loom:** make 4 worker apps boot in a partially-configured env ([#327](https://github.com/fgarofalo56/csa-inabox/issues/327)) ([0d49273](https://github.com/fgarofalo56/csa-inabox/commit/0d49273be24be2e6a6d5a863a1a62736ba8b6afb))
+
 ## [0.8.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.7.0...csa-inabox-v0.8.0) (2026-05-24)
 
 

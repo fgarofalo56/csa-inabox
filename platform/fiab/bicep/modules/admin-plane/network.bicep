@@ -75,6 +75,12 @@ var subnets = [
   {
     name: 'snet-apim'
     addressPrefix: '${prefix}.4.0/24'
+    delegations: [
+      {
+        name: 'Microsoft.Web/hostingEnvironments'
+        properties: { serviceName: 'Microsoft.Web/hostingEnvironments' }
+      }
+    ]
   }
   {
     name: 'snet-private-endpoints'
@@ -128,7 +134,21 @@ resource hubVnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
 // Network Security Groups (per non-system subnet)
 // =====================================================================
 
-var nsgSubnets = filter(subnets, s => !startsWith(s.name, 'Azure'))
+var nsgSubnets = filter(subnets, s => !startsWith(s.name, 'Azure') && s.name != 'GatewaySubnet')
+
+// Associate NSGs with their corresponding subnets (required by APIM,
+// recommended for all workload subnets). One subnet/NSG update per
+// non-system subnet — runs after both VNet and NSG resources exist.
+@batchSize(1)
+resource subnetNsgAttach 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = [for (s, i) in nsgSubnets: {
+  parent: hubVnet
+  name: s.name
+  properties: union(
+    { addressPrefix: s.addressPrefix, networkSecurityGroup: { id: nsgs[i].id } },
+    contains(s, 'delegations') ? { delegations: s.delegations } : {},
+    contains(s, 'privateEndpointNetworkPolicies') ? { privateEndpointNetworkPolicies: s.privateEndpointNetworkPolicies } : {}
+  )
+}]
 
 resource nsgs 'Microsoft.Network/networkSecurityGroups@2024-05-01' = [for s in nsgSubnets: {
   name: 'nsg-${s.name}'
@@ -275,6 +295,11 @@ var dnsZones = [
   'privatelink.api.azureml.ms'
   'privatelink.notebooks.azure.net'
   'privatelink.${location}.kusto.windows.net'
+  // v2.0 — Synapse SQL + Dev endpoints (Dedicated + Serverless + Studio)
+  'privatelink.sql.azuresynapse.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'net'}'
+  'privatelink.dev.azuresynapse.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'net'}'
+  // v2 — Azure Data Factory (Pipeline / Dataset / Trigger editors)
+  'privatelink.${boundary == 'GCC-High' || boundary == 'IL5' ? 'datafactory.azure.us' : 'adf.azure.com'}'
 ]
 
 resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in dnsZones: {
@@ -365,4 +390,6 @@ output privateDnsZoneIds object = {
   azuremlapi: privateDnsZones[14].id
   notebooks: privateDnsZones[15].id
   kusto: privateDnsZones[16].id
+  synapseSql: privateDnsZones[17].id
+  synapseDev: privateDnsZones[18].id
 }
