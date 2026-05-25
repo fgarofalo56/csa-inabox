@@ -1,12 +1,24 @@
 # CSA Loom v3 — Security Hardening
 
-**Status:** In progress (started 2026-05-25)
+**Status:** Phases 1-7 complete (2026-05-25)
 **Branch:** `access-patterns-vpn-agw-fd`
 **Subscription:** `363ef5d1-0e77-4594-a530-f51af23dbf8c` (FedCiv ATU FFL — DLZ)
 **Console UAMI principalId:** `e61f3eb3-c646-4183-8198-4c4a34cd9a01`
 
 This document records the v3 security posture for the CSA Loom platform. Each
 phase is independently committed.
+
+## TL;DR — what changed in v3
+
+| Phase | Change | Status |
+|---|---|---|
+| 1 | Defender for Cloud Standard tier on KubernetesService, ContainerRegistry, AI | DONE |
+| 2 | ContainerIntegrityContribution extension enabled on Containers plan | DONE |
+| 3 | Console MSAL client secret + session secret moved to KV references | DONE — verified end-to-end |
+| 4 | Removed broad Contributor from Synapse / Databricks / AI Foundry workspace scopes | DONE — BFF still green |
+| 5 | Conditional Access policy template as bicep doc-as-code | TEMPLATE — manual apply required |
+| 6 | Bicep linter cleanup (no-hardcoded-env-urls, no-unused-params) | DONE — 0 of each warning |
+| 7 | This document | DONE |
 
 ---
 
@@ -305,3 +317,118 @@ az rest --method GET \
 Look at `conditionalAccessPolicies[].result` per sign-in event.
 
 ---
+
+## Phase 6 — Bicep linter cleanup
+
+Two lint rule classes addressed across the FiaB bicep tree:
+
+| Rule | Before | After | Approach |
+|---|---|---|---|
+| `no-hardcoded-env-urls` | 2 warnings in `admin-plane/network.bicep` (blob/dfs DNS zones used hand-rolled boundary ternaries with `core.windows.net` / `core.usgovcloudapi.net`) | 0 | Replaced with `environment().suffixes.storage` so the AZ CLI cloud profile drives the suffix automatically across Commercial / GCC / GCC-High / IL5. |
+| `no-unused-params` | 14 warnings across admin-plane (`main.bicep`, `presidio-sidecar.bicep`, `catalog.bicep`, `ai-defense.bicep`) and landing-zone (`main.bicep`, `synapse.bicep`) | 0 | Each param annotated `Reserved for v3.x — <specific reason>` and silenced with `#disable-next-line no-unused-params`. None removed — orchestrator parameter contracts remain stable. |
+
+Other lint warnings (`prefer-unquoted-property-names`, `use-safe-access`,
+`use-secure-value-for-secure-inputs`, `BCP318`) are out of scope for v3
+hardening and tracked separately.
+
+---
+
+## Phase 7 — Known gaps and v3.x roadmap
+
+These remain open and are deferred to v3.x or v4. Documented here so the
+posture is honest:
+
+### Gap 1 — On-behalf-of (OBO) token flow
+
+The MSAL OBO flow that would let the BFF call downstream Azure REST APIs with
+the **signed-in user's** delegated permissions (instead of the Console UAMI's
+broad app-as-service privileges) is **not** in production. It was prototyped
+in v1.18 but the OBO access token blew past the Front Door cookie size limit
+(~4 KB, see commit `6fe597d5`) and was removed.
+
+Re-enabling OBO requires either:
+- Server-side token cache (e.g. Redis) keyed by session id, with the OBO
+  token never leaving the BFF, OR
+- A trimmed-token approach where only the refresh token is in the cookie
+  and the access token is minted per-request
+
+Until OBO returns, all downstream Azure data-plane calls go via the Console
+UAMI's managed identity. RBAC scoping (Phase 4) compensates partially by
+narrowing what the UAMI can do, but it cannot enforce per-user authorization.
+**This is the single largest residual gap.**
+
+### Gap 2 — Other Container App secrets still raw
+
+Phase 3 migrated the two high-impact secrets (`loom-msal-client-secret`,
+`session-secret`). The deployment-automation secrets (`azure-client-secret`,
+`deploy-sp-secret`, `deploy-sp-id`) remain as raw values in the Container App
+secret store. Recommend migrating once a deployment-script-based KV write
+path is in place (so we don't have to do the public-network toggle dance
+every time).
+
+### Gap 3 — Conditional Access policies not applied
+
+The bicep module in Phase 5 documents the required CA policies as code, but
+they have not yet been pushed to Entra. Pushing requires a delegated-user
+session of someone holding the **Conditional Access Administrator** role.
+Suggested rollout: apply in reporting-only mode, monitor sign-in telemetry
+for 24-48 h, then flip to `enabled`.
+
+### Gap 4 — Contributor on DLZ RG and ADX cluster retained
+
+Phase 4 narrowed Synapse / Databricks / AI Foundry from Contributor to
+least-privilege roles, but kept Contributor at:
+- `rg-csa-loom-dlz-single-eastus2` (RG-wide)
+- `adx-csa-loom-shared` (ADX cluster)
+
+Both are candidates for further narrowing in v3.x once we have a clean
+enumeration of the actual ARM actions the BFF performs against ADF, Cosmos,
+EventHubs, Storage account properties, and ADX cluster lifecycle.
+
+### Gap 5 — Synapse Operator role not yet versioned in source
+
+The custom role definition (`temp/v3-security/synapse-operator-role.json`)
+was created via `az role definition create`. It is not yet sourced from a
+checked-in Bicep / ARM module. v3.x should move it into
+`platform/fiab/bicep/modules/admin-plane/custom-roles.bicep` so role drift
+is detectable in CI.
+
+---
+
+## Verification record
+
+All BFF smoke-tests use the local cookie-minter at
+`temp/uat-pw/mint-session.mjs` with the KV-stored session secret, hitting
+`https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net`.
+
+| Phase | Endpoint | Pre-change | Post-change |
+|---|---|---|---|
+| 3 | `/api/me` | 200 authenticated | 200 authenticated (after force-new-revision) |
+| 3 | `/api/health` | 200 ok | 200 ok |
+| 3 | `/api/workspaces` | 200 | 200 |
+| 4a (Synapse Contributor removed) | same three | 200/200/200 | 200/200/200 |
+| 4b (Databricks Contributor removed) | same three | 200/200/200 | 200/200/200 |
+| 4c (AI Foundry Contributor removed) | same three | 200/200/200 | 200/200/200 |
+
+No regressions detected.
+
+---
+
+## Artifacts checked in
+
+- `docs/fiab/v3-security-hardening.md` (this file)
+- `platform/fiab/bicep/modules/admin-plane/conditional-access.bicep`
+  (template — deploys nothing, documents required CA policies as code)
+- `platform/fiab/bicep/modules/admin-plane/network.bicep` (uses
+  `environment().suffixes.storage`)
+- `platform/fiab/bicep/modules/admin-plane/*.bicep` and
+  `platform/fiab/bicep/modules/landing-zone/*.bicep` with all
+  `no-unused-params` properly documented
+
+## Artifacts in `temp/v3-security/` (not checked in)
+
+- `defender-pricing-after.tsv` — final Defender plan coverage
+- `synapse-operator-role.json` — custom role definition (to be moved to bicep in v3.x)
+- `cookie4.txt` — smoke-test session cookie
+- `msal-secret-clean.txt`, `session-secret-clean.txt` — secret values
+  (DO NOT commit — these are the live credentials)
