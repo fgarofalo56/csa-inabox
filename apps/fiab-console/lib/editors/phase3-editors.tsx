@@ -11,8 +11,14 @@
  * wiring lands in v3.
  *
  * Warehouse is real-REST (Fabric Warehouse over Synapse Dedicated pool).
- * Activator, Semantic model, Report, Dashboard, Paginated report,
- * Scorecard remain visual shells.
+ *
+ * v2.1 Power BI / Fabric family — Semantic model, Report, Dashboard,
+ * Paginated report, Scorecard, and Activator — are now wired against
+ * live Power BI REST (api.powerbi.com/v1.0/myorg) and Fabric REST
+ * (api.fabric.microsoft.com/v1) via the Console UAMI. If the UAMI's SP
+ * is not yet registered in the Power BI tenant or hasn't been added to
+ * a workspace, the editors surface the underlying 401/403 verbatim with
+ * a remediation hint — no mock data is shown.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -828,6 +834,75 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   );
 }
 
+// ============================================================
+// Shared Power BI / Fabric workspace picker
+// ============================================================
+interface PbiWorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
+
+function useWorkspaces() {
+  const [workspaces, setWorkspaces] = useState<PbiWorkspaceLite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null); setHint(null);
+    try {
+      const r = await fetch('/api/powerbi/workspaces');
+      const j = await r.json();
+      if (!j.ok) { setError(j.error || 'failed to list workspaces'); setHint(j.hint || null); setWorkspaces([]); }
+      else { setWorkspaces(j.workspaces || []); }
+    } catch (e: any) {
+      setError(e?.message || String(e));
+      setWorkspaces([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  return { workspaces, error, hint, loading, reload: load };
+}
+
+function WorkspacePicker({
+  value, onChange, error, hint, loading, workspaces,
+}: {
+  value: string; onChange: (id: string) => void;
+  error: string | null; hint: string | null; loading: boolean;
+  workspaces: PbiWorkspaceLite[] | null;
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 280 }}>
+      <Caption1>Workspace</Caption1>
+      <Select value={value} onChange={(_, d) => onChange(d.value)} disabled={loading || (workspaces?.length ?? 0) === 0}>
+        {!value && <option value="">{loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
+        {(workspaces || []).map((w) => (
+          <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · F/P SKU' : ''}</option>
+        ))}
+      </Select>
+      {error && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Power BI / Fabric not reachable</MessageBarTitle>
+            {error}{hint ? <><br /><Caption1>{hint}</Caption1></> : null}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Power BI / Fabric editor shells — v2.1 live REST.
+//
+// IMPORTANT: All six editors below require the Console UAMI's service
+// principal to be (a) registered in the Power BI tenant and (b) added to
+// each target workspace. If either is missing, the editor surfaces the
+// underlying 401/403 verbatim via MessageBar so the operator knows
+// exactly what to fix. No mock data is shown when the call fails.
+// ============================================================
+
 // ----- Activator -----
 const ACT_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
@@ -835,28 +910,223 @@ const ACT_RIBBON: RibbonTab[] = [
     { label: 'Actions', actions: [{ label: 'Email' }, { label: 'Teams' }, { label: 'Run pipeline' }, { label: 'Run notebook' }, { label: 'Power Automate' }] },
   ]},
 ];
+
+interface ActivatorLite {
+  id: string; displayName: string; description?: string;
+}
+interface RuleLite {
+  id: string; name: string;
+  objectName?: string; propertyName?: string;
+  condition?: { operator?: string; value?: unknown };
+  action?: { kind?: string; config?: Record<string, unknown> };
+  state?: string; lastTriggered?: string;
+}
+
 export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const ws = useWorkspaces();
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [activators, setActivators] = useState<ActivatorLite[] | null>(null);
+  const [selectedId, setSelectedId] = useState<string>('');
+  const [rules, setRules] = useState<RuleLite[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [listErr, setListErr] = useState<string | null>(null);
+  const [rulesErr, setRulesErr] = useState<string | null>(null);
+
+  // create
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createDesc, setCreateDesc] = useState('');
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createErr, setCreateErr] = useState<string | null>(null);
+
+  // new rule
+  const [ruleOpen, setRuleOpen] = useState(false);
+  const [ruleName, setRuleName] = useState('');
+  const [ruleCondition, setRuleCondition] = useState('{ "operator": "GreaterThan", "value": 20 }');
+  const [ruleAction, setRuleAction] = useState('{ "kind": "TeamsMessage", "config": {} }');
+  const [ruleBusy, setRuleBusy] = useState(false);
+  const [ruleErr, setRuleErr] = useState<string | null>(null);
+
+  const loadList = useCallback(async (wsId: string) => {
+    setLoading(true); setListErr(null);
+    try {
+      const r = await fetch(`/api/items/activator?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (!j.ok) { setActivators([]); setListErr(j.error); return; }
+      setActivators(j.activators || []);
+      if (!selectedId && (j.activators || []).length) setSelectedId(j.activators[0].id);
+    } catch (e: any) {
+      setActivators([]); setListErr(e?.message || String(e));
+    } finally { setLoading(false); }
+  }, [selectedId]);
+
+  const loadRules = useCallback(async (wsId: string, actId: string) => {
+    setRulesErr(null);
+    try {
+      const r = await fetch(`/api/items/activator/${encodeURIComponent(actId)}/rules?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (!j.ok) { setRules([]); setRulesErr(j.error); return; }
+      setRules(j.rules || []);
+    } catch (e: any) {
+      setRules([]); setRulesErr(e?.message || String(e));
+    }
+  }, []);
+
+  useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
+  useEffect(() => { if (workspaceId && selectedId) loadRules(workspaceId, selectedId); }, [workspaceId, selectedId, loadRules]);
+
+  const createReflex = useCallback(async () => {
+    if (!createName.trim() || !workspaceId) return;
+    setCreateBusy(true); setCreateErr(null);
+    try {
+      const r = await fetch(`/api/items/activator?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ displayName: createName.trim(), description: createDesc.trim() || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCreateErr(j.error || 'create failed'); }
+      else {
+        setCreateOpen(false); setCreateName(''); setCreateDesc('');
+        loadList(workspaceId);
+      }
+    } finally { setCreateBusy(false); }
+  }, [createName, createDesc, workspaceId, loadList]);
+
+  const addRule = useCallback(async () => {
+    if (!ruleName.trim() || !workspaceId || !selectedId) return;
+    setRuleBusy(true); setRuleErr(null);
+    let condition: any; let action: any;
+    try { condition = JSON.parse(ruleCondition); } catch (e: any) { setRuleErr(`condition JSON: ${e?.message}`); setRuleBusy(false); return; }
+    try { action = JSON.parse(ruleAction); } catch (e: any) { setRuleErr(`action JSON: ${e?.message}`); setRuleBusy(false); return; }
+    try {
+      const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: ruleName.trim(), condition, action }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRuleErr(j.error || 'add rule failed'); }
+      else { setRuleOpen(false); setRuleName(''); loadRules(workspaceId, selectedId); }
+    } finally { setRuleBusy(false); }
+  }, [ruleName, ruleCondition, ruleAction, workspaceId, selectedId, loadRules]);
+
+  const triggerNow = useCallback(async (ruleId: string) => {
+    if (!workspaceId || !selectedId) return;
+    const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&trigger=${encodeURIComponent(ruleId)}`, { method: 'POST' });
+    const j = await r.json();
+    if (!j.ok) setRulesErr(j.error || 'trigger failed');
+    else loadRules(workspaceId, selectedId);
+  }, [workspaceId, selectedId, loadRules]);
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ACT_RIBBON}
       leftPanel={
-        <Tree aria-label="Activator explorer" defaultOpenItems={['obj']}>
-          <TreeItem itemType="branch" value="obj">
-            <TreeItemLayout>Objects (3)</TreeItemLayout>
-            <Tree>
-              {['Freezer', 'DeliveryTruck', 'Package'].map((x) =>
-                <TreeItem key={x} itemType="leaf"><TreeItemLayout>{x}</TreeItemLayout></TreeItem>)}
-            </Tree>
-          </TreeItem>
-          <TreeItem itemType="branch" value="ev"><TreeItemLayout>Events (2)</TreeItemLayout></TreeItem>
-          <TreeItem itemType="branch" value="pr"><TreeItemLayout>Properties (8)</TreeItemLayout></TreeItem>
-          <TreeItem itemType="branch" value="ru"><TreeItemLayout>Rules (4)</TreeItemLayout></TreeItem>
-        </Tree>
+        <div className={s.treePad}>
+          <Subtitle2 style={{ marginBottom: 8 }}>Reflexes</Subtitle2>
+          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
+          {workspaceId && loading && <Spinner size="tiny" label="Loading…" />}
+          {activators && activators.length === 0 && !loading && <Caption1>No reflexes in this workspace.</Caption1>}
+          <Tree aria-label="Reflex list">
+            {(activators || []).map((a) => (
+              <TreeItem key={a.id} itemType="leaf" value={a.id} onClick={() => setSelectedId(a.id)}>
+                <TreeItemLayout>{selectedId === a.id ? <strong>{a.displayName}</strong> : a.displayName}</TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
+        </div>
       }
       main={
-        <div style={{ padding: 16 }}>
-          <Subtitle2>Rule: Too hot for medicine</Subtitle2>
-          <Body1 style={{ marginTop: 8 }}>Monitor <b>Package.Temperature</b> · Condition <b>is greater than 20 °C</b> · Action <b>Send Teams message to assigned technician</b></Body1>
-          <Badge appearance="filled" color="success" style={{ marginTop: 12 }}>Active · last triggered 4 min ago</Badge>
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">Activator (Reflex)</Badge>
+            <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
+              <DialogTrigger disableButtonEnhancement>
+                <Button appearance="primary" icon={<Add20Regular />} disabled={!workspaceId} style={{ marginLeft: 'auto' }}>New reflex</Button>
+              </DialogTrigger>
+              <DialogSurface>
+                <DialogBody>
+                  <DialogTitle>Create Activator (reflex)</DialogTitle>
+                  <DialogContent>
+                    <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
+                    <Input placeholder="description (optional)" value={createDesc} onChange={(_, d) => setCreateDesc(d.value)} style={{ width: '100%', marginTop: 8 }} />
+                    {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
+                    <Button appearance="primary" disabled={createBusy || !createName.trim()} onClick={createReflex}>{createBusy ? 'Creating…' : 'Create'}</Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+          </div>
+          {listErr && <MessageBar intent="error"><MessageBarBody>{listErr}</MessageBarBody></MessageBar>}
+
+          {selectedId && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Subtitle2>Rules</Subtitle2>
+                <Dialog open={ruleOpen} onOpenChange={(_, d) => setRuleOpen(d.open)}>
+                  <DialogTrigger disableButtonEnhancement>
+                    <Button size="small" appearance="outline" icon={<Add20Regular />}>New rule</Button>
+                  </DialogTrigger>
+                  <DialogSurface>
+                    <DialogBody>
+                      <DialogTitle>Add rule</DialogTitle>
+                      <DialogContent>
+                        <Input placeholder="rule name" value={ruleName} onChange={(_, d) => setRuleName(d.value)} style={{ width: '100%' }} />
+                        <Caption1 style={{ marginTop: 8 }}>condition JSON</Caption1>
+                        <Textarea value={ruleCondition} onChange={(_, d) => setRuleCondition(d.value)} rows={3} style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }} />
+                        <Caption1 style={{ marginTop: 8 }}>action JSON</Caption1>
+                        <Textarea value={ruleAction} onChange={(_, d) => setRuleAction(d.value)} rows={3} style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }} />
+                        {ruleErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{ruleErr}</MessageBarBody></MessageBar>}
+                      </DialogContent>
+                      <DialogActions>
+                        <Button appearance="secondary" onClick={() => setRuleOpen(false)}>Cancel</Button>
+                        <Button appearance="primary" disabled={ruleBusy || !ruleName.trim()} onClick={addRule}>{ruleBusy ? 'Adding…' : 'Add'}</Button>
+                      </DialogActions>
+                    </DialogBody>
+                  </DialogSurface>
+                </Dialog>
+              </div>
+              {rulesErr && <MessageBar intent="error"><MessageBarBody>{rulesErr}</MessageBarBody></MessageBar>}
+              {rules.length === 0 ? (
+                <Caption1>No rules on this reflex (or Rules preview API not enabled in this tenant).</Caption1>
+              ) : (
+                <div className={s.tableWrap}>
+                  <Table aria-label="Rules" size="small">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Name</TableHeaderCell>
+                      <TableHeaderCell>Object · Property</TableHeaderCell>
+                      <TableHeaderCell>Condition</TableHeaderCell>
+                      <TableHeaderCell>Action</TableHeaderCell>
+                      <TableHeaderCell>State</TableHeaderCell>
+                      <TableHeaderCell>Last triggered</TableHeaderCell>
+                      <TableHeaderCell></TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {rules.map((r) => (
+                        <TableRow key={r.id}>
+                          <TableCell>{r.name}</TableCell>
+                          <TableCell>{r.objectName || '—'} · {r.propertyName || '—'}</TableCell>
+                          <TableCell className={s.cell}>{r.condition ? `${r.condition.operator} ${fmtCell(r.condition.value)}` : '—'}</TableCell>
+                          <TableCell className={s.cell}>{r.action?.kind || '—'}</TableCell>
+                          <TableCell>{r.state || '—'}</TableCell>
+                          <TableCell className={s.cell}>{r.lastTriggered || '—'}</TableCell>
+                          <TableCell>
+                            <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => triggerNow(r.id)}>Trigger</Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
+          )}
         </div>
       }
     />
@@ -1051,67 +1321,553 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   );
 }
 
-// ----- Semantic model -----
+// ============================================================
+// Semantic Model (Power BI dataset)
+// ============================================================
 const SM_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
     { label: 'Model', actions: [{ label: 'New measure' }, { label: 'New role' }, { label: 'New perspective' }] },
     { label: 'Source', actions: [{ label: 'Refresh' }, { label: 'Direct Lake' }, { label: 'Import' }] },
   ]},
 ];
+
+interface DatasetLite {
+  id: string; name: string; configuredBy?: string; isRefreshable?: boolean; targetStorageMode?: string; createdDate?: string;
+}
+interface TableLite {
+  name: string;
+  columns?: Array<{ name: string; dataType?: string }>;
+  measures?: Array<{ name: string; expression?: string }>;
+}
+interface RefreshLite {
+  requestId?: string; refreshType?: string; startTime?: string; endTime?: string; status?: string; serviceExceptionJson?: string;
+}
+
 export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [tab, setTab] = useState('tables');
+  const ws = useWorkspaces();
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [datasets, setDatasets] = useState<DatasetLite[] | null>(null);
+  const [datasetId, setDatasetId] = useState('');
+  const [listErr, setListErr] = useState<string | null>(null);
+  const [detail, setDetail] = useState<{ dataset?: DatasetLite; tables?: TableLite[]; refreshSchedule?: any } | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
+  const [refreshes, setRefreshes] = useState<RefreshLite[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshErr, setRefreshErr] = useState<string | null>(null);
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'refresh' | 'config'>('tables');
+
+  const loadList = useCallback(async (wsId: string) => {
+    setListErr(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (!j.ok) { setDatasets([]); setListErr(j.error); return; }
+      setDatasets(j.datasets || []);
+      if ((j.datasets || []).length && !datasetId) setDatasetId(j.datasets[0].id);
+    } catch (e: any) {
+      setDatasets([]); setListErr(e?.message || String(e));
+    }
+  }, [datasetId]);
+
+  const loadDetail = useCallback(async (wsId: string, dsId: string) => {
+    setDetailErr(null); setDetail(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (!j.ok) { setDetailErr(j.error); return; }
+      setDetail({ dataset: j.dataset, tables: j.tables || [], refreshSchedule: j.refreshSchedule });
+    } catch (e: any) { setDetailErr(e?.message || String(e)); }
+  }, []);
+
+  const loadRefreshes = useCallback(async (wsId: string, dsId: string) => {
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/refreshes?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (j.ok) setRefreshes(j.refreshes || []);
+    } catch { /* silently keep last */ }
+  }, []);
+
+  useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
+  useEffect(() => {
+    if (workspaceId && datasetId) { loadDetail(workspaceId, datasetId); loadRefreshes(workspaceId, datasetId); }
+  }, [workspaceId, datasetId, loadDetail, loadRefreshes]);
+
+  const refreshNow = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setRefreshing(true); setRefreshErr(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) setRefreshErr(j.error || 'refresh failed');
+      else { setTimeout(() => loadRefreshes(workspaceId, datasetId), 1500); }
+    } finally { setRefreshing(false); }
+  }, [workspaceId, datasetId, loadRefreshes]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={SM_RIBBON} main={
-      <>
-        <div className={s.tabBar}>
-          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
-            <Tab value="tables">Tables</Tab>
-            <Tab value="relationships">Relationships</Tab>
-            <Tab value="measures">Measures (DAX)</Tab>
-            <Tab value="roles">Roles (RLS)</Tab>
-          </TabList>
+    <ItemEditorChrome item={item} id={id} ribbon={SM_RIBBON}
+      leftPanel={
+        <div className={s.treePad}>
+          <Subtitle2 style={{ marginBottom: 8 }}>Datasets</Subtitle2>
+          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
+          {datasets && datasets.length === 0 && <Caption1>No datasets in this workspace.</Caption1>}
+          <Tree aria-label="Datasets">
+            {(datasets || []).map((d) => (
+              <TreeItem key={d.id} itemType="leaf" value={d.id} onClick={() => setDatasetId(d.id)}>
+                <TreeItemLayout iconBefore={<Database20Regular />}>
+                  {datasetId === d.id ? <strong>{d.name}</strong> : d.name}
+                </TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
         </div>
-        <div className={s.pad}>
-          {tab === 'tables' && (
-            <Table aria-label="Tables">
-              <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Columns</TableHeaderCell></TableRow></TableHeader>
-              <TableBody>
-                {[['fact_sales', 'Fact', 12], ['dim_customer', 'Dimension', 24], ['dim_product', 'Dimension', 31], ['dim_date', 'Dimension', 9]].map(([n, t, c]) =>
-                  <TableRow key={n as string}><TableCell>{n}</TableCell><TableCell>{t}</TableCell><TableCell>{c}</TableCell></TableRow>)}
-              </TableBody>
-            </Table>
+      }
+      main={
+        <>
+          <div className={s.pad}>
+            <div className={s.toolbar}>
+              <Badge appearance="filled" color="brand">Semantic model</Badge>
+              <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+              <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+              <Button appearance="primary" icon={<Play20Regular />} disabled={!datasetId || refreshing} onClick={refreshNow} style={{ marginLeft: 'auto' }}>
+                {refreshing ? 'Queuing…' : 'Refresh dataset'}
+              </Button>
+            </div>
+            {listErr && <MessageBar intent="error"><MessageBarBody>{listErr}</MessageBarBody></MessageBar>}
+            {refreshErr && <MessageBar intent="error"><MessageBarBody>{refreshErr}</MessageBarBody></MessageBar>}
+            {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+            {detail?.dataset && (
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Caption1>Owner: <strong>{detail.dataset.configuredBy || '—'}</strong></Caption1>
+                <Caption1>Mode: <strong>{detail.dataset.targetStorageMode || '—'}</strong></Caption1>
+                {detail.dataset.isRefreshable === false && <Badge appearance="outline" color="warning">not refreshable</Badge>}
+              </div>
+            )}
+          </div>
+          {datasetId && (
+            <>
+              <div className={s.tabBar}>
+                <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
+                  <Tab value="tables">Tables ({detail?.tables?.length ?? 0})</Tab>
+                  <Tab value="relationships">Relationships</Tab>
+                  <Tab value="measures">Measures (DAX)</Tab>
+                  <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
+                  <Tab value="config">Configuration</Tab>
+                </TabList>
+              </div>
+              <div className={s.pad}>
+                {tab === 'tables' && (
+                  <div className={s.tableWrap}>
+                    <Table aria-label="Tables" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Table</TableHeaderCell>
+                        <TableHeaderCell>Columns</TableHeaderCell>
+                        <TableHeaderCell>Measures</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {(detail?.tables || []).map((t) => (
+                          <TableRow key={t.name}>
+                            <TableCell>{t.name}</TableCell>
+                            <TableCell className={s.cell}>{(t.columns || []).map((c) => `${c.name}:${c.dataType || '?'}`).join(', ') || '—'}</TableCell>
+                            <TableCell className={s.cell}>{(t.measures || []).map((m) => m.name).join(', ') || '—'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+                {tab === 'relationships' && (
+                  <Body1>Power BI REST returns relationships only via the XMLA endpoint (TMSL). Click <strong>Refresh dataset</strong> to validate metadata; full TMSL graph rendering lands in v2.2.</Body1>
+                )}
+                {tab === 'measures' && (
+                  <>
+                    {(detail?.tables || []).flatMap((t) => (t.measures || []).map((m) => (
+                      <div key={`${t.name}-${m.name}`} className={s.card} style={{ marginTop: 8 }}>
+                        <Caption1>{t.name}</Caption1>
+                        <div style={{ fontWeight: 600 }}>{m.name}</div>
+                        <pre style={{ margin: 0, fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap' }}>{m.expression || '—'}</pre>
+                      </div>
+                    )))}
+                    {((detail?.tables || []).flatMap((t) => t.measures || []).length === 0) && (
+                      <Caption1>No DAX measures returned (or the dataset hasn't exposed its model definition).</Caption1>
+                    )}
+                  </>
+                )}
+                {tab === 'refresh' && (
+                  <div className={s.tableWrap}>
+                    <Table aria-label="Refreshes" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Request ID</TableHeaderCell>
+                        <TableHeaderCell>Type</TableHeaderCell>
+                        <TableHeaderCell>Status</TableHeaderCell>
+                        <TableHeaderCell>Start</TableHeaderCell>
+                        <TableHeaderCell>End</TableHeaderCell>
+                        <TableHeaderCell>Error</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {refreshes.length === 0 && <TableRow><TableCell colSpan={6}>No refresh history.</TableCell></TableRow>}
+                        {refreshes.map((r, i) => (
+                          <TableRow key={r.requestId || i}>
+                            <TableCell className={s.cell}>{r.requestId?.slice(0, 8) || '—'}</TableCell>
+                            <TableCell>{r.refreshType || '—'}</TableCell>
+                            <TableCell>{r.status || '—'}</TableCell>
+                            <TableCell className={s.cell}>{r.startTime || '—'}</TableCell>
+                            <TableCell className={s.cell}>{r.endTime || '—'}</TableCell>
+                            <TableCell className={s.cell}>{r.serviceExceptionJson || ''}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+                {tab === 'config' && (
+                  <>
+                    <Caption1>Refresh schedule</Caption1>
+                    <pre style={{ margin: 0, fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap', padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+                      {detail?.refreshSchedule ? JSON.stringify(detail.refreshSchedule, null, 2) : 'No schedule (manual refresh only).'}
+                    </pre>
+                  </>
+                )}
+              </div>
+            </>
           )}
-          {tab === 'relationships' && (<Body1>4 active relationships · 1 inactive (role-playing dim_date.ship_date)</Body1>)}
-          {tab === 'measures' && (
-            <textarea className={s.monaco} defaultValue={`Total Revenue =\nCALCULATE(\n  SUM(fact_sales[Amount]),\n  REMOVEFILTERS(dim_date[IsHoliday])\n)`} spellCheck={false} aria-label="DAX measure" />
-          )}
-          {tab === 'roles' && (<Body1>2 roles defined: Sales (regional filter), Exec (all-access)</Body1>)}
-        </div>
-      </>
-    } />
+        </>
+      }
+    />
   );
 }
 
-// ----- Report / Dashboard / Paginated / Scorecard shells -----
-function genericShell(title: string, body: string, ribbon: RibbonTab[]) {
-  return function Shell({ item, id }: { item: FabricItemType; id: string }) {
-    return (
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
-        <div style={{ padding: 24, textAlign: 'center' }}>
-          <Subtitle2>{title}</Subtitle2>
-          <Body1 style={{ marginTop: 8, color: tokens.colorNeutralForeground3 }}>{body}</Body1>
-        </div>
-      } />
-    );
-  };
-}
+// ============================================================
+// Report (Power BI)
+// ============================================================
 const REPORT_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
   { label: 'Pages', actions: [{ label: 'New page' }, { label: 'Duplicate' }] },
   { label: 'Visuals', actions: [{ label: 'New visual' }, { label: 'Format' }, { label: 'Bookmark' }] },
   { label: 'Data', actions: [{ label: 'Refresh' }, { label: 'Filters' }] },
 ]}];
-export const ReportEditor = genericShell('Power BI report canvas', 'Visual canvas, Visualizations / Fields / Filters panes, page tabs. Embedded Power BI iframe lands here in Phase 6.', REPORT_RIBBON);
-export const DashboardEditor = genericShell('Power BI dashboard', 'Pin tiles from reports and Q&A. Tile grid renders here.', REPORT_RIBBON);
-export const PaginatedReportEditor = genericShell('Paginated report', 'Pixel-perfect RDL report. Renderer placeholder + parameter bar.', REPORT_RIBBON);
-export const ScorecardEditor = genericShell('Scorecard', 'KPI tree with targets, owners, status. Metadata-only — no Fabric REST API today.', REPORT_RIBBON);
+
+interface ReportLite {
+  id: string; name: string; embedUrl?: string; webUrl?: string; datasetId?: string;
+  modifiedDateTime?: string; modifiedBy?: string; reportType?: string;
+}
+
+function ReportLikeEditor({
+  item, id, kind, ribbon, listPath, detailPathBase,
+}: {
+  item: FabricItemType; id: string; kind: 'report' | 'paginated';
+  ribbon: RibbonTab[]; listPath: string; detailPathBase: string;
+}) {
+  const s = useStyles();
+  const ws = useWorkspaces();
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [reports, setReports] = useState<ReportLite[] | null>(null);
+  const [reportId, setReportId] = useState('');
+  const [report, setReport] = useState<ReportLite | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const loadList = useCallback(async (wsId: string) => {
+    setErr(null);
+    try {
+      const r = await fetch(`${listPath}?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (!j.ok) { setReports([]); setErr(j.error); return; }
+      setReports(j.reports || []);
+      if ((j.reports || []).length && !reportId) setReportId(j.reports[0].id);
+    } catch (e: any) { setReports([]); setErr(e?.message || String(e)); }
+  }, [listPath, reportId]);
+
+  const loadDetail = useCallback(async (wsId: string, rId: string) => {
+    try {
+      const r = await fetch(`${detailPathBase}/${encodeURIComponent(rId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (j.ok) setReport(j.report);
+      else setErr(j.error);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+  }, [detailPathBase]);
+
+  useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
+  useEffect(() => { if (workspaceId && reportId) loadDetail(workspaceId, reportId); }, [workspaceId, reportId, loadDetail]);
+
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      leftPanel={
+        <div className={s.treePad}>
+          <Subtitle2 style={{ marginBottom: 8 }}>{kind === 'paginated' ? 'Paginated reports' : 'Reports'}</Subtitle2>
+          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
+          {reports && reports.length === 0 && <Caption1>No {kind === 'paginated' ? 'paginated ' : ''}reports in this workspace.</Caption1>}
+          <Tree aria-label="Reports">
+            {(reports || []).map((r) => (
+              <TreeItem key={r.id} itemType="leaf" value={r.id} onClick={() => setReportId(r.id)}>
+                <TreeItemLayout>{reportId === r.id ? <strong>{r.name}</strong> : r.name}</TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">{kind === 'paginated' ? 'Paginated report' : 'Power BI report'}</Badge>
+            <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+          </div>
+          {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          {report && (
+            <>
+              <div className={s.card}>
+                <Subtitle2>{report.name}</Subtitle2>
+                <Caption1>type: {report.reportType || (kind === 'paginated' ? 'PaginatedReport' : 'PowerBIReport')} · datasetId: {report.datasetId || '—'}</Caption1>
+                <Caption1>modified: {report.modifiedDateTime || '—'} by {report.modifiedBy || '—'}</Caption1>
+                {report.webUrl && <Caption1><a href={report.webUrl} target="_blank" rel="noreferrer">Open in Power BI</a></Caption1>}
+              </div>
+              <div className={s.card} style={{ minHeight: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 6, color: tokens.colorNeutralForeground3 }}>
+                <Subtitle2>Embed preview</Subtitle2>
+                <Caption1>v2.1: showing metadata only — full embed via Power BI Embed SDK lands in v2.2.</Caption1>
+                <Caption1>embedUrl: <code style={{ fontSize: 11 }}>{report.embedUrl || '—'}</code></Caption1>
+              </div>
+            </>
+          )}
+        </div>
+      }
+    />
+  );
+}
+
+export function ReportEditor({ item, id }: { item: FabricItemType; id: string }) {
+  return <ReportLikeEditor item={item} id={id} kind="report" ribbon={REPORT_RIBBON} listPath="/api/items/report" detailPathBase="/api/items/report" />;
+}
+export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: string }) {
+  return <ReportLikeEditor item={item} id={id} kind="paginated" ribbon={REPORT_RIBBON} listPath="/api/items/paginated-report" detailPathBase="/api/items/paginated-report" />;
+}
+
+// ============================================================
+// Dashboard (Power BI)
+// ============================================================
+interface DashboardLite { id: string; displayName: string; webUrl?: string; embedUrl?: string; isReadOnly?: boolean; }
+interface TileLite { id: string; title?: string; subTitle?: string; reportId?: string; datasetId?: string; embedUrl?: string; rowSpan?: number; colSpan?: number; }
+
+export function DashboardEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const ws = useWorkspaces();
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [dashboards, setDashboards] = useState<DashboardLite[] | null>(null);
+  const [dashId, setDashId] = useState('');
+  const [tiles, setTiles] = useState<TileLite[]>([]);
+  const [selectedTile, setSelectedTile] = useState<TileLite | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const loadList = useCallback(async (wsId: string) => {
+    setErr(null);
+    try {
+      const r = await fetch(`/api/items/dashboard?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (!j.ok) { setDashboards([]); setErr(j.error); return; }
+      setDashboards(j.dashboards || []);
+      if ((j.dashboards || []).length && !dashId) setDashId(j.dashboards[0].id);
+    } catch (e: any) { setDashboards([]); setErr(e?.message || String(e)); }
+  }, [dashId]);
+
+  const loadDetail = useCallback(async (wsId: string, dId: string) => {
+    setSelectedTile(null);
+    try {
+      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (j.ok) setTiles(j.tiles || []); else setErr(j.error);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+  }, []);
+
+  useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
+  useEffect(() => { if (workspaceId && dashId) loadDetail(workspaceId, dashId); }, [workspaceId, dashId, loadDetail]);
+
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={REPORT_RIBBON}
+      leftPanel={
+        <div className={s.treePad}>
+          <Subtitle2 style={{ marginBottom: 8 }}>Dashboards</Subtitle2>
+          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
+          {dashboards && dashboards.length === 0 && <Caption1>No dashboards in this workspace.</Caption1>}
+          <Tree aria-label="Dashboards">
+            {(dashboards || []).map((d) => (
+              <TreeItem key={d.id} itemType="leaf" value={d.id} onClick={() => setDashId(d.id)}>
+                <TreeItemLayout>{dashId === d.id ? <strong>{d.displayName}</strong> : d.displayName}</TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">Power BI dashboard</Badge>
+            <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+          </div>
+          {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          <Subtitle2>Tiles ({tiles.length})</Subtitle2>
+          <div className={s.cardGrid}>
+            {tiles.map((t) => (
+              <div key={t.id} className={s.card} style={{ cursor: 'pointer', borderColor: selectedTile?.id === t.id ? tokens.colorBrandStroke1 : undefined }} onClick={() => setSelectedTile(t)}>
+                <Caption1>{t.subTitle || 'tile'}</Caption1>
+                <div style={{ fontWeight: 600 }}>{t.title || t.id}</div>
+                <Caption1>{t.rowSpan && t.colSpan ? `${t.colSpan}×${t.rowSpan}` : ''}</Caption1>
+              </div>
+            ))}
+            {tiles.length === 0 && dashId && <Caption1>Dashboard has no tiles.</Caption1>}
+          </div>
+          {selectedTile && (
+            <div className={s.card}>
+              <Subtitle2>Tile detail</Subtitle2>
+              <Caption1>id: <code>{selectedTile.id}</code></Caption1>
+              <Caption1>reportId: <code>{selectedTile.reportId || '—'}</code></Caption1>
+              <Caption1>datasetId: <code>{selectedTile.datasetId || '—'}</code></Caption1>
+              <Caption1>embedUrl: <code style={{ fontSize: 11 }}>{selectedTile.embedUrl || '—'}</code></Caption1>
+            </div>
+          )}
+        </div>
+      }
+    />
+  );
+}
+
+// ============================================================
+// Scorecard (Fabric)
+// ============================================================
+interface ScorecardLite { id: string; displayName: string; description?: string; }
+interface GoalLite { id?: string; name?: string; description?: string; currentValue?: number; targetValue?: number; }
+
+export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const ws = useWorkspaces();
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [scorecards, setScorecards] = useState<ScorecardLite[] | null>(null);
+  const [scorecardId, setScorecardId] = useState('');
+  const [goals, setGoals] = useState<GoalLite[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [entryOpen, setEntryOpen] = useState<{ goalId: string } | null>(null);
+  const [entryValue, setEntryValue] = useState('');
+  const [entryTarget, setEntryTarget] = useState('');
+  const [entryNote, setEntryNote] = useState('');
+  const [entryBusy, setEntryBusy] = useState(false);
+  const [entryErr, setEntryErr] = useState<string | null>(null);
+
+  const loadList = useCallback(async (wsId: string) => {
+    setErr(null);
+    try {
+      const r = await fetch(`/api/items/scorecard?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (!j.ok) { setScorecards([]); setErr(j.error); return; }
+      setScorecards(j.scorecards || []);
+      if ((j.scorecards || []).length && !scorecardId) setScorecardId(j.scorecards[0].id);
+    } catch (e: any) { setScorecards([]); setErr(e?.message || String(e)); }
+  }, [scorecardId]);
+
+  const loadGoals = useCallback(async (wsId: string, scId: string) => {
+    try {
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (j.ok) setGoals(j.goals || []); else setErr(j.error);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+  }, []);
+
+  useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
+  useEffect(() => { if (workspaceId && scorecardId) loadGoals(workspaceId, scorecardId); }, [workspaceId, scorecardId, loadGoals]);
+
+  const submitValue = useCallback(async () => {
+    if (!entryOpen || !workspaceId || !scorecardId) return;
+    const value = Number(entryValue);
+    if (!Number.isFinite(value)) { setEntryErr('numeric value required'); return; }
+    setEntryBusy(true); setEntryErr(null);
+    try {
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ goalId: entryOpen.goalId, value, targetValue: entryTarget ? Number(entryTarget) : undefined, noteText: entryNote || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setEntryErr(j.error || 'submit failed'); return; }
+      setEntryOpen(null); setEntryValue(''); setEntryTarget(''); setEntryNote('');
+      loadGoals(workspaceId, scorecardId);
+    } finally { setEntryBusy(false); }
+  }, [entryOpen, entryValue, entryTarget, entryNote, workspaceId, scorecardId, loadGoals]);
+
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={REPORT_RIBBON}
+      leftPanel={
+        <div className={s.treePad}>
+          <Subtitle2 style={{ marginBottom: 8 }}>Scorecards</Subtitle2>
+          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
+          {scorecards && scorecards.length === 0 && <Caption1>No scorecards in this workspace.</Caption1>}
+          <Tree aria-label="Scorecards">
+            {(scorecards || []).map((sc) => (
+              <TreeItem key={sc.id} itemType="leaf" value={sc.id} onClick={() => setScorecardId(sc.id)}>
+                <TreeItemLayout>{scorecardId === sc.id ? <strong>{sc.displayName}</strong> : sc.displayName}</TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">Scorecard</Badge>
+            <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+          </div>
+          {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          {scorecardId && (
+            <>
+              <Subtitle2>Goals ({goals.length})</Subtitle2>
+              {goals.length === 0 ? (
+                <Caption1>No goals on this scorecard (or the Fabric scorecard preview API is not enabled in this tenant).</Caption1>
+              ) : (
+                <div className={s.tableWrap}>
+                  <Table aria-label="Goals" size="small">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Goal</TableHeaderCell>
+                      <TableHeaderCell>Current</TableHeaderCell>
+                      <TableHeaderCell>Target</TableHeaderCell>
+                      <TableHeaderCell></TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {goals.map((g, i) => (
+                        <TableRow key={g.id || i}>
+                          <TableCell>{g.name || g.id || '—'}</TableCell>
+                          <TableCell>{g.currentValue ?? '—'}</TableCell>
+                          <TableCell>{g.targetValue ?? '—'}</TableCell>
+                          <TableCell>
+                            {g.id && <Button size="small" appearance="subtle" onClick={() => { setEntryOpen({ goalId: g.id! }); setEntryTarget(g.targetValue?.toString() || ''); }}>Add value</Button>}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
+          )}
+
+          <Dialog open={!!entryOpen} onOpenChange={(_, d) => { if (!d.open) setEntryOpen(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Add goal value</DialogTitle>
+                <DialogContent>
+                  <Caption1>value</Caption1>
+                  <Input value={entryValue} onChange={(_, d) => setEntryValue(d.value)} type="number" style={{ width: '100%' }} />
+                  <Caption1 style={{ marginTop: 8 }}>target (optional)</Caption1>
+                  <Input value={entryTarget} onChange={(_, d) => setEntryTarget(d.value)} type="number" style={{ width: '100%' }} />
+                  <Caption1 style={{ marginTop: 8 }}>note (optional)</Caption1>
+                  <Input value={entryNote} onChange={(_, d) => setEntryNote(d.value)} style={{ width: '100%' }} />
+                  {entryErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{entryErr}</MessageBarBody></MessageBar>}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setEntryOpen(null)}>Cancel</Button>
+                  <Button appearance="primary" disabled={entryBusy || !entryValue} onClick={submitValue}>{entryBusy ? 'Saving…' : 'Save'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+        </div>
+      }
+    />
+  );
+}
