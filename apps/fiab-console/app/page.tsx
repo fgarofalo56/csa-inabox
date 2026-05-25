@@ -13,6 +13,8 @@ import Link from 'next/link';
 import { PageShell } from '@/lib/components/page-shell';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import { LoomLogo } from '@/lib/components/loom-logo';
+import { RecentItems } from '@/lib/components/recent-items';
+import { RecommendedApps } from '@/lib/components/recommended-apps';
 
 const useStyles = makeStyles({
   hero: {
@@ -137,6 +139,22 @@ export default function HomePage() {
           </Link>
         ))}
       </div>
+
+      <div className={s.sectionTitle}>
+        <Title3 as="h2">Recent</Title3>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Items you've opened or edited
+        </Caption1>
+      </div>
+      <RecentItems />
+
+      <div className={s.sectionTitle}>
+        <Title3 as="h2">Recommended apps</Title3>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Curated CSA solutions seeded into this tenant
+        </Caption1>
+      </div>
+      <RecommendedApps />
     </PageShell>
   );
 }
