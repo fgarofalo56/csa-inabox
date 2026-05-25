@@ -18,6 +18,7 @@ let _client: CosmosClient | null = null;
 let _db: Database | null = null;
 let _workspaces: Container | null = null;
 let _items: Container | null = null;
+let _copilotSessions: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -59,6 +60,11 @@ async function ensure() {
     partitionKey: { paths: ['/workspaceId'] },
   });
   _items = it;
+  const { container: cs } = await database.containers.createIfNotExists({
+    id: 'copilot-sessions',
+    partitionKey: { paths: ['/sessionId'] },
+  });
+  _copilotSessions = cs;
   _ensured = true;
 }
 
@@ -70,4 +76,9 @@ export async function workspacesContainer(): Promise<Container> {
 export async function itemsContainer(): Promise<Container> {
   await ensure();
   return _items!;
+}
+
+export async function copilotSessionsContainer(): Promise<Container> {
+  await ensure();
+  return _copilotSessions!;
 }

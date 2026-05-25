@@ -33,7 +33,8 @@ export type WorkloadCategory =
   | 'Azure Graph + Vector'
   | 'CSA Data Products'
   | 'Copilot Studio'
-  | 'Power Platform';
+  | 'Power Platform'
+  | 'AI & Agents';
 
 export interface FabricItemType {
   /** Route slug — used at /items/[slug]/[id] */
@@ -272,6 +273,10 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     description: 'CSA-curated push-button template: medallion lakehouse, IoT analytics, federated mesh, RAG agent, geospatial.' },
   { slug: 'data-product-instance',       displayName: 'Data product instance',       restType: 'DataProductInstance',       category: 'CSA Data Products',
     description: 'Instantiated data product in a workspace — composed of underlying items (pipelines, lakehouses, indexes).' },
+
+  // --- v3 — Cross-item Copilot orchestrator (AOAI via Foundry hub) ---
+  { slug: 'cross-item-copilot',          displayName: 'Cross-item Copilot',          restType: 'CrossItemCopilot',          category: 'AI & Agents',
+    description: 'Natural-language orchestrator across every wired Loom service: Synapse, Lakehouse, Databricks, APIM, ADX, ADF, Power BI, Fabric, Foundry. 25+ tools.' },
 ];
 
 export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [

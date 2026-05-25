@@ -566,7 +566,7 @@ output mcpServerUrl string = containerPlatform == 'containerApps'
 output catalogEndpoint string = catalogPrimary == 'purview'
   ? 'https://purview-csa-loom-${location}.purview.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   : (catalogPrimary == 'unity-catalog-managed'
-      ? 'https://adb-csa-loom-${location}.azuredatabricks.net'
+      ? 'https://adb-csa-loom-${location}.azuredatabricks.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'net'}'
       : 'https://atlas-csa-loom.${location}.aks.csa-loom.internal')
 
 output keyVaultUri string = keyvault.outputs.keyVaultUri
