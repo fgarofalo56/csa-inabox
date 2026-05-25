@@ -171,3 +171,84 @@ deployment-script-based KV write path is in place to avoid the temporary
 public-network toggle workaround.
 
 ---
+
+## Phase 4 — Per-app least-privilege RBAC audit (Console UAMI)
+
+The Console UAMI (`uami-loom-console-eastus2`,
+`principalId e61f3eb3-c646-4183-8198-4c4a34cd9a01`) previously held broad
+**Contributor** at five scopes. We removed three of them in v3:
+
+### 4a. Synapse workspace — swapped for custom Operator role
+
+Created a new subscription-scoped custom role:
+
+| Field | Value |
+|---|---|
+| Role name | `CSA Loom Synapse Operator` |
+| Role ID | `1face001-f130-49d7-870c-f3225eb79708` |
+| Definition file | `temp/v3-security/synapse-operator-role.json` |
+
+Actions:
+- `Microsoft.Synapse/workspaces/read`
+- `Microsoft.Synapse/workspaces/sqlPools/read`
+- `Microsoft.Synapse/workspaces/sqlPools/pause/action`
+- `Microsoft.Synapse/workspaces/sqlPools/resume/action`
+- `Microsoft.Synapse/workspaces/sqlPools/operationResults/read`
+- `Microsoft.Synapse/workspaces/operationStatuses/read`
+- `Microsoft.Insights/metrics/read`
+- `Microsoft.Insights/metricDefinitions/read`
+
+Assigned at scope `…/workspaces/syn-loom-default-eastus2`. Broad Contributor
+removed (assignment `5b55eded-…-bc6f50be`). Data-plane access remains via the
+existing **Synapse Administrator** and **Synapse SQL Administrator** grants
+(not ARM RBAC).
+
+Smoke test after: `/api/me`, `/api/health`, `/api/workspaces` all `200`.
+
+### 4b. Databricks workspace — Contributor removed
+
+The BFF accesses Databricks exclusively through workspace REST (clusters,
+jobs, DBSQL), not ARM. Broad Contributor at workspace scope removed
+(assignment `0f4d9861-…-78bf52c24dd`). Workspace-level entitlements / SPN
+remain in place.
+
+Smoke test after: `/api/me`, `/api/health`, `/api/workspaces` all `200`.
+
+### 4c. AI Foundry workspace — Contributor removed
+
+UAMI retains **AzureML Data Scientist** and **AzureML Compute Operator** at
+`aifoundry-csa-loom-eastus2` and `loom-project-default`, which cover all
+data-plane actions the BFF needs (jobs, datasets, endpoints, compute lifecycle).
+Broad Contributor at the hub workspace removed (assignment
+`15fd45cf-…-2afb7550abc`).
+
+Smoke test after: `/api/me`, `/api/health`, `/api/workspaces` all `200`.
+
+### 4d. Retained Contributor (documented)
+
+| Scope | Why kept |
+|---|---|
+| `rg-csa-loom-dlz-single-eastus2` (RG) | The Console UAMI orchestrates cross-resource ARM ops in this RG: ADF pipeline triggers, Synapse pool ARM lifecycle, Cosmos throughput changes, Storage account properties, Event Hub namespaces, etc. Narrowing to a custom role would require enumerating actions across 8+ providers and is deferred to v3.x. |
+| `adx-csa-loom-shared` (ADX cluster) | Cluster lifecycle (start/stop, scale, follower-db) is ARM-level. Could be narrowed to a `Microsoft.Kusto/clusters/*/action` operator role in v3.x. |
+
+### Final v3 RBAC posture for Console UAMI
+
+```
+Contributor                     rg-csa-loom-dlz-single-eastus2          (kept)
+Contributor                     adx-csa-loom-shared                     (kept, candidate for v3.x narrowing)
+CSA Loom Synapse Operator (NEW) syn-loom-default-eastus2                (replaces Contributor)
+[no ARM role]                   adb-loom-default-eastus2                (Contributor REMOVED)
+AzureML Data Scientist          aifoundry-csa-loom-eastus2              (Contributor REMOVED)
+AzureML Compute Operator        loom-project-default
+AzureML Data Scientist          loom-project-default
+AcrPull                         acrloomm56yejezt7bjo
+Storage Blob Data Contributor   saloomdefaultmwfaiy3truk
+Data Factory Contributor        adf-loom-default-eastus2
+API Management Service Contributor  dml-ai-east-aigateway
+Search Service Contributor / Index Data Contributor / Reader  dlz-aisearch-dev-eastus2
+Log Analytics Reader, Monitoring Reader  law-csa-loom-eastus2 + ai-csa-loom-eastus2
+Cognitive Services User         cs-loom-eastus2
+Key Vault Secrets User (NEW)    kv-loom-m56yejezt7bjo                   (Phase 3)
+```
+
+---
