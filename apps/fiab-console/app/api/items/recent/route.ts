@@ -38,9 +38,9 @@ export async function GET(req: NextRequest) {
         recent.push({
           id: resource.id,
           type: resource.itemType,
-          name: resource.displayName,
+          displayName: resource.displayName,
           workspaceId: resource.workspaceId,
-          touchedAt: new Date(e._ts * 1000).toISOString(),
+          lastTouchedAt: new Date(e._ts * 1000).toISOString(),
         });
       }
     } catch {}
