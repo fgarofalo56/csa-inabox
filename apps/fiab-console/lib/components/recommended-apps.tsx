@@ -19,15 +19,16 @@ interface AppDoc {
 const useStyles = makeStyles({
   row: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-    gap: 12,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+    gap: 16,
   },
   card: {
-    padding: 16, borderRadius: 10,
+    padding: 20, borderRadius: 10,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     textDecoration: 'none', color: tokens.colorNeutralForeground1,
     transition: 'border-color 0.15s, transform 0.15s, box-shadow 0.15s',
+    display: 'flex', flexDirection: 'column', gap: 4,
     ':hover': {
       borderColor: tokens.colorBrandStroke1,
       transform: 'translateY(-2px)',
@@ -37,14 +38,15 @@ const useStyles = makeStyles({
   badge: {
     fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
     color: tokens.colorBrandForeground1, fontWeight: 700,
+    marginBottom: 6,
   },
-  name: { fontSize: 15, fontWeight: 600, marginTop: 4, marginBottom: 6 },
-  desc: { fontSize: 13, color: tokens.colorNeutralForeground2, lineHeight: 1.45 },
+  name: { fontSize: 15, fontWeight: 600, marginBottom: 8, lineHeight: 1.3 },
+  desc: { fontSize: 13, color: tokens.colorNeutralForeground2, lineHeight: 1.5 },
   empty: {
-    padding: 14, borderRadius: 10,
+    padding: 20, borderRadius: 10,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
-    fontSize: 13, textAlign: 'center',
+    fontSize: 13, textAlign: 'center', lineHeight: 1.5,
   },
 });
 

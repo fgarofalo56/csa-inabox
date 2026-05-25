@@ -1,13 +1,7 @@
-import { PageShell } from '@/lib/components/page-shell';
-import { WorkloadHubPane } from '@/lib/panes/workload-hub';
+import { redirect } from 'next/navigation';
 
 export default function WorkloadHubPage() {
-  return (
-    <PageShell
-      title="Workload hub"
-      subtitle="Discover, install, and manage Fabric workloads published by Microsoft and partners."
-    >
-      <WorkloadHubPane />
-    </PageShell>
-  );
+  // /workload-hub and /workloads converge — keep the canonical page at /workloads
+  // (Cosmos workloads-catalog), redirect the legacy URL here.
+  redirect('/workloads');
 }

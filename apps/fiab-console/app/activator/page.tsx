@@ -1,10 +1,14 @@
 import { PageShell } from '@/lib/components/page-shell';
-import { ActivatorPane } from '@/lib/panes/activator';
+import { ItemsByTypePane } from '@/lib/components/items-by-type-pane';
 
 export default function ActivatorPage() {
   return (
-    <PageShell title="Activator" subtitle="Detect conditions on streaming data and trigger actions. Legacy stub — Phase 3 ships the full rule designer.">
-      <ActivatorPane />
+    <PageShell
+      title="Activator"
+      subtitle="No-code event-driven automation. Watches a stream or KQL query and fires Teams/Email/Power Automate actions on conditions."
+    >
+      <ItemsByTypePane types={['activator']}
+        emptyHint="No Activator rules in this tenant yet." />
     </PageShell>
   );
 }

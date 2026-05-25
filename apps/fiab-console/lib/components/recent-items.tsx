@@ -16,27 +16,29 @@ interface Recent { id: string; type: string; displayName?: string; workspaceId?:
 const useStyles = makeStyles({
   row: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-    gap: 12,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+    gap: 16,
   },
   card: {
-    padding: 14, borderRadius: 10,
+    padding: 16, borderRadius: 10,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     textDecoration: 'none', color: tokens.colorNeutralForeground1,
     transition: 'border-color 0.15s, transform 0.15s',
+    display: 'flex', flexDirection: 'column', gap: 4,
     ':hover': { borderColor: tokens.colorBrandStroke1, transform: 'translateY(-2px)' },
   },
   type: {
     fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground3, fontWeight: 600,
+    marginBottom: 4,
   },
-  name: { fontSize: 14, fontWeight: 600, marginTop: 4, marginBottom: 4 },
+  name: { fontSize: 14, fontWeight: 600, lineHeight: 1.35, marginBottom: 6 },
   empty: {
-    padding: 14, borderRadius: 10,
+    padding: 20, borderRadius: 10,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
-    fontSize: 13, textAlign: 'center',
+    fontSize: 13, textAlign: 'center', lineHeight: 1.5,
   },
 });
 

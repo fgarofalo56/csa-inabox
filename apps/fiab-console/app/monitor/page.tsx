@@ -1,13 +1,13 @@
 import { PageShell } from '@/lib/components/page-shell';
-import { MonitorHubPane } from '@/lib/panes/monitor-hub';
+import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
 
 export default function MonitorHubPage() {
   return (
     <PageShell
       title="Monitor"
-      subtitle="A centralized view of job health for every Fabric item — pipelines, notebooks, dataflows, Spark jobs, ML experiments, and more."
+      subtitle="Live job, edit, and share activity for every item in your tenant. Every entry below was written to Cosmos by an actual user action."
     >
-      <MonitorHubPane />
+      <ActivityFeedPane />
     </PageShell>
   );
 }

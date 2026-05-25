@@ -141,9 +141,9 @@ export function AppShell({ children }: { children: ReactNode }) {
               onClick={openFeedback} aria-label="Send feedback" />
           </Tooltip>
           <ThemeToggle color="white" />
-          <Tooltip content="Help" relationship="label">
+          <Tooltip content="Help — Learn library" relationship="label">
             <Button appearance="transparent" className={styles.iconBtn} icon={<Question24Regular />}
-              aria-label="Help" />
+              as="a" href="/learn" aria-label="Help — open Learn library" />
           </Tooltip>
           <Tooltip content="Admin & settings" relationship="label">
             <Button appearance="transparent" className={styles.iconBtn} icon={<Settings24Regular />}
