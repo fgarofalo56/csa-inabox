@@ -252,3 +252,56 @@ Key Vault Secrets User (NEW)    kv-loom-m56yejezt7bjo                   (Phase 3
 ```
 
 ---
+
+## Phase 5 — Conditional Access policy template
+
+Conditional Access policies cannot be created via ARM / Bicep — they live in
+Entra ID and only the Microsoft Graph API can create them, using a
+**delegated** user token with the *Conditional Access Administrator* role
+(service principals cannot create CA policies).
+
+To keep the policy definition reviewed-and-versioned with the platform code,
+v3 ships `platform/fiab/bicep/modules/admin-plane/conditional-access.bicep`.
+It deploys **no resources** — it exists as config-as-code documentation,
+embedding the exact Graph REST payloads and `az rest` invocations to apply
+manually.
+
+### Required policies (apply via Graph in reporting mode first)
+
+1. **`CSA Loom Console — require MFA for sign-in`**
+   - Targets app `9844c28c-3b3a-4949-8d63-9eefa3b50a9d` (LOOM_MSAL_CLIENT_ID)
+   - All users, all client app types, all locations
+   - Grant: `mfa`
+
+2. **(Optional) `CSA Loom Console — require compliant device`**
+   - Same target app
+   - Grant: `compliantDevice` OR `domainJoinedDevice`
+   - Requires Intune-enrolled devices with a compliance policy assigned
+
+### Apply procedure (manual, requires delegated user auth)
+
+```bash
+# Authenticate as a user (NOT the deploy SP) with CA Administrator
+az login --tenant d1fc0498-f208-4b49-8376-beb9293acdf6 --allow-no-subscriptions
+
+# Create in reporting-only state first
+az rest --method POST \
+  --url "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies" \
+  --body @<(see Bicep template policy block 1)
+
+# After 24h of sign-in telemetry, flip to enabled
+az rest --method PATCH \
+  --url "https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies/<policyId>" \
+  --body '{"state":"enabled"}'
+```
+
+### Verification
+
+```bash
+az rest --method GET \
+  --url "https://graph.microsoft.com/v1.0/auditLogs/signIns?\$filter=appId eq '9844c28c-3b3a-4949-8d63-9eefa3b50a9d'&\$top=50"
+```
+
+Look at `conditionalAccessPolicies[].result` per sign-in event.
+
+---
