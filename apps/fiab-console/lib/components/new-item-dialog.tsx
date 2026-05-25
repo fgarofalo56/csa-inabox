@@ -21,14 +21,18 @@ import {
   DialogActions,
   Button,
   Input,
+  Field,
   Badge,
+  MessageBar,
+  MessageBarBody,
   makeStyles,
   tokens,
   Subtitle2,
   Body1,
   Caption1,
 } from '@fluentui/react-components';
-import { Add24Regular, Search20Regular } from '@fluentui/react-icons';
+import { Add24Regular, Search20Regular, ArrowLeft20Regular } from '@fluentui/react-icons';
+import { createItem } from '@/lib/api/workspaces';
 import {
   FABRIC_ITEM_TYPES,
   WORKLOAD_CATEGORIES,
@@ -92,14 +96,21 @@ const useStyles = makeStyles({
 interface Props {
   /** Optional pre-selected category */
   defaultCategory?: WorkloadCategory;
+  /** Workspace to scope the new item to; forwarded as ?workspaceId=… */
+  workspaceId?: string;
 }
 
-export function NewItemDialog({ defaultCategory }: Props = {}) {
+export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
   const styles = useStyles();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [category, setCategory] = useState<WorkloadCategory>(defaultCategory ?? 'Data Engineering');
   const [query, setQuery] = useState('');
+  // Two-step flow when workspaceId is known: pick type → name it inline.
+  const [picked, setPicked] = useState<FabricItemType | null>(null);
+  const [displayName, setDisplayName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const items = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -117,20 +128,66 @@ export function NewItemDialog({ defaultCategory }: Props = {}) {
     });
   }, [category, query]);
 
+  function reset() {
+    setPicked(null); setDisplayName(''); setError(null); setCreating(false);
+  }
+
   function onPick(item: FabricItemType) {
+    if (workspaceId) {
+      // Two-step: prompt for name, then create directly.
+      setPicked(item);
+      setDisplayName('');
+      setError(null);
+      return;
+    }
     setOpen(false);
     router.push(`/items/${item.slug}/new`);
   }
 
+  async function createInline() {
+    if (!workspaceId || !picked || !displayName.trim()) return;
+    setCreating(true); setError(null);
+    try {
+      const item = await createItem(workspaceId, {
+        itemType: picked.slug,
+        displayName: displayName.trim(),
+      });
+      setOpen(false);
+      reset();
+      router.push(`/items/${item.itemType}/${item.id}`);
+    } catch (e) {
+      setError((e as Error).message);
+      setCreating(false);
+    }
+  }
+
   return (
-    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
+    <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) reset(); }}>
       <DialogTrigger disableButtonEnhancement>
         <Button appearance="primary" icon={<Add24Regular />}>New item</Button>
       </DialogTrigger>
       <DialogSurface className={styles.surface}>
         <DialogBody>
-          <DialogTitle>New item</DialogTitle>
+          <DialogTitle>
+            {picked ? `Name your ${picked.displayName.toLowerCase()}` : 'New item'}
+          </DialogTitle>
           <DialogContent>
+            {picked && workspaceId ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Button appearance="subtle" icon={<ArrowLeft20Regular />}
+                  onClick={() => { setPicked(null); setError(null); }}>
+                  Back to types
+                </Button>
+                <Field label="Name" required>
+                  <Input value={displayName} onChange={(_, d) => setDisplayName(d.value)}
+                         placeholder={`My ${picked.displayName.toLowerCase()}`}
+                         onKeyDown={(e) => { if (e.key === 'Enter') createInline(); }} />
+                </Field>
+                {error && (
+                  <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>
+                )}
+              </div>
+            ) : (
             <div className={styles.layout}>
               <div className={styles.catList} role="tablist" aria-label="Workload category">
                 {WORKLOAD_CATEGORIES.map((c) => (
@@ -179,11 +236,19 @@ export function NewItemDialog({ defaultCategory }: Props = {}) {
                 </div>
               </div>
             </div>
+            )}
           </DialogContent>
           <DialogActions>
             <DialogTrigger disableButtonEnhancement>
               <Button appearance="secondary">Cancel</Button>
             </DialogTrigger>
+            {picked && workspaceId && (
+              <Button appearance="primary"
+                disabled={!displayName.trim() || creating}
+                onClick={createInline}>
+                {creating ? 'Creating…' : 'Create'}
+              </Button>
+            )}
           </DialogActions>
         </DialogBody>
       </DialogSurface>
