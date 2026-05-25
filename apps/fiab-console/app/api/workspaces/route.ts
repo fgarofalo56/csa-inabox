@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
+import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import type { Workspace } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
   try {
     const c = await workspacesContainer();
     const { resource } = await c.items.create<Workspace>(ws);
+    if (resource) void upsertLoomDoc(docForWorkspace(resource));
     return NextResponse.json(resource, { status: 201 });
   } catch (e: any) {
     return err(e?.message || 'Failed to create workspace', 500, 'cosmos_error');

@@ -1,13 +1,18 @@
 /**
  * Search across the user's tenant's workspaces + items.
- * v3.0: Cosmos CONTAINS() — fast enough for tens of thousands of items.
- * v3.1 (Chunk 8): switches to Azure AI Search index `loom-items`.
  *
- * POST /api/search/items  body {q, top?, filters?} → { ok, hits:[{type, id, name, workspaceId, snippet}], took }
+ * v3.2 strategy:
+ *   1. If LOOM_AI_SEARCH_SERVICE is set, query the `loom-items` AI Search
+ *      index (BFF mirrors writes on item/workspace create+update+delete).
+ *   2. Otherwise fall back to Cosmos CONTAINS — same behaviour as v3.0/3.1.
+ *
+ * POST /api/search/items  body {q, top?, filters?}
+ *   → { ok, hits:[{kind, type?, id, name, workspaceId, snippet, score?}], took, source }
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { workspacesContainer, itemsContainer, searchHistoryContainer } from '@/lib/azure/cosmos-client';
+import { isSearchConfigured, searchLoomItems } from '@/lib/azure/loom-search';
 import crypto from 'node:crypto';
 
 export const runtime = 'nodejs';
@@ -19,10 +24,35 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const q = (body?.q || '').toString().trim();
   const top = Math.min(50, Math.max(1, Number(body?.top) || 20));
-  if (!q) return NextResponse.json({ ok: true, hits: [], took: 0 });
+  if (!q) return NextResponse.json({ ok: true, hits: [], took: 0, source: 'empty' });
 
   const started = Date.now();
   const tenantId = s.claims.oid;
+
+  // ---- Preferred path: AI Search ----
+  if (isSearchConfigured()) {
+    try {
+      const docs = await searchLoomItems({ q, tenantId, top });
+      if (docs) {
+        const hits = docs.map(d => ({
+          kind: d.kind,
+          type: d.itemType,
+          id: d.kind === 'workspace' ? d.workspaceId : d.id.replace(/^it:/, ''),
+          name: d.displayName,
+          workspaceId: d.workspaceId,
+          snippet: d.description || '',
+          score: d['@search.score'],
+        }));
+        await recordHistory(tenantId, q, hits.length);
+        return NextResponse.json({ ok: true, hits, took: Date.now() - started, source: 'aisearch' });
+      }
+    } catch (e: any) {
+      // Search hit but errored — fall through to Cosmos as a safety net.
+      console.warn('AI Search query failed; falling back to Cosmos:', e?.message);
+    }
+  }
+
+  // ---- Fallback: Cosmos CONTAINS ----
   const ws = await workspacesContainer();
   const items = await itemsContainer();
   const lower = q.toLowerCase();
@@ -39,7 +69,6 @@ export async function POST(req: NextRequest) {
         ],
       })
       .fetchAll(),
-    // Cross-partition over /workspaceId — bounded by TOP and only matches within tenant via JOIN-by-id lookup.
     items.items
       .query({
         query:
@@ -52,8 +81,6 @@ export async function POST(req: NextRequest) {
       .fetchAll(),
   ]);
 
-  // Filter items to those whose workspace belongs to this tenant (one extra read worth of cost,
-  // but keeps the answer correct without a synced index).
   const tenantWsIds = new Set<string>();
   {
     const { resources } = await ws.items
@@ -82,17 +109,19 @@ export async function POST(req: NextRequest) {
       })),
   ].slice(0, top);
 
-  // Record search history (fire-and-forget).
+  await recordHistory(tenantId, q, hits.length);
+  return NextResponse.json({ ok: true, hits, took: Date.now() - started, source: 'cosmos' });
+}
+
+async function recordHistory(userId: string, q: string, hits: number) {
   try {
     const hist = await searchHistoryContainer();
     await hist.items.create({
       id: crypto.randomUUID(),
-      userId: tenantId,
+      userId,
       q,
-      hits: hits.length,
+      hits,
       at: new Date().toISOString(),
     });
   } catch {}
-
-  return NextResponse.json({ ok: true, hits, took: Date.now() - started });
 }

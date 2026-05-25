@@ -167,6 +167,17 @@ async function main() {
       const { body } = await call('POST', '/api/search/items', { q: 'uat-sqldb', top: 5 });
       expect(body.hits, h => Array.isArray(h));
     });
+    await step('POST /api/admin/reindex-items (Chunk 8 backfill)', async () => {
+      const { status, body } = await call('POST', '/api/admin/reindex-items');
+      // 200 = indexed; 503 = LOOM_AI_SEARCH_SERVICE not set (honest fallback).
+      expect(status, s => s === 200 || s === 503,
+        `status=${status} body=${JSON.stringify(body).slice(0, 200)}`);
+    });
+    await step('POST /api/search/items reports source field', async () => {
+      const { body } = await call('POST', '/api/search/items', { q: 'uat-sqldb', top: 5 });
+      expect(body.source, src => src === 'aisearch' || src === 'cosmos',
+        `source=${body.source}`);
+    });
   }
 
   // ---- Chunk 5 workspace patch + delete ----

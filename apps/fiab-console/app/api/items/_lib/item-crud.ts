@@ -9,6 +9,7 @@
 import { NextResponse } from 'next/server';
 import type { SessionPayload } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { upsertLoomDoc, deleteLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export function jerr(error: string, status = 500, code?: string) {
@@ -107,6 +108,8 @@ export async function createOwnedItem(
   };
   const items = await itemsContainer();
   const { resource } = await items.items.create<WorkspaceItem>(item);
+  // Mirror to AI Search (best-effort; no-throw).
+  void upsertLoomDoc(docForItem(resource!, session.claims.oid));
   return { ok: true, item: resource! };
 }
 
@@ -128,6 +131,7 @@ export async function updateOwnedItem(
   };
   const items = await itemsContainer();
   const { resource } = await items.item(current.id, current.workspaceId).replace<WorkspaceItem>(next);
+  void upsertLoomDoc(docForItem(resource!, tenantId));
   return resource!;
 }
 
@@ -140,5 +144,6 @@ export async function deleteOwnedItem(
   if (!current) return false;
   const items = await itemsContainer();
   await items.item(current.id, current.workspaceId).delete();
+  void deleteLoomDoc(`it:${current.id}`);
   return true;
 }
