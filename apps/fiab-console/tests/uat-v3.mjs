@@ -163,6 +163,14 @@ async function main() {
       expect(first, f => f && f.displayName && f.lastTouchedAt,
         `missing fields: ${JSON.stringify(first)}`);
     });
+    await step('GET /api/items/by-type (UI-audit pass)', async () => {
+      const { body } = await call('GET', '/api/items/by-type?type=azure-sql-database');
+      expect(body.items, i => Array.isArray(i) && i.length >= 1, `items=${JSON.stringify(body.items).slice(0, 100)}`);
+    });
+    await step('GET /api/activity (UI-audit pass)', async () => {
+      const { body } = await call('GET', '/api/activity?n=20');
+      expect(body.entries, e => Array.isArray(e), `entries=${typeof body.entries}`);
+    });
     await step('POST /api/search/items (q=uat-sqldb)', async () => {
       const { body } = await call('POST', '/api/search/items', { q: 'uat-sqldb', top: 5 });
       expect(body.hits, h => Array.isArray(h));
