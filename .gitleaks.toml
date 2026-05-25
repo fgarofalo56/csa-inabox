@@ -62,4 +62,11 @@ paths = [
     # cap bounds cost; if someone abuses the key they pollute our
     # telemetry, not steal data.
     '''docs/javascripts/app-insights\.js''',
+
+    # CSA Loom one-shot bootstrap workflow — references public Azure
+    # resource names (APIM_NAME, SYNAPSE_WS, DBX_WS, UAMI principal id,
+    # workspace IDs). These are not secrets; they are tenant-visible
+    # resource identifiers. Real credentials are pulled via
+    # ${{ secrets.AZURE_CLIENT_SECRET }} GitHub Actions secret.
+    '''\.github/workflows/csa-loom-post-deploy-bootstrap\.yml''',
 ]
