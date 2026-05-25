@@ -26,7 +26,8 @@ export type WorkloadCategory =
   | 'Synapse Analytics'
   | 'Azure Databricks'
   | 'Azure Data Factory'
-  | 'Azure Data Lake Analytics';
+  | 'Azure Data Lake Analytics'
+  | 'Azure AI Foundry';
 
 export interface FabricItemType {
   /** Route slug — used at /items/[slug]/[id] */
@@ -177,6 +178,10 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     description: 'Inbound / backend / outbound / on-error XML policy: JWT validation, rate-limit, cache, transform, mock.' },
   { slug: 'data-product',                displayName: 'Data product',                restType: 'DataProduct',               category: 'APIs and functions',
     description: 'Data-mesh-aligned package: dataset + semantic contract + APIM API + access policy + owner. Listed in the marketplace.' },
+
+  // --- Azure AI Foundry hub (Microsoft.MachineLearningServices/workspaces kind=Hub) ---
+  { slug: 'ai-foundry-hub',              displayName: 'AI Foundry hub',              restType: 'AiFoundryHub',              category: 'Azure AI Foundry',
+    description: 'Azure AI Foundry hub workspace — connections, models, online endpoints, computes, datastores, and jobs. Native in Loom.' },
 ];
 
 export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
@@ -193,6 +198,7 @@ export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
   'Azure Databricks',
   'Azure Data Factory',
   'Azure Data Lake Analytics',
+  'Azure AI Foundry',
 ];
 
 export function itemsByCategory(category: WorkloadCategory): FabricItemType[] {

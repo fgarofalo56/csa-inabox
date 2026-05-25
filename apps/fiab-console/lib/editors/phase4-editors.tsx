@@ -2,13 +2,21 @@
 
 /**
  * Phase 4 editors — Data Science, APIs / Functions, Fabric IQ.
+ *
+ * MlModelEditor and MlExperimentEditor are wired live to the AI Foundry hub
+ * (Microsoft.MachineLearningServices/workspaces) via the BFF:
+ *   GET /api/items/ml-model/[id]      → model + versions
+ *   GET /api/items/ml-experiment/[id] → job OR experiment grouping of runs
+ * No mock data; errors surface in MessageBar.
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea,
+  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  MessageBar, MessageBarBody, MessageBarTitle,
+  Tree, TreeItem, TreeItemLayout,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -35,50 +43,291 @@ const useStyles = makeStyles({
 // ----- ML Model -----
 const ML_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
-    { label: 'Versions', actions: [{ label: 'Register new version' }, { label: 'Compare versions' }] },
+    { label: 'Versions', actions: [{ label: 'Reload' }, { label: 'Compare versions' }] },
     { label: 'Apply', actions: [{ label: 'Apply (PREDICT)' }, { label: 'Real-time endpoint' }] },
   ]},
 ];
+
+interface ModelSummary {
+  id: string; name: string; description?: string; latestVersion?: string;
+  tags?: Record<string, string>; properties?: Record<string, string>;
+}
+interface ModelVersion {
+  id: string; name: string; version: string; description?: string;
+  modelType?: string; modelUri?: string; createdAt?: string;
+  tags?: Record<string, string>; properties?: Record<string, string>;
+}
+
 export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [model, setModel] = useState<ModelSummary | null>(null);
+  const [versions, setVersions] = useState<ModelVersion[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch(`/api/items/ml-model/${encodeURIComponent(id)}`);
+      const j = await r.json();
+      if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setLoading(false); return; }
+      setModel(j.model);
+      setVersions(j.versions || []);
+      setSelected(j.versions?.[0]?.version || null);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+  useEffect(() => { load(); }, [load]);
+
+  const current = versions.find((v) => v.version === selected) || versions[0];
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ML_RIBBON} main={
-      <div className={s.pad}>
-        <Subtitle2>Versions</Subtitle2>
-        <Table aria-label="Model versions">
-          <TableHeader><TableRow><TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Created</TableHeaderCell><TableHeaderCell>Run</TableHeaderCell><TableHeaderCell>ROC AUC</TableHeaderCell><TableHeaderCell>Stage</TableHeaderCell></TableRow></TableHeader>
-          <TableBody>
-            {[['3', '2026-05-22', 'run-9f2a', '0.91', 'Production'], ['2', '2026-04-30', 'run-7c11', '0.88', 'Staging'], ['1', '2026-04-12', 'run-3b04', '0.83', 'Archived']].map((r) =>
-              <TableRow key={r[0]}>{r.map((c, i) => <TableCell key={i}>{c}</TableCell>)}</TableRow>)}
-          </TableBody>
-        </Table>
-      </div>
-    } />
+    <ItemEditorChrome
+      item={item}
+      id={id}
+      ribbon={ML_RIBBON}
+      leftPanel={
+        <div style={{ padding: 8 }}>
+          <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>
+            Versions ({versions.length})
+          </Caption1>
+          {versions.length === 0 && !loading && (
+            <Body1 style={{ padding: 8, color: tokens.colorNeutralForeground3 }}>No versions registered.</Body1>
+          )}
+          <Tree aria-label="Model versions">
+            {versions.map((v) => (
+              <TreeItem
+                itemType="leaf"
+                key={v.version}
+                onClick={() => setSelected(v.version)}
+                style={{ background: v.version === selected ? tokens.colorNeutralBackground2 : undefined }}
+              >
+                <TreeItemLayout>
+                  v{v.version}
+                  {model?.latestVersion === v.version && (
+                    <Badge appearance="tint" color="brand" style={{ marginLeft: 8 }}>latest</Badge>
+                  )}
+                </TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          {loading && <Spinner size="small" label="Loading model…" labelPosition="after" />}
+          {error && (
+            <MessageBar intent="error">
+              <MessageBarBody><MessageBarTitle>Load failed</MessageBarTitle>{error}</MessageBarBody>
+            </MessageBar>
+          )}
+          {model && !loading && !error && (
+            <>
+              <Subtitle2>{model.name}</Subtitle2>
+              {model.description && <Body1>{model.description}</Body1>}
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <Badge appearance="tint">Latest: v{model.latestVersion || '—'}</Badge>
+                <Badge appearance="tint">{versions.length} version(s)</Badge>
+              </div>
+              <Subtitle2 style={{ marginTop: 8 }}>Versions</Subtitle2>
+              <Table aria-label="Model versions" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Version</TableHeaderCell>
+                  <TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>Created</TableHeaderCell>
+                  <TableHeaderCell>URI</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {versions.map((v) => (
+                    <TableRow key={v.version}>
+                      <TableCell><strong>v{v.version}</strong></TableCell>
+                      <TableCell>{v.modelType || '—'}</TableCell>
+                      <TableCell>{v.createdAt || '—'}</TableCell>
+                      <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{v.modelUri || '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {current && (
+                <>
+                  <Subtitle2 style={{ marginTop: 8 }}>Selected: v{current.version}</Subtitle2>
+                  {current.description && <Body1>{current.description}</Body1>}
+                  {current.tags && Object.keys(current.tags).length > 0 && (
+                    <div>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Tags</Caption1>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                        {Object.entries(current.tags).map(([k, v]) => (
+                          <Badge key={k} appearance="outline">{k}={String(v)}</Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      }
+    />
   );
 }
 
 // ----- ML Experiment -----
 const MLE_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
-    { label: 'Runs', actions: [{ label: 'Compare' }, { label: 'Register model' }, { label: 'Delete' }] },
+    { label: 'Runs', actions: [{ label: 'Reload' }, { label: 'Register model' }] },
     { label: 'Charts', actions: [{ label: 'Parallel coordinates' }, { label: 'Scatter' }] },
   ]},
 ];
+
+interface FoundryJob {
+  id: string; name: string; displayName?: string; jobType?: string;
+  experimentName?: string; status?: string; startTimeUtc?: string; endTimeUtc?: string;
+  computeId?: string; description?: string;
+  tags?: Record<string, string>; properties?: Record<string, string>;
+}
+
 export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [kind, setKind] = useState<'job' | 'experiment' | null>(null);
+  const [job, setJob] = useState<FoundryJob | null>(null);
+  const [runs, setRuns] = useState<FoundryJob[]>([]);
+  const [expName, setExpName] = useState<string>('');
+  const [selectedRun, setSelectedRun] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}`);
+      const j = await r.json();
+      if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setLoading(false); return; }
+      setKind(j.kind);
+      if (j.kind === 'job') {
+        setJob(j.job); setRuns([j.job]); setSelectedRun(j.job?.name || null);
+      } else {
+        setJob(null); setRuns(j.runs || []); setExpName(j.experimentName || '');
+        setSelectedRun(j.runs?.[0]?.name || null);
+      }
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+  useEffect(() => { load(); }, [load]);
+
+  const current = runs.find((r) => r.name === selectedRun) || runs[0] || job;
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={MLE_RIBBON} main={
-      <div className={s.pad}>
-        <Subtitle2>Runs (12)</Subtitle2>
-        <Table aria-label="Experiment runs">
-          <TableHeader><TableRow><TableHeaderCell>Run ID</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>learning_rate</TableHeaderCell><TableHeaderCell>num_leaves</TableHeaderCell><TableHeaderCell>R²</TableHeaderCell></TableRow></TableHeader>
-          <TableBody>
-            {[['run-9f2a', 'FINISHED', '0.05', '127', '0.91'], ['run-7c11', 'FINISHED', '0.1', '63', '0.88'], ['run-3b04', 'FAILED', '0.2', '31', '—']].map((r) =>
-              <TableRow key={r[0]}>{r.map((c, i) => <TableCell key={i}>{c}</TableCell>)}</TableRow>)}
-          </TableBody>
-        </Table>
-      </div>
-    } />
+    <ItemEditorChrome
+      item={item}
+      id={id}
+      ribbon={MLE_RIBBON}
+      leftPanel={
+        <div style={{ padding: 8 }}>
+          <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>
+            Runs ({runs.length})
+          </Caption1>
+          <Tree aria-label="Runs">
+            {runs.map((r) => (
+              <TreeItem
+                itemType="leaf"
+                key={r.name}
+                onClick={() => setSelectedRun(r.name)}
+                style={{ background: r.name === selectedRun ? tokens.colorNeutralBackground2 : undefined }}
+              >
+                <TreeItemLayout>
+                  <span style={{ fontSize: 12 }}>{r.displayName || r.name}</span>
+                  {r.status && (
+                    <Badge
+                      appearance="tint"
+                      color={r.status === 'Completed' ? 'success' : r.status === 'Failed' ? 'danger' : 'informative'}
+                      style={{ marginLeft: 8 }}
+                    >
+                      {r.status}
+                    </Badge>
+                  )}
+                </TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          {loading && <Spinner size="small" label="Loading runs…" labelPosition="after" />}
+          {error && (
+            <MessageBar intent="error">
+              <MessageBarBody><MessageBarTitle>Load failed</MessageBarTitle>{error}</MessageBarBody>
+            </MessageBar>
+          )}
+          {!loading && !error && kind === 'experiment' && (
+            <>
+              <Subtitle2>Experiment: {expName || '(unnamed)'}</Subtitle2>
+              <Caption1>{runs.length} run(s)</Caption1>
+            </>
+          )}
+          {!loading && !error && kind === 'job' && job && (
+            <>
+              <Subtitle2>{job.displayName || job.name}</Subtitle2>
+              {job.experimentName && <Caption1>Experiment: {job.experimentName}</Caption1>}
+            </>
+          )}
+          {!loading && !error && runs.length > 0 && (
+            <>
+              <Table aria-label="Runs" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Run</TableHeaderCell>
+                  <TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Started</TableHeaderCell>
+                  <TableHeaderCell>Ended</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {runs.map((r) => (
+                    <TableRow key={r.name}>
+                      <TableCell><strong>{r.displayName || r.name}</strong></TableCell>
+                      <TableCell>{r.jobType || '—'}</TableCell>
+                      <TableCell>{r.status || '—'}</TableCell>
+                      <TableCell>{r.startTimeUtc || '—'}</TableCell>
+                      <TableCell>{r.endTimeUtc || '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              {current && (
+                <>
+                  <Subtitle2 style={{ marginTop: 8 }}>Selected run: {current.displayName || current.name}</Subtitle2>
+                  {current.description && <Body1>{current.description}</Body1>}
+                  {current.properties && Object.keys(current.properties).length > 0 && (
+                    <>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 8 }}>Properties / metrics</Caption1>
+                      <Table aria-label="Properties" size="small">
+                        <TableHeader><TableRow><TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell></TableRow></TableHeader>
+                        <TableBody>
+                          {Object.entries(current.properties).map(([k, v]) => (
+                            <TableRow key={k}>
+                              <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{k}</TableCell>
+                              <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{String(v)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </div>
+      }
+    />
   );
 }
 

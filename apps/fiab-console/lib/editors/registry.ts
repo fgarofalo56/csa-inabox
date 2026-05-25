@@ -60,13 +60,14 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
 
   // v1.5 — Native Azure-service editors (Synapse, Databricks, ADF, U-SQL)
   // v2.0 — Synapse Dedicated + Serverless are real-REST wired (TDS over PE + AAD MI)
+  // v2.1 — Synapse Spark pool + Pipeline + Warehouse alias real-REST wired (ARM + dev endpoint)
   'synapse-dedicated-sql-pool':  reg(() => import('./synapse-sql-editors'),    'SynapseDedicatedSqlPoolEditor'),
   'synapse-serverless-sql-pool': reg(() => import('./synapse-sql-editors'),    'SynapseServerlessSqlPoolEditor'),
   'synapse-spark-pool':          reg(() => import('./azure-services-editors'), 'SynapseSparkPoolEditor'),
   'synapse-pipeline':            reg(() => import('./azure-services-editors'), 'SynapsePipelineEditor'),
-  'databricks-notebook':         reg(() => import('./azure-services-editors'), 'DatabricksNotebookEditor'),
-  'databricks-job':              reg(() => import('./azure-services-editors'), 'DatabricksJobEditor'),
-  'databricks-cluster':          reg(() => import('./azure-services-editors'), 'DatabricksClusterEditor'),
+  'databricks-notebook':         reg(() => import('./databricks-editors'),     'DatabricksNotebookEditor'),
+  'databricks-job':              reg(() => import('./databricks-editors'),     'DatabricksJobEditor'),
+  'databricks-cluster':          reg(() => import('./databricks-editors'),     'DatabricksClusterEditor'),
   'databricks-sql-warehouse':    reg(() => import('./databricks-editors'),     'DatabricksSqlWarehouseEditor'),
   'adf-pipeline':                reg(() => import('./azure-services-editors'), 'AdfPipelineEditor'),
   'adf-dataset':                 reg(() => import('./azure-services-editors'), 'AdfDatasetEditor'),
@@ -78,6 +79,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'apim-product':                reg(() => import('./apim-editors'),           'ApimProductEditor'),
   'apim-policy':                 reg(() => import('./apim-editors'),           'ApimPolicyEditor'),
   'data-product':                reg(() => import('./apim-editors'),           'DataProductEditor'),
+
+  // v2.x — Azure AI Foundry hub (Microsoft.MachineLearningServices/workspaces kind=Hub)
+  'ai-foundry-hub':              reg(() => import('./foundry-hub-editor'),     'FoundryHubEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {
