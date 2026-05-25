@@ -18,6 +18,7 @@ import { ArrowLeft24Regular } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { PageShell } from '@/lib/components/page-shell';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
+import { WorkspaceSettingsDrawer } from '@/lib/components/workspace-settings-drawer';
 import {
   getWorkspace,
   listItems,
@@ -69,7 +70,12 @@ export default function WorkspaceDetailPage({ params }: { params: { id: string }
     <PageShell
       title={ws?.name ?? 'Workspace'}
       subtitle={ws?.description}
-      actions={ws ? <NewItemDialog workspaceId={ws.id} /> : undefined}
+      actions={ws ? (
+        <div style={{ display: 'flex', gap: 4 }}>
+          <WorkspaceSettingsDrawer workspace={ws} />
+          <NewItemDialog workspaceId={ws.id} />
+        </div>
+      ) : undefined}
     >
       <div className={styles.back}>
         <Link href="/workspaces">
