@@ -49,3 +49,34 @@ az security pricing create -n AI            --tier Standard
 Raw output is captured in `temp/v3-security/defender-pricing-after.tsv`.
 
 ---
+
+## Phase 2 — ACR Defender + container image scanning
+
+### Registry: `acrloomm56yejezt7bjo` (rg-csa-loom-admin-eastus2)
+
+- SKU: Premium
+- Public network: Disabled (PE-only)
+- Admin user: disabled (UAMI / AAD AcrPull/AcrPush only)
+- Zone redundancy: Enabled
+
+### Defender for Containers extensions (subscription-level)
+
+All five extensions now enabled on the `Containers` plan:
+
+| Extension | State | Purpose |
+|---|---|---|
+| ContainerRegistriesVulnerabilityAssessments | Enabled | Trivy-based image vuln scans (on push + weekly) |
+| AgentlessDiscoveryForKubernetes | Enabled | API-server posture |
+| AgentlessVmScanning | Enabled | Node-VM scanning |
+| ContainerSensor | Enabled | Runtime detection (CA env via DaemonSet) |
+| ContainerIntegrityContribution | **Newly enabled in v3** | Image signing / supply chain integrity signals |
+
+```bash
+az security pricing create -n Containers --tier Standard \
+  --extensions name=ContainerIntegrityContribution isEnabled=True
+```
+
+Image scanning is automatic for all images pushed to `acrloomm56yejezt7bjo`;
+findings flow into Defender for Cloud > Recommendations.
+
+---
