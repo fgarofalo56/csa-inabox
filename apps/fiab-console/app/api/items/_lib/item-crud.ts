@@ -1,0 +1,144 @@
+/**
+ * Shared CRUD helpers for the Phase 2 misc item routes (spark-job-definition,
+ * environment, copy-job, dbt-job). Wraps the Cosmos `items` container with
+ * tenant-aware reads/writes so each per-type route stays tiny.
+ *
+ * Underscore-prefixed folder — Next.js does not treat this as a route.
+ */
+
+import { NextResponse } from 'next/server';
+import type { SessionPayload } from '@/lib/auth/session';
+import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+
+export function jerr(error: string, status = 500, code?: string) {
+  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+}
+
+/** Load an item by id, verifying the caller's tenant owns the parent workspace. */
+export async function loadOwnedItem(
+  itemId: string,
+  itemType: string,
+  tenantId: string,
+): Promise<WorkspaceItem | null> {
+  const items = await itemsContainer();
+  const { resources } = await items.items
+    .query<WorkspaceItem>({
+      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
+      parameters: [
+        { name: '@id', value: itemId },
+        { name: '@t', value: itemType },
+      ],
+    })
+    .fetchAll();
+  const item = resources[0];
+  if (!item) return null;
+  const ws = await workspacesContainer();
+  try {
+    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
+    if (!resource || resource.tenantId !== tenantId) return null;
+  } catch (e: any) {
+    if (e?.code === 404) return null;
+    throw e;
+  }
+  return item;
+}
+
+/** List all items of a type owned by caller's tenant. */
+export async function listOwnedItems(itemType: string, tenantId: string): Promise<WorkspaceItem[]> {
+  const items = await itemsContainer();
+  const { resources } = await items.items
+    .query<WorkspaceItem>({
+      query: 'SELECT * FROM c WHERE c.itemType = @t',
+      parameters: [{ name: '@t', value: itemType }],
+    })
+    .fetchAll();
+  if (resources.length === 0) return [];
+  const ws = await workspacesContainer();
+  const owned: WorkspaceItem[] = [];
+  // Resolve unique workspace ownership in one pass.
+  const wsCache = new Map<string, boolean>();
+  for (const it of resources) {
+    let isOwned = wsCache.get(it.workspaceId);
+    if (isOwned === undefined) {
+      try {
+        const { resource } = await ws.item(it.workspaceId, tenantId).read<Workspace>();
+        isOwned = !!resource && resource.tenantId === tenantId;
+      } catch { isOwned = false; }
+      wsCache.set(it.workspaceId, isOwned);
+    }
+    if (isOwned) owned.push(it);
+  }
+  return owned;
+}
+
+/** Create a new item under a tenant-owned workspace. */
+export async function createOwnedItem(
+  session: SessionPayload,
+  itemType: string,
+  body: { workspaceId?: string; displayName?: string; description?: string; state?: Record<string, unknown> },
+): Promise<{ ok: true; item: WorkspaceItem } | { ok: false; status: number; error: string }> {
+  const { workspaceId, displayName, description, state } = body || {};
+  if (!workspaceId || !displayName) {
+    return { ok: false, status: 400, error: 'workspaceId and displayName are required' };
+  }
+  const ws = await workspacesContainer();
+  let workspace: Workspace | undefined;
+  try {
+    const { resource } = await ws.item(workspaceId, session.claims.oid).read<Workspace>();
+    workspace = resource;
+  } catch (e: any) {
+    if (e?.code !== 404) throw e;
+  }
+  if (!workspace || workspace.tenantId !== session.claims.oid) {
+    return { ok: false, status: 404, error: 'workspace not found' };
+  }
+  const now = new Date().toISOString();
+  const item: WorkspaceItem = {
+    id: crypto.randomUUID(),
+    workspaceId,
+    itemType,
+    displayName: String(displayName).trim(),
+    description: description?.trim() || undefined,
+    state: state && typeof state === 'object' ? state : {},
+    createdBy: session.claims.upn || session.claims.email || session.claims.oid,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const items = await itemsContainer();
+  const { resource } = await items.items.create<WorkspaceItem>(item);
+  return { ok: true, item: resource! };
+}
+
+/** Replace state on an owned item. */
+export async function updateOwnedItem(
+  itemId: string,
+  itemType: string,
+  tenantId: string,
+  patch: { displayName?: string; description?: string; state?: Record<string, unknown> },
+): Promise<WorkspaceItem | null> {
+  const current = await loadOwnedItem(itemId, itemType, tenantId);
+  if (!current) return null;
+  const next: WorkspaceItem = {
+    ...current,
+    displayName: patch.displayName?.trim() || current.displayName,
+    description: 'description' in patch ? (patch.description?.trim() || undefined) : current.description,
+    state: patch.state && typeof patch.state === 'object' ? patch.state : current.state,
+    updatedAt: new Date().toISOString(),
+  };
+  const items = await itemsContainer();
+  const { resource } = await items.item(current.id, current.workspaceId).replace<WorkspaceItem>(next);
+  return resource!;
+}
+
+export async function deleteOwnedItem(
+  itemId: string,
+  itemType: string,
+  tenantId: string,
+): Promise<boolean> {
+  const current = await loadOwnedItem(itemId, itemType, tenantId);
+  if (!current) return false;
+  const items = await itemsContainer();
+  await items.item(current.id, current.workspaceId).delete();
+  return true;
+}
