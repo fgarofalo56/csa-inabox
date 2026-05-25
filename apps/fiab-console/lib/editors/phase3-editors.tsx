@@ -5,16 +5,17 @@
  * Each follows the per-item anatomy from the inventory.
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input,
+  Subtitle2, Body1, Caption1, Badge, Button, Input, Spinner,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
+  MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Database20Regular, DocumentTable20Regular, Play20Regular,
+  Database20Regular, DocumentTable20Regular, Play20Regular, Folder20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -256,41 +257,180 @@ const WH_RIBBON: RibbonTab[] = [
     { label: 'Manage', actions: [{ label: 'Permissions' }, { label: 'Source control' }] },
   ]},
 ];
-const SAMPLE_SQL = `SELECT TOP 100\n  c.CustomerName,\n  SUM(o.Amount) AS TotalRevenue\nFROM dbo.Orders o\nJOIN dbo.Customers c ON c.CustomerID = o.CustomerID\nWHERE o.OrderDate >= DATEADD(MONTH, -3, GETDATE())\nGROUP BY c.CustomerName\nORDER BY TotalRevenue DESC;`;
+interface WHQueryResult {
+  ok: boolean;
+  columns?: string[];
+  rows?: unknown[][];
+  rowCount?: number;
+  executionMs?: number;
+  truncated?: boolean;
+  error?: string;
+  state?: string;
+  code?: string;
+  sqlNumber?: number;
+  warehouse?: string;
+}
+interface WHSchemaResp {
+  ok: boolean;
+  state?: string;
+  sku?: string;
+  warehouse?: string;
+  message?: string;
+  schemas?: Record<string, { table: string; rows: number }[]>;
+  error?: string;
+}
+
+const SAMPLE_SQL = `-- Fabric Warehouse (Loom-Gov: backed by Synapse Dedicated SQL pool)\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, SYSDATETIMEOFFSET() AS now_utc;`;
+
+function formatCell(v: unknown): string {
+  if (v === null || v === undefined) return 'NULL';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
 export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const [sqlText, setSqlText] = useState(SAMPLE_SQL);
+  const [schema, setSchema] = useState<WHSchemaResp | null>(null);
+  const [result, setResult] = useState<WHQueryResult | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const loadSchema = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/schema`);
+      const j = (await r.json()) as WHSchemaResp;
+      setSchema(j);
+    } catch (e: any) {
+      setSchema({ ok: false, error: e?.message || String(e) });
+    }
+  }, [id]);
+
+  useEffect(() => { loadSchema(); }, [loadSchema]);
+
+  const run = useCallback(async () => {
+    setLoading(true); setResult(null);
+    try {
+      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sql: sqlText }),
+      });
+      const j = (await r.json()) as WHQueryResult;
+      setResult(j);
+      if (r.status === 409 && j.state) loadSchema();
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    } finally { setLoading(false); }
+  }, [id, sqlText, loadSchema]);
+
+  const schemaEntries = Object.entries(schema?.schemas || {});
+  const ready = schema?.ok === true;
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={WH_RIBBON}
       leftPanel={
-        <Tree aria-label="Warehouse explorer" defaultOpenItems={['schemas']}>
-          <TreeItem itemType="branch" value="schemas">
-            <TreeItemLayout iconBefore={<Database20Regular />}>Schemas (2)</TreeItemLayout>
-            <Tree>
-              {['dbo.Orders', 'dbo.Customers', 'dbo.Products', 'fin.Ledger'].map((t) =>
-                <TreeItem key={t} itemType="leaf"><TreeItemLayout iconBefore={<DocumentTable20Regular />}>{t}</TreeItemLayout></TreeItem>)}
-            </Tree>
-          </TreeItem>
-          <TreeItem itemType="branch" value="sp"><TreeItemLayout>Stored procedures (12)</TreeItemLayout></TreeItem>
-          <TreeItem itemType="branch" value="fn"><TreeItemLayout>Functions (4)</TreeItemLayout></TreeItem>
-        </Tree>
+        <div style={{ padding: 8 }}>
+          <Tree aria-label="Warehouse explorer" defaultOpenItems={['schemas']}>
+            <TreeItem itemType="branch" value="schemas">
+              <TreeItemLayout iconBefore={<Database20Regular />}>
+                Schemas ({schemaEntries.length})
+              </TreeItemLayout>
+              <Tree>
+                {!ready && (
+                  <TreeItem itemType="leaf" value="not-ready">
+                    <TreeItemLayout>{schema?.message || 'Warehouse compute offline'}</TreeItemLayout>
+                  </TreeItem>
+                )}
+                {ready && schemaEntries.length === 0 && (
+                  <TreeItem itemType="leaf" value="empty">
+                    <TreeItemLayout>No user tables yet. Create with T-SQL.</TreeItemLayout>
+                  </TreeItem>
+                )}
+                {schemaEntries.map(([schemaName, tables]) => (
+                  <TreeItem key={schemaName} itemType="branch" value={`s-${schemaName}`}>
+                    <TreeItemLayout iconBefore={<Folder20Regular />}>{schemaName} ({tables.length})</TreeItemLayout>
+                    <Tree>
+                      {tables.map((t) => (
+                        <TreeItem
+                          key={t.table}
+                          itemType="leaf"
+                          value={`t-${schemaName}.${t.table}`}
+                          onClick={() => setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`)}
+                        >
+                          <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
+                            {t.table} <Caption1>· {t.rows.toLocaleString()} rows</Caption1>
+                          </TreeItemLayout>
+                        </TreeItem>
+                      ))}
+                    </Tree>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+          </Tree>
+        </div>
       }
       main={
         <div className={s.pad}>
           <div className={s.toolbar}>
-            <Button appearance="primary" icon={<Play20Regular />}>Run</Button>
-            <Badge appearance="outline">Query 1</Badge>
-            <Badge appearance="outline">Query 2</Badge>
+            <Badge appearance="filled" color={ready ? 'success' : 'warning'}>{schema?.state || 'Unknown'}</Badge>
+            <Badge appearance="outline">{schema?.warehouse || 'warehouse —'}</Badge>
+            <Badge appearance="outline">{schema?.sku || 'DW—'}</Badge>
+            <Button appearance="outline" onClick={loadSchema}>Refresh</Button>
+            <Button appearance="primary" icon={<Play20Regular />} disabled={loading || !ready} onClick={run} style={{ marginLeft: 'auto' }}>Run</Button>
           </div>
-          <textarea className={s.monaco} defaultValue={SAMPLE_SQL} spellCheck={false} aria-label="T-SQL editor" />
-          <Subtitle2>Results</Subtitle2>
-          <Table aria-label="Query results">
-            <TableHeader><TableRow><TableHeaderCell>CustomerName</TableHeaderCell><TableHeaderCell>TotalRevenue</TableHeaderCell></TableRow></TableHeader>
-            <TableBody>
-              {[['Contoso Logistics', '$248,510'], ['Fabrikam Foods', '$192,180'], ['Northwind Traders', '$144,605']].map(([a, b]) =>
-                <TableRow key={a}><TableCell>{a}</TableCell><TableCell>{b}</TableCell></TableRow>)}
-            </TableBody>
-          </Table>
-          <Caption1>3 rows · 124 ms · 0 errors</Caption1>
+          {schema && !ready && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>Warehouse compute is {schema.state}</MessageBarTitle>
+                {schema.message || 'Open the Synapse Dedicated SQL pool editor and click Resume.'}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          <textarea
+            className={s.monaco}
+            spellCheck={false}
+            value={sqlText}
+            onChange={(e) => setSqlText(e.target.value)}
+            aria-label="Warehouse T-SQL editor"
+          />
+          {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}
+          {result && !result.ok && (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                <MessageBarTitle>Query failed</MessageBarTitle>
+                {result.error || 'Unknown error'} {result.code && <Caption1>· {result.code}</Caption1>}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {result?.ok && (
+            <>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <Badge appearance="filled" color="success">{result.rowCount ?? result.rows?.length ?? 0} rows</Badge>
+                <Caption1>· {result.executionMs} ms</Caption1>
+                {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
+              </div>
+              {(result.rows?.length ?? 0) === 0 ? (
+                <Caption1>Query returned no rows.</Caption1>
+              ) : (
+                <div style={{ overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+                  <Table aria-label="Query results" size="small">
+                    <TableHeader><TableRow>
+                      {(result.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {(result.rows || []).map((row, i) => (
+                        <TableRow key={i}>
+                          {(result.columns || []).map((_, j) => (
+                            <TableCell key={j} style={{ fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' }}>{formatCell(row[j])}</TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
+          )}
         </div>
       }
     />

@@ -10,15 +10,19 @@
  * Fluent UI structure.
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Dropdown, Option, Textarea,
-  Tab, TabList,
+  Tab, TabList, Spinner,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
+  MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Database20Regular, DocumentTable20Regular, Play20Regular, Server20Regular } from '@fluentui/react-icons';
+import {
+  Database20Regular, DocumentTable20Regular, Play20Regular, Server20Regular,
+  Pause20Regular, ArrowSync20Regular, Save20Regular,
+} from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -131,24 +135,230 @@ const SYN_SPARK_RIBBON: RibbonTab[] = [
     { label: 'Run', actions: [{ label: 'Open notebook' }, { label: 'Submit Spark job' }] },
   ]},
 ];
+interface SparkPoolDTO {
+  name: string;
+  properties: {
+    nodeSize?: string;
+    sparkVersion?: string;
+    nodeCount?: number;
+    provisioningState?: string;
+    autoScale?: { enabled: boolean; minNodeCount: number; maxNodeCount: number };
+    autoPause?: { enabled: boolean; delayInMinutes: number };
+  };
+}
+interface SparkBatchDTO {
+  id: number;
+  name?: string;
+  state?: string;
+  result?: string;
+  appId?: string | null;
+  submitterName?: string;
+}
+
 export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const [pools, setPools] = useState<SparkPoolDTO[]>([]);
+  const [selected, setSelected] = useState<string>(id);
+  const [pool, setPool] = useState<SparkPoolDTO | null>(null);
+  const [batches, setBatches] = useState<SparkBatchDTO[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState('config');
+
+  // submit-batch form
+  const [jobName, setJobName] = useState('loom-smoke');
+  const [jobFile, setJobFile] = useState('abfss://jobs@<storage>.dfs.core.windows.net/smoke.py');
+  const [jobClass, setJobClass] = useState('');
+  const [jobArgs, setJobArgs] = useState('');
+
+  const loadPools = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch('/api/items/synapse-spark-pool/list');
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'list failed');
+      setPools(j.pools || []);
+      if (j.pools?.length && !j.pools.find((p: SparkPoolDTO) => p.name === selected)) {
+        setSelected(j.pools[0].name);
+      }
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [selected]);
+
+  const loadPool = useCallback(async (name: string) => {
+    setError(null);
+    try {
+      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(name)}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'get failed');
+      setPool(j.pool);
+    } catch (e: any) { setError(e?.message || String(e)); }
+  }, []);
+
+  const loadBatches = useCallback(async (name: string) => {
+    try {
+      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(name)}/runs?size=20`);
+      const j = await r.json();
+      if (!j.ok) { setBatches([]); return; }
+      setBatches(j.sessions || []);
+    } catch { setBatches([]); }
+  }, []);
+
+  useEffect(() => { loadPools(); }, [loadPools]);
+  useEffect(() => { if (selected) { loadPool(selected); loadBatches(selected); } }, [selected, loadPool, loadBatches]);
+
+  const submit = useCallback(async () => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/submit`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: jobName,
+          file: jobFile,
+          className: jobClass || undefined,
+          args: jobArgs ? jobArgs.split(/\s+/).filter(Boolean) : undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'submit failed');
+      await loadBatches(selected);
+      setTab('runs');
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, jobName, jobFile, jobClass, jobArgs, loadBatches]);
+
+  const setAutoPause = useCallback(async (action: 'pause' | 'resume') => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/state`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `${action} failed`);
+      await loadPool(selected);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, loadPool]);
+
+  const state = pool?.properties.provisioningState || 'Unknown';
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={SYN_SPARK_RIBBON} main={
-      <div className={s.form}>
-        <Subtitle2>Spark pool configuration</Subtitle2>
-        <div className={s.row}>
-          <div className={s.field}><Caption1>Node size</Caption1><Dropdown defaultValue="Medium (8 vCores, 64 GB)" defaultSelectedOptions={['Medium (8 vCores, 64 GB)']}><Option>Small (4/32)</Option><Option>Medium (8 vCores, 64 GB)</Option><Option>Large (16/128)</Option></Dropdown></div>
-          <div className={s.field}><Caption1>Autoscale</Caption1><Dropdown defaultValue="3 — 10 nodes" defaultSelectedOptions={['3 — 10 nodes']}><Option>3 — 10 nodes</Option><Option>5 — 30 nodes</Option></Dropdown></div>
+    <ItemEditorChrome item={item} id={id} ribbon={SYN_SPARK_RIBBON}
+      leftPanel={
+        <div style={{ padding: 8 }}>
+          <Tree aria-label="Spark pools" defaultOpenItems={['pools']}>
+            <TreeItem itemType="branch" value="pools">
+              <TreeItemLayout iconBefore={<Server20Regular />}>Pools ({pools.length})</TreeItemLayout>
+              <Tree>
+                {pools.map((p) => (
+                  <TreeItem key={p.name} itemType="leaf" value={`p-${p.name}`} onClick={() => setSelected(p.name)}>
+                    <TreeItemLayout iconBefore={<Server20Regular />}>
+                      {p.name} {selected === p.name && '·'}
+                    </TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+          </Tree>
         </div>
-        <div className={s.row}>
-          <div className={s.field}><Caption1>Spark version</Caption1><Dropdown defaultValue="Spark 3.4 / Scala 2.12" defaultSelectedOptions={['Spark 3.4 / Scala 2.12']}><Option>Spark 3.4 / Scala 2.12</Option></Dropdown></div>
-          <div className={s.field}><Caption1>Auto-pause</Caption1><Input defaultValue="15 minutes" /></div>
+      }
+      main={
+        <div className={s.pad}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <Badge appearance="filled" color={state === 'Succeeded' ? 'success' : state === 'Provisioning' ? 'warning' : 'informative'}>{state}</Badge>
+            <Badge appearance="outline">{pool?.properties.nodeSize || '—'}</Badge>
+            <Badge appearance="outline">{pool?.properties.sparkVersion || 'Spark —'}</Badge>
+            <Badge appearance="outline">
+              {pool?.properties.autoScale?.enabled
+                ? `${pool.properties.autoScale.minNodeCount}-${pool.properties.autoScale.maxNodeCount} nodes`
+                : `${pool?.properties.nodeCount ?? 0} nodes`}
+            </Badge>
+            <Button appearance="outline" icon={<Pause20Regular />} disabled={busy || !selected} onClick={() => setAutoPause('pause')}>Force pause</Button>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={busy || !selected} onClick={() => setAutoPause('resume')}>Reset auto-pause</Button>
+            <Button appearance="outline" onClick={() => { if (selected) { loadPool(selected); loadBatches(selected); } }} style={{ marginLeft: 'auto' }}>Refresh</Button>
+          </div>
+          {loading && <Spinner size="tiny" label="Loading Spark pools…" labelPosition="after" />}
+          {error && (
+            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Spark API error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+          )}
+          <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
+              <Tab value="config">Configuration</Tab>
+              <Tab value="submit">Submit batch job</Tab>
+              <Tab value="runs">Recent batches ({batches.length})</Tab>
+            </TabList>
+          </div>
+          {tab === 'config' && (
+            <div className={s.form}>
+              <div className={s.row}>
+                <div className={s.field}><Caption1>Pool name</Caption1><Input value={pool?.name || ''} readOnly /></div>
+                <div className={s.field}><Caption1>Node size</Caption1><Input value={pool?.properties.nodeSize || ''} readOnly /></div>
+              </div>
+              <div className={s.row}>
+                <div className={s.field}><Caption1>Spark version</Caption1><Input value={pool?.properties.sparkVersion || ''} readOnly /></div>
+                <div className={s.field}><Caption1>Auto-pause (min)</Caption1><Input value={String(pool?.properties.autoPause?.delayInMinutes ?? '—')} readOnly /></div>
+              </div>
+              <div className={s.row}>
+                <div className={s.field}><Caption1>Autoscale min</Caption1><Input value={String(pool?.properties.autoScale?.minNodeCount ?? '—')} readOnly /></div>
+                <div className={s.field}><Caption1>Autoscale max</Caption1><Input value={String(pool?.properties.autoScale?.maxNodeCount ?? '—')} readOnly /></div>
+              </div>
+              <Caption1>Edit via Synapse Studio for now; v2.2 wires inline PUT.</Caption1>
+            </div>
+          )}
+          {tab === 'submit' && (
+            <div className={s.form}>
+              <div className={s.field}><Caption1>Job name</Caption1><Input value={jobName} onChange={(_, d) => setJobName(d.value)} /></div>
+              <div className={s.field}><Caption1>File (abfss:// or wasbs:// URI to .py / .jar)</Caption1><Input value={jobFile} onChange={(_, d) => setJobFile(d.value)} /></div>
+              <div className={s.row}>
+                <div className={s.field}><Caption1>Main class (JAR only)</Caption1><Input value={jobClass} onChange={(_, d) => setJobClass(d.value)} placeholder="com.example.Main" /></div>
+                <div className={s.field}><Caption1>Args (space-separated)</Caption1><Input value={jobArgs} onChange={(_, d) => setJobArgs(d.value)} /></div>
+              </div>
+              <Button appearance="primary" icon={<Play20Regular />} disabled={busy || !selected} onClick={submit}>
+                {busy ? 'Submitting…' : 'Submit batch'}
+              </Button>
+            </div>
+          )}
+          {tab === 'runs' && (
+            <div style={{ overflow: 'auto' }}>
+              <Table aria-label="Recent batches" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Id</TableHeaderCell>
+                  <TableHeaderCell>Name</TableHeaderCell>
+                  <TableHeaderCell>State</TableHeaderCell>
+                  <TableHeaderCell>Result</TableHeaderCell>
+                  <TableHeaderCell>App</TableHeaderCell>
+                  <TableHeaderCell>Submitter</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {batches.length === 0 && (
+                    <TableRow><TableCell colSpan={6}><Caption1>No recent batches.</Caption1></TableCell></TableRow>
+                  )}
+                  {batches.map((b) => (
+                    <TableRow key={b.id}>
+                      <TableCell>{b.id}</TableCell>
+                      <TableCell>{b.name || '—'}</TableCell>
+                      <TableCell>{b.state || '—'}</TableCell>
+                      <TableCell>
+                        {b.result && (
+                          <Badge appearance="filled" color={b.result === 'Succeeded' ? 'success' : b.result === 'Failed' ? 'danger' : 'informative'}>{b.result}</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell><code>{b.appId || '—'}</code></TableCell>
+                      <TableCell>{b.submitterName || '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </div>
-        <Subtitle2 style={{ marginTop: 8 }}>Recent sessions</Subtitle2>
-        <Caption1>3 active sessions · 12 sessions in last 24 h · avg duration 18 min</Caption1>
-      </div>
-    } />
+      }
+    />
   );
 }
 
@@ -161,21 +371,185 @@ const SYN_PIPE_RIBBON: RibbonTab[] = [
     { label: 'Run', actions: [{ label: 'Run' }, { label: 'Debug' }, { label: 'Triggers' }] },
   ]},
 ];
+interface PipelineDTO {
+  name: string;
+  properties: { activities?: unknown[]; description?: string; parameters?: Record<string, { type: string; defaultValue?: unknown }> };
+}
+interface PipelineRunDTO {
+  runId: string;
+  pipelineName: string;
+  status?: string;
+  runStart?: string;
+  runEnd?: string;
+  durationInMs?: number;
+  message?: string;
+  invokedBy?: { name?: string; invokedByType?: string };
+}
+
 export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const [pipelines, setPipelines] = useState<PipelineDTO[]>([]);
+  const [selected, setSelected] = useState<string>(id);
+  const [spec, setSpec] = useState<string>('');
+  const [origSpec, setOrigSpec] = useState<string>('');
+  const [runs, setRuns] = useState<PipelineRunDTO[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<'json' | 'runs'>('json');
+
+  const loadList = useCallback(async () => {
+    setError(null);
+    try {
+      const r = await fetch('/api/items/synapse-pipeline/list');
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'list failed');
+      setPipelines(j.pipelines || []);
+      if (j.pipelines?.length && !j.pipelines.find((p: PipelineDTO) => p.name === selected)) {
+        setSelected(j.pipelines[0].name);
+      }
+    } catch (e: any) { setError(e?.message || String(e)); }
+  }, [selected]);
+
+  const loadPipeline = useCallback(async (name: string) => {
+    setError(null);
+    try {
+      const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(name)}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'get failed');
+      const txt = JSON.stringify(j.pipeline, null, 2);
+      setSpec(txt); setOrigSpec(txt);
+    } catch (e: any) { setError(e?.message || String(e)); }
+  }, []);
+
+  const loadRuns = useCallback(async (name: string) => {
+    try {
+      const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(name)}/runs`);
+      const j = await r.json();
+      if (!j.ok) { setRuns([]); return; }
+      setRuns(j.runs || []);
+    } catch { setRuns([]); }
+  }, []);
+
+  useEffect(() => { loadList(); }, [loadList]);
+  useEffect(() => { if (selected) { loadPipeline(selected); loadRuns(selected); } }, [selected, loadPipeline, loadRuns]);
+
+  const save = useCallback(async () => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const parsed = JSON.parse(spec);
+      const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(selected)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(parsed),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'save failed');
+      setOrigSpec(spec);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, spec]);
+
+  const run = useCallback(async () => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(selected)}/run`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ params: {} }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'run failed');
+      // give Synapse a beat to register, then refresh runs
+      setTimeout(() => loadRuns(selected), 1500);
+      setTab('runs');
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, loadRuns]);
+
+  const dirty = spec !== origSpec;
+  const activityCount = (() => {
+    try { return (JSON.parse(spec)?.properties?.activities || []).length; } catch { return 0; }
+  })();
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={SYN_PIPE_RIBBON} main={
-      <div className={s.pad}>
-        <Subtitle2>Synapse Integrate canvas</Subtitle2>
-        <Body1>Identical authoring experience to Synapse Studio. Drag activities onto the canvas, configure connections via linked services, and run on the integration runtime of your choice.</Body1>
-        <div className={s.cardGrid}>
-          {['Copy data', 'Notebook', 'Stored procedure', 'Mapping data flow', 'Foreach', 'If condition', 'Switch', 'Web activity', 'Wait', 'Set variable', 'Lookup', 'Get metadata'].map((a) => (
-            <div key={a} className={s.card}>{a}</div>
-          ))}
+    <ItemEditorChrome item={item} id={id} ribbon={SYN_PIPE_RIBBON}
+      leftPanel={
+        <div style={{ padding: 8 }}>
+          <Tree aria-label="Pipelines" defaultOpenItems={['p']}>
+            <TreeItem itemType="branch" value="p">
+              <TreeItemLayout iconBefore={<Server20Regular />}>Pipelines ({pipelines.length})</TreeItemLayout>
+              <Tree>
+                {pipelines.map((p) => (
+                  <TreeItem key={p.name} itemType="leaf" value={`pl-${p.name}`} onClick={() => setSelected(p.name)}>
+                    <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{p.name} {selected === p.name && '·'}</TreeItemLayout>
+                  </TreeItem>
+                ))}
+              </Tree>
+            </TreeItem>
+          </Tree>
         </div>
-        <Caption1>12 of 90+ activities shown. Full palette available in the canvas.</Caption1>
-      </div>
-    } />
+      }
+      main={
+        <div className={s.pad}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Badge appearance="filled" color="brand">{selected || '(no pipeline)'}</Badge>
+            <Badge appearance="outline">{activityCount} activities</Badge>
+            {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+            <Button appearance="outline" icon={<Save20Regular />} disabled={busy || !dirty} onClick={save}>Save</Button>
+            <Button appearance="primary" icon={<Play20Regular />} disabled={busy || !selected || dirty} onClick={run}>Run</Button>
+            <Button appearance="outline" onClick={() => { if (selected) { loadPipeline(selected); loadRuns(selected); } }} style={{ marginLeft: 'auto' }}>Refresh</Button>
+          </div>
+          {error && (
+            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Pipeline API error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+          )}
+          <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'json' | 'runs')}>
+              <Tab value="json">Spec (JSON)</Tab>
+              <Tab value="runs">Run history ({runs.length})</Tab>
+            </TabList>
+          </div>
+          {tab === 'json' && (
+            <textarea
+              className={s.monaco}
+              spellCheck={false}
+              value={spec}
+              onChange={(e) => setSpec(e.target.value)}
+              aria-label="Pipeline spec editor"
+              style={{ minHeight: 360 }}
+            />
+          )}
+          {tab === 'runs' && (
+            <div style={{ overflow: 'auto' }}>
+              <Table aria-label="Pipeline runs" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Run ID</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Start</TableHeaderCell>
+                  <TableHeaderCell>Duration</TableHeaderCell>
+                  <TableHeaderCell>Invoked by</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {runs.length === 0 && (
+                    <TableRow><TableCell colSpan={5}><Caption1>No runs in last 7 days.</Caption1></TableCell></TableRow>
+                  )}
+                  {runs.map((r) => (
+                    <TableRow key={r.runId}>
+                      <TableCell><code style={{ fontSize: 11 }}>{r.runId.slice(0, 8)}…</code></TableCell>
+                      <TableCell>
+                        <Badge appearance="filled" color={r.status === 'Succeeded' ? 'success' : r.status === 'Failed' ? 'danger' : r.status === 'InProgress' ? 'warning' : 'informative'}>{r.status || '—'}</Badge>
+                      </TableCell>
+                      <TableCell>{r.runStart ? new Date(r.runStart).toLocaleString() : '—'}</TableCell>
+                      <TableCell>{r.durationInMs != null ? `${(r.durationInMs / 1000).toFixed(1)}s` : '—'}</TableCell>
+                      <TableCell>{r.invokedBy?.name || '—'} <Caption1>({r.invokedBy?.invokedByType || '—'})</Caption1></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+      }
+    />
   );
 }
 
