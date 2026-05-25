@@ -92,6 +92,23 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'ai-search-index':             reg(() => import('./foundry-sub-editors'),    'AiSearchIndexEditor'),
   'compute':                     reg(() => import('./foundry-sub-editors'),    'ComputeEditor'),
   'dataset':                     reg(() => import('./foundry-sub-editors'),    'DatasetEditor'),
+
+  // v3 — Copilot Studio (Power Platform / Dataverse-backed agents)
+  'copilot-studio-agent':        reg(() => import('./copilot-studio-editors'), 'CopilotStudioAgentEditor'),
+  'copilot-studio-knowledge':    reg(() => import('./copilot-studio-editors'), 'CopilotKnowledgeEditor'),
+  'copilot-studio-topic':        reg(() => import('./copilot-studio-editors'), 'CopilotTopicEditor'),
+  'copilot-studio-action':       reg(() => import('./copilot-studio-editors'), 'CopilotActionEditor'),
+  'copilot-studio-channel':      reg(() => import('./copilot-studio-editors'), 'CopilotChannelEditor'),
+  'copilot-studio-analytics':    reg(() => import('./copilot-studio-editors'), 'CopilotAnalyticsEditor'),
+  'copilot-template-library':    reg(() => import('./copilot-studio-editors'), 'CopilotTemplateLibraryEditor'),
+
+  // v3 — Power Platform (real BAP / PowerApps / Flow / Dataverse REST)
+  'powerplatform-environment':   reg(() => import('./powerplatform-editors'),  'PowerPlatformEnvironmentEditor'),
+  'dataverse-table':             reg(() => import('./powerplatform-editors'),  'DataverseTableEditor'),
+  'power-app':                   reg(() => import('./powerplatform-editors'),  'PowerAppEditor'),
+  'power-automate-flow':         reg(() => import('./powerplatform-editors'),  'PowerAutomateFlowEditor'),
+  'power-page':                  reg(() => import('./powerplatform-editors'),  'PowerPageEditor'),
+  'ai-builder-model':            reg(() => import('./powerplatform-editors'),  'AiBuilderModelEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {
