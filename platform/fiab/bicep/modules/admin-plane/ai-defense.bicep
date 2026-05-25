@@ -17,7 +17,8 @@ param location string
 @description('Defender for AI native availability')
 param defenderForAIEnabled bool
 
-@description('Sentinel workspace ID (Log Analytics workspace ID)')
+@description('Sentinel workspace ID (Log Analytics workspace ID). Reserved for v3.x — current Defender for AI wiring resolves the workspace via lawName; the explicit ID will be used once the diagnostic-settings module switches to resourceId binding.')
+#disable-next-line no-unused-params
 param lawId string
 
 @description('Sentinel workspace name')

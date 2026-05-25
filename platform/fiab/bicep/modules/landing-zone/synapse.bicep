@@ -76,7 +76,8 @@ param dedicatedPoolSku string = 'DW100c'
 @description('Collation for the Dedicated pool.')
 param dedicatedPoolCollation string = 'SQL_Latin1_General_CP1_CI_AS'
 
-@description('Provision the Dedicated pool paused on creation (recommended — Loom resumes on demand from the editor).')
+@description('Provision the Dedicated pool paused on creation (recommended — Loom resumes on demand from the editor). Reserved for v3.x — current implementation always provisions in Active state then relies on the synapse-auto-pause module to put it to sleep; explicit start-paused wiring is deferred.')
+#disable-next-line no-unused-params
 param dedicatedPoolStartPaused bool = true
 
 @description('Dedicated pool backup storage redundancy. Some subscriptions block GRS via policy (Azure SQL Database Block Geo-redundant Backup Storage); LRS works everywhere.')

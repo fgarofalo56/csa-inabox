@@ -27,7 +27,8 @@ param atlasOnAksEnabled bool
 @description('Admin Entra group object ID')
 param adminEntraGroupId string
 
-@description('Private endpoint subnet ID')
+@description('Private endpoint subnet ID. Reserved for v3.x — Purview private endpoint wiring is deferred; today catalog uses managed endpoints.')
+#disable-next-line no-unused-params
 param privateEndpointSubnetId string
 
 @description('AKS cluster ID (required if atlasOnAksEnabled)')

@@ -14,7 +14,8 @@ param boundary string
 @allowed(['containerApps', 'aks'])
 param containerPlatform string
 
-@description('Functions host SKU')
+@description('Functions host SKU. Reserved for v3.x — declared so the orchestrator contract is stable while the Functions host wiring is deferred.')
+#disable-next-line no-unused-params
 param functionsHostSku string
 
 @description('APIM SKU')
@@ -26,7 +27,8 @@ param catalogPrimary string
 @description('Agent orchestrator')
 param agentOrchestrator string
 
-@description('Capacity SKU')
+@description('Capacity SKU. Reserved for v3.x — Fabric/Power BI capacity sizing parameter; wired downstream once landing-zone capacity module lands.')
+#disable-next-line no-unused-params
 param capacitySku string
 
 @description('Foundry portal enabled')
@@ -41,16 +43,20 @@ param purviewEnabled bool
 @description('Atlas on AKS enabled (IL5 only)')
 param atlasOnAksEnabled bool
 
-@description('OpenAI region for chat')
+@description('OpenAI region for chat. Reserved for v3.x — multi-region OpenAI deployment wiring (per-model regional pinning) is deferred.')
+#disable-next-line no-unused-params
 param openaiLocation string
 
-@description('OpenAI region for embeddings')
+@description('OpenAI region for embeddings. Reserved for v3.x — see openaiLocation note above.')
+#disable-next-line no-unused-params
 param openaiEmbeddingsLocation string
 
-@description('OpenAI chat model')
+@description('OpenAI chat model. Reserved for v3.x — explicit deployment-name pinning is handled inside ai-foundry.bicep today.')
+#disable-next-line no-unused-params
 param openaiChatModel string
 
-@description('OpenAI embeddings model')
+@description('OpenAI embeddings model. Reserved for v3.x — see openaiChatModel note above.')
+#disable-next-line no-unused-params
 param openaiEmbeddingsModel string
 
 @description('Key Vault Premium HSM isolated (IL5)')
