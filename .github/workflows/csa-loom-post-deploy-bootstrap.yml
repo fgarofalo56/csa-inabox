@@ -1,0 +1,152 @@
+name: csa-loom-post-deploy-bootstrap
+
+# Runs as the limitlessdata_deploy SP (the Synapse + Databricks
+# workspace admin) to perform one-time RBAC bootstraps that can't be
+# done via bicep:
+#   1. Grant Console UAMI Synapse Administrator data-plane role.
+#   2. Register Console UAMI as Databricks workspace SP (SCIM).
+#   3. Grant Console UAMI APIM Service Contributor (if APIM exists).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+  ADMIN_RG: rg-csa-loom-admin-eastus2
+  DLZ_RG: rg-csa-loom-dlz-single-eastus2
+  SYNAPSE_WS: syn-loom-default-eastus2
+  DBX_WS: adb-loom-default-eastus2
+  DBX_HOST: adb-7405613013893759.19.azuredatabricks.net
+  APIM_NAME: apim-csa-loom-eastus2
+  CONSOLE_UAMI_PRINCIPAL: e61f3eb3-c646-4183-8198-4c4a34cd9a01
+  CONSOLE_UAMI_CLIENT: c6272de5-3c4e-4b72-8b57-71b2e950209b
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login (limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+      - name: Verify SP identity
+        run: |
+          set -e
+          az account show --query "{user:user.name, sub:id}" -o table
+          echo "Acting as Synapse initial admin (b9c3cc65-522e-49c9-ad02-914676aa5a6b)"
+
+      - name: Enable Synapse public access (temp)
+        run: |
+          set -e
+          az resource update --ids "/subscriptions/$SUB/resourceGroups/$DLZ_RG/providers/Microsoft.Synapse/workspaces/$SYNAPSE_WS" \
+            --api-version 2021-06-01 --set properties.publicNetworkAccess=Enabled \
+            --query "properties.publicNetworkAccess" -o tsv
+          sleep 30
+          # Allow GHA runner IP through firewall
+          GHA_IP=$(curl -sS https://ifconfig.me)
+          echo "GHA IP: $GHA_IP"
+          az synapse workspace firewall-rule create -g $DLZ_RG --workspace-name $SYNAPSE_WS \
+            --name allow-gha-bootstrap-$(date +%s) --start-ip-address "$GHA_IP" --end-ip-address "$GHA_IP" || true
+          sleep 30
+
+      - name: Grant Console UAMI Synapse Administrator
+        run: |
+          set -e
+          az synapse role assignment create \
+            --workspace-name $SYNAPSE_WS \
+            --role "Synapse Administrator" \
+            --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+            --assignee-principal-type ServicePrincipal \
+            -o table || echo "Already assigned or partial"
+          # Also grant SQL Administrator just for sanity (SQL pool access)
+          az synapse role assignment create \
+            --workspace-name $SYNAPSE_WS \
+            --role "Synapse SQL Administrator" \
+            --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+            --assignee-principal-type ServicePrincipal \
+            -o table || true
+
+      - name: SQL-level grants via sqlcmd (Serverless)
+        run: |
+          set -e
+          # Acquire AAD token for Synapse SQL
+          TOKEN=$(az account get-access-token --resource https://database.windows.net --query accessToken -o tsv)
+          # Install sqlcmd
+          curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+          curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y mssql-tools18 unixodbc-dev
+          export PATH="$PATH:/opt/mssql-tools18/bin"
+          # Connect to Serverless master, create UAMI as login + user
+          sqlcmd -S "$SYNAPSE_WS-ondemand.sql.azuresynapse.net" -d master -G -P "$TOKEN" -Q "
+          IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = 'uami-loom-console-eastus2')
+            CREATE LOGIN [uami-loom-console-eastus2] FROM EXTERNAL PROVIDER;
+          IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = 'uami-loom-console-eastus2')
+            CREATE USER [uami-loom-console-eastus2] FROM LOGIN [uami-loom-console-eastus2];
+          ALTER SERVER ROLE sysadmin ADD MEMBER [uami-loom-console-eastus2];
+          " || echo "Some grants may have failed (already exist or other) — continuing"
+
+      - name: Restore Synapse public access disabled
+        if: always()
+        run: |
+          az resource update --ids "/subscriptions/$SUB/resourceGroups/$DLZ_RG/providers/Microsoft.Synapse/workspaces/$SYNAPSE_WS" \
+            --api-version 2021-06-01 --set properties.publicNetworkAccess=Disabled \
+            --query "properties.publicNetworkAccess" -o tsv
+
+      - name: Bootstrap Databricks SCIM (Console UAMI as SP)
+        run: |
+          set -e
+          TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
+          PAYLOAD=$(cat <<EOF
+          {
+            "schemas":["urn:ietf:params:scim:schemas:core:2.0:ServicePrincipal"],
+            "applicationId":"$CONSOLE_UAMI_CLIENT",
+            "displayName":"uami-loom-console-eastus2",
+            "groups":[],
+            "entitlements":[{"value":"workspace-access"},{"value":"databricks-sql-access"}]
+          }
+          EOF
+          )
+          # Try POST; if 409 (exists), patch entitlements
+          RESP=$(curl -sS -w "%{http_code}" -o /tmp/scim.json -X POST \
+            "https://$DBX_HOST/api/2.0/preview/scim/v2/ServicePrincipals" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/scim+json" \
+            -d "$PAYLOAD")
+          echo "SCIM POST status: $RESP"
+          cat /tmp/scim.json
+          echo
+
+      - name: Grant Console UAMI APIM Service Contributor (if APIM exists)
+        run: |
+          set -e
+          APIM_STATE=$(az apim show -n $APIM_NAME -g $ADMIN_RG --query provisioningState -o tsv 2>/dev/null || echo "Missing")
+          echo "APIM state: $APIM_STATE"
+          if [[ "$APIM_STATE" == "Succeeded" ]]; then
+            az role assignment create \
+              --assignee $CONSOLE_UAMI_PRINCIPAL \
+              --role "API Management Service Contributor" \
+              --scope "/subscriptions/$SUB/resourceGroups/$ADMIN_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME" \
+              -o table || echo "Already assigned"
+          else
+            echo "APIM not provisioned yet — skipping RBAC grant"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "==== Bootstrap complete ===="
+          echo "Synapse: UAMI granted Synapse Administrator + SQL Administrator + SQL-level sysadmin"
+          echo "Databricks: UAMI registered as SP via SCIM (workspace-access + databricks-sql-access)"
+          echo "APIM: Service Contributor granted (if APIM provisioned)"

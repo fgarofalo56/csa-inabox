@@ -1,0 +1,338 @@
+/**
+ * Synapse dev-endpoint + ARM REST client.
+ *
+ * Talks to two surfaces with the same credential chain:
+ *
+ *   1. ARM ({management.azure.com})       — Spark Big Data pool CRUD
+ *      (Microsoft.Synapse/workspaces/{ws}/bigDataPools/*)
+ *   2. Dev endpoint ({ws}.dev.azuresynapse.net) — Livy Spark batches,
+ *      Pipelines (Synapse Integrate), pipeline runs.
+ *
+ * Auth: ChainedTokenCredential(UAMI, DefaultAzureCredential). UAMI
+ * `uami-loom-console-eastus2` already has Synapse Administrator at
+ * the workspace + Contributor on the RG → all calls below succeed.
+ *
+ * No mocks. Every call hits the real API and surfaces errors verbatim.
+ */
+
+import {
+  DefaultAzureCredential,
+  ManagedIdentityCredential,
+  ChainedTokenCredential,
+} from '@azure/identity';
+
+const ARM_SCOPE = 'https://management.azure.com/.default';
+const DEV_SCOPE = 'https://dev.azuresynapse.net/.default';
+const ARM_API = '2021-06-01';
+const DEV_API = '2020-12-01';
+const LIVY_API = '2019-11-01-preview';
+
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
+  ? new ChainedTokenCredential(
+      new ManagedIdentityCredential({ clientId: uamiClientId }),
+      new DefaultAzureCredential(),
+    )
+  : new DefaultAzureCredential();
+
+function required(k: string): string {
+  const v = process.env[k];
+  if (!v) throw new Error(`Missing env var: ${k}`);
+  return v;
+}
+
+function sub(): string { return required('LOOM_SUBSCRIPTION_ID'); }
+function rg():  string { return required('LOOM_DLZ_RG'); }
+function ws():  string { return required('LOOM_SYNAPSE_WORKSPACE'); }
+
+function armBase(): string {
+  return `https://management.azure.com/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.Synapse/workspaces/${ws()}`;
+}
+
+export function devBase(): string {
+  return `https://${ws()}.dev.azuresynapse.net`;
+}
+
+async function callArm(url: string, init?: RequestInit): Promise<Response> {
+  const tok = await credential.getToken(ARM_SCOPE);
+  if (!tok?.token) throw new Error('Failed to acquire ARM token');
+  return fetch(url, {
+    ...init,
+    headers: {
+      ...(init?.headers || {}),
+      authorization: `Bearer ${tok.token}`,
+      'content-type': 'application/json',
+    },
+  });
+}
+
+async function callDev(path: string, init?: RequestInit): Promise<Response> {
+  const tok = await credential.getToken(DEV_SCOPE);
+  if (!tok?.token) throw new Error('Failed to acquire Synapse dev token');
+  return fetch(`${devBase()}${path}`, {
+    ...init,
+    headers: {
+      ...(init?.headers || {}),
+      authorization: `Bearer ${tok.token}`,
+      'content-type': 'application/json',
+    },
+  });
+}
+
+async function jsonOrThrow<T>(r: Response, label: string): Promise<T> {
+  if (!r.ok && r.status !== 202) {
+    throw new Error(`${label} failed ${r.status}: ${await r.text()}`);
+  }
+  const text = await r.text();
+  if (!text) return {} as T;
+  try { return JSON.parse(text) as T; }
+  catch { return {} as T; }
+}
+
+// ============================================================
+// Spark Big Data Pools (ARM)
+// ============================================================
+
+export interface SparkPool {
+  name: string;
+  id: string;
+  location?: string;
+  properties: {
+    nodeSize?: 'Small' | 'Medium' | 'Large' | 'XLarge' | 'XXLarge';
+    nodeSizeFamily?: string;
+    sparkVersion?: string;
+    nodeCount?: number;
+    autoScale?: { enabled: boolean; minNodeCount: number; maxNodeCount: number };
+    autoPause?: { enabled: boolean; delayInMinutes: number };
+    creationDate?: string;
+    provisioningState?: string;
+    sessionLevelPackagesEnabled?: boolean;
+    isComputeIsolationEnabled?: boolean;
+    dynamicExecutorAllocation?: { enabled: boolean; minExecutors?: number; maxExecutors?: number };
+  };
+}
+
+export async function listSparkPools(): Promise<SparkPool[]> {
+  const r = await callArm(`${armBase()}/bigDataPools?api-version=${ARM_API}`);
+  const body = await jsonOrThrow<{ value: SparkPool[] }>(r, 'listSparkPools');
+  return body.value || [];
+}
+
+export async function getSparkPool(name: string): Promise<SparkPool> {
+  const r = await callArm(`${armBase()}/bigDataPools/${name}?api-version=${ARM_API}`);
+  return jsonOrThrow<SparkPool>(r, `getSparkPool(${name})`);
+}
+
+export async function upsertSparkPool(name: string, spec: Partial<SparkPool>): Promise<SparkPool> {
+  const body = {
+    location: spec.location || 'eastus2',
+    properties: spec.properties || {},
+  };
+  const r = await callArm(`${armBase()}/bigDataPools/${name}?api-version=${ARM_API}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<SparkPool>(r, `upsertSparkPool(${name})`);
+}
+
+export async function deleteSparkPool(name: string): Promise<void> {
+  const r = await callArm(`${armBase()}/bigDataPools/${name}?api-version=${ARM_API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 202 && r.status !== 204) {
+    throw new Error(`deleteSparkPool failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+// ============================================================
+// Spark Livy batch jobs (dev endpoint)
+// ============================================================
+
+export interface SparkBatchJob {
+  id: number;
+  livyInfo?: { currentState?: string; jobCreationRequest?: unknown };
+  name?: string;
+  state?: string;
+  appId?: string | null;
+  artifactId?: string;
+  result?: 'Uncertain' | 'Succeeded' | 'Failed' | 'Cancelled';
+  schedulerInfo?: unknown;
+  log?: string[];
+  submitterId?: string;
+  submitterName?: string;
+  pluginInfo?: unknown;
+  errorInfo?: unknown[];
+  tags?: Record<string, string>;
+  workspaceName?: string;
+  sparkPoolName?: string;
+  submittedAt?: string;
+  jobType?: string;
+}
+
+export interface SparkBatchRequest {
+  name: string;
+  file: string;                 // wasbs://… or abfss://… URI to JAR / .py
+  className?: string;
+  args?: string[];
+  jars?: string[];
+  pyFiles?: string[];
+  files?: string[];
+  archives?: string[];
+  conf?: Record<string, string>;
+  driverMemory?: string;
+  driverCores?: number;
+  executorMemory?: string;
+  executorCores?: number;
+  numExecutors?: number;
+  tags?: Record<string, string>;
+}
+
+export async function submitSparkBatchJob(
+  poolName: string,
+  job: SparkBatchRequest,
+): Promise<SparkBatchJob> {
+  const r = await callDev(
+    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches?detailed=true`,
+    { method: 'POST', body: JSON.stringify(job) },
+  );
+  return jsonOrThrow<SparkBatchJob>(r, `submitSparkBatchJob(${poolName})`);
+}
+
+export async function listSparkBatchJobs(
+  poolName: string,
+  from = 0,
+  size = 20,
+): Promise<{ from: number; total: number; sessions: SparkBatchJob[] }> {
+  const r = await callDev(
+    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches?from=${from}&size=${size}&detailed=true`,
+  );
+  return jsonOrThrow(r, `listSparkBatchJobs(${poolName})`);
+}
+
+export async function getSparkBatchJob(poolName: string, batchId: number): Promise<SparkBatchJob> {
+  const r = await callDev(
+    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches/${batchId}?detailed=true`,
+  );
+  return jsonOrThrow<SparkBatchJob>(r, `getSparkBatchJob(${poolName},${batchId})`);
+}
+
+export async function cancelSparkBatchJob(poolName: string, batchId: number): Promise<void> {
+  const r = await callDev(
+    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/batches/${batchId}`,
+    { method: 'DELETE' },
+  );
+  if (!r.ok && r.status !== 200) {
+    throw new Error(`cancelSparkBatchJob failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+// ============================================================
+// Pipelines (dev endpoint — Synapse Integrate)
+// ============================================================
+
+export interface SynapsePipeline {
+  id?: string;
+  name: string;
+  type?: string;
+  etag?: string;
+  properties: {
+    description?: string;
+    activities?: unknown[];
+    parameters?: Record<string, { type: string; defaultValue?: unknown }>;
+    variables?: Record<string, { type: string; defaultValue?: unknown }>;
+    annotations?: unknown[];
+    runDimensions?: Record<string, unknown>;
+    folder?: { name: string };
+    concurrency?: number;
+    policy?: unknown;
+  };
+}
+
+export async function listPipelines(): Promise<SynapsePipeline[]> {
+  const r = await callDev(`/pipelines?api-version=${DEV_API}`);
+  const body = await jsonOrThrow<{ value: SynapsePipeline[] }>(r, 'listPipelines');
+  return body.value || [];
+}
+
+export async function getPipeline(name: string): Promise<SynapsePipeline> {
+  const r = await callDev(`/pipelines/${encodeURIComponent(name)}?api-version=${DEV_API}`);
+  return jsonOrThrow<SynapsePipeline>(r, `getPipeline(${name})`);
+}
+
+export async function upsertPipeline(name: string, spec: SynapsePipeline): Promise<SynapsePipeline> {
+  const body = { name: spec.name || name, properties: spec.properties || { activities: [] } };
+  const r = await callDev(
+    `/pipelines/${encodeURIComponent(name)}?api-version=${DEV_API}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+  );
+  return jsonOrThrow<SynapsePipeline>(r, `upsertPipeline(${name})`);
+}
+
+export async function deletePipeline(name: string): Promise<void> {
+  const r = await callDev(
+    `/pipelines/${encodeURIComponent(name)}?api-version=${DEV_API}`,
+    { method: 'DELETE' },
+  );
+  if (!r.ok && r.status !== 200 && r.status !== 204) {
+    throw new Error(`deletePipeline failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export interface PipelineRunResponse { runId: string; }
+
+export async function runPipeline(
+  name: string,
+  params?: Record<string, unknown>,
+): Promise<PipelineRunResponse> {
+  const r = await callDev(
+    `/pipelines/${encodeURIComponent(name)}/createRun?api-version=${DEV_API}`,
+    { method: 'POST', body: JSON.stringify(params || {}) },
+  );
+  return jsonOrThrow<PipelineRunResponse>(r, `runPipeline(${name})`);
+}
+
+export interface PipelineRun {
+  runId: string;
+  pipelineName: string;
+  parameters?: Record<string, unknown>;
+  invokedBy?: { id?: string; name?: string; invokedByType?: string };
+  runStart?: string;
+  runEnd?: string;
+  durationInMs?: number;
+  status?: 'Queued' | 'InProgress' | 'Succeeded' | 'Failed' | 'Cancelling' | 'Cancelled';
+  message?: string;
+  lastUpdated?: string;
+  annotations?: string[];
+  runGroupId?: string;
+  isLatest?: boolean;
+}
+
+export interface PipelineRunQuery {
+  lastUpdatedAfter: string;   // ISO 8601
+  lastUpdatedBefore: string;  // ISO 8601
+  filters?: Array<{ operand: string; operator: 'Equals' | 'NotEquals' | 'In' | 'NotIn'; values: string[] }>;
+  orderBy?: Array<{ orderBy: 'RunStart' | 'RunEnd' | 'PipelineName' | 'Status'; order: 'ASC' | 'DESC' }>;
+  continuationToken?: string;
+}
+
+export async function queryPipelineRuns(
+  query?: Partial<PipelineRunQuery>,
+): Promise<{ value: PipelineRun[]; continuationToken?: string }> {
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const body: PipelineRunQuery = {
+    lastUpdatedAfter: query?.lastUpdatedAfter || sevenDaysAgo.toISOString(),
+    lastUpdatedBefore: query?.lastUpdatedBefore || now.toISOString(),
+    filters: query?.filters,
+    orderBy: query?.orderBy || [{ orderBy: 'RunStart', order: 'DESC' }],
+    continuationToken: query?.continuationToken,
+  };
+  const r = await callDev(`/queryPipelineRuns?api-version=${DEV_API}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow(r, 'queryPipelineRuns');
+}
+
+export async function getPipelineRun(runId: string): Promise<PipelineRun> {
+  const r = await callDev(`/pipelineruns/${encodeURIComponent(runId)}?api-version=${DEV_API}`);
+  return jsonOrThrow<PipelineRun>(r, `getPipelineRun(${runId})`);
+}

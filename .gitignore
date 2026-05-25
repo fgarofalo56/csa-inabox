@@ -222,7 +222,9 @@ tmp/
 runs/
 cache/
 retrieval/
-containers/
+# containers/ is intentionally NOT here — it would silently swallow
+# Next.js route directories named `containers/` (e.g. /api/lakehouse/containers/).
+# If you need to ignore a runtime "containers/" cache dir, scope it: /some/path/containers/
 stats/
 # Load-test reports (tests/load/README.md) — keep baselines checked in
 # under tests/load/baselines/ but do not commit raw runs.

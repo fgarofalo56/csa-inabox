@@ -220,10 +220,12 @@ export function SetupWizardPane() {
 
         {state.step === 'capacity' && (
           <>
-            <Body1 weight="semibold">Capacity SKU equivalence</Body1>
+            <Body1 weight="semibold">Capacity sizing</Body1>
             <Body1>
-              Drives Databricks cluster sizing + ADX SKU + Power BI capacity. Use Fabric F-SKU
-              equivalents.
+              Loom uses Fabric F-SKU labels as a familiar <i>sizing equivalence</i> so existing Fabric
+              sizing guides apply, but the underlying compute is provisioned on Azure-native services
+              you already pay for: Databricks cluster nodes + ADX SKU + Synapse Spark pool size.
+              Pick the equivalence that matches your expected workload.
             </Body1>
             <Dropdown
               value={state.capacitySku}
