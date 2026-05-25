@@ -109,6 +109,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'power-automate-flow':         reg(() => import('./powerplatform-editors'),  'PowerAutomateFlowEditor'),
   'power-page':                  reg(() => import('./powerplatform-editors'),  'PowerPageEditor'),
   'ai-builder-model':            reg(() => import('./powerplatform-editors'),  'AiBuilderModelEditor'),
+
+  // v3 — Cross-item Copilot orchestrator (32 tools across all wired services)
+  'cross-item-copilot':          reg(() => import('./cross-item-copilot-editor').then((m) => ({ CrossItemCopilotEditor: m.CrossItemCopilotEditor })), 'CrossItemCopilotEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {

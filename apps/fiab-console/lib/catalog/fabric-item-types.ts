@@ -300,6 +300,7 @@ export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
   'CSA Data Products',
   'Copilot Studio',
   'Power Platform',
+  'AI & Agents',
 ];
 
 export function itemsByCategory(category: WorkloadCategory): FabricItemType[] {
