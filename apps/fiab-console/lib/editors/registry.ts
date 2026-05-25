@@ -82,6 +82,16 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
 
   // v2.x — Azure AI Foundry hub (Microsoft.MachineLearningServices/workspaces kind=Hub)
   'ai-foundry-hub':              reg(() => import('./foundry-hub-editor'),     'FoundryHubEditor'),
+
+  // v2.5 — AI Foundry sub-editors (projects + project-scoped surfaces)
+  'ai-foundry-project':          reg(() => import('./foundry-sub-editors'),    'ProjectEditor'),
+  'prompt-flow':                 reg(() => import('./foundry-sub-editors'),    'PromptFlowEditor'),
+  'evaluation':                  reg(() => import('./foundry-sub-editors'),    'EvaluationEditor'),
+  'content-safety':              reg(() => import('./foundry-sub-editors'),    'ContentSafetyEditor'),
+  'tracing':                     reg(() => import('./foundry-sub-editors'),    'TracingEditor'),
+  'ai-search-index':             reg(() => import('./foundry-sub-editors'),    'AiSearchIndexEditor'),
+  'compute':                     reg(() => import('./foundry-sub-editors'),    'ComputeEditor'),
+  'dataset':                     reg(() => import('./foundry-sub-editors'),    'DatasetEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {
