@@ -1,121 +1,273 @@
 'use client';
 
 /**
- * DataflowGen2Editor — Power Query Online clone: queries pane (left),
- * diagram view + data preview (center), applied steps (right), ribbon
- * with Home/Transform/Add column/View/Tools/Help tabs.
+ * DataflowGen2Editor — Fabric-native Dataflow Gen2 editor wired to live
+ * Fabric REST. Dataflows are managed as items + JSON definition; Refresh
+ * triggers a Refresh job on the item.
+ *
+ * Auth gate: requires Console UAMI SP authorized in the Fabric tenant and
+ * added to the target workspace. Underlying 401/403 surface verbatim.
+ *
+ * Backed by /api/fabric/workspaces + /api/items/dataflow/**.
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  Input, Button, makeStyles, tokens,
+  Subtitle2, Caption1, Badge, Button, Spinner, Input,
+  Tree, TreeItem, TreeItemLayout, Select,
+  MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Search20Regular } from '@fluentui/react-icons';
+import {
+  Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
+} from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
-const QUERIES = ['Orders', 'Customers', 'Products', 'dim_date'];
-const STEPS = ['Source', 'Navigation', 'Promoted Headers', 'Changed Type', 'Filtered Rows (Active = true)', 'Added Custom Column (FullName)', 'Grouped Rows'];
-const PREVIEW = [
-  { OrderID: '10001', CustomerID: 'C-0042', Amount: '124.50', Active: 'true', FullName: 'Jane Q.' },
-  { OrderID: '10002', CustomerID: 'C-1003', Amount: '89.95', Active: 'true', FullName: 'Bob R.' },
-  { OrderID: '10003', CustomerID: 'C-2204', Amount: '212.10', Active: 'false', FullName: 'Sara T.' },
+const RIBBON: RibbonTab[] = [
+  { id: 'home', label: 'Home', groups: [
+    { label: 'Refresh', actions: [{ label: 'Refresh now' }] },
+    { label: 'Item', actions: [{ label: 'New dataflow' }, { label: 'Save' }, { label: 'Delete' }] },
+  ]},
 ];
 
 const useStyles = makeStyles({
-  layout: { display: 'grid', gridTemplateColumns: '200px 1fr 260px', minHeight: '500px' },
-  pane: { padding: '12px', borderRight: `1px solid ${tokens.colorNeutralStroke2}`, overflow: 'auto' },
-  paneRight: { padding: '12px', borderLeft: `1px solid ${tokens.colorNeutralStroke2}`, overflow: 'auto' },
-  center: { padding: '12px', overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' },
-  queryItem: {
-    padding: '6px 10px', borderRadius: '4px',
-    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover, cursor: 'pointer' },
+  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  editor: {
+    width: '100%', minHeight: 300,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12, padding: 12,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
+    resize: 'vertical',
   },
-  queryItemActive: {
-    backgroundColor: tokens.colorBrandBackground2,
-    color: tokens.colorBrandForeground1,
-    fontWeight: '600',
-  },
-  step: {
-    padding: '6px 10px',
-    borderLeft: `3px solid ${tokens.colorBrandStroke1}`,
-    marginBottom: '4px',
-    fontSize: '12px',
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  globalSearch: { marginBottom: '8px' },
+  treePad: { padding: 8 },
 });
 
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Get data', actions: [{ label: 'Get data' }, { label: 'Recent sources' }, { label: 'Enter data' }] },
-    { label: 'Query', actions: [{ label: 'New query' }, { label: 'Manage' }, { label: 'Refresh preview' }] },
-    { label: 'Data destination', actions: [{ label: 'Lakehouse' }, { label: 'Warehouse' }, { label: 'KQL DB' }, { label: 'SQL DB' }] },
-    { label: 'Publish', actions: [{ label: 'Save & run' }, { label: 'Publish' }] },
-  ]},
-  { id: 'transform', label: 'Transform', groups: [
-    { label: 'Any column', actions: [{ label: 'Group by' }, { label: 'Use first row as headers' }, { label: 'Replace values' }, { label: 'Fill' }, { label: 'Pivot' }, { label: 'Unpivot' }] },
-    { label: 'Text', actions: [{ label: 'Split column' }, { label: 'Trim' }, { label: 'Clean' }] },
-    { label: 'Number', actions: [{ label: 'Standard' }, { label: 'Statistics' }, { label: 'Trigonometry' }] },
-  ]},
-  { id: 'add-column', label: 'Add column', groups: [
-    { label: 'General', actions: [{ label: 'Custom column' }, { label: 'Conditional column' }, { label: 'Index column' }] },
-    { label: 'From text', actions: [{ label: 'Format' }, { label: 'Extract' }] },
-  ]},
-  { id: 'view', label: 'View', groups: [
-    { label: 'Layout', actions: [{ label: 'Diagram view' }, { label: 'Query settings' }, { label: 'Advanced editor' }] },
-  ]},
-];
+interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
+interface DataflowLite { id: string; displayName: string; description?: string; }
+
+function useWorkspaces() {
+  const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    setLoading(true); setError(null); setHint(null);
+    try {
+      const r = await fetch('/api/fabric/workspaces');
+      const j = await r.json();
+      if (!j.ok) { setError(j.error || 'failed'); setHint(j.hint || null); setWorkspaces([]); }
+      else setWorkspaces(j.workspaces || []);
+    } catch (e: any) { setError(e?.message || String(e)); setWorkspaces([]); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  return { workspaces, error, hint, loading };
+}
+
+const STARTER_M = `// Power Query M (mashup.pq). Edit then click Save.
+section Section1;
+shared Query1 = let
+    Source = #table({"col1","col2"}, {{"hello", "world"}})
+in
+    Source;`;
+
+function toB64(s: string): string {
+  return typeof window === 'undefined' ? Buffer.from(s, 'utf-8').toString('base64')
+    : btoa(unescape(encodeURIComponent(s)));
+}
+function fromB64(b: string): string {
+  try {
+    return typeof window === 'undefined' ? Buffer.from(b, 'base64').toString('utf-8')
+      : decodeURIComponent(escape(atob(b)));
+  } catch { return ''; }
+}
 
 interface Props { item: FabricItemType; id: string; }
 
 export function DataflowGen2Editor({ item, id }: Props) {
-  const styles = useStyles();
-  const [activeQuery, setActiveQuery] = useState('Orders');
+  const s = useStyles();
+  const ws = useWorkspaces();
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [dataflows, setDataflows] = useState<DataflowLite[] | null>(null);
+  const [dataflowId, setDataflowId] = useState('');
+  const [defText, setDefText] = useState(STARTER_M);
+  const [partPath, setPartPath] = useState('mashup.pq');
+  const [dirty, setDirty] = useState(false);
+  const [listErr, setListErr] = useState<string | null>(null);
+  const [listHint, setListHint] = useState<string | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createErr, setCreateErr] = useState<string | null>(null);
+
+  const loadList = useCallback(async (wsId: string) => {
+    setListErr(null); setListHint(null);
+    try {
+      const r = await fetch(`/api/items/dataflow?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (!j.ok) { setDataflows([]); setListErr(j.error); setListHint(j.hint); return; }
+      setDataflows(j.dataflows || []);
+      if ((j.dataflows || []).length && !dataflowId) setDataflowId(j.dataflows[0].id);
+    } catch (e: any) { setDataflows([]); setListErr(e?.message || String(e)); }
+  }, [dataflowId]);
+
+  const loadDetail = useCallback(async (wsId: string, dId: string) => {
+    setDetailErr(null); setRefreshMsg(null);
+    try {
+      const r = await fetch(`/api/items/dataflow/${encodeURIComponent(dId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (!j.ok) { setDetailErr(j.error); return; }
+      const parts: Array<{ path: string; payload: string }> = j.definition?.parts || [];
+      const main = parts.find((p) => /mashup\.(pq|m)$/i.test(p.path))
+        || parts.find((p) => /queryMetadata\.json$/i.test(p.path))
+        || parts[0];
+      if (main?.payload) { setPartPath(main.path); setDefText(fromB64(main.payload)); }
+      else { setPartPath('mashup.pq'); setDefText(STARTER_M); }
+      setDirty(false);
+    } catch (e: any) { setDetailErr(e?.message || String(e)); }
+  }, []);
+
+  useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
+  useEffect(() => { if (workspaceId && dataflowId) loadDetail(workspaceId, dataflowId); }, [workspaceId, dataflowId, loadDetail]);
+
+  const save = useCallback(async () => {
+    if (!workspaceId || !dataflowId) return;
+    setSaving(true); setDetailErr(null);
+    try {
+      const definition = { parts: [{ path: partPath, payload: toB64(defText), payloadType: 'InlineBase64' }] };
+      const r = await fetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ definition }),
+      });
+      const j = await r.json();
+      if (!j.ok) setDetailErr(j.error || 'save failed');
+      else setDirty(false);
+    } finally { setSaving(false); }
+  }, [workspaceId, dataflowId, partPath, defText]);
+
+  const refresh = useCallback(async () => {
+    if (!workspaceId || !dataflowId) return;
+    setRefreshing(true); setRefreshMsg(null);
+    try {
+      const r = await fetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}/refresh?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) setRefreshMsg(`Refresh failed: ${j.error}`);
+      else setRefreshMsg('Refresh job queued.');
+    } finally { setRefreshing(false); }
+  }, [workspaceId, dataflowId]);
+
+  const create = useCallback(async () => {
+    if (!workspaceId || !createName.trim()) return;
+    setCreateBusy(true); setCreateErr(null);
+    try {
+      const r = await fetch(`/api/items/dataflow?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ displayName: createName.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCreateErr(j.error || 'create failed'); return; }
+      setCreateOpen(false); setCreateName('');
+      await loadList(workspaceId);
+      if (j.dataflow?.id) setDataflowId(j.dataflow.id);
+    } finally { setCreateBusy(false); }
+  }, [workspaceId, createName, loadList]);
+
+  const del = useCallback(async () => {
+    if (!workspaceId || !dataflowId) return;
+    if (!confirm('Delete this dataflow? This cannot be undone.')) return;
+    await fetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
+    setDataflowId('');
+    await loadList(workspaceId);
+  }, [workspaceId, dataflowId, loadList]);
+
   return (
-    <ItemEditorChrome
-      item={item}
-      id={id}
-      ribbon={RIBBON}
-      main={
-        <div className={styles.layout}>
-          <aside className={styles.pane} aria-label="Queries">
-            <Subtitle2 style={{ marginBottom: 8 }}>Queries</Subtitle2>
-            {QUERIES.map((q) => (
-              <div
-                key={q}
-                className={`${styles.queryItem} ${q === activeQuery ? styles.queryItemActive : ''}`}
-                onClick={() => setActiveQuery(q)}
-              >{q}</div>
+    <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
+      leftPanel={
+        <div className={s.treePad}>
+          <Subtitle2 style={{ marginBottom: 8 }}>Dataflows Gen2</Subtitle2>
+          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
+          {workspaceId && dataflows === null && <Spinner size="tiny" label="Loading…" />}
+          {dataflows && dataflows.length === 0 && !listErr && <Caption1>No dataflows.</Caption1>}
+          <Tree aria-label="Dataflows">
+            {(dataflows || []).map((d) => (
+              <TreeItem key={d.id} itemType="leaf" value={d.id} onClick={() => setDataflowId(d.id)}>
+                <TreeItemLayout iconBefore={<Flow20Regular />}>
+                  {dataflowId === d.id ? <strong>{d.displayName}</strong> : d.displayName}
+                </TreeItemLayout>
+              </TreeItem>
             ))}
-          </aside>
-          <div className={styles.center}>
-            <Input className={styles.globalSearch} contentBefore={<Search20Regular />} placeholder="Search (Alt+Q)" />
-            <Subtitle2>{activeQuery} · Data preview</Subtitle2>
-            <Table aria-label="Data preview">
-              <TableHeader>
-                <TableRow>
-                  {Object.keys(PREVIEW[0]).map((k) => <TableHeaderCell key={k}>{k}</TableHeaderCell>)}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {PREVIEW.map((r, i) => (
-                  <TableRow key={i}>
-                    {Object.values(r).map((v, j) => <TableCell key={j}>{v}</TableCell>)}
-                  </TableRow>
+          </Tree>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">Dataflow Gen2</Badge>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+              <Caption1>Workspace</Caption1>
+              <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
+                {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
+                {(ws.workspaces || []).map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · F/P SKU' : ''}</option>
                 ))}
-              </TableBody>
-            </Table>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>3 rows · Column profiling on</Caption1>
+              </Select>
+            </div>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh list</Button>
+            <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
+              <DialogTrigger disableButtonEnhancement>
+                <Button appearance="outline" icon={<Add20Regular />} disabled={!workspaceId}>New</Button>
+              </DialogTrigger>
+              <DialogSurface>
+                <DialogBody>
+                  <DialogTitle>Create Fabric dataflow Gen2</DialogTitle>
+                  <DialogContent>
+                    <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
+                    {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
+                    <Button appearance="primary" disabled={createBusy || !createName.trim()} onClick={create}>{createBusy ? 'Creating…' : 'Create'}</Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+            <Button appearance="outline" icon={<Save20Regular />} disabled={saving || !dataflowId || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save'}</Button>
+            <Button appearance="primary" icon={<ArrowSync20Regular />} disabled={refreshing || !dataflowId} onClick={refresh}>{refreshing ? 'Refreshing…' : 'Refresh'}</Button>
+            <Button appearance="subtle" icon={<Delete20Regular />} disabled={!dataflowId} onClick={del}>Delete</Button>
           </div>
-          <aside className={styles.paneRight} aria-label="Applied steps">
-            <Subtitle2 style={{ marginBottom: 8 }}>Applied steps</Subtitle2>
-            {STEPS.map((s) => <div key={s} className={styles.step}>{s}</div>)}
-            <Button appearance="subtle" size="small" style={{ marginTop: 8 }}>+ Add step</Button>
-          </aside>
+
+          {(ws.error || listErr) && (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                <MessageBarTitle>Fabric not reachable</MessageBarTitle>
+                {ws.error || listErr}
+                {(ws.hint || listHint) && <><br /><Caption1>{ws.hint || listHint}</Caption1></>}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+          {refreshMsg && <MessageBar intent="info"><MessageBarBody>{refreshMsg}</MessageBarBody></MessageBar>}
+
+          {dataflowId && (
+            <>
+              {dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
+              <Caption1>Definition part: <code>{partPath}</code></Caption1>
+              <textarea
+                className={s.editor}
+                spellCheck={false}
+                value={defText}
+                onChange={(e) => { setDefText(e.target.value); setDirty(true); }}
+                aria-label="Dataflow definition"
+              />
+            </>
+          )}
         </div>
       }
     />

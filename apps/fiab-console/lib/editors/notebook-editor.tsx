@@ -1,167 +1,328 @@
 'use client';
 
 /**
- * NotebookEditor — cell-based authoring with kernel selector + run
- * status. Cells are styled to look like Monaco but use textarea (no
- * Monaco dep). Each cell has output preview and run button per the
- * Fabric notebook anatomy.
+ * NotebookEditor — Fabric-native notebook editor wired to live Fabric REST.
+ *
+ * Auth gate: requires the Console UAMI's SP to be (a) registered in the
+ * Fabric tenant ("Service principals can use Fabric APIs") and (b) added
+ * to the target workspace. If either is missing, the editor surfaces the
+ * underlying 401/403 verbatim via MessageBar — no mocks.
+ *
+ * Backed by /api/fabric/workspaces + /api/items/notebook/**.
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  Dropdown, Option,
-  Button, Badge, Subtitle2, Body1, Caption1,
+  Subtitle2, Caption1, Badge, Button, Spinner, Input,
+  Tree, TreeItem, TreeItemLayout, Select,
+  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Play20Regular, Add20Regular, Delete20Regular, ArrowUp20Regular, ArrowDown20Regular,
+  Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
-const KERNELS = ['PySpark (Python)', 'Spark (Scala)', 'Spark SQL', 'SparkR', 'Python 3.11', 'Python 3.10'];
-
-interface Cell {
-  id: string;
-  kind: 'code' | 'markdown';
-  source: string;
-  output?: string;
-  status: 'idle' | 'running' | 'success' | 'error';
-}
-
-const STARTER_CELLS: Cell[] = [
-  { id: 'c1', kind: 'markdown', source: '# Welcome to your new notebook\n\nThis notebook is attached to **PySpark (Python)** by default. Add a code cell below to start exploring your lakehouse.', status: 'idle' },
-  { id: 'c2', kind: 'code', source: 'df = spark.read.table("fact_sales")\ndf.show(5)', status: 'success', output: '+----------+--------+-------+\n|order_id  |customer|amount |\n+----------+--------+-------+\n|10001     |C-0042  |124.50 |\n|10002     |C-1003  |89.95  |\n+----------+--------+-------+\nonly showing top 5 rows' },
-  { id: 'c3', kind: 'code', source: 'df.groupBy("customer").count().orderBy("count", ascending=False).limit(10)', status: 'idle' },
+const RIBBON: RibbonTab[] = [
+  { id: 'home', label: 'Home', groups: [
+    { label: 'Run', actions: [{ label: 'Run' }, { label: 'Run history' }] },
+    { label: 'Item', actions: [{ label: 'New notebook' }, { label: 'Save' }, { label: 'Delete' }] },
+    { label: 'Workspace', actions: [{ label: 'Switch workspace' }, { label: 'Refresh list' }] },
+  ]},
 ];
 
 const useStyles = makeStyles({
-  toolbar: {
-    padding: '8px 16px',
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: 'flex',
-    gap: '12px',
-    alignItems: 'center',
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  cells: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' },
-  cell: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
-    overflow: 'hidden',
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  cellHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    padding: '6px 12px',
-    backgroundColor: tokens.colorNeutralBackground2,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  src: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: '13px',
-    padding: '12px',
-    width: '100%',
-    minHeight: '64px',
-    border: 'none',
-    outline: 'none',
+  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  editor: {
+    width: '100%', minHeight: 280,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
-    backgroundColor: tokens.colorNeutralBackground1,
-    color: tokens.colorNeutralForeground1,
   },
-  output: {
-    padding: '12px',
-    backgroundColor: tokens.colorNeutralBackground3,
-    fontFamily: 'Consolas, monospace',
-    fontSize: '12px',
-    whiteSpace: 'pre',
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  cellActions: { marginLeft: 'auto', display: 'flex', gap: '4px' },
+  treePad: { padding: 8 },
+  tableWrap: { overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
 });
 
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Run', actions: [{ label: 'Run all' }, { label: 'Run selected' }, { label: 'Stop' }] },
-    { label: 'Insert', actions: [{ label: 'Code cell' }, { label: 'Markdown cell' }] },
-    { label: 'Kernel', actions: [{ label: 'Restart' }, { label: 'Variables' }] },
-    { label: 'Workspace', actions: [{ label: 'Add lakehouse' }, { label: 'Add environment' }] },
-  ]},
-  { id: 'view', label: 'View', groups: [
-    { label: 'Layout', actions: [{ label: 'Variables explorer' }, { label: 'Session info' }, { label: 'Open in VS Code' }] },
-  ]},
-];
+interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
+interface NotebookLite { id: string; displayName: string; description?: string; }
+interface JobLite {
+  id: string; status?: string; jobType?: string; invokeType?: string;
+  startTimeUtc?: string; endTimeUtc?: string;
+  failureReason?: { errorCode?: string; message?: string } | null;
+}
+
+function useWorkspaces() {
+  const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    setLoading(true); setError(null); setHint(null);
+    try {
+      const r = await fetch('/api/fabric/workspaces');
+      const j = await r.json();
+      if (!j.ok) { setError(j.error || 'failed'); setHint(j.hint || null); setWorkspaces([]); }
+      else setWorkspaces(j.workspaces || []);
+    } catch (e: any) { setError(e?.message || String(e)); setWorkspaces([]); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  return { workspaces, error, hint, loading, reload: load };
+}
+
+const STARTER_PY = `# Fabric Notebook (PySpark)\n# Edit, then click Save. Click Run to queue a notebook job instance.\ndf = spark.range(10)\ndf.show()\n`;
+
+function encodePy(src: string): string {
+  // browser btoa needs latin-1 — encode utf-8 first.
+  return typeof window === 'undefined' ? Buffer.from(src, 'utf-8').toString('base64')
+    : btoa(unescape(encodeURIComponent(src)));
+}
+function decodePy(b64: string): string {
+  try {
+    return typeof window === 'undefined' ? Buffer.from(b64, 'base64').toString('utf-8')
+      : decodeURIComponent(escape(atob(b64)));
+  } catch { return ''; }
+}
 
 interface Props { item: FabricItemType; id: string; }
 
 export function NotebookEditor({ item, id }: Props) {
-  const styles = useStyles();
-  const [cells, setCells] = useState<Cell[]>(STARTER_CELLS);
-  const [kernel, setKernel] = useState<string>(KERNELS[0]);
+  const s = useStyles();
+  const ws = useWorkspaces();
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [notebooks, setNotebooks] = useState<NotebookLite[] | null>(null);
+  const [notebookId, setNotebookId] = useState('');
+  const [source, setSource] = useState(STARTER_PY);
+  const [dirty, setDirty] = useState(false);
+  const [listErr, setListErr] = useState<string | null>(null);
+  const [listHint, setListHint] = useState<string | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [runMsg, setRunMsg] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<JobLite[]>([]);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createErr, setCreateErr] = useState<string | null>(null);
 
-  function runCell(cellId: string) {
-    setCells((cs) => cs.map((c) => c.id === cellId ? { ...c, status: 'running' as const } : c));
-    setTimeout(() => {
-      setCells((cs) => cs.map((c) => c.id === cellId
-        ? { ...c, status: 'success' as const, output: c.output ?? '[runtime mock] ran in 0.42s' }
-        : c));
-    }, 600);
-  }
-  function addCell(kind: 'code' | 'markdown') {
-    setCells((cs) => [...cs, { id: `c${cs.length + 1}`, kind, source: '', status: 'idle' as const }]);
-  }
-  function deleteCell(cellId: string) {
-    setCells((cs) => cs.filter((c) => c.id !== cellId));
-  }
+  const loadList = useCallback(async (wsId: string) => {
+    setListErr(null); setListHint(null);
+    try {
+      const r = await fetch(`/api/items/notebook?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (!j.ok) { setNotebooks([]); setListErr(j.error); setListHint(j.hint); return; }
+      setNotebooks(j.notebooks || []);
+      if ((j.notebooks || []).length && !notebookId) setNotebookId(j.notebooks[0].id);
+    } catch (e: any) { setNotebooks([]); setListErr(e?.message || String(e)); }
+  }, [notebookId]);
+
+  const loadDetail = useCallback(async (wsId: string, nbId: string) => {
+    setDetailErr(null); setRunMsg(null);
+    try {
+      const r = await fetch(`/api/items/notebook/${encodeURIComponent(nbId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (!j.ok) { setDetailErr(j.error); return; }
+      const part = j.definition?.parts?.find((p: any) => /notebook-content\.(py|sql|scala|r)$/.test(p.path));
+      if (part?.payload) setSource(decodePy(part.payload));
+      else setSource(STARTER_PY);
+      setDirty(false);
+    } catch (e: any) { setDetailErr(e?.message || String(e)); }
+  }, []);
+
+  const loadJobs = useCallback(async (wsId: string, nbId: string) => {
+    try {
+      const r = await fetch(`/api/items/notebook/${encodeURIComponent(nbId)}/jobs?workspaceId=${encodeURIComponent(wsId)}`);
+      const j = await r.json();
+      if (j.ok) setJobs(j.jobs || []);
+    } catch { /* keep last */ }
+  }, []);
+
+  useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
+  useEffect(() => {
+    if (workspaceId && notebookId) { loadDetail(workspaceId, notebookId); loadJobs(workspaceId, notebookId); }
+  }, [workspaceId, notebookId, loadDetail, loadJobs]);
+
+  const save = useCallback(async () => {
+    if (!workspaceId || !notebookId) return;
+    setSaving(true); setDetailErr(null);
+    try {
+      const definition = {
+        format: 'fabricGitSource',
+        parts: [{ path: 'notebook-content.py', payload: encodePy(source), payloadType: 'InlineBase64' }],
+      };
+      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ definition }),
+      });
+      const j = await r.json();
+      if (!j.ok) setDetailErr(j.error || 'save failed');
+      else setDirty(false);
+    } finally { setSaving(false); }
+  }, [workspaceId, notebookId, source]);
+
+  const run = useCallback(async () => {
+    if (!workspaceId || !notebookId) return;
+    setRunning(true); setRunMsg(null);
+    try {
+      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await r.json();
+      if (!j.ok) setRunMsg(`Run failed: ${j.error}`);
+      else { setRunMsg('Job queued. Status polling starts via Refresh.'); setTimeout(() => loadJobs(workspaceId, notebookId), 1500); }
+    } finally { setRunning(false); }
+  }, [workspaceId, notebookId, loadJobs]);
+
+  const create = useCallback(async () => {
+    if (!workspaceId || !createName.trim()) return;
+    setCreateBusy(true); setCreateErr(null);
+    try {
+      const definition = {
+        format: 'fabricGitSource',
+        parts: [{ path: 'notebook-content.py', payload: encodePy(STARTER_PY), payloadType: 'InlineBase64' }],
+      };
+      const r = await fetch(`/api/items/notebook?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ displayName: createName.trim(), definition }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCreateErr(j.error || 'create failed'); return; }
+      setCreateOpen(false); setCreateName('');
+      await loadList(workspaceId);
+      if (j.notebook?.id) setNotebookId(j.notebook.id);
+    } finally { setCreateBusy(false); }
+  }, [workspaceId, createName, loadList]);
+
+  const del = useCallback(async () => {
+    if (!workspaceId || !notebookId) return;
+    if (!confirm('Delete this notebook? This cannot be undone.')) return;
+    await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
+    setNotebookId('');
+    await loadList(workspaceId);
+  }, [workspaceId, notebookId, loadList]);
 
   return (
-    <ItemEditorChrome
-      item={item}
-      id={id}
-      ribbon={RIBBON}
-      main={
-        <>
-          <div className={styles.toolbar}>
-            <Caption1>Kernel:</Caption1>
-            <Dropdown value={kernel} selectedOptions={[kernel]} onOptionSelect={(_, d) => setKernel(d.optionValue ?? kernel)}>
-              {KERNELS.map((k) => <Option key={k} value={k}>{k}</Option>)}
-            </Dropdown>
-            <Badge appearance="outline" color="success">Session: idle</Badge>
-            <Button appearance="primary" icon={<Play20Regular />} onClick={() => cells.forEach((c) => runCell(c.id))}>Run all</Button>
-            <Button appearance="subtle" icon={<Add20Regular />} onClick={() => addCell('code')}>Code cell</Button>
-            <Button appearance="subtle" onClick={() => addCell('markdown')}>+ Markdown</Button>
-          </div>
-          <div className={styles.cells}>
-            {cells.map((c, i) => (
-              <div key={c.id} className={styles.cell}>
-                <div className={styles.cellHeader}>
-                  <Caption1>[{i + 1}] {c.kind}</Caption1>
-                  {c.status === 'running' && <Badge color="brand">Running…</Badge>}
-                  {c.status === 'success' && <Badge color="success">Succeeded</Badge>}
-                  {c.status === 'error' && <Badge color="danger">Failed</Badge>}
-                  <div className={styles.cellActions}>
-                    {c.kind === 'code' && (
-                      <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => runCell(c.id)} aria-label="Run cell" />
-                    )}
-                    <Button size="small" appearance="subtle" icon={<ArrowUp20Regular />} aria-label="Move up" />
-                    <Button size="small" appearance="subtle" icon={<ArrowDown20Regular />} aria-label="Move down" />
-                    <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => deleteCell(c.id)} aria-label="Delete cell" />
-                  </div>
-                </div>
-                <textarea
-                  className={styles.src}
-                  defaultValue={c.source}
-                  spellCheck={false}
-                  aria-label={`Cell ${i + 1} source`}
-                />
-                {c.output && <div className={styles.output}>{c.output}</div>}
-              </div>
+    <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
+      leftPanel={
+        <div className={s.treePad}>
+          <Subtitle2 style={{ marginBottom: 8 }}>Notebooks</Subtitle2>
+          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
+          {workspaceId && notebooks === null && <Spinner size="tiny" label="Loading…" />}
+          {notebooks && notebooks.length === 0 && !listErr && <Caption1>No notebooks in this workspace.</Caption1>}
+          <Tree aria-label="Notebooks">
+            {(notebooks || []).map((n) => (
+              <TreeItem key={n.id} itemType="leaf" value={n.id} onClick={() => setNotebookId(n.id)}>
+                <TreeItemLayout iconBefore={<Notebook20Regular />}>
+                  {notebookId === n.id ? <strong>{n.displayName}</strong> : n.displayName}
+                </TreeItemLayout>
+              </TreeItem>
             ))}
+          </Tree>
+        </div>
+      }
+      main={
+        <div className={s.pad}>
+          <div className={s.toolbar}>
+            <Badge appearance="filled" color="brand">Fabric Notebook</Badge>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+              <Caption1>Workspace</Caption1>
+              <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
+                {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
+                {(ws.workspaces || []).map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · F/P SKU' : ''}</option>
+                ))}
+              </Select>
+            </div>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
+              <DialogTrigger disableButtonEnhancement>
+                <Button appearance="outline" icon={<Add20Regular />} disabled={!workspaceId}>New</Button>
+              </DialogTrigger>
+              <DialogSurface>
+                <DialogBody>
+                  <DialogTitle>Create Fabric notebook</DialogTitle>
+                  <DialogContent>
+                    <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
+                    {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
+                    <Button appearance="primary" disabled={createBusy || !createName.trim()} onClick={create}>{createBusy ? 'Creating…' : 'Create'}</Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+            <Button appearance="outline" icon={<Save20Regular />} disabled={saving || !notebookId || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save'}</Button>
+            <Button appearance="primary" icon={<Play20Regular />} disabled={running || !notebookId} onClick={run}>{running ? 'Queuing…' : 'Run'}</Button>
+            <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
-        </>
+
+          {(ws.error || listErr) && (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                <MessageBarTitle>Fabric not reachable</MessageBarTitle>
+                {ws.error || listErr}
+                {(ws.hint || listHint) && <><br /><Caption1>{ws.hint || listHint}</Caption1></>}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+          {runMsg && <MessageBar intent="info"><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
+
+          {notebookId && (
+            <>
+              {dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
+              <textarea
+                className={s.editor}
+                spellCheck={false}
+                value={source}
+                onChange={(e) => { setSource(e.target.value); setDirty(true); }}
+                aria-label="Notebook PySpark source"
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Subtitle2>Run history ({jobs.length})</Subtitle2>
+                <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => loadJobs(workspaceId, notebookId)}>Refresh</Button>
+              </div>
+              <div className={s.tableWrap}>
+                <Table aria-label="Jobs" size="small">
+                  <TableHeader><TableRow>
+                    <TableHeaderCell>Job ID</TableHeaderCell>
+                    <TableHeaderCell>Status</TableHeaderCell>
+                    <TableHeaderCell>Invoke</TableHeaderCell>
+                    <TableHeaderCell>Start</TableHeaderCell>
+                    <TableHeaderCell>End</TableHeaderCell>
+                    <TableHeaderCell>Failure</TableHeaderCell>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {jobs.length === 0 && <TableRow><TableCell colSpan={6}>No runs yet.</TableCell></TableRow>}
+                    {jobs.map((j) => (
+                      <TableRow key={j.id}>
+                        <TableCell className={s.cell}>{j.id.slice(0, 8)}</TableCell>
+                        <TableCell>{j.status || '—'}</TableCell>
+                        <TableCell>{j.invokeType || '—'}</TableCell>
+                        <TableCell className={s.cell}>{j.startTimeUtc || '—'}</TableCell>
+                        <TableCell className={s.cell}>{j.endTimeUtc || '—'}</TableCell>
+                        <TableCell className={s.cell}>{j.failureReason?.message || ''}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
+          )}
+        </div>
       }
     />
   );
