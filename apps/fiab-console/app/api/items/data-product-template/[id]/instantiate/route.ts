@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { createOwnedItem } from '../../_lib/item-crud';
+import { createOwnedItem } from '../../../_lib/item-crud';
 import { CURATED_TEMPLATES } from '@/lib/catalog/data-product-templates';
 
 export const runtime = 'nodejs';
