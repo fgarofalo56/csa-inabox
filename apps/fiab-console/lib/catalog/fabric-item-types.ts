@@ -36,6 +36,26 @@ export type WorkloadCategory =
   | 'Power Platform'
   | 'AI & Agents';
 
+export interface LearnStep {
+  title: string;
+  body: string;
+  /** Optional screenshot path under /public */
+  screenshot?: string;
+}
+
+export interface LearnContent {
+  /** 1-3 sentence overview shown on the Learn dialog's first pane. */
+  overview: string;
+  /** Numbered getting-started walkthrough — 3-5 steps. */
+  steps: LearnStep[];
+  /** Optional embed URL for an explainer video. */
+  videoUrl?: string;
+  /** Authoritative docs link (Microsoft Learn for Fabric/Azure concepts, Loom docs for Loom-only). */
+  docsUrl?: string;
+  /** Optional sample-data dataset suggestions. */
+  sampleData?: string[];
+}
+
 export interface FabricItemType {
   /** Route slug — used at /items/[slug]/[id] */
   slug: string;
@@ -51,6 +71,8 @@ export interface FabricItemType {
   preview?: boolean;
   /** True when no Fabric REST API exists (Scorecard, Dataflow Gen1) */
   noRestApi?: boolean;
+  /** Learn / Getting started popup content. Required for every type. */
+  learnContent?: LearnContent;
 }
 
 export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
