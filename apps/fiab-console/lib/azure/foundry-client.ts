@@ -846,8 +846,10 @@ export async function queryTraces(opts: { hours?: number; operation?: string } =
   let query = `union traces, dependencies, customEvents | where timestamp > ago(${hours}h)`;
   if (opts.operation) query += ` | where operation_Name == "${opts.operation.replace(/"/g, '\\"')}"`;
   query += ` | order by timestamp desc | take 200 | project timestamp, name, operation_Name, duration, success, resultCode, message, customDimensions`;
+  // App Insights query via Log Analytics-backed API. /query supports KQL.
+  // Using 2015-05-01 (stable GA) on the application/components resource.
   const path = `${appiId}/api/query`;
-  const res = await armFetch(path, { apiVersion: '2018-04-20', method: 'POST', body: JSON.stringify({ query }) });
+  const res = await armFetch(path, { apiVersion: '2015-05-01', method: 'POST', body: JSON.stringify({ query }) });
   if (!res.ok) {
     const t = await res.text();
     throw new FoundryError(res.status, t, `App Insights query failed (${res.status}): ${t.slice(0, 240)} | endpoint=${path}`);
