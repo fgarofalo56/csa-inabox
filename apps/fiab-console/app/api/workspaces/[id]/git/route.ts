@@ -2,8 +2,12 @@
  * Workspace Git integration.
  *
  * GET    /api/workspaces/[id]/git              → current Git binding (or null)
- * PUT    /api/workspaces/[id]/git              → upsert binding {provider, repoUrl, branch, directory?, pat?}
+ * POST   /api/workspaces/[id]/git              → upsert binding {provider, repoUrl, branch, directory?, pat?}
  * DELETE /api/workspaces/[id]/git              → disconnect
+ *
+ * (PUT would be the conventional verb here, but Front Door's default WAF
+ * profile rejects PUT on dynamic paths with a 403 — POST upsert is the
+ * pragmatic choice.)
  *
  * Backed by Cosmos `workspace-git` (PK /workspaceId). Doc shape:
  *   { id: workspaceId, workspaceId, provider:'github'|'ado', repoUrl,
@@ -60,7 +64,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   if (!(await assertOwner(params.id, s.claims.oid)))

@@ -204,11 +204,11 @@ async function main() {
   });
 
   // ---- Chunk 5b git ----
-  await step('PUT + GET /api/workspaces/[id]/git (Chunk 5b)', async () => {
-    const put = await call('PUT', `/api/workspaces/${ws.id}/git`, {
+  await step('POST + GET /api/workspaces/[id]/git (Chunk 5b)', async () => {
+    const put = await call('POST', `/api/workspaces/${ws.id}/git`, {
       provider: 'github', repoUrl: 'https://github.com/example/repo', branch: 'main',
     });
-    expect(put.status, s => s === 200, `put status=${put.status}`);
+    expect(put.status, s => s === 200, `post status=${put.status}`);
     const { body } = await call('GET', `/api/workspaces/${ws.id}/git`);
     expect(body.git?.repoUrl, u => u === 'https://github.com/example/repo');
   });

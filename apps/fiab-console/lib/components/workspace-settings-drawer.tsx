@@ -317,7 +317,7 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
   const save = async () => {
     setBusy(true); setError(null);
     const r = await fetch(`/api/workspaces/${workspaceId}/git`, {
-      method: 'PUT', headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ provider, repoUrl, branch, directory: directory || undefined,
         pat: pat || undefined }),
     });
