@@ -694,14 +694,62 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save } = useItemState<OntoState>('ontology', id, { source: ONTO_SAMPLE });
   const classes = parseOntologyHierarchy(state.source || '');
+  const [materializing, setMaterializing] = useState(false);
+  const [matMsg, setMatMsg] = useState<string | null>(null);
+
+  // v3.27: D-upgrade — materialize the ontology hierarchy as a graph-model.
+  // Each class becomes a node type; parent → child edges become an `is_a`
+  // relationship type. The new graph-model can then be ADX-materialized
+  // via its own /materialize endpoint to create real KQL tables.
+  const materializeToGraphModel = useCallback(async () => {
+    if (classes.length === 0) {
+      setMatMsg('No classes parsed — nothing to materialize.');
+      return;
+    }
+    setMaterializing(true); setMatMsg(null);
+    try {
+      const nodes = classes.map(c => ({
+        name: c.name,
+        properties: [
+          { name: 'id', type: 'string' },
+          ...(c.description ? [{ name: 'description', type: 'string' }] : []),
+        ],
+      }));
+      const hasParents = classes.some(c => c.parent);
+      const edges = hasParents
+        ? [{ name: 'IS_A', properties: [{ name: 'inheritedAt', type: 'datetime' }] }]
+        : [];
+      const r = await fetch('/api/items/graph-model', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId: 'default',
+          displayName: `${item.label || 'Ontology'} graph (from ontology ${id})`,
+          state: {
+            nodes,
+            edges,
+            database: 'loomdb-default',
+            sourceOntologyId: id,
+            sourceOntologyClasses: classes.length,
+          },
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMatMsg(`Failed: ${j.error || `HTTP ${r.status}`}`); return; }
+      setMatMsg(`Materialized as graph-model id=${j.item?.id || j.id} with ${nodes.length} node type(s) + ${edges.length} edge type(s). Open the graph-model editor and click Materialize to push to ADX.`);
+    } catch (e: any) {
+      setMatMsg(`Failed: ${e?.message || String(e)}`);
+    } finally { setMaterializing(false); }
+  }, [classes, id, item.label]);
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={IQ_RIBBON} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info">
           <MessageBarBody>
-            <MessageBarTitle>v2.1: configuration only</MessageBarTitle>
-            Ontology source persists to Cosmos and the class tree renders below. Binding entities to Lakehouse/Warehouse tables and rule-driven Activator triggers are deferred to v2.x.
+            <MessageBarTitle>Ontology runtime</MessageBarTitle>
+            v3.27 adds the <strong>Materialize as graph-model</strong> action below — converts the parsed class hierarchy into a graph-model item (one node type per class, IS_A edge type for parent relationships). The graph-model can then be ADX-materialized to create real KQL tables. Lakehouse/Warehouse entity binding + Activator triggers are still deferred.
           </MessageBarBody>
         </MessageBar>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16 }}>
@@ -721,6 +769,14 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
                 </TreeItem>
               ))}
             </Tree>
+            <Button appearance="primary" disabled={materializing || classes.length === 0} onClick={materializeToGraphModel} style={{ marginTop: 8, alignSelf: 'flex-start' }}>
+              {materializing ? 'Materializing…' : `Materialize as graph-model (${classes.length} class${classes.length === 1 ? '' : 'es'})`}
+            </Button>
+            {matMsg && (
+              <MessageBar intent={matMsg.startsWith('Failed') ? 'error' : 'success'} style={{ marginTop: 8 }}>
+                <MessageBarBody>{matMsg}</MessageBarBody>
+              </MessageBar>
+            )}
           </div>
         </div>
         <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
@@ -837,16 +893,40 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const add = () => setState({ ...state, tasks: [...state.tasks, { title: '', owner: '', due: '', status: 'todo' }] });
   const remove = (idx: number) => setState({ ...state, tasks: state.tasks.filter((_, i) => i !== idx) });
 
+  // v3.27: D-upgrade — compute and surface progress + overdue counts.
+  const counts = state.tasks.reduce(
+    (acc, t) => { acc[t.status] = (acc[t.status] || 0) + 1; return acc; },
+    {} as Record<PlanTask['status'], number>,
+  );
+  const todo = counts.todo || 0;
+  const doing = counts.doing || 0;
+  const done = counts.done || 0;
+  const total = state.tasks.length;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = state.tasks.filter(t => t.status !== 'done' && t.due && t.due < today).length;
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={PLAN_RIBBON} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info">
           <MessageBarBody>
-            <MessageBarTitle>v2.1: task list persisted</MessageBarTitle>
-            Plan rows save to Cosmos. Semantic-model writeback and approval workflows are deferred to v2.x.
+            <MessageBarTitle>Plan runtime</MessageBarTitle>
+            Plan rows save to Cosmos. v3.27: progress + status badges surface real counts; overdue tasks (due date passed and not done) get a danger badge. Approval-workflow handoff to <code>power-automate-flow</code> + semantic-model writeback are still deferred.
           </MessageBarBody>
         </MessageBar>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Badge appearance="filled" color="brand">{total} task{total === 1 ? '' : 's'}</Badge>
+          <Badge appearance="outline">to-do: {todo}</Badge>
+          <Badge appearance="filled" color="warning">doing: {doing}</Badge>
+          <Badge appearance="filled" color="success">done: {done}</Badge>
+          {overdue > 0 && <Badge appearance="filled" color="danger">overdue: {overdue}</Badge>}
+          <Caption1 style={{ marginLeft: 8 }}>{pct}% complete</Caption1>
+          <div style={{ flex: 1, height: 6, backgroundColor: tokens.colorNeutralBackground3, borderRadius: 3, overflow: 'hidden', minWidth: 120, maxWidth: 240 }}>
+            <div style={{ width: `${pct}%`, height: '100%', backgroundColor: tokens.colorBrandStroke1, transition: 'width 0.2s' }} />
+          </div>
+        </div>
         <Table aria-label="Plan tasks" size="small">
           <TableHeader><TableRow>
             <TableHeaderCell>Task</TableHeaderCell>
@@ -893,24 +973,65 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   const { state, setState, loading, saving, error, savedAt, save } = useItemState<MapState>('map', id, { geojson: GEO_SAMPLE });
   let parseErr: string | null = null;
   let featureCount = 0;
+  let bbox: { minLon: number; maxLon: number; minLat: number; maxLat: number } | null = null;
   try {
     const j = JSON.parse(state.geojson);
     featureCount = Array.isArray(j?.features) ? j.features.length : 0;
+    // v3.27: compute bbox to drive the Azure Maps tile preview centerpoint.
+    if (Array.isArray(j?.features)) {
+      let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+      for (const f of j.features) {
+        const coords = f?.geometry?.coordinates;
+        const walk = (c: any) => {
+          if (!Array.isArray(c)) return;
+          if (typeof c[0] === 'number' && typeof c[1] === 'number') {
+            const [lon, lat] = c;
+            if (lon < minLon) minLon = lon; if (lon > maxLon) maxLon = lon;
+            if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
+          } else { c.forEach(walk); }
+        };
+        walk(coords);
+      }
+      if (Number.isFinite(minLon)) bbox = { minLon, maxLon, minLat, maxLat };
+    }
   } catch (e: any) { parseErr = e?.message || String(e); }
+
+  // v3.27: D-upgrade — Azure Maps tile preview. Static-map REST API is the
+  // simplest no-deps integration: just emit an <img>. Falls back to a
+  // MessageBar gate when LOOM_AZURE_MAPS_SUBSCRIPTION_KEY isn't set.
+  const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY;
+  const centerLon = bbox ? (bbox.minLon + bbox.maxLon) / 2 : -122.33;
+  const centerLat = bbox ? (bbox.minLat + bbox.maxLat) / 2 : 47.61;
+  // Naive zoom heuristic: smaller bbox → larger zoom.
+  const span = bbox ? Math.max(bbox.maxLon - bbox.minLon, bbox.maxLat - bbox.minLat) : 0.1;
+  const zoom = Math.max(1, Math.min(18, Math.round(11 - Math.log2(Math.max(span, 0.0001)))));
+  const tileUrl = mapsKey
+    ? `https://atlas.microsoft.com/map/static?api-version=2024-04-01&style=main&zoom=${zoom}&center=${centerLon},${centerLat}&width=640&height=320&subscription-key=${mapsKey}`
+    : null;
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={MAP_RIBBON} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="info">
-          <MessageBarBody>
-            <MessageBarTitle>v2.1: GeoJSON storage only</MessageBarTitle>
-            Layers persist to Cosmos and validate as GeoJSON. The interactive map renderer (Leaflet/Azure Maps) lands in v2.x.
-          </MessageBarBody>
-        </MessageBar>
+        {!mapsKey && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Azure Maps tile preview disabled</MessageBarTitle>
+              GeoJSON persists to Cosmos and validates correctly. To enable the tile preview below, set <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> in the Container App env to a key from an Azure Maps account (or use MI-auth via the future <code>/api/items/map/[id]/preview</code> proxy). Vector overlay rendering of the GeoJSON itself (atlas.data.Source) lands in v2.x.
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <Subtitle2>GeoJSON ({featureCount} feature{featureCount === 1 ? '' : 's'})</Subtitle2>
-        <textarea className={s.monaco} value={state.geojson} onChange={(e) => setState({ ...state, geojson: e.target.value })} spellCheck={false} aria-label="GeoJSON" style={{ minHeight: 320 }} />
+        <textarea className={s.monaco} value={state.geojson} onChange={(e) => setState({ ...state, geojson: e.target.value })} spellCheck={false} aria-label="GeoJSON" style={{ minHeight: 280 }} />
         {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid JSON: {parseErr}</MessageBarBody></MessageBar>}
+        {tileUrl && (
+          <>
+            <Subtitle2>Azure Maps preview (zoom {zoom}, center {centerLat.toFixed(3)}, {centerLon.toFixed(3)})</Subtitle2>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={tileUrl} alt="Azure Maps tile preview" style={{ width: '100%', maxWidth: 640, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}` }} />
+            <Caption1>Static-map preview only — features above are NOT rendered as overlays in this snapshot. Use the vector overlay path in v2.x for live layer rendering.</Caption1>
+          </>
+        )}
         <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
       </div>
     } />
