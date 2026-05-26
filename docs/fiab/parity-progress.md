@@ -2,6 +2,33 @@
 
 Live log of the multi-agent `fabric-parity-loop` workflow. Most recent at top.
 
+## 2026-05-26 — ✅ CATALOG PHASE COMPLETE — 85 / 85 UIs cataloged
+
+**All 85 Loom editors have a parity spec on disk under `docs/fiab/<name>-parity-spec.md`.**
+
+Wave-by-wave tally:
+- Wave 1 (previous session): 2 (notebook, lakehouse)
+- Wave 2: 10 (eventstream, eventhouse, dataflow, copy-job, warehouse, semantic-model, report, kql-database, kql-queryset, data-pipeline)
+- Wave 3: 13 (dashboard, paginated-report, scorecard, ml-experiment, ml-model, spark-job-definition, environment, graphql-api, user-data-function, kql-dashboard, activator, mirrored-database, dbt-job)
+- Wave 4: 21 (variable-library, plan, ontology, graph-model, map, operations-agent, data-agent, synapse-{ded,serverless,spark}-sql-pool, synapse-pipeline, adf-{pipeline,dataset,trigger}, databricks-{notebook,job,cluster,sql-warehouse})
+- Wave 5: 21 (apim-{api,product,policy}, data-product, ai-foundry-{hub,project}, compute, dataset, prompt-flow, evaluation, content-safety, tracing, copilot-studio-{agent,knowledge,topic,action,channel,analytics}, ai-search-index, usql-job, ai-search-skillset)
+- Wave 6: 18 (copilot-template-library, powerplatform-environment, dataverse-table, power-app, power-automate-flow, power-page, ai-builder-model, azure-sql-{server,database,managed-instance}, sql-server-2025-vector-index, geo-{map,dataset,query,pipeline}, cosmos-gremlin-graph, cypher-graph, gql-graph, vector-store, data-product-{template,instance}, cross-item-copilot)
+
+**Notable findings from the catalog**:
+1. **`data-product` is F-grade vaporware** — hardcoded `productId='customer-360'`, owner `'alice@contoso'`, fixed bundle grid. "Publish to APIM" creates an APIM Product (wrong backend). Needs Purview Unified Catalog wiring. Reclassified in `wiring-audit.md`.
+2. **`usql-job` is unreachable** — Azure Data Lake Analytics retired 2024-02-29. Recommendation: graceful deprecation + Spark-translation helper.
+3. **`sql-server-2025-vector-index` editor has a real DDL bug** — `DIMENSIONS` is a column-level property (`VECTOR(N)`), not an index `WITH` option.
+4. **Copilot Studio 6-pack** is real and wired through Dataverse `msdyn_copilots` / `msdyn_knowledgesources` / etc., gated by per-env Copilot Studio enablement.
+5. **AI Search Skillset / Indexer / DataSource items don't exist in registry** — gap that blocks enterprise-search ingest.
+6. **APIM Policy operation scope is unwired** — only Global/API/Product scopes; missing `/apis/{aid}/operations/{oid}/policies/policy`.
+7. **All four Geo items are Loom-native** (no Fabric equivalent); specs pivot to Azure-native references (Azure Maps Studio, KQL `geo_*`, Synapse spatial extensions).
+
+**Next phase**: with 85 specs in hand, Phase 2 (Build) can now be sequenced. Suggested ordering per the no-vaporware rule:
+1. **F-grade fixes** (vaporware violations must clear first): `data-product` MessageBar gate + Purview wiring
+2. **D-grade upgrades**: `usql-job` deprecation MessageBar, `ontology`/`map`/`plan` runtime wiring
+3. **C-grade enhancements**: `notebook` Phase 2 (ExplorerPane / Lakehouse attach), `apim-policy` operation scope, the DAG canvas (shared by `data-pipeline` / `adf-pipeline` / `synapse-pipeline`)
+4. **A-grade polish**: Monaco upgrades, multi-tab, query history, etc.
+
 ## 2026-05-26 — Catalog phase ~73% complete (62 / 85 UIs cataloged)
 
 **Today's full output**:
