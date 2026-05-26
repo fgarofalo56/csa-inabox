@@ -1,8 +1,13 @@
 'use client';
 
-import { useState } from 'react';
-import { Button, Caption1, makeStyles, tokens } from '@fluentui/react-components';
-import { Edit16Regular, Eye16Regular, Delete16Regular, ChevronUp16Regular, ChevronDown16Regular } from '@fluentui/react-icons';
+import { useEffect, useState } from 'react';
+import { Badge, Button, Caption1, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import {
+  Edit16Regular, Eye16Regular, Delete16Regular,
+  ChevronUp16Regular, ChevronDown16Regular,
+  LockClosed16Regular, LockClosed16Filled, Copy16Regular,
+  ArrowMaximize16Regular, ArrowMinimize16Regular,
+} from '@fluentui/react-icons';
 import type { NotebookCell } from '@/lib/types/notebook-cell';
 
 const useStyles = makeStyles({
@@ -14,6 +19,22 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
   },
   shellActive: { border: `1px solid ${tokens.colorBrandStroke1}` },
+  shellMaximized: {
+    position: 'fixed',
+    top: '64px',
+    right: '16px',
+    bottom: '16px',
+    left: '16px',
+    zIndex: 1000,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow28,
+  },
+  backdrop: {
+    position: 'fixed',
+    inset: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    zIndex: 999,
+  },
   header: {
     display: 'flex', alignItems: 'center', gap: 8,
     padding: '4px 8px',
@@ -29,11 +50,25 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1, resize: 'vertical',
   },
+  editorLocked: {
+    backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground2,
+    cursor: 'not-allowed',
+  },
+  editorMaximized: {
+    flex: 1,
+    minHeight: 0,
+    resize: 'none',
+  },
   rendered: {
     padding: 12,
     fontSize: 14,
     lineHeight: 1.5,
     color: tokens.colorNeutralForeground1,
+  },
+  renderedMaximized: {
+    flex: 1,
+    overflow: 'auto',
   },
   tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: 11 },
 });
@@ -73,43 +108,99 @@ export interface MarkdownCellProps {
   onDelete?: () => void;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
+  onDuplicate?: () => void;
   canMoveUp?: boolean;
   canMoveDown?: boolean;
 }
 
-export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMoveUp, onMoveDown, canMoveUp, canMoveDown }: MarkdownCellProps) {
+export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMoveUp, onMoveDown, onDuplicate, canMoveUp, canMoveDown }: MarkdownCellProps) {
   const s = useStyles();
   const [editing, setEditing] = useState(!cell.source);
+  const [maximized, setMaximized] = useState(false);
 
-  return (
-    <div className={`${s.shell} ${active ? s.shellActive : ''}`} onClick={onFocus}>
+  const locked = !!cell.locked;
+
+  // ESC dismisses the maximized state.
+  useEffect(() => {
+    if (!maximized) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMaximized(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [maximized]);
+
+  const toggleLock = () => onChange({ ...cell, locked: !cell.locked });
+
+  const shell = (
+    <div
+      className={mergeClasses(
+        s.shell,
+        active && s.shellActive,
+        maximized && s.shellMaximized,
+      )}
+      onClick={onFocus}
+    >
       <div className={s.header}>
         <Caption1 className={s.tag}># md</Caption1>
-        <Button size="small" appearance="subtle" icon={editing ? <Eye16Regular /> : <Edit16Regular />} onClick={(e) => { e.stopPropagation(); setEditing(!editing); }}>
+        <Button
+          size="small"
+          appearance="subtle"
+          icon={editing ? <Eye16Regular /> : <Edit16Regular />}
+          onClick={(e) => { e.stopPropagation(); if (locked && !editing) return; setEditing(!editing); }}
+          disabled={locked && !editing}
+        >
           {editing ? 'View' : 'Edit'}
         </Button>
+        {locked && <Badge appearance="outline" color="warning" size="small">locked</Badge>}
         <div className={s.spacer} />
+        <Button
+          size="small"
+          appearance={locked ? 'primary' : 'subtle'}
+          icon={locked ? <LockClosed16Filled /> : <LockClosed16Regular />}
+          onClick={(e) => { e.stopPropagation(); toggleLock(); }}
+          aria-label={locked ? 'Unlock cell' : 'Lock cell'}
+          title={locked ? 'Unlock cell' : 'Lock cell'}
+        />
+        <Button size="small" appearance="subtle" icon={<Copy16Regular />} disabled={!onDuplicate} onClick={(e) => { e.stopPropagation(); onDuplicate?.(); }} aria-label="Duplicate cell" title="Duplicate cell" />
+        <Button
+          size="small"
+          appearance="subtle"
+          icon={maximized ? <ArrowMinimize16Regular /> : <ArrowMaximize16Regular />}
+          onClick={(e) => { e.stopPropagation(); setMaximized(m => !m); }}
+          aria-label={maximized ? 'Restore cell' : 'Maximize cell'}
+          title={maximized ? 'Restore cell (Esc)' : 'Maximize cell'}
+        />
         <Button size="small" appearance="subtle" icon={<ChevronUp16Regular />} disabled={!canMoveUp} onClick={(e) => { e.stopPropagation(); onMoveUp?.(); }} aria-label="Move cell up" />
         <Button size="small" appearance="subtle" icon={<ChevronDown16Regular />} disabled={!canMoveDown} onClick={(e) => { e.stopPropagation(); onMoveDown?.(); }} aria-label="Move cell down" />
         <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={(e) => { e.stopPropagation(); onDelete?.(); }} aria-label="Delete cell" />
       </div>
       {editing ? (
         <textarea
-          className={s.editor}
+          className={mergeClasses(s.editor, locked && s.editorLocked, maximized && s.editorMaximized)}
           value={cell.source}
           spellCheck
+          readOnly={locked}
           onChange={(e) => onChange({ ...cell, source: e.target.value })}
-          onBlur={() => cell.source.trim() && setEditing(false)}
+          onBlur={() => { if (!locked && cell.source.trim()) setEditing(false); }}
           aria-label={`Markdown cell ${cell.id}`}
         />
       ) : (
         <div
-          className={s.rendered}
-          onDoubleClick={() => setEditing(true)}
+          className={mergeClasses(s.rendered, maximized && s.renderedMaximized)}
+          onDoubleClick={() => { if (!locked) setEditing(true); }}
           // eslint-disable-next-line react/no-danger
           dangerouslySetInnerHTML={{ __html: renderMarkdown(cell.source || '_Empty markdown cell — double-click to edit._') }}
         />
       )}
     </div>
   );
+
+  if (maximized) {
+    return (
+      <>
+        <div className={s.backdrop} onClick={() => setMaximized(false)} aria-hidden="true" />
+        {shell}
+      </>
+    );
+  }
+  return shell;
 }

@@ -22,6 +22,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
+  History20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -29,6 +30,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
+import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
 const RIBBON: RibbonTab[] = [
@@ -160,6 +162,8 @@ export function NotebookEditor({ item, id }: Props) {
   const [attachOpen, setAttachOpen] = useState(false);
   const [availableLakehouses, setAvailableLakehouses] = useState<LakehouseLite[] | null>(null);
   const [attachBusy, setAttachBusy] = useState(false);
+  // Phase 3: History drawer
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // Auto-pick first runnable compute (skip serverless SQL — not for notebooks)
   useEffect(() => {
@@ -407,6 +411,31 @@ export function NotebookEditor({ item, id }: Props) {
     setDirty(true);
   }, []);
 
+  // Phase 3: duplicate a cell — clone with a fresh id and splice right
+  // after the source cell. Clears any execution output / count so the
+  // copy doesn't inherit stale run state.
+  const duplicateCell = useCallback((id: string) => {
+    const newId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `cell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setCells(prev => {
+      const idx = prev.findIndex(c => c.id === id);
+      if (idx < 0) return prev;
+      const src = prev[idx];
+      const copy: NotebookCell = {
+        ...src,
+        id: newId,
+        executionCount: undefined,
+        output: undefined,
+      };
+      const next = [...prev];
+      next.splice(idx + 1, 0, copy);
+      return next;
+    });
+    setActiveCellId(newId);
+    setDirty(true);
+  }, []);
+
   // Per-cell run: dispatches a single cell's source to the notebook /run endpoint with cellId, then polls.
   const runCell = useCallback(async (cell: NotebookCell) => {
     if (!workspaceId || !notebookId) return;
@@ -565,8 +594,19 @@ export function NotebookEditor({ item, id }: Props) {
             </Dialog>
             <Button appearance="outline" icon={<Save20Regular />} disabled={saving || !notebookId || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save'}</Button>
             <Button appearance="primary" icon={<Play20Regular />} disabled={running || !notebookId} onClick={run}>{running ? 'Queuing…' : 'Run'}</Button>
+            <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
+
+          {/* Phase 3: HistoryDrawer — right-side OverlayDrawer wired to /jobs */}
+          <HistoryDrawer
+            open={historyOpen}
+            onOpenChange={setHistoryOpen}
+            notebookId={notebookId}
+            workspaceId={workspaceId}
+            computeId={computeId}
+            onRerun={run}
+          />
 
           {/* Phase 2: Attach Lakehouse modal */}
           <Dialog open={attachOpen} onOpenChange={(_, d) => setAttachOpen(d.open)}>
@@ -649,6 +689,7 @@ export function NotebookEditor({ item, id }: Props) {
                         onDelete={() => deleteCell(c.id)}
                         onMoveUp={() => moveCell(c.id, -1)}
                         onMoveDown={() => moveCell(c.id, 1)}
+                        onDuplicate={() => duplicateCell(c.id)}
                         canMoveUp={idx > 0}
                         canMoveDown={idx < cells.length - 1}
                       />
@@ -661,6 +702,7 @@ export function NotebookEditor({ item, id }: Props) {
                         onDelete={() => deleteCell(c.id)}
                         onMoveUp={() => moveCell(c.id, -1)}
                         onMoveDown={() => moveCell(c.id, 1)}
+                        onDuplicate={() => duplicateCell(c.id)}
                         canMoveUp={idx > 0}
                         canMoveDown={idx < cells.length - 1}
                       />
