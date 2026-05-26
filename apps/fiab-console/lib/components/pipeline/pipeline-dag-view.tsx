@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * PipelineDagView — read-only DAG renderer for ADF / Synapse / Fabric
+ * PipelineDagView — DAG renderer for ADF / Synapse / Fabric
  * pipeline activity arrays. All three share the same JSON shape:
  *   { properties: { activities: [{ name, type, dependsOn: [{ activity, dependencyConditions: [] }] }] } }
  *
@@ -10,12 +10,17 @@
  * rank stack vertically. SVG overlay draws success/failure/completion/
  * skip dependency arrows.
  *
- * This is the v3.27 shared DAG canvas — Phase 1 (read-only). Drag-drop
- * authoring is queued for Phase 2.
+ * v3.27 Phase 1: read-only canvas.
+ * v3.28 Phase 2: optional click-to-add activity palette. When the parent
+ *   passes `onActivityAdd`, a horizontal row of activity-type buttons
+ *   renders above the DAG. Each click templates a fresh activity of that
+ *   type (with auto-incremented name) and hands it to the parent for
+ *   insertion into its JSON state. Drag-to-reorder + properties pane are
+ *   queued for Phase 3.
  */
 
 import { useMemo } from 'react';
-import { Badge, Caption1, MessageBar, MessageBarBody, makeStyles, tokens } from '@fluentui/react-components';
+import { Badge, Button, Caption1, MessageBar, MessageBarBody, makeStyles, tokens } from '@fluentui/react-components';
 
 const useStyles = makeStyles({
   shell: {
@@ -69,6 +74,19 @@ const useStyles = makeStyles({
     top: 0, left: 0, right: 0, bottom: 0,
     pointerEvents: 'none',
   },
+  palette: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 12,
+    paddingBottom: 8,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  paletteLabel: {
+    alignSelf: 'center',
+    marginRight: 4,
+    color: tokens.colorNeutralForeground3,
+  },
 });
 
 export interface PipelineActivityRef { activity: string; dependencyConditions?: string[]; }
@@ -77,6 +95,11 @@ export interface PipelineActivity {
   type?: string;
   dependsOn?: PipelineActivityRef[];
   description?: string;
+  typeProperties?: Record<string, unknown>;
+  // Phase-2 templates may carry compound shapes (ForEach/IfCondition children).
+  // Use index signature so callers can attach future fields without us
+  // having to keep the type in sync with every Azure activity flavor.
+  [key: string]: unknown;
 }
 
 const TYPE_COLORS: Record<string, { bg: string; fg: string }> = {
@@ -143,13 +166,132 @@ function computeRanks(activities: PipelineActivity[]): Map<string, number> {
   return ranks;
 }
 
+// ============================================================
+// Phase-2 palette
+// ============================================================
+// Each entry maps a palette button -> (label, activity-type key, name-prefix,
+// factory that produces a fresh template). The label is what users see;
+// the type key is what gets stamped into the JSON; the prefix is what the
+// auto-incrementer scans for to suggest the next free <n>.
+interface PaletteEntry {
+  label: string;
+  type: string;
+  namePrefix: string;
+  build: (name: string) => PipelineActivity;
+}
+
+const PALETTE: PaletteEntry[] = [
+  {
+    label: 'Copy', type: 'Copy', namePrefix: 'Copy',
+    build: (name) => ({ name, type: 'Copy', typeProperties: { source: {}, sink: {} }, dependsOn: [] }),
+  },
+  {
+    label: 'Notebook', type: 'Notebook', namePrefix: 'Notebook',
+    build: (name) => ({ name, type: 'Notebook', typeProperties: { notebookId: '' }, dependsOn: [] }),
+  },
+  {
+    label: 'Dataflow', type: 'ExecuteDataFlow', namePrefix: 'Dataflow',
+    build: (name) => ({ name, type: 'ExecuteDataFlow', typeProperties: {}, dependsOn: [] }),
+  },
+  {
+    label: 'Lookup', type: 'Lookup', namePrefix: 'Lookup',
+    build: (name) => ({ name, type: 'Lookup', typeProperties: {}, dependsOn: [] }),
+  },
+  {
+    label: 'ForEach', type: 'ForEach', namePrefix: 'ForEach',
+    build: (name) => ({
+      name, type: 'ForEach',
+      typeProperties: {
+        items: { value: "@variables('items')", type: 'Expression' },
+        activities: [],
+      },
+      dependsOn: [],
+    }),
+  },
+  {
+    label: 'IfCondition', type: 'IfCondition', namePrefix: 'If',
+    build: (name) => ({
+      name, type: 'IfCondition',
+      typeProperties: {
+        expression: { value: '@equals(1,1)', type: 'Expression' },
+        ifTrueActivities: [],
+        ifFalseActivities: [],
+      },
+      dependsOn: [],
+    }),
+  },
+  {
+    label: 'Wait', type: 'Wait', namePrefix: 'Wait',
+    build: (name) => ({ name, type: 'Wait', typeProperties: { waitTimeInSeconds: 5 }, dependsOn: [] }),
+  },
+  {
+    label: 'ExecutePipeline', type: 'ExecutePipeline', namePrefix: 'ExecPipeline',
+    build: (name) => ({
+      name, type: 'ExecutePipeline',
+      typeProperties: { pipeline: { referenceName: '', type: 'PipelineReference' } },
+      dependsOn: [],
+    }),
+  },
+];
+
+/**
+ * Scan existing activities for names matching `<prefix><n>` and return the
+ * next free <n>. Example: with prefix 'Copy' and activities ['Copy1','Copy2'],
+ * returns 3. Activities whose name doesn't match the pattern are ignored.
+ */
+function nextNameSuffix(activities: PipelineActivity[], prefix: string): number {
+  // Palette prefixes are simple ASCII identifiers (Copy, Notebook, If, etc.)
+  // so we don't need regex-escape; just substring + integer parse.
+  let max = 0;
+  for (const a of activities) {
+    const name = a.name || '';
+    if (!name.startsWith(prefix)) continue;
+    const tail = name.slice(prefix.length);
+    if (!/^\d+$/.test(tail)) continue;
+    const n = parseInt(tail, 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return max + 1;
+}
+
 export interface PipelineDagViewProps {
   activities: PipelineActivity[];
   emptyHint?: string;
+  /**
+   * Phase-2 hook: when provided, a click-to-add palette renders above the
+   * canvas. The handler receives a freshly-templated activity (with an
+   * auto-incremented name) and is expected to append it to its own JSON
+   * state. When omitted, the view stays read-only (Phase-1 behavior).
+   */
+  onActivityAdd?: (activity: PipelineActivity) => void;
 }
 
-export function PipelineDagView({ activities, emptyHint }: PipelineDagViewProps) {
+export function PipelineDagView({ activities, emptyHint, onActivityAdd }: PipelineDagViewProps) {
   const s = useStyles();
+
+  const palette = onActivityAdd ? (
+    <div className={s.palette} role="toolbar" aria-label="Add activity">
+      <Caption1 className={s.paletteLabel}>Add activity:</Caption1>
+      {PALETTE.map((p) => {
+        const c = typeColor(p.type);
+        return (
+          <Button
+            key={p.label}
+            size="small"
+            appearance="outline"
+            data-palette-type={p.type}
+            style={{ borderLeft: `4px solid ${c.bg}` }}
+            onClick={() => {
+              const n = nextNameSuffix(activities, p.namePrefix);
+              onActivityAdd(p.build(`${p.namePrefix}${n}`));
+            }}
+          >
+            {p.label}
+          </Button>
+        );
+      })}
+    </div>
+  ) : null;
 
   const { columns, edges } = useMemo(() => {
     const ranks = computeRanks(activities);
@@ -172,15 +314,25 @@ export function PipelineDagView({ activities, emptyHint }: PipelineDagViewProps)
   }, [activities]);
 
   if (activities.length === 0) {
+    // Even with no activities, surface the palette so users can stamp the
+    // first one with a click instead of hand-editing JSON.
     return (
-      <MessageBar intent="info">
-        <MessageBarBody>{emptyHint || 'No activities yet. Add one via the JSON editor — the DAG view will render automatically.'}</MessageBarBody>
-      </MessageBar>
+      <div className={s.shell}>
+        {palette}
+        <MessageBar intent="info">
+          <MessageBarBody>
+            {emptyHint || (onActivityAdd
+              ? 'No activities yet. Click a palette button above to add one.'
+              : 'No activities yet. Add one via the JSON editor — the DAG view will render automatically.')}
+          </MessageBarBody>
+        </MessageBar>
+      </div>
     );
   }
 
   return (
     <div className={s.shell}>
+      {palette}
       <div className={s.legend}>
         <Caption1>Edge color:</Caption1>
         <Badge appearance="filled" color="success" size="small">Succeeded</Badge>

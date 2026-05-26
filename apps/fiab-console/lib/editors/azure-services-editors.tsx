@@ -25,7 +25,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
-import { PipelineDagView, extractActivities } from '@/lib/components/pipeline/pipeline-dag-view';
+import { PipelineDagView, extractActivities, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -472,6 +472,20 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
   const activities = extractActivities(spec);
   const activityCount = activities.length;
 
+  // Phase-2 palette: append a freshly-templated activity to
+  // properties.activities[] and re-serialize the spec JSON.
+  const addActivity = useCallback((activity: PipelineActivity) => {
+    setSpec((prev) => {
+      let parsed: any;
+      try { parsed = JSON.parse(prev); }
+      catch { return prev; } // bail if JSON is currently broken; user must fix it first
+      if (!parsed.properties || typeof parsed.properties !== 'object') parsed.properties = {};
+      if (!Array.isArray(parsed.properties.activities)) parsed.properties.activities = [];
+      parsed.properties.activities.push(activity);
+      return JSON.stringify(parsed, null, 2);
+    });
+  }, []);
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={SYN_PIPE_RIBBON}
       leftPanel={
@@ -513,7 +527,8 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
           {tab === 'graph' && (
             <PipelineDagView
               activities={activities}
-              emptyHint="No activities yet. Switch to the Spec (JSON) tab and add activities under properties.activities[]."
+              onActivityAdd={addActivity}
+              emptyHint="No activities yet. Click a palette button above to add one — or switch to the Spec (JSON) tab to author by hand."
             />
           )}
           {tab === 'json' && (
@@ -822,6 +837,20 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
     try { return (JSON.parse(spec)?.properties?.activities || []).length; } catch { return 0; }
   })();
 
+  // Phase-2 palette: append a freshly-templated activity to
+  // properties.activities[] and re-serialize the spec JSON.
+  const addActivity = useCallback((activity: PipelineActivity) => {
+    setSpec((prev) => {
+      let parsed: any;
+      try { parsed = JSON.parse(prev); }
+      catch { return prev; }
+      if (!parsed.properties || typeof parsed.properties !== 'object') parsed.properties = {};
+      if (!Array.isArray(parsed.properties.activities)) parsed.properties.activities = [];
+      parsed.properties.activities.push(activity);
+      return JSON.stringify(parsed, null, 2);
+    });
+  }, []);
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ADF_PIPE_RIBBON}
       leftPanel={
@@ -864,7 +893,8 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
           {tab === 'graph' && (
             <PipelineDagView
               activities={extractActivities(spec)}
-              emptyHint="No activities in this pipeline yet. Switch to the Spec (JSON) tab and add activities under properties.activities[]."
+              onActivityAdd={addActivity}
+              emptyHint="No activities in this pipeline yet. Click a palette button above to add one — or switch to the Spec (JSON) tab to author by hand."
             />
           )}
           {tab === 'json' && (

@@ -24,7 +24,7 @@ import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
-import { PipelineDagView, extractActivities } from '@/lib/components/pipeline/pipeline-dag-view';
+import { PipelineDagView, extractActivities, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -216,6 +216,21 @@ export function DataPipelineEditor({ item, id }: Props) {
     } finally { setCreateBusy(false); }
   }, [workspaceId, createName, loadList]);
 
+  // Phase-2 palette: append a freshly-templated activity to
+  // properties.activities[] inside defText and mark dirty.
+  const addActivity = useCallback((activity: PipelineActivity) => {
+    setDefText((prev) => {
+      let parsed: any;
+      try { parsed = JSON.parse(prev); }
+      catch { return prev; } // user must fix invalid JSON first
+      if (!parsed.properties || typeof parsed.properties !== 'object') parsed.properties = {};
+      if (!Array.isArray(parsed.properties.activities)) parsed.properties.activities = [];
+      parsed.properties.activities.push(activity);
+      return JSON.stringify(parsed, null, 2);
+    });
+    setDirty(true);
+  }, []);
+
   const del = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     if (!confirm('Delete this pipeline? This cannot be undone.')) return;
@@ -300,7 +315,8 @@ export function DataPipelineEditor({ item, id }: Props) {
               <Subtitle2>Activity graph ({extractActivities(defText).length})</Subtitle2>
               <PipelineDagView
                 activities={extractActivities(defText)}
-                emptyHint="No activities in this pipeline yet. Edit the JSON below and add objects under properties.activities[]."
+                onActivityAdd={addActivity}
+                emptyHint="No activities in this pipeline yet. Click a palette button above to add one — or edit the JSON below by hand."
               />
               <Caption1>Pipeline definition (JSON)</Caption1>
               <textarea
