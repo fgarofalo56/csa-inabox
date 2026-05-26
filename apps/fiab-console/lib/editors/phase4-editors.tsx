@@ -544,10 +544,57 @@ const VL_RIBBON: RibbonTab[] = [
     { label: 'Value sets', actions: [{ label: 'dev' }, { label: 'test' }, { label: 'prod' }] },
   ]},
 ];
-type VarType = 'string' | 'number' | 'bool' | 'secret-ref';
-interface VarDef { name: string; type: VarType; default: string; dev?: string; test?: string; prod?: string }
+// v3.27: extended to Fabric's 7 variable types — String/Integer/Number/
+// Boolean/DateTime/Guid/ItemReference/ConnectionReference. Plus the
+// Loom-native `secret-ref` for KV / env-var lookups.
+type VarType =
+  | 'string'
+  | 'integer'
+  | 'number'
+  | 'bool'
+  | 'datetime'
+  | 'guid'
+  | 'item-ref'
+  | 'connection-ref'
+  | 'secret-ref';
+interface VarDef { name: string; type: VarType; default: string; dev?: string; test?: string; prod?: string; description?: string; }
 interface VlState { variables: VarDef[]; [k: string]: unknown }
 const VL_VALUE_SETS: Array<'default' | 'dev' | 'test' | 'prod'> = ['default', 'dev', 'test', 'prod'];
+
+const VAR_TYPE_LABELS: Record<VarType, string> = {
+  string: 'String',
+  integer: 'Integer',
+  number: 'Number',
+  bool: 'Boolean',
+  datetime: 'DateTime',
+  guid: 'Guid',
+  'item-ref': 'ItemReference',
+  'connection-ref': 'ConnectionReference',
+  'secret-ref': 'SecretReference',
+};
+const VAR_TYPE_PLACEHOLDERS: Record<VarType, string> = {
+  string: '',
+  integer: '0',
+  number: '0.0',
+  bool: 'true | false',
+  datetime: 'YYYY-MM-DDThh:mm:ssZ',
+  guid: '00000000-0000-0000-0000-000000000000',
+  'item-ref': 'Loom item id (Cosmos)',
+  'connection-ref': 'connection id (ADF Linked Service / Power Platform connection)',
+  'secret-ref': 'kv-uri or env var name',
+};
+
+function validateVarValue(type: VarType, value: string): string | null {
+  if (!value) return null;
+  switch (type) {
+    case 'integer': return /^-?\d+$/.test(value) ? null : 'must be an integer';
+    case 'number': return /^-?\d+(\.\d+)?$/.test(value) ? null : 'must be a number';
+    case 'bool': return /^(true|false)$/i.test(value) ? null : 'must be true or false';
+    case 'datetime': return /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$/.test(value) ? null : 'ISO 8601 expected';
+    case 'guid': return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? null : 'GUID expected';
+    default: return null;
+  }
+}
 
 export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -588,28 +635,36 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
               <TableHeaderCell>Name</TableHeaderCell>
               <TableHeaderCell>Type</TableHeaderCell>
               <TableHeaderCell>Value ({tab})</TableHeaderCell>
+              <TableHeaderCell>Description</TableHeaderCell>
               <TableHeaderCell />
             </TableRow></TableHeader>
             <TableBody>
-              {state.variables.map((v, i) => (
-                <TableRow key={i}>
-                  <TableCell><Input value={v.name} onChange={(_, d) => update(i, { name: d.value })} /></TableCell>
-                  <TableCell>
-                    <select value={v.type} onChange={(e) => update(i, { type: e.target.value as VarType })}
-                      style={{ padding: 4, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
-                      <option value="string">string</option>
-                      <option value="number">number</option>
-                      <option value="bool">bool</option>
-                      <option value="secret-ref">secret-ref</option>
-                    </select>
-                  </TableCell>
-                  <TableCell>
-                    <Input value={(v as any)[valueKey] ?? ''} onChange={(_, d) => update(i, { [valueKey]: d.value } as any)}
-                      placeholder={v.type === 'secret-ref' ? 'kv-uri or env var name' : ''} />
-                  </TableCell>
-                  <TableCell><Button size="small" onClick={() => deleteRow(i)}>Delete</Button></TableCell>
-                </TableRow>
-              ))}
+              {state.variables.map((v, i) => {
+                const val = (v as any)[valueKey] ?? '';
+                const validationErr = validateVarValue(v.type, val);
+                return (
+                  <TableRow key={i}>
+                    <TableCell><Input value={v.name} onChange={(_, d) => update(i, { name: d.value })} /></TableCell>
+                    <TableCell>
+                      <select value={v.type} onChange={(e) => update(i, { type: e.target.value as VarType })}
+                        style={{ padding: 4, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
+                        {Object.entries(VAR_TYPE_LABELS).map(([t, label]) => (
+                          <option key={t} value={t}>{label}</option>
+                        ))}
+                      </select>
+                    </TableCell>
+                    <TableCell>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <Input value={val} onChange={(_, d) => update(i, { [valueKey]: d.value } as any)}
+                          placeholder={VAR_TYPE_PLACEHOLDERS[v.type]} />
+                        {validationErr && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{validationErr}</Caption1>}
+                      </div>
+                    </TableCell>
+                    <TableCell><Input value={v.description ?? ''} onChange={(_, d) => update(i, { description: d.value })} placeholder="optional" /></TableCell>
+                    <TableCell><Button size="small" onClick={() => deleteRow(i)}>Delete</Button></TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
           <Button onClick={addRow} style={{ alignSelf: 'flex-start' }}>+ New variable</Button>
