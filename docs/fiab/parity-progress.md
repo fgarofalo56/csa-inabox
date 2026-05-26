@@ -2,6 +2,31 @@
 
 Live log of the multi-agent `fabric-parity-loop` workflow. Most recent at top.
 
+## 2026-05-26 — Wave 4 catalog launched (21 UIs in 6 parallel agents) + Notebook Phase 1A shipped
+
+**Wave 4 agents kicked off**:
+
+| Agent | UIs |
+|---|---|
+| `a2433a6acd1482965` | variable-library, plan |
+| `ae995b89188aa4e58` | ontology, graph-model, map |
+| `a748958dbf3da3721` | operations-agent, data-agent |
+| `a5984cea98c72082f` | synapse-dedicated-sql-pool, synapse-serverless-sql-pool, synapse-spark-pool |
+| `a898bc142c4bf4488` | synapse-pipeline, adf-pipeline, adf-dataset, adf-trigger |
+| `abe32b64e154c734e` | databricks-notebook, databricks-job, databricks-cluster, databricks-sql-warehouse |
+
+Target after wave 4: **46 / 85 UIs cataloged**.
+
+**Notebook editor Phase 1A landed** (commit `3e1b32b6`):
+- `NotebookCell` type + state migration in `lib/types/notebook-cell.ts`
+- `lib/components/notebook/{code-cell,markdown-cell,cell-adder}.tsx` — Fluent UI cell shells with per-cell Run, lang picker, move up/down, delete
+- Cell-based load/save with backward compat for legacy `{code, lang}` blob
+- Per-cell run dispatch via Cosmos `pendingRuns[runId]` transient map (each cell's source is cached at dispatch; poll endpoint reads from there when Livy session reaches `idle`)
+- Markdown minimal renderer (headings/bold/italic/code/lists/links) — no Monaco/react-markdown deps added yet
+- `.gitignore` carve-out for the previously-eaten `runs/[runId]/` dynamic route segment
+
+**Honest scope**: Phase 1A is the cell scaffold only. Phase 2 (ExplorerPane / Lakehouse attach), Phase 3 (HistoryDrawer / cell toolbars) still pending per `notebook-parity-spec.md`. The notebook editor now visibly looks like Fabric (cell-based) but doesn't yet have OneLake browsing or the Connect menu.
+
 ## 2026-05-26 — Wave 3 catalog launched (12 UIs in 6 parallel agents)
 
 **Wave 3 catalog kicked off** — 6 general-purpose agents running in parallel, each owning 1-3 UIs:
