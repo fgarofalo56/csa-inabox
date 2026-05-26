@@ -219,7 +219,12 @@ tmp/
 *.tmp
 *.completed.json
 *.dev_OLD.json
+# `runs/` is generally output from sub-agents, EXCEPT the Next.js dynamic
+# route at app/api/items/notebook/[id]/runs/[runId]/route.ts which is real source.
 runs/
+!apps/fiab-console/app/api/items/notebook/[id]/runs/
+!apps/fiab-console/app/api/items/notebook/[id]/runs/[runId]/
+!apps/fiab-console/app/api/items/notebook/[id]/runs/[runId]/route.ts
 cache/
 retrieval/
 # containers/ is intentionally NOT here — it would silently swallow

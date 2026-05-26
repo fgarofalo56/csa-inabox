@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { migrateLegacyState, type NotebookCell, type NotebookCellLang } from '@/lib/types/notebook-cell';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,12 +40,19 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     const items = await itemsContainer();
     const { resource } = await items.item(ctx.params.id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'notebook') return err('notebook not found', 404);
+    const state = (resource.state as any) || {};
+    const migrated = migrateLegacyState(state);
     return NextResponse.json({
       ok: true,
       notebook: { id: resource.id, displayName: resource.displayName, description: resource.description },
       definition: {
-        code: (resource.state as any)?.code || '',
-        lang: (resource.state as any)?.lang || 'python',
+        // Legacy flat fields kept for backward compat.
+        code: state.code || '',
+        lang: state.lang || 'python',
+        // New cell-based shape.
+        cells: migrated.cells,
+        defaultLang: migrated.defaultLang,
+        attachedSources: migrated.attachedSources || [],
       },
     });
   } catch (e: any) {
@@ -66,19 +74,46 @@ export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
     const { resource: existing } = await items.item(ctx.params.id, workspaceId).read<WorkspaceItem>();
     if (!existing || existing.itemType !== 'notebook') return err('notebook not found', 404);
     const def = body?.definition;
+    const stateNext: Record<string, unknown> = { ...(existing.state || {}) };
+
+    if (def?.cells !== undefined && Array.isArray(def.cells)) {
+      const cells = def.cells as NotebookCell[];
+      stateNext.cells = cells;
+      if (def?.defaultLang) stateNext.defaultLang = def.defaultLang as NotebookCellLang;
+      if (def?.attachedSources !== undefined) stateNext.attachedSources = def.attachedSources;
+      // Keep `code` mirror in sync for old consumers (concatenated cells).
+      const codeMirror = cells
+        .filter(c => c.type === 'code')
+        .map(c => c.source)
+        .join('\n\n# --- next cell ---\n');
+      stateNext.code = codeMirror;
+      if (def?.defaultLang) stateNext.lang = def.defaultLang;
+    } else {
+      // Legacy single-blob update path.
+      if (def?.code !== undefined) stateNext.code = String(def.code);
+      if (def?.lang) stateNext.lang = def.lang;
+    }
+
     const next: WorkspaceItem = {
       ...existing,
       displayName: body?.displayName?.trim() || existing.displayName,
       description: 'description' in body ? body.description : existing.description,
-      state: {
-        ...(existing.state || {}),
-        ...(def?.code !== undefined ? { code: String(def.code) } : {}),
-        ...(def?.lang ? { lang: def.lang } : {}),
-      },
+      state: stateNext,
       updatedAt: new Date().toISOString(),
     };
     const { resource } = await items.item(existing.id, workspaceId).replace(next);
-    return NextResponse.json({ ok: true, notebook: { id: resource?.id, displayName: resource?.displayName }, definition: { code: (resource?.state as any)?.code, lang: (resource?.state as any)?.lang } });
+    const respState = (resource?.state as any) || {};
+    return NextResponse.json({
+      ok: true,
+      notebook: { id: resource?.id, displayName: resource?.displayName },
+      definition: {
+        code: respState.code,
+        lang: respState.lang,
+        cells: respState.cells || [],
+        defaultLang: respState.defaultLang || 'pyspark',
+        attachedSources: respState.attachedSources || [],
+      },
+    });
   } catch (e: any) { return err(e?.message || String(e), 500); }
 }
 

@@ -26,6 +26,10 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { CodeCell } from '@/lib/components/notebook/code-cell';
+import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
+import { CellAdder } from '@/lib/components/notebook/cell-adder';
+import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
 const RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
@@ -77,7 +81,14 @@ function useWorkspaces() {
   return { workspaces, error, hint, loading, reload: load };
 }
 
-const STARTER_PY = `# Fabric Notebook (PySpark)\n# Edit, then click Save. Click Run to queue a notebook job instance.\ndf = spark.range(10)\ndf.show()\n`;
+const STARTER_PY = `# Fabric Notebook (PySpark)\n# Edit, then click Save. Click Run cell to queue execution.\ndf = spark.range(10)\ndf.show()\n`;
+
+function starterCells(): NotebookCell[] {
+  return [
+    { ...emptyCell('markdown'), source: '# New notebook\n\nDouble-click to edit. Use **+ Code** between cells to add code cells.' },
+    { ...emptyCell('code', 'pyspark'), source: STARTER_PY },
+  ];
+}
 
 function encodePy(src: string): string {
   // browser btoa needs latin-1 — encode utf-8 first.
@@ -121,7 +132,9 @@ export function NotebookEditor({ item, id }: Props) {
   const [computeId, setComputeId] = useState('');
   const [notebooks, setNotebooks] = useState<NotebookLite[] | null>(null);
   const [notebookId, setNotebookId] = useState('');
-  const [source, setSource] = useState(STARTER_PY);
+  const [cells, setCells] = useState<NotebookCell[]>(starterCells());
+  const [defaultLang, setDefaultLang] = useState<NotebookCellLang>('pyspark');
+  const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [listErr, setListErr] = useState<string | null>(null);
   const [listHint, setListHint] = useState<string | null>(null);
@@ -152,7 +165,7 @@ export function NotebookEditor({ item, id }: Props) {
       if (!raw) return;
       const data = JSON.parse(raw);
       if (data?.code) {
-        setSource(data.code);
+        setCells([{ ...emptyCell('code', 'pyspark'), source: data.code }]);
         setPrefill({ source: data.source, container: data.container, path: data.path });
         setCreateName(`From ${data.path?.split('/').pop()?.replace(/\.[^.]+$/, '') || 'lakehouse'}`);
         setCreateOpen(true);
@@ -178,14 +191,19 @@ export function NotebookEditor({ item, id }: Props) {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(nbId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDetailErr(j.error); return; }
-      // v3.22: Loom-native shape — flat { code, lang }. Legacy Fabric shape
-      // (definition.parts[]) still supported during transition.
-      if (j.definition?.code !== undefined) {
-        setSource(j.definition.code || STARTER_PY);
+      // v3.26: cell-based shape. Falls back through legacy `code` then Fabric `parts[]`.
+      if (Array.isArray(j.definition?.cells) && j.definition.cells.length > 0) {
+        setCells(j.definition.cells);
+        setDefaultLang((j.definition.defaultLang as NotebookCellLang) || 'pyspark');
+      } else if (j.definition?.code !== undefined) {
+        const lang = (j.definition.lang as NotebookCellLang) || 'pyspark';
+        setCells(migrateLegacyState({ code: j.definition.code || STARTER_PY, lang }).cells);
+        setDefaultLang(lang);
       } else {
         const part = j.definition?.parts?.find((p: any) => /notebook-content\.(py|sql|scala|r)$/.test(p.path));
-        if (part?.payload) setSource(decodePy(part.payload));
-        else setSource(STARTER_PY);
+        const code = part?.payload ? decodePy(part.payload) : STARTER_PY;
+        setCells(migrateLegacyState({ code }).cells);
+        setDefaultLang('pyspark');
       }
       setDirty(false);
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
@@ -211,13 +229,13 @@ export function NotebookEditor({ item, id }: Props) {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ definition: { code: source, lang: 'python' } }),
+        body: JSON.stringify({ definition: { cells, defaultLang } }),
       });
       const j = await r.json();
       if (!j.ok) setDetailErr(j.error || 'save failed');
       else setDirty(false);
     } finally { setSaving(false); }
-  }, [workspaceId, notebookId, source]);
+  }, [workspaceId, notebookId, cells, defaultLang]);
 
   const run = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
@@ -303,6 +321,98 @@ export function NotebookEditor({ item, id }: Props) {
     await loadList(workspaceId);
   }, [workspaceId, notebookId, loadList]);
 
+  // Cell mutations
+  const insertCell = useCallback((after: number, type: 'code' | 'markdown') => {
+    const fresh = emptyCell(type, defaultLang);
+    setCells(prev => [...prev.slice(0, after + 1), fresh, ...prev.slice(after + 1)]);
+    setActiveCellId(fresh.id);
+    setDirty(true);
+  }, [defaultLang]);
+
+  const updateCell = useCallback((id: string, next: NotebookCell) => {
+    setCells(prev => prev.map(c => c.id === id ? next : c));
+    setDirty(true);
+  }, []);
+
+  const deleteCell = useCallback((id: string) => {
+    setCells(prev => prev.length <= 1 ? prev : prev.filter(c => c.id !== id));
+    setDirty(true);
+  }, []);
+
+  const moveCell = useCallback((id: string, delta: -1 | 1) => {
+    setCells(prev => {
+      const idx = prev.findIndex(c => c.id === id);
+      if (idx < 0) return prev;
+      const newIdx = idx + delta;
+      if (newIdx < 0 || newIdx >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(idx, 1);
+      next.splice(newIdx, 0, moved);
+      return next;
+    });
+    setDirty(true);
+  }, []);
+
+  // Per-cell run: dispatches a single cell's source to the notebook /run endpoint with cellId, then polls.
+  const runCell = useCallback(async (cell: NotebookCell) => {
+    if (!workspaceId || !notebookId) return;
+    if (!computeId) { setRunMsg('Pick a compute target before running.'); return; }
+    if (cell.type !== 'code') return;
+    updateCell(cell.id, { ...cell, output: { status: 'pending' } });
+    setRunMsg(`Running cell ${cell.id.slice(0, 6)}…`);
+    try {
+      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ compute: computeId, cellId: cell.id, source: cell.source, lang: cell.lang || defaultLang }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'DispatchError', evalue: j.error || 'dispatch failed' } });
+        setRunMsg(`Cell run failed: ${j.error}`);
+        return;
+      }
+      let runId: string = j.runId;
+      const start = Date.now();
+      const MAX_MS = 8 * 60 * 1000;
+      while (Date.now() - start < MAX_MS) {
+        await new Promise(res => setTimeout(res, 4000));
+        const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const p = await pollRes.json();
+        if (!p.ok) {
+          updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } });
+          break;
+        }
+        if (p.runId && p.runId !== runId) runId = p.runId;
+        setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${p.phase ? ' · ' + p.phase : ''}`);
+        if (p.output) {
+          updateCell(cell.id, {
+            ...cell,
+            executionCount: (cell.executionCount || 0) + 1,
+            output: {
+              status: p.output.status === 'ok' ? 'ok' : 'error',
+              textPlain: p.output.textPlain,
+              data: p.output.data,
+              ename: p.output.ename,
+              evalue: p.output.evalue,
+              traceback: p.output.traceback,
+              executedAtUtc: new Date().toISOString(),
+            },
+          });
+          setRunMsg(`Cell ${cell.id.slice(0, 6)} complete`);
+          break;
+        }
+        if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
+          updateCell(cell.id, { ...cell, output: { status: 'error', ename: p.status, evalue: p.resultState || '' } });
+          break;
+        }
+      }
+      loadJobs(workspaceId, notebookId);
+    } catch (e: any) {
+      updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
+    }
+  }, [workspaceId, notebookId, computeId, defaultLang, updateCell, loadJobs]);
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
       leftPanel={
@@ -384,14 +494,59 @@ export function NotebookEditor({ item, id }: Props) {
 
           {notebookId && (
             <>
-              {dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
-              <textarea
-                className={s.editor}
-                spellCheck={false}
-                value={source}
-                onChange={(e) => { setSource(e.target.value); setDirty(true); }}
-                aria-label="Notebook PySpark source"
-              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+                <Caption1>{cells.length} cell{cells.length === 1 ? '' : 's'} · default lang <code>{defaultLang}</code></Caption1>
+                <div style={{ flex: 1 }} />
+                <Select size="small" value={defaultLang} onChange={(_, d) => { setDefaultLang(d.value as NotebookCellLang); setDirty(true); }} aria-label="Default cell language">
+                  <option value="pyspark">PySpark (Python)</option>
+                  <option value="spark">Spark (Scala)</option>
+                  <option value="sparksql">Spark SQL</option>
+                  <option value="sparkr">SparkR (R)</option>
+                  <option value="python">Python</option>
+                  <option value="tsql">T-SQL</option>
+                </Select>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <CellAdder
+                  onAddCode={() => insertCell(-1, 'code')}
+                  onAddMarkdown={() => insertCell(-1, 'markdown')}
+                />
+                {cells.map((c, idx) => (
+                  <div key={c.id}>
+                    {c.type === 'code' ? (
+                      <CodeCell
+                        cell={c}
+                        active={activeCellId === c.id}
+                        onFocus={() => setActiveCellId(c.id)}
+                        onChange={(next) => updateCell(c.id, next)}
+                        onRun={runCell}
+                        onDelete={() => deleteCell(c.id)}
+                        onMoveUp={() => moveCell(c.id, -1)}
+                        onMoveDown={() => moveCell(c.id, 1)}
+                        canMoveUp={idx > 0}
+                        canMoveDown={idx < cells.length - 1}
+                      />
+                    ) : (
+                      <MarkdownCell
+                        cell={c}
+                        active={activeCellId === c.id}
+                        onFocus={() => setActiveCellId(c.id)}
+                        onChange={(next) => updateCell(c.id, next)}
+                        onDelete={() => deleteCell(c.id)}
+                        onMoveUp={() => moveCell(c.id, -1)}
+                        onMoveDown={() => moveCell(c.id, 1)}
+                        canMoveUp={idx > 0}
+                        canMoveDown={idx < cells.length - 1}
+                      />
+                    )}
+                    <CellAdder
+                      onAddCode={() => insertCell(idx, 'code')}
+                      onAddMarkdown={() => insertCell(idx, 'markdown')}
+                    />
+                  </div>
+                ))}
+              </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Subtitle2>Run history ({jobs.length})</Subtitle2>
                 <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => loadJobs(workspaceId, notebookId)}>Refresh</Button>

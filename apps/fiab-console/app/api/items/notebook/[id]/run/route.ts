@@ -41,31 +41,63 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   try {
     const nb = await loadNotebook(ctx.params.id, workspaceId);
     if (!nb) return err('notebook not found', 404);
-    const code = (nb.state as any)?.code || '';
+    // Per-cell run path: caller passes { source, lang, cellId } — we run
+    // only that cell's source. Fallback to notebook-level `code` blob.
+    const state = (nb.state as any) || {};
+    const cellSource = typeof body?.source === 'string' ? body.source : '';
+    const cellLang = typeof body?.lang === 'string' ? body.lang : '';
+    const cellId = typeof body?.cellId === 'string' ? body.cellId : '';
+    const code = cellSource || state.code || '';
     if (!code.trim()) return err('notebook is empty — write code before running', 400);
+
+    // Map cell-lang to compute-lang.
+    function effectiveLang(): 'pyspark' | 'spark' | 'tsql' | 'sql' {
+      const l = (cellLang || state.lang || 'pyspark').toLowerCase();
+      if (l === 'sparksql' || l === 'spark-sql' || l === 'sql') return 'spark';
+      if (l === 'tsql' || l === 't-sql') return 'tsql';
+      if (l === 'pyspark' || l === 'python') return 'pyspark';
+      return 'pyspark';
+    }
+    const livyKind = effectiveLang();
 
     if (compute.startsWith('spark:')) {
       const pool = compute.slice('spark:'.length);
       const { createLivySessionAsync } = await import('@/lib/azure/synapse-dev-client');
-      // Just create the session. Client polls /runs/[runId] which submits
-      // the statement once session reaches 'idle'.
-      const sess = await createLivySessionAsync(pool, ((nb.state as any)?.lang === 'sql') ? 'spark' : 'pyspark');
+      const sess = await createLivySessionAsync(pool, livyKind === 'spark' ? 'spark' : 'pyspark');
+      const runIdStr = `spark:${pool}:${sess.id}`;
+      // Cache the per-cell source so the poll endpoint can submit the right
+      // statement when the session reaches 'idle'. Lives in nb.state.pendingRuns[runId].
+      if (cellSource) {
+        try {
+          const items = await itemsContainer();
+          const pendingRuns = { ...(state.pendingRuns || {}) };
+          pendingRuns[runIdStr] = { source: cellSource, lang: livyKind, cellId };
+          await items.item(nb.id, workspaceId).replace({
+            ...nb,
+            state: { ...state, pendingRuns },
+            updatedAt: new Date().toISOString(),
+          } as WorkspaceItem);
+        } catch { /* non-fatal — poll will fall back to state.code */ }
+      }
       return NextResponse.json({
         ok: true,
-        runId: `spark:${pool}:${sess.id}`,
+        runId: runIdStr,
         status: sess.state,
         compute: { kind: 'synapse-spark', pool },
+        cellId: cellId || null,
+        sourcePreview: code.slice(0, 200),
       });
     }
 
     if (compute.startsWith('databricks:')) {
       const clusterId = compute.slice('databricks:'.length);
       const { runOneTimeNotebook } = await import('@/lib/azure/databricks-client');
+      const dbLang = livyKind === 'spark' ? 'SCALA' : livyKind === 'tsql' ? 'SQL' : 'PYTHON';
       const runRes = await runOneTimeNotebook({
         clusterId,
         code,
-        lang: (nb.state as any)?.lang === 'sql' ? 'SQL' : 'PYTHON',
-        jobName: `loom-${nb.displayName.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 40)}`,
+        lang: dbLang,
+        jobName: `loom-${nb.displayName.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 40)}${cellId ? '-' + cellId.slice(0, 6) : ''}`,
       });
       return NextResponse.json({
         ok: true,
@@ -73,6 +105,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
         status: 'PENDING',
         compute: { kind: 'databricks-cluster', clusterId },
         runUrl: runRes.run_page_url,
+        cellId: cellId || null,
       });
     }
 
