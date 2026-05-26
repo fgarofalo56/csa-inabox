@@ -61,6 +61,13 @@ interface JobLite {
   startTimeUtc?: string; endTimeUtc?: string;
   failureReason?: { errorCode?: string; message?: string } | null;
 }
+interface LakehouseLite { id: string; displayName: string; description?: string; }
+interface AttachedSource {
+  kind: 'lakehouse' | 'warehouse' | 'kql-database';
+  id: string;
+  displayName: string;
+  isDefault?: boolean;
+}
 
 function useWorkspaces() {
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
@@ -148,6 +155,11 @@ export function NotebookEditor({ item, id }: Props) {
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [prefill, setPrefill] = useState<{ source: string; container?: string; path?: string } | null>(null);
+  // Phase 2: attached data sources (Lakehouses / Warehouses / KQL DBs).
+  const [attachedSources, setAttachedSources] = useState<AttachedSource[]>([]);
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [availableLakehouses, setAvailableLakehouses] = useState<LakehouseLite[] | null>(null);
+  const [attachBusy, setAttachBusy] = useState(false);
 
   // Auto-pick first runnable compute (skip serverless SQL — not for notebooks)
   useEffect(() => {
@@ -205,6 +217,8 @@ export function NotebookEditor({ item, id }: Props) {
         setCells(migrateLegacyState({ code }).cells);
         setDefaultLang('pyspark');
       }
+      // Phase 2: attached data sources.
+      setAttachedSources(Array.isArray(j.definition?.attachedSources) ? j.definition.attachedSources : []);
       setDirty(false);
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
@@ -229,13 +243,53 @@ export function NotebookEditor({ item, id }: Props) {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ definition: { cells, defaultLang } }),
+        body: JSON.stringify({ definition: { cells, defaultLang, attachedSources } }),
       });
       const j = await r.json();
       if (!j.ok) setDetailErr(j.error || 'save failed');
       else setDirty(false);
     } finally { setSaving(false); }
-  }, [workspaceId, notebookId, cells, defaultLang]);
+  }, [workspaceId, notebookId, cells, defaultLang, attachedSources]);
+
+  // Phase 2: load lakehouses in the current workspace for the attach modal.
+  const loadLakehouses = useCallback(async () => {
+    if (!workspaceId) return;
+    try {
+      const r = await fetch(`/api/items/lakehouse?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (j.ok && Array.isArray(j.items)) {
+        setAvailableLakehouses(j.items.map((x: any) => ({ id: x.id, displayName: x.displayName, description: x.description })));
+      } else if (j.ok && Array.isArray(j.lakehouses)) {
+        setAvailableLakehouses(j.lakehouses);
+      } else {
+        setAvailableLakehouses([]);
+      }
+    } catch { setAvailableLakehouses([]); }
+  }, [workspaceId]);
+
+  const openAttach = useCallback(() => {
+    setAttachOpen(true);
+    if (availableLakehouses === null) loadLakehouses();
+  }, [availableLakehouses, loadLakehouses]);
+
+  const attachLakehouse = useCallback((lh: LakehouseLite) => {
+    if (attachedSources.some(s => s.kind === 'lakehouse' && s.id === lh.id)) return;
+    setAttachedSources(prev => [
+      ...prev,
+      { kind: 'lakehouse', id: lh.id, displayName: lh.displayName, isDefault: prev.length === 0 },
+    ]);
+    setDirty(true);
+  }, [attachedSources]);
+
+  const detachSource = useCallback((srcId: string) => {
+    setAttachedSources(prev => prev.filter(s => s.id !== srcId));
+    setDirty(true);
+  }, []);
+
+  const promoteDefault = useCallback((srcId: string) => {
+    setAttachedSources(prev => prev.map(s => ({ ...s, isDefault: s.id === srcId })));
+    setDirty(true);
+  }, []);
 
   const run = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
@@ -430,6 +484,40 @@ export function NotebookEditor({ item, id }: Props) {
               </TreeItem>
             ))}
           </Tree>
+
+          {/* Phase 2: Data items pane — Fabric "Explorer" tab equivalent */}
+          {notebookId && (
+            <>
+              <Subtitle2 style={{ marginTop: 16, marginBottom: 4 }}>Data items</Subtitle2>
+              {attachedSources.length === 0 ? (
+                <Caption1>No sources attached. Attach a Lakehouse so cells can read its OneLake mount.</Caption1>
+              ) : (
+                <Tree aria-label="Attached sources">
+                  {attachedSources.map((src) => (
+                    <TreeItem key={src.id} itemType="leaf" value={src.id}>
+                      <TreeItemLayout
+                        iconBefore={<Notebook20Regular />}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                          <span style={{ flex: 1 }}>
+                            {src.isDefault ? <strong>{src.displayName}</strong> : src.displayName}
+                            {src.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: 6 }}>default</Badge>}
+                          </span>
+                          {!src.isDefault && (
+                            <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); promoteDefault(src.id); }}>Pin</Button>
+                          )}
+                          <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); detachSource(src.id); }}>×</Button>
+                        </div>
+                      </TreeItemLayout>
+                    </TreeItem>
+                  ))}
+                </Tree>
+              )}
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={openAttach} disabled={!workspaceId} style={{ marginTop: 8, alignSelf: 'flex-start' }}>
+                Add data items
+              </Button>
+            </>
+          )}
         </div>
       }
       main={
@@ -479,6 +567,43 @@ export function NotebookEditor({ item, id }: Props) {
             <Button appearance="primary" icon={<Play20Regular />} disabled={running || !notebookId} onClick={run}>{running ? 'Queuing…' : 'Run'}</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
+
+          {/* Phase 2: Attach Lakehouse modal */}
+          <Dialog open={attachOpen} onOpenChange={(_, d) => setAttachOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Attach Lakehouse</DialogTitle>
+                <DialogContent>
+                  {availableLakehouses === null && <Spinner size="tiny" label="Loading lakehouses…" />}
+                  {availableLakehouses && availableLakehouses.length === 0 && (
+                    <Caption1>No lakehouses found in this workspace. Create one first from the workspace +New menu.</Caption1>
+                  )}
+                  {availableLakehouses && availableLakehouses.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflow: 'auto' }}>
+                      {availableLakehouses.map((lh) => {
+                        const already = attachedSources.some(s => s.kind === 'lakehouse' && s.id === lh.id);
+                        return (
+                          <div key={lh.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 6, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+                            <div style={{ flex: 1 }}>
+                              <Subtitle2>{lh.displayName}</Subtitle2>
+                              {lh.description && <Caption1 style={{ display: 'block' }}>{lh.description}</Caption1>}
+                            </div>
+                            <Button size="small" appearance={already ? 'subtle' : 'primary'} disabled={already || attachBusy} onClick={() => { attachLakehouse(lh); setAttachOpen(false); }}>
+                              {already ? 'Already attached' : 'Attach'}
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="outline" onClick={loadLakehouses}>Refresh</Button>
+                  <Button appearance="secondary" onClick={() => setAttachOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           {(ws.error || listErr) && (
             <MessageBar intent="error">

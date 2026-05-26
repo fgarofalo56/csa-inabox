@@ -422,11 +422,12 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
 const POLICY_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
     { label: 'Edit', actions: [{ label: 'Save' }, { label: 'Reload' }, { label: 'Validate XML' }] },
-    { label: 'Scope', actions: [{ label: 'Global' }, { label: 'API' }, { label: 'Product' }] },
+    { label: 'Scope', actions: [{ label: 'Global' }, { label: 'API' }, { label: 'Product' }, { label: 'Operation' }] },
   ]},
 ];
 
-type PolicyScopeKind = 'service' | 'api' | 'product';
+// v3.27: added 'operation' scope — APIM's finest-grain policy attach point.
+type PolicyScopeKind = 'service' | 'api' | 'product' | 'operation';
 
 const DEFAULT_POLICY_XML =
   `<policies>\n  <inbound>\n    <base />\n    <!-- example: validate Entra JWT -->\n    <!-- <validate-jwt header-name="Authorization" failed-validation-httpcode="401">\n      <openid-config url="https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration" />\n    </validate-jwt> -->\n    <rate-limit calls="120" renewal-period="60" />\n  </inbound>\n  <backend>\n    <base />\n  </backend>\n  <outbound>\n    <base />\n  </outbound>\n  <on-error>\n    <base />\n  </on-error>\n</policies>`;
@@ -448,16 +449,18 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
   const [scopeKind, setScopeKind] = useState<PolicyScopeKind>('service');
   const [apiId, setApiId] = useState('');
   const [productId, setProductId] = useState('');
+  const [operationId, setOperationId] = useState('');
   const [value, setValue] = useState(DEFAULT_POLICY_XML);
   const [loadState, setLoadState] = useState<LoadState<{ value: string; format: string }>>({ loading: true, data: null });
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' });
 
   const scopeQuery = useMemo(() => {
     const sp = new URLSearchParams({ scope: scopeKind });
-    if (scopeKind === 'api' && apiId) sp.set('apiId', apiId);
+    if ((scopeKind === 'api' || scopeKind === 'operation') && apiId) sp.set('apiId', apiId);
     if (scopeKind === 'product' && productId) sp.set('productId', productId);
+    if (scopeKind === 'operation' && operationId) sp.set('operationId', operationId);
     return sp.toString();
-  }, [scopeKind, apiId, productId]);
+  }, [scopeKind, apiId, productId, operationId]);
 
   const load = useCallback(async () => {
     setLoadState({ loading: true, data: null });
@@ -478,20 +481,22 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
     if (scopeKind === 'service') load();
     else if (scopeKind === 'api' && apiId) load();
     else if (scopeKind === 'product' && productId) load();
+    else if (scopeKind === 'operation' && apiId && operationId) load();
     else setLoadState({ loading: false, data: null });
-  }, [load, scopeKind, apiId, productId]);
+  }, [load, scopeKind, apiId, productId, operationId]);
 
   const save = useCallback(async () => {
     const check = isWellFormedXml(value);
     if (!check.ok) { setStatus({ kind: 'err', msg: `Invalid XML: ${check.error}` }); return; }
     if (scopeKind === 'api' && !apiId) { setStatus({ kind: 'err', msg: 'apiId is required for API scope' }); return; }
     if (scopeKind === 'product' && !productId) { setStatus({ kind: 'err', msg: 'productId is required for product scope' }); return; }
+    if (scopeKind === 'operation' && (!apiId || !operationId)) { setStatus({ kind: 'err', msg: 'apiId and operationId are required for operation scope' }); return; }
     setStatus({ kind: 'saving' });
     try {
       const r = await fetch(`/api/items/apim-policy/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ scope: scopeKind, apiId, productId, value }),
+        body: JSON.stringify({ scope: scopeKind, apiId, productId, operationId, value }),
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
@@ -499,7 +504,7 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
     } catch (e: any) {
       setStatus({ kind: 'err', msg: e?.message || String(e) });
     }
-  }, [id, scopeKind, apiId, productId, value]);
+  }, [id, scopeKind, apiId, productId, operationId, value]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={POLICY_RIBBON} main={
@@ -515,11 +520,17 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
               <Option value="service">Global (service)</Option>
               <Option value="api">API</Option>
               <Option value="product">Product</Option>
+              <Option value="operation">API operation</Option>
             </Dropdown>
           </Field>
-          {scopeKind === 'api' && (
+          {(scopeKind === 'api' || scopeKind === 'operation') && (
             <Field label="API id">
               <Input value={apiId} onChange={(_, d) => setApiId(d.value)} placeholder="e.g. orders-api" />
+            </Field>
+          )}
+          {scopeKind === 'operation' && (
+            <Field label="Operation id">
+              <Input value={operationId} onChange={(_, d) => setOperationId(d.value)} placeholder="e.g. getOrderById" />
             </Field>
           )}
           {scopeKind === 'product' && (
