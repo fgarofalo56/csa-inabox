@@ -131,7 +131,82 @@ workspace picker should populate.
 
 ---
 
-## 4. Optional cleanup — let bicep deploy missing endpoints
+## 4. Dataverse + Power Platform Application User  *(unblocks dataverse-table, power-app, power-page, copilot-studio-knowledge editors)*
+
+Microsoft Dataverse is a per-environment add-on. Two things have to happen before Loom can read Dataverse data:
+
+1. **Add a Dataverse database to the Power Platform env(s) Loom should read.**
+2. **Register Loom's MSAL Web App SP as a Dataverse Application User with the System Administrator role on each of those envs.**
+
+The Loom code uses the MSAL Web App SP (`LOOM_MSAL_CLIENT_ID`) — *not* the UAMI — for all `*.crm.dynamics.com` calls. This is because Dataverse's Application User feature only accepts Entra App Registrations, not Managed Identities (Microsoft platform restriction).
+
+### Step 4a — Add Dataverse to the env (one-time per env)
+
+1. Open https://admin.powerplatform.microsoft.com/manage/environments.
+2. Click the target environment (e.g. "Default", or a custom env you created).
+3. If "Dataverse" column says **No** in the env list:
+   - Click **+ Add Dataverse** in the command bar or in the **Add Dataverse** card on the env detail page.
+   - Pick Language (default English-US), Currency (default USD). Leave "Deploy sample apps and data" OFF.
+   - Click **Add**. Provisioning takes 5–10 minutes; refresh until State = **Ready** and Dataverse = **Yes**.
+
+Once Ready, the env detail page shows the **Environment URL** (e.g. `orgd9f634de.crm.dynamics.com`) — Loom will discover it automatically via the BAP admin API.
+
+### Step 4b — Promote yourself to Dataverse System Administrator  *(only needed for envs where Dataverse was added AFTER env creation, including any Default env)*
+
+When Dataverse is added to a brand-new env it auto-promotes the env creator to Dataverse SA. When Dataverse is added to an **existing** env (e.g. Default), the operator is **not** auto-promoted — they only get `Environment Maker + Basic User`. Loom's automated AppUser registration script can't run without SA, so this one-time click is required:
+
+1. Open `https://<org>.crm.dynamics.com/main.aspx?settingsonly=true&pagetype=entitylist&etn=systemuser` — replace `<org>` with the env's Dataverse host from the PPAC env detail page.
+2. Tick the checkbox next to your name.
+3. Click **Promote To Admin** in the top command bar → **OK** in the confirmation dialog.
+4. Verify via `az rest`:
+   ```bash
+   az rest --resource "https://<org>.crm.dynamics.com" --method get \
+     --url "https://<org>.crm.dynamics.com/api/data/v9.2/WhoAmI" --query UserId -o tsv
+   # then list your roles
+   az rest --resource "https://<org>.crm.dynamics.com" --method get \
+     --url "https://<org>.crm.dynamics.com/api/data/v9.2/systemusers(<userid>)/systemuserroles_association?\$select=name"
+   ```
+   You should see **System Administrator** in the list.
+
+### Step 4c — Register the MSAL SP as an Application User  *(automatable)*
+
+Re-run the post-deploy bootstrap workflow (or call the script directly). It's idempotent — safe to re-run:
+
+```bash
+LOOM_MSAL_CLIENT_ID=9844c28c-3b3a-4949-8d63-9eefa3b50a9d \
+  bash scripts/csa-loom/dataverse-add-appuser.sh
+```
+
+The script discovers every env in the tenant with a Dataverse database, creates an AppUser for the MSAL SP, and assigns System Administrator on each one.
+
+Alternatively, the post-deploy bootstrap GitHub workflow runs this step automatically when `LOOM_MSAL_CLIENT_ID` is set (the workflow env block sets it).
+
+### Optional — enable Copilot Studio in the env
+
+`copilot-studio-{agent,knowledge,topic,action,channel,analytics}` editors require the env to have Copilot Studio enabled (separate per-env add-on, has its own consumption tier). Until it's enabled, the Loom editor renders a quiet "Copilot Studio not enabled" MessageBar (B-grade, not a bug).
+
+To enable: PPAC → env → **Settings** → **Product** → **Features** → toggle **Copilot Studio** on.
+
+### Verify everything
+
+After Steps 4a–4c, all four Dataverse-backed editors should return HTTP 200 with real data:
+
+```bash
+ENVID="Default-d1fc0498-f208-4b49-8376-beb9293acdf6"
+for ep in dataverse-table power-app power-page copilot-studio-agent; do
+  curl -s -o /dev/null -w "  /api/items/$ep: HTTP %{http_code}\n" \
+    -H "cookie: loom_session=<minted>" \
+    "https://<loom-host>/api/items/$ep?envId=$ENVID"
+done
+```
+
+Expect 4× HTTP 200. `copilot-studio-agent` stays HTTP 503 until Copilot Studio is enabled (Step 4d above).
+
+See `docs/fiab/dataverse-app-user.md` for the full background + Why-this-works.
+
+---
+
+## 5. Optional cleanup — let bicep deploy missing endpoints
 
 Two editors are gated on Azure resources that aren't deployed in the
 default Loom stack yet. Both are tracked in the bicep tree but not in
