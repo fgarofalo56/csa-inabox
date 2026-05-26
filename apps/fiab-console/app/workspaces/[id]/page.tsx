@@ -4,15 +4,12 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Title2,
   Body1,
-  Card,
-  CardHeader,
   Button,
   makeStyles,
   tokens,
   Spinner,
   MessageBar,
   MessageBarBody,
-  Subtitle2,
 } from '@fluentui/react-components';
 import { ArrowLeft24Regular } from '@fluentui/react-icons';
 import Link from 'next/link';
@@ -29,25 +26,43 @@ import { findItemType } from '@/lib/catalog/fabric-item-types';
 
 const useStyles = makeStyles({
   back: { marginBottom: '12px' },
-  header: { display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' },
+  header: { display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px' },
   spacer: { flex: 1 },
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-    gap: '12px',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+    gap: '16px',
   },
   card: {
+    paddingTop: '18px', paddingRight: '18px', paddingBottom: '18px', paddingLeft: '18px',
+    borderRadius: '10px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
+    textDecoration: 'none',
+    display: 'flex', flexDirection: 'column',
+    minHeight: '120px',
     cursor: 'pointer',
-    transition: 'transform 0.15s, box-shadow 0.15s',
-    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow8 },
+    transition: 'transform 0.15s, box-shadow 0.15s, border-color 0.15s',
+    ':hover': {
+      transform: 'translateY(-2px)',
+      boxShadow: tokens.shadow8,
+      borderColor: tokens.colorBrandStroke1,
+    },
   },
-  meta: { fontSize: '12px', color: tokens.colorNeutralForeground3 },
+  cardType: {
+    fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
+    color: tokens.colorNeutralForeground3, fontWeight: 600, marginBottom: '6px',
+  },
+  cardName: { fontSize: '15px', fontWeight: 600, lineHeight: 1.3, marginBottom: '6px' },
+  cardDesc: { fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.45, marginBottom: '8px' },
+  meta: { fontSize: '11px', color: tokens.colorNeutralForeground3, marginTop: 'auto' },
   empty: {
-    padding: '40px',
+    paddingTop: '32px', paddingRight: '32px', paddingBottom: '32px', paddingLeft: '32px',
     textAlign: 'center',
     color: tokens.colorNeutralForeground3,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    borderRadius: '8px',
+    borderRadius: '12px', lineHeight: 1.6,
   },
 });
 
@@ -121,22 +136,14 @@ export default function WorkspaceDetailPage({ params }: { params: { id: string }
                   <Link
                     key={it.id}
                     href={`/items/${it.itemType}/${it.id}`}
-                    style={{ textDecoration: 'none' }}
+                    className={styles.card}
                   >
-                    <Card className={styles.card}>
-                      <CardHeader
-                        header={<Subtitle2>{it.displayName}</Subtitle2>}
-                        description={
-                          <div>
-                            <div className={styles.meta}>{meta?.displayName ?? it.itemType}</div>
-                            {it.description && <Body1>{it.description}</Body1>}
-                            <div className={styles.meta}>
-                              Updated {new Date(it.updatedAt).toLocaleDateString()}
-                            </div>
-                          </div>
-                        }
-                      />
-                    </Card>
+                    <div className={styles.cardType}>{meta?.displayName ?? it.itemType.replace(/-/g, ' ')}</div>
+                    <div className={styles.cardName}>{it.displayName}</div>
+                    {it.description && <div className={styles.cardDesc}>{it.description}</div>}
+                    <div className={styles.meta}>
+                      Updated {new Date(it.updatedAt).toLocaleDateString()}
+                    </div>
                   </Link>
                 );
               })}
