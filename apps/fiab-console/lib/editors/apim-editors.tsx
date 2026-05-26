@@ -23,7 +23,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
-  Document20Regular, Code20Regular,
+  Document20Regular, Code20Regular, Library20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
@@ -584,6 +584,10 @@ interface DataProductState {
   certified: boolean;
   sla: string;
   bundle: string[];
+  // Phase 1 Purview Unified Catalog wiring — populated by
+  // POST /api/items/data-product/[id]/register-purview on success.
+  purviewDataProductId?: string;
+  lastRegisteredAt?: string;
 }
 
 const DP_EMPTY: DataProductState = {
@@ -596,12 +600,27 @@ const DP_EMPTY: DataProductState = {
   bundle: [],
 };
 
+// Hint payload returned with HTTP 501 from /register-purview when the
+// LOOM_PURVIEW_ACCOUNT env var is not set. Mirrors PurviewNotConfiguredHint
+// in lib/azure/purview-client.ts.
+interface PurviewNotConfiguredHint {
+  missingEnvVar: string;
+  bicepModule: string;
+  bicepStatus: string;
+  rolesRequired: { name: string; scope: string; reason: string }[];
+  followUp: string;
+}
+
 export function DataProductEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [state, setState] = useState<DataProductState>(DP_EMPTY);
   const [loading, setLoading] = useState(id !== 'new');
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' });
+  // Phase 1: when /register-purview returns 501, we surface the structured
+  // hint payload as a dedicated MessageBar so the operator sees the bicep
+  // module path + roles to grant.
+  const [purviewHint, setPurviewHint] = useState<PurviewNotConfiguredHint | null>(null);
 
   // v3.27: F-vaporware fix — Cosmos-backed load, removes hardcoded
   // 'Customer 360' / alice@contoso / fixed bundle grid.
@@ -630,6 +649,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   const save = useCallback(async () => {
     setStatus({ kind: 'saving' });
+    setPurviewHint(null);
     try {
       const r = await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`, {
         method: 'PATCH',
@@ -638,7 +658,9 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
-      setStatus({ kind: 'ok', msg: 'Saved to Cosmos. Purview Unified Catalog publish remains gated until backend lands.' });
+      setStatus({ kind: 'ok', msg: state.purviewDataProductId
+        ? 'Saved to Cosmos. Re-register with Purview to propagate edits to the Unified Catalog.'
+        : 'Saved to Cosmos. Click Register with Purview to publish to the Unified Catalog.' });
     } catch (e: any) {
       setStatus({ kind: 'err', msg: e?.message || String(e) });
     }
@@ -646,6 +668,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   const publishApimMirror = useCallback(async () => {
     setStatus({ kind: 'saving' });
+    setPurviewHint(null);
     try {
       const r = await fetch(`/api/items/apim-product`, {
         method: 'POST',
@@ -667,17 +690,82 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     }
   }, [id, state.displayName, state.description]);
 
+  const registerPurview = useCallback(async () => {
+    setStatus({ kind: 'saving' });
+    setPurviewHint(null);
+    try {
+      const r = await fetch(`/api/items/data-product/${encodeURIComponent(id)}/register-purview`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      });
+      const j = await r.json();
+      if (r.status === 501 && j?.hint) {
+        // Honest config-only state per .claude/rules/no-vaporware.md — the
+        // backend is gated, surface the actionable hint to the operator.
+        setPurviewHint(j.hint as PurviewNotConfiguredHint);
+        setStatus({ kind: 'idle' });
+        return;
+      }
+      if (!j.ok) {
+        const detail = j.hint?.followUp ? ` Hint: ${j.hint.followUp}` : (j.hint ? ` Hint: ${j.hint}` : '');
+        setStatus({ kind: 'err', msg: `${j.error || `HTTP ${r.status}`}${detail}` });
+        return;
+      }
+      // Success — hydrate the local state with the returned id + timestamp
+      // so the MessageBar flips from "pending" to "registered" without a reload.
+      setState((prev) => ({
+        ...prev,
+        purviewDataProductId: j.purviewDataProductId,
+        lastRegisteredAt: j.lastRegisteredAt,
+      }));
+      setStatus({
+        kind: 'ok',
+        msg: `Registered with Purview Unified Catalog. dataProductId=${j.purviewDataProductId} · lastRegisteredAt=${j.lastRegisteredAt}`,
+      });
+    } catch (e: any) {
+      setStatus({ kind: 'err', msg: e?.message || String(e) });
+    }
+  }, [id]);
+
   const setBundleText = (text: string) => setState({ ...state, bundle: text.split('\n').map(s => s.trim()).filter(Boolean) });
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={DP_RIBBON} main={
       <div className={s.pad}>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Purview Unified Catalog wiring pending</MessageBarTitle>
-            The Data Product item type persists configuration to Cosmos, but the canonical Purview UC registration (<code>POST /datagovernance/catalog/dataProducts</code>) is not yet wired. Until a Purview account + <code>loom-purview-client.ts</code> + role assignments (<code>Data Curator</code>, <code>Data Product Owner</code>) ship, this editor saves metadata only. The <strong>Publish to APIM</strong> action below publishes the API consumer surface (an APIM Product), which is the right access-layer artifact but not the Purview Data Product itself. See <code>docs/fiab/data-product-parity-spec.md</code>.
-          </MessageBarBody>
-        </MessageBar>
+        {state.purviewDataProductId ? (
+          <MessageBar intent="success">
+            <MessageBarBody>
+              <MessageBarTitle>Registered with Purview Unified Catalog</MessageBarTitle>
+              Data product <code>{state.purviewDataProductId}</code> is live in the catalog.{' '}
+              {state.lastRegisteredAt && <>Last registered <code>{state.lastRegisteredAt}</code>.{' '}</>}
+              Re-click <strong>Register with Purview</strong> after edits to push updates. APIM publish remains a separate, API-access-layer concern.
+            </MessageBarBody>
+          </MessageBar>
+        ) : (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Not yet registered with Purview Unified Catalog</MessageBarTitle>
+              The item persists configuration to Cosmos, but it has not been published to the canonical Purview Data Product catalog. Click <strong>Register with Purview</strong> below to create the Unified Catalog data product via <code>POST /datagovernance/catalog/dataProducts</code>. Requires a Purview account (<code>LOOM_PURVIEW_ACCOUNT</code>), a <code>businessDomainId</code> GUID in <code>state.domain</code>, and the Loom UAMI to hold the <code>Data Curator</code> + <code>Data Product Owner</code> roles. See <code>docs/fiab/data-product-parity-spec.md</code>.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {purviewHint && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Purview is not provisioned in this deployment</MessageBarTitle>
+              Missing env var: <code>{purviewHint.missingEnvVar}</code>.{' '}
+              Bicep module: <code>{purviewHint.bicepModule}</code> — {purviewHint.bicepStatus}{' '}
+              Required Purview roles (granted via the Purview portal, NOT ARM RBAC):
+              <ul style={{ margin: '6px 0 6px 18px' }}>
+                {purviewHint.rolesRequired.map((r) => (
+                  <li key={r.name}><strong>{r.name}</strong> at {r.scope} — {r.reason}</li>
+                ))}
+              </ul>
+              {purviewHint.followUp}
+            </MessageBarBody>
+          </MessageBar>
+        )}
 
         {loadErr && <MessageBar intent="error"><MessageBarBody>{loadErr}</MessageBarBody></MessageBar>}
         {loading && <Spinner size="tiny" label="Loading…" />}
@@ -686,8 +774,20 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           {state.domain && <Badge appearance="filled" color="brand">Domain: {state.domain}</Badge>}
           {state.owner && <Badge appearance="outline">Owner: {state.owner}</Badge>}
           {state.certified && <Badge appearance="outline" color="success">Certified</Badge>}
+          {state.purviewDataProductId && <Badge appearance="outline" color="success">Purview: {state.purviewDataProductId.slice(0, 8)}…</Badge>}
           <Button appearance="secondary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving'}>Save</Button>
-          <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={publishApimMirror} disabled={status.kind === 'saving' || !state.displayName} style={{ marginLeft: 'auto' }}>
+          <Button
+            appearance={state.purviewDataProductId ? 'secondary' : 'primary'}
+            icon={<Library20Regular />}
+            onClick={registerPurview}
+            disabled={status.kind === 'saving' || !state.displayName}
+            style={{ marginLeft: 'auto' }}
+          >
+            {status.kind === 'saving'
+              ? 'Registering…'
+              : state.purviewDataProductId ? 'Re-register with Purview' : 'Register with Purview'}
+          </Button>
+          <Button appearance="secondary" icon={<CloudArrowUp20Regular />} onClick={publishApimMirror} disabled={status.kind === 'saving' || !state.displayName}>
             {status.kind === 'saving' ? 'Publishing…' : 'Publish to APIM'}
           </Button>
         </div>
@@ -695,7 +795,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
         <div className={s.form}>
           <Field label="Display name"><Input value={state.displayName} onChange={(_, d) => setState({ ...state, displayName: d.value })} /></Field>
-          <Field label="Domain"><Input value={state.domain} onChange={(_, d) => setState({ ...state, domain: d.value })} placeholder="Finance / Sales / Operations / …" /></Field>
+          <Field label="Domain (Purview businessDomainId GUID)"><Input value={state.domain} onChange={(_, d) => setState({ ...state, domain: d.value })} placeholder="e.g. 0a1b2c3d-4e5f-6789-abcd-ef0123456789" /></Field>
           <Field label="Owner (email)"><Input value={state.owner} onChange={(_, d) => setState({ ...state, owner: d.value })} placeholder="owner@contoso.com" /></Field>
           <Field label="SLA"><Input value={state.sla} onChange={(_, d) => setState({ ...state, sla: d.value })} placeholder="99.9% · P95 < 200 ms" /></Field>
           <Field label="Description" style={{ gridColumn: '1 / -1' }}>
