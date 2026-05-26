@@ -378,8 +378,25 @@ export async function submitLivyBatch(args: {
   );
   const sess = await jsonOrThrow<{ id: number; state: string; appInfo?: any }>(sessRes, `createLivySession(${poolName})`);
 
-  // 2) Submit the code as a statement (session must be 'idle' before this; Synapse
-  //    accepts statements while still 'starting' and queues them).
+  // 2) Poll session until 'idle' — Synapse Livy refuses statement submission
+  //    while the session is in 'starting'/'busy'/'shutting_down' states.
+  //    First cold start of a Spark pool can take 60-90s.
+  let sessState = sess.state;
+  for (let i = 0; i < 60; i++) {
+    if (sessState === 'idle') break;
+    if (sessState === 'error' || sessState === 'dead' || sessState === 'killed') {
+      throw new Error(`Spark session ${sess.id} entered terminal state '${sessState}' before becoming ready`);
+    }
+    await new Promise(r => setTimeout(r, 3000));
+    const polled = await callDev(`/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sess.id}`);
+    const j = await jsonOrThrow<{ state: string }>(polled, `pollLivySession(${poolName}/${sess.id})`);
+    sessState = j.state;
+  }
+  if (sessState !== 'idle') {
+    throw new Error(`Spark session ${sess.id} not ready after 3 min — current state '${sessState}'. Pool may be undersized or auto-paused.`);
+  }
+
+  // 3) Submit the code as a statement
   const stmtRes = await callDev(
     `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sess.id}/statements`,
     {
@@ -391,7 +408,7 @@ export async function submitLivyBatch(args: {
 
   return {
     id: `${sess.id}.${stmt.id}`,
-    state: stmt.state || sess.state || 'starting',
+    state: stmt.state || 'running',
     appInfo: sess.appInfo,
   };
 }
