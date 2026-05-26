@@ -143,6 +143,45 @@ jobs:
             echo "APIM not provisioned yet — skipping RBAC grant"
           fi
 
+      - name: Grant Console UAMI Reader on admin RG (unblocks /admin/capacity full inventory)
+        run: |
+          az role assignment create \
+            --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+            --assignee-principal-type ServicePrincipal \
+            --role "Reader" \
+            --scope "/subscriptions/$SUB/resourceGroups/$ADMIN_RG" \
+            -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
+
+      - name: Grant Console UAMI AzureML Data Scientist on Foundry workspace (unblocks Foundry editors)
+        run: |
+          FOUNDRY_WS=$(az resource list -g $ADMIN_RG --resource-type Microsoft.MachineLearningServices/workspaces --query "[0].id" -o tsv)
+          if [ -n "$FOUNDRY_WS" ]; then
+            echo "Foundry workspace: $FOUNDRY_WS"
+            az role assignment create \
+              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-principal-type ServicePrincipal \
+              --role "AzureML Data Scientist" \
+              --scope "$FOUNDRY_WS" \
+              -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
+          else
+            echo "No Foundry workspace in $ADMIN_RG — skipping"
+          fi
+
+      - name: Grant Console UAMI Storage Blob Data Reader on Foundry storage (unblocks datastores)
+        run: |
+          STG=$(az storage account list -g $ADMIN_RG --query "[?contains(name,'aifound') || contains(name,'foundry') || contains(name,'aml')].id" -o tsv | head -1)
+          if [ -n "$STG" ]; then
+            echo "Foundry storage: $STG"
+            az role assignment create \
+              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-principal-type ServicePrincipal \
+              --role "Storage Blob Data Reader" \
+              --scope "$STG" \
+              -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
+          else
+            echo "No Foundry storage in $ADMIN_RG — skipping"
+          fi
+
       - name: Summary
         if: always()
         run: |
@@ -150,3 +189,11 @@ jobs:
           echo "Synapse: UAMI granted Synapse Administrator + SQL Administrator + SQL-level sysadmin"
           echo "Databricks: UAMI registered as SP via SCIM (workspace-access + databricks-sql-access)"
           echo "APIM: Service Contributor granted (if APIM provisioned)"
+          echo "Admin RG: Reader granted (for /admin/capacity full inventory)"
+          echo "Foundry workspace: AzureML Data Scientist granted (unblocks /api/foundry/workspace + datastores)"
+          echo "Foundry storage: Blob Data Reader granted"
+          echo ""
+          echo "Still needs manual steps (not grantable via SP):"
+          echo "  • Power Platform Admin — grant at https://admin.powerplatform.microsoft.com"
+          echo "    Add SP id $CONSOLE_UAMI_PRINCIPAL as Power Platform Administrator."
+          echo "  • Power BI tenant SP enablement — Fabric admin portal"
