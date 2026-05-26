@@ -32,19 +32,20 @@ interface Props {
 }
 
 const useStyles = makeStyles({
-  toolbar: { display: 'flex', gap: 16, alignItems: 'center', marginBottom: 20, flexWrap: 'wrap' },
-  search: { flex: 1, maxWidth: 380 },
+  toolbar: { display: 'flex', gap: '16px', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap' },
+  search: { flex: 1, maxWidth: '380px' },
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-    gap: 16,
+    gap: '16px',
   },
   card: {
-    padding: 18, borderRadius: 10,
+    paddingTop: '18px', paddingRight: '18px', paddingBottom: '18px', paddingLeft: '18px',
+    borderRadius: '10px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     textDecoration: 'none', color: tokens.colorNeutralForeground1,
-    display: 'flex', flexDirection: 'column', gap: 6,
+    display: 'flex', flexDirection: 'column',
     transition: 'border-color 0.15s, box-shadow 0.15s, transform 0.15s',
     ':hover': {
       borderColor: tokens.colorBrandStroke1,
@@ -53,18 +54,19 @@ const useStyles = makeStyles({
     },
   },
   type: {
-    fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
-    color: tokens.colorNeutralForeground3, fontWeight: 600, marginBottom: 4,
+    fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
+    color: tokens.colorNeutralForeground3, fontWeight: 600, marginBottom: '4px',
   },
-  name: { fontSize: 15, fontWeight: 600, lineHeight: 1.3, marginBottom: 4 },
-  desc: { fontSize: 13, color: tokens.colorNeutralForeground2, lineHeight: 1.45 },
-  meta: { fontSize: 11, color: tokens.colorNeutralForeground3, marginTop: 8 },
+  name: { fontSize: '15px', fontWeight: 600, lineHeight: 1.3, marginBottom: '4px' },
+  desc: { fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.45 },
+  meta: { fontSize: '11px', color: tokens.colorNeutralForeground3, marginTop: '8px' },
   empty: {
-    padding: 32, borderRadius: 12,
+    paddingTop: '32px', paddingRight: '32px', paddingBottom: '32px', paddingLeft: '32px',
+    borderRadius: '12px',
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
     color: tokens.colorNeutralForeground2,
-    fontSize: 14, textAlign: 'center', lineHeight: 1.6,
+    fontSize: '14px', textAlign: 'center', lineHeight: 1.6,
   },
 });
 

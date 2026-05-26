@@ -50,13 +50,14 @@ const useStyles = makeStyles({
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-    gap: 18,
+    gap: '18px',
   },
   card: {
-    padding: 20, borderRadius: 10,
+    paddingTop: '20px', paddingRight: '20px', paddingBottom: '20px', paddingLeft: '20px',
+    borderRadius: '10px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    display: 'flex', flexDirection: 'column', gap: 8,
+    display: 'flex', flexDirection: 'column', gap: '8px',
     transition: 'border-color 0.15s, box-shadow 0.15s, transform 0.15s',
     ':hover': {
       borderColor: tokens.colorBrandStroke1,
@@ -64,10 +65,10 @@ const useStyles = makeStyles({
       transform: 'translateY(-2px)',
     },
   },
-  title: { fontSize: 15, fontWeight: 600, lineHeight: 1.3 },
-  body: { fontSize: 13, color: tokens.colorNeutralForeground2, lineHeight: 1.55 },
-  linkRow: { display: 'flex', gap: 12, marginTop: 'auto', paddingTop: 10, flexWrap: 'wrap' },
-  link: { fontSize: 13, color: tokens.colorBrandForeground1, textDecoration: 'none',
+  title: { fontSize: '15px', fontWeight: 600, lineHeight: 1.3 },
+  body: { fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.55 },
+  linkRow: { display: 'flex', gap: '12px', marginTop: 'auto', paddingTop: '10px', flexWrap: 'wrap' },
+  link: { fontSize: '13px', color: tokens.colorBrandForeground1, textDecoration: 'none',
     ':hover': { textDecoration: 'underline' } },
 });
 

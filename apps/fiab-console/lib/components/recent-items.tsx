@@ -17,28 +17,30 @@ const useStyles = makeStyles({
   row: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
-    gap: 16,
+    gap: '16px',
   },
   card: {
-    padding: 16, borderRadius: 10,
+    paddingTop: '16px', paddingRight: '16px', paddingBottom: '16px', paddingLeft: '16px',
+    borderRadius: '10px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     textDecoration: 'none', color: tokens.colorNeutralForeground1,
     transition: 'border-color 0.15s, transform 0.15s',
-    display: 'flex', flexDirection: 'column', gap: 4,
+    display: 'flex', flexDirection: 'column',
     ':hover': { borderColor: tokens.colorBrandStroke1, transform: 'translateY(-2px)' },
   },
   type: {
-    fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
+    fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground3, fontWeight: 600,
-    marginBottom: 4,
+    marginBottom: '4px',
   },
-  name: { fontSize: 14, fontWeight: 600, lineHeight: 1.35, marginBottom: 6 },
+  name: { fontSize: '14px', fontWeight: 600, lineHeight: 1.35, marginBottom: '6px' },
   empty: {
-    padding: 20, borderRadius: 10,
+    paddingTop: '20px', paddingRight: '20px', paddingBottom: '20px', paddingLeft: '20px',
+    borderRadius: '10px',
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
-    fontSize: 13, textAlign: 'center', lineHeight: 1.5,
+    fontSize: '13px', textAlign: 'center', lineHeight: 1.5,
   },
 });
 

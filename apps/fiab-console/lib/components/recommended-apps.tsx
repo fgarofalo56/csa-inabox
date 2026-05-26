@@ -20,15 +20,16 @@ const useStyles = makeStyles({
   row: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-    gap: 16,
+    gap: '16px',
   },
   card: {
-    padding: 20, borderRadius: 10,
+    paddingTop: '20px', paddingRight: '20px', paddingBottom: '20px', paddingLeft: '20px',
+    borderRadius: '10px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     textDecoration: 'none', color: tokens.colorNeutralForeground1,
     transition: 'border-color 0.15s, transform 0.15s, box-shadow 0.15s',
-    display: 'flex', flexDirection: 'column', gap: 4,
+    display: 'flex', flexDirection: 'column',
     ':hover': {
       borderColor: tokens.colorBrandStroke1,
       transform: 'translateY(-2px)',
@@ -36,17 +37,18 @@ const useStyles = makeStyles({
     },
   },
   badge: {
-    fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em',
+    fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
     color: tokens.colorBrandForeground1, fontWeight: 700,
-    marginBottom: 6,
+    marginBottom: '6px',
   },
-  name: { fontSize: 15, fontWeight: 600, marginBottom: 8, lineHeight: 1.3 },
-  desc: { fontSize: 13, color: tokens.colorNeutralForeground2, lineHeight: 1.5 },
+  name: { fontSize: '15px', fontWeight: 600, marginBottom: '8px', lineHeight: 1.3 },
+  desc: { fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.5 },
   empty: {
-    padding: 20, borderRadius: 10,
+    paddingTop: '20px', paddingRight: '20px', paddingBottom: '20px', paddingLeft: '20px',
+    borderRadius: '10px',
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
-    fontSize: 13, textAlign: 'center', lineHeight: 1.5,
+    fontSize: '13px', textAlign: 'center', lineHeight: 1.5,
   },
 });
 
