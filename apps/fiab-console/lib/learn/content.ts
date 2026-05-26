@@ -414,6 +414,124 @@ const REGISTRY: Record<string, LearnEntry> = {
     summary: 'Write operation the agent can perform — Power Automate flow, custom connector, or REST endpoint.',
     docsUrl: 'https://learn.microsoft.com/microsoft-copilot-studio/authoring-actions',
   },
+  'copilot-studio-channel': {
+    title: 'Copilot Studio channel',
+    summary: 'Surface where users interact with the agent: Teams, web embed, Slack, custom Direct Line, mobile.',
+    docsUrl: 'https://learn.microsoft.com/microsoft-copilot-studio/publication-fundamentals-publish-channels',
+  },
+  'copilot-studio-analytics': {
+    title: 'Copilot Studio analytics',
+    summary: 'Conversation insights: session count, deflection rate, top topics, customer-satisfaction trends.',
+    docsUrl: 'https://learn.microsoft.com/microsoft-copilot-studio/analytics-overview',
+  },
+  'copilot-template-library': {
+    title: 'Copilot template library',
+    summary: 'CSA-curated agent templates: HR helpdesk, IT support, FinOps assistant, healthcare intake. Clone + customize.',
+  },
+  'ai-foundry-project': {
+    title: 'AI Foundry project',
+    summary: 'Scoped Foundry workspace for a single app: prompt flows, evaluations, deployments, model catalog access.',
+    docsUrl: 'https://learn.microsoft.com/azure/ai-studio/concepts/architecture',
+  },
+  'airflow-job': {
+    title: 'Apache Airflow job',
+    summary: 'DAG-based pipeline orchestration. Use when you need Airflow operators (Spark / dbt / Snowflake / etc.) beyond what ADF/Synapse pipelines cover.',
+    docsUrl: 'https://learn.microsoft.com/azure/data-factory/airflow-overview',
+  },
+  'dbt-job': {
+    title: 'dbt job',
+    summary: 'Run a dbt project (models + tests + docs) against a warehouse/lakehouse. Compiles SQL, materializes models, surfaces test failures.',
+    docsUrl: 'https://docs.getdbt.com/docs/introduction',
+  },
+  'data-agent': {
+    title: 'Data agent',
+    summary: 'Conversational Q&A grounded in your warehouse, lakehouse, and semantic models. Built on Foundry prompt-flow + AI Search hybrid retrieval.',
+  },
+  'cross-item-copilot': {
+    title: 'Cross-item Copilot',
+    summary: 'Orchestrator that drives Loom items via natural language. Calls the same BFF actions the UI calls; full audit log of every move.',
+  },
+  'event-schema-set': {
+    title: 'Event schema set',
+    summary: 'Centralized event schemas (Avro / JSON Schema / Protobuf) shared across Eventstream sources + KQL ingestion + downstream consumers.',
+  },
+  'geo-dataset': {
+    title: 'Geoanalytics dataset',
+    summary: 'Geo-typed parquet dataset (point/polygon/h3-cell). Queried via ST_* spatial functions in Synapse Serverless or Databricks.',
+  },
+  'geo-map': {
+    title: 'Geo map',
+    summary: 'Azure Maps + geoanalytics layer composition for visual analytics. Heatmaps, choropleths, point clusters over your geo-dataset.',
+  },
+  'geo-pipeline': {
+    title: 'Geo pipeline',
+    summary: 'Pre-built ETL: lat/long → H3 cell → spatial join → aggregate. Outputs a queryable geo-dataset.',
+  },
+  'geo-query': {
+    title: 'Geo query',
+    summary: 'Saved spatial query (ST_Within, ST_Distance, ST_Contains, H3 ring). Pinnable to geo-map layers.',
+  },
+  'graph-model': {
+    title: 'Graph model',
+    summary: 'Schema definition for a property graph: node labels, edge types, allowed properties, indexes. Feeds Cosmos Gremlin, Cypher-over-ADX, or GQL backends.',
+  },
+  'map': {
+    title: 'Map',
+    summary: 'Static or interactive map artifact bound to a geo-dataset. Embeddable in reports and dashboards.',
+  },
+  'mounted-adf': {
+    title: 'Mounted Data Factory',
+    summary: 'Read-only attachment of an existing Azure Data Factory. Run history + monitoring surface inside Loom without migrating pipelines.',
+    docsUrl: 'https://learn.microsoft.com/fabric/data-factory/use-existing-adf-in-fabric',
+  },
+  'ontology': {
+    title: 'Ontology',
+    summary: 'RDF / OWL ontology that types entities + relationships. Feeds the graph backend semantic layer.',
+  },
+  'operations-agent': {
+    title: 'Operations agent',
+    summary: 'Always-on agent that monitors Loom items + workspaces, flags drift, opens incidents in audit-log, and proposes remediations via Cross-item Copilot.',
+  },
+  'plan': {
+    title: 'Plan',
+    summary: 'Declarative state for a set of items + their dependencies. Like Terraform for Loom items — diffable, reviewable, applyable.',
+  },
+  'power-page': {
+    title: 'Power Page',
+    summary: 'Low-code public-facing website over Dataverse data. Built-in auth, role-based pages, web forms wired to Power Automate.',
+    docsUrl: 'https://learn.microsoft.com/power-pages/introduction',
+  },
+  'powerplatform-environment': {
+    title: 'Power Platform environment',
+    summary: 'Isolated Power Platform container (Dataverse instance + apps + flows + agents). Each prod/dev/UAT gets its own environment.',
+    docsUrl: 'https://learn.microsoft.com/power-platform/admin/environments-overview',
+  },
+  'sql-database': {
+    title: 'SQL database',
+    summary: 'Generic SQL database item. Defaults to Azure SQL Database; can target Azure SQL MI or SQL Server 2025 depending on workload requirements.',
+  },
+  'synapse-pipeline': {
+    title: 'Synapse pipeline',
+    summary: 'ADF-shaped pipeline that runs inside a Synapse workspace. Reuses Synapse-attached linked services + integration runtimes.',
+    docsUrl: 'https://learn.microsoft.com/azure/synapse-analytics/data-integration/concepts-data-factory-differences',
+  },
+  'synapse-spark-pool': {
+    title: 'Synapse Spark pool',
+    summary: 'Apache Spark compute pool. Auto-scale + auto-pause; size by node family. Attach notebooks + Spark job definitions.',
+    docsUrl: 'https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-pool-configurations',
+  },
+  'tracing': {
+    title: 'Tracing',
+    summary: 'Application Insights / OpenTelemetry trace surface for Loom-orchestrated runs. Drill from a failed pipeline into the actual span.',
+  },
+  'usql-job': {
+    title: 'U-SQL job',
+    summary: 'Legacy Azure Data Lake Analytics U-SQL job (compatibility surface). Recommend migrating to Spark or Databricks for new workloads.',
+  },
+  'variable-library': {
+    title: 'Variable library',
+    summary: 'Centralized name → value store for pipelines, notebooks, and SQL parameter substitution. Workspace- or domain-scoped.',
+  },
 };
 
 export function getLearn(itemType: string): LearnEntry | null {

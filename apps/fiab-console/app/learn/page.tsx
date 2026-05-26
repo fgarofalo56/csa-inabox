@@ -14,36 +14,46 @@ import { getLearn } from '@/lib/learn/content';
 // Mirror the registry keys here — Learn page lists known entries.
 const KNOWN_TYPES = [
   // Real-time
-  'eventstream', 'eventhouse', 'kql-database', 'kql-queryset', 'kql-dashboard', 'activator',
+  'eventstream', 'eventhouse', 'kql-database', 'kql-queryset', 'kql-dashboard',
+  'activator', 'event-schema-set',
   // Lakehouse / storage
   'lakehouse', 'mirrored-database', 'mirrored-databricks',
   // Warehouse / SQL
   'warehouse', 'synapse-serverless-sql-pool', 'synapse-dedicated-sql-pool',
-  'azure-sql-database', 'azure-sql-server', 'azure-sql-managed-instance',
-  'sql-server-2025-vector-index',
+  'sql-database', 'azure-sql-database', 'azure-sql-server',
+  'azure-sql-managed-instance', 'sql-server-2025-vector-index',
   // Data engineering
   'notebook', 'data-pipeline', 'dataflow', 'copy-job',
-  'spark-job-definition', 'environment',
+  'spark-job-definition', 'environment', 'variable-library',
+  // Synapse
+  'synapse-pipeline', 'synapse-spark-pool',
   // Databricks
   'databricks-cluster', 'databricks-job', 'databricks-notebook', 'databricks-sql-warehouse',
-  // ADF
-  'adf-pipeline', 'adf-dataset', 'adf-trigger',
+  // ADF / orchestration
+  'adf-pipeline', 'adf-dataset', 'adf-trigger', 'mounted-adf',
+  'airflow-job', 'dbt-job', 'usql-job',
   // AI / ML
-  'ai-foundry-hub', 'ai-search-index', 'prompt-flow', 'evaluation',
-  'ml-model', 'ml-experiment', 'compute', 'dataset', 'content-safety', 'vector-store',
+  'ai-foundry-hub', 'ai-foundry-project', 'ai-search-index',
+  'prompt-flow', 'evaluation', 'ml-model', 'ml-experiment',
+  'compute', 'dataset', 'content-safety', 'vector-store', 'data-agent',
   // Power BI
   'semantic-model', 'report', 'dashboard', 'paginated-report', 'scorecard',
   // APIs
   'apim-api', 'apim-product', 'apim-policy', 'graphql-api', 'user-data-function',
   // Power Platform
-  'power-app', 'power-automate-flow', 'dataverse-table', 'ai-builder-model',
+  'power-app', 'power-automate-flow', 'power-page', 'dataverse-table',
+  'ai-builder-model', 'powerplatform-environment',
   // Copilot Studio
-  'copilot-studio-agent', 'copilot-studio-knowledge',
-  'copilot-studio-topic', 'copilot-studio-action',
+  'copilot-studio-agent', 'copilot-studio-knowledge', 'copilot-studio-topic',
+  'copilot-studio-action', 'copilot-studio-channel', 'copilot-studio-analytics',
+  'copilot-template-library', 'cross-item-copilot',
   // Data products
   'data-product', 'data-product-template', 'data-product-instance',
-  // Graph
-  'cosmos-gremlin-graph', 'cypher-graph', 'gql-graph',
+  // Graph / geo
+  'cosmos-gremlin-graph', 'cypher-graph', 'gql-graph', 'graph-model', 'ontology',
+  'geo-dataset', 'geo-map', 'geo-pipeline', 'geo-query', 'map',
+  // Ops
+  'operations-agent', 'plan', 'tracing',
 ];
 
 const useStyles = makeStyles({
