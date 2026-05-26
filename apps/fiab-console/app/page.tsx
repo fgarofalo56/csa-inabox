@@ -75,7 +75,6 @@ const useStyles = makeStyles({
   cardTitle: { marginBottom: '8px', lineHeight: 1.3, display: 'block' },
   cardBody: { color: tokens.colorNeutralForeground3, margin: 0, lineHeight: 1.55, display: 'block' },
 });
-});
 
 interface Quick {
   href: string;
