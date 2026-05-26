@@ -8,7 +8,7 @@
  * to the target workspace. If either is missing, the editor surfaces the
  * underlying 401/403 verbatim via MessageBar — no mocks.
  *
- * Backed by /api/fabric/workspaces + /api/items/notebook/**.
+ * Backed by /api/loom/workspaces + /api/items/notebook/**.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -66,7 +66,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/fabric/workspaces');
+      const r = await fetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setHint(j.hint || null); setWorkspaces([]); }
       else setWorkspaces(j.workspaces || []);
@@ -93,10 +93,32 @@ function decodePy(b64: string): string {
 
 interface Props { item: FabricItemType; id: string; }
 
+interface ComputeTarget {
+  id: string;
+  name: string;
+  kind: 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql';
+  state?: string;
+}
+
+function useComputes() {
+  const [computes, setComputes] = useState<ComputeTarget[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    fetch('/api/loom/compute-targets').then(r => r.json()).then(j => {
+      if (j.ok) setComputes(j.computes || []);
+      else setError(j.error || 'failed to list compute');
+    }).catch(e => setError(e?.message || String(e))).finally(() => setLoading(false));
+  }, []);
+  return { computes, loading, error };
+}
+
 export function NotebookEditor({ item, id }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
+  const cp = useComputes();
   const [workspaceId, setWorkspaceId] = useState('');
+  const [computeId, setComputeId] = useState('');
   const [notebooks, setNotebooks] = useState<NotebookLite[] | null>(null);
   const [notebookId, setNotebookId] = useState('');
   const [source, setSource] = useState(STARTER_PY);
@@ -113,6 +135,14 @@ export function NotebookEditor({ item, id }: Props) {
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [prefill, setPrefill] = useState<{ source: string; container?: string; path?: string } | null>(null);
+
+  // Auto-pick first runnable compute (skip serverless SQL — not for notebooks)
+  useEffect(() => {
+    if (!computeId && cp.computes.length) {
+      const first = cp.computes.find(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster');
+      if (first) setComputeId(first.id);
+    }
+  }, [cp.computes, computeId]);
 
   // Pick up Lakehouse "Open in notebook" prefill (stored in localStorage before route push).
   useEffect(() => {
@@ -148,9 +178,15 @@ export function NotebookEditor({ item, id }: Props) {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(nbId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDetailErr(j.error); return; }
-      const part = j.definition?.parts?.find((p: any) => /notebook-content\.(py|sql|scala|r)$/.test(p.path));
-      if (part?.payload) setSource(decodePy(part.payload));
-      else setSource(STARTER_PY);
+      // v3.22: Loom-native shape — flat { code, lang }. Legacy Fabric shape
+      // (definition.parts[]) still supported during transition.
+      if (j.definition?.code !== undefined) {
+        setSource(j.definition.code || STARTER_PY);
+      } else {
+        const part = j.definition?.parts?.find((p: any) => /notebook-content\.(py|sql|scala|r)$/.test(p.path));
+        if (part?.payload) setSource(decodePy(part.payload));
+        else setSource(STARTER_PY);
+      }
       setDirty(false);
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
@@ -172,14 +208,10 @@ export function NotebookEditor({ item, id }: Props) {
     if (!workspaceId || !notebookId) return;
     setSaving(true); setDetailErr(null);
     try {
-      const definition = {
-        format: 'fabricGitSource',
-        parts: [{ path: 'notebook-content.py', payload: encodePy(source), payloadType: 'InlineBase64' }],
-      };
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ definition }),
+        body: JSON.stringify({ definition: { code: source, lang: 'python' } }),
       });
       const j = await r.json();
       if (!j.ok) setDetailErr(j.error || 'save failed');
@@ -189,18 +221,27 @@ export function NotebookEditor({ item, id }: Props) {
 
   const run = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
+    if (!computeId) {
+      setRunMsg('Pick a compute target before running.');
+      return;
+    }
     setRunning(true); setRunMsg(null);
     try {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ compute: computeId }),
       });
       const j = await r.json();
-      if (!j.ok) setRunMsg(`Run failed: ${j.error}`);
-      else { setRunMsg('Job queued. Status polling starts via Refresh.'); setTimeout(() => loadJobs(workspaceId, notebookId), 1500); }
+      if (!j.ok) setRunMsg(`Run failed: ${j.error}${j.hint ? ' — ' + j.hint : ''}`);
+      else {
+        const kind = j.compute?.kind || 'compute';
+        const target = j.compute?.pool || j.compute?.clusterId || computeId;
+        setRunMsg(`Run started on ${kind} ${target} — runId ${j.runId}${j.runUrl ? ` · ${j.runUrl}` : ''}`);
+        setTimeout(() => loadJobs(workspaceId, notebookId), 1500);
+      }
     } finally { setRunning(false); }
-  }, [workspaceId, notebookId, loadJobs]);
+  }, [workspaceId, notebookId, computeId, loadJobs]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -253,14 +294,25 @@ export function NotebookEditor({ item, id }: Props) {
       main={
         <div className={s.pad}>
           <div className={s.toolbar}>
-            <Badge appearance="filled" color="brand">Fabric Notebook</Badge>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+            <Badge appearance="filled" color="brand">Loom Notebook</Badge>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
               <Caption1>Workspace</Caption1>
               <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
                 {(ws.workspaces || []).map((w) => (
-                  <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · F/P SKU' : ''}</option>
+                  <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · dedicated' : ''}</option>
                 ))}
+              </Select>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+              <Caption1>Compute target</Caption1>
+              <Select value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
+                {!computeId && <option value="">{cp.loading ? 'Loading compute…' : 'Select compute'}</option>}
+                {cp.computes
+                  .filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster')
+                  .map(c => (
+                    <option key={c.id} value={c.id}>{c.name}{c.state ? ` · ${c.state}` : ''}</option>
+                  ))}
               </Select>
             </div>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>

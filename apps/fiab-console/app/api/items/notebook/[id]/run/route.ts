@@ -1,25 +1,92 @@
 /**
  * POST /api/items/notebook/[id]/run?workspaceId=...
- *   body: { parameters?: Record<string,{value,type?}>, configuration?: object }
+ *   body: { compute: 'spark:<poolName>' | 'databricks:<clusterId>',
+ *           parameters?: Record<string, any> }
+ *
+ * Dispatches the notebook's code to the chosen Azure-native compute:
+ *   - synapse-spark: submits a Livy batch to the named Spark pool
+ *   - databricks-cluster: runs the notebook as a one-time Databricks Jobs
+ *     submission against the named cluster
+ *
+ * Returns { ok, runId, status, livyId?, runUrl? }. Poll status via
+ * /api/items/notebook/[id]/jobs?workspaceId=...
  */
-
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { runNotebook, FabricError } from '@/lib/azure/fabric-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
-  if (!getSession()) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
-  const body = await req.json().catch(() => ({}));
+function err(error: string, status: number, hint?: string) {
+  return NextResponse.json({ ok: false, error, hint }, { status });
+}
+
+async function loadNotebook(id: string, workspaceId: string): Promise<WorkspaceItem | null> {
+  const items = await itemsContainer();
   try {
-    const res = await runNotebook(workspaceId, ctx.params.id, body);
-    return NextResponse.json({ ok: true, ...res });
+    const { resource } = await items.item(id, workspaceId).read<WorkspaceItem>();
+    return (resource && resource.itemType === 'notebook') ? resource : null;
+  } catch (e: any) { if (e?.code === 404) return null; throw e; }
+}
+
+export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+  const s = getSession();
+  if (!s) return err('unauthenticated', 401);
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  if (!workspaceId) return err('workspaceId required', 400);
+  const body = await req.json().catch(() => ({}));
+  const compute: string = body?.compute || '';
+  if (!compute) return err('compute required (e.g. "spark:loompool" or "databricks:0526-123456-abcde1234")', 400);
+
+  try {
+    const nb = await loadNotebook(ctx.params.id, workspaceId);
+    if (!nb) return err('notebook not found', 404);
+    const code = (nb.state as any)?.code || '';
+    if (!code.trim()) return err('notebook is empty — write some code before running', 400);
+
+    // Dispatch by compute kind
+    if (compute.startsWith('spark:')) {
+      const pool = compute.slice('spark:'.length);
+      const { submitLivyBatch } = await import('@/lib/azure/synapse-dev-client');
+      const runRes = await submitLivyBatch({
+        poolName: pool,
+        code,
+        kind: ((nb.state as any)?.lang === 'sql') ? 'spark' : 'pyspark',
+        jobName: `loom-${nb.displayName.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 40)}-${Date.now()}`,
+      });
+      return NextResponse.json({
+        ok: true,
+        runId: String(runRes.id),
+        status: runRes.state,
+        compute: { kind: 'synapse-spark', pool },
+        livyId: runRes.id,
+        runUrl: runRes.appInfo?.sparkUiUrl,
+      });
+    }
+
+    if (compute.startsWith('databricks:')) {
+      const clusterId = compute.slice('databricks:'.length);
+      const { runOneTimeNotebook } = await import('@/lib/azure/databricks-client');
+      const runRes = await runOneTimeNotebook({
+        clusterId,
+        code,
+        lang: (nb.state as any)?.lang === 'sql' ? 'SQL' : 'PYTHON',
+        jobName: `loom-${nb.displayName.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 40)}`,
+      });
+      return NextResponse.json({
+        ok: true,
+        runId: String(runRes.run_id),
+        status: 'PENDING',
+        compute: { kind: 'databricks-cluster', clusterId },
+        runUrl: runRes.run_page_url,
+      });
+    }
+
+    return err(`unsupported compute kind: ${compute.split(':')[0]}`, 400,
+      'Use "spark:<poolName>" or "databricks:<clusterId>"');
   } catch (e: any) {
-    const status = e instanceof FabricError ? e.status : 502;
-    return NextResponse.json({ ok: false, error: e?.message || String(e), endpoint: e?.endpoint, hint: e?.hint }, { status });
+    return err(e?.message || String(e), e?.status || 502, e?.hint);
   }
 }

@@ -8,7 +8,7 @@
  * Auth gate: requires Console UAMI SP authorized in the Fabric tenant and
  * added to the target workspace. Underlying 401/403 surface verbatim.
  *
- * Backed by /api/fabric/workspaces + /api/items/dataflow/**.
+ * Backed by /api/loom/workspaces + /api/items/dataflow/**.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -57,7 +57,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/fabric/workspaces');
+      const r = await fetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setHint(j.hint || null); setWorkspaces([]); }
       else setWorkspaces(j.workspaces || []);
