@@ -75,7 +75,7 @@ resource vpnGateway 'Microsoft.Network/virtualNetworkGateways@2024-05-01' = {
       }
       vpnClientProtocols: ['OpenVPN']
       vpnAuthenticationTypes: ['AAD']
-      aadTenant: 'https://login.microsoftonline.com/${tenantId}'
+      aadTenant: '${environment().authentication.loginEndpoint}${tenantId}'
       aadAudience: azureVpnClientAppId
       aadIssuer: 'https://sts.windows.net/${tenantId}/'
     }

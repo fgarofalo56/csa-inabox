@@ -1,148 +1,70 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
   Title2,
   Body1,
-  Card,
-  CardHeader,
   Button,
-  Combobox,
-  Option,
-  Input,
-  Field,
-  Dialog,
-  DialogTrigger,
-  DialogSurface,
-  DialogBody,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
   makeStyles,
   tokens,
   Spinner,
   MessageBar,
   MessageBarBody,
-  Subtitle2,
 } from '@fluentui/react-components';
-import { Add24Regular, ArrowLeft24Regular } from '@fluentui/react-icons';
+import { ArrowLeft24Regular } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { PageShell } from '@/lib/components/page-shell';
+import { NewItemDialog } from '@/lib/components/new-item-dialog';
+import { WorkspaceSettingsDrawer } from '@/lib/components/workspace-settings-drawer';
 import {
   getWorkspace,
   listItems,
-  createItem,
   type Workspace,
   type WorkspaceItem,
 } from '@/lib/api/workspaces';
-import { FABRIC_ITEM_TYPES, findItemType } from '@/lib/catalog/fabric-item-types';
+import { findItemType } from '@/lib/catalog/fabric-item-types';
 
 const useStyles = makeStyles({
   back: { marginBottom: '12px' },
-  header: { display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' },
+  header: { display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '20px' },
   spacer: { flex: 1 },
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-    gap: '12px',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+    gap: '16px',
   },
   card: {
+    paddingTop: '18px', paddingRight: '18px', paddingBottom: '18px', paddingLeft: '18px',
+    borderRadius: '10px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
+    textDecoration: 'none',
+    display: 'flex', flexDirection: 'column',
+    minHeight: '120px',
     cursor: 'pointer',
-    transition: 'transform 0.15s, box-shadow 0.15s',
-    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow8 },
+    transition: 'transform 0.15s, box-shadow 0.15s, border-color 0.15s',
+    ':hover': {
+      transform: 'translateY(-2px)',
+      boxShadow: tokens.shadow8,
+      borderColor: tokens.colorBrandStroke1,
+    },
   },
-  meta: { fontSize: '12px', color: tokens.colorNeutralForeground3 },
+  cardType: {
+    fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
+    color: tokens.colorNeutralForeground3, fontWeight: 600, marginBottom: '6px',
+  },
+  cardName: { fontSize: '15px', fontWeight: 600, lineHeight: 1.3, marginBottom: '6px' },
+  cardDesc: { fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.45, marginBottom: '8px' },
+  meta: { fontSize: '11px', color: tokens.colorNeutralForeground3, marginTop: 'auto' },
   empty: {
-    padding: '40px',
+    paddingTop: '32px', paddingRight: '32px', paddingBottom: '32px', paddingLeft: '32px',
     textAlign: 'center',
     color: tokens.colorNeutralForeground3,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    borderRadius: '8px',
+    borderRadius: '12px', lineHeight: 1.6,
   },
-  formCol: { display: 'flex', flexDirection: 'column', gap: '12px' },
 });
-
-function NewItemForWorkspaceDialog({ workspaceId }: { workspaceId: string }) {
-  const styles = useStyles();
-  const router = useRouter();
-  const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const [itemType, setItemType] = useState<string>('');
-  const [displayName, setDisplayName] = useState('');
-
-  const sorted = useMemo(
-    () => [...FABRIC_ITEM_TYPES].sort((a, b) => a.displayName.localeCompare(b.displayName)),
-    [],
-  );
-
-  const mut = useMutation({
-    mutationFn: () => createItem(workspaceId, { itemType, displayName }),
-    onSuccess: (item) => {
-      qc.invalidateQueries({ queryKey: ['items', workspaceId] });
-      setOpen(false);
-      setItemType('');
-      setDisplayName('');
-      router.push(`/items/${item.itemType}/${item.id}`);
-    },
-  });
-
-  return (
-    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
-      <DialogTrigger disableButtonEnhancement>
-        <Button appearance="primary" icon={<Add24Regular />}>New item</Button>
-      </DialogTrigger>
-      <DialogSurface>
-        <DialogBody>
-          <DialogTitle>New item</DialogTitle>
-          <DialogContent>
-            <div className={styles.formCol}>
-              <Field label="Item type" required>
-                <Combobox
-                  placeholder="Pick an item type"
-                  value={itemType ? (findItemType(itemType)?.displayName ?? itemType) : ''}
-                  selectedOptions={itemType ? [itemType] : []}
-                  onOptionSelect={(_, d) => setItemType(d.optionValue ?? '')}
-                >
-                  {sorted.map((t) => (
-                    <Option key={t.slug} value={t.slug} text={t.displayName}>
-                      {t.displayName} <span style={{ color: tokens.colorNeutralForeground3, marginLeft: 8 }}>({t.category})</span>
-                    </Option>
-                  ))}
-                </Combobox>
-              </Field>
-              <Field label="Name" required>
-                <Input
-                  value={displayName}
-                  onChange={(_, d) => setDisplayName(d.value)}
-                  placeholder="My new item"
-                />
-              </Field>
-              {mut.error && (
-                <MessageBar intent="error">
-                  <MessageBarBody>{(mut.error as Error).message}</MessageBarBody>
-                </MessageBar>
-              )}
-            </div>
-          </DialogContent>
-          <DialogActions>
-            <DialogTrigger disableButtonEnhancement>
-              <Button appearance="secondary">Cancel</Button>
-            </DialogTrigger>
-            <Button
-              appearance="primary"
-              disabled={!itemType || !displayName.trim() || mut.isPending}
-              onClick={() => mut.mutate()}
-            >
-              {mut.isPending ? 'Creating…' : 'Create'}
-            </Button>
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
-  );
-}
 
 export default function WorkspaceDetailPage({ params }: { params: { id: string } }) {
   const styles = useStyles();
@@ -163,7 +85,12 @@ export default function WorkspaceDetailPage({ params }: { params: { id: string }
     <PageShell
       title={ws?.name ?? 'Workspace'}
       subtitle={ws?.description}
-      actions={ws ? <NewItemForWorkspaceDialog workspaceId={ws.id} /> : undefined}
+      actions={ws ? (
+        <div style={{ display: 'flex', gap: 4 }}>
+          <WorkspaceSettingsDrawer workspace={ws} />
+          <NewItemDialog workspaceId={ws.id} />
+        </div>
+      ) : undefined}
     >
       <div className={styles.back}>
         <Link href="/workspaces">
@@ -209,22 +136,14 @@ export default function WorkspaceDetailPage({ params }: { params: { id: string }
                   <Link
                     key={it.id}
                     href={`/items/${it.itemType}/${it.id}`}
-                    style={{ textDecoration: 'none' }}
+                    className={styles.card}
                   >
-                    <Card className={styles.card}>
-                      <CardHeader
-                        header={<Subtitle2>{it.displayName}</Subtitle2>}
-                        description={
-                          <div>
-                            <div className={styles.meta}>{meta?.displayName ?? it.itemType}</div>
-                            {it.description && <Body1>{it.description}</Body1>}
-                            <div className={styles.meta}>
-                              Updated {new Date(it.updatedAt).toLocaleDateString()}
-                            </div>
-                          </div>
-                        }
-                      />
-                    </Card>
+                    <div className={styles.cardType}>{meta?.displayName ?? it.itemType.replace(/-/g, ' ')}</div>
+                    <div className={styles.cardName}>{it.displayName}</div>
+                    {it.description && <div className={styles.cardDesc}>{it.description}</div>}
+                    <div className={styles.meta}>
+                      Updated {new Date(it.updatedAt).toLocaleDateString()}
+                    </div>
                   </Link>
                 );
               })}

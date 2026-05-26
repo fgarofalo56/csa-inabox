@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { makeStyles, tokens } from '@fluentui/react-components';
+import { PinnedSection } from './pinned-section';
 import {
   Home24Regular,
   Building24Regular,
@@ -85,6 +86,7 @@ export function LeftNav() {
           </Link>
         );
       })}
+      <PinnedSection />
     </nav>
   );
 }

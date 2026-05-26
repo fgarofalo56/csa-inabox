@@ -1,9 +1,8 @@
 'use client';
 
 import {
-  Card, CardHeader, CardPreview,
-  Subtitle1, Subtitle2, Body1, Title2, Title3, Caption1, Badge,
-  makeStyles, tokens, Button,
+  Subtitle1, Body1, Title2, Title3, Caption1,
+  makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Database24Filled, Flash24Filled, ChartMultiple24Filled, ShieldCheckmark24Filled,
@@ -13,17 +12,19 @@ import Link from 'next/link';
 import { PageShell } from '@/lib/components/page-shell';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import { LoomLogo } from '@/lib/components/loom-logo';
+import { RecentItems } from '@/lib/components/recent-items';
+import { RecommendedApps } from '@/lib/components/recommended-apps';
 
 const useStyles = makeStyles({
   hero: {
     background: 'var(--loom-hero-bg)',
     color: 'white',
-    padding: '40px 48px',
-    borderRadius: 16,
-    marginBottom: 24,
+    paddingTop: '48px', paddingRight: '56px', paddingBottom: '48px', paddingLeft: '56px',
+    borderRadius: '18px',
+    marginBottom: '32px',
     display: 'flex',
     alignItems: 'center',
-    gap: 32,
+    gap: '40px',
     boxShadow: '0 12px 32px rgba(31, 111, 235, 0.18)',
     position: 'relative',
     overflow: 'hidden',
@@ -36,22 +37,30 @@ const useStyles = makeStyles({
   },
   heroCopy: { flex: 1, position: 'relative' },
   heroTitle: { color: 'white', fontWeight: 700, letterSpacing: '-0.01em' },
-  heroSub: { color: 'rgba(255,255,255,0.92)', fontSize: 16, lineHeight: 1.55, maxWidth: 720, marginTop: 8 },
-  heroChips: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 },
+  heroSub: { color: 'rgba(255,255,255,0.92)', fontSize: '16px', lineHeight: 1.6, maxWidth: '720px', marginTop: '14px' },
+  heroChips: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '24px' },
   chip: {
-    fontSize: 12, padding: '4px 10px', borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.18)', border: '1px solid rgba(255,255,255,0.25)',
-    color: 'white', backdropFilter: 'blur(8px)',
+    fontSize: '12px',
+    paddingTop: '7px', paddingRight: '14px', paddingBottom: '7px', paddingLeft: '14px',
+    borderRadius: '999px',
+    backgroundColor: 'rgba(255,255,255,0.22)', border: '1px solid rgba(255,255,255,0.35)',
+    color: 'white', lineHeight: 1.4, fontWeight: 500,
+    whiteSpace: 'nowrap',
   },
-  sectionTitle: { marginTop: 24, marginBottom: 12, display: 'flex', alignItems: 'baseline', gap: 10 },
+  sectionTitle: { marginTop: '36px', marginBottom: '16px', display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap' },
   grid: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14,
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px',
   },
   card: {
-    padding: 18, cursor: 'pointer', height: '100%',
+    paddingTop: '24px', paddingRight: '24px', paddingBottom: '24px', paddingLeft: '24px',
+    cursor: 'pointer', height: '100%',
+    display: 'flex', flexDirection: 'column',
     transition: 'transform 0.15s, box-shadow 0.15s, border-color 0.15s',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    borderRadius: '12px',
+    textDecoration: 'none',
+    color: tokens.colorNeutralForeground1,
     ':hover': {
       transform: 'translateY(-3px)',
       boxShadow: tokens.shadow16,
@@ -59,10 +68,12 @@ const useStyles = makeStyles({
     },
   },
   cardIcon: {
-    width: 40, height: 40, borderRadius: 10,
+    width: '44px', height: '44px', borderRadius: '12px',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    color: 'white', marginBottom: 12,
+    color: 'white', marginBottom: '18px', flexShrink: 0,
   },
+  cardTitle: { marginBottom: '8px', lineHeight: 1.3, display: 'block' },
+  cardBody: { color: tokens.colorNeutralForeground3, margin: 0, lineHeight: 1.55, display: 'block' },
 });
 
 interface Quick {
@@ -128,15 +139,29 @@ export default function HomePage() {
       </div>
       <div className={s.grid}>
         {QUICK_LINKS.map((q) => (
-          <Link key={q.href} href={q.href} style={{ display: 'block', textDecoration: 'none' }}>
-            <Card className={s.card}>
-              <div className={s.cardIcon} style={{ background: q.tint }}>{q.icon}</div>
-              <Subtitle1>{q.title}</Subtitle1>
-              <Body1 style={{ color: tokens.colorNeutralForeground3, marginTop: 4 }}>{q.body}</Body1>
-            </Card>
+          <Link key={q.href} href={q.href} className={s.card}>
+            <div className={s.cardIcon} style={{ background: q.tint }}>{q.icon}</div>
+            <Subtitle1 className={s.cardTitle}>{q.title}</Subtitle1>
+            <Body1 className={s.cardBody}>{q.body}</Body1>
           </Link>
         ))}
       </div>
+
+      <div className={s.sectionTitle}>
+        <Title3 as="h2">Recent</Title3>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Items you've opened or edited
+        </Caption1>
+      </div>
+      <RecentItems />
+
+      <div className={s.sectionTitle}>
+        <Title3 as="h2">Recommended apps</Title3>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Curated CSA solutions seeded into this tenant
+        </Caption1>
+      </div>
+      <RecommendedApps />
     </PageShell>
   );
 }

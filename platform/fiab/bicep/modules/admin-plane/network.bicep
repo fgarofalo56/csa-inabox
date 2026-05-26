@@ -280,8 +280,8 @@ resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = {
 var dnsZones = [
   'privatelink.vaultcore.azure.net'
   'privatelink.azurecr.io'
-  'privatelink.blob.${boundary == 'GCC-High' || boundary == 'IL5' ? 'core.usgovcloudapi.net' : 'core.windows.net'}'
-  'privatelink.dfs.${boundary == 'GCC-High' || boundary == 'IL5' ? 'core.usgovcloudapi.net' : 'core.windows.net'}'
+  'privatelink.blob.${environment().suffixes.storage}'
+  'privatelink.dfs.${environment().suffixes.storage}'
   'privatelink.azconfig.io'
   'privatelink.cognitiveservices.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   'privatelink.openai.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'

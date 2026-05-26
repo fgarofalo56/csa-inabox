@@ -1,4 +1,7 @@
 // CSA Loom — GCC-High / IL4 parameters (Azure Government)
+// v3 audit (2026-05): aligned with commercial-full deployment surface so
+// every flag main.bicep accepts is set explicitly. Cloud-specific values
+// (regions, SKUs, orchestrator) flip per the per-boundary dispatch matrix.
 //
 // Per AMENDMENTS A1 + per-boundary dispatch matrix:
 // - Container Apps NOT at IL4 → AKS
@@ -10,8 +13,10 @@
 // - Functions Flex Consumption not in Gov → EP1
 // - OpenAI Content Safety NOT at IL4 → self-hosted Presidio
 // - OpenAI Batch API NOT in Gov
-//
-// Status: PARAMETER SCAFFOLDED
+// - AI Search GA-region surface limited in Gov — default off; opt in once
+//   region capacity confirmed.
+// - Purview: prefer tenant-level Enterprise Purview (Gov tenants already
+//   typically have one). Set false here; reuse the existing account.
 
 using '../main.bicep'
 
@@ -41,7 +46,7 @@ param databricksSqlWarehouseEnabled = false  // NOT in Gov
 
 // Security
 param defenderForAIEnabled = false        // Commercial-only → Sentinel workaround
-param purviewEnabled = true               // IL4 audit OK
+param purviewEnabled = false              // Reuse tenant Enterprise Purview
 param atlasOnAksEnabled = false           // IL5-only
 param storageRequireCmk = false           // recommended at IL4; required at IL5
 param keyVaultHsmIsolated = false         // IL5 only
@@ -61,6 +66,21 @@ param hubVnetCidr = '10.0.0.0/16'
 // Identity (Gov tenant)
 param adminEntraGroupId = '<replace-with-GCC-High-tenant-FiaB-Admins-group-guid>'
 
+// Loom version + image tags
+param loomVersion = readEnvironmentVariable('LOOM_VERSION', 'v3.0')
+param appImageTags = {
+  console: readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v3.0')
+  mcp: readEnvironmentVariable('LOOM_MCP_TAG', 'v0.7')
+  orchestrator: readEnvironmentVariable('LOOM_ORCHESTRATOR_TAG', 'v0.7')
+  activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
+  mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
+  directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+}
+
+// MSAL — Gov tenant client id+secret via env (don't commit)
+param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')
+param loomMsalClientSecret = readEnvironmentVariable('LOOM_MSAL_CLIENT_SECRET', '')
+
 // Multi-sub (one sub per DLZ for production federal)
 param dlzSubscriptionIds = [
   // '<dlz-1-sub-id>'
@@ -70,6 +90,17 @@ param dlzDomainNames = [
   // 'mission-ops'
   // 'finance'
 ]
+
+// Feature flags — Gov defaults. AI Search OFF (region capacity TBD).
+// Front Door NOT certified for IL5 but is for GCC-H — enabled here.
+param deployAppsEnabled = true
+param aiFoundryEnabled = true
+param apimEnabled = true
+param aiSearchEnabled = false
+param adxEnabled = true
+param vpnGatewayEnabled = true
+param appGatewayEnabled = true
+param frontDoorEnabled = true
 
 // Tags
 param complianceTags = {
