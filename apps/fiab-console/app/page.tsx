@@ -1,9 +1,8 @@
 'use client';
 
 import {
-  Card, CardHeader, CardPreview,
-  Subtitle1, Subtitle2, Body1, Title2, Title3, Caption1, Badge,
-  makeStyles, tokens, Button,
+  Subtitle1, Body1, Title2, Title3, Caption1,
+  makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Database24Filled, Flash24Filled, ChartMultiple24Filled, ShieldCheckmark24Filled,
@@ -20,12 +19,12 @@ const useStyles = makeStyles({
   hero: {
     background: 'var(--loom-hero-bg)',
     color: 'white',
-    padding: '40px 48px',
-    borderRadius: 16,
-    marginBottom: 24,
+    padding: '48px 56px',
+    borderRadius: 18,
+    marginBottom: 32,
     display: 'flex',
     alignItems: 'center',
-    gap: 32,
+    gap: 40,
     boxShadow: '0 12px 32px rgba(31, 111, 235, 0.18)',
     position: 'relative',
     overflow: 'hidden',
@@ -38,24 +37,27 @@ const useStyles = makeStyles({
   },
   heroCopy: { flex: 1, position: 'relative' },
   heroTitle: { color: 'white', fontWeight: 700, letterSpacing: '-0.01em' },
-  heroSub: { color: 'rgba(255,255,255,0.92)', fontSize: 16, lineHeight: 1.6, maxWidth: 720, marginTop: 12 },
-  heroChips: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 20 },
+  heroSub: { color: 'rgba(255,255,255,0.92)', fontSize: 16, lineHeight: 1.6, maxWidth: 720, marginTop: 14 },
+  heroChips: { display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 24 },
   chip: {
-    fontSize: 12, padding: '6px 12px', borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.18)', border: '1px solid rgba(255,255,255,0.25)',
-    color: 'white', backdropFilter: 'blur(8px)', lineHeight: 1.4,
+    fontSize: 12, padding: '7px 14px', borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.22)', border: '1px solid rgba(255,255,255,0.35)',
+    color: 'white', lineHeight: 1.4, fontWeight: 500,
+    whiteSpace: 'nowrap',
   },
   sectionTitle: { marginTop: 36, marginBottom: 16, display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' },
   grid: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 20,
   },
   card: {
-    padding: 22, cursor: 'pointer', height: '100%',
-    display: 'flex', flexDirection: 'column', gap: 4,
+    padding: 24, cursor: 'pointer', height: '100%',
+    display: 'flex', flexDirection: 'column', gap: 0,
     transition: 'transform 0.15s, box-shadow 0.15s, border-color 0.15s',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     borderRadius: 12,
+    textDecoration: 'none',
+    color: tokens.colorNeutralForeground1,
     ':hover': {
       transform: 'translateY(-3px)',
       boxShadow: tokens.shadow16,
@@ -65,10 +67,10 @@ const useStyles = makeStyles({
   cardIcon: {
     width: 44, height: 44, borderRadius: 12,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    color: 'white', marginBottom: 16, flexShrink: 0,
+    color: 'white', marginBottom: 18, flexShrink: 0,
   },
-  cardTitle: { marginBottom: 6, lineHeight: 1.3 },
-  cardBody: { color: tokens.colorNeutralForeground3, marginTop: 0, lineHeight: 1.5 },
+  cardTitle: { marginBottom: 8, lineHeight: 1.3, display: 'block' },
+  cardBody: { color: tokens.colorNeutralForeground3, margin: 0, lineHeight: 1.55, display: 'block' },
 });
 
 interface Quick {
@@ -134,12 +136,10 @@ export default function HomePage() {
       </div>
       <div className={s.grid}>
         {QUICK_LINKS.map((q) => (
-          <Link key={q.href} href={q.href} style={{ display: 'block', textDecoration: 'none' }}>
-            <Card className={s.card}>
-              <div className={s.cardIcon} style={{ background: q.tint }}>{q.icon}</div>
-              <Subtitle1 className={s.cardTitle}>{q.title}</Subtitle1>
-              <Body1 className={s.cardBody}>{q.body}</Body1>
-            </Card>
+          <Link key={q.href} href={q.href} className={s.card}>
+            <div className={s.cardIcon} style={{ background: q.tint }}>{q.icon}</div>
+            <Subtitle1 className={s.cardTitle}>{q.title}</Subtitle1>
+            <Body1 className={s.cardBody}>{q.body}</Body1>
           </Link>
         ))}
       </div>
