@@ -91,16 +91,16 @@ export async function createItem(workspaceId: string, input: {
 }
 
 export async function getItem(type: string, id: string): Promise<WorkspaceItem> {
-  return fetchJson<WorkspaceItem>(`/api/items/${type}/${id}`);
+  return fetchJson<WorkspaceItem>(`/api/cosmos-items/${type}/${id}`);
 }
 
 export async function updateItem(type: string, id: string, patch: Partial<Pick<WorkspaceItem, 'displayName' | 'description' | 'state'>>): Promise<WorkspaceItem> {
-  return fetchJson<WorkspaceItem>(`/api/items/${type}/${id}`, {
+  return fetchJson<WorkspaceItem>(`/api/cosmos-items/${type}/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
 }
 
 export async function deleteItem(type: string, id: string): Promise<void> {
-  await fetchJson<{ ok: boolean }>(`/api/items/${type}/${id}`, { method: 'DELETE' });
+  await fetchJson<{ ok: boolean }>(`/api/cosmos-items/${type}/${id}`, { method: 'DELETE' });
 }

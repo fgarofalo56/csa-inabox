@@ -85,25 +85,32 @@ for (const type of editorTypes) {
   }
   const id = create.json.id;
 
-  // Render the editor page
-  const r = await fetch(`${BASE}/items/${type}/${id}`, { headers: { cookie: COOKIE } });
-  const html = await r.text();
+  // Render the editor page AND hit the same hydration endpoint the page
+  // calls client-side (this is what actually 400'd in prod — the page
+  // returned 200 but then `getItem(type, id)` failed).
+  const [pageRes, hydrateRes] = await Promise.all([
+    fetch(`${BASE}/items/${type}/${id}`, { headers: { cookie: COOKIE } }),
+    call('GET', `/api/cosmos-items/${type}/${id}`),
+  ]);
+  const html = await pageRes.text();
 
-  // Sentinels: editor chrome renders header with the item type label
-  // OR Next surfaces a recognizable error boundary. Anything else = fail.
   const renderedOk =
-    r.status === 200 &&
+    pageRes.status === 200 &&
     !html.includes('Application error') &&
     !html.includes('500 — Internal') &&
     !/<title>404/.test(html);
+  const hydrateOk = hydrateRes.status === 200 && hydrateRes.json?.id === id;
 
-  if (renderedOk) {
+  if (renderedOk && hydrateOk) {
     console.log(`PASS`);
     pass++;
+  } else if (!hydrateOk) {
+    console.log(`FAIL hydrate ${hydrateRes.status} — ${hydrateRes.json?.error || hydrateRes.text.slice(0, 80)}`);
+    fail++; failures.push({ type, stage: 'hydrate', status: hydrateRes.status, hint: hydrateRes.json?.error });
   } else {
     const snip = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 80);
-    console.log(`FAIL render ${r.status} — ${snip}`);
-    fail++; failures.push({ type, stage: 'render', status: r.status, hint: snip });
+    console.log(`FAIL render ${pageRes.status} — ${snip}`);
+    fail++; failures.push({ type, stage: 'render', status: pageRes.status, hint: snip });
   }
 }
 
