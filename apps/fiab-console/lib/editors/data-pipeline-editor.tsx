@@ -24,6 +24,7 @@ import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { PipelineDagView, extractActivities } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -295,6 +296,12 @@ export function DataPipelineEditor({ item, id }: Props) {
           {pipelineId && (
             <>
               {dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
+              {/* v3.27: read-only DAG view derived from JSON state */}
+              <Subtitle2>Activity graph ({extractActivities(defText).length})</Subtitle2>
+              <PipelineDagView
+                activities={extractActivities(defText)}
+                emptyHint="No activities in this pipeline yet. Edit the JSON below and add objects under properties.activities[]."
+              />
               <Caption1>Pipeline definition (JSON)</Caption1>
               <textarea
                 className={s.editor}

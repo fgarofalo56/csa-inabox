@@ -2,6 +2,37 @@
 
 Live log of the multi-agent `fabric-parity-loop` workflow. Most recent at top.
 
+## 2026-05-26 — Build Phase 1 complete — vaporware cleared + D/C-grade upgrades shipped
+
+After the catalog phase wrapped, ran the prioritized Build sequence end-to-end:
+
+**F-fixes (vaporware cleared)**
+- `data-product` — Cosmos-state editor + Purview-pending MessageBar gate. Removed hardcoded `customer-360` / `alice@contoso` / fixed bundle grid.
+- `gql-graph` — Run button now dispatches to `/api/items/gql-graph/[id]/query`; 3 backends (persist-only / fabric-graph / cosmos-gremlin-translate).
+
+**Quick wins (dead ribbon buttons wired)**
+- `cosmos-gremlin-graph` Edges/Vertices, `cross-item-copilot` View registry + Session New/Refresh, `data-product-instance` Health column + ribbon Health button.
+
+**D-fixes**
+- `usql-job` — deprecation MessageBar (ADLA EOL 2024-02-29) + heuristic U-SQL→PySpark translator.
+- `vector-store` — added Microsoft-recommended `cosmos-nosql` backend (now default).
+- `ontology` — **Materialize as graph-model** button creates a graph-model item from parsed class hierarchy.
+- `plan` — status badges (todo/doing/done/overdue) + progress meter.
+- `map` — Azure Maps Static-API tile preview when `NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY` is set.
+
+**C-enhancements**
+- Notebook **Phase 2** — Data items pane + Lakehouse attach modal in left rail.
+- APIM Policy — **Operation scope** added (`apis/{aid}/operations/{oid}` resolver in backend + form fields in UI).
+- **Shared pipeline DAG canvas** — new `lib/components/pipeline/pipeline-dag-view.tsx` (read-only topological layout + activity-type color coding + success/failure/completion/skip edge legend); wired into adf-pipeline, synapse-pipeline, and data-pipeline editors as a "Graph" tab.
+
+After these: zero F-grade items remain in the wiring-audit. Branch is ~30 commits ahead of `origin/access-patterns-vpn-agw-fd`.
+
+**Still deferred** (truly multi-session work)
+- Pipeline DAG **Phase 2** (drag-drop authoring, activity library palette, properties pane for the selected node) — currently read-only.
+- Foundry Agent Service runtime for `operations-agent` / `data-agent` (per their parity specs — 4-6 sessions each).
+- Purview Unified Catalog wiring for `data-product` — needs new `lib/azure/purview-client.ts` + Bicep module + role assignments.
+- Notebook **Phase 3** (HistoryDrawer, per-cell edge toolbars, AI tools tab) and Phase 1B Monaco upgrade.
+
 ## 2026-05-26 — ✅ CATALOG PHASE COMPLETE — 85 / 85 UIs cataloged
 
 **All 85 Loom editors have a parity spec on disk under `docs/fiab/<name>-parity-spec.md`.**

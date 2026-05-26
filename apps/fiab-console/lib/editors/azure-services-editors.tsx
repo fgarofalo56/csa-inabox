@@ -25,6 +25,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
+import { PipelineDagView, extractActivities } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -396,7 +397,7 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
   const [runs, setRuns] = useState<PipelineRunDTO[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<'json' | 'runs'>('json');
+  const [tab, setTab] = useState<'graph' | 'json' | 'runs'>('graph');
 
   const loadList = useCallback(async () => {
     setError(null);
@@ -468,9 +469,8 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
   }, [selected, loadRuns]);
 
   const dirty = spec !== origSpec;
-  const activityCount = (() => {
-    try { return (JSON.parse(spec)?.properties?.activities || []).length; } catch { return 0; }
-  })();
+  const activities = extractActivities(spec);
+  const activityCount = activities.length;
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={SYN_PIPE_RIBBON}
@@ -504,11 +504,18 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
             <BackendStateBar error={error} title="Pipeline API" />
           )}
           <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
-            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'json' | 'runs')}>
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'graph' | 'json' | 'runs')}>
+              <Tab value="graph">Graph ({activityCount} act{activityCount === 1 ? '' : 's'})</Tab>
               <Tab value="json">Spec (JSON)</Tab>
               <Tab value="runs">Run history ({runs.length})</Tab>
             </TabList>
           </div>
+          {tab === 'graph' && (
+            <PipelineDagView
+              activities={activities}
+              emptyHint="No activities yet. Switch to the Spec (JSON) tab and add activities under properties.activities[]."
+            />
+          )}
           {tab === 'json' && (
             <textarea
               className={s.monaco}
@@ -723,7 +730,7 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
   const [runs, setRuns] = useState<AdfPipelineRunDTO[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<'json' | 'runs'>('json');
+  const [tab, setTab] = useState<'graph' | 'json' | 'runs'>('graph');
 
   const loadList = useCallback(async () => {
     setError(null);
@@ -848,11 +855,18 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
             <BackendStateBar error={error} title="ADF Pipeline" />
           )}
           <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
-            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'json' | 'runs')}>
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'graph' | 'json' | 'runs')}>
+              <Tab value="graph">Graph ({activityCount} act{activityCount === 1 ? '' : 's'})</Tab>
               <Tab value="json">Spec (JSON)</Tab>
               <Tab value="runs">Run history ({runs.length})</Tab>
             </TabList>
           </div>
+          {tab === 'graph' && (
+            <PipelineDagView
+              activities={extractActivities(spec)}
+              emptyHint="No activities in this pipeline yet. Switch to the Spec (JSON) tab and add activities under properties.activities[]."
+            />
+          )}
           {tab === 'json' && (
             <textarea
               className={s.monaco}
