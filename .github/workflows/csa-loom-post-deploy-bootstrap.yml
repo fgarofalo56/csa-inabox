@@ -182,6 +182,41 @@ jobs:
             echo "No Foundry storage in $ADMIN_RG — skipping"
           fi
 
+      - name: Grant Console UAMI Cognitive Services User on Content Safety (unblocks /items/content-safety)
+        run: |
+          CS=$(az cognitiveservices account list -g $ADMIN_RG --query "[?kind=='ContentSafety'].id" -o tsv | head -1)
+          if [ -n "$CS" ]; then
+            echo "Content Safety: $CS"
+            az role assignment create \
+              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-principal-type ServicePrincipal \
+              --role "Cognitive Services User" \
+              --scope "$CS" \
+              -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
+          else
+            echo "No Content Safety in $ADMIN_RG — skipping"
+          fi
+
+      - name: Register Console UAMI as Power Platform Management App (unblocks PP + Copilot Studio editors)
+        run: |
+          # PP admin API for SP access requires the SP to be registered as a
+          # tenant-wide PP management app — separate from the Power Platform
+          # Admin Entra role. PUT is idempotent (returns 200 on re-run).
+          PP_TOKEN=$(az account get-access-token --resource https://api.bap.microsoft.com --query accessToken -o tsv)
+          R=$(curl -sS -w "%{http_code}" -o /tmp/pp.json -X PUT \
+            "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/adminApplications/$CONSOLE_UAMI_CLIENT?api-version=2020-10-01" \
+            -H "Authorization: Bearer $PP_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{}')
+          echo "PP management app PUT: $R"
+          cat /tmp/pp.json
+          echo
+          if [[ "$R" == "200" ]] || [[ "$R" == "201" ]]; then
+            echo "  Power Platform + Copilot Studio editors unlocked."
+          else
+            echo "  PP registration returned $R — deploy SP may lack PP Admin role."
+          fi
+
       - name: Summary
         if: always()
         run: |
@@ -192,6 +227,8 @@ jobs:
           echo "Admin RG: Reader granted (for /admin/capacity full inventory)"
           echo "Foundry workspace: AzureML Data Scientist granted (unblocks /api/foundry/workspace + datastores)"
           echo "Foundry storage: Blob Data Reader granted"
+          echo "Content Safety: Cognitive Services User granted"
+          echo "Power Platform: UAMI registered as Management App (unblocks PP + Copilot Studio)"
           echo ""
           echo "Still needs manual steps (not grantable via SP):"
           echo "  • Power Platform Admin — grant at https://admin.powerplatform.microsoft.com"
