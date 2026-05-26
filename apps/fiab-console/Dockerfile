@@ -40,12 +40,25 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Build-time marker — populated by CI from --build-arg LOOM_BUILD_SHA=...
+# Embeds the git SHA into the image itself and stamps /public/build-marker.txt
+# so deploy-validation can definitively prove which build is serving.
+ARG LOOM_BUILD_SHA=unknown
+ARG LOOM_BUILD_TIMESTAMP=unknown
+ENV LOOM_BUILD_SHA=${LOOM_BUILD_SHA}
+ENV LOOM_BUILD_TIMESTAMP=${LOOM_BUILD_TIMESTAMP}
+
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+
+# Overwrite any source-tree marker with one stamped at build time.
+# Validator probes /build-marker.txt and grep's for sha=<expected>.
+RUN echo "loom-build-marker sha=${LOOM_BUILD_SHA} stamp=${LOOM_BUILD_TIMESTAMP} token=LOOM_LIVE_BUILD" > /app/public/build-marker.txt && \
+    chown nextjs:nodejs /app/public/build-marker.txt
 
 USER nextjs
 
