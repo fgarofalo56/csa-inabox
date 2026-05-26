@@ -8,7 +8,7 @@
  * Auth gate: requires Console UAMI SP authorized in the Fabric tenant and
  * added to the target workspace. Underlying 401/403 surface verbatim.
  *
- * Backed by /api/fabric/workspaces + /api/items/data-pipeline/**.
+ * Backed by /api/loom/workspaces + /api/items/data-pipeline/**.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -24,6 +24,7 @@ import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { PipelineDagView, extractActivities, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -65,7 +66,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/fabric/workspaces');
+      const r = await fetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setHint(j.hint || null); setWorkspaces([]); }
       else setWorkspaces(j.workspaces || []);
@@ -215,6 +216,21 @@ export function DataPipelineEditor({ item, id }: Props) {
     } finally { setCreateBusy(false); }
   }, [workspaceId, createName, loadList]);
 
+  // Phase-2 palette: append a freshly-templated activity to
+  // properties.activities[] inside defText and mark dirty.
+  const addActivity = useCallback((activity: PipelineActivity) => {
+    setDefText((prev) => {
+      let parsed: any;
+      try { parsed = JSON.parse(prev); }
+      catch { return prev; } // user must fix invalid JSON first
+      if (!parsed.properties || typeof parsed.properties !== 'object') parsed.properties = {};
+      if (!Array.isArray(parsed.properties.activities)) parsed.properties.activities = [];
+      parsed.properties.activities.push(activity);
+      return JSON.stringify(parsed, null, 2);
+    });
+    setDirty(true);
+  }, []);
+
   const del = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     if (!confirm('Delete this pipeline? This cannot be undone.')) return;
@@ -295,6 +311,13 @@ export function DataPipelineEditor({ item, id }: Props) {
           {pipelineId && (
             <>
               {dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
+              {/* v3.27: read-only DAG view derived from JSON state */}
+              <Subtitle2>Activity graph ({extractActivities(defText).length})</Subtitle2>
+              <PipelineDagView
+                activities={extractActivities(defText)}
+                onActivityAdd={addActivity}
+                emptyHint="No activities in this pipeline yet. Click a palette button above to add one — or edit the JSON below by hand."
+              />
               <Caption1>Pipeline definition (JSON)</Caption1>
               <textarea
                 className={s.editor}

@@ -27,6 +27,7 @@ import {
   ShieldKeyhole20Regular, Globe20Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -180,7 +181,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
       main={
         <div className={s.pad}>
           {error && (
-            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ARM error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+            <BackendStateBar error={error} title="Azure SQL" />
           )}
           {!selected ? (
             <Caption1>Pick a server on the left to inspect its databases, firewall, and AAD admin.</Caption1>
@@ -386,7 +387,7 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
       leftPanel={<div className={s.treePad}><Caption1>Managed Instance editor — list-only in v3. Query execution deferred to v3.x (TDS via dedicated PE in the MI subnet).</Caption1></div>}
       main={
         <div className={s.pad}>
-          {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ARM error</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+          {err && <BackendStateBar error={err} title="Azure SQL" />}
           <Subtitle2>Managed Instances</Subtitle2>
           <div className={s.tableWrap}>
             <Table size="small">

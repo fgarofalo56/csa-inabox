@@ -8,7 +8,7 @@
  * to the target workspace. If either is missing, the editor surfaces the
  * underlying 401/403 verbatim via MessageBar — no mocks.
  *
- * Backed by /api/fabric/workspaces + /api/items/notebook/**.
+ * Backed by /api/loom/workspaces + /api/items/notebook/**.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -22,10 +22,16 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
+  History20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { CodeCell } from '@/lib/components/notebook/code-cell';
+import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
+import { CellAdder } from '@/lib/components/notebook/cell-adder';
+import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
+import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
 const RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
@@ -57,6 +63,13 @@ interface JobLite {
   startTimeUtc?: string; endTimeUtc?: string;
   failureReason?: { errorCode?: string; message?: string } | null;
 }
+interface LakehouseLite { id: string; displayName: string; description?: string; }
+interface AttachedSource {
+  kind: 'lakehouse' | 'warehouse' | 'kql-database';
+  id: string;
+  displayName: string;
+  isDefault?: boolean;
+}
 
 function useWorkspaces() {
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
@@ -66,7 +79,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/fabric/workspaces');
+      const r = await fetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setHint(j.hint || null); setWorkspaces([]); }
       else setWorkspaces(j.workspaces || []);
@@ -77,7 +90,14 @@ function useWorkspaces() {
   return { workspaces, error, hint, loading, reload: load };
 }
 
-const STARTER_PY = `# Fabric Notebook (PySpark)\n# Edit, then click Save. Click Run to queue a notebook job instance.\ndf = spark.range(10)\ndf.show()\n`;
+const STARTER_PY = `# Fabric Notebook (PySpark)\n# Edit, then click Save. Click Run cell to queue execution.\ndf = spark.range(10)\ndf.show()\n`;
+
+function starterCells(): NotebookCell[] {
+  return [
+    { ...emptyCell('markdown'), source: '# New notebook\n\nDouble-click to edit. Use **+ Code** between cells to add code cells.' },
+    { ...emptyCell('code', 'pyspark'), source: STARTER_PY },
+  ];
+}
 
 function encodePy(src: string): string {
   // browser btoa needs latin-1 — encode utf-8 first.
@@ -93,13 +113,37 @@ function decodePy(b64: string): string {
 
 interface Props { item: FabricItemType; id: string; }
 
+interface ComputeTarget {
+  id: string;
+  name: string;
+  kind: 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql';
+  state?: string;
+}
+
+function useComputes() {
+  const [computes, setComputes] = useState<ComputeTarget[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    fetch('/api/loom/compute-targets').then(r => r.json()).then(j => {
+      if (j.ok) setComputes(j.computes || []);
+      else setError(j.error || 'failed to list compute');
+    }).catch(e => setError(e?.message || String(e))).finally(() => setLoading(false));
+  }, []);
+  return { computes, loading, error };
+}
+
 export function NotebookEditor({ item, id }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
+  const cp = useComputes();
   const [workspaceId, setWorkspaceId] = useState('');
+  const [computeId, setComputeId] = useState('');
   const [notebooks, setNotebooks] = useState<NotebookLite[] | null>(null);
   const [notebookId, setNotebookId] = useState('');
-  const [source, setSource] = useState(STARTER_PY);
+  const [cells, setCells] = useState<NotebookCell[]>(starterCells());
+  const [defaultLang, setDefaultLang] = useState<NotebookCellLang>('pyspark');
+  const [activeCellId, setActiveCellId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [listErr, setListErr] = useState<string | null>(null);
   const [listHint, setListHint] = useState<string | null>(null);
@@ -112,6 +156,39 @@ export function NotebookEditor({ item, id }: Props) {
   const [createName, setCreateName] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
+  const [prefill, setPrefill] = useState<{ source: string; container?: string; path?: string } | null>(null);
+  // Phase 2: attached data sources (Lakehouses / Warehouses / KQL DBs).
+  const [attachedSources, setAttachedSources] = useState<AttachedSource[]>([]);
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [availableLakehouses, setAvailableLakehouses] = useState<LakehouseLite[] | null>(null);
+  const [attachBusy, setAttachBusy] = useState(false);
+  // Phase 3: History drawer
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  // Auto-pick first runnable compute (skip serverless SQL — not for notebooks)
+  useEffect(() => {
+    if (!computeId && cp.computes.length) {
+      const first = cp.computes.find(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster');
+      if (first) setComputeId(first.id);
+    }
+  }, [cp.computes, computeId]);
+
+  // Pick up Lakehouse "Open in notebook" prefill (stored in localStorage before route push).
+  useEffect(() => {
+    if (typeof window === 'undefined' || id !== 'new') return;
+    try {
+      const raw = localStorage.getItem('loom.notebook.prefill');
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (data?.code) {
+        setCells([{ ...emptyCell('code', 'pyspark'), source: data.code }]);
+        setPrefill({ source: data.source, container: data.container, path: data.path });
+        setCreateName(`From ${data.path?.split('/').pop()?.replace(/\.[^.]+$/, '') || 'lakehouse'}`);
+        setCreateOpen(true);
+      }
+      localStorage.removeItem('loom.notebook.prefill');
+    } catch { /* ignore */ }
+  }, [id]);
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null); setListHint(null);
@@ -130,9 +207,22 @@ export function NotebookEditor({ item, id }: Props) {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(nbId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDetailErr(j.error); return; }
-      const part = j.definition?.parts?.find((p: any) => /notebook-content\.(py|sql|scala|r)$/.test(p.path));
-      if (part?.payload) setSource(decodePy(part.payload));
-      else setSource(STARTER_PY);
+      // v3.26: cell-based shape. Falls back through legacy `code` then Fabric `parts[]`.
+      if (Array.isArray(j.definition?.cells) && j.definition.cells.length > 0) {
+        setCells(j.definition.cells);
+        setDefaultLang((j.definition.defaultLang as NotebookCellLang) || 'pyspark');
+      } else if (j.definition?.code !== undefined) {
+        const lang = (j.definition.lang as NotebookCellLang) || 'pyspark';
+        setCells(migrateLegacyState({ code: j.definition.code || STARTER_PY, lang }).cells);
+        setDefaultLang(lang);
+      } else {
+        const part = j.definition?.parts?.find((p: any) => /notebook-content\.(py|sql|scala|r)$/.test(p.path));
+        const code = part?.payload ? decodePy(part.payload) : STARTER_PY;
+        setCells(migrateLegacyState({ code }).cells);
+        setDefaultLang('pyspark');
+      }
+      // Phase 2: attached data sources.
+      setAttachedSources(Array.isArray(j.definition?.attachedSources) ? j.definition.attachedSources : []);
       setDirty(false);
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
@@ -154,35 +244,111 @@ export function NotebookEditor({ item, id }: Props) {
     if (!workspaceId || !notebookId) return;
     setSaving(true); setDetailErr(null);
     try {
-      const definition = {
-        format: 'fabricGitSource',
-        parts: [{ path: 'notebook-content.py', payload: encodePy(source), payloadType: 'InlineBase64' }],
-      };
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ definition }),
+        body: JSON.stringify({ definition: { cells, defaultLang, attachedSources } }),
       });
       const j = await r.json();
       if (!j.ok) setDetailErr(j.error || 'save failed');
       else setDirty(false);
     } finally { setSaving(false); }
-  }, [workspaceId, notebookId, source]);
+  }, [workspaceId, notebookId, cells, defaultLang, attachedSources]);
+
+  // Phase 2: load lakehouses in the current workspace for the attach modal.
+  const loadLakehouses = useCallback(async () => {
+    if (!workspaceId) return;
+    try {
+      const r = await fetch(`/api/items/lakehouse?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const j = await r.json();
+      if (j.ok && Array.isArray(j.items)) {
+        setAvailableLakehouses(j.items.map((x: any) => ({ id: x.id, displayName: x.displayName, description: x.description })));
+      } else if (j.ok && Array.isArray(j.lakehouses)) {
+        setAvailableLakehouses(j.lakehouses);
+      } else {
+        setAvailableLakehouses([]);
+      }
+    } catch { setAvailableLakehouses([]); }
+  }, [workspaceId]);
+
+  const openAttach = useCallback(() => {
+    setAttachOpen(true);
+    if (availableLakehouses === null) loadLakehouses();
+  }, [availableLakehouses, loadLakehouses]);
+
+  const attachLakehouse = useCallback((lh: LakehouseLite) => {
+    if (attachedSources.some(s => s.kind === 'lakehouse' && s.id === lh.id)) return;
+    setAttachedSources(prev => [
+      ...prev,
+      { kind: 'lakehouse', id: lh.id, displayName: lh.displayName, isDefault: prev.length === 0 },
+    ]);
+    setDirty(true);
+  }, [attachedSources]);
+
+  const detachSource = useCallback((srcId: string) => {
+    setAttachedSources(prev => prev.filter(s => s.id !== srcId));
+    setDirty(true);
+  }, []);
+
+  const promoteDefault = useCallback((srcId: string) => {
+    setAttachedSources(prev => prev.map(s => ({ ...s, isDefault: s.id === srcId })));
+    setDirty(true);
+  }, []);
 
   const run = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
-    setRunning(true); setRunMsg(null);
+    if (!computeId) {
+      setRunMsg('Pick a compute target before running.');
+      return;
+    }
+    setRunning(true);
+    setRunMsg('Submitting run…');
     try {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ compute: computeId }),
       });
       const j = await r.json();
-      if (!j.ok) setRunMsg(`Run failed: ${j.error}`);
-      else { setRunMsg('Job queued. Status polling starts via Refresh.'); setTimeout(() => loadJobs(workspaceId, notebookId), 1500); }
+      if (!j.ok) {
+        setRunMsg(`Run failed: ${j.error}${j.hint ? ' — ' + j.hint : ''}`);
+        setRunning(false);
+        return;
+      }
+
+      // Poll the run endpoint every 4s for status — Synapse cold-start can
+      // take 60-90s; Databricks 30-60s. Keep polling for up to 8 min.
+      let runId: string = j.runId;
+      setRunMsg(`${j.compute?.kind || 'compute'} ${j.compute?.pool || j.compute?.clusterId} — ${j.status} (runId ${runId})`);
+      const start = Date.now();
+      const MAX_MS = 8 * 60 * 1000;
+      while (Date.now() - start < MAX_MS) {
+        await new Promise(res => setTimeout(res, 4000));
+        const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const p = await pollRes.json();
+        if (!p.ok) { setRunMsg(`Poll error: ${p.error || pollRes.status}`); break; }
+        if (p.runId && p.runId !== runId) runId = p.runId; // promotion when statement is submitted
+        const phase = p.phase ? ` · ${p.phase}` : '';
+        setRunMsg(`Status: ${p.status}${phase}`);
+        if (p.output) {
+          if (p.output.status === 'ok') {
+            const txt = p.output.textPlain || JSON.stringify(p.output.data || {}, null, 2);
+            setRunMsg(`✓ Completed:\n${txt}`);
+          } else if (p.output.status === 'error') {
+            setRunMsg(`✗ Error: ${p.output.ename} ${p.output.evalue}${p.output.traceback ? '\n' + (Array.isArray(p.output.traceback) ? p.output.traceback.join('\n') : p.output.traceback) : ''}`);
+          } else {
+            setRunMsg(`Completed: ${JSON.stringify(p.output)}`);
+          }
+          break;
+        }
+        if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
+          setRunMsg(`Run ended: ${p.status}${p.resultState ? ` (${p.resultState})` : ''}`);
+          break;
+        }
+      }
+      loadJobs(workspaceId, notebookId);
     } finally { setRunning(false); }
-  }, [workspaceId, notebookId, loadJobs]);
+  }, [workspaceId, notebookId, computeId, loadJobs]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -213,6 +379,123 @@ export function NotebookEditor({ item, id }: Props) {
     await loadList(workspaceId);
   }, [workspaceId, notebookId, loadList]);
 
+  // Cell mutations
+  const insertCell = useCallback((after: number, type: 'code' | 'markdown') => {
+    const fresh = emptyCell(type, defaultLang);
+    setCells(prev => [...prev.slice(0, after + 1), fresh, ...prev.slice(after + 1)]);
+    setActiveCellId(fresh.id);
+    setDirty(true);
+  }, [defaultLang]);
+
+  const updateCell = useCallback((id: string, next: NotebookCell) => {
+    setCells(prev => prev.map(c => c.id === id ? next : c));
+    setDirty(true);
+  }, []);
+
+  const deleteCell = useCallback((id: string) => {
+    setCells(prev => prev.length <= 1 ? prev : prev.filter(c => c.id !== id));
+    setDirty(true);
+  }, []);
+
+  const moveCell = useCallback((id: string, delta: -1 | 1) => {
+    setCells(prev => {
+      const idx = prev.findIndex(c => c.id === id);
+      if (idx < 0) return prev;
+      const newIdx = idx + delta;
+      if (newIdx < 0 || newIdx >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(idx, 1);
+      next.splice(newIdx, 0, moved);
+      return next;
+    });
+    setDirty(true);
+  }, []);
+
+  // Phase 3: duplicate a cell — clone with a fresh id and splice right
+  // after the source cell. Clears any execution output / count so the
+  // copy doesn't inherit stale run state.
+  const duplicateCell = useCallback((id: string) => {
+    const newId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `cell-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setCells(prev => {
+      const idx = prev.findIndex(c => c.id === id);
+      if (idx < 0) return prev;
+      const src = prev[idx];
+      const copy: NotebookCell = {
+        ...src,
+        id: newId,
+        executionCount: undefined,
+        output: undefined,
+      };
+      const next = [...prev];
+      next.splice(idx + 1, 0, copy);
+      return next;
+    });
+    setActiveCellId(newId);
+    setDirty(true);
+  }, []);
+
+  // Per-cell run: dispatches a single cell's source to the notebook /run endpoint with cellId, then polls.
+  const runCell = useCallback(async (cell: NotebookCell) => {
+    if (!workspaceId || !notebookId) return;
+    if (!computeId) { setRunMsg('Pick a compute target before running.'); return; }
+    if (cell.type !== 'code') return;
+    updateCell(cell.id, { ...cell, output: { status: 'pending' } });
+    setRunMsg(`Running cell ${cell.id.slice(0, 6)}…`);
+    try {
+      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ compute: computeId, cellId: cell.id, source: cell.source, lang: cell.lang || defaultLang }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'DispatchError', evalue: j.error || 'dispatch failed' } });
+        setRunMsg(`Cell run failed: ${j.error}`);
+        return;
+      }
+      let runId: string = j.runId;
+      const start = Date.now();
+      const MAX_MS = 8 * 60 * 1000;
+      while (Date.now() - start < MAX_MS) {
+        await new Promise(res => setTimeout(res, 4000));
+        const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const p = await pollRes.json();
+        if (!p.ok) {
+          updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } });
+          break;
+        }
+        if (p.runId && p.runId !== runId) runId = p.runId;
+        setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${p.phase ? ' · ' + p.phase : ''}`);
+        if (p.output) {
+          updateCell(cell.id, {
+            ...cell,
+            executionCount: (cell.executionCount || 0) + 1,
+            output: {
+              status: p.output.status === 'ok' ? 'ok' : 'error',
+              textPlain: p.output.textPlain,
+              data: p.output.data,
+              ename: p.output.ename,
+              evalue: p.output.evalue,
+              traceback: p.output.traceback,
+              executedAtUtc: new Date().toISOString(),
+            },
+          });
+          setRunMsg(`Cell ${cell.id.slice(0, 6)} complete`);
+          break;
+        }
+        if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
+          updateCell(cell.id, { ...cell, output: { status: 'error', ename: p.status, evalue: p.resultState || '' } });
+          break;
+        }
+      }
+      loadJobs(workspaceId, notebookId);
+    } catch (e: any) {
+      updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
+    }
+  }, [workspaceId, notebookId, computeId, defaultLang, updateCell, loadJobs]);
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
       leftPanel={
@@ -230,19 +513,64 @@ export function NotebookEditor({ item, id }: Props) {
               </TreeItem>
             ))}
           </Tree>
+
+          {/* Phase 2: Data items pane — Fabric "Explorer" tab equivalent */}
+          {notebookId && (
+            <>
+              <Subtitle2 style={{ marginTop: 16, marginBottom: 4 }}>Data items</Subtitle2>
+              {attachedSources.length === 0 ? (
+                <Caption1>No sources attached. Attach a Lakehouse so cells can read its OneLake mount.</Caption1>
+              ) : (
+                <Tree aria-label="Attached sources">
+                  {attachedSources.map((src) => (
+                    <TreeItem key={src.id} itemType="leaf" value={src.id}>
+                      <TreeItemLayout
+                        iconBefore={<Notebook20Regular />}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                          <span style={{ flex: 1 }}>
+                            {src.isDefault ? <strong>{src.displayName}</strong> : src.displayName}
+                            {src.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: 6 }}>default</Badge>}
+                          </span>
+                          {!src.isDefault && (
+                            <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); promoteDefault(src.id); }}>Pin</Button>
+                          )}
+                          <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); detachSource(src.id); }}>×</Button>
+                        </div>
+                      </TreeItemLayout>
+                    </TreeItem>
+                  ))}
+                </Tree>
+              )}
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={openAttach} disabled={!workspaceId} style={{ marginTop: 8, alignSelf: 'flex-start' }}>
+                Add data items
+              </Button>
+            </>
+          )}
         </div>
       }
       main={
         <div className={s.pad}>
           <div className={s.toolbar}>
-            <Badge appearance="filled" color="brand">Fabric Notebook</Badge>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+            <Badge appearance="filled" color="brand">Loom Notebook</Badge>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
               <Caption1>Workspace</Caption1>
               <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
                 {(ws.workspaces || []).map((w) => (
-                  <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · F/P SKU' : ''}</option>
+                  <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · dedicated' : ''}</option>
                 ))}
+              </Select>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+              <Caption1>Compute target</Caption1>
+              <Select value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
+                {!computeId && <option value="">{cp.loading ? 'Loading compute…' : 'Select compute'}</option>}
+                {cp.computes
+                  .filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster')
+                  .map(c => (
+                    <option key={c.id} value={c.id}>{c.name}{c.state ? ` · ${c.state}` : ''}</option>
+                  ))}
               </Select>
             </div>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
@@ -266,8 +594,56 @@ export function NotebookEditor({ item, id }: Props) {
             </Dialog>
             <Button appearance="outline" icon={<Save20Regular />} disabled={saving || !notebookId || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save'}</Button>
             <Button appearance="primary" icon={<Play20Regular />} disabled={running || !notebookId} onClick={run}>{running ? 'Queuing…' : 'Run'}</Button>
+            <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
+
+          {/* Phase 3: HistoryDrawer — right-side OverlayDrawer wired to /jobs */}
+          <HistoryDrawer
+            open={historyOpen}
+            onOpenChange={setHistoryOpen}
+            notebookId={notebookId}
+            workspaceId={workspaceId}
+            computeId={computeId}
+            onRerun={run}
+          />
+
+          {/* Phase 2: Attach Lakehouse modal */}
+          <Dialog open={attachOpen} onOpenChange={(_, d) => setAttachOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Attach Lakehouse</DialogTitle>
+                <DialogContent>
+                  {availableLakehouses === null && <Spinner size="tiny" label="Loading lakehouses…" />}
+                  {availableLakehouses && availableLakehouses.length === 0 && (
+                    <Caption1>No lakehouses found in this workspace. Create one first from the workspace +New menu.</Caption1>
+                  )}
+                  {availableLakehouses && availableLakehouses.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflow: 'auto' }}>
+                      {availableLakehouses.map((lh) => {
+                        const already = attachedSources.some(s => s.kind === 'lakehouse' && s.id === lh.id);
+                        return (
+                          <div key={lh.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 6, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+                            <div style={{ flex: 1 }}>
+                              <Subtitle2>{lh.displayName}</Subtitle2>
+                              {lh.description && <Caption1 style={{ display: 'block' }}>{lh.description}</Caption1>}
+                            </div>
+                            <Button size="small" appearance={already ? 'subtle' : 'primary'} disabled={already || attachBusy} onClick={() => { attachLakehouse(lh); setAttachOpen(false); }}>
+                              {already ? 'Already attached' : 'Attach'}
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="outline" onClick={loadLakehouses}>Refresh</Button>
+                  <Button appearance="secondary" onClick={() => setAttachOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           {(ws.error || listErr) && (
             <MessageBar intent="error">
@@ -283,14 +659,61 @@ export function NotebookEditor({ item, id }: Props) {
 
           {notebookId && (
             <>
-              {dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
-              <textarea
-                className={s.editor}
-                spellCheck={false}
-                value={source}
-                onChange={(e) => { setSource(e.target.value); setDirty(true); }}
-                aria-label="Notebook PySpark source"
-              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+                <Caption1>{cells.length} cell{cells.length === 1 ? '' : 's'} · default lang <code>{defaultLang}</code></Caption1>
+                <div style={{ flex: 1 }} />
+                <Select size="small" value={defaultLang} onChange={(_, d) => { setDefaultLang(d.value as NotebookCellLang); setDirty(true); }} aria-label="Default cell language">
+                  <option value="pyspark">PySpark (Python)</option>
+                  <option value="spark">Spark (Scala)</option>
+                  <option value="sparksql">Spark SQL</option>
+                  <option value="sparkr">SparkR (R)</option>
+                  <option value="python">Python</option>
+                  <option value="tsql">T-SQL</option>
+                </Select>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <CellAdder
+                  onAddCode={() => insertCell(-1, 'code')}
+                  onAddMarkdown={() => insertCell(-1, 'markdown')}
+                />
+                {cells.map((c, idx) => (
+                  <div key={c.id}>
+                    {c.type === 'code' ? (
+                      <CodeCell
+                        cell={c}
+                        active={activeCellId === c.id}
+                        onFocus={() => setActiveCellId(c.id)}
+                        onChange={(next) => updateCell(c.id, next)}
+                        onRun={runCell}
+                        onDelete={() => deleteCell(c.id)}
+                        onMoveUp={() => moveCell(c.id, -1)}
+                        onMoveDown={() => moveCell(c.id, 1)}
+                        onDuplicate={() => duplicateCell(c.id)}
+                        canMoveUp={idx > 0}
+                        canMoveDown={idx < cells.length - 1}
+                      />
+                    ) : (
+                      <MarkdownCell
+                        cell={c}
+                        active={activeCellId === c.id}
+                        onFocus={() => setActiveCellId(c.id)}
+                        onChange={(next) => updateCell(c.id, next)}
+                        onDelete={() => deleteCell(c.id)}
+                        onMoveUp={() => moveCell(c.id, -1)}
+                        onMoveDown={() => moveCell(c.id, 1)}
+                        onDuplicate={() => duplicateCell(c.id)}
+                        canMoveUp={idx > 0}
+                        canMoveDown={idx < cells.length - 1}
+                      />
+                    )}
+                    <CellAdder
+                      onAddCode={() => insertCell(idx, 'code')}
+                      onAddMarkdown={() => insertCell(idx, 'markdown')}
+                    />
+                  </div>
+                ))}
+              </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Subtitle2>Run history ({jobs.length})</Subtitle2>
                 <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => loadJobs(workspaceId, notebookId)}>Refresh</Button>

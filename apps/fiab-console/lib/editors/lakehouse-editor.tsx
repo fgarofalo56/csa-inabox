@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Badge, Body1, Button, Caption1, Spinner, Subtitle2,
   Tree, TreeItem, TreeItemLayout,
@@ -27,6 +28,7 @@ import {
 import {
   ArrowSync20Regular, ArrowUpload20Regular, Database20Regular, Delete20Regular,
   DocumentTable20Regular, Eye20Regular, Folder20Regular, FolderAdd20Regular, Play20Regular,
+  BookOpen20Regular, TableSimple20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -102,6 +104,7 @@ interface Props { item: FabricItemType; id: string }
 
 export function LakehouseEditor({ item, id }: Props) {
   const s = useStyles();
+  const router = useRouter();
   const [containers, setContainers] = useState<ContainerInfo[] | null>(null);
   const [containerError, setContainerError] = useState<string | null>(null);
   const [activeContainer, setActiveContainer] = useState<string | null>(null);
@@ -206,6 +209,50 @@ export function LakehouseEditor({ item, id }: Props) {
 
   // ---- file actions ---------------------------------------------------
   const onUploadClick = useCallback(() => fileInputRef.current?.click(), []);
+
+  /** Open the selected file in a new notebook, prefilled with Spark Delta load + display. */
+  const onOpenInNotebook = useCallback((entry: PathEntry) => {
+    if (!activeContainer) return;
+    const ext = entry.name.split('.').pop()?.toLowerCase();
+    const isDelta = ext === 'delta' || entry.name.endsWith('_delta_log');
+    const fmt = isDelta ? 'delta' : ext === 'parquet' ? 'parquet'
+      : ext === 'csv' ? 'csv' : ext === 'json' ? 'json' : 'parquet';
+    const bulk = `abfss://${activeContainer}@__accountname__.dfs.core.windows.net/${entry.name}`;
+    const code = [
+      `# Auto-generated from Lakehouse — ${activeContainer}/${entry.name}`,
+      `df = spark.read.format("${fmt}")${fmt === 'csv' ? '.option("header", "true").option("inferSchema", "true")' : ''}.load("${bulk}")`,
+      `display(df.limit(100))`,
+      `print(f"Loaded {df.count()} rows from ${bulk}")`,
+    ].join('\n');
+    // Stash the code in localStorage; the notebook editor reads it on mount.
+    try {
+      localStorage.setItem('loom.notebook.prefill', JSON.stringify({
+        source: 'lakehouse', container: activeContainer, path: entry.name, code,
+      }));
+    } catch {}
+    router.push(`/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}&path=${encodeURIComponent(entry.name)}`);
+  }, [activeContainer, router]);
+
+  /** Load a file as a Delta table — opens notebook with the conversion code prefilled. */
+  const onLoadToTables = useCallback((entry: PathEntry) => {
+    if (!activeContainer) return;
+    const tableName = leafName(entry.name).replace(/\.[^.]+$/, '').replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
+    const ext = entry.name.split('.').pop()?.toLowerCase();
+    const fmt = ext === 'parquet' ? 'parquet' : ext === 'csv' ? 'csv' : ext === 'json' ? 'json' : 'parquet';
+    const bulk = `abfss://${activeContainer}@__accountname__.dfs.core.windows.net/${entry.name}`;
+    const code = [
+      `# Load ${entry.name} into Tables/${tableName} as Delta`,
+      `df = spark.read.format("${fmt}")${fmt === 'csv' ? '.option("header", "true").option("inferSchema", "true")' : ''}.load("${bulk}")`,
+      `df.write.mode("overwrite").format("delta").saveAsTable("${tableName}")`,
+      `display(spark.table("${tableName}").limit(100))`,
+    ].join('\n');
+    try {
+      localStorage.setItem('loom.notebook.prefill', JSON.stringify({
+        source: 'lakehouse-load-to-tables', container: activeContainer, path: entry.name, tableName, code,
+      }));
+    } catch {}
+    router.push(`/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}&loadToTable=${encodeURIComponent(tableName)}`);
+  }, [activeContainer, router]);
 
   const onUploadChange = useCallback(async (ev: React.ChangeEvent<HTMLInputElement>) => {
     const file = ev.target.files?.[0];
@@ -458,7 +505,17 @@ export function LakehouseEditor({ item, id }: Props) {
                       <TableBody>
                         {currentListing.length === 0 && (
                           <TableRow>
-                            <TableCell colSpan={4}><Caption1>(empty)</Caption1></TableCell>
+                            <TableCell colSpan={4}>
+                              <div style={{ padding: 20, textAlign: 'center' }}>
+                                <Body1 style={{ display: 'block', marginBottom: 8 }}>
+                                  No files in <strong>/{currentPrefix || ''}</strong> yet.
+                                </Body1>
+                                <Caption1 style={{ display: 'block' }}>
+                                  Use the toolbar above to <b>Upload file</b> or create a <b>New folder</b>.
+                                  Once you have files, right-click any one for <b>Preview · Query · Open in notebook · Load to Tables · Delete</b>.
+                                </Caption1>
+                              </div>
+                            </TableCell>
                           </TableRow>
                         )}
                         {currentListing.map((entry) => (
@@ -487,6 +544,16 @@ export function LakehouseEditor({ item, id }: Props) {
                                     {!entry.isDirectory && (
                                       <MenuItem icon={<Play20Regular />} onClick={() => { selectFile(entry); setTab('sql'); }}>
                                         Query this file
+                                      </MenuItem>
+                                    )}
+                                    {!entry.isDirectory && (
+                                      <MenuItem icon={<BookOpen20Regular />} onClick={() => onOpenInNotebook(entry)}>
+                                        Open in notebook
+                                      </MenuItem>
+                                    )}
+                                    {!entry.isDirectory && (
+                                      <MenuItem icon={<TableSimple20Regular />} onClick={() => onLoadToTables(entry)}>
+                                        Load to Tables (Delta)
                                       </MenuItem>
                                     )}
                                     <MenuItem icon={<Delete20Regular />} onClick={() => onDelete(entry)}>

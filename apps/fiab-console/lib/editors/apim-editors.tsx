@@ -23,9 +23,10 @@ import {
 } from '@fluentui/react-components';
 import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
-  Document20Regular, Code20Regular,
+  Document20Regular, Code20Regular, Library20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -248,9 +249,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
           <StatusBar status={status} />
           {api.loading && <Spinner size="small" label="Loading API from APIM…" labelPosition="after" />}
           {api.error && !api.loading && (
-            <MessageBar intent="error">
-              <MessageBarBody><MessageBarTitle>Failed to load</MessageBarTitle>{api.error}</MessageBarBody>
-            </MessageBar>
+            <BackendStateBar error={api.error} title="APIM API" />
           )}
           <div className={s.form}>
             <Field label="Display name" required>
@@ -383,7 +382,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
         <StatusBar status={status} />
         {product.loading && <Spinner size="small" label="Loading product…" labelPosition="after" />}
         {product.error && !product.loading && (
-          <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Failed to load</MessageBarTitle>{product.error}</MessageBarBody></MessageBar>
+          <BackendStateBar error={product.error} title="APIM Product" />
         )}
         <div className={s.form}>
           <Field label="Display name" required>
@@ -423,11 +422,12 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
 const POLICY_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
     { label: 'Edit', actions: [{ label: 'Save' }, { label: 'Reload' }, { label: 'Validate XML' }] },
-    { label: 'Scope', actions: [{ label: 'Global' }, { label: 'API' }, { label: 'Product' }] },
+    { label: 'Scope', actions: [{ label: 'Global' }, { label: 'API' }, { label: 'Product' }, { label: 'Operation' }] },
   ]},
 ];
 
-type PolicyScopeKind = 'service' | 'api' | 'product';
+// v3.27: added 'operation' scope — APIM's finest-grain policy attach point.
+type PolicyScopeKind = 'service' | 'api' | 'product' | 'operation';
 
 const DEFAULT_POLICY_XML =
   `<policies>\n  <inbound>\n    <base />\n    <!-- example: validate Entra JWT -->\n    <!-- <validate-jwt header-name="Authorization" failed-validation-httpcode="401">\n      <openid-config url="https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration" />\n    </validate-jwt> -->\n    <rate-limit calls="120" renewal-period="60" />\n  </inbound>\n  <backend>\n    <base />\n  </backend>\n  <outbound>\n    <base />\n  </outbound>\n  <on-error>\n    <base />\n  </on-error>\n</policies>`;
@@ -449,16 +449,18 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
   const [scopeKind, setScopeKind] = useState<PolicyScopeKind>('service');
   const [apiId, setApiId] = useState('');
   const [productId, setProductId] = useState('');
+  const [operationId, setOperationId] = useState('');
   const [value, setValue] = useState(DEFAULT_POLICY_XML);
   const [loadState, setLoadState] = useState<LoadState<{ value: string; format: string }>>({ loading: true, data: null });
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' });
 
   const scopeQuery = useMemo(() => {
     const sp = new URLSearchParams({ scope: scopeKind });
-    if (scopeKind === 'api' && apiId) sp.set('apiId', apiId);
+    if ((scopeKind === 'api' || scopeKind === 'operation') && apiId) sp.set('apiId', apiId);
     if (scopeKind === 'product' && productId) sp.set('productId', productId);
+    if (scopeKind === 'operation' && operationId) sp.set('operationId', operationId);
     return sp.toString();
-  }, [scopeKind, apiId, productId]);
+  }, [scopeKind, apiId, productId, operationId]);
 
   const load = useCallback(async () => {
     setLoadState({ loading: true, data: null });
@@ -479,20 +481,22 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
     if (scopeKind === 'service') load();
     else if (scopeKind === 'api' && apiId) load();
     else if (scopeKind === 'product' && productId) load();
+    else if (scopeKind === 'operation' && apiId && operationId) load();
     else setLoadState({ loading: false, data: null });
-  }, [load, scopeKind, apiId, productId]);
+  }, [load, scopeKind, apiId, productId, operationId]);
 
   const save = useCallback(async () => {
     const check = isWellFormedXml(value);
     if (!check.ok) { setStatus({ kind: 'err', msg: `Invalid XML: ${check.error}` }); return; }
     if (scopeKind === 'api' && !apiId) { setStatus({ kind: 'err', msg: 'apiId is required for API scope' }); return; }
     if (scopeKind === 'product' && !productId) { setStatus({ kind: 'err', msg: 'productId is required for product scope' }); return; }
+    if (scopeKind === 'operation' && (!apiId || !operationId)) { setStatus({ kind: 'err', msg: 'apiId and operationId are required for operation scope' }); return; }
     setStatus({ kind: 'saving' });
     try {
       const r = await fetch(`/api/items/apim-policy/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ scope: scopeKind, apiId, productId, value }),
+        body: JSON.stringify({ scope: scopeKind, apiId, productId, operationId, value }),
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
@@ -500,7 +504,7 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
     } catch (e: any) {
       setStatus({ kind: 'err', msg: e?.message || String(e) });
     }
-  }, [id, scopeKind, apiId, productId, value]);
+  }, [id, scopeKind, apiId, productId, operationId, value]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={POLICY_RIBBON} main={
@@ -516,11 +520,17 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
               <Option value="service">Global (service)</Option>
               <Option value="api">API</Option>
               <Option value="product">Product</Option>
+              <Option value="operation">API operation</Option>
             </Dropdown>
           </Field>
-          {scopeKind === 'api' && (
+          {(scopeKind === 'api' || scopeKind === 'operation') && (
             <Field label="API id">
               <Input value={apiId} onChange={(_, d) => setApiId(d.value)} placeholder="e.g. orders-api" />
+            </Field>
+          )}
+          {scopeKind === 'operation' && (
+            <Field label="Operation id">
+              <Input value={operationId} onChange={(_, d) => setOperationId(d.value)} placeholder="e.g. getOrderById" />
             </Field>
           )}
           {scopeKind === 'product' && (
@@ -561,29 +571,112 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
 
 const DP_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
-    { label: 'Product', actions: [{ label: 'Publish to APIM' }, { label: 'Request access' }] },
+    { label: 'Product', actions: [{ label: 'Save' }, { label: 'Publish to APIM' }] },
     { label: 'Contract', actions: [{ label: 'Semantic schema' }, { label: 'SLA' }, { label: 'Owner' }] },
   ]},
 ];
 
+interface DataProductState {
+  displayName: string;
+  description: string;
+  domain: string;
+  owner: string;
+  certified: boolean;
+  sla: string;
+  bundle: string[];
+  // Phase 1 Purview Unified Catalog wiring — populated by
+  // POST /api/items/data-product/[id]/register-purview on success.
+  purviewDataProductId?: string;
+  lastRegisteredAt?: string;
+}
+
+const DP_EMPTY: DataProductState = {
+  displayName: '',
+  description: '',
+  domain: '',
+  owner: '',
+  certified: false,
+  sla: '',
+  bundle: [],
+};
+
+// Hint payload returned with HTTP 501 from /register-purview when the
+// LOOM_PURVIEW_ACCOUNT env var is not set. Mirrors PurviewNotConfiguredHint
+// in lib/azure/purview-client.ts.
+interface PurviewNotConfiguredHint {
+  missingEnvVar: string;
+  bicepModule: string;
+  bicepStatus: string;
+  rolesRequired: { name: string; scope: string; reason: string }[];
+  followUp: string;
+}
+
 export function DataProductEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const [state, setState] = useState<DataProductState>(DP_EMPTY);
+  const [loading, setLoading] = useState(id !== 'new');
+  const [loadErr, setLoadErr] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' });
+  // Phase 1: when /register-purview returns 501, we surface the structured
+  // hint payload as a dedicated MessageBar so the operator sees the bicep
+  // module path + roles to grant.
+  const [purviewHint, setPurviewHint] = useState<PurviewNotConfiguredHint | null>(null);
 
-  const productId = id !== 'new' ? id : 'customer-360';
-  const displayName = 'Customer 360';
-  const description = 'Gold revenue + churn data product. Backed by silver_revenue (Lakehouse) + churn-model (AML). Versioned via APIM product so consumers can subscribe through the developer portal.';
+  // v3.27: F-vaporware fix — Cosmos-backed load, removes hardcoded
+  // 'Customer 360' / alice@contoso / fixed bundle grid.
+  useEffect(() => {
+    if (id === 'new') { setLoading(false); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`);
+        const j = await r.json();
+        if (cancelled) return;
+        if (!j.ok) {
+          // 404 on fresh items is expected; show empty form rather than error.
+          if (r.status !== 404) setLoadErr(j.error || `HTTP ${r.status}`);
+        } else if (j.item?.state) {
+          setState({ ...DP_EMPTY, ...(j.item.state as Partial<DataProductState>) });
+        }
+      } catch (e: any) {
+        if (!cancelled) setLoadErr(e?.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
 
-  const publish = useCallback(async () => {
+  const save = useCallback(async () => {
     setStatus({ kind: 'saving' });
+    setPurviewHint(null);
+    try {
+      const r = await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ state, displayName: state.displayName || 'Untitled data product' }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
+      setStatus({ kind: 'ok', msg: state.purviewDataProductId
+        ? 'Saved to Cosmos. Re-register with Purview to propagate edits to the Unified Catalog.'
+        : 'Saved to Cosmos. Click Register with Purview to publish to the Unified Catalog.' });
+    } catch (e: any) {
+      setStatus({ kind: 'err', msg: e?.message || String(e) });
+    }
+  }, [id, state]);
+
+  const publishApimMirror = useCallback(async () => {
+    setStatus({ kind: 'saving' });
+    setPurviewHint(null);
     try {
       const r = await fetch(`/api/items/apim-product`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          id: productId,
-          displayName,
-          description,
+          id,
+          displayName: state.displayName || 'Untitled data product',
+          description: state.description,
           state: 'published',
           subscriptionRequired: true,
           approvalRequired: false,
@@ -591,37 +684,139 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
-      setStatus({ kind: 'ok', msg: `Published as APIM product '${j.product.name}'` });
+      setStatus({ kind: 'ok', msg: `Published API consumer surface as APIM product '${j.product.name}'. (Note: this is the API access layer, NOT the Purview Data Product registration.)` });
     } catch (e: any) {
       setStatus({ kind: 'err', msg: e?.message || String(e) });
     }
-  }, [productId]);
+  }, [id, state.displayName, state.description]);
+
+  const registerPurview = useCallback(async () => {
+    setStatus({ kind: 'saving' });
+    setPurviewHint(null);
+    try {
+      const r = await fetch(`/api/items/data-product/${encodeURIComponent(id)}/register-purview`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      });
+      const j = await r.json();
+      if (r.status === 501 && j?.hint) {
+        // Honest config-only state per .claude/rules/no-vaporware.md — the
+        // backend is gated, surface the actionable hint to the operator.
+        setPurviewHint(j.hint as PurviewNotConfiguredHint);
+        setStatus({ kind: 'idle' });
+        return;
+      }
+      if (!j.ok) {
+        const detail = j.hint?.followUp ? ` Hint: ${j.hint.followUp}` : (j.hint ? ` Hint: ${j.hint}` : '');
+        setStatus({ kind: 'err', msg: `${j.error || `HTTP ${r.status}`}${detail}` });
+        return;
+      }
+      // Success — hydrate the local state with the returned id + timestamp
+      // so the MessageBar flips from "pending" to "registered" without a reload.
+      setState((prev) => ({
+        ...prev,
+        purviewDataProductId: j.purviewDataProductId,
+        lastRegisteredAt: j.lastRegisteredAt,
+      }));
+      setStatus({
+        kind: 'ok',
+        msg: `Registered with Purview Unified Catalog. dataProductId=${j.purviewDataProductId} · lastRegisteredAt=${j.lastRegisteredAt}`,
+      });
+    } catch (e: any) {
+      setStatus({ kind: 'err', msg: e?.message || String(e) });
+    }
+  }, [id]);
+
+  const setBundleText = (text: string) => setState({ ...state, bundle: text.split('\n').map(s => s.trim()).filter(Boolean) });
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={DP_RIBBON} main={
       <div className={s.pad}>
+        {state.purviewDataProductId ? (
+          <MessageBar intent="success">
+            <MessageBarBody>
+              <MessageBarTitle>Registered with Purview Unified Catalog</MessageBarTitle>
+              Data product <code>{state.purviewDataProductId}</code> is live in the catalog.{' '}
+              {state.lastRegisteredAt && <>Last registered <code>{state.lastRegisteredAt}</code>.{' '}</>}
+              Re-click <strong>Register with Purview</strong> after edits to push updates. APIM publish remains a separate, API-access-layer concern.
+            </MessageBarBody>
+          </MessageBar>
+        ) : (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Not yet registered with Purview Unified Catalog</MessageBarTitle>
+              The item persists configuration to Cosmos, but it has not been published to the canonical Purview Data Product catalog. Click <strong>Register with Purview</strong> below to create the Unified Catalog data product via <code>POST /datagovernance/catalog/dataProducts</code>. Requires a Purview account (<code>LOOM_PURVIEW_ACCOUNT</code>), a <code>businessDomainId</code> GUID in <code>state.domain</code>, and the Loom UAMI to hold the <code>Data Curator</code> + <code>Data Product Owner</code> roles. See <code>docs/fiab/data-product-parity-spec.md</code>.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {purviewHint && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Purview is not provisioned in this deployment</MessageBarTitle>
+              Missing env var: <code>{purviewHint.missingEnvVar}</code>.{' '}
+              Bicep module: <code>{purviewHint.bicepModule}</code> — {purviewHint.bicepStatus}{' '}
+              Required Purview roles (granted via the Purview portal, NOT ARM RBAC):
+              <ul style={{ margin: '6px 0 6px 18px' }}>
+                {purviewHint.rolesRequired.map((r) => (
+                  <li key={r.name}><strong>{r.name}</strong> at {r.scope} — {r.reason}</li>
+                ))}
+              </ul>
+              {purviewHint.followUp}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {loadErr && <MessageBar intent="error"><MessageBarBody>{loadErr}</MessageBarBody></MessageBar>}
+        {loading && <Spinner size="tiny" label="Loading…" />}
+
         <div className={s.toolbar}>
-          <Badge appearance="filled" color="brand">Domain: Finance</Badge>
-          <Badge appearance="outline">Owner: alice@contoso</Badge>
-          <Badge appearance="outline" color="success">Certified</Badge>
-          <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={publish} disabled={status.kind === 'saving'} style={{ marginLeft: 'auto' }}>
+          {state.domain && <Badge appearance="filled" color="brand">Domain: {state.domain}</Badge>}
+          {state.owner && <Badge appearance="outline">Owner: {state.owner}</Badge>}
+          {state.certified && <Badge appearance="outline" color="success">Certified</Badge>}
+          {state.purviewDataProductId && <Badge appearance="outline" color="success">Purview: {state.purviewDataProductId.slice(0, 8)}…</Badge>}
+          <Button appearance="secondary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving'}>Save</Button>
+          <Button
+            appearance={state.purviewDataProductId ? 'secondary' : 'primary'}
+            icon={<Library20Regular />}
+            onClick={registerPurview}
+            disabled={status.kind === 'saving' || !state.displayName}
+            style={{ marginLeft: 'auto' }}
+          >
+            {status.kind === 'saving'
+              ? 'Registering…'
+              : state.purviewDataProductId ? 'Re-register with Purview' : 'Register with Purview'}
+          </Button>
+          <Button appearance="secondary" icon={<CloudArrowUp20Regular />} onClick={publishApimMirror} disabled={status.kind === 'saving' || !state.displayName}>
             {status.kind === 'saving' ? 'Publishing…' : 'Publish to APIM'}
           </Button>
         </div>
         <StatusBar status={status} />
-        <Subtitle2>{displayName}</Subtitle2>
-        <Body1>{description}</Body1>
-        <Subtitle2 style={{ marginTop: 8 }}>Bundle</Subtitle2>
-        <div className={s.cardGrid}>
-          {[
-            'Dataset: silver_revenue (Delta)',
-            'Semantic contract: orders.yaml (v2)',
-            'APIM API: orders-api v2.1',
-            'Access policy: tier ≥ Gold',
-            'SLA: 99.9% · P95 < 200 ms',
-            'Lineage: 6 upstream sources',
-          ].map((b) => <div key={b} className={s.card}>{b}</div>)}
+
+        <div className={s.form}>
+          <Field label="Display name"><Input value={state.displayName} onChange={(_, d) => setState({ ...state, displayName: d.value })} /></Field>
+          <Field label="Domain (Purview businessDomainId GUID)"><Input value={state.domain} onChange={(_, d) => setState({ ...state, domain: d.value })} placeholder="e.g. 0a1b2c3d-4e5f-6789-abcd-ef0123456789" /></Field>
+          <Field label="Owner (email)"><Input value={state.owner} onChange={(_, d) => setState({ ...state, owner: d.value })} placeholder="owner@contoso.com" /></Field>
+          <Field label="SLA"><Input value={state.sla} onChange={(_, d) => setState({ ...state, sla: d.value })} placeholder="99.9% · P95 < 200 ms" /></Field>
+          <Field label="Description" style={{ gridColumn: '1 / -1' }}>
+            <Textarea value={state.description} onChange={(_, d) => setState({ ...state, description: d.value })} rows={3} />
+          </Field>
+          <Field label="Certified" style={{ gridColumn: '1 / -1' }}>
+            <Switch checked={state.certified} onChange={(_, d) => setState({ ...state, certified: d.checked })} label={state.certified ? 'Certified by data governance' : 'Not certified'} />
+          </Field>
+          <Field label="Bundle (one per line — datasets, contracts, APIs, policies)" style={{ gridColumn: '1 / -1' }}>
+            <Textarea value={state.bundle.join('\n')} onChange={(_, d) => setBundleText(d.value)} rows={6} placeholder={'Dataset: silver_revenue (Delta)\nSemantic contract: orders.yaml (v2)\nAPIM API: orders-api v2.1'} />
+          </Field>
         </div>
+
+        {state.bundle.length > 0 && (
+          <>
+            <Subtitle2 style={{ marginTop: 8 }}>Bundle preview</Subtitle2>
+            <div className={s.cardGrid}>
+              {state.bundle.map((b, i) => <div key={i} className={s.card}>{b}</div>)}
+            </div>
+          </>
+        )}
       </div>
     } />
   );

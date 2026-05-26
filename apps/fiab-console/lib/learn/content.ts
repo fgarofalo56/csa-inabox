@@ -369,6 +369,14 @@ const REGISTRY: Record<string, LearnEntry> = {
   'cypher-graph': {
     title: 'Cypher graph',
     summary: 'Cypher dialect translated to ADX `make-graph` operators. Lets Neo4j-trained engineers query the lakehouse without rewriting.',
+    steps: [
+      'Run admin → Load sample data (kind=graph) once. That creates `SampleSocialGraph(Source, Target, EdgeType, Weight, Since)` in the default Kusto DB.',
+      'Pattern: edges | make-graph Source --> Target with_node_id=NodeId | graph-match (a)-[e]->(b)-[e2]->(c) where a.NodeId == "alice" project a=a.NodeId, b=b.NodeId, c=c.NodeId.',
+      'Cypher `(a)-[*1..3]->(b)` ≈ KQL `graph-match (a)-[e*1..3]->(b)`. Cypher `WHERE` ≈ KQL `where` inside graph-match.',
+      'For shortest-path use `graph-shortest-paths`; for cycle detection wrap in `graph-to-table edges`.',
+    ],
+    tip: 'KQL graph operators are server-side — no Spark, no Gremlin, no Cosmos. Latency is millisecond-scale up to ~10M edges.',
+    docsUrl: 'https://learn.microsoft.com/azure/data-explorer/kusto/query/graph-operators',
   },
   'gql-graph': {
     title: 'GQL graph',
