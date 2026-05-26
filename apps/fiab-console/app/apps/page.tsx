@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Spinner, makeStyles, tokens, Input } from '@fluentui/react-components';
 import { PageShell } from '@/lib/components/page-shell';
+import { SignInRequired } from '@/lib/components/sign-in-required';
 
 interface AppDoc { id: string; name: string; description?: string; category?: string; publisher?: string; }
 
@@ -47,11 +48,15 @@ const useStyles = makeStyles({
 export default function AppsPage() {
   const s = useStyles();
   const [apps, setApps] = useState<AppDoc[] | null>(null);
+  const [unauth, setUnauth] = useState(false);
   const [q, setQ] = useState('');
 
   useEffect(() => {
-    fetch('/api/apps-catalog').then(r => r.json()).then(d => {
-      setApps(Array.isArray(d?.apps) ? d.apps : []);
+    fetch('/api/apps-catalog').then(r => {
+      if (r.status === 401 || r.status === 403) { setUnauth(true); setApps([]); return null; }
+      return r.json();
+    }).then(d => {
+      if (d) setApps(Array.isArray(d?.apps) ? d.apps : []);
     }).catch(() => setApps([]));
   }, []);
 
@@ -63,6 +68,7 @@ export default function AppsPage() {
 
   return (
     <PageShell title="Apps" subtitle="Curated CSA solutions that bundle items, dashboards, and pipelines into one click.">
+      {unauth && <SignInRequired subject="the apps catalog" />}
       <div className={s.toolbar}>
         <Input placeholder="Filter apps…" value={q} onChange={(_, d) => setQ(d.value)} style={{ flex: 1, maxWidth: 360 }} />
       </div>

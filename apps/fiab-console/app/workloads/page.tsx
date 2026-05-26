@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react';
 import { Spinner, makeStyles, tokens, Badge, Input } from '@fluentui/react-components';
 import { PageShell } from '@/lib/components/page-shell';
+import { SignInRequired } from '@/lib/components/sign-in-required';
 
 interface Workload {
   id: string; name: string; description?: string;
@@ -49,11 +50,15 @@ const useStyles = makeStyles({
 export default function WorkloadsPage() {
   const s = useStyles();
   const [items, setItems] = useState<Workload[] | null>(null);
+  const [unauth, setUnauth] = useState(false);
   const [q, setQ] = useState('');
 
   useEffect(() => {
-    fetch('/api/workloads-catalog').then(r => r.json()).then(d => {
-      setItems(Array.isArray(d?.workloads) ? d.workloads : []);
+    fetch('/api/workloads-catalog').then(r => {
+      if (r.status === 401 || r.status === 403) { setUnauth(true); setItems([]); return null; }
+      return r.json();
+    }).then(d => {
+      if (d) setItems(Array.isArray(d?.workloads) ? d.workloads : []);
     }).catch(() => setItems([]));
   }, []);
 
@@ -66,6 +71,7 @@ export default function WorkloadsPage() {
   return (
     <PageShell title="Workloads"
       subtitle="Each workload groups item types that solve a problem together. Pick what you need; everything else stays out of the way.">
+      {unauth && <SignInRequired subject="workloads" />}
       <div className={s.toolbar}>
         <Input placeholder="Filter workloads…" value={q} onChange={(_, d) => setQ(d.value)} style={{ flex: 1, maxWidth: 360 }} />
       </div>

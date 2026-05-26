@@ -16,6 +16,7 @@ import {
 import {
   History20Regular, Comment20Regular, Share20Regular,
 } from '@fluentui/react-icons';
+import { SignInRequired } from '@/lib/components/sign-in-required';
 
 interface Entry {
   kind: 'audit' | 'comment' | 'share';
@@ -74,10 +75,14 @@ const useStyles = makeStyles({
 export function ActivityFeedPane({ showStats = true }: { showStats?: boolean }) {
   const styles = useStyles();
   const [entries, setEntries] = useState<Entry[] | null>(null);
+  const [unauth, setUnauth] = useState(false);
 
   useEffect(() => {
-    fetch('/api/activity?n=50').then(r => r.json()).then(d => {
-      setEntries(Array.isArray(d?.entries) ? d.entries : []);
+    fetch('/api/activity?n=50').then(r => {
+      if (r.status === 401 || r.status === 403) { setUnauth(true); setEntries([]); return null; }
+      return r.json();
+    }).then(d => {
+      if (d) setEntries(Array.isArray(d?.entries) ? d.entries : []);
     }).catch(() => setEntries([]));
   }, []);
 
@@ -96,6 +101,7 @@ export function ActivityFeedPane({ showStats = true }: { showStats?: boolean }) 
 
   return (
     <>
+      {unauth && <SignInRequired subject="activity" />}
       {showStats && (
         <div className={styles.stats}>
           {stats.map(s => (

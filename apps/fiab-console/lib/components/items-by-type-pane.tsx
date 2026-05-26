@@ -16,6 +16,7 @@ import {
 } from '@fluentui/react-components';
 import { Add20Regular, Search20Regular } from '@fluentui/react-icons';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
+import { SignInRequired } from '@/lib/components/sign-in-required';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 
 interface OwnedItem {
@@ -70,12 +71,16 @@ const useStyles = makeStyles({
 export function ItemsByTypePane({ types, emptyHint }: Props) {
   const styles = useStyles();
   const [items, setItems] = useState<OwnedItem[] | null>(null);
+  const [unauth, setUnauth] = useState(false);
   const [q, setQ] = useState('');
 
   useEffect(() => {
     const qs = types.map(t => `type=${encodeURIComponent(t)}`).join('&');
-    fetch(`/api/items/by-type?${qs}`).then(r => r.json()).then(d => {
-      setItems(Array.isArray(d?.items) ? d.items : []);
+    fetch(`/api/items/by-type?${qs}`).then(r => {
+      if (r.status === 401 || r.status === 403) { setUnauth(true); setItems([]); return null; }
+      return r.json();
+    }).then(d => {
+      if (d) setItems(Array.isArray(d?.items) ? d.items : []);
     }).catch(() => setItems([]));
   }, [types.join(',')]);
 
@@ -88,6 +93,7 @@ export function ItemsByTypePane({ types, emptyHint }: Props) {
 
   return (
     <>
+      {unauth && <SignInRequired subject="items" />}
       <div className={styles.toolbar}>
         <Input className={styles.search}
           contentBefore={<Search20Regular />}
