@@ -20,7 +20,57 @@ These are wired automatically by `platform/fiab/bicep/modules/admin-plane/main.b
 
 The manual step is: **register that SP as an Application User in each Dataverse-enabled env**, with an appropriate Security Role.
 
-## One-time PPAC walkthrough (per env)
+## One-time per-env setup
+
+The naive "use PPAC's New app user button" path runs into the **stub user gotcha** on the Default env — adding Dataverse to a Default env doesn't auto-promote the operator to Dataverse System Administrator. Without SA, PPAC's role picker won't render the SA option, and the AppUser create API returns 403 `prvCreateUser missing`.
+
+The reliable end-to-end recipe (verified working on Limitless Data tenant, 2026-05-26):
+
+### Step 1 — Promote yourself to Dataverse System Administrator
+
+Required because adding Dataverse to a Default env makes you only `Environment Maker + Basic User`, not SA.
+
+1. Open `https://<org>.crm.dynamics.com/main.aspx?settingsonly=true&pagetype=entitylist&etn=systemuser` (replace `<org>` with the env's Dataverse host, e.g. `orgd9f634de`).
+2. Tick the checkbox next to your name in the user grid.
+3. Click **Promote To Admin** in the top command bar → **OK** in the confirmation dialog.
+4. Verify: `az rest --method get --url "https://<org>.crm.dynamics.com/api/data/v9.2/systemusers(<your-systemuserid>)/systemuserroles_association?\$select=name" --resource "https://<org>.crm.dynamics.com"` should list **System Administrator**.
+
+### Step 2 — Create the AppUser + assign SA role via Dataverse Web API
+
+Bypasses PPAC entirely. Pure REST:
+
+```bash
+DV_URL="https://<org>.crm.dynamics.com"
+TOKEN=$(az account get-access-token --resource "$DV_URL" --query accessToken -o tsv)
+APP_CLIENT_ID="<LOOM_MSAL_CLIENT_ID>"   # e.g. 9844c28c-3b3a-4949-8d63-9eefa3b50a9d
+BU_ID=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  "$DV_URL/api/data/v9.2/businessunits?\$select=businessunitid&\$filter=parentbusinessunitid%20eq%20null" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['value'][0]['businessunitid'])")
+ROLE_ID=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  "$DV_URL/api/data/v9.2/roles?\$select=roleid&\$filter=name%20eq%20'System%20Administrator'%20and%20_businessunitid_value%20eq%20$BU_ID" \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['value'][0]['roleid'])")
+
+# Create the AppUser
+NEW=$(curl -s -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "OData-Version: 4.0" -H "Content-Type: application/json" -H "Prefer: return=representation" \
+  -d "{\"applicationid\":\"$APP_CLIENT_ID\",\"businessunitid@odata.bind\":\"/businessunits($BU_ID)\",\"firstname\":\"CSA Loom\",\"lastname\":\"Console (UAT)\"}" \
+  "$DV_URL/api/data/v9.2/systemusers")
+NEW_USER_ID=$(echo "$NEW" | python3 -c "import json,sys; print(json.load(sys.stdin)['systemuserid'])")
+
+# Assign System Administrator
+curl -s -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "OData-Version: 4.0" -H "Content-Type: application/json" \
+  -d "{\"@odata.id\": \"$DV_URL/api/data/v9.2/roles($ROLE_ID)\"}" \
+  "$DV_URL/api/data/v9.2/systemusers($NEW_USER_ID)/systemuserroles_association/\$ref"
+```
+
+### Why we can't fully automate Step 1
+
+`Promote To Admin` requires the **legacy Dynamics 365 UI** (`main.aspx` settings page) which uses a different auth flow than PPAC and has no REST equivalent for this exact action. A tenant admin must click it once per env at first provisioning. Once Step 1 is done, Step 2 is fully scriptable and can be added to the post-deploy bootstrap workflow.
+
+## Legacy PPAC walkthrough (if you prefer the UI for Step 2)
 
 1. Open https://admin.powerplatform.microsoft.com/manage/environments and select the target env (must have a Dataverse database — see [v3-tenant-bootstrap.md](./v3-tenant-bootstrap.md) §"Add Dataverse").
 2. Sidebar **Settings** → **Users + permissions** → **Application users**, or directly: `https://admin.powerplatform.microsoft.com/manage/environments/<orgId>/appusers`
