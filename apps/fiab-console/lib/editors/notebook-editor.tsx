@@ -173,6 +173,28 @@ export function NotebookEditor({ item, id }: Props) {
     }
   }, [cp.computes, computeId]);
 
+  // v3.28: honor URL deep-link — when /items/notebook/{id} loads, discover
+  // the owning workspace from the Cosmos record and auto-select it so the
+  // cells actually render. Previously workspaceId stayed empty until the
+  // user manually picked from the dropdown, leaving the editor blank.
+  useEffect(() => {
+    if (id === 'new' || !id || workspaceId || notebookId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/notebook/${encodeURIComponent(id)}`);
+        if (!r.ok) return;
+        const j = await r.json();
+        if (cancelled) return;
+        if (j?.workspaceId) {
+          setWorkspaceId(j.workspaceId);
+          setNotebookId(id);
+        }
+      } catch { /* ignore — user can still pick manually */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id, workspaceId, notebookId]);
+
   // Pick up Lakehouse "Open in notebook" prefill (stored in localStorage before route push).
   useEffect(() => {
     if (typeof window === 'undefined' || id !== 'new') return;
