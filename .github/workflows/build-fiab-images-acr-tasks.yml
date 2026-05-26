@@ -44,7 +44,7 @@ jobs:
       app_matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Azure login
-        uses: Azure/login@v2
+        uses: azure/login@v2.3.0
         with:
           creds: |
             {
@@ -80,7 +80,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Azure login
-        uses: Azure/login@v2
+        uses: azure/login@v2.3.0
         with:
           creds: |
             {

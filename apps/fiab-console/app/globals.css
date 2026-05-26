@@ -119,6 +119,19 @@ html[data-theme='dark'] {
   }
 }
 
+/*
+ * Responsive stance: Loom mirrors Fabric — desktop-first, ≥1280px is the
+ * target. Below 1024px the left nav collapses to an icon rail so the
+ * editor canvas keeps room to breathe; below 768px (tablet portrait or
+ * phone) we render a wide-screen prompt rather than pretending phones work.
+ */
+@media (max-width: 1023px) {
+  :root { --loom-nav-width: 56px; }
+}
+@media (max-width: 767px) {
+  html, body { min-width: 768px; overflow-x: auto; }
+}
+
 * { box-sizing: border-box; }
 
 html, body {
