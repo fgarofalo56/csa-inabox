@@ -112,6 +112,24 @@ export function NotebookEditor({ item, id }: Props) {
   const [createName, setCreateName] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
+  const [prefill, setPrefill] = useState<{ source: string; container?: string; path?: string } | null>(null);
+
+  // Pick up Lakehouse "Open in notebook" prefill (stored in localStorage before route push).
+  useEffect(() => {
+    if (typeof window === 'undefined' || id !== 'new') return;
+    try {
+      const raw = localStorage.getItem('loom.notebook.prefill');
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (data?.code) {
+        setSource(data.code);
+        setPrefill({ source: data.source, container: data.container, path: data.path });
+        setCreateName(`From ${data.path?.split('/').pop()?.replace(/\.[^.]+$/, '') || 'lakehouse'}`);
+        setCreateOpen(true);
+      }
+      localStorage.removeItem('loom.notebook.prefill');
+    } catch { /* ignore */ }
+  }, [id]);
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null); setListHint(null);
