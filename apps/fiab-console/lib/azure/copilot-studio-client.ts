@@ -110,6 +110,21 @@ async function rawCall<T = any>(url: string, opts: CallOpts): Promise<T> {
   try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
   if (!res.ok) {
     const msg = (json?.error?.message || json?.message || text || `${opts.method ?? 'GET'} ${url} failed`).toString();
+    // Detect "Copilot Studio not enabled in this env" — the msdyn_copilots table
+    // and msdyn_knowledgesources table only exist when the env's admin has
+    // enabled Copilot Studio (separate per-env add-on, PPAC → env → Copilot
+    // Studio → Enable). Surface as a friendly 503 so editors render a quiet
+    // MessageBar instead of a loud error.
+    const isCsNotEnabled =
+      res.status === 404 &&
+      /Resource not found for the segment '(msdyn_copilots?|msdyn_knowledgesources?|msdyn_botcomponents?)'/i.test(msg);
+    if (isCsNotEnabled) {
+      throw new CopilotStudioError(
+        'Copilot Studio is not enabled in this environment. ' +
+        'Enable it from Power Platform admin centre → Environments → <env> → Settings → Product → Features → "Copilot Studio".',
+        503, json || text, url,
+      );
+    }
     throw new CopilotStudioError(msg, res.status, json || text, url);
   }
   return (json as T) ?? ({} as T);

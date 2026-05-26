@@ -463,21 +463,26 @@ export async function listFlowRuns(envId: string, name: string, top = 50): Promi
 
 export async function listPowerPages(envId: string): Promise<PowerPage[]> {
   const { url, scope } = await dataverseBase(envId);
-  // mspp_website is the Power Pages site table. Older portals (adx_website)
-  // also exist; we try mspp_ first, fall back on 404.
+  // mspp_website is the Power Pages site table. Schema (verified 2026-05-26):
+  //   mspp_websiteid, mspp_name, mspp_primarydomainname, mspp_partialurl,
+  //   mspp_website_version, statecode, statuscode, createdon, modifiedon.
+  // Older portals (adx_website) also exist; we try mspp_ first, fall back on 404.
   try {
     const j = await call<{ value: any[] }>(
       `${url}/api/data/v9.2/mspp_websites`,
       scope,
-      { query: { '$select': 'mspp_websiteid,mspp_name,mspp_primarydomainname,mspp_websiteurl,statuscode,createdon,modifiedon,mspp_type' } },
+      { query: { '$select': 'mspp_websiteid,mspp_name,mspp_primarydomainname,mspp_partialurl,statecode,statuscode,createdon,modifiedon' } },
     );
     return (j.value || []).map((w: any) => ({
       websiteid: w.mspp_websiteid,
       name: w.mspp_name,
       primarydomainname: w.mspp_primarydomainname,
-      websiteurl: w.mspp_websiteurl,
+      // websiteurl is derived: https://<primarydomain>/<partialurl>
+      websiteurl: w.mspp_primarydomainname
+        ? `https://${w.mspp_primarydomainname}${w.mspp_partialurl ? '/' + w.mspp_partialurl.replace(/^\//, '') : ''}`
+        : undefined,
       status: w['statuscode@OData.Community.Display.V1.FormattedValue'] || String(w.statuscode ?? ''),
-      type: w['mspp_type@OData.Community.Display.V1.FormattedValue'] || String(w.mspp_type ?? ''),
+      type: w['statecode@OData.Community.Display.V1.FormattedValue'] || String(w.statecode ?? ''),
       createdon: w.createdon,
       modifiedon: w.modifiedon,
     }));

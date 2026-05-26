@@ -24,6 +24,8 @@ env:
   APIM_NAME: apim-csa-loom-eastus2
   CONSOLE_UAMI_PRINCIPAL: e61f3eb3-c646-4183-8198-4c4a34cd9a01
   CONSOLE_UAMI_CLIENT: c6272de5-3c4e-4b72-8b57-71b2e950209b
+  # MSAL Web App SP — used as Dataverse Application User (UAMIs can't be one)
+  LOOM_MSAL_CLIENT_ID: 9844c28c-3b3a-4949-8d63-9eefa3b50a9d
 
 jobs:
   bootstrap:
@@ -217,6 +219,20 @@ jobs:
             echo "  PP registration returned $R — deploy SP may lack PP Admin role."
           fi
 
+      - name: Register MSAL SP as Dataverse Application User in every env that has Dataverse
+        run: |
+          # For each env with Dataverse, register the MSAL Web App SP as an
+          # Application User with System Administrator. Idempotent — skips
+          # envs where the AppUser already exists. Requires the caller to
+          # already be SA on each env (Default env needs one-time Promote To
+          # Admin click; see docs/fiab/dataverse-app-user.md Step 1).
+          if [ -z "${LOOM_MSAL_CLIENT_ID:-}" ]; then
+            echo "  LOOM_MSAL_CLIENT_ID not set — skipping Dataverse AppUser registration"
+          else
+            LOOM_MSAL_CLIENT_ID="$LOOM_MSAL_CLIENT_ID" \
+              bash scripts/csa-loom/dataverse-add-appuser.sh || true
+          fi
+
       - name: Summary
         if: always()
         run: |
@@ -229,8 +245,12 @@ jobs:
           echo "Foundry storage: Blob Data Reader granted"
           echo "Content Safety: Cognitive Services User granted"
           echo "Power Platform: UAMI registered as Management App (unblocks PP + Copilot Studio)"
+          echo "Dataverse: MSAL SP registered as Application User w/ SA role on every env with Dataverse (idempotent)"
           echo ""
           echo "Still needs manual steps (not grantable via SP):"
           echo "  • Power Platform Admin — grant at https://admin.powerplatform.microsoft.com"
           echo "    Add SP id $CONSOLE_UAMI_PRINCIPAL as Power Platform Administrator."
           echo "  • Power BI tenant SP enablement — Fabric admin portal"
+          echo "  • Dataverse System Administrator on Default env — one-time Promote To Admin click"
+          echo "    at https://<org>.crm.dynamics.com/main.aspx?settingsonly=true&pagetype=entitylist&etn=systemuser"
+          echo "    (only needed for envs Dataverse was added to AFTER bootstrap; new custom envs don't need this)"
