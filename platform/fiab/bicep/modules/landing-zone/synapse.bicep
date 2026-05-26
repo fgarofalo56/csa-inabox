@@ -66,6 +66,26 @@ param complianceTags object
 @description('Deploy a Dedicated SQL pool on the workspace. Default true so the Loom Dedicated editor works out of the box.')
 param deployDedicatedPool bool = true
 
+// Spark pool — required for Notebook editor (Loom-native notebook execution
+// dispatches to either this Spark pool via Livy or to a Databricks cluster).
+// Auto-pause keeps idle cost low.
+@description('Deploy the loompool Spark pool used by notebook + spark-job editors.')
+param deploySparkPool bool = true
+@description('Name of the Spark pool.')
+param sparkPoolName string = 'loompool'
+@description('Spark pool node size family — Small/Medium/Large/XLarge/XXLarge.')
+param sparkPoolNodeSize string = 'Small'
+@description('Spark pool node count (min 3, max 200).')
+@minValue(3)
+@maxValue(200)
+param sparkPoolNodeCount int = 3
+@description('Spark version — 3.4 is current GA at time of writing.')
+param sparkPoolSparkVersion string = '3.4'
+@description('Idle minutes before the Spark pool auto-pauses (5-10080).')
+@minValue(5)
+@maxValue(10080)
+param sparkPoolAutoPauseDelay int = 15
+
 @description('Dedicated SQL pool name (must match a SQL identifier; no dashes).')
 param dedicatedPoolName string = 'loompool'
 
@@ -116,6 +136,40 @@ resource synapseWs 'Microsoft.Synapse/workspaces@2021-06-01' = {
       preventDataExfiltration: true
       allowedAadTenantIdsForLinking: [subscription().tenantId]
     } : null
+  }
+}
+
+// =====================================================================
+// Spark pool — backs the Notebook + Spark job definition editors.
+// Auto-pause + autoscale keep cost low; first cold-start ≈ 60-90s.
+// =====================================================================
+
+resource sparkPool 'Microsoft.Synapse/workspaces/bigDataPools@2021-06-01' = if (deploySparkPool) {
+  parent: synapseWs
+  name: sparkPoolName
+  location: location
+  tags: complianceTags
+  properties: {
+    nodeSizeFamily: 'MemoryOptimized'
+    nodeSize: sparkPoolNodeSize
+    nodeCount: sparkPoolNodeCount
+    autoScale: {
+      enabled: true
+      minNodeCount: 3
+      maxNodeCount: 10
+    }
+    autoPause: {
+      enabled: true
+      delayInMinutes: sparkPoolAutoPauseDelay
+    }
+    sparkVersion: sparkPoolSparkVersion
+    isComputeIsolationEnabled: false
+    sessionLevelPackagesEnabled: false
+    dynamicExecutorAllocation: {
+      enabled: true
+      minExecutors: 1
+      maxExecutors: 9
+    }
   }
 }
 
@@ -439,3 +493,5 @@ output synapseDevEndpoint string = synapseWs.properties.connectivityEndpoints.de
 output synapseManagedIdentityPrincipalId string = synapseWs.identity.principalId
 output dedicatedPoolName string = deployDedicatedPool ? dedicatedPool.name : ''
 output dedicatedPoolId string = deployDedicatedPool ? dedicatedPool.id : ''
+output sparkPoolName string = deploySparkPool ? sparkPool.name : ''
+output sparkPoolId string = deploySparkPool ? sparkPool.id : ''

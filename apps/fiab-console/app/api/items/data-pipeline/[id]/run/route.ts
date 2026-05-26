@@ -1,25 +1,40 @@
 /**
  * POST /api/items/data-pipeline/[id]/run?workspaceId=...
  *   body: { parameters?: Record<string, unknown> }
+ *
+ * v3.25: dispatches to the underlying ADF pipeline.
  */
-
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { runDataPipeline, FabricError } from '@/lib/azure/fabric-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { runPipeline } from '@/lib/azure/adf-client';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
+
 export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
-  if (!getSession()) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const s = getSession();
+  if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+  if (!workspaceId) return err('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   try {
-    const res = await runDataPipeline(workspaceId, ctx.params.id, body);
-    return NextResponse.json({ ok: true, ...res });
+    const items = await itemsContainer();
+    const { resource } = await items.item(ctx.params.id, workspaceId).read<WorkspaceItem>();
+    if (!resource || resource.itemType !== 'data-pipeline') return err('pipeline not found', 404);
+    const adfName = (resource.state as any)?.adfPipelineName;
+    if (!adfName) return err('Pipeline has no ADF backing — re-create from the editor', 500);
+    const runRes = await runPipeline(adfName, body?.parameters || {});
+    return NextResponse.json({
+      ok: true,
+      runId: runRes.runId,
+      adfPipelineName: adfName,
+      status: 'Queued',
+    });
   } catch (e: any) {
-    const status = e instanceof FabricError ? e.status : 502;
-    return NextResponse.json({ ok: false, error: e?.message || String(e), endpoint: e?.endpoint, hint: e?.hint }, { status });
+    return err(e?.message || String(e), e?.status || 502);
   }
 }
