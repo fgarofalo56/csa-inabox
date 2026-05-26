@@ -95,7 +95,8 @@ Verdict legend:
 | `databricks-sql-warehouse` | (covered by databricks-editors) | **🟢 LOCAL-AZURE** | Works |
 | `adf-pipeline`, `adf-dataset`, `adf-trigger` | `/api/items/adf-pipeline/{name}/run`, etc. | **🟢 LOCAL-AZURE** | Works — real ADF REST |
 | `usql-job` | `/api/items/usql-job/...` | **🟡 LOOM-COSMOS-ONLY** | USQL is legacy ADLA. Cosmos save works; submit not wired (ADLA EOL). Should be **D-graded** in UAT and offered as "Coming soon — pick a different option" |
-| `apim-api`, `apim-product`, `apim-policy`, `data-product` | `/api/items/apim-*` | **🟢 LOCAL-AZURE** | Works — real APIM REST |
+| `apim-api`, `apim-product`, `apim-policy` | `/api/items/apim-*` | **🟢 LOCAL-AZURE** | Works — real APIM REST. APIM Policy missing Operation-scope route (gap, not vapor). |
+| `data-product` | (no real GET endpoint) | **🔴 VAPORWARE (F)** | Editor renders hardcoded `productId='customer-360'`, owner `'alice@contoso'`, fixed "Certified" badge, fixed 6-item bundle grid. "Publish to APIM" creates an APIM Product (wrong backend — should be Purview UC `/datagovernance/catalog/dataProducts`). MUST add MessageBar gate + new `lib/azure/purview-client.ts`. See `data-product-parity-spec.md`. |
 | `lakehouse` | `/api/lakehouse/containers`, `/paths`, `/preview`, `/upload`; `/api/items/synapse-serverless-sql-pool/{id}/query` | **🟢 LOCAL-AZURE** | Works — real ADLS Gen2 browse + Synapse Serverless query |
 | `azure-sql-server`, `azure-sql-database`, `azure-sql-managed-instance`, `sql-server-2025-vector-index` | `/api/items/azure-sql-*/query` etc. | **🟢 LOCAL-AZURE** | Works — real TDS + ARM |
 | `cosmos-gremlin-graph` | `/api/items/cosmos-gremlin-graph/{id}/query` | **🟢 LOCAL-AZURE** | Works — real Gremlin |
