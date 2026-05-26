@@ -154,29 +154,71 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
   );
 }
 
+interface ComponentHealth {
+  status: 'ok' | 'stale' | 'missing' | 'unknown';
+  detail?: string;
+  lastUpdated?: string;
+}
+
+function classifyHealth(updatedAt?: string): ComponentHealth {
+  if (!updatedAt) return { status: 'unknown', detail: 'no updatedAt' };
+  const ms = Date.now() - new Date(updatedAt).getTime();
+  if (Number.isNaN(ms)) return { status: 'unknown', detail: 'invalid timestamp' };
+  const days = ms / (1000 * 60 * 60 * 24);
+  if (days < 7) return { status: 'ok', detail: `updated ${days.toFixed(1)}d ago`, lastUpdated: updatedAt };
+  if (days < 30) return { status: 'stale', detail: `updated ${days.toFixed(0)}d ago`, lastUpdated: updatedAt };
+  return { status: 'stale', detail: `last updated ${days.toFixed(0)}d ago — likely abandoned`, lastUpdated: updatedAt };
+}
+
 export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [instance, setInstance] = useState<any>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [health, setHealth] = useState<Record<string, ComponentHealth>>({});
 
-  useEffect(() => {
-    fetch(`/api/items/data-product-instance/${id}`)
-      .then((r) => r.json())
-      .then((j) => { if (j.ok) setInstance(j.item); else setErr(j.error); })
-      .catch((e) => setErr(String(e)));
+  const loadInstance = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/items/data-product-instance/${id}`);
+      const j = await r.json();
+      if (j.ok) { setInstance(j.item); setErr(null); }
+      else setErr(j.error);
+    } catch (e: any) { setErr(String(e)); }
   }, [id]);
+
+  useEffect(() => { loadInstance(); }, [loadInstance]);
 
   const components: Array<{ slug: string; itemId: string; displayName: string }> = instance?.state?.components || [];
   const errors: Array<{ slug: string; error: string }> = instance?.state?.errors || [];
 
+  // v3.27: wire the Health ribbon button + render the previously-claimed
+  // Health column. Peeks at each child item's updatedAt via /api/cosmos-items.
+  const refreshHealth = useCallback(async () => {
+    const next: Record<string, ComponentHealth> = {};
+    await Promise.all(components.map(async (c) => {
+      try {
+        const r = await fetch(`/api/cosmos-items/${encodeURIComponent(c.slug)}/${encodeURIComponent(c.itemId)}`);
+        if (r.status === 404) { next[c.itemId] = { status: 'missing', detail: 'item not found in Cosmos' }; return; }
+        const j = await r.json();
+        next[c.itemId] = j.ok ? classifyHealth(j.item?.updatedAt) : { status: 'unknown', detail: j.error };
+      } catch (e: any) {
+        next[c.itemId] = { status: 'unknown', detail: e?.message || String(e) };
+      }
+    }));
+    setHealth(next);
+  }, [components]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Manage', actions: [{ label: 'Refresh' }, { label: 'Health' }] }] }]}
+      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Manage', actions: [
+        { label: 'Refresh', onClick: loadInstance },
+        { label: 'Health', onClick: refreshHealth },
+      ] }] }]}
       leftPanel={<div className={s.treePad}>
         <Subtitle2>Instance</Subtitle2>
         <Caption1>{instance?.displayName || '—'}</Caption1>
         <Caption1>Template: <code>{instance?.state?.template || '—'}</code></Caption1>
+        <Button size="small" onClick={refreshHealth} style={{ marginTop: 8, alignSelf: 'flex-start' }}>Check component health</Button>
       </div>}
       main={
         <div className={s.pad}>
@@ -188,15 +230,27 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
                 <TableHeaderCell>Display name</TableHeaderCell>
                 <TableHeaderCell>Item type</TableHeaderCell>
                 <TableHeaderCell>Item id</TableHeaderCell>
+                <TableHeaderCell>Health</TableHeaderCell>
               </TableRow></TableHeader>
               <TableBody>
-                {components.map((c) => (
-                  <TableRow key={c.itemId}>
-                    <TableCell><a href={`/items/${c.slug}/${c.itemId}`}>{c.displayName}</a></TableCell>
-                    <TableCell><code style={{ fontSize: 12 }}>{c.slug}</code></TableCell>
-                    <TableCell><code style={{ fontSize: 11 }}>{c.itemId}</code></TableCell>
-                  </TableRow>
-                ))}
+                {components.map((c) => {
+                  const h = health[c.itemId];
+                  return (
+                    <TableRow key={c.itemId}>
+                      <TableCell><a href={`/items/${c.slug}/${c.itemId}`}>{c.displayName}</a></TableCell>
+                      <TableCell><code style={{ fontSize: 12 }}>{c.slug}</code></TableCell>
+                      <TableCell><code style={{ fontSize: 11 }}>{c.itemId}</code></TableCell>
+                      <TableCell>
+                        {!h && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click "Check component health"</Caption1>}
+                        {h?.status === 'ok' && <Badge appearance="filled" color="success">OK</Badge>}
+                        {h?.status === 'stale' && <Badge appearance="filled" color="warning">Stale</Badge>}
+                        {h?.status === 'missing' && <Badge appearance="filled" color="danger">Missing</Badge>}
+                        {h?.status === 'unknown' && <Badge appearance="outline">Unknown</Badge>}
+                        {h?.detail && <Caption1 style={{ marginLeft: 6, color: tokens.colorNeutralForeground3 }}>{h.detail}</Caption1>}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

@@ -1364,21 +1364,11 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
 // ============================================================
 const USQL_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
-    { label: 'Submit', actions: [{ label: 'Submit job' }, { label: 'Estimate AUs' }] },
-    { label: 'Project', actions: [{ label: 'Register assembly' }, { label: 'Catalog' }] },
+    { label: 'Migration', actions: [{ label: 'Convert to PySpark' }] },
   ]},
 ];
-export function UsqlJobEditor({ item, id }: { item: FabricItemType; id: string }) {
-  const s = useStyles();
-  return (
-    <ItemEditorChrome item={item} id={id} ribbon={USQL_RIBBON} main={
-      <div className={s.pad}>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <Badge appearance="outline">ADLA · East US</Badge>
-          <Badge appearance="outline">AUs: 10</Badge>
-          <Badge appearance="outline" color="warning">Legacy</Badge>
-        </div>
-        <textarea className={s.monaco} spellCheck={false} defaultValue={`// U-SQL — runs on Azure Data Lake Analytics
+
+const USQL_SAMPLE = `// U-SQL — Azure Data Lake Analytics (RETIRED 2024-02-29)
 @orders = EXTRACT
   OrderId int,
   CustomerId string,
@@ -1393,8 +1383,89 @@ USING Extractors.Csv(skipFirstNRows: 1);
 
 OUTPUT @agg
 TO   "/curated/customer_revenue.csv"
-USING Outputters.Csv(outputHeader: true);`} aria-label="U-SQL editor" />
-        <Caption1>Submit to ADLA account · estimated 8 AU·s · ~$0.04</Caption1>
+USING Outputters.Csv(outputHeader: true);`;
+
+// v3.27: heuristic U-SQL → PySpark translator. Handles EXTRACT/OUTPUT
+// patterns + SELECT/GROUP BY. NOT a full compiler — operator covers
+// the 80% case; the rest must be hand-edited in the resulting cell.
+function convertUsqlToPyspark(usql: string): string {
+  const lines: string[] = [
+    '# Converted from U-SQL by Loom usql-job heuristic translator.',
+    '# REVIEW BEFORE RUNNING — this covers EXTRACT/SELECT/GROUP BY/OUTPUT only.',
+    '',
+  ];
+  const extractMatch = usql.match(/@(\w+)\s*=\s*EXTRACT\s+([\s\S]*?)FROM\s+"([^"]+)"\s+USING\s+Extractors\.(\w+)\s*\(([^)]*)\)/i);
+  if (extractMatch) {
+    const [, alias, cols, path, fmt, opts] = extractMatch;
+    const skip = /skipFirstNRows:\s*1/i.test(opts);
+    const schema = cols.split(',').map(c => c.trim().split(/\s+/)).filter(p => p.length === 2)
+      .map(([n, t]) => `('${n}', '${t.toLowerCase()}')`).join(', ');
+    lines.push(`# EXTRACT @${alias}`);
+    lines.push(`${alias} = spark.read.option("header", ${skip ? 'True' : 'False'}).${fmt.toLowerCase() === 'csv' ? 'csv' : fmt.toLowerCase()}("abfss:/${path}")`);
+    lines.push(`# Original U-SQL schema: ${schema}`);
+    lines.push('');
+  }
+  const selectMatch = usql.match(/@(\w+)\s*=\s*SELECT\s+([\s\S]*?)\s+FROM\s+@(\w+)([\s\S]*?);/i);
+  if (selectMatch) {
+    const [, target, projection, src, rest] = selectMatch;
+    const groupBy = rest.match(/GROUP\s+BY\s+([\w,\s]+)/i);
+    lines.push(`# SELECT into @${target}`);
+    if (groupBy) {
+      lines.push(`${target} = ${src}.groupBy("${groupBy[1].trim().replace(/\s*,\s*/g, '", "')}").agg(/* TODO: hand-translate aggregates from: ${projection.trim()} */)`);
+    } else {
+      lines.push(`${target} = ${src}.selectExpr(${projection.split(',').map(c => '"' + c.trim() + '"').join(', ')})`);
+    }
+    lines.push('');
+  }
+  const outputMatch = usql.match(/OUTPUT\s+@(\w+)\s+TO\s+"([^"]+)"\s+USING\s+Outputters\.(\w+)\s*\(([^)]*)\)/i);
+  if (outputMatch) {
+    const [, src, path, fmt, opts] = outputMatch;
+    const header = /outputHeader:\s*true/i.test(opts);
+    lines.push(`# OUTPUT @${src}`);
+    lines.push(`${src}.write.mode("overwrite").option("header", ${header ? 'True' : 'False'}).${fmt.toLowerCase() === 'csv' ? 'csv' : fmt.toLowerCase()}("abfss:/${path}")`);
+  }
+  if (lines.length <= 3) {
+    lines.push('# Translator could not parse the input.');
+    lines.push('# Original U-SQL preserved as a comment block:');
+    usql.split(/\r?\n/).forEach(l => lines.push('# ' + l));
+  }
+  return lines.join('\n');
+}
+
+export function UsqlJobEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const [usql, setUsql] = useState<string>(USQL_SAMPLE);
+  const [pyspark, setPyspark] = useState<string>('');
+
+  // v3.27: D-fix — ADLA was retired 2024-02-29. The previous editor
+  // pretended to estimate AUs and submit jobs to a service that no
+  // longer exists. This is now a deprecation surface that helps users
+  // migrate to Spark via a heuristic translator.
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={USQL_RIBBON} main={
+      <div className={s.pad}>
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Azure Data Lake Analytics has been retired</MessageBarTitle>
+            ADLA reached end of life on <strong>2024-02-29</strong>. New <code>Microsoft.DataLakeAnalytics/accounts</code> resources cannot be provisioned in any cloud and <code>az dla</code> is deprecated. This editor is preserved as a migration surface only — there is no live submission target.
+            <br /><br />
+            <strong>Recommended path</strong>: convert your U-SQL to PySpark (button below) and submit through the Synapse Spark, Databricks Notebook, or Fabric Notebook editor instead.
+          </MessageBarBody>
+        </MessageBar>
+        <Subtitle2>U-SQL source</Subtitle2>
+        <textarea className={s.monaco} spellCheck={false} value={usql} onChange={(e) => setUsql(e.target.value)} aria-label="U-SQL editor" />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setPyspark(convertUsqlToPyspark(usql))}>
+            Convert to PySpark
+          </Button>
+          <Caption1 style={{ alignSelf: 'center' }}>Heuristic translator — covers EXTRACT / SELECT / GROUP BY / OUTPUT. Review before running.</Caption1>
+        </div>
+        {pyspark && (
+          <>
+            <Subtitle2>PySpark (review + paste into a Notebook)</Subtitle2>
+            <textarea className={s.monaco} spellCheck={false} value={pyspark} onChange={(e) => setPyspark(e.target.value)} aria-label="PySpark output" />
+          </>
+        )}
       </div>
     } />
   );

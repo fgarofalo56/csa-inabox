@@ -391,11 +391,31 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
 }
 
 // -------- Editor variant (for /items/cross-item-copilot/<id>) --------
+// v3.27: wire the previously-dead 'View registry' ribbon button. The
+// tools list is always visible in the right rail of CopilotConsoleView,
+// so the button now opens the raw /api/copilot/tools JSON in a new tab
+// for debugging/inspection. The session ribbon buttons dispatch window
+// events the embedded console listens for.
+
+function dispatchSessionEvent(kind: 'new' | 'refresh') {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('loom-copilot:session', { detail: { kind } }));
+}
+
+function viewToolRegistry() {
+  if (typeof window === 'undefined') return;
+  window.open('/api/copilot/tools', '_blank', 'noopener,noreferrer');
+}
 
 const RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
-    { label: 'Session', actions: [{ label: 'New' }, { label: 'Refresh' }] },
-    { label: 'Tools', actions: [{ label: 'View registry' }] },
+    { label: 'Session', actions: [
+      { label: 'New', onClick: () => dispatchSessionEvent('new') },
+      { label: 'Refresh', onClick: () => dispatchSessionEvent('refresh') },
+    ] },
+    { label: 'Tools', actions: [
+      { label: 'View registry', onClick: viewToolRegistry },
+    ] },
   ]},
 ];
 
