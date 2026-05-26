@@ -80,12 +80,13 @@ for (const type of EDITOR_TYPES) {
       // Classify network errors:
       //   "expected gate" = real backend not deployed / tenant not configured
       //   "real failure"  = unexpected 5xx, 4xx that signals a code bug
-      const isExpectedGate = (e: { status: number; body?: string }) => {
+      const isExpectedGate = (e: { status: number; body?: string; url: string }) => {
         const b = (e.body || '').toLowerCase();
         if (e.status === 503) return true;
         if (e.status === 409 && /environment .+ do/i.test(e.body || '')) return true;
         if (e.status === 404 && /environment .+ ha/i.test(e.body || '')) return true;
-        if (e.status === 404 && /(not found|no spec)/i.test(b) && /(api-|provider|envid)/i.test(e.url)) return true;
+        if (e.status === 404 && /(not found|no spec|no job or experiment|could not find|api.powerapps.com.+failed)/i.test(b)) return true;
+        if (e.status === 404 && /^(<!doctype|<html)/i.test((e.body || '').trim())) return true; // sub-routes that 404 to login
         if (e.status === 502 && /(failed 404|getpipeline|getdataset|gettrigger|getsparkpool)/i.test(b)) return true;
         if (e.status === 400 && /not configured/i.test(b)) return true;
         if (e.status === 409 && /(paused|state":"paused)/i.test(b)) return true;
