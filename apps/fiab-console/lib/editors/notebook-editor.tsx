@@ -225,7 +225,8 @@ export function NotebookEditor({ item, id }: Props) {
       setRunMsg('Pick a compute target before running.');
       return;
     }
-    setRunning(true); setRunMsg(null);
+    setRunning(true);
+    setRunMsg('Submitting run…');
     try {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
@@ -233,13 +234,43 @@ export function NotebookEditor({ item, id }: Props) {
         body: JSON.stringify({ compute: computeId }),
       });
       const j = await r.json();
-      if (!j.ok) setRunMsg(`Run failed: ${j.error}${j.hint ? ' — ' + j.hint : ''}`);
-      else {
-        const kind = j.compute?.kind || 'compute';
-        const target = j.compute?.pool || j.compute?.clusterId || computeId;
-        setRunMsg(`Run started on ${kind} ${target} — runId ${j.runId}${j.runUrl ? ` · ${j.runUrl}` : ''}`);
-        setTimeout(() => loadJobs(workspaceId, notebookId), 1500);
+      if (!j.ok) {
+        setRunMsg(`Run failed: ${j.error}${j.hint ? ' — ' + j.hint : ''}`);
+        setRunning(false);
+        return;
       }
+
+      // Poll the run endpoint every 4s for status — Synapse cold-start can
+      // take 60-90s; Databricks 30-60s. Keep polling for up to 8 min.
+      let runId: string = j.runId;
+      setRunMsg(`${j.compute?.kind || 'compute'} ${j.compute?.pool || j.compute?.clusterId} — ${j.status} (runId ${runId})`);
+      const start = Date.now();
+      const MAX_MS = 8 * 60 * 1000;
+      while (Date.now() - start < MAX_MS) {
+        await new Promise(res => setTimeout(res, 4000));
+        const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const p = await pollRes.json();
+        if (!p.ok) { setRunMsg(`Poll error: ${p.error || pollRes.status}`); break; }
+        if (p.runId && p.runId !== runId) runId = p.runId; // promotion when statement is submitted
+        const phase = p.phase ? ` · ${p.phase}` : '';
+        setRunMsg(`Status: ${p.status}${phase}`);
+        if (p.output) {
+          if (p.output.status === 'ok') {
+            const txt = p.output.textPlain || JSON.stringify(p.output.data || {}, null, 2);
+            setRunMsg(`✓ Completed:\n${txt}`);
+          } else if (p.output.status === 'error') {
+            setRunMsg(`✗ Error: ${p.output.ename} ${p.output.evalue}${p.output.traceback ? '\n' + (Array.isArray(p.output.traceback) ? p.output.traceback.join('\n') : p.output.traceback) : ''}`);
+          } else {
+            setRunMsg(`Completed: ${JSON.stringify(p.output)}`);
+          }
+          break;
+        }
+        if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
+          setRunMsg(`Run ended: ${p.status}${p.resultState ? ` (${p.resultState})` : ''}`);
+          break;
+        }
+      }
+      loadJobs(workspaceId, notebookId);
     } finally { setRunning(false); }
   }, [workspaceId, notebookId, computeId, loadJobs]);
 

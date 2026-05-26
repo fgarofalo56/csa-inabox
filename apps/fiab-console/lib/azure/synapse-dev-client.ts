@@ -420,6 +420,38 @@ export async function getLivyStatement(poolName: string, sessionId: number, stmt
   return jsonOrThrow(r, `getLivyStatement(${poolName}/${sessionId}/${stmtId})`);
 }
 
+// === Async-friendly helpers used by /api/items/notebook/[id]/run + /runs/[runId] ===
+
+export async function createLivySessionAsync(poolName: string, kind: 'pyspark' | 'spark' | 'sparkr' | 'sql' = 'pyspark', jobName?: string): Promise<{ id: number; state: string; appInfo?: any }> {
+  const r = await callDev(
+    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        kind,
+        name: jobName || `loom-session-${Date.now()}`,
+        driverMemory: '4g', driverCores: 4,
+        executorMemory: '4g', executorCores: 4,
+        numExecutors: 2,
+      }),
+    },
+  );
+  return jsonOrThrow(r, `createLivySession(${poolName})`);
+}
+
+export async function getLivySession(poolName: string, sessionId: number): Promise<{ id: number; state: string; appInfo?: any }> {
+  const r = await callDev(`/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}`);
+  return jsonOrThrow(r, `getLivySession(${poolName}/${sessionId})`);
+}
+
+export async function submitLivyStatement(poolName: string, sessionId: number, body: { code: string; kind?: 'pyspark' | 'spark' | 'sparkr' | 'sql' }): Promise<{ id: number; state: string }> {
+  const r = await callDev(
+    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}/statements`,
+    { method: 'POST', body: JSON.stringify({ code: body.code, kind: body.kind || 'pyspark' }) },
+  );
+  return jsonOrThrow(r, `submitStatement(${poolName}/${sessionId})`);
+}
+
 export async function listDedicatedSqlPools(): Promise<Array<{ name: string; status?: string; sku?: { name?: string } }>> {
   // ARM call lives elsewhere; this is a stub so /api/loom/compute-targets's
   // dynamic import doesn't fail. Real impl can replace this later.

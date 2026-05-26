@@ -1,15 +1,13 @@
 /**
  * POST /api/items/notebook/[id]/run?workspaceId=...
- *   body: { compute: 'spark:<poolName>' | 'databricks:<clusterId>',
- *           parameters?: Record<string, any> }
+ *   body: { compute: 'spark:<poolName>' | 'databricks:<clusterId>' }
  *
- * Dispatches the notebook's code to the chosen Azure-native compute:
- *   - synapse-spark: submits a Livy batch to the named Spark pool
- *   - databricks-cluster: runs the notebook as a one-time Databricks Jobs
- *     submission against the named cluster
+ * v3.24 — async pattern (Front Door has a hard 30s timeout, so we can't
+ * block waiting for Spark cold-start). Returns immediately with a runId
+ * the client can poll via /api/items/notebook/[id]/runs/[runId].
  *
- * Returns { ok, runId, status, livyId?, runUrl? }. Poll status via
- * /api/items/notebook/[id]/jobs?workspaceId=...
+ * For Synapse Spark: creates the Livy session, returns its ID.
+ * For Databricks: submits the run, returns its ID.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -38,31 +36,25 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   if (!workspaceId) return err('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   const compute: string = body?.compute || '';
-  if (!compute) return err('compute required (e.g. "spark:loompool" or "databricks:0526-123456-abcde1234")', 400);
+  if (!compute) return err('compute required', 400);
 
   try {
     const nb = await loadNotebook(ctx.params.id, workspaceId);
     if (!nb) return err('notebook not found', 404);
     const code = (nb.state as any)?.code || '';
-    if (!code.trim()) return err('notebook is empty — write some code before running', 400);
+    if (!code.trim()) return err('notebook is empty — write code before running', 400);
 
-    // Dispatch by compute kind
     if (compute.startsWith('spark:')) {
       const pool = compute.slice('spark:'.length);
-      const { submitLivyBatch } = await import('@/lib/azure/synapse-dev-client');
-      const runRes = await submitLivyBatch({
-        poolName: pool,
-        code,
-        kind: ((nb.state as any)?.lang === 'sql') ? 'spark' : 'pyspark',
-        jobName: `loom-${nb.displayName.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 40)}-${Date.now()}`,
-      });
+      const { createLivySessionAsync } = await import('@/lib/azure/synapse-dev-client');
+      // Just create the session. Client polls /runs/[runId] which submits
+      // the statement once session reaches 'idle'.
+      const sess = await createLivySessionAsync(pool, ((nb.state as any)?.lang === 'sql') ? 'spark' : 'pyspark');
       return NextResponse.json({
         ok: true,
-        runId: String(runRes.id),
-        status: runRes.state,
+        runId: `spark:${pool}:${sess.id}`,
+        status: sess.state,
         compute: { kind: 'synapse-spark', pool },
-        livyId: runRes.id,
-        runUrl: runRes.appInfo?.sparkUiUrl,
       });
     }
 
@@ -77,15 +69,14 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
       });
       return NextResponse.json({
         ok: true,
-        runId: String(runRes.run_id),
+        runId: `databricks:${runRes.run_id}`,
         status: 'PENDING',
         compute: { kind: 'databricks-cluster', clusterId },
         runUrl: runRes.run_page_url,
       });
     }
 
-    return err(`unsupported compute kind: ${compute.split(':')[0]}`, 400,
-      'Use "spark:<poolName>" or "databricks:<clusterId>"');
+    return err(`unsupported compute kind: ${compute.split(':')[0]}`, 400);
   } catch (e: any) {
     return err(e?.message || String(e), e?.status || 502, e?.hint);
   }
