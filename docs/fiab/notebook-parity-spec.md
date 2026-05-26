@@ -16,7 +16,7 @@ The current Loom notebook is a single textarea + a code-only Save/Run. That's NO
 | **Right-side global** | Search bar (centered) · Notifications · Settings · Downloads · Help · Feedback · Account picker | top-right |
 | **Notebook tab strip** | `Home` (selected) · `Edit` · `AI tools` · `Run` · `View` | below title bar, left half |
 | **Notebook right-side actions** | `Comments` · `History` · `Develop` (dropdown) · `Share` | below title bar, right half |
-| **Home ribbon** | Save (disk) · Download · Settings (gear) · **Run all** ▼ · **Connect** ▼ · **PySpark (Python)** ▼ · Environment · **Workspace default** ▼ · Data Wrangler ▼ · AI assistant icon · Pipeline icon · VS Code icon · **Copilot** | ribbon strip under tabs |
+| **Home ribbon** | Save (disk) · Download · Settings (gear) · **Run all** ▼ · **Connect** ▼ · **PySpark (Python)** ▼ · Environment · **Workspace default** ▼ · Data Wrangler ▼ · AI assistant icon · **AutoML** (New AutoML run) · **Pipeline** (Add to pipeline) · **VS Code** (Open in VS Code) · **Copilot** | ribbon strip under tabs |
 
 ### Status bar (bottom)
 
@@ -45,7 +45,8 @@ Every cell has:
 1. **Cell-type icon on the left** — green code-bracket for code cells, hash # for markdown
 2. **Collapse arrow** at left edge to fold cell
 3. **Cell body** — Monaco editor (code) OR rendered markdown
-4. **Right-edge toolbar** (visible on hover): Convert (code↔md), Maximize, Copy, Edit, Lock, More menu (⋯), Delete
+4. **Right-edge toolbar** (visible on hover): **Ask Copilot**, Maximize/Expand, Convert (code↔md), Edit, Lock, More menu (⋯), Delete
+   - Execution count badge `[N]` shown on code cells after run
 5. **Between cells on hover**: a thin gap shows `+ Code` and `+ Markdown` buttons to insert a new cell at that position
 6. **Output area** below code cells — text, tables (Spark DataFrame.show output), charts (with Chart View toggle)
 7. **Run cell** button (▷) at the top-left of the cell when hovered
