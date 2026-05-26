@@ -425,6 +425,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'AZURE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             { name: 'SESSION_SECRET', secretRef: 'session-secret' }
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+            // Dataverse auth — UAMIs can't be Dataverse Application Users
+            // (Microsoft platform restriction), so re-use the MSAL Web App
+            // SP credentials. The SP must be registered as a Dataverse
+            // Application User with System Administrator role on every
+            // env Loom should read. See docs/fiab/dataverse-app-user.md.
+            { name: 'LOOM_DATAVERSE_CLIENT_ID', value: loomMsalClientId }
+            { name: 'LOOM_DATAVERSE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
+            { name: 'LOOM_DATAVERSE_TENANT_ID', value: tenant().tenantId }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
           ]

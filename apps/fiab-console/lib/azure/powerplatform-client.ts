@@ -22,7 +22,10 @@
  * BFF + editor can render a clean MessageBar with remediation hint.
  */
 
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import {
+  ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential,
+  ClientSecretCredential, type TokenCredential,
+} from '@azure/identity';
 
 const BAP_BASE = process.env.LOOM_BAP_BASE || 'https://api.bap.microsoft.com';
 const POWERAPPS_BASE = process.env.LOOM_POWERAPPS_BASE || 'https://api.powerapps.com';
@@ -32,10 +35,30 @@ const BAP_SCOPE = 'https://api.bap.microsoft.com/.default';
 const POWERAPPS_SCOPE = 'https://service.powerapps.com/.default';
 const FLOW_SCOPE = 'https://service.flow.microsoft.com/.default';
 
+// UAMI credential — used for BAP / PowerApps / Flow control-plane calls.
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
-const credential = uamiClientId
+const uamiCredential: TokenCredential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
+
+// Dataverse credential — UAMIs aren't valid Dataverse Application Users
+// (Microsoft platform restriction), so we use the MSAL Web App SP
+// (LOOM_DATAVERSE_CLIENT_ID / _CLIENT_SECRET / _TENANT_ID) for any
+// `<org>.crm.dynamics.com/.default` scope. The SP must be registered as
+// a Dataverse Application User with the System Administrator (or
+// equivalent) security role on every env Loom needs to read.
+const dataverseClientId = process.env.LOOM_DATAVERSE_CLIENT_ID;
+const dataverseClientSecret = process.env.LOOM_DATAVERSE_CLIENT_SECRET;
+const dataverseTenantId = process.env.LOOM_DATAVERSE_TENANT_ID || process.env.AZURE_TENANT_ID;
+const dataverseCredential: TokenCredential | null =
+  (dataverseClientId && dataverseClientSecret && dataverseTenantId)
+    ? new ClientSecretCredential(dataverseTenantId, dataverseClientId, dataverseClientSecret)
+    : null;
+
+const isDataverseScope = (scope: string) => /\.crm[0-9]*\.dynamics\.com\/\.default$/.test(scope);
+
+/** Legacy alias — most call sites still reference `credential`. */
+const credential = uamiCredential;
 
 export class PowerPlatformError extends Error {
   status: number;
@@ -53,7 +76,14 @@ export class PowerPlatformError extends Error {
 }
 
 async function getToken(scope: string): Promise<string> {
-  const t = await credential.getToken(scope);
+  // Route Dataverse-scope tokens through the MSAL Web App SP when
+  // configured (Dataverse refuses UAMI-issued tokens — the SP must
+  // be registered as an Application User on the env). Falls back to
+  // UAMI credential if the dedicated Dataverse SP isn't configured,
+  // which then surfaces a 403 with "user is not a member of the
+  // organization" — actionable.
+  const cred = (isDataverseScope(scope) && dataverseCredential) ? dataverseCredential : uamiCredential;
+  const t = await cred.getToken(scope);
   if (!t?.token) throw new PowerPlatformError(`Failed to acquire AAD token for ${scope}`, 401);
   return t.token;
 }

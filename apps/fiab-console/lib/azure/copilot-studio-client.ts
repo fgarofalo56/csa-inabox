@@ -35,6 +35,8 @@ import {
   ChainedTokenCredential,
   DefaultAzureCredential,
   ManagedIdentityCredential,
+  ClientSecretCredential,
+  type TokenCredential,
 } from '@azure/identity';
 
 const BAP_BASE = process.env.LOOM_POWER_PLATFORM_BAP_BASE || 'https://api.bap.microsoft.com';
@@ -42,9 +44,24 @@ const BAP_SCOPE = 'https://api.bap.microsoft.com/.default';
 const BAP_API_VERSION = '2020-10-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
-const credential = uamiClientId
+const uamiCredential: TokenCredential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
+
+// Dataverse credential — Copilot Studio agents/knowledge live in Dataverse.
+// UAMIs can't be Dataverse Application Users, so route those scopes through
+// the MSAL Web App SP when configured. See powerplatform-client.ts.
+const dataverseClientId = process.env.LOOM_DATAVERSE_CLIENT_ID;
+const dataverseClientSecret = process.env.LOOM_DATAVERSE_CLIENT_SECRET;
+const dataverseTenantId = process.env.LOOM_DATAVERSE_TENANT_ID || process.env.AZURE_TENANT_ID;
+const dataverseCredential: TokenCredential | null =
+  (dataverseClientId && dataverseClientSecret && dataverseTenantId)
+    ? new ClientSecretCredential(dataverseTenantId, dataverseClientId, dataverseClientSecret)
+    : null;
+
+const isDataverseScope = (scope: string) => /\.crm[0-9]*\.dynamics\.com\/\.default$/.test(scope);
+
+const credential = uamiCredential;
 
 export class CopilotStudioError extends Error {
   status: number;
@@ -60,7 +77,8 @@ export class CopilotStudioError extends Error {
 }
 
 async function getToken(scope: string): Promise<string> {
-  const t = await credential.getToken(scope);
+  const cred = (isDataverseScope(scope) && dataverseCredential) ? dataverseCredential : uamiCredential;
+  const t = await cred.getToken(scope);
   if (!t?.token) throw new CopilotStudioError(`Failed to acquire AAD token for ${scope}`, 401);
   return t.token;
 }
