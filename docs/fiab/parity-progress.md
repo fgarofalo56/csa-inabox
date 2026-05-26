@@ -2,6 +2,42 @@
 
 Live log of the multi-agent `fabric-parity-loop` workflow. Most recent at top.
 
+## 2026-05-26 — Wave 3 catalog launched (12 UIs in 6 parallel agents)
+
+**Wave 3 catalog kicked off** — 6 general-purpose agents running in parallel, each owning 1-3 UIs:
+
+| Agent | UIs |
+|---|---|
+| `ab63f02fd92b935c8` | dashboard, paginated-report, scorecard |
+| `a1402587cb2c6e0d7` | ml-experiment, ml-model |
+| `a67c4b66eb7808477` | spark-job-definition, environment |
+| `aa402e5fa7f4b0b6f` | graphql-api, user-data-function |
+| `a22495e60e0256876` | kql-dashboard, activator |
+| `a588b40b0dd792de0` | mirrored-database, dbt-job |
+
+After wave 3 lands: **24 / 85 UIs cataloged**. Then Phase 2 (Build) waves.
+
+**Catalog format change**: switched from read-only `Explore` agents to `general-purpose` agents so they can `Write` spec files directly (no more I-write-back-from-text). Faster end-to-end.
+
+## 2026-05-26 — Wave 2 catalog COMPLETE (12 UIs cataloged total)
+
+**Specs written** to `docs/fiab/<name>-parity-spec.md` for the next 10 Fabric UIs:
+
+| UI | Agent | Status |
+|---|---|---|
+| eventstream | `a8260c3697beb6c69` | ✓ |
+| eventhouse | `a8260c3697beb6c69` | ✓ |
+| dataflow | `a30c2872e59523af4` | ✓ |
+| copy-job | `a30c2872e59523af4` | ✓ |
+| warehouse | `a25d745464518b765` | ✓ (rewritten — agent confused with eventhouse) |
+| semantic-model | `a6112853cd6c023e5` | ✓ |
+| report | `a6112853cd6c023e5` | ✓ |
+| kql-database | `ad6a393dd34fd232c` | ✓ |
+| kql-queryset | `ad6a393dd34fd232c` | ✓ |
+| data-pipeline | `aff49f5c28912ff78` | ✓ (manually written from agent text; was read-only) |
+
+**Cumulative**: 12/85 UIs cataloged. Notebook + Lakehouse from wave 1, plus the above 10.
+
 ## 2026-05-26 — Workflow scaffold + first parallel catalog run
 
 **Workflow infrastructure shipped:**
