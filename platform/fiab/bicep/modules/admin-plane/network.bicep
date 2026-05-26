@@ -308,8 +308,15 @@ resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for z
   tags: complianceTags
 }]
 
+// v3.27: link name MUST be stable across deploys. Earlier revisions used
+// '${zone}/link-hub-${uniqueString(hubVnet.id)}' which broke idempotency:
+// once the link existed (any name), ARM rejects a *new* link to the same
+// (zone, vnet) pair with a 409 Conflict — the deploy-fiab-commercial
+// scheduled workflow has been failing on this for ~3 days. Using a
+// constant 'link-hub' (matching what's already in the tenant) lets ARM
+// treat subsequent deploys as no-op updates.
 resource dnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = [for (zone, i) in dnsZones: {
-  name: '${zone}/link-hub-${uniqueString(hubVnet.id)}'
+  name: '${zone}/link-hub'
   location: 'global'
   dependsOn: [ privateDnsZones[i] ]
   properties: {
