@@ -2,6 +2,21 @@
 
 Live log of the multi-agent `fabric-parity-loop` workflow. Most recent at top.
 
+## 2026-05-26 — Catalog phase ~73% complete (62 / 85 UIs cataloged)
+
+**Today's full output**:
+- Waves 1+2 (12 UIs) — closed previous session + data-pipeline added today
+- Wave 3 (13 UIs) — completed
+- Wave 4 (21 UIs) — all 6 agents complete
+- Wave 5 (21 UIs) — 4 of 5 agents complete; tracing + ai-foundry dataset still pending
+- Wave 6 (22 UIs) — 1 of 4 agents complete (geo 4-pack); Power Platform 7-pack, Azure SQL 4-pack, graphs+misc 7-pack still running
+
+**Build phase progress** (alongside catalog):
+- ✓ **Notebook Phase 1A** — cell-based scaffold shipped: CodeCell + MarkdownCell + CellAdder; per-cell Run via Cosmos `pendingRuns[runId]` transient map; language picker (PySpark / Spark / SparkSQL / SparkR / Python / T-SQL); back-compat with legacy `{code, lang}` blob (commit `3e1b32b6`)
+- ✓ **Variable Library** — extended from 4 to 9 variable types: + Integer, DateTime, Guid, ItemReference, ConnectionReference (in addition to existing String/Number/Boolean/SecretReference); added Description column; per-cell value validation regex per type
+
+**Remaining catalog work**: tracing, ai-foundry-dataset (waiting on partial agent finish), plus 5 still-running agents covering: Copilot Studio 6-pack, Power Platform 7-pack (copilot-template-library + powerplatform-environment + dataverse-table + power-app + power-automate-flow + power-page + ai-builder-model), Azure SQL 4-pack, and graphs/misc 6-pack (cypher-graph + gql-graph + vector-store + data-product-template + data-product-instance + cross-item-copilot).
+
 ## 2026-05-26 — Wave 4 catalog launched (21 UIs in 6 parallel agents) + Notebook Phase 1A shipped
 
 **Wave 4 agents kicked off**:
