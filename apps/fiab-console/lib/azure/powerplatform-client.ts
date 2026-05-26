@@ -471,7 +471,9 @@ export async function listPowerPages(envId: string): Promise<PowerPage[]> {
     const j = await call<{ value: any[] }>(
       `${url}/api/data/v9.2/mspp_websites`,
       scope,
-      { query: { '$select': 'mspp_websiteid,mspp_name,mspp_primarydomainname,mspp_partialurl,statecode,statuscode,createdon,modifiedon' } },
+      // Power Pages overrides the standard createdon/modifiedon audit fields
+      // with mspp_-prefixed versions because IsAuditEnabled=false on this entity.
+      { query: { '$select': 'mspp_websiteid,mspp_name,mspp_primarydomainname,mspp_partialurl,statecode,statuscode,mspp_createdon,mspp_modifiedon' } },
     );
     return (j.value || []).map((w: any) => ({
       websiteid: w.mspp_websiteid,
@@ -483,8 +485,8 @@ export async function listPowerPages(envId: string): Promise<PowerPage[]> {
         : undefined,
       status: w['statuscode@OData.Community.Display.V1.FormattedValue'] || String(w.statuscode ?? ''),
       type: w['statecode@OData.Community.Display.V1.FormattedValue'] || String(w.statecode ?? ''),
-      createdon: w.createdon,
-      modifiedon: w.modifiedon,
+      createdon: w.mspp_createdon,
+      modifiedon: w.mspp_modifiedon,
     }));
   } catch (e) {
     if (e instanceof PowerPlatformError && e.status === 404) {
