@@ -10,6 +10,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.10.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.9.0...csa-inabox-v0.10.0) (2026-05-25)
+
+
+### Features
+
+* **csa-loom:** v1.5–v1.10 — Loom Console rebuild + governance + APIM + ATLAS logo ([#331](https://github.com/fgarofalo56/csa-inabox/issues/331)) ([8b1b40d](https://github.com/fgarofalo56/csa-inabox/commit/8b1b40d04dbfeac3d27107729bdcb4c584e8a257))
+
+
+### Miscellaneous
+
+* **deps:** Bump react and @types/react in /portal/react-webapp ([#272](https://github.com/fgarofalo56/csa-inabox/issues/272)) ([6986b77](https://github.com/fgarofalo56/csa-inabox/commit/6986b776cff9929dd09a5c01266448492adea096))
+
 ## [0.9.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.8.0...csa-inabox-v0.9.0) (2026-05-24)
 
 

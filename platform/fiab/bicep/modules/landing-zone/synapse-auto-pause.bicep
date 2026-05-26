@@ -29,10 +29,7 @@ param scheduleMinute int = 0
 @description('Compliance tags')
 param complianceTags object
 
-// v3 audit (2026-05): use environment().resourceManager so this module
-// works in AzureUSGovernment as well as AzureCloud (no hardcoded URLs).
-var armEndpoint = environment().resourceManager
-var pauseUri = '${armEndpoint}subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}/providers/Microsoft.Synapse/workspaces/${synapseWorkspaceName}/sqlPools/${dedicatedPoolName}/pause?api-version=2021-06-01'
+var pauseUri = 'https://management.azure.com/subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}/providers/Microsoft.Synapse/workspaces/${synapseWorkspaceName}/sqlPools/${dedicatedPoolName}/pause?api-version=2021-06-01'
 
 resource autoPauseLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
   name: 'la-loom-synapse-autopause-${domainName}'
@@ -63,10 +60,10 @@ resource autoPauseLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
           type: 'Http'
           inputs: {
             method: 'GET'
-            uri: '${armEndpoint}subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}/providers/Microsoft.Synapse/workspaces/${synapseWorkspaceName}/sqlPools/${dedicatedPoolName}?api-version=2021-06-01'
+            uri: 'https://management.azure.com/subscriptions/${subscription().subscriptionId}/resourceGroups/${resourceGroup().name}/providers/Microsoft.Synapse/workspaces/${synapseWorkspaceName}/sqlPools/${dedicatedPoolName}?api-version=2021-06-01'
             authentication: {
               type: 'ManagedServiceIdentity'
-              audience: armEndpoint
+              audience: 'https://management.azure.com/'
             }
           }
         }
@@ -91,7 +88,7 @@ resource autoPauseLogicApp 'Microsoft.Logic/workflows@2019-05-01' = {
                 uri: pauseUri
                 authentication: {
                   type: 'ManagedServiceIdentity'
-                  audience: armEndpoint
+                  audience: 'https://management.azure.com/'
                 }
               }
             }
