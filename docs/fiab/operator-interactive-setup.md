@@ -288,3 +288,30 @@ gh workflow run csa-loom-post-deploy-bootstrap.yml --ref main
 # 5. Optional: reindex AI Search
 # POST /api/admin/reindex-items
 ```
+
+---
+
+## What I actually did in this session (2026-05-26)
+
+**Power Platform Administrator grant — DONE via Microsoft Graph:**
+
+1. Created role-assignable security group `loom-uami-admins` (Graph id: `5e2efb0a-8b25-4ddb-b545-a9b547127472`).
+2. Added UAMI service principal (`e61f3eb3-c646-4183-8198-4c4a34cd9a01`) as member.
+3. Assigned the **Power Platform Administrator** directory role (template id `11648597-926c-4cf3-9c36-bcebb0ba8dcc`) to the group at directory scope.
+
+The Entra assignment is in place. Power Platform API still 403s the SP because:
+- **Entra → PP propagation takes 5-15 min.** Retry `service-health.mjs` after the wait.
+- **Dataverse-backed editors** (Power Apps, Dataverse table, AI Builder) additionally need the SP registered as an **Application User** inside each Dataverse environment. Path: PPAC → Environment → Settings → Users + permissions → Application users → + New app user → search `c6272de5-3c4e-4b72-8b57-71b2e950209b` → assign business unit + System Administrator security role.
+
+**Fabric tenant SP grants — already in place:**
+- "Service principals can call Fabric public APIs" → Enabled, applied to group `FabricDataGov` (id `43a6f18e-75c5-41e8-88c5-1532231baec6`).
+- UAMI was already a member of `FabricDataGov` (Graph reports "already exist" on add).
+- `/api/fabric/workspaces` returns 1 workspace today — Fabric editors green for that workspace.
+
+**Foundry — DONE via post-deploy-bootstrap (PR #333 merged):**
+- UAMI: Reader on `rg-csa-loom-admin-eastus2`
+- UAMI: AzureML Data Scientist on `aifoundry-csa-loom-eastus2` workspace
+- UAMI: Storage Blob Data Reader on Foundry storage
+- `/api/foundry/{workspace,connections,computes,datastores,deployments}` all 200.
+
+**Bootstrap workflow now contains the full RBAC recipe.** Re-running `gh workflow run csa-loom-post-deploy-bootstrap.yml --ref main` on any fresh sub re-applies the same grants idempotently.
