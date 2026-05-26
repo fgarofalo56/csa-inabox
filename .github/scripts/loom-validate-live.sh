@@ -93,15 +93,27 @@ fi
 end
 
 # ---------------------------------------------------------------------------
-# 6) /api/copilot/tools — orchestrator must list tools
+# 6) /api/copilot/tools — orchestrator must respond. We accept:
+#   - 200 with count > 0 (authed probe path)
+#   - 401 (session-gated — expected for unauthenticated CI probes)
+# We only FAIL if the route 5xx's OR returns 200 with count=0.
 # ---------------------------------------------------------------------------
 log "6. /api/copilot/tools"
-TOOLS=$(curl -s -m 30 "${URL}/api/copilot/tools${CACHEBUST}" || true)
-TOOL_COUNT=$(echo "$TOOLS" | python -c "import json,sys; d=json.load(sys.stdin); print(d.get('count',0))" 2>/dev/null || echo "0")
-if [[ "$TOOL_COUNT" -gt 0 ]]; then
-  ok "copilot tool registry returns $TOOL_COUNT tools"
+TOOLS_HTTP=$(curl -s -m 30 -o /tmp/loom-tools.json -w "%{http_code}" "${URL}/api/copilot/tools${CACHEBUST}" || echo "000")
+cat /tmp/loom-tools.json 2>/dev/null
+echo ""
+echo "http=$TOOLS_HTTP"
+if [[ "$TOOLS_HTTP" == "401" ]]; then
+  ok "copilot tools route is wired (401 unauthenticated — expected for CI probe)"
+elif [[ "$TOOLS_HTTP" == "200" ]]; then
+  TOOL_COUNT=$(python -c "import json; d=json.load(open('/tmp/loom-tools.json')); print(d.get('count',0))" 2>/dev/null || echo "0")
+  if [[ "$TOOL_COUNT" -gt 0 ]]; then
+    ok "copilot tool registry returns $TOOL_COUNT tools"
+  else
+    fail "copilot tool registry returned 200 with 0 tools — orchestrator may be broken"
+  fi
 else
-  fail "copilot tool registry returned 0 tools — orchestrator may be broken"
+  fail "copilot tools route returned http=$TOOLS_HTTP (expected 200 or 401)"
 fi
 end
 
