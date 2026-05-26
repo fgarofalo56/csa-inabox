@@ -1,0 +1,212 @@
+{
+  "$schema": "./fabric-parity-tasks.schema.json",
+  "description": "Per-UI task list driving the fabric-parity-loop multi-agent workflow. Each entry specifies the Fabric reference, the Loom target, and the Azure backend it should wire to. Used by .claude/commands/fabric-parity-loop.md.",
+  "fabricRefWorkspace": {
+    "name": "casino-fabric-poc",
+    "id": "7899f58d-d19f-4e9d-8370-b88621aad31e",
+    "tenant": "limitlessdata.ai",
+    "capacity": "F64"
+  },
+  "loomBaseUrl": "https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net",
+  "uis": [
+    {
+      "name": "notebook",
+      "priority": 1,
+      "currentVerdict": "D",
+      "fabricRefUrl": "https://app.fabric.microsoft.com/groups/7899f58d-d19f-4e9d-8370-b88621aad31e/synapsenotebooks/46904b80-e8a4-4251-8ff7-3b866039f959?experience=power-bi",
+      "loomEditorPath": "apps/fiab-console/lib/editors/notebook-editor.tsx",
+      "loomRoutes": [
+        "/api/items/notebook",
+        "/api/items/notebook/[id]",
+        "/api/items/notebook/[id]/run",
+        "/api/items/notebook/[id]/runs/[runId]"
+      ],
+      "azureBackend": "Synapse Spark Livy + Databricks Jobs",
+      "requiredAzureResources": ["Synapse Spark pool (loompool)", "Databricks cluster"],
+      "requiredManualGrants": [],
+      "knownGaps": [
+        "Single textarea instead of cell-based editor",
+        "Missing language picker (PySpark/Spark Scala/Spark SQL/SparkR/Python/T-SQL)",
+        "Missing OneLake side panel with attached Lakehouse browser",
+        "Missing + Code / + Markdown hover insert between cells",
+        "Missing per-cell Run button + cell output display",
+        "Missing cell right-edge toolbar (Convert/Maximize/Copy/Edit/Lock/Delete)",
+        "Missing notebook tab strip (Home/Edit/AI tools/Run/View)",
+        "Missing History pane",
+        "Missing Connect dropdown (Attach Lakehouse / Warehouse / KQL DB)"
+      ],
+      "parityRefDoc": "docs/fiab/notebook-parity-spec.md"
+    },
+    {
+      "name": "lakehouse",
+      "priority": 2,
+      "currentVerdict": "A",
+      "fabricRefUrl": "https://app.fabric.microsoft.com/groups/7899f58d-d19f-4e9d-8370-b88621aad31e/list?experience=power-bi&subfolderId=142455",
+      "loomEditorPath": "apps/fiab-console/lib/editors/lakehouse-editor.tsx",
+      "loomRoutes": [
+        "/api/lakehouse/containers",
+        "/api/lakehouse/paths",
+        "/api/lakehouse/preview",
+        "/api/lakehouse/upload"
+      ],
+      "azureBackend": "ADLS Gen2 + auto-paired Synapse Serverless SQL Analytics Endpoint",
+      "requiredAzureResources": ["ADLS Gen2 container (bronze/silver/gold)"],
+      "knownGaps": [
+        "No auto-paired SQL Analytics Endpoint (Fabric Lakehouse comes with one — Loom should auto-create a synapse-serverless-sql-pool sibling item)",
+        "No 'Open in notebook' button on table rows",
+        "No table preview as DataFrame.show()-style grid",
+        "No shortcut creation flow (mount external ADLS as virtual table)"
+      ],
+      "parityRefDoc": null
+    },
+    {
+      "name": "data-pipeline",
+      "priority": 3,
+      "currentVerdict": "B",
+      "fabricRefUrl": "https://app.fabric.microsoft.com/groups/7899f58d-d19f-4e9d-8370-b88621aad31e/list?experience=power-bi&subfolderId=data_pipelines",
+      "loomEditorPath": "apps/fiab-console/lib/editors/data-pipeline-editor.tsx",
+      "loomRoutes": [
+        "/api/items/data-pipeline",
+        "/api/items/data-pipeline/[id]",
+        "/api/items/data-pipeline/[id]/run",
+        "/api/items/data-pipeline/[id]/jobs"
+      ],
+      "azureBackend": "ADF (Azure Data Factory)",
+      "requiredAzureResources": ["ADF instance (already deployed)"],
+      "knownGaps": [
+        "No drag-and-drop visual pipeline designer (Fabric has Mapping Data Flow style canvas)",
+        "Only JSON-text editor for activity definition",
+        "No connector picker (Copy data / Web activity / Notebook / Stored proc / Foreach / etc.)",
+        "No real-time run debug view"
+      ],
+      "parityRefDoc": null
+    },
+    {
+      "name": "kql-database",
+      "priority": 4,
+      "currentVerdict": "A",
+      "fabricRefUrl": null,
+      "loomEditorPath": "apps/fiab-console/lib/editors/phase3-editors.tsx#KqlDatabaseEditor",
+      "loomRoutes": ["/api/items/kql-database/[id]/query", "/api/items/kql-database/[id]/tables"],
+      "azureBackend": "Azure Data Explorer (loom-shared ADX cluster)",
+      "knownGaps": [
+        "No table schema browser sidebar (Fabric shows tables + columns + funcs)",
+        "No query history pane",
+        "No multi-query tab support",
+        "Results grid is plain — Fabric has column types, sort, filter, export, viz toggle"
+      ]
+    },
+    {
+      "name": "warehouse",
+      "priority": 5,
+      "currentVerdict": "B",
+      "fabricRefUrl": null,
+      "loomEditorPath": "apps/fiab-console/lib/editors/phase3-editors.tsx#WarehouseEditor",
+      "loomRoutes": ["/api/items/warehouse/[id]/query", "/api/items/warehouse/[id]/schema"],
+      "azureBackend": "Synapse Dedicated SQL Pool",
+      "requiredAzureResources": ["Synapse Dedicated SQL Pool (loompool)"],
+      "knownGaps": [
+        "No object explorer with schemas/tables/views/SP tree",
+        "No table data preview in browser",
+        "No 'New SQL Query' tab spawn",
+        "Cold-resume UX could be better — currently 60s wait without progress"
+      ]
+    },
+    {
+      "name": "semantic-model",
+      "priority": 6,
+      "currentVerdict": "C",
+      "fabricRefUrl": null,
+      "loomEditorPath": "apps/fiab-console/lib/editors/phase3-editors.tsx#SemanticModelEditor",
+      "loomRoutes": ["/api/items/semantic-model/[id]"],
+      "azureBackend": "Power BI tenant + Premium capacity",
+      "knownGaps": [
+        "No model schema editor (tables, columns, measures, relationships)",
+        "No DAX editor with intellisense",
+        "No data source connection wizard",
+        "No 'Refresh now' against the PBI dataset",
+        "No row-level security editor"
+      ]
+    },
+    {
+      "name": "report",
+      "priority": 7,
+      "currentVerdict": "C",
+      "loomEditorPath": "apps/fiab-console/lib/editors/phase3-editors.tsx#ReportEditor",
+      "azureBackend": "Power BI Report embed",
+      "knownGaps": [
+        "No embedded Power BI report (Fabric shows the actual report rendered inline)",
+        "Missing visual library picker (Bar/Line/Pie/Card/Slicer/etc.)",
+        "Missing fields pane",
+        "Missing pages tab"
+      ]
+    },
+    {
+      "name": "dashboard",
+      "priority": 8,
+      "currentVerdict": "C",
+      "loomEditorPath": "apps/fiab-console/lib/editors/phase3-editors.tsx#DashboardEditor",
+      "azureBackend": "Power BI Dashboard embed",
+      "knownGaps": ["Same as report but for dashboard view"]
+    },
+    {
+      "name": "eventstream",
+      "priority": 9,
+      "currentVerdict": "B",
+      "loomEditorPath": "apps/fiab-console/lib/editors/phase3-editors.tsx#EventstreamEditor",
+      "azureBackend": "Event Hubs + Kusto ingestion",
+      "requiredAzureResources": ["Event Hubs namespace + hub", "Kusto ingestion mapping"],
+      "knownGaps": [
+        "No visual stream designer (source → transform → sink canvas)",
+        "Refresh/Start/Stop runtime not wired to Event Hubs ingestion pipeline"
+      ]
+    },
+    {
+      "name": "dataflow",
+      "priority": 10,
+      "currentVerdict": "B",
+      "loomEditorPath": "apps/fiab-console/lib/editors/dataflow-gen2-editor.tsx",
+      "azureBackend": "ADF Mapping Data Flow",
+      "knownGaps": ["Refresh runtime not wired", "No Power Query M editor", "No transformation designer"]
+    },
+    {
+      "name": "mirrored-database",
+      "priority": 11,
+      "currentVerdict": "B",
+      "loomEditorPath": "apps/fiab-console/lib/editors/mirrored-database-editor.tsx",
+      "azureBackend": "loom-mirroring-engine container app",
+      "knownGaps": ["Start/Stop control plane not wired to mirroring engine", "No source DB connection wizard", "No table mapping UI"]
+    },
+    {
+      "name": "real-time-dashboard",
+      "priority": 12,
+      "currentVerdict": "C",
+      "azureBackend": "ADX + Power BI",
+      "knownGaps": ["No tile-based dashboard designer", "No KQL backing query editor per tile"]
+    },
+    {
+      "name": "ml-experiment",
+      "priority": 13,
+      "currentVerdict": "B",
+      "loomEditorPath": "apps/fiab-console/lib/editors/phase4-editors.tsx#MlExperimentEditor",
+      "azureBackend": "Azure ML / Foundry MLflow",
+      "knownGaps": ["No runs comparison grid", "No metric chart pane", "No artifact browser"]
+    },
+    {
+      "name": "ml-model",
+      "priority": 14,
+      "currentVerdict": "B",
+      "loomEditorPath": "apps/fiab-console/lib/editors/phase4-editors.tsx#MlModelEditor",
+      "azureBackend": "Azure ML model registry",
+      "knownGaps": ["No version comparison", "No 'Deploy' button to AML endpoint", "No model card"]
+    },
+    {
+      "name": "graphql-api",
+      "priority": 15,
+      "currentVerdict": "B",
+      "loomEditorPath": "apps/fiab-console/lib/editors/phase4-editors.tsx#GraphqlApiEditor",
+      "azureBackend": "APIM (publish via /publish endpoint)",
+      "knownGaps": ["No GraphiQL playground tab", "Schema editor is plain text — needs Monaco with GraphQL grammar", "Publish doesn't expose a real endpoint yet"]
+    }
+  ]
+}
