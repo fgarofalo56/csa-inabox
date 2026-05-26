@@ -26,6 +26,7 @@ import {
   Document20Regular, Code20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -248,9 +249,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
           <StatusBar status={status} />
           {api.loading && <Spinner size="small" label="Loading API from APIM…" labelPosition="after" />}
           {api.error && !api.loading && (
-            <MessageBar intent="error">
-              <MessageBarBody><MessageBarTitle>Failed to load</MessageBarTitle>{api.error}</MessageBarBody>
-            </MessageBar>
+            <BackendStateBar error={api.error} title="APIM API" />
           )}
           <div className={s.form}>
             <Field label="Display name" required>
@@ -383,7 +382,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
         <StatusBar status={status} />
         {product.loading && <Spinner size="small" label="Loading product…" labelPosition="after" />}
         {product.error && !product.loading && (
-          <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Failed to load</MessageBarTitle>{product.error}</MessageBarBody></MessageBar>
+          <BackendStateBar error={product.error} title="APIM Product" />
         )}
         <div className={s.form}>
           <Field label="Display name" required>

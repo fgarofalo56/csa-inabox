@@ -24,6 +24,7 @@ import {
   Pause20Regular, ArrowSync20Regular, Save20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -284,7 +285,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
           </div>
           {loading && <Spinner size="tiny" label="Loading Spark pools…" labelPosition="after" />}
           {error && (
-            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Spark API error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+            <BackendStateBar error={error} title="Spark API" />
           )}
           <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
@@ -500,7 +501,7 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
             <Button appearance="outline" onClick={() => { if (selected) { loadPipeline(selected); loadRuns(selected); } }} style={{ marginLeft: 'auto' }}>Refresh</Button>
           </div>
           {error && (
-            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Pipeline API error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+            <BackendStateBar error={error} title="Pipeline API" />
           )}
           <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'json' | 'runs')}>
@@ -844,7 +845,7 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
             <Button appearance="outline" onClick={() => { if (selected) { loadPipeline(selected); loadRuns(selected); } }} style={{ marginLeft: 'auto' }}>Refresh</Button>
           </div>
           {error && (
-            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ADF Pipeline API error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+            <BackendStateBar error={error} title="ADF Pipeline" />
           )}
           <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'json' | 'runs')}>
@@ -1074,7 +1075,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
             <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !selected} onClick={save} style={{ marginLeft: 'auto' }}>Save</Button>
           </div>
           {error && (
-            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ADF Dataset API error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+            <BackendStateBar error={error} title="ADF Dataset" />
           )}
           <Subtitle2>Dataset configuration</Subtitle2>
           <div className={s.row}>
@@ -1320,7 +1321,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
             <Button appearance="outline" icon={<Pause20Regular />} disabled={busy || !selected || runtimeState !== 'Started'} onClick={() => setState('stop')}>Stop</Button>
           </div>
           {error && (
-            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ADF Trigger API error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+            <BackendStateBar error={error} title="ADF Trigger" />
           )}
           <Subtitle2>Trigger configuration</Subtitle2>
           <div className={s.row}>
