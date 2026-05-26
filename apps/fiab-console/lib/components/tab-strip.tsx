@@ -2,12 +2,17 @@
 
 /**
  * TabStrip — multi-tab view like Fabric. Persists to /api/tabs (Cosmos
- * tabs-state container, partitioned by userId; one doc per user). Tabs
- * include workspace, item, or page targets. Active tab is the one whose
- * href matches the current pathname.
+ * tabs-state container, partitioned by userId; one doc per user).
  *
- * Other components can fire `loom:open-tab` CustomEvent with detail
- * { title, href, type? } to register a new tab.
+ * Auto-open policy (Fabric-parity): tabs are ONLY for actual work-in-
+ * progress — pages where edits could be lost. That means:
+ *   - /items/[type]/[id]              (any item editor — work in progress)
+ *   - /workspaces/[id]                (workspace detail / item list)
+ * Navigation surfaces (/workspaces, /apps, /admin, /onelake, /governance,
+ * etc.) do NOT auto-open tabs — they're discovery views, not workbenches.
+ *
+ * Home is pinned. Tabs are dismissible via X. `loom:open-tab` CustomEvent
+ * still lets any component explicitly open a tab (e.g. Open in notebook).
  */
 
 import { useEffect, useState, useCallback } from 'react';
@@ -24,6 +29,39 @@ interface Tab {
 }
 
 const STATIC_HOME: Tab = { id: 'home', title: 'Home', href: '/', pinned: true };
+
+/**
+ * Decide if a path warrants an auto-opened tab. Only "workbench" surfaces
+ * that the user actively edits / runs against get tabs.
+ */
+function shouldAutoOpenTab(pathname: string): boolean {
+  if (!pathname || pathname === '/') return false;
+  // Item editors: /items/[type]/[id]
+  if (/^\/items\/[^/]+\/[^/]+/.test(pathname)) return true;
+  // Workspace detail: /workspaces/[id] but NOT the list /workspaces
+  if (/^\/workspaces\/[^/]+/.test(pathname)) return true;
+  // App detail: /apps/[id] but NOT the list /apps
+  if (/^\/apps\/[^/]+/.test(pathname)) return true;
+  return false;
+}
+
+/** Derive a readable title from a workbench path. */
+function deriveTitle(pathname: string, hint?: string): string {
+  if (hint) return hint;
+  // /items/lakehouse/abc123 → "lakehouse · abc12345"
+  const itemMatch = pathname.match(/^\/items\/([^/]+)\/([^/]+)/);
+  if (itemMatch) {
+    const type = itemMatch[1].replace(/-/g, ' ');
+    const id = itemMatch[2];
+    const short = id === 'new' ? 'new' : id.slice(0, 8);
+    return `${type} · ${short}`;
+  }
+  const wsMatch = pathname.match(/^\/workspaces\/([^/]+)/);
+  if (wsMatch) return `workspace · ${wsMatch[1].slice(0, 8)}`;
+  const appMatch = pathname.match(/^\/apps\/([^/]+)/);
+  if (appMatch) return appMatch[1].replace(/^app-/, '').replace(/-/g, ' ');
+  return pathname.replace(/^\//, '').split('/').pop() || pathname;
+}
 
 const useStyles = makeStyles({
   root: {
@@ -96,13 +134,15 @@ export function TabStrip() {
     }).catch(() => {/* will retry on next change */});
   }, [loaded]);
 
-  // Auto-open tab when user navigates somewhere we don't have a tab for yet.
+  // Auto-open tab only when the user lands on a workbench surface
+  // (item editor, workspace detail, app detail). Navigation surfaces
+  // like /workspaces, /apps, /admin do NOT open tabs — they're
+  // discovery views, not work-in-progress.
   useEffect(() => {
     if (!loaded) return;
-    if (pathname === '/' || pathname === '') return;
+    if (!shouldAutoOpenTab(pathname)) return;
     if (tabs.some(t => t.href === pathname)) return;
-    // Derive a tab title from the path tail.
-    const title = decodeURIComponent(pathname.split('/').filter(Boolean).slice(-1)[0] || pathname);
+    const title = deriveTitle(pathname);
     const next: Tab[] = [...tabs, { id: pathname, title, href: pathname }];
     setTabs(next);
     persist(next);

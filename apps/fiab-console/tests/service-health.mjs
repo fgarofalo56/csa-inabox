@@ -43,9 +43,8 @@ const PROBES = [
   ['Cosmos', '/api/apps-catalog',                            'GET'],
   ['Cosmos', '/api/activity?n=5',                            'GET'],
 
-  ['Synapse', '/api/items/synapse-serverless-sql-pool/_probe/query', 'POST',
-    { sql: 'SELECT 1 AS smoke' }, /*optional*/ true],
-  ['Synapse', '/api/items/synapse-dedicated-sql-pool/_probe/schema', 'GET', null, true],
+  ['Synapse', '/api/items/by-type?type=synapse-serverless-sql-pool', 'GET'],
+  ['Synapse', '/api/items/by-type?type=synapse-dedicated-sql-pool', 'GET'],
 
   ['Databricks', '/api/items/databricks-cluster/options',    'GET'],
   ['Databricks', '/api/items/databricks-notebook/list',      'GET'],
