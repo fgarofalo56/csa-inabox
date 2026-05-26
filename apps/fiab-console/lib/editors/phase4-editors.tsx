@@ -1038,27 +1038,77 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   );
 }
 
-// ----- Operations Agent (Cosmos config; Foundry Agent Service not yet wired) -----
+// ----- Operations Agent (Cosmos config + Phase 1 Foundry deploy stub) -----
 const OPS_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Agent', actions: [{ label: 'Save' }] },
+  { label: 'Agent', actions: [{ label: 'Save' }, { label: 'Deploy to Foundry' }] },
 ]}];
-interface AgentState { systemPrompt: string; model: string; tools: string; eventhouse: string; ontology: string; [k: string]: unknown }
+interface AgentState {
+  systemPrompt: string; model: string; tools: string;
+  eventhouse: string; ontology: string;
+  foundryAgentId?: string; foundryProjectId?: string; lastDeployedAt?: string;
+  [k: string]: unknown;
+}
+
+interface DeployResponse {
+  ok: boolean;
+  deferred?: boolean;
+  agentId?: string;
+  projectId?: string;
+  lastDeployedAt?: string;
+  error?: string;
+  hint?: string;
+}
+
 export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<AgentState>('operations-agent', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload } = useItemState<AgentState>('operations-agent', id, {
     systemPrompt: 'You monitor real-time operational signals and trigger actions when thresholds are breached.',
     model: 'gpt-4o', tools: 'eventhouse-query, activator-trigger', eventhouse: '', ontology: '',
   });
+  const [deploying, setDeploying] = useState(false);
+  const [deployResult, setDeployResult] = useState<DeployResponse | null>(null);
+
+  const onDeploy = useCallback(async () => {
+    setDeploying(true); setDeployResult(null);
+    try {
+      // Save first so the BFF reads the latest state from Cosmos.
+      const saved = await save();
+      if (!saved) {
+        setDeployResult({ ok: false, error: 'Save failed before deploy — fix the save error and retry.' });
+        return;
+      }
+      const r = await fetch(`/api/items/operations-agent/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
+      const j: DeployResponse = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+      setDeployResult(j);
+      if (j.ok) await reload();
+    } catch (e: any) {
+      setDeployResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setDeploying(false);
+    }
+  }, [id, save, reload]);
+
+  const deployedAgentId = state.foundryAgentId;
+  const deployedAt = state.lastDeployedAt;
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={OPS_RIBBON} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="warning">
           <MessageBarBody>
-            <MessageBarTitle>v2.1: configuration only — runtime deferred</MessageBarTitle>
-            Agent config persists to Cosmos. The Azure AI Foundry Agent Service ({process.env.NEXT_PUBLIC_LOOM_FOUNDRY_NAME || 'aifoundry-csa-loom-eastus2'}) is provisioned but the agents data-plane has no live editor wiring yet — create/run wires up in v2.x.
+            <MessageBarTitle>Phase 1: Foundry Agent deploy stub</MessageBarTitle>
+            Agent config persists to Cosmos and the <strong>Deploy to Foundry</strong> button pushes a prompt-agent definition (instructions + model + tools) to the Azure AI Foundry Agent Service. Playbook generation, 5-minute polling, Activator + Power Automate handshake, and Teams notifications are tracked in <code>docs/fiab/operations-agent-parity-spec.md</code> for follow-up sessions.
           </MessageBarBody>
         </MessageBar>
+        {deployedAgentId && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Caption1>Deployed agent:</Caption1>
+            <Badge appearance="filled" color="success">{deployedAgentId}</Badge>
+            {state.foundryProjectId && <Badge appearance="outline">project {state.foundryProjectId}</Badge>}
+            {deployedAt && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>last deployed {new Date(deployedAt).toLocaleString()}</Caption1>}
+          </div>
+        )}
         <Caption1>System prompt</Caption1>
         <Textarea value={state.systemPrompt} onChange={(_, d) => setState({ ...state, systemPrompt: d.value })} rows={6} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -1067,37 +1117,98 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
           <div><Caption1>Eventhouse binding</Caption1><Input value={state.eventhouse} onChange={(_, d) => setState({ ...state, eventhouse: d.value })} placeholder="eventhouse item id" /></div>
           <div><Caption1>Ontology binding</Caption1><Input value={state.ontology} onChange={(_, d) => setState({ ...state, ontology: d.value })} placeholder="ontology item id" /></div>
         </div>
-        <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+        {deployResult && (
+          <MessageBar intent={deployResult.ok ? 'success' : deployResult.deferred ? 'warning' : 'error'}>
+            <MessageBarBody>
+              <MessageBarTitle>
+                {deployResult.ok ? 'Deployed to Foundry'
+                  : deployResult.deferred ? 'Deploy deferred — Foundry not configured'
+                  : 'Deploy failed'}
+              </MessageBarTitle>
+              {deployResult.ok && deployResult.agentId && (
+                <>Agent <code>{deployResult.agentId}</code> upserted in project <code>{deployResult.projectId}</code>. The Foundry Agent Service is now the source of truth for runtime behavior.</>
+              )}
+              {deployResult.error && <div>{deployResult.error}</div>}
+              {deployResult.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {deployResult.hint}</div>}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        <SaveBar
+          saving={saving} savedAt={savedAt} error={error} onSave={() => save()}
+          extraRight={
+            <Button appearance="primary" onClick={onDeploy} disabled={deploying || saving}>
+              {deploying ? 'Deploying…' : 'Deploy to Foundry'}
+            </Button>
+          }
+        />
       </div>
     } />
   );
 }
 
-// ----- Data Agent (Cosmos config; Foundry Agent Service not yet wired) -----
+// ----- Data Agent (Cosmos config + Phase 1 Foundry deploy stub) -----
 const DA_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Sources', actions: [{ label: 'Save' }] },
+  { label: 'Sources', actions: [{ label: 'Save' }, { label: 'Deploy to Foundry' }] },
   { label: 'Test', actions: [{ label: 'Chat preview' }] },
 ]}];
-interface DataAgentState { systemPrompt: string; model: string; sources: string; sqlEndpoints: string; kqlDatabases: string; lakehousePaths: string; examples: string; [k: string]: unknown }
+interface DataAgentState {
+  systemPrompt: string; model: string; sources: string;
+  sqlEndpoints: string; kqlDatabases: string; lakehousePaths: string; examples: string;
+  foundryAgentId?: string; foundryProjectId?: string; lastDeployedAt?: string;
+  [k: string]: unknown;
+}
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<DataAgentState>('data-agent', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload } = useItemState<DataAgentState>('data-agent', id, {
     systemPrompt: 'You are a finance analyst. Always use dim_date and roll metrics by quarter unless asked otherwise.',
     model: 'gpt-4o',
     sources: 'fin-warehouse, orders semantic model, ldn-gold-lakehouse, ontology-finance',
     sqlEndpoints: '', kqlDatabases: '', lakehousePaths: '',
     examples: 'Top 10 customers by revenue last quarter\nMonthly recurring revenue trend\nForecast next quarter',
   });
+  const [deploying, setDeploying] = useState(false);
+  const [deployResult, setDeployResult] = useState<DeployResponse | null>(null);
+
+  const onDeploy = useCallback(async () => {
+    setDeploying(true); setDeployResult(null);
+    try {
+      const saved = await save();
+      if (!saved) {
+        setDeployResult({ ok: false, error: 'Save failed before deploy — fix the save error and retry.' });
+        return;
+      }
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
+      const j: DeployResponse = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+      setDeployResult(j);
+      if (j.ok) await reload();
+    } catch (e: any) {
+      setDeployResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setDeploying(false);
+    }
+  }, [id, save, reload]);
+
+  const deployedAgentId = state.foundryAgentId;
+  const deployedAt = state.lastDeployedAt;
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={DA_RIBBON} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="warning">
           <MessageBarBody>
-            <MessageBarTitle>v2.1: configuration only — runtime deferred</MessageBarTitle>
-            Data-agent config persists to Cosmos. Live chat against the AI Foundry agent service lands in v2.x; bindings here will become the runtime tool list.
+            <MessageBarTitle>Phase 1: Foundry Agent deploy stub</MessageBarTitle>
+            Data-agent config persists to Cosmos and the <strong>Deploy to Foundry</strong> button pushes a prompt-agent definition to the Azure AI Foundry Agent Service. The typed five-source picker, per-source instructions, test chat pane, Publish flow, and Copilot Studio handoff are tracked in <code>docs/fiab/data-agent-parity-spec.md</code> for follow-up sessions.
           </MessageBarBody>
         </MessageBar>
+        {deployedAgentId && (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Caption1>Deployed agent:</Caption1>
+            <Badge appearance="filled" color="success">{deployedAgentId}</Badge>
+            {state.foundryProjectId && <Badge appearance="outline">project {state.foundryProjectId}</Badge>}
+            {deployedAt && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>last deployed {new Date(deployedAt).toLocaleString()}</Caption1>}
+          </div>
+        )}
         <Caption1>System prompt / AI instructions</Caption1>
         <Textarea value={state.systemPrompt} onChange={(_, d) => setState({ ...state, systemPrompt: d.value })} rows={5} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -1112,7 +1223,30 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
         </div>
         <Caption1>Example queries (one per line)</Caption1>
         <Textarea value={state.examples} onChange={(_, d) => setState({ ...state, examples: d.value })} rows={4} />
-        <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+        {deployResult && (
+          <MessageBar intent={deployResult.ok ? 'success' : deployResult.deferred ? 'warning' : 'error'}>
+            <MessageBarBody>
+              <MessageBarTitle>
+                {deployResult.ok ? 'Deployed to Foundry'
+                  : deployResult.deferred ? 'Deploy deferred — Foundry not configured'
+                  : 'Deploy failed'}
+              </MessageBarTitle>
+              {deployResult.ok && deployResult.agentId && (
+                <>Agent <code>{deployResult.agentId}</code> upserted in project <code>{deployResult.projectId}</code>. The Foundry Agent Service is now the source of truth for runtime behavior.</>
+              )}
+              {deployResult.error && <div>{deployResult.error}</div>}
+              {deployResult.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {deployResult.hint}</div>}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        <SaveBar
+          saving={saving} savedAt={savedAt} error={error} onSave={() => save()}
+          extraRight={
+            <Button appearance="primary" onClick={onDeploy} disabled={deploying || saving}>
+              {deploying ? 'Deploying…' : 'Deploy to Foundry'}
+            </Button>
+          }
+        />
       </div>
     } />
   );
