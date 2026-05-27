@@ -116,9 +116,13 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
 // ============================================================
 // Server editor
 // ============================================================
+// Firewall + AAD admin entries render as disabled (ribbon auto-disables
+// actions without an onClick handler — see lib/components/ribbon.tsx),
+// which is honest disclosure per `no-vaporware.md`. The mutation paths
+// are documented inline in the editor body.
 const SERVER_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
-    { label: 'Databases', actions: [{ label: 'List' }, { label: 'Refresh' }] },
+    { label: 'Databases', actions: [{ label: 'Refresh list' }] },
     { label: 'Security', actions: [{ label: 'Firewall' }, { label: 'AAD admin' }] },
   ]},
 ];
@@ -136,8 +140,8 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    setLoading(true);
+  const refresh = useCallback(() => {
+    setLoading(true); setError(null);
     fetch(`/api/items/azure-sql-server`)
       .then((r) => r.json())
       .then((j) => {
@@ -147,6 +151,8 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
 
   const pickServer = useCallback(async (sv: ServerInfo) => {
     setSelected(sv);
@@ -181,11 +187,25 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
       }
       main={
         <div className={s.pad}>
+          {id === 'new' && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Azure SQL servers are provisioned out-of-band</MessageBarTitle>
+                Servers are created via bicep (<code>Microsoft.Sql/servers</code>) or the Azure portal — not from inside
+                Loom. This is a read-only registry view. Pick an existing server on the left, or run
+                <code> az sql server create</code> first.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          <div className={s.toolbar}>
+            <Button size="small" appearance="outline" onClick={refresh} disabled={loading}>Refresh list</Button>
+            {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
+          </div>
           {error && (
             <BackendStateBar error={error} title="Azure SQL" />
           )}
           {!selected ? (
-            <Caption1>Pick a server on the left to inspect its databases, firewall, and AAD admin.</Caption1>
+            <Caption1>Pick a server on the left to inspect its databases.</Caption1>
           ) : (
             <>
               <Subtitle2>{selected.name}</Subtitle2>
@@ -286,6 +306,21 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
     setSql2025State(await r.json());
   }, [id, server, database]);
 
+  // v3.28 Phase 4.5: Ctrl+S / Cmd+S triggers Run when on the Query tab.
+  // T-SQL text is ephemeral query state (not persisted item state), so
+  // there is no SAVE-RELOAD round-trip — the action surfaced by Ctrl+S
+  // is Run, matching SSMS / Azure Data Studio muscle memory.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (tab === 'query' && server && database && !loading) run();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tab, server, database, loading, run]);
+
   return (
     <ItemEditorChrome
       item={item} id={id} ribbon={DB_RIBBON}
@@ -375,21 +410,41 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
   const s = useStyles();
   const [instances, setInstances] = useState<any[]>([]);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
+  const [loading, setLoading] = useState(false);
+
+  const refresh = useCallback(() => {
+    setLoading(true); setErr(null);
     fetch(`/api/items/azure-sql-managed-instance`)
       .then((r) => r.json())
       .then((j) => { if (j.ok) setInstances(j.instances || []); else setErr(j.error); })
-      .catch((e) => setErr(String(e)));
+      .catch((e) => setErr(String(e)))
+      .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Refresh', actions: [{ label: 'List instances' }] }] }]}
+      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Instances', actions: [{ label: 'Refresh list' }] }] }]}
       leftPanel={<div className={s.treePad}><Caption1>Managed Instance editor — list-only in v3. Query execution deferred to v3.x (TDS via dedicated PE in the MI subnet).</Caption1></div>}
       main={
         <div className={s.pad}>
+          {id === 'new' && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Managed Instances are provisioned out-of-band</MessageBarTitle>
+                Create via bicep <code>Microsoft.Sql/managedInstances</code> (45+ min deploy) or the Azure portal.
+                This is a read-only registry view.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          <div className={s.toolbar}>
+            <Button size="small" appearance="outline" onClick={refresh} disabled={loading}>Refresh list</Button>
+            {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
+          </div>
           {err && <BackendStateBar error={err} title="Azure SQL" />}
-          <Subtitle2>Managed Instances</Subtitle2>
+          <Subtitle2>Managed Instances ({instances.length})</Subtitle2>
           <div className={s.tableWrap}>
             <Table size="small">
               <TableHeader><TableRow>

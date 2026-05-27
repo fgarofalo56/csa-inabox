@@ -121,6 +121,10 @@ export function LakehouseEditor({ item, id }: Props) {
   const [sqlLoading, setSqlLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Phase 4.5 — positive feedback for upload / mkdir / delete so the user
+  // can tell the operation actually hit ADLS. Mirrors the "Saved at HH:MM:SS"
+  // pattern used by the document editors (notebook, pipeline, dataflow, etc.).
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ---- container load -------------------------------------------------
@@ -263,6 +267,7 @@ export function LakehouseEditor({ item, id }: Props) {
     const targetPath = prefix ? `${prefix.replace(/\/+$/, '')}/${file.name}` : file.name;
     setUploading(true);
     setActionError(null);
+    setActionStatus(null);
     try {
       const fd = new FormData();
       fd.set('container', activeContainer);
@@ -272,6 +277,8 @@ export function LakehouseEditor({ item, id }: Props) {
       const j = await r.json();
       if (!r.ok || j.ok === false) {
         setActionError(j.error || `Upload failed (HTTP ${r.status})`);
+      } else {
+        setActionStatus(`Uploaded ${file.name} at ${new Date().toLocaleTimeString()}`);
       }
     } catch (e: any) {
       setActionError(e?.message || String(e));
@@ -289,11 +296,13 @@ export function LakehouseEditor({ item, id }: Props) {
     const prefix = activePath?.isDirectory ? activePath.name : '';
     const targetPath = prefix ? `${prefix.replace(/\/+$/, '')}/${name}` : name;
     setActionError(null);
+    setActionStatus(null);
     try {
       const qs = new URLSearchParams({ container: activeContainer, path: targetPath });
       const r = await fetch(`/api/lakehouse/path?${qs.toString()}`, { method: 'POST' });
       const j = await r.json();
       if (!r.ok || j.ok === false) setActionError(j.error || `Mkdir failed (HTTP ${r.status})`);
+      else setActionStatus(`Folder ${targetPath} created at ${new Date().toLocaleTimeString()}`);
     } catch (e: any) {
       setActionError(e?.message || String(e));
     } finally {
@@ -309,6 +318,7 @@ export function LakehouseEditor({ item, id }: Props) {
       : false;
     if (!ok) return;
     setActionError(null);
+    setActionStatus(null);
     try {
       const qs = new URLSearchParams({
         container: activeContainer,
@@ -318,6 +328,7 @@ export function LakehouseEditor({ item, id }: Props) {
       const r = await fetch(`/api/lakehouse/path?${qs.toString()}`, { method: 'DELETE' });
       const j = await r.json();
       if (!r.ok || j.ok === false) setActionError(j.error || `Delete failed (HTTP ${r.status})`);
+      else setActionStatus(`Deleted ${entry.name} at ${new Date().toLocaleTimeString()}`);
       if (activePath?.name === entry.name) setActivePath(null);
     } catch (e: any) {
       setActionError(e?.message || String(e));
@@ -483,6 +494,11 @@ export function LakehouseEditor({ item, id }: Props) {
                 {actionError && (
                   <MessageBar intent="error">
                     <MessageBarBody>{actionError}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {actionStatus && !actionError && (
+                  <MessageBar intent="success">
+                    <MessageBarBody>{actionStatus}</MessageBarBody>
                   </MessageBar>
                 )}
                 {currentListing === 'loading' && <Spinner size="small" label="Listing paths…" labelPosition="after" />}

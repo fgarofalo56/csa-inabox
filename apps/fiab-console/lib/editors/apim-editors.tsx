@@ -179,15 +179,20 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
       return;
     }
     setStatus({ kind: 'saving' });
+    // Phase 4.5 — capture the body we're about to PUT before the await so
+    // if a user keystroke commits to React state mid-request we don't
+    // silently report success for bytes that were never sent. Status msg
+    // always references the snapshot we actually transmitted.
+    const body = { displayName, path, protocols: [...protocols], subscriptionRequired, serviceUrl: serviceUrl || undefined };
     try {
       const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ displayName, path, protocols, subscriptionRequired, serviceUrl: serviceUrl || undefined }),
+        body: JSON.stringify(body),
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
-      setStatus({ kind: 'ok', msg: `${j.api.displayName} (${j.api.name})` });
+      setStatus({ kind: 'ok', msg: `${j.api.displayName} (${j.api.name}) at ${new Date().toLocaleTimeString()}` });
       setApi({ loading: false, data: j.api });
       setDirty(false);
       loadOps();
@@ -368,15 +373,18 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
   const save = useCallback(async () => {
     if (!displayName.trim()) { setStatus({ kind: 'err', msg: 'displayName is required' }); return; }
     setStatus({ kind: 'saving' });
+    // Phase 4.5 — snapshot body before await so the user can keep typing
+    // without the request landing on bytes that differ from what we sent.
+    const body = { displayName, description, state, subscriptionRequired, approvalRequired };
     try {
       const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ displayName, description, state, subscriptionRequired, approvalRequired }),
+        body: JSON.stringify(body),
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
-      setStatus({ kind: 'ok', msg: `${j.product.displayName} (${j.product.state})` });
+      setStatus({ kind: 'ok', msg: `${j.product.displayName} (${j.product.state}) at ${new Date().toLocaleTimeString()}` });
       setProduct({ loading: false, data: j.product });
       setDirty(false);
     } catch (e: any) {
@@ -522,7 +530,13 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
   }, [load, scopeKind, apiId, productId, operationId]);
 
   const save = useCallback(async () => {
-    const check = isWellFormedXml(value);
+    // Phase 4.5 — snapshot the XML buffer via functional setter so the
+    // bytes validated, sent, and reflected back in the status match the
+    // user's actual edit even if Monaco fires another onChange during the
+    // await. Mirrors notebook-editor.tsx patchCell snapshot pattern.
+    let snapshot = value;
+    setValue((prev) => { snapshot = prev; return prev; });
+    const check = isWellFormedXml(snapshot);
     if (!check.ok) { setStatus({ kind: 'err', msg: `Invalid XML: ${check.error}` }); return; }
     if (scopeKind === 'api' && !apiId) { setStatus({ kind: 'err', msg: 'apiId is required for API scope' }); return; }
     if (scopeKind === 'product' && !productId) { setStatus({ kind: 'err', msg: 'productId is required for product scope' }); return; }
@@ -532,11 +546,11 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
       const r = await fetch(`/api/items/apim-policy/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ scope: scopeKind, apiId, productId, operationId, value }),
+        body: JSON.stringify({ scope: scopeKind, apiId, productId, operationId, value: snapshot }),
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
-      setStatus({ kind: 'ok', msg: `Policy saved at scope: ${j.scope}` });
+      setStatus({ kind: 'ok', msg: `Policy saved at scope: ${j.scope} at ${new Date().toLocaleTimeString()}` });
       setDirty(false);
     } catch (e: any) {
       setStatus({ kind: 'err', msg: e?.message || String(e) });

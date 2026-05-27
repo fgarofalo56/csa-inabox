@@ -423,6 +423,7 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
   const save = useCallback(async () => {
     if (!selected) return;
     setBusy(true); setError(null);
+    try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
     try {
       const parsed = JSON.parse(spec);
       const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(selected)}`, {
@@ -432,6 +433,7 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'save failed');
       setOrigSpec(spec);
+      try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: selected } })); } catch {}
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [selected, spec]);
@@ -456,6 +458,18 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
   const dirty = spec !== origSpec;
   const activities = extractActivities(spec);
   const activityCount = activities.length;
+
+  // v3.28 Phase 4.5: Ctrl+S triggers Save when dirty. Mirrors Synapse Studio + ADF.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (selected && dirty && !busy) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, dirty, busy, save]);
 
   // Phase-2 palette: append a freshly-templated activity to
   // properties.activities[] and re-serialize the spec JSON.
@@ -759,6 +773,7 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
   const save = useCallback(async () => {
     if (!selected) return;
     setBusy(true); setError(null);
+    try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
     try {
       const parsed = JSON.parse(spec);
       const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(selected)}`, {
@@ -768,6 +783,7 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'save failed');
       setOrigSpec(spec);
+      try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: selected } })); } catch {}
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [selected, spec]);
@@ -809,6 +825,18 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
   const activityCount = (() => {
     try { return (JSON.parse(spec)?.properties?.activities || []).length; } catch { return 0; }
   })();
+
+  // v3.28 Phase 4.5: Ctrl+S to save when dirty. Matches ADF Studio.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (selected && dirty && !busy) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, dirty, busy, save]);
 
   // Phase-2 palette: append a freshly-templated activity to
   // properties.activities[] and re-serialize the spec JSON.
@@ -1026,16 +1054,30 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
           typeProperties,
         },
       };
+      try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
       const r = await fetch(`/api/items/adf-dataset/${encodeURIComponent(selected)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'save failed');
+      try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: selected } })); } catch {}
       await loadDataset(selected);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [selected, linkedService, type, path, ds, loadDataset]);
+
+  // v3.28 Phase 4.5: Ctrl+S triggers Save. Mirrors ADF Studio behavior.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (selected && !busy) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, busy, save]);
 
   const createNew = useCallback(async () => {
     const name = window.prompt('New dataset name');
@@ -1253,16 +1295,30 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
           typeProperties,
         },
       };
+      try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
       const r = await fetch(`/api/items/adf-trigger/${encodeURIComponent(selected)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'save failed');
+      try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: selected } })); } catch {}
       await loadTrigger(selected);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [selected, targetPipeline, type, frequency, interval, timeZone, loadTrigger]);
+
+  // v3.28 Phase 4.5: Ctrl+S triggers Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (selected && !busy && targetPipeline) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, busy, targetPipeline, save]);
 
   const setState = useCallback(async (action: 'start' | 'stop') => {
     if (!selected) return;

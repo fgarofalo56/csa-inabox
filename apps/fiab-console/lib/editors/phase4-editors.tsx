@@ -10,7 +10,7 @@
  * No mock data; errors surface in MessageBar.
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner,
   Tab, TabList,
@@ -406,7 +406,18 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
-  const [state, setState] = useState<T>(fallback);
+  const [state, setStateRaw] = useState<T>(fallback);
+  // Phase 4.5 — dirty flag: any external setState call (typing, button click,
+  // patch/etc.) flips this true. load() / save() reset it false. SaveBar +
+  // Ctrl+S handler read it to gate behavior.
+  const [dirty, setDirty] = useState(false);
+  // Suppress dirty when load() applies server state.
+  const suppressDirty = useRef(false);
+
+  const setState = useCallback<typeof setStateRaw>((updater) => {
+    setStateRaw(updater as any);
+    if (!suppressDirty.current) setDirty(true);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -416,7 +427,12 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
       if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); return; }
       const doc = j as ItemDoc;
       if (doc.state && typeof doc.state === 'object') {
-        setState({ ...fallback, ...(doc.state as T) });
+        suppressDirty.current = true;
+        setStateRaw({ ...fallback, ...(doc.state as T) });
+        setDirty(false);
+        // Release the suppression on next tick so user-triggered setState
+        // calls after this load() correctly mark dirty.
+        queueMicrotask(() => { suppressDirty.current = false; });
       }
       setSavedAt(doc.updatedAt || null);
     } catch (e: any) { setError(e?.message || String(e)); }
@@ -438,21 +454,43 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
       const j = await r.json();
       if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); return false; }
       setSavedAt(j?.updatedAt || new Date().toISOString());
+      // Phase 4.5: explicit save success → no longer dirty. When called
+      // programmatically with a `next` arg (publish-then-save, materialize-
+      // then-save, deploy-then-save), also clear dirty — the next arg IS
+      // the snapshot we just persisted.
+      setDirty(false);
       return true;
     } catch (e: any) { setError(e?.message || String(e)); return false; }
     finally { setSaving(false); }
   }, [slug, id, state]);
 
-  return { state, setState, loading, saving, error, savedAt, save, reload: load };
+  // Phase 4.5 — Ctrl+S / Cmd+S shortcut.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (dirty && !saving) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dirty, saving, save]);
+
+  return { state, setState, loading, saving, error, savedAt, save, reload: load, dirty };
 }
 
-function SaveBar({ saving, savedAt, error, onSave, extraRight }: {
+function SaveBar({ saving, savedAt, error, onSave, extraRight, dirty }: {
   saving: boolean; savedAt: string | null; error: string | null;
   onSave: () => void; extraRight?: ReactNode;
+  // Phase 4.5 — when provided, gates Save button + shows "unsaved" badge.
+  dirty?: boolean;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
-      <Button appearance="primary" onClick={onSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+      <Button appearance="primary" onClick={onSave} disabled={saving || dirty === false}>
+        {saving ? 'Saving…' : dirty === false ? 'Saved' : 'Save (Ctrl+S)'}
+      </Button>
+      {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
       {savedAt && !saving && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Saved {new Date(savedAt).toLocaleTimeString()}</Caption1>}
       {error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{error}</Caption1>}
       <div style={{ flex: 1 }} />
@@ -472,7 +510,7 @@ const GQL_RIBBON: RibbonTab[] = [
 interface GqlState { displayName: string; path: string; serviceUrl: string; sdl: string; description: string; subscriptionRequired: boolean; lastPublishedAt?: string; lastPublishedTo?: string; [k: string]: unknown }
 export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<GqlState>('graphql-api', id, {
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<GqlState>('graphql-api', id, {
     displayName: '', path: '', serviceUrl: '', sdl: GQL_SAMPLE, description: '', subscriptionRequired: true,
   });
   const [publishing, setPublishing] = useState(false);
@@ -538,7 +576,7 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
           </MessageBar>
         )}
         <SaveBar
-          saving={saving} savedAt={savedAt} error={error} onSave={() => save()}
+          saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
           extraRight={<Button onClick={publish} disabled={publishing || saving}>{publishing ? 'Publishing…' : 'Publish to APIM'}</Button>}
         />
       </div>
@@ -557,7 +595,7 @@ const UDF_RIBBON: RibbonTab[] = [
 interface UdfState { runtime: 'python' | 'node' | 'dotnet'; entrypoint: string; source: string; functionAppName: string; connections: string; [k: string]: unknown }
 export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<UdfState>('user-data-function', id, {
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<UdfState>('user-data-function', id, {
     runtime: 'python', entrypoint: 'compute_score', source: UDF_SAMPLE, functionAppName: '', connections: '',
   });
   return (
@@ -594,7 +632,7 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
         <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="python" height={320} minHeight={240} ariaLabel="Function source" />
         <Caption1>Connections (comma-separated workspace items)</Caption1>
         <Input value={state.connections} onChange={(_, d) => setState((p) => ({ ...p, connections: d.value }))} placeholder="fin-warehouse, ldn-gold-lakehouse" />
-        <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+        <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
     } />
   );
@@ -661,7 +699,7 @@ function validateVarValue(type: VarType, value: string): string | null {
 
 export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<VlState>('variable-library', id, {
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<VlState>('variable-library', id, {
     variables: [
       { name: 'ENV', type: 'string', default: 'dev' },
       { name: 'BatchSize', type: 'number', default: '5000' },
@@ -741,7 +779,7 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
             </TableBody>
           </Table>
           <Button onClick={addRow} style={{ alignSelf: 'flex-start' }}>+ New variable</Button>
-          <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+          <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
         </div>
       </>
     } />
@@ -765,7 +803,7 @@ function parseOntologyHierarchy(src: string): { name: string; parent?: string; d
 
 export function OntologyEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<OntoState>('ontology', id, { source: ONTO_SAMPLE });
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<OntoState>('ontology', id, { source: ONTO_SAMPLE });
   const classes = parseOntologyHierarchy(state.source || '');
   const [materializing, setMaterializing] = useState(false);
   const [matMsg, setMatMsg] = useState<string | null>(null);
@@ -854,7 +892,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
             )}
           </div>
         </div>
-        <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+        <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
     } />
   );
@@ -870,7 +908,7 @@ interface GraphState { nodes: GraphDecl[]; edges: GraphDecl[]; database: string;
 
 export function GraphModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<GraphState>('graph-model', id, {
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<GraphState>('graph-model', id, {
     nodes: [{ name: 'Customer', properties: [{ name: 'name', type: 'string' }] }],
     edges: [{ name: 'PLACED', properties: [{ name: 'at', type: 'datetime' }] }],
     database: 'loomdb-default',
@@ -951,7 +989,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
           </MessageBar>
         )}
         <SaveBar
-          saving={saving} savedAt={savedAt} error={error} onSave={() => save()}
+          saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
           extraRight={<Button onClick={materialize} disabled={materializing || saving}>{materializing ? 'Materializing…' : 'Materialize to ADX'}</Button>}
         />
       </div>
@@ -968,7 +1006,7 @@ const PLAN_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
 
 export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<PlanState>('plan', id, {
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<PlanState>('plan', id, {
     tasks: [{ title: 'Define semantic model', owner: '', due: '', status: 'todo' }],
   });
   // v3.28 Phase 4.5: functional setState so rapid Update/Add/Delete edits don't
@@ -1051,7 +1089,7 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
           </TableBody>
         </Table>
         <Button onClick={add} style={{ alignSelf: 'flex-start' }}>+ New task</Button>
-        <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+        <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
     } />
   );
@@ -1066,7 +1104,7 @@ const MAP_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
 
 export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<MapState>('map', id, { geojson: GEO_SAMPLE });
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<MapState>('map', id, { geojson: GEO_SAMPLE });
   let parseErr: string | null = null;
   let featureCount = 0;
   let bbox: { minLon: number; maxLon: number; minLat: number; maxLat: number } | null = null;
@@ -1128,7 +1166,7 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
             <Caption1>Static-map preview only — features above are NOT rendered as overlays in this snapshot. Use the vector overlay path in v2.x for live layer rendering.</Caption1>
           </>
         )}
-        <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+        <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
     } />
   );
@@ -1157,7 +1195,7 @@ interface DeployResponse {
 
 export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, reload } = useItemState<AgentState>('operations-agent', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<AgentState>('operations-agent', id, {
     systemPrompt: 'You monitor real-time operational signals and trigger actions when thresholds are breached.',
     model: 'gpt-4o', tools: 'eventhouse-query, activator-trigger', eventhouse: '', ontology: '',
   });
@@ -1231,7 +1269,7 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
           </MessageBar>
         )}
         <SaveBar
-          saving={saving} savedAt={savedAt} error={error} onSave={() => save()}
+          saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
           extraRight={
             <Button appearance="primary" onClick={onDeploy} disabled={deploying || saving}>
               {deploying ? 'Deploying…' : 'Deploy to Foundry'}
@@ -1256,7 +1294,7 @@ interface DataAgentState {
 }
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, reload } = useItemState<DataAgentState>('data-agent', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<DataAgentState>('data-agent', id, {
     systemPrompt: 'You are a finance analyst. Always use dim_date and roll metrics by quarter unless asked otherwise.',
     model: 'gpt-4o',
     sources: 'fin-warehouse, orders semantic model, ldn-gold-lakehouse, ontology-finance',
@@ -1338,7 +1376,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
           </MessageBar>
         )}
         <SaveBar
-          saving={saving} savedAt={savedAt} error={error} onSave={() => save()}
+          saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
           extraRight={
             <Button appearance="primary" onClick={onDeploy} disabled={deploying || saving}>
               {deploying ? 'Deploying…' : 'Deploy to Foundry'}

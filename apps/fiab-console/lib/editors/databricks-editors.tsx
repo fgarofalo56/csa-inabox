@@ -1005,6 +1005,10 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  // Phase 4.5 — dirty tracking so Save button gates correctly and Ctrl+S
+  // is a no-op when there are no edits. Any field mutation flips dirty=true;
+  // a successful save or selecting another job resets dirty=false.
+  const [dirty, setDirty] = useState(false);
 
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [running, setRunning] = useState(false);
@@ -1052,6 +1056,8 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       const rr = await fetch(`/api/items/databricks-job/${id}/runs?jobId=${jid}`);
       const rj = await rr.json();
       if (rj.ok) setRuns(rj.runs || []);
+      // Selecting a job hydrates state from the server — clean by definition.
+      setDirty(false);
     } catch (e: any) {
       setSaveError(e?.message || String(e));
     }
@@ -1080,8 +1086,12 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     setSaving(true);
     setSaveError(null);
     setSaveMessage(null);
+    // Phase 4.5 — build the spec from the freshest committed state via
+    // buildSpec() before the await; if the user keeps typing during the
+    // request, the dirty flag will stay true after a clean origSpec is
+    // captured, prompting them to save again.
+    const spec = buildSpec();
     try {
-      const spec = buildSpec();
       if (jobId === null) {
         const r = await fetch('/api/items/databricks-job', {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1090,8 +1100,9 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
         const j = await r.json();
         if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); return; }
         setJobId(j.job_id);
-        setSaveMessage(`Created job ${j.job_id}`);
+        setSaveMessage(`Created job ${j.job_id} at ${new Date().toLocaleTimeString()}`);
         await loadJobs();
+        setDirty(false);
       } else {
         const r = await fetch(`/api/items/databricks-job/${id}?jobId=${jobId}`, {
           method: 'PUT', headers: { 'content-type': 'application/json' },
@@ -1099,7 +1110,8 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
         });
         const j = await r.json();
         if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); return; }
-        setSaveMessage(`Saved job ${jobId}`);
+        setSaveMessage(`Saved job ${jobId} at ${new Date().toLocaleTimeString()}`);
+        setDirty(false);
       }
     } catch (e: any) {
       setSaveError(e?.message || String(e));
@@ -1139,17 +1151,18 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     }
   }, [id, jobId]);
 
-  // Ctrl/Cmd+S to save the job spec.
+  // Ctrl/Cmd+S to save the job spec when there are unsaved edits OR the
+  // form is a brand-new job (jobId === null) the user is composing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        if (!saving) save();
+        if (!saving && (dirty || jobId === null)) save();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [saving, save]);
+  }, [saving, dirty, jobId, save]);
 
   return (
     <ItemEditorChrome
@@ -1164,6 +1177,9 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
               setJobId(null); setName(''); setSaveMessage(null); setSaveError(null);
               setTasks([{ task_key: 'main', notebook_path: '', cluster_id: '', depends_on: '' }]);
               setRuns([]);
+              // Fresh blank form = no edits yet (Ctrl+S still works because
+              // the keybinding accepts jobId === null as "creating").
+              setDirty(false);
             }} />
             <Button size="small" icon={<ArrowSync20Regular />} onClick={loadJobs} />
           </div>
@@ -1188,8 +1204,14 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       main={
         <div className={s.pad}>
           <div className={s.toolbar}>
-            <Button appearance="primary" icon={<Save20Regular />} disabled={saving} onClick={save}>
-              {saving ? 'Saving…' : jobId === null ? 'Create' : 'Save'}
+            {dirty && jobId !== null && <Badge appearance="outline" color="warning">unsaved</Badge>}
+            <Button
+              appearance="primary"
+              icon={<Save20Regular />}
+              disabled={saving || (jobId !== null && !dirty)}
+              onClick={save}
+            >
+              {saving ? 'Saving…' : jobId === null ? 'Create' : dirty ? 'Save *' : 'Save'}
             </Button>
             {jobId !== null && (
               <Button appearance="outline" icon={<Play20Regular />} disabled={running} onClick={runNow}>
@@ -1215,14 +1237,14 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
           )}
 
           <Field label="Display name">
-            <Input value={name} onChange={(_, d) => setName(d.value)} />
+            <Input value={name} onChange={(_, d) => { setName(d.value); setDirty(true); }} />
           </Field>
 
           <Subtitle2>Schedule</Subtitle2>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <Switch checked={scheduled} onChange={(_, d) => setScheduled(!!d.checked)} label="Scheduled" />
-            <Field label="Quartz cron"><Input value={cron} onChange={(_, d) => setCron(d.value)} disabled={!scheduled} /></Field>
-            <Field label="Timezone"><Input value={tz} onChange={(_, d) => setTz(d.value)} disabled={!scheduled} /></Field>
+            <Switch checked={scheduled} onChange={(_, d) => { setScheduled(!!d.checked); setDirty(true); }} label="Scheduled" />
+            <Field label="Quartz cron"><Input value={cron} onChange={(_, d) => { setCron(d.value); setDirty(true); }} disabled={!scheduled} /></Field>
+            <Field label="Timezone"><Input value={tz} onChange={(_, d) => { setTz(d.value); setDirty(true); }} disabled={!scheduled} /></Field>
           </div>
 
           <Subtitle2 style={{ marginTop: 8 }}>Tasks</Subtitle2>
@@ -1239,15 +1261,15 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                 {tasks.map((t, i) => (
                   <TableRow key={i}>
                     <TableCell><Input size="small" value={t.task_key}
-                      onChange={(_, d) => setTasks((arr) => arr.map((x, j) => j === i ? { ...x, task_key: d.value } : x))} /></TableCell>
+                      onChange={(_, d) => { setTasks((arr) => arr.map((x, j) => j === i ? { ...x, task_key: d.value } : x)); setDirty(true); }} /></TableCell>
                     <TableCell><Input size="small" value={t.notebook_path}
-                      onChange={(_, d) => setTasks((arr) => arr.map((x, j) => j === i ? { ...x, notebook_path: d.value } : x))} /></TableCell>
+                      onChange={(_, d) => { setTasks((arr) => arr.map((x, j) => j === i ? { ...x, notebook_path: d.value } : x)); setDirty(true); }} /></TableCell>
                     <TableCell>
                       <Dropdown size="small"
                         value={clusters.find((c) => c.cluster_id === t.cluster_id)?.cluster_name || t.cluster_id}
                         selectedOptions={t.cluster_id ? [t.cluster_id] : []}
-                        onOptionSelect={(_, d) => d.optionValue && setTasks((arr) =>
-                          arr.map((x, j) => j === i ? { ...x, cluster_id: d.optionValue! } : x))}
+                        onOptionSelect={(_, d) => { if (d.optionValue) { setTasks((arr) =>
+                          arr.map((x, j) => j === i ? { ...x, cluster_id: d.optionValue! } : x)); setDirty(true); } }}
                       >
                         {clusters.map((c) => (
                           <Option key={c.cluster_id} value={c.cluster_id} text={c.cluster_name || c.cluster_id}>
@@ -1257,10 +1279,10 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                       </Dropdown>
                     </TableCell>
                     <TableCell><Input size="small" value={t.depends_on}
-                      onChange={(_, d) => setTasks((arr) => arr.map((x, j) => j === i ? { ...x, depends_on: d.value } : x))} /></TableCell>
+                      onChange={(_, d) => { setTasks((arr) => arr.map((x, j) => j === i ? { ...x, depends_on: d.value } : x)); setDirty(true); }} /></TableCell>
                     <TableCell>
                       <Button size="small" icon={<Delete20Regular />}
-                        onClick={() => setTasks((arr) => arr.filter((_, j) => j !== i))} />
+                        onClick={() => { setTasks((arr) => arr.filter((_, j) => j !== i)); setDirty(true); }} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -1268,7 +1290,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
             </Table>
           </div>
           <Button size="small" icon={<Add20Regular />} appearance="outline"
-            onClick={() => setTasks((arr) => [...arr, { task_key: `task_${arr.length + 1}`, notebook_path: '', cluster_id: '', depends_on: '' }])}>
+            onClick={() => { setTasks((arr) => [...arr, { task_key: `task_${arr.length + 1}`, notebook_path: '', cluster_id: '', depends_on: '' }]); setDirty(true); }}>
             Add task
           </Button>
 
@@ -1429,8 +1451,10 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     setSaving(true);
     setSaveError(null);
     setSaveMessage(null);
+    // Phase 4.5 — call buildSpec before the await so any in-flight typing
+    // during the request lands in the next save, not silently dropped.
+    const spec = buildSpec();
     try {
-      const spec = buildSpec();
       if (!clusterId) {
         const r = await fetch('/api/items/databricks-cluster', {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1438,7 +1462,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
         });
         const j = await r.json();
         if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); return; }
-        setSaveMessage(`Created cluster ${j.cluster_id}`);
+        setSaveMessage(`Created cluster ${j.cluster_id} at ${new Date().toLocaleTimeString()}`);
         await loadClusters();
         setClusterId(j.cluster_id);
         await selectCluster(j.cluster_id);

@@ -470,22 +470,32 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
   }, [queries, dirty, selectedIdx]);
 
   const addQuery = useCallback(() => {
-    // Carry the dirty draft of the currently-selected query into the
-    // queries[] array before appending — otherwise the new entry replaces
-    // the user's unsaved edit in the visible list.
-    const carried = queries.map((q, i) => i === selectedIdx ? draft : q);
-    const next = [...carried, { title: `Query ${carried.length + 1}`, kql: '' }];
-    setQueries(next); setSelectedIdx(next.length - 1); setDraft(next[next.length - 1]); setDirty(true);
-    setSaveMsg(null);
-  }, [queries, selectedIdx, draft]);
+    // Phase 4.5 — functional setQueries so back-to-back clicks before
+    // re-render cannot drop entries. Carry the dirty draft of the
+    // currently-selected query into the queries[] array before appending
+    // — otherwise the new entry replaces the user's unsaved edit.
+    setQueries((prev) => {
+      const carried = prev.map((q, i) => i === selectedIdx ? draft : q);
+      const next = [...carried, { title: `Query ${carried.length + 1}`, kql: '' }];
+      setSelectedIdx(next.length - 1);
+      setDraft(next[next.length - 1]);
+      return next;
+    });
+    setDirty(true); setSaveMsg(null);
+  }, [selectedIdx, draft]);
 
   const deleteQuery = useCallback((idx: number) => {
-    const next = queries.filter((_, i) => i !== idx);
-    setQueries(next);
-    const newIdx = Math.max(0, Math.min(idx - 1, next.length - 1));
-    setSelectedIdx(newIdx); setDraft(next[newIdx] || SAMPLE_QS); setDirty(true);
-    setSaveMsg(null);
-  }, [queries]);
+    // Phase 4.5 — functional setter so multiple deletes in flight don't
+    // operate on a stale array.
+    setQueries((prev) => {
+      const next = prev.filter((_, i) => i !== idx);
+      const newIdx = Math.max(0, Math.min(idx - 1, next.length - 1));
+      setSelectedIdx(newIdx);
+      setDraft(next[newIdx] || SAMPLE_QS);
+      return next;
+    });
+    setDirty(true); setSaveMsg(null);
+  }, []);
 
   const saveAll = useCallback(async () => {
     setSaving(true); setSaveErr(null); setSaveMsg('Saving…');
@@ -662,18 +672,27 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   useEffect(() => { load(true); }, [load]);
 
   const addTile = useCallback(() => {
-    const next: Tile[] = [...tiles, { title: `Tile ${tiles.length + 1}`, kql: 'print value = 1', viz: 'table' }];
-    setTiles(next); setExpandedIdx(next.length - 1); setDirty(true);
-  }, [tiles]);
+    // Phase 4.5 — functional setter so rapid clicks each create a new tile.
+    setTiles((prev) => {
+      const next: Tile[] = [...prev, { title: `Tile ${prev.length + 1}`, kql: 'print value = 1', viz: 'table' }];
+      setExpandedIdx(next.length - 1);
+      return next;
+    });
+    setDirty(true);
+  }, []);
 
   const deleteTile = useCallback((idx: number) => {
-    setTiles(tiles.filter((_, i) => i !== idx)); setDirty(true);
-    if (expandedIdx === idx) setExpandedIdx(null);
-  }, [tiles, expandedIdx]);
+    setTiles((prev) => prev.filter((_, i) => i !== idx));
+    setDirty(true);
+    setExpandedIdx((cur) => (cur === idx ? null : cur));
+  }, []);
 
   const updateTile = useCallback((idx: number, patch: Partial<Tile>) => {
-    setTiles(tiles.map((t, i) => i === idx ? { ...t, ...patch } : t)); setDirty(true);
-  }, [tiles]);
+    // Phase 4.5 — functional setter prevents one keystroke from clobbering
+    // another when the user types fast in the inline editor.
+    setTiles((prev) => prev.map((t, i) => i === idx ? { ...t, ...patch } : t));
+    setDirty(true);
+  }, []);
 
   const save = useCallback(async () => {
     setSaving(true); setSaveErr(null); setSaveMsg('Saving…');

@@ -271,13 +271,23 @@ export function SetupWizardPane() {
 
         {state.step === 'deploying' && (
           <>
-            <Body1 weight="semibold">Deploying...</Body1>
-            <ProgressBar value={state.deployProgress ?? 0} />
+            <Body1 weight="semibold">{state.deployError ? 'Deployment failed' : 'Deploying…'}</Body1>
+            {!state.deployError && <ProgressBar value={state.deployProgress ?? 0} />}
             <Body1>{state.deployStage}</Body1>
             {state.deployError && (
-              <MessageBar intent="error">
-                <MessageBarBody>{state.deployError}</MessageBarBody>
-              </MessageBar>
+              <>
+                <MessageBar intent="error">
+                  <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{state.deployError}</MessageBarBody>
+                </MessageBar>
+                <div className={styles.buttons}>
+                  <Button onClick={() => setState((s) => ({ ...s, step: 'review', deployError: undefined }))}>
+                    Back to review
+                  </Button>
+                  <Button appearance="primary" onClick={deploy}>
+                    Retry deploy
+                  </Button>
+                </div>
+              </>
             )}
           </>
         )}

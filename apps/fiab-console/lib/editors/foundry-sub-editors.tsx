@@ -211,6 +211,10 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
   const [list, reload] = useApi<{ flows: any[] }>(project ? `/api/items/prompt-flow?project=${encodeURIComponent(project)}` : null, [project]);
   const [selected, setSelected] = useState<string | null>(null);
   const [defText, setDefText] = useState('');
+  // Phase 4.5 — track whether the user has typed into defText. Without this
+  // the useEffect that syncs from detail.data would clobber unsaved edits
+  // whenever the list reloads (background polling, user clicked Reload, etc).
+  const [defDirty, setDefDirty] = useState(false);
   const [runInputs, setRunInputs] = useState('{}');
   const [runResult, setRunResult] = useState<any>(null);
   const [running, setRunning] = useState(false);
@@ -219,7 +223,17 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
 
   const detailUrl = project && selected ? `/api/items/prompt-flow/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}` : null;
   const [detail] = useApi<{ flow: any }>(detailUrl, [project, selected]);
-  useEffect(() => { if (detail.data?.flow) setDefText(JSON.stringify(detail.data.flow.flowDefinition || detail.data.flow, null, 2)); }, [detail.data]);
+  useEffect(() => {
+    // Only adopt server flow definition when the user hasn't typed into the
+    // local editor since the last selection. Prevents clobbering edits.
+    if (detail.data?.flow && !defDirty) {
+      setDefText(JSON.stringify(detail.data.flow.flowDefinition || detail.data.flow, null, 2));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.data]);
+
+  // Resetting selection clears the dirty flag so the next flow's body loads.
+  useEffect(() => { setDefDirty(false); }, [selected]);
 
   const runFlow = async () => {
     if (!project || !selected) return;
@@ -264,7 +278,16 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
       {selected && (
         <div className={s.card}>
           <Subtitle2>Flow: {selected}</Subtitle2>
-          <MonacoTextarea value={defText} onChange={setDefText} language="json" height={300} minHeight={200} ariaLabel="Prompt Flow definition" />
+          <MessageBar intent="info">
+            <MessageBarBody>
+              <MessageBarTitle>Definition is view-only in v2.5</MessageBarTitle>
+              The flow JSON is fetched from the Foundry runtime for inspection. Editing-and-saving the
+              flow definition (PUT against the Foundry prompt-flow API) lands in v2.6 — edits here
+              affect only the Run preview below and are not persisted.
+            </MessageBarBody>
+          </MessageBar>
+          <MonacoTextarea value={defText} onChange={(v) => { setDefText(v); setDefDirty(true); }} language="json" height={300} minHeight={200} ariaLabel="Prompt Flow definition" />
+          {defDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Edits are local-only; Run uses the edited JSON for this session.</Caption1>}
           <Subtitle2 style={{ marginTop: 8 }}>Run inputs (JSON)</Subtitle2>
           <MonacoTextarea value={runInputs} onChange={setRunInputs} language="json" height={140} minHeight={80} ariaLabel="Run inputs JSON" />
           <div className={s.toolbar} style={{ marginTop: 8 }}>

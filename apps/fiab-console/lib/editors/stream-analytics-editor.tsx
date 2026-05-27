@@ -144,15 +144,21 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const save = useCallback(async () => {
     if (!selected) return;
     setBusy(true); setStatus(null); setError(null);
+    // Phase 4.5 — snapshot via functional setter so the PUT body and the
+    // origQuery we land on success match exactly the bytes we sent, even
+    // if the user keeps typing while the request is in flight. Mirrors the
+    // notebook-editor.tsx patchCell fix landed 2026-05-27.
+    let snapshot = query;
+    setQuery((prev) => { snapshot = prev; return prev; });
     try {
       const r = await fetch(`/api/items/stream-analytics-job/${encodeURIComponent(selected)}/query`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query: snapshot }),
       });
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'Save failed'); return; }
       setStatus(`Query saved at ${new Date().toLocaleTimeString()}`);
-      setOrigQuery(query);
+      setOrigQuery(snapshot);
     } finally { setBusy(false); }
   }, [selected, query]);
 
