@@ -425,6 +425,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'AZURE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             { name: 'SESSION_SECRET', secretRef: 'session-secret' }
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+            // Microsoft Graph user enrichment — flipped ON by default so
+            // /admin/users surfaces displayName + department from Entra.
+            // The Console UAMI also needs the Graph Directory.Read.All
+            // app-role grant, which the
+            // scripts/csa-loom/grant-uami-graph-roles.sh post-deploy
+            // bootstrap step performs (idempotent).
+            { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
             // Dataverse auth — UAMIs can't be Dataverse Application Users
             // (Microsoft platform restriction), so re-use the MSAL Web App
             // SP credentials. The SP must be registered as a Dataverse
@@ -435,6 +442,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DATAVERSE_TENANT_ID', value: tenant().tenantId }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+            { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
           ]
         )
         secrets: !empty(loomMsalClientId) ? [
