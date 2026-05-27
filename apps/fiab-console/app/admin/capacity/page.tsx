@@ -1,14 +1,20 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import {
-  Body1, Caption1, Subtitle2, Badge, Spinner,
+  Body1, Caption1, Badge, Spinner, Input, Dropdown, Option,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import { Open16Regular, Search24Regular } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+
+function portalUrl(id: string): string {
+  // Azure portal deep-link to the resource Overview blade.
+  return `https://portal.azure.com/#@/resource${id}/overview`;
+}
 
 /**
  * /admin/capacity — Live inventory of Azure resources Loom orchestrates.
@@ -66,6 +72,8 @@ export default function CapacityPage() {
   const styles = useStyles();
   const [data, setData] = useState<Response | null>(null);
   const [unauth, setUnauth] = useState(false);
+  const [q, setQ] = useState('');
+  const [provider, setProvider] = useState('');
 
   useEffect(() => {
     fetch('/api/admin/azure-resources').then(r => {
@@ -73,6 +81,22 @@ export default function CapacityPage() {
       return r.json();
     }).then(d => { if (d) setData(d); }).catch(e => setData({ ok: false, error: String(e) }));
   }, []);
+
+  const visibleResources = useMemo(() => {
+    const all = data?.resources || [];
+    const f = q.toLowerCase().trim();
+    return all.filter((r) => {
+      if (provider && !r.type.toLowerCase().includes(provider.toLowerCase())) return false;
+      if (!f) return true;
+      return (
+        r.name.toLowerCase().includes(f) ||
+        r.type.toLowerCase().includes(f) ||
+        r.resourceGroup.toLowerCase().includes(f) ||
+        (r.sku || '').toLowerCase().includes(f) ||
+        (r.kind || '').toLowerCase().includes(f)
+      );
+    });
+  }, [data, q, provider]);
 
   return (
     <AdminShell sectionTitle="Capacity & compute">
@@ -119,6 +143,28 @@ export default function CapacityPage() {
             </MessageBar>
           )}
 
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 }}>
+            <Input
+              contentBefore={<Search24Regular />}
+              placeholder="Filter by name, type, RG, SKU…"
+              value={q}
+              onChange={(_, d) => setQ(d.value)}
+              style={{ flex: 1, maxWidth: 360 }}
+            />
+            <Dropdown
+              value={provider || 'All providers'}
+              selectedOptions={[provider]}
+              onOptionSelect={(_, d) => setProvider(d.optionValue ?? '')}
+              style={{ minWidth: 200 }}
+            >
+              <Option value="">All providers</Option>
+              {Object.keys(data.byProvider || {}).map((p) => <Option key={p} value={p}>{p}</Option>)}
+            </Dropdown>
+            <Caption1 style={{ marginLeft: 'auto', color: tokens.colorNeutralForeground3 }}>
+              {visibleResources.length} of {data.totalResources}
+            </Caption1>
+          </div>
+
           <Table size="small">
             <TableHeader>
               <TableRow>
@@ -128,10 +174,11 @@ export default function CapacityPage() {
                 <TableHeaderCell>Resource group</TableHeaderCell>
                 <TableHeaderCell>SKU / Kind</TableHeaderCell>
                 <TableHeaderCell>State</TableHeaderCell>
+                <TableHeaderCell></TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(data.resources || []).map(r => (
+              {visibleResources.map(r => (
                 <TableRow key={r.id}>
                   <TableCell><strong>{r.name}</strong></TableCell>
                   <TableCell><Caption1>{r.type.replace('Microsoft.', '')}</Caption1></TableCell>
@@ -146,8 +193,23 @@ export default function CapacityPage() {
                         </Badge>
                       : <Caption1>—</Caption1>}
                   </TableCell>
+                  <TableCell>
+                    <a
+                      href={portalUrl(r.id)}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}
+                    >
+                      Azure portal <Open16Regular />
+                    </a>
+                  </TableCell>
                 </TableRow>
               ))}
+              {visibleResources.length === 0 && (
+                <TableRow><TableCell colSpan={7}>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No resources match the current filters.</Caption1>
+                </TableCell></TableRow>
+              )}
             </TableBody>
           </Table>
 

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import Link from 'next/link';
 import {
   Title2,
   Body1,
@@ -9,6 +10,10 @@ import {
   Button,
   Input,
   Avatar,
+  MessageBar,
+  MessageBarBody,
+  MessageBarTitle,
+  MessageBarActions,
 } from '@fluentui/react-components';
 import { Send24Regular, Bot24Regular, Person24Regular } from '@fluentui/react-icons';
 
@@ -54,11 +59,19 @@ const useStyles = makeStyles({
   composer: { display: 'flex', gap: '8px', marginTop: '12px' },
 });
 
+interface Remediation {
+  message?: string;
+  redirectTo?: string;
+  env?: string[];
+  bicepModule?: string;
+}
+
 export function DataAgentPane() {
   const styles = useStyles();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [gate, setGate] = useState<Remediation | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,7 +95,25 @@ export function DataAgentPane() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: [...messages, userMsg] }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Per no-vaporware.md: surface backend gating honestly so the user
+        // knows where to go instead of getting a polite-looking fake reply.
+        if (res.status === 503 && data.remediation) {
+          setGate(data.remediation as Remediation);
+        } else {
+          setMessages((m) => [
+            ...m,
+            {
+              id: crypto.randomUUID(),
+              role: 'assistant',
+              content: `Backend error (HTTP ${res.status}): ${data?.error || 'unknown error'}`,
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+        }
+        return;
+      }
       setMessages((m) => [
         ...m,
         {
@@ -112,9 +143,34 @@ export function DataAgentPane() {
     <div className={styles.root}>
       <div className={styles.header}>
         <Title2>Data Agent</Title2>
-        <Body1>Finance Analyst Agent</Body1>
         <div className={styles.spacer} />
       </div>
+
+      {gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Data agent backend not deployed</MessageBarTitle>
+            {gate.message}
+            {gate.env && gate.env.length > 0 && (
+              <div style={{ marginTop: 6, fontSize: 12 }}>
+                Required env: <code>{gate.env.join(', ')}</code>
+              </div>
+            )}
+            {gate.bicepModule && (
+              <div style={{ fontSize: 12 }}>
+                Bicep module: <code>{gate.bicepModule}</code>
+              </div>
+            )}
+          </MessageBarBody>
+          <MessageBarActions>
+            {gate.redirectTo && (
+              <Link href={gate.redirectTo}>
+                <Button appearance="primary">Open Copilot orchestrator</Button>
+              </Link>
+            )}
+          </MessageBarActions>
+        </MessageBar>
+      )}
 
       <div className={styles.messages} ref={scrollRef}>
         {messages.length === 0 && (

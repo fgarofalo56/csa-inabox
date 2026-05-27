@@ -1,0 +1,147 @@
+name: loom-roll-and-validate
+
+# Roll a built loom-console image to the Container App and validate the live
+# URL actually serves it. Per user feedback after the 2026-05-26 incident
+# where the image-build workflow succeeded but stale code shipped: every
+# rollout now has to PROVE the new build is live before declaring success.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to roll (e.g. d07f330d094b10147945a086026119cdb18f409d, or "latest")'
+        type: string
+        required: true
+        default: latest
+      expected_sha:
+        description: 'Expected SHA prefix (8 chars) — validation will check /api/version and /build-marker.txt contain this. Leave blank to skip.'
+        type: string
+        default: ''
+      url:
+        description: 'Public URL to probe'
+        type: string
+        default: 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net'
+  workflow_run:
+    workflows: ['build-fiab-images-acr-tasks']
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  AZURE_LOCATION: eastus2
+  RG_NAME: rg-csa-loom-admin-eastus2
+  ACR_NAME: acrloomm56yejezt7bjo
+  APP_NAME: loom-console
+
+jobs:
+  roll-and-validate:
+    name: Roll image + validate live URL
+    runs-on: ubuntu-latest
+    # When triggered by upstream image-build workflow, only run if it succeeded.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Resolve inputs
+        id: vars
+        run: |
+          set -e
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            # Upstream image-build runs on push-to-main; use that SHA.
+            TAG="${{ github.event.workflow_run.head_sha }}"
+            EXPECTED="${TAG:0:8}"
+          else
+            TAG="${{ inputs.image_tag }}"
+            EXPECTED="${{ inputs.expected_sha }}"
+          fi
+          URL="${{ inputs.url }}"
+          [[ -z "$URL" ]] && URL='https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net'
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "expected=$EXPECTED" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "image=${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:$TAG" >> "$GITHUB_OUTPUT"
+          echo "previous_revision=$(az containerapp show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} --query properties.latestRevisionName -o tsv)" >> "$GITHUB_OUTPUT"
+
+      - name: Roll Container App to new image
+        id: roll
+        run: |
+          az containerapp update -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
+            --image "${{ steps.vars.outputs.image }}" \
+            --set-env-vars "LOOM_VERSION=v-${{ steps.vars.outputs.expected }}" \
+                            "NEXT_PUBLIC_LOOM_VERSION=v-${{ steps.vars.outputs.expected }}"
+          NEW_REV=$(az containerapp show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} --query properties.latestRevisionName -o tsv)
+          echo "new_revision=$NEW_REV" >> "$GITHUB_OUTPUT"
+          echo "::notice::Rolled to revision $NEW_REV with image ${{ steps.vars.outputs.image }}"
+
+      - name: Wait for revision health
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            STATE=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
+              --revision ${{ steps.roll.outputs.new_revision }} \
+              --query "{health:properties.healthState, running:properties.runningState}" -o tsv)
+            echo "[$i] $STATE"
+            if [[ "$STATE" == *"Healthy"* && "$STATE" == *"Running"* ]]; then break; fi
+            sleep 10
+          done
+          # Purge Front Door so we don't validate a cached old page.
+          FD_PROFILE=$(az afd profile list -g ${{ env.RG_NAME }} --query "[0].name" -o tsv)
+          if [[ -n "$FD_PROFILE" ]]; then
+            az afd endpoint purge --profile-name "$FD_PROFILE" -g ${{ env.RG_NAME }} \
+              --endpoint-name ${{ env.APP_NAME }} --content-paths '/*' --no-wait || true
+          fi
+          sleep 20
+
+      - name: Validate live URL
+        id: validate
+        run: |
+          chmod +x .github/scripts/loom-validate-live.sh
+          bash .github/scripts/loom-validate-live.sh \
+            "${{ steps.vars.outputs.url }}" \
+            "${{ steps.vars.outputs.expected }}"
+
+      - name: Rollback on validation failure
+        if: failure() && steps.validate.outcome == 'failure'
+        run: |
+          echo "::error::Live validation failed — rolling back to previous revision ${{ steps.vars.outputs.previous_revision }}"
+          PREV_IMAGE=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
+            --revision "${{ steps.vars.outputs.previous_revision }}" \
+            --query "properties.template.containers[0].image" -o tsv)
+          az containerapp update -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} --image "$PREV_IMAGE"
+          echo "::notice::Rolled back to $PREV_IMAGE"
+
+      - name: File issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `loom-roll-and-validate failed for tag ${{ steps.vars.outputs.tag }}`,
+              body: [
+                `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+                ``,
+                `Tag: \`${{ steps.vars.outputs.tag }}\``,
+                `Expected SHA: \`${{ steps.vars.outputs.expected }}\``,
+                `Previous revision: \`${{ steps.vars.outputs.previous_revision }}\``,
+                `New revision (rolled back): \`${{ steps.roll.outputs.new_revision }}\``,
+                `URL probed: ${{ steps.vars.outputs.url }}`,
+                ``,
+                `Check the workflow run for which probe failed (health / version / build-marker / notebook page / data-pipeline page / copilot tools).`,
+              ].join('\n'),
+              labels: ['csa-loom', 'deploy-validation'],
+            });

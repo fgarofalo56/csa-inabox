@@ -397,3 +397,69 @@ export async function getEmbedToken(
     { method: 'POST', body: { ...body, datasets: body.datasets, reports: body.reports } },
   );
 }
+
+/**
+ * Per-item GenerateToken (preferred over the workspace-scoped one above
+ * when embedding a single report or dashboard — narrower scope, lower
+ * blast radius if the token leaks).
+ */
+export async function generateReportEmbedToken(
+  workspaceId: string,
+  reportId: string,
+  accessLevel: 'View' | 'Edit' = 'View',
+): Promise<{ token: string; tokenId: string; expiration: string }> {
+  return call(
+    `/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/GenerateToken`,
+    { method: 'POST', body: { accessLevel } },
+  );
+}
+
+export async function generateDashboardEmbedToken(
+  workspaceId: string,
+  dashboardId: string,
+  accessLevel: 'View' | 'Edit' = 'View',
+): Promise<{ token: string; tokenId: string; expiration: string }> {
+  return call(
+    `/groups/${encodeURIComponent(workspaceId)}/dashboards/${encodeURIComponent(dashboardId)}/GenerateToken`,
+    { method: 'POST', body: { accessLevel } },
+  );
+}
+
+export async function generateTileEmbedToken(
+  workspaceId: string,
+  dashboardId: string,
+  tileId: string,
+  accessLevel: 'View' | 'Edit' = 'View',
+): Promise<{ token: string; tokenId: string; expiration: string }> {
+  return call(
+    `/groups/${encodeURIComponent(workspaceId)}/dashboards/${encodeURIComponent(dashboardId)}/tiles/${encodeURIComponent(tileId)}/GenerateToken`,
+    { method: 'POST', body: { accessLevel } },
+  );
+}
+
+export async function generateDatasetEmbedToken(
+  workspaceId: string,
+  datasetId: string,
+  accessLevel: 'View' | 'Edit' = 'View',
+): Promise<{ token: string; tokenId: string; expiration: string }> {
+  return call(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/GenerateToken`,
+    { method: 'POST', body: { accessLevel } },
+  );
+}
+
+/**
+ * CloneTile — POST /v1.0/myorg/groups/{ws}/dashboards/{id}/tiles/{tile}/Clone
+ * Validator's recommended Dashboard editor uplift.
+ */
+export async function cloneDashboardTile(
+  workspaceId: string,
+  dashboardId: string,
+  tileId: string,
+  body: { targetDashboardId: string; targetWorkspaceId?: string; targetReportId?: string; targetModelId?: string },
+): Promise<unknown> {
+  return call(
+    `/groups/${encodeURIComponent(workspaceId)}/dashboards/${encodeURIComponent(dashboardId)}/tiles/${encodeURIComponent(tileId)}/Clone`,
+    { method: 'POST', body },
+  );
+}

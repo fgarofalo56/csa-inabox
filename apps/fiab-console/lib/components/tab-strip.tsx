@@ -2,17 +2,25 @@
 
 /**
  * TabStrip — multi-tab view like Fabric. Persists to /api/tabs (Cosmos
- * tabs-state container, partitioned by userId; one doc per user). Tabs
- * include workspace, item, or page targets. Active tab is the one whose
- * href matches the current pathname.
+ * tabs-state container, partitioned by userId; one doc per user).
  *
- * Other components can fire `loom:open-tab` CustomEvent with detail
- * { title, href, type? } to register a new tab.
+ * Auto-open policy (Fabric-parity): tabs are ONLY for actual work-in-
+ * progress — pages where edits could be lost. That means:
+ *   - /items/[type]/[id]              (any item editor — work in progress)
+ *   - /workspaces/[id]                (workspace detail / item list)
+ * Navigation surfaces (/workspaces, /apps, /admin, /onelake, /governance,
+ * etc.) do NOT auto-open tabs — they're discovery views, not workbenches.
+ *
+ * Home is pinned. Tabs are dismissible via X. `loom:open-tab` CustomEvent
+ * still lets any component explicitly open a tab (e.g. Open in notebook).
  */
 
-import { useEffect, useState, useCallback } from 'react';
-import { makeStyles, tokens, Tooltip, Button } from '@fluentui/react-components';
-import { Dismiss12Regular } from '@fluentui/react-icons';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
+import {
+  makeStyles, tokens, Tooltip, Button,
+  Popover, PopoverTrigger, PopoverSurface,
+} from '@fluentui/react-components';
+import { Dismiss12Regular, ChevronDown16Regular } from '@fluentui/react-icons';
 import { usePathname, useRouter } from 'next/navigation';
 
 interface Tab {
@@ -25,13 +33,53 @@ interface Tab {
 
 const STATIC_HOME: Tab = { id: 'home', title: 'Home', href: '/', pinned: true };
 
+/**
+ * Decide if a path warrants an auto-opened tab. Only "workbench" surfaces
+ * that the user actively edits / runs against get tabs.
+ */
+function shouldAutoOpenTab(pathname: string): boolean {
+  if (!pathname || pathname === '/') return false;
+  // Item editors: /items/[type]/[id]
+  if (/^\/items\/[^/]+\/[^/]+/.test(pathname)) return true;
+  // Workspace detail: /workspaces/[id] but NOT the list /workspaces
+  if (/^\/workspaces\/[^/]+/.test(pathname)) return true;
+  // App detail: /apps/[id] but NOT the list /apps
+  if (/^\/apps\/[^/]+/.test(pathname)) return true;
+  return false;
+}
+
+/** Derive a readable title from a workbench path. */
+function deriveTitle(pathname: string, hint?: string): string {
+  if (hint) return hint;
+  // /items/lakehouse/abc123 → "lakehouse · abc12345"
+  const itemMatch = pathname.match(/^\/items\/([^/]+)\/([^/]+)/);
+  if (itemMatch) {
+    const type = itemMatch[1].replace(/-/g, ' ');
+    const id = itemMatch[2];
+    const short = id === 'new' ? 'new' : id.slice(0, 8);
+    return `${type} · ${short}`;
+  }
+  const wsMatch = pathname.match(/^\/workspaces\/([^/]+)/);
+  if (wsMatch) return `workspace · ${wsMatch[1].slice(0, 8)}`;
+  const appMatch = pathname.match(/^\/apps\/([^/]+)/);
+  if (appMatch) return appMatch[1].replace(/^app-/, '').replace(/-/g, ' ');
+  return pathname.replace(/^\//, '').split('/').pop() || pathname;
+}
+
 const useStyles = makeStyles({
   root: {
+    // Hard width clamp + no scroll. When tabs would overflow, the
+    // overflow chevron at the right opens a Popover with the rest.
     display: 'flex', alignItems: 'flex-end',
-    gap: 2, flex: '1 1 auto', minWidth: 0,
-    overflowX: 'auto', overflowY: 'hidden',
+    gap: 2, flex: '1 1 0', minWidth: 0, maxWidth: '100%',
+    overflow: 'hidden',
     height: '100%', paddingTop: 4,
-    '::-webkit-scrollbar': { display: 'none' },
+    position: 'relative',
+  },
+  scroller: {
+    display: 'flex', alignItems: 'flex-end',
+    gap: 2, minWidth: 0, flex: '1 1 0',
+    overflow: 'hidden',
   },
   tab: {
     display: 'inline-flex', alignItems: 'center',
@@ -40,12 +88,29 @@ const useStyles = makeStyles({
     color: 'rgba(255,255,255,0.78)',
     borderTopLeftRadius: 'var(--loom-radius-md)',
     borderTopRightRadius: 'var(--loom-radius-md)',
-    fontSize: 12, maxWidth: 220, minWidth: 80,
+    fontSize: 12, maxWidth: 180, minWidth: 0,
+    flex: '0 1 auto',
     cursor: 'pointer', whiteSpace: 'nowrap',
     border: '1px solid transparent',
     borderBottom: 'none',
     transition: 'background-color var(--loom-motion-fast) var(--loom-motion-ease)',
     ':hover': { backgroundColor: 'rgba(255,255,255,0.14)' },
+  },
+  overflowBtn: {
+    color: 'rgba(255,255,255,0.78)',
+    marginLeft: 4,
+    flex: '0 0 auto',
+  },
+  overflowMenu: {
+    display: 'flex', flexDirection: 'column', gap: 2,
+    minWidth: 240, maxHeight: 360, overflowY: 'auto',
+    padding: 4,
+  },
+  overflowItem: {
+    display: 'flex', alignItems: 'center', gap: 6,
+    padding: '6px 10px', cursor: 'pointer', borderRadius: 4,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+    fontSize: 13,
   },
   active: {
     backgroundColor: 'var(--loom-app-bg)',
@@ -96,13 +161,15 @@ export function TabStrip() {
     }).catch(() => {/* will retry on next change */});
   }, [loaded]);
 
-  // Auto-open tab when user navigates somewhere we don't have a tab for yet.
+  // Auto-open tab only when the user lands on a workbench surface
+  // (item editor, workspace detail, app detail). Navigation surfaces
+  // like /workspaces, /apps, /admin do NOT open tabs — they're
+  // discovery views, not work-in-progress.
   useEffect(() => {
     if (!loaded) return;
-    if (pathname === '/' || pathname === '') return;
+    if (!shouldAutoOpenTab(pathname)) return;
     if (tabs.some(t => t.href === pathname)) return;
-    // Derive a tab title from the path tail.
-    const title = decodeURIComponent(pathname.split('/').filter(Boolean).slice(-1)[0] || pathname);
+    const title = deriveTitle(pathname);
     const next: Tab[] = [...tabs, { id: pathname, title, href: pathname }];
     setTabs(next);
     persist(next);
@@ -139,26 +206,97 @@ export function TabStrip() {
     }
   };
 
+  // Track how many tabs fit in the visible scroller width. Anything past
+  // the limit is hidden + accessible via the overflow chevron.
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const [visibleCount, setVisibleCount] = useState(tabs.length);
+
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const avail = el.clientWidth;
+      const children = Array.from(el.children) as HTMLElement[];
+      let used = 0;
+      let count = 0;
+      for (const c of children) {
+        // 4px reserve for the overflow chevron pill.
+        if (used + c.offsetWidth > avail - 32) break;
+        used += c.offsetWidth + 2;
+        count++;
+      }
+      setVisibleCount(count || 1);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tabs.length]);
+
+  const hidden = tabs.slice(visibleCount);
+
   return (
     <div className={styles.root} role="tablist" aria-label="Open tabs">
-      {tabs.map(tab => {
-        const active = tab.href === pathname;
-        return (
-          <Tooltip key={tab.id} content={tab.title} relationship="label">
-            <a href={tab.href}
-               role="tab" aria-selected={active}
-               className={`${styles.tab} ${active ? styles.active : ''}`}
-               onClick={(e) => { e.preventDefault(); router.push(tab.href); }}>
-              <span className={styles.title}>{tab.title}</span>
-              {!tab.pinned && (
-                <Button appearance="transparent" size="small" className={styles.close}
-                  icon={<Dismiss12Regular />} onClick={(e) => close(tab.id, e)}
-                  aria-label={`Close ${tab.title}`} />
-              )}
-            </a>
-          </Tooltip>
-        );
-      })}
+      <div className={styles.scroller} ref={scrollerRef}>
+        {tabs.map(tab => {
+          const active = tab.href === pathname;
+          return (
+            <Tooltip key={tab.id} content={tab.title} relationship="label">
+              <a href={tab.href}
+                 role="tab" aria-selected={active}
+                 className={`${styles.tab} ${active ? styles.active : ''}`}
+                 onClick={(e) => { e.preventDefault(); router.push(tab.href); }}>
+                <span className={styles.title}>{tab.title}</span>
+                {!tab.pinned && (
+                  <Button appearance="transparent" size="small" className={styles.close}
+                    icon={<Dismiss12Regular />} onClick={(e) => close(tab.id, e)}
+                    aria-label={`Close ${tab.title}`} />
+                )}
+              </a>
+            </Tooltip>
+          );
+        })}
+      </div>
+      {hidden.length > 0 && (
+        <Popover withArrow positioning="below-end">
+          <PopoverTrigger>
+            <Button
+              appearance="transparent"
+              size="small"
+              icon={<ChevronDown16Regular />}
+              className={styles.overflowBtn}
+              aria-label={`${hidden.length} more open tabs`}
+            >
+              +{hidden.length}
+            </Button>
+          </PopoverTrigger>
+          <PopoverSurface>
+            <div className={styles.overflowMenu} role="menu">
+              {hidden.map((tab) => (
+                <div
+                  key={tab.id}
+                  role="menuitem"
+                  className={styles.overflowItem}
+                  onClick={() => router.push(tab.href)}
+                >
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {tab.title}
+                  </span>
+                  {!tab.pinned && (
+                    <Button
+                      appearance="transparent"
+                      size="small"
+                      icon={<Dismiss12Regular />}
+                      onClick={(e) => close(tab.id, e)}
+                      aria-label={`Close ${tab.title}`}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          </PopoverSurface>
+        </Popover>
+      )}
     </div>
   );
 }

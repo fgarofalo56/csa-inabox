@@ -28,6 +28,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -210,6 +211,10 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
   const [list, reload] = useApi<{ flows: any[] }>(project ? `/api/items/prompt-flow?project=${encodeURIComponent(project)}` : null, [project]);
   const [selected, setSelected] = useState<string | null>(null);
   const [defText, setDefText] = useState('');
+  // Phase 4.5 — track whether the user has typed into defText. Without this
+  // the useEffect that syncs from detail.data would clobber unsaved edits
+  // whenever the list reloads (background polling, user clicked Reload, etc).
+  const [defDirty, setDefDirty] = useState(false);
   const [runInputs, setRunInputs] = useState('{}');
   const [runResult, setRunResult] = useState<any>(null);
   const [running, setRunning] = useState(false);
@@ -218,7 +223,17 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
 
   const detailUrl = project && selected ? `/api/items/prompt-flow/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}` : null;
   const [detail] = useApi<{ flow: any }>(detailUrl, [project, selected]);
-  useEffect(() => { if (detail.data?.flow) setDefText(JSON.stringify(detail.data.flow.flowDefinition || detail.data.flow, null, 2)); }, [detail.data]);
+  useEffect(() => {
+    // Only adopt server flow definition when the user hasn't typed into the
+    // local editor since the last selection. Prevents clobbering edits.
+    if (detail.data?.flow && !defDirty) {
+      setDefText(JSON.stringify(detail.data.flow.flowDefinition || detail.data.flow, null, 2));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.data]);
+
+  // Resetting selection clears the dirty flag so the next flow's body loads.
+  useEffect(() => { setDefDirty(false); }, [selected]);
 
   const runFlow = async () => {
     if (!project || !selected) return;
@@ -263,9 +278,18 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
       {selected && (
         <div className={s.card}>
           <Subtitle2>Flow: {selected}</Subtitle2>
-          <textarea className={s.monaco} value={defText} onChange={(e) => setDefText(e.target.value)} spellCheck={false} />
+          <MessageBar intent="info">
+            <MessageBarBody>
+              <MessageBarTitle>Definition is view-only in v2.5</MessageBarTitle>
+              The flow JSON is fetched from the Foundry runtime for inspection. Editing-and-saving the
+              flow definition (PUT against the Foundry prompt-flow API) lands in v2.6 — edits here
+              affect only the Run preview below and are not persisted.
+            </MessageBarBody>
+          </MessageBar>
+          <MonacoTextarea value={defText} onChange={(v) => { setDefText(v); setDefDirty(true); }} language="json" height={300} minHeight={200} ariaLabel="Prompt Flow definition" />
+          {defDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Edits are local-only; Run uses the edited JSON for this session.</Caption1>}
           <Subtitle2 style={{ marginTop: 8 }}>Run inputs (JSON)</Subtitle2>
-          <textarea className={s.monaco} style={{ minHeight: 80 }} value={runInputs} onChange={(e) => setRunInputs(e.target.value)} spellCheck={false} />
+          <MonacoTextarea value={runInputs} onChange={setRunInputs} language="json" height={140} minHeight={80} ariaLabel="Run inputs JSON" />
           <div className={s.toolbar} style={{ marginTop: 8 }}>
             <Button appearance="primary" onClick={runFlow} disabled={running}>{running ? 'Running…' : 'Run flow'}</Button>
             <Button onClick={reload}>Reload list</Button>
@@ -342,10 +366,10 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
       <div className={s.card}>
         <Subtitle2>New evaluation</Subtitle2>
         <div className={s.formRow}>
-          <span>Display name</span><Input value={form.displayName} onChange={(_, d) => setForm({ ...form, displayName: d.value })} />
-          <span>Dataset ID</span><Input value={form.datasetId} onChange={(_, d) => setForm({ ...form, datasetId: d.value })} placeholder="azureml://datastores/.../paths/..." />
-          <span>Model deployment</span><Input value={form.modelDeployment} onChange={(_, d) => setForm({ ...form, modelDeployment: d.value })} placeholder="gpt-4o-mini" />
-          <span>Evaluators</span><Input value={form.evaluators} onChange={(_, d) => setForm({ ...form, evaluators: d.value })} placeholder="comma-separated" />
+          <span>Display name</span><Input value={form.displayName} onChange={(_, d) => setForm((f) => ({ ...f, displayName: d.value }))} />
+          <span>Dataset ID</span><Input value={form.datasetId} onChange={(_, d) => setForm((f) => ({ ...f, datasetId: d.value }))} placeholder="azureml://datastores/.../paths/..." />
+          <span>Model deployment</span><Input value={form.modelDeployment} onChange={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.value }))} placeholder="gpt-4o-mini" />
+          <span>Evaluators</span><Input value={form.evaluators} onChange={(_, d) => setForm((f) => ({ ...f, evaluators: d.value }))} placeholder="comma-separated" />
         </div>
         <div className={s.toolbar} style={{ marginTop: 8 }}>
           <Button appearance="primary" onClick={create} disabled={busy}>{busy ? 'Submitting…' : 'Create evaluation'}</Button>
@@ -528,20 +552,99 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
     </Shell>;
   }
 
+  const idx = detail.data?.index;
+  const fields: any[] = idx?.fields || [];
+  const docs: any[] = hits?.ok ? (hits.result?.value || hits.result?.['value'] || []) : [];
+
   return <Shell item={item} id={id}>
     <div className={s.pad}>
-      {detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.index && (
+      {detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : idx && (
         <>
-          <Subtitle2>Index: {detail.data.index.name}</Subtitle2>
+          <Subtitle2>Index: {idx.name}</Subtitle2>
           <div className={s.toolbar}>
-            <Field label="Query"><Input value={query} onChange={(_, d) => setQuery(d.value)} /></Field>
+            <Field label="Search query"><Input value={query} onChange={(_, d) => setQuery(d.value)} /></Field>
             <Button appearance="primary" onClick={runSearch} disabled={busy}>{busy ? 'Searching…' : 'Search'}</Button>
           </div>
-          <Subtitle2 style={{ marginTop: 8 }}>Definition</Subtitle2>
-          <pre className={s.monaco}>{JSON.stringify(detail.data.index, null, 2)}</pre>
-          {hits && (hits.ok
-            ? <pre className={s.monaco}>{JSON.stringify(hits.result, null, 2)}</pre>
-            : <ErrorBar msg={hits.error} hint={hits.hint} notDeployed={hits.notDeployed} />)}
+          <Subtitle2 style={{ marginTop: 12 }}>Fields ({fields.length})</Subtitle2>
+          <div className={s.tableWrap}>
+            <Table size="small" aria-label="Index fields">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>Name</TableHeaderCell>
+                  <TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>Key</TableHeaderCell>
+                  <TableHeaderCell>Searchable</TableHeaderCell>
+                  <TableHeaderCell>Filterable</TableHeaderCell>
+                  <TableHeaderCell>Sortable</TableHeaderCell>
+                  <TableHeaderCell>Facetable</TableHeaderCell>
+                  <TableHeaderCell>Retrievable</TableHeaderCell>
+                  <TableHeaderCell>Dims</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {fields.map((f: any) => (
+                  <TableRow key={f.name}>
+                    <TableCell className={s.cell}><strong>{f.name}</strong></TableCell>
+                    <TableCell className={s.cell}><code>{f.type}</code></TableCell>
+                    <TableCell className={s.cell}>{f.key ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.searchable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.filterable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.sortable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.facetable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.retrievable !== false ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.dimensions || ''}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          {idx.vectorSearch && (
+            <Caption1 style={{ marginTop: 8 }}>
+              Vector search enabled · profiles: {(idx.vectorSearch?.profiles || []).map((p: any) => p.name).join(', ') || '—'}
+            </Caption1>
+          )}
+          {hits && !hits.ok && (
+            <ErrorBar msg={hits.error} hint={hits.hint} notDeployed={hits.notDeployed} />
+          )}
+          {hits?.ok && (
+            <>
+              <Subtitle2 style={{ marginTop: 12 }}>Results ({docs.length})</Subtitle2>
+              {docs.length === 0 ? (
+                <Caption1>No documents matched.</Caption1>
+              ) : (
+                <div className={s.tableWrap}>
+                  <Table size="small" aria-label="Search results">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHeaderCell>Score</TableHeaderCell>
+                        {/* Show all retrievable fields; cap at 6 to keep the grid readable. */}
+                        {fields.filter(f => f.retrievable !== false).slice(0, 6).map((f) => (
+                          <TableHeaderCell key={f.name}>{f.name}</TableHeaderCell>
+                        ))}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {docs.map((d, i) => (
+                        <TableRow key={i}>
+                          <TableCell className={s.cell}>{(d['@search.score'] || 0).toFixed(3)}</TableCell>
+                          {fields.filter(f => f.retrievable !== false).slice(0, 6).map((f) => (
+                            <TableCell key={f.name} className={s.cell}>
+                              {(() => {
+                                const v = d[f.name];
+                                if (v === undefined || v === null) return '—';
+                                const s = typeof v === 'string' ? v : JSON.stringify(v);
+                                return s.length > 80 ? s.slice(0, 80) + '…' : s;
+                              })()}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
     </div>
@@ -585,17 +688,19 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
         <div className={s.card}>
           <Subtitle2>New compute</Subtitle2>
           <div className={s.formRow}>
-            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm({ ...form, name: d.value })} />
+            {/* v3.28 Phase 4.5: functional setForm so the Start/Stop polling
+                refresh + concurrent typing don't clobber form edits. */}
+            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
             <span>Type</span>
             <Dropdown value={form.computeType} selectedOptions={[form.computeType]}
-              onOptionSelect={(_, d) => d.optionValue && setForm({ ...form, computeType: d.optionValue })}>
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, computeType: d.optionValue! }))}>
               <Option value="AmlCompute">AmlCompute (cluster)</Option>
               <Option value="ComputeInstance">ComputeInstance</Option>
             </Dropdown>
-            <span>VM size</span><Input value={form.vmSize} onChange={(_, d) => setForm({ ...form, vmSize: d.value })} />
+            <span>VM size</span><Input value={form.vmSize} onChange={(_, d) => setForm((f) => ({ ...f, vmSize: d.value }))} />
             {form.computeType === 'AmlCompute' && <>
-              <span>Min nodes</span><Input type="number" value={String(form.minNodeCount)} onChange={(_, d) => setForm({ ...form, minNodeCount: Number(d.value) })} />
-              <span>Max nodes</span><Input type="number" value={String(form.maxNodeCount)} onChange={(_, d) => setForm({ ...form, maxNodeCount: Number(d.value) })} />
+              <span>Min nodes</span><Input type="number" value={String(form.minNodeCount)} onChange={(_, d) => setForm((f) => ({ ...f, minNodeCount: Number(d.value) }))} />
+              <span>Max nodes</span><Input type="number" value={String(form.maxNodeCount)} onChange={(_, d) => setForm((f) => ({ ...f, maxNodeCount: Number(d.value) }))} />
             </>}
           </div>
           <Button appearance="primary" onClick={create} disabled={busy || !form.name}>{busy ? 'Creating…' : 'Create compute'}</Button>
@@ -707,17 +812,17 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
         <div className={s.card}>
           <Subtitle2>New asset</Subtitle2>
           <div className={s.formRow}>
-            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm({ ...form, name: d.value })} />
+            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
             <span>Type</span>
             <Dropdown value={form.dataType} selectedOptions={[form.dataType]}
-              onOptionSelect={(_, d) => d.optionValue && setForm({ ...form, dataType: d.optionValue })}>
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, dataType: d.optionValue! }))}>
               <Option value="uri_file">uri_file</Option>
               <Option value="uri_folder">uri_folder</Option>
               <Option value="mltable">mltable</Option>
             </Dropdown>
-            <span>URI</span><Input value={form.dataUri} onChange={(_, d) => setForm({ ...form, dataUri: d.value })} placeholder="azureml:// or abfss://..." />
-            <span>Version</span><Input value={form.version} onChange={(_, d) => setForm({ ...form, version: d.value })} />
-            <span>Description</span><Input value={form.description} onChange={(_, d) => setForm({ ...form, description: d.value })} />
+            <span>URI</span><Input value={form.dataUri} onChange={(_, d) => setForm((f) => ({ ...f, dataUri: d.value }))} placeholder="azureml:// or abfss://..." />
+            <span>Version</span><Input value={form.version} onChange={(_, d) => setForm((f) => ({ ...f, version: d.value }))} />
+            <span>Description</span><Input value={form.description} onChange={(_, d) => setForm((f) => ({ ...f, description: d.value }))} />
           </div>
           <Button appearance="primary" onClick={create} disabled={!form.name || !form.dataUri}>Create asset</Button>
           {msg && <Caption1> {msg}</Caption1>}

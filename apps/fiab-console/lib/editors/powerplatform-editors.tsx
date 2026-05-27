@@ -162,6 +162,16 @@ export function PowerPlatformEnvironmentEditor({ item, id }: { item: FabricItemT
   return (
     <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
       <div className={s.pad}>
+        {id === 'new' && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Environments are provisioned out-of-band</MessageBarTitle>
+              Power Platform environments are created via the Power Platform admin center
+              (<code>admin.powerplatform.microsoft.com</code>) or the BAP REST API. This editor is a
+              read-only registry view — pick an existing environment from the dropdown below.
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={env.reload} disabled={env.loading}>Reload</Button>
@@ -224,6 +234,16 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
   return (
     <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
       <div className={s.pad}>
+        {id === 'new' && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Dataverse tables are authored in the Maker portal</MessageBarTitle>
+              Custom tables / columns / relationships are designed in <code>make.powerapps.com</code> or via
+              solution import. This editor is a read-only schema browser — pick a table on the left to inspect
+              its attributes.
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={() => { reloadTables(); if (selectedTable) reloadSchema(); }}>Reload</Button>
@@ -327,6 +347,15 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
       <div className={s.pad}>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Power Apps cannot be authored inside Loom</MessageBarTitle>
+            The canvas designer is a proprietary Microsoft client. This editor is a read-only registry view —
+            it lists existing apps in the selected environment, shows owner / type / Play URL, and that's it.
+            To create or edit an app, click the <strong>Play</strong> link to open Maker Studio at
+            <code> make.powerapps.com</code>.
+          </MessageBarBody>
+        </MessageBar>
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadList}>Reload</Button>
@@ -441,6 +470,16 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
   return (
     <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
       <div className={s.pad}>
+        {id === 'new' && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Flows are authored in the Maker portal</MessageBarTitle>
+              Cloud flows / desktop flows are built in <code>make.powerautomate.com</code>. This editor is a
+              read-only registry view that lists deployed flows in the selected environment and triggers a
+              manual run. Pick a flow on the left.
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadList}>Reload</Button>
@@ -561,6 +600,15 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
   return (
     <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
       <div className={s.pad}>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Power Pages cannot be authored inside Loom</MessageBarTitle>
+            Pages, templates, web roles, and content snippets edit in the proprietary Power Pages design
+            studio. This editor is a read-only registry view that lists deployed sites in the selected
+            environment with their primary domain and status. Click a site URL to open the live page; click
+            the site row for metadata. To edit, open Maker Studio at <code>make.powerpages.microsoft.com</code>.
+          </MessageBarBody>
+        </MessageBar>
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadList}>Reload</Button>
@@ -665,6 +713,15 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
   return (
     <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
       <div className={s.pad}>
+        {id === 'new' && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>AI Builder models are authored in the Maker portal</MessageBarTitle>
+              Model training, document templates, and prediction inputs live in <code>make.powerapps.com → AI hub</code>.
+              This editor is a read-only registry view of models stored in <code>msdyn_aimodel</code>.
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadList}>Reload</Button>

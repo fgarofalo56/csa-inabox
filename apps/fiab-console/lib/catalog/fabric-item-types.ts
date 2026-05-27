@@ -194,9 +194,9 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     description: 'Typed dataset over linked services — JSON, Parquet, Delimited, SQL, REST, etc.' },
   { slug: 'adf-trigger',                 displayName: 'ADF trigger',                 restType: 'AdfTrigger',                category: 'Azure Data Factory',
     description: 'Schedule, tumbling window, storage event, or custom event trigger.' },
-  // Azure Data Lake Analytics
-  { slug: 'usql-job',                    displayName: 'U-SQL job',                   restType: 'UsqlJob',                   category: 'Azure Data Lake Analytics',
-    description: 'U-SQL script over ADLS Gen1/Gen2 with C# UDFs. Legacy ADLA workloads, native in Loom.' },
+  // Azure Stream Analytics — real-time streaming SQL over Event Hubs / IoT Hub / Blob
+  { slug: 'stream-analytics-job',        displayName: 'Stream Analytics job',        restType: 'StreamAnalyticsJob',        category: 'Streaming analytics',
+    description: 'Continuous SQL-style queries over real-time streams (Event Hubs / IoT Hub / Blob) writing to Blob / SQL / Power BI / Event Hub / ADX / Cosmos.' },
 
   // --- API-first surfacing: APIM is the runtime glue for every Loom-managed function, ML endpoint, and data product ---
   { slug: 'apim-api',                    displayName: 'APIM API',                    restType: 'ApimApi',                   category: 'APIs and functions',

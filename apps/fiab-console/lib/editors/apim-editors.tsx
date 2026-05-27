@@ -23,11 +23,13 @@ import {
 } from '@fluentui/react-components';
 import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
-  Document20Regular, Code20Regular,
+  Document20Regular, Code20Regular, Library20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -122,6 +124,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const [protocols, setProtocols] = useState<string[]>(['https']);
   const [subscriptionRequired, setSubscriptionRequired] = useState(true);
   const [serviceUrl, setServiceUrl] = useState('');
+  const [dirty, setDirty] = useState(false);
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -136,6 +139,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
       setProtocols(j.api.protocols?.length ? j.api.protocols : ['https']);
       setSubscriptionRequired(j.api.subscriptionRequired ?? true);
       setServiceUrl(j.api.serviceUrl || '');
+      setDirty(false);
     } catch (e: any) {
       setApi({ loading: false, data: null, error: e?.message || String(e) });
     }
@@ -175,24 +179,43 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
       return;
     }
     setStatus({ kind: 'saving' });
+    // Phase 4.5 — capture the body we're about to PUT before the await so
+    // if a user keystroke commits to React state mid-request we don't
+    // silently report success for bytes that were never sent. Status msg
+    // always references the snapshot we actually transmitted.
+    const body = { displayName, path, protocols: [...protocols], subscriptionRequired, serviceUrl: serviceUrl || undefined };
     try {
       const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ displayName, path, protocols, subscriptionRequired, serviceUrl: serviceUrl || undefined }),
+        body: JSON.stringify(body),
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
-      setStatus({ kind: 'ok', msg: `${j.api.displayName} (${j.api.name})` });
+      setStatus({ kind: 'ok', msg: `${j.api.displayName} (${j.api.name}) at ${new Date().toLocaleTimeString()}` });
       setApi({ loading: false, data: j.api });
+      setDirty(false);
       loadOps();
     } catch (e: any) {
       setStatus({ kind: 'err', msg: e?.message || String(e) });
     }
   }, [id, displayName, path, protocols, subscriptionRequired, serviceUrl, loadOps]);
 
+  // Phase 4.5 — Ctrl+S / Cmd+S keyboard shortcut for Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (dirty && status.kind !== 'saving' && displayName.trim() && path.trim()) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dirty, status.kind, displayName, path, save]);
+
   const toggleProtocol = (p: string) => {
     setProtocols((cur) => cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]);
+    setDirty(true);
   };
 
   const copySpec = () => {
@@ -238,7 +261,8 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
             <Badge appearance="filled" color="brand">APIM API</Badge>
             <Badge appearance="outline">{api.data?.name || id}</Badge>
             {subscriptionRequired && <Badge appearance="outline">Subscription required</Badge>}
-            <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving'}>
+            {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+            <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving' || (!isNew && !dirty)}>
               {status.kind === 'saving' ? 'Saving…' : isNew ? 'Create' : 'Save'}
             </Button>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => { load(); loadOps(); loadSpec(); }}>
@@ -248,22 +272,20 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
           <StatusBar status={status} />
           {api.loading && <Spinner size="small" label="Loading API from APIM…" labelPosition="after" />}
           {api.error && !api.loading && (
-            <MessageBar intent="error">
-              <MessageBarBody><MessageBarTitle>Failed to load</MessageBarTitle>{api.error}</MessageBarBody>
-            </MessageBar>
+            <BackendStateBar error={api.error} title="APIM API" />
           )}
           <div className={s.form}>
             <Field label="Display name" required>
-              <Input value={displayName} onChange={(_, d) => setDisplayName(d.value)} />
+              <Input value={displayName} onChange={(_, d) => { setDisplayName(d.value); setDirty(true); }} />
             </Field>
             <Field label="Path" required hint="URL suffix after the gateway hostname, e.g. 'orders'">
-              <Input value={path} onChange={(_, d) => setPath(d.value)} />
+              <Input value={path} onChange={(_, d) => { setPath(d.value); setDirty(true); }} />
             </Field>
             <Field label="Service URL" hint="Backend base URL (optional)">
-              <Input value={serviceUrl} onChange={(_, d) => setServiceUrl(d.value)} placeholder="https://backend.example.com" />
+              <Input value={serviceUrl} onChange={(_, d) => { setServiceUrl(d.value); setDirty(true); }} placeholder="https://backend.example.com" />
             </Field>
             <Field label="Subscription required">
-              <Switch checked={subscriptionRequired} onChange={(_, d) => setSubscriptionRequired(d.checked)} label={subscriptionRequired ? 'Yes' : 'No'} />
+              <Switch checked={subscriptionRequired} onChange={(_, d) => { setSubscriptionRequired(d.checked); setDirty(true); }} label={subscriptionRequired ? 'Yes' : 'No'} />
             </Field>
             <Field label="Protocols" hint="At least one">
               <div className={s.protocolRow}>
@@ -325,6 +347,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [state, setState] = useState<'published' | 'notPublished'>('notPublished');
   const [subscriptionRequired, setSubscriptionRequired] = useState(true);
   const [approvalRequired, setApprovalRequired] = useState(false);
+  const [dirty, setDirty] = useState(false);
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -339,6 +362,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
       setState((j.product.state as any) || 'notPublished');
       setSubscriptionRequired(j.product.subscriptionRequired ?? true);
       setApprovalRequired(j.product.approvalRequired ?? false);
+      setDirty(false);
     } catch (e: any) {
       setProduct({ loading: false, data: null, error: e?.message || String(e) });
     }
@@ -349,20 +373,36 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
   const save = useCallback(async () => {
     if (!displayName.trim()) { setStatus({ kind: 'err', msg: 'displayName is required' }); return; }
     setStatus({ kind: 'saving' });
+    // Phase 4.5 — snapshot body before await so the user can keep typing
+    // without the request landing on bytes that differ from what we sent.
+    const body = { displayName, description, state, subscriptionRequired, approvalRequired };
     try {
       const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ displayName, description, state, subscriptionRequired, approvalRequired }),
+        body: JSON.stringify(body),
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
-      setStatus({ kind: 'ok', msg: `${j.product.displayName} (${j.product.state})` });
+      setStatus({ kind: 'ok', msg: `${j.product.displayName} (${j.product.state}) at ${new Date().toLocaleTimeString()}` });
       setProduct({ loading: false, data: j.product });
+      setDirty(false);
     } catch (e: any) {
       setStatus({ kind: 'err', msg: e?.message || String(e) });
     }
   }, [id, displayName, description, state, subscriptionRequired, approvalRequired]);
+
+  // Phase 4.5 — Ctrl+S / Cmd+S keyboard shortcut for Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (dirty && status.kind !== 'saving' && displayName.trim()) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dirty, status.kind, displayName, save]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={PRODUCT_RIBBON} main={
@@ -375,7 +415,8 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
               {product.data.state}
             </Badge>
           )}
-          <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving'}>
+          {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+          <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving' || (!isNew && !dirty)}>
             {status.kind === 'saving' ? 'Saving…' : isNew ? 'Create' : 'Save'}
           </Button>
           <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Reload</Button>
@@ -383,17 +424,17 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
         <StatusBar status={status} />
         {product.loading && <Spinner size="small" label="Loading product…" labelPosition="after" />}
         {product.error && !product.loading && (
-          <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Failed to load</MessageBarTitle>{product.error}</MessageBarBody></MessageBar>
+          <BackendStateBar error={product.error} title="APIM Product" />
         )}
         <div className={s.form}>
           <Field label="Display name" required>
-            <Input value={displayName} onChange={(_, d) => setDisplayName(d.value)} />
+            <Input value={displayName} onChange={(_, d) => { setDisplayName(d.value); setDirty(true); }} />
           </Field>
           <Field label="Lifecycle state">
             <Dropdown
               value={state}
               selectedOptions={[state]}
-              onOptionSelect={(_, d) => d.optionValue && setState(d.optionValue as 'published' | 'notPublished')}
+              onOptionSelect={(_, d) => { if (d.optionValue) { setState(d.optionValue as 'published' | 'notPublished'); setDirty(true); } }}
             >
               <Option value="notPublished">Not published</Option>
               <Option value="published">Published</Option>
@@ -401,14 +442,14 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
           </Field>
           <div style={{ gridColumn: '1 / span 2' }}>
             <Field label="Description" hint="Shown in the developer portal">
-              <Textarea value={description} onChange={(_, d) => setDescription(d.value)} rows={4} />
+              <Textarea value={description} onChange={(_, d) => { setDescription(d.value); setDirty(true); }} rows={4} />
             </Field>
           </div>
           <Field label="Subscription required">
-            <Switch checked={subscriptionRequired} onChange={(_, d) => setSubscriptionRequired(d.checked)} label={subscriptionRequired ? 'Yes' : 'No'} />
+            <Switch checked={subscriptionRequired} onChange={(_, d) => { setSubscriptionRequired(d.checked); setDirty(true); }} label={subscriptionRequired ? 'Yes' : 'No'} />
           </Field>
           <Field label="Approval required" hint="Only meaningful when subscription is required">
-            <Switch checked={approvalRequired} onChange={(_, d) => setApprovalRequired(d.checked)} disabled={!subscriptionRequired} label={approvalRequired ? 'Yes' : 'No'} />
+            <Switch checked={approvalRequired} onChange={(_, d) => { setApprovalRequired(d.checked); setDirty(true); }} disabled={!subscriptionRequired} label={approvalRequired ? 'Yes' : 'No'} />
           </Field>
         </div>
       </div>
@@ -423,11 +464,12 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
 const POLICY_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
     { label: 'Edit', actions: [{ label: 'Save' }, { label: 'Reload' }, { label: 'Validate XML' }] },
-    { label: 'Scope', actions: [{ label: 'Global' }, { label: 'API' }, { label: 'Product' }] },
+    { label: 'Scope', actions: [{ label: 'Global' }, { label: 'API' }, { label: 'Product' }, { label: 'Operation' }] },
   ]},
 ];
 
-type PolicyScopeKind = 'service' | 'api' | 'product';
+// v3.27: added 'operation' scope — APIM's finest-grain policy attach point.
+type PolicyScopeKind = 'service' | 'api' | 'product' | 'operation';
 
 const DEFAULT_POLICY_XML =
   `<policies>\n  <inbound>\n    <base />\n    <!-- example: validate Entra JWT -->\n    <!-- <validate-jwt header-name="Authorization" failed-validation-httpcode="401">\n      <openid-config url="https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration" />\n    </validate-jwt> -->\n    <rate-limit calls="120" renewal-period="60" />\n  </inbound>\n  <backend>\n    <base />\n  </backend>\n  <outbound>\n    <base />\n  </outbound>\n  <on-error>\n    <base />\n  </on-error>\n</policies>`;
@@ -449,16 +491,19 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
   const [scopeKind, setScopeKind] = useState<PolicyScopeKind>('service');
   const [apiId, setApiId] = useState('');
   const [productId, setProductId] = useState('');
+  const [operationId, setOperationId] = useState('');
   const [value, setValue] = useState(DEFAULT_POLICY_XML);
   const [loadState, setLoadState] = useState<LoadState<{ value: string; format: string }>>({ loading: true, data: null });
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' });
+  const [dirty, setDirty] = useState(false);
 
   const scopeQuery = useMemo(() => {
     const sp = new URLSearchParams({ scope: scopeKind });
-    if (scopeKind === 'api' && apiId) sp.set('apiId', apiId);
+    if ((scopeKind === 'api' || scopeKind === 'operation') && apiId) sp.set('apiId', apiId);
     if (scopeKind === 'product' && productId) sp.set('productId', productId);
+    if (scopeKind === 'operation' && operationId) sp.set('operationId', operationId);
     return sp.toString();
-  }, [scopeKind, apiId, productId]);
+  }, [scopeKind, apiId, productId, operationId]);
 
   const load = useCallback(async () => {
     setLoadState({ loading: true, data: null });
@@ -469,6 +514,7 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
       setLoadState({ loading: false, data: { value: j.value, format: j.format } });
       if (j.value) setValue(j.value);
       else setValue(DEFAULT_POLICY_XML);
+      setDirty(false);
     } catch (e: any) {
       setLoadState({ loading: false, data: null, error: e?.message || String(e) });
     }
@@ -479,28 +525,49 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
     if (scopeKind === 'service') load();
     else if (scopeKind === 'api' && apiId) load();
     else if (scopeKind === 'product' && productId) load();
+    else if (scopeKind === 'operation' && apiId && operationId) load();
     else setLoadState({ loading: false, data: null });
-  }, [load, scopeKind, apiId, productId]);
+  }, [load, scopeKind, apiId, productId, operationId]);
 
   const save = useCallback(async () => {
-    const check = isWellFormedXml(value);
+    // Phase 4.5 — snapshot the XML buffer via functional setter so the
+    // bytes validated, sent, and reflected back in the status match the
+    // user's actual edit even if Monaco fires another onChange during the
+    // await. Mirrors notebook-editor.tsx patchCell snapshot pattern.
+    let snapshot = value;
+    setValue((prev) => { snapshot = prev; return prev; });
+    const check = isWellFormedXml(snapshot);
     if (!check.ok) { setStatus({ kind: 'err', msg: `Invalid XML: ${check.error}` }); return; }
     if (scopeKind === 'api' && !apiId) { setStatus({ kind: 'err', msg: 'apiId is required for API scope' }); return; }
     if (scopeKind === 'product' && !productId) { setStatus({ kind: 'err', msg: 'productId is required for product scope' }); return; }
+    if (scopeKind === 'operation' && (!apiId || !operationId)) { setStatus({ kind: 'err', msg: 'apiId and operationId are required for operation scope' }); return; }
     setStatus({ kind: 'saving' });
     try {
       const r = await fetch(`/api/items/apim-policy/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ scope: scopeKind, apiId, productId, value }),
+        body: JSON.stringify({ scope: scopeKind, apiId, productId, operationId, value: snapshot }),
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
-      setStatus({ kind: 'ok', msg: `Policy saved at scope: ${j.scope}` });
+      setStatus({ kind: 'ok', msg: `Policy saved at scope: ${j.scope} at ${new Date().toLocaleTimeString()}` });
+      setDirty(false);
     } catch (e: any) {
       setStatus({ kind: 'err', msg: e?.message || String(e) });
     }
-  }, [id, scopeKind, apiId, productId, value]);
+  }, [id, scopeKind, apiId, productId, operationId, value]);
+
+  // Phase 4.5 — Ctrl+S / Cmd+S keyboard shortcut for Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (dirty && status.kind !== 'saving') save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dirty, status.kind, save]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={POLICY_RIBBON} main={
@@ -516,11 +583,17 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
               <Option value="service">Global (service)</Option>
               <Option value="api">API</Option>
               <Option value="product">Product</Option>
+              <Option value="operation">API operation</Option>
             </Dropdown>
           </Field>
-          {scopeKind === 'api' && (
+          {(scopeKind === 'api' || scopeKind === 'operation') && (
             <Field label="API id">
               <Input value={apiId} onChange={(_, d) => setApiId(d.value)} placeholder="e.g. orders-api" />
+            </Field>
+          )}
+          {scopeKind === 'operation' && (
+            <Field label="Operation id">
+              <Input value={operationId} onChange={(_, d) => setOperationId(d.value)} placeholder="e.g. getOrderById" />
             </Field>
           )}
           {scopeKind === 'product' && (
@@ -528,7 +601,14 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
               <Input value={productId} onChange={(_, d) => setProductId(d.value)} placeholder="e.g. customer-360" />
             </Field>
           )}
-          <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving'} style={{ marginLeft: 'auto' }}>
+          {dirty && <Badge appearance="outline" color="warning" style={{ marginLeft: 'auto' }}>unsaved</Badge>}
+          <Button
+            appearance="primary"
+            icon={<Save20Regular />}
+            onClick={save}
+            disabled={status.kind === 'saving' || !dirty}
+            style={dirty ? undefined : { marginLeft: 'auto' }}
+          >
             {status.kind === 'saving' ? 'Saving…' : 'Save policy'}
           </Button>
           <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Reload</Button>
@@ -543,12 +623,13 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
             </MessageBarBody>
           </MessageBar>
         )}
-        <textarea
-          className={s.monaco}
-          spellCheck={false}
+        <MonacoTextarea
           value={value}
-          onChange={(e) => setValue(e.target.value)}
-          aria-label="APIM policy XML"
+          onChange={(v) => { setValue(v); setDirty(true); }}
+          language="xml"
+          height={320}
+          minHeight={240}
+          ariaLabel="APIM policy XML"
         />
       </div>
     } />
@@ -561,29 +642,132 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
 
 const DP_RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
-    { label: 'Product', actions: [{ label: 'Publish to APIM' }, { label: 'Request access' }] },
+    { label: 'Product', actions: [{ label: 'Save' }, { label: 'Publish to APIM' }] },
     { label: 'Contract', actions: [{ label: 'Semantic schema' }, { label: 'SLA' }, { label: 'Owner' }] },
   ]},
 ];
 
+interface DataProductState {
+  displayName: string;
+  description: string;
+  domain: string;
+  owner: string;
+  certified: boolean;
+  sla: string;
+  bundle: string[];
+  // Phase 1 Purview Unified Catalog wiring — populated by
+  // POST /api/items/data-product/[id]/register-purview on success.
+  purviewDataProductId?: string;
+  lastRegisteredAt?: string;
+}
+
+const DP_EMPTY: DataProductState = {
+  displayName: '',
+  description: '',
+  domain: '',
+  owner: '',
+  certified: false,
+  sla: '',
+  bundle: [],
+};
+
+// Hint payload returned with HTTP 501 from /register-purview when the
+// LOOM_PURVIEW_ACCOUNT env var is not set. Mirrors PurviewNotConfiguredHint
+// in lib/azure/purview-client.ts.
+interface PurviewNotConfiguredHint {
+  missingEnvVar: string;
+  bicepModule: string;
+  bicepStatus: string;
+  rolesRequired: { name: string; scope: string; reason: string }[];
+  followUp: string;
+}
+
 export function DataProductEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const [state, setState] = useState<DataProductState>(DP_EMPTY);
+  const [loading, setLoading] = useState(id !== 'new');
+  const [loadErr, setLoadErr] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' });
+  const [dirty, setDirty] = useState(false);
+  // Phase 1: when /register-purview returns 501, we surface the structured
+  // hint payload as a dedicated MessageBar so the operator sees the bicep
+  // module path + roles to grant.
+  const [purviewHint, setPurviewHint] = useState<PurviewNotConfiguredHint | null>(null);
 
-  const productId = id !== 'new' ? id : 'customer-360';
-  const displayName = 'Customer 360';
-  const description = 'Gold revenue + churn data product. Backed by silver_revenue (Lakehouse) + churn-model (AML). Versioned via APIM product so consumers can subscribe through the developer portal.';
+  // Phase 4.5 — all field mutations use functional updates so that if an
+  // async response (e.g. registerPurview hydrating purviewDataProductId)
+  // lands between the user's keystroke and React's commit, neither edit
+  // clobbers the other. Same pattern as notebook-editor.tsx patchCell fix.
+  const patchState = useCallback((patch: Partial<DataProductState>) => {
+    setState((prev) => ({ ...prev, ...patch }));
+    setDirty(true);
+  }, []);
 
-  const publish = useCallback(async () => {
+  // v3.27: F-vaporware fix — Cosmos-backed load, removes hardcoded
+  // 'Customer 360' / alice@contoso / fixed bundle grid.
+  useEffect(() => {
+    if (id === 'new') { setLoading(false); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`);
+        const j = await r.json();
+        if (cancelled) return;
+        if (!j.ok) {
+          // 404 on fresh items is expected; show empty form rather than error.
+          if (r.status !== 404) setLoadErr(j.error || `HTTP ${r.status}`);
+        } else if (j.item?.state) {
+          setState({ ...DP_EMPTY, ...(j.item.state as Partial<DataProductState>) });
+          setDirty(false);
+        }
+      } catch (e: any) {
+        if (!cancelled) setLoadErr(e?.message || String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  const save = useCallback(async () => {
     setStatus({ kind: 'saving' });
+    setPurviewHint(null);
+    // Snapshot current state from the latest committed render via functional
+    // setter — guarantees we PUT the user's freshest field values, not a
+    // stale closure capture from when the Save callback was last memoised.
+    let snapshot: DataProductState = DP_EMPTY;
+    setState((prev) => { snapshot = prev; return prev; });
+    try {
+      const r = await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ state: snapshot, displayName: snapshot.displayName || 'Untitled data product' }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
+      setDirty(false);
+      setStatus({ kind: 'ok', msg: snapshot.purviewDataProductId
+        ? 'Saved to Cosmos. Re-register with Purview to propagate edits to the Unified Catalog.'
+        : 'Saved to Cosmos. Click Register with Purview to publish to the Unified Catalog.' });
+    } catch (e: any) {
+      setStatus({ kind: 'err', msg: e?.message || String(e) });
+    }
+  }, [id]);
+
+  const publishApimMirror = useCallback(async () => {
+    setStatus({ kind: 'saving' });
+    setPurviewHint(null);
+    // Snapshot to avoid stale closure of state.displayName/description.
+    let snapshot: DataProductState = DP_EMPTY;
+    setState((prev) => { snapshot = prev; return prev; });
     try {
       const r = await fetch(`/api/items/apim-product`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          id: productId,
-          displayName,
-          description,
+          id,
+          displayName: snapshot.displayName || 'Untitled data product',
+          description: snapshot.description,
           state: 'published',
           subscriptionRequired: true,
           approvalRequired: false,
@@ -591,37 +775,152 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
-      setStatus({ kind: 'ok', msg: `Published as APIM product '${j.product.name}'` });
+      setStatus({ kind: 'ok', msg: `Published API consumer surface as APIM product '${j.product.name}'. (Note: this is the API access layer, NOT the Purview Data Product registration.)` });
     } catch (e: any) {
       setStatus({ kind: 'err', msg: e?.message || String(e) });
     }
-  }, [productId]);
+  }, [id]);
+
+  const registerPurview = useCallback(async () => {
+    setStatus({ kind: 'saving' });
+    setPurviewHint(null);
+    try {
+      const r = await fetch(`/api/items/data-product/${encodeURIComponent(id)}/register-purview`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      });
+      const j = await r.json();
+      if (r.status === 501 && j?.hint) {
+        // Honest config-only state per .claude/rules/no-vaporware.md — the
+        // backend is gated, surface the actionable hint to the operator.
+        setPurviewHint(j.hint as PurviewNotConfiguredHint);
+        setStatus({ kind: 'idle' });
+        return;
+      }
+      if (!j.ok) {
+        const detail = j.hint?.followUp ? ` Hint: ${j.hint.followUp}` : (j.hint ? ` Hint: ${j.hint}` : '');
+        setStatus({ kind: 'err', msg: `${j.error || `HTTP ${r.status}`}${detail}` });
+        return;
+      }
+      // Success — hydrate the local state with the returned id + timestamp
+      // so the MessageBar flips from "pending" to "registered" without a reload.
+      setState((prev) => ({
+        ...prev,
+        purviewDataProductId: j.purviewDataProductId,
+        lastRegisteredAt: j.lastRegisteredAt,
+      }));
+      setStatus({
+        kind: 'ok',
+        msg: `Registered with Purview Unified Catalog. dataProductId=${j.purviewDataProductId} · lastRegisteredAt=${j.lastRegisteredAt}`,
+      });
+    } catch (e: any) {
+      setStatus({ kind: 'err', msg: e?.message || String(e) });
+    }
+  }, [id]);
+
+  const setBundleText = (text: string) => patchState({ bundle: text.split('\n').map(s => s.trim()).filter(Boolean) });
+
+  // Phase 4.5 — Ctrl+S / Cmd+S shortcut for Save. Matches notebook-editor.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (dirty && status.kind !== 'saving' && state.displayName) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dirty, status.kind, state.displayName, save]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={DP_RIBBON} main={
       <div className={s.pad}>
+        {state.purviewDataProductId ? (
+          <MessageBar intent="success">
+            <MessageBarBody>
+              <MessageBarTitle>Registered with Purview Unified Catalog</MessageBarTitle>
+              Data product <code>{state.purviewDataProductId}</code> is live in the catalog.{' '}
+              {state.lastRegisteredAt && <>Last registered <code>{state.lastRegisteredAt}</code>.{' '}</>}
+              Re-click <strong>Register with Purview</strong> after edits to push updates. APIM publish remains a separate, API-access-layer concern.
+            </MessageBarBody>
+          </MessageBar>
+        ) : (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Not yet registered with Purview Unified Catalog</MessageBarTitle>
+              The item persists configuration to Cosmos, but it has not been published to the canonical Purview Data Product catalog. Click <strong>Register with Purview</strong> below to create the Unified Catalog data product via <code>POST /datagovernance/catalog/dataProducts</code>. Requires a Purview account (<code>LOOM_PURVIEW_ACCOUNT</code>), a <code>businessDomainId</code> GUID in <code>state.domain</code>, and the Loom UAMI to hold the <code>Data Curator</code> + <code>Data Product Owner</code> roles. See <code>docs/fiab/data-product-parity-spec.md</code>.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {purviewHint && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Purview is not provisioned in this deployment</MessageBarTitle>
+              Missing env var: <code>{purviewHint.missingEnvVar}</code>.{' '}
+              Bicep module: <code>{purviewHint.bicepModule}</code> — {purviewHint.bicepStatus}{' '}
+              Required Purview roles (granted via the Purview portal, NOT ARM RBAC):
+              <ul style={{ margin: '6px 0 6px 18px' }}>
+                {purviewHint.rolesRequired.map((r) => (
+                  <li key={r.name}><strong>{r.name}</strong> at {r.scope} — {r.reason}</li>
+                ))}
+              </ul>
+              {purviewHint.followUp}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {loadErr && <MessageBar intent="error"><MessageBarBody>{loadErr}</MessageBarBody></MessageBar>}
+        {loading && <Spinner size="tiny" label="Loading…" />}
+
         <div className={s.toolbar}>
-          <Badge appearance="filled" color="brand">Domain: Finance</Badge>
-          <Badge appearance="outline">Owner: alice@contoso</Badge>
-          <Badge appearance="outline" color="success">Certified</Badge>
-          <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={publish} disabled={status.kind === 'saving'} style={{ marginLeft: 'auto' }}>
+          {state.domain && <Badge appearance="filled" color="brand">Domain: {state.domain}</Badge>}
+          {state.owner && <Badge appearance="outline">Owner: {state.owner}</Badge>}
+          {state.certified && <Badge appearance="outline" color="success">Certified</Badge>}
+          {state.purviewDataProductId && <Badge appearance="outline" color="success">Purview: {state.purviewDataProductId.slice(0, 8)}…</Badge>}
+          {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+          <Button appearance="secondary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving' || !dirty}>Save</Button>
+          <Button
+            appearance={state.purviewDataProductId ? 'secondary' : 'primary'}
+            icon={<Library20Regular />}
+            onClick={registerPurview}
+            disabled={status.kind === 'saving' || !state.displayName}
+            style={{ marginLeft: 'auto' }}
+          >
+            {status.kind === 'saving'
+              ? 'Registering…'
+              : state.purviewDataProductId ? 'Re-register with Purview' : 'Register with Purview'}
+          </Button>
+          <Button appearance="secondary" icon={<CloudArrowUp20Regular />} onClick={publishApimMirror} disabled={status.kind === 'saving' || !state.displayName}>
             {status.kind === 'saving' ? 'Publishing…' : 'Publish to APIM'}
           </Button>
         </div>
         <StatusBar status={status} />
-        <Subtitle2>{displayName}</Subtitle2>
-        <Body1>{description}</Body1>
-        <Subtitle2 style={{ marginTop: 8 }}>Bundle</Subtitle2>
-        <div className={s.cardGrid}>
-          {[
-            'Dataset: silver_revenue (Delta)',
-            'Semantic contract: orders.yaml (v2)',
-            'APIM API: orders-api v2.1',
-            'Access policy: tier ≥ Gold',
-            'SLA: 99.9% · P95 < 200 ms',
-            'Lineage: 6 upstream sources',
-          ].map((b) => <div key={b} className={s.card}>{b}</div>)}
+
+        <div className={s.form}>
+          <Field label="Display name"><Input value={state.displayName} onChange={(_, d) => patchState({ displayName: d.value })} /></Field>
+          <Field label="Domain (Purview businessDomainId GUID)"><Input value={state.domain} onChange={(_, d) => patchState({ domain: d.value })} placeholder="e.g. 0a1b2c3d-4e5f-6789-abcd-ef0123456789" /></Field>
+          <Field label="Owner (email)"><Input value={state.owner} onChange={(_, d) => patchState({ owner: d.value })} placeholder="owner@contoso.com" /></Field>
+          <Field label="SLA"><Input value={state.sla} onChange={(_, d) => patchState({ sla: d.value })} placeholder="99.9% · P95 < 200 ms" /></Field>
+          <Field label="Description" style={{ gridColumn: '1 / -1' }}>
+            <Textarea value={state.description} onChange={(_, d) => patchState({ description: d.value })} rows={3} />
+          </Field>
+          <Field label="Certified" style={{ gridColumn: '1 / -1' }}>
+            <Switch checked={state.certified} onChange={(_, d) => patchState({ certified: d.checked })} label={state.certified ? 'Certified by data governance' : 'Not certified'} />
+          </Field>
+          <Field label="Bundle (one per line — datasets, contracts, APIs, policies)" style={{ gridColumn: '1 / -1' }}>
+            <Textarea value={state.bundle.join('\n')} onChange={(_, d) => setBundleText(d.value)} rows={6} placeholder={'Dataset: silver_revenue (Delta)\nSemantic contract: orders.yaml (v2)\nAPIM API: orders-api v2.1'} />
+          </Field>
         </div>
+
+        {state.bundle.length > 0 && (
+          <>
+            <Subtitle2 style={{ marginTop: 8 }}>Bundle preview</Subtitle2>
+            <div className={s.cardGrid}>
+              {state.bundle.map((b, i) => <div key={i} className={s.card}>{b}</div>)}
+            </div>
+          </>
+        )}
       </div>
     } />
   );

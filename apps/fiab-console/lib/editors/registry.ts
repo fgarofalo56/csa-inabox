@@ -72,7 +72,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'adf-pipeline':                reg(() => import('./azure-services-editors'), 'AdfPipelineEditor'),
   'adf-dataset':                 reg(() => import('./azure-services-editors'), 'AdfDatasetEditor'),
   'adf-trigger':                 reg(() => import('./azure-services-editors'), 'AdfTriggerEditor'),
-  'usql-job':                    reg(() => import('./azure-services-editors'), 'UsqlJobEditor'),
+  'stream-analytics-job':        reg(() => import('./stream-analytics-editor'), 'StreamAnalyticsJobEditor'),
 
   // v1.9 — APIM-first surface (API-first methodology, data product marketplace)
   'apim-api':                    reg(() => import('./apim-editors'),           'ApimApiEditor'),

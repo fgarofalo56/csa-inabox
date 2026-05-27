@@ -13,19 +13,28 @@ import { executeQuery, serverlessTarget } from '@/lib/azure/synapse-sql-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type Fmt = 'PARQUET' | 'CSV' | 'JSON' | 'DELTA';
+type Fmt = 'PARQUET' | 'CSV' | 'JSON' | 'DELTA' | 'TEXT' | 'IMAGE' | 'BINARY';
+
+const TEXT_EXTS = new Set(['txt', 'log', 'md', 'yaml', 'yml', 'xml', 'html', 'htm', 'sql', 'py', 'ipynb', 'scala', 'r', 'js', 'ts', 'kql', 'sh', 'ps1', 'bicep', 'tf', 'toml', 'ini', 'conf', 'cfg', 'env']);
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']);
+const TABULAR_EXTS = new Set(['parquet', 'csv', 'tsv', 'json', 'jsonl', 'ndjson']);
 
 function detectFormat(path: string, explicit?: string | null): Fmt {
   if (explicit) {
     const up = explicit.toUpperCase();
-    if (up === 'PARQUET' || up === 'CSV' || up === 'JSON' || up === 'DELTA') return up;
+    if (['PARQUET', 'CSV', 'JSON', 'DELTA', 'TEXT', 'IMAGE', 'BINARY'].includes(up)) return up as Fmt;
   }
   if (path.includes('/_delta_log/') || path.endsWith('/_delta_log')) return 'DELTA';
   const ext = path.toLowerCase().split('.').pop() || '';
   if (ext === 'parquet') return 'PARQUET';
   if (ext === 'csv' || ext === 'tsv') return 'CSV';
   if (ext === 'json' || ext === 'jsonl' || ext === 'ndjson') return 'JSON';
-  return 'PARQUET';
+  if (TEXT_EXTS.has(ext)) return 'TEXT';
+  if (IMAGE_EXTS.has(ext)) return 'IMAGE';
+  // v3.28: any unrecognized extension is BINARY — return metadata-only,
+  // NOT a forced-PARQUET OPENROWSET attempt that errors with cryptic
+  // "file is not parquet/json" messages.
+  return 'BINARY';
 }
 
 /**
@@ -62,6 +71,27 @@ export async function GET(req: NextRequest) {
   const bulkPath = normalizeBulkPath(path, fmt);
   const url = pathToHttpsUrl(container, bulkPath);
   const safeUrl = escapeSingleQuotes(url);
+
+  // v3.28: non-tabular formats return metadata-only — no Synapse Serverless
+  // OPENROWSET attempt that would error with cryptic 'not a parquet file'.
+  if (fmt === 'TEXT' || fmt === 'IMAGE' || fmt === 'BINARY') {
+    return NextResponse.json({
+      ok: true,
+      container,
+      path,
+      format: fmt,
+      bulkUrl: url,
+      message: fmt === 'TEXT'
+        ? 'Text file. Use Download to view the raw content.'
+        : fmt === 'IMAGE'
+        ? 'Image file. Use Download to view the binary content.'
+        : 'Binary file. Use Download — this file type is not tabular and is not previewable in-browser. All standard Fabric Lakehouse file types are supported for upload.',
+      previewable: false,
+      kind: fmt.toLowerCase(),
+      // Fabric also previews text + images inline — that path lands in a future
+      // PR that streams the bytes via a /download passthrough route.
+    });
+  }
 
   let sqlText: string;
   if (fmt === 'CSV') {

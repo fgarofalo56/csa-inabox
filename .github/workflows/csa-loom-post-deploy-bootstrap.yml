@@ -24,6 +24,8 @@ env:
   APIM_NAME: apim-csa-loom-eastus2
   CONSOLE_UAMI_PRINCIPAL: e61f3eb3-c646-4183-8198-4c4a34cd9a01
   CONSOLE_UAMI_CLIENT: c6272de5-3c4e-4b72-8b57-71b2e950209b
+  # MSAL Web App SP — used as Dataverse Application User (UAMIs can't be one)
+  LOOM_MSAL_CLIENT_ID: 9844c28c-3b3a-4949-8d63-9eefa3b50a9d
 
 jobs:
   bootstrap:
@@ -182,6 +184,55 @@ jobs:
             echo "No Foundry storage in $ADMIN_RG — skipping"
           fi
 
+      - name: Grant Console UAMI Cognitive Services User on Content Safety (unblocks /items/content-safety)
+        run: |
+          CS=$(az cognitiveservices account list -g $ADMIN_RG --query "[?kind=='ContentSafety'].id" -o tsv | head -1)
+          if [ -n "$CS" ]; then
+            echo "Content Safety: $CS"
+            az role assignment create \
+              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-principal-type ServicePrincipal \
+              --role "Cognitive Services User" \
+              --scope "$CS" \
+              -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
+          else
+            echo "No Content Safety in $ADMIN_RG — skipping"
+          fi
+
+      - name: Register Console UAMI as Power Platform Management App (unblocks PP + Copilot Studio editors)
+        run: |
+          # PP admin API for SP access requires the SP to be registered as a
+          # tenant-wide PP management app — separate from the Power Platform
+          # Admin Entra role. PUT is idempotent (returns 200 on re-run).
+          PP_TOKEN=$(az account get-access-token --resource https://api.bap.microsoft.com --query accessToken -o tsv)
+          R=$(curl -sS -w "%{http_code}" -o /tmp/pp.json -X PUT \
+            "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/adminApplications/$CONSOLE_UAMI_CLIENT?api-version=2020-10-01" \
+            -H "Authorization: Bearer $PP_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{}')
+          echo "PP management app PUT: $R"
+          cat /tmp/pp.json
+          echo
+          if [[ "$R" == "200" ]] || [[ "$R" == "201" ]]; then
+            echo "  Power Platform + Copilot Studio editors unlocked."
+          else
+            echo "  PP registration returned $R — deploy SP may lack PP Admin role."
+          fi
+
+      - name: Register MSAL SP as Dataverse Application User in every env that has Dataverse
+        run: |
+          # For each env with Dataverse, register the MSAL Web App SP as an
+          # Application User with System Administrator. Idempotent — skips
+          # envs where the AppUser already exists. Requires the caller to
+          # already be SA on each env (Default env needs one-time Promote To
+          # Admin click; see docs/fiab/dataverse-app-user.md Step 1).
+          if [ -z "${LOOM_MSAL_CLIENT_ID:-}" ]; then
+            echo "  LOOM_MSAL_CLIENT_ID not set — skipping Dataverse AppUser registration"
+          else
+            LOOM_MSAL_CLIENT_ID="$LOOM_MSAL_CLIENT_ID" \
+              bash scripts/csa-loom/dataverse-add-appuser.sh || true
+          fi
+
       - name: Summary
         if: always()
         run: |
@@ -192,8 +243,14 @@ jobs:
           echo "Admin RG: Reader granted (for /admin/capacity full inventory)"
           echo "Foundry workspace: AzureML Data Scientist granted (unblocks /api/foundry/workspace + datastores)"
           echo "Foundry storage: Blob Data Reader granted"
+          echo "Content Safety: Cognitive Services User granted"
+          echo "Power Platform: UAMI registered as Management App (unblocks PP + Copilot Studio)"
+          echo "Dataverse: MSAL SP registered as Application User w/ SA role on every env with Dataverse (idempotent)"
           echo ""
           echo "Still needs manual steps (not grantable via SP):"
           echo "  • Power Platform Admin — grant at https://admin.powerplatform.microsoft.com"
           echo "    Add SP id $CONSOLE_UAMI_PRINCIPAL as Power Platform Administrator."
           echo "  • Power BI tenant SP enablement — Fabric admin portal"
+          echo "  • Dataverse System Administrator on Default env — one-time Promote To Admin click"
+          echo "    at https://<org>.crm.dynamics.com/main.aspx?settingsonly=true&pagetype=entitylist&etn=systemuser"
+          echo "    (only needed for envs Dataverse was added to AFTER bootstrap; new custom envs don't need this)"

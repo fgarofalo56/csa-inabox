@@ -1,24 +1,22 @@
 /**
  * POST /api/items/dataflow/[id]/refresh?workspaceId=...
- *   Triggers a Refresh job on the dataflow item.
+ *   Triggers a refresh on the dataflow.
+ *
+ * v3.25: Cosmos-backed dataflow's Refresh is Preview — the ADF Mapping
+ * Data Flow dispatch lands in a follow-up release. Returns 503 with
+ * an actionable hint so BackendStateBar renders it as a quiet warning.
  */
-
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { refreshDataflow, FabricError } from '@/lib/azure/fabric-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   if (!getSession()) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
-  try {
-    const res = await refreshDataflow(workspaceId, ctx.params.id);
-    return NextResponse.json({ ok: true, ...res });
-  } catch (e: any) {
-    const status = e instanceof FabricError ? e.status : 502;
-    return NextResponse.json({ ok: false, error: e?.message || String(e), endpoint: e?.endpoint, hint: e?.hint }, { status });
-  }
+  return NextResponse.json({
+    ok: false,
+    error: 'Dataflow Refresh runtime not yet wired in this Loom release. Use a Data pipeline + Notebook to ingest data for now.',
+    hint: 'Tracked in docs/fiab/wiring-audit.md Phase B. The dataflow definition is saved to Cosmos and visible to Apps + Lineage; Refresh dispatch is the remaining piece.',
+  }, { status: 503 });
 }

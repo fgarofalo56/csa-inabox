@@ -44,7 +44,7 @@ jobs:
       app_matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Azure login
-        uses: Azure/login@v2
+        uses: azure/login@v2.3.0
         with:
           creds: |
             {
@@ -80,7 +80,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Azure login
-        uses: Azure/login@v2
+        uses: azure/login@v2.3.0
         with:
           creds: |
             {
@@ -94,11 +94,18 @@ jobs:
         run: |
           set -e
           TAG="${{ inputs.tag_override || 'v0.1' }}"
+          STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          # v3.28: pass LOOM_BUILD_SHA + LOOM_BUILD_TIMESTAMP as build args
+          # so the Dockerfile stamps /public/build-marker.txt with the actual
+          # commit being built. deploy-validation reads this file and refuses
+          # to declare success unless the SHA matches.
           az acr build \
             --registry "${{ needs.resolve.outputs.acr_name }}" \
             --image "${{ matrix.name }}:${TAG}" \
             --image "${{ matrix.name }}:${{ github.sha }}" \
             --image "${{ matrix.name }}:latest" \
             --file "${{ matrix.ctx }}/Dockerfile" \
+            --build-arg "LOOM_BUILD_SHA=${{ github.sha }}" \
+            --build-arg "LOOM_BUILD_TIMESTAMP=${STAMP}" \
             "${{ matrix.ctx }}"
-          echo "::notice::Built ${{ matrix.name }}:${TAG} via ACR Tasks"
+          echo "::notice::Built ${{ matrix.name }}:${TAG} via ACR Tasks (sha=${{ github.sha }})"

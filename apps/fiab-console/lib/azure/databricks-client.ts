@@ -590,3 +590,40 @@ export async function listClusterEvents(
   const body = await asJsonOrThrow<{ events?: ClusterEvent[] }>(res, 'listClusterEvents');
   return body.events || [];
 }
+
+// ============================================================
+// One-time notebook run — imports inline code as a notebook in
+// /Shared/loom-runs/<ts>, then submits as a one-time job. Used
+// by /api/items/notebook/[id]/run when compute is databricks.
+// ============================================================
+
+export async function runOneTimeNotebook(args: {
+  clusterId: string;
+  code: string;
+  lang?: 'PYTHON' | 'SQL' | 'SCALA' | 'R';
+  jobName?: string;
+}): Promise<{ run_id: number; run_page_url?: string }> {
+  const { clusterId, code, lang = 'PYTHON', jobName } = args;
+  const ts = Date.now();
+  const nbPath = `/Shared/loom-runs/${ts}-${jobName || 'notebook'}`;
+
+  // 1) Ensure parent dir
+  await dbxFetch('/api/2.0/workspace/mkdirs', {
+    method: 'POST',
+    body: JSON.stringify({ path: '/Shared/loom-runs' }),
+  }).catch(() => { /* dir may exist */ });
+
+  // 2) Import the notebook source
+  await importNotebook(nbPath, lang, code, true);
+
+  // 3) Submit as one-time run
+  const submitRes = await dbxFetch('/api/2.1/jobs/runs/submit', {
+    method: 'POST',
+    body: JSON.stringify({
+      run_name: jobName || `loom-${ts}`,
+      existing_cluster_id: clusterId,
+      notebook_task: { notebook_path: nbPath },
+    }),
+  });
+  return asJsonOrThrow<{ run_id: number; run_page_url?: string }>(submitRes, 'runOneTimeNotebook');
+}

@@ -15,16 +15,16 @@
  *    persist the index spec into item state.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Label, Textarea,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Caption1, Badge, Button, Input, Label,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Play20Regular, Add20Regular, Search20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -91,24 +91,44 @@ function ResultsPreview({ result }: { result: any }) {
 // ============================================================
 // Cosmos Gremlin
 // ============================================================
+const QUICK_EDGES = `// List the first 25 edges with both endpoints' labels and the edge label.
+g.E().limit(25).project('from', 'edge', 'to')
+  .by(outV().label())
+  .by(label())
+  .by(inV().label())`;
+const QUICK_VERTICES = `// List the first 25 vertices with their label + name (if present).
+g.V().limit(25).project('label', 'name', 'id')
+  .by(label())
+  .by(coalesce(values('name'), constant('')))
+  .by(id())`;
+
 export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [endpoint, setEndpoint] = useState<string>(process.env.NEXT_PUBLIC_LOOM_COSMOS_GREMLIN_ENDPOINT || '');
+  // v3.28 Phase 4.5: endpoint is read-only — it reflects the server-side
+  // env binding. Letting users type a fake endpoint into a textbox that
+  // does nothing is vaporware per `no-vaporware.md`.
+  const endpoint = process.env.NEXT_PUBLIC_LOOM_COSMOS_GREMLIN_ENDPOINT || '';
   const [query, setQuery] = useState<string>(SAMPLE_GREMLIN);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  const run = useCallback(async () => {
+  const runGremlin = useCallback(async (gremlin: string) => {
     setLoading(true); setResult(null);
     try {
       const r = await fetch(`/api/items/cosmos-gremlin-graph/${id}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query: gremlin }),
       });
       setResult(await r.json());
     } catch (e: any) { setResult({ ok: false, error: e?.message || String(e) }); }
     finally { setLoading(false); }
-  }, [id, query]);
+  }, [id]);
+
+  const run = useCallback(() => runGremlin(query), [query, runGremlin]);
+  // v3.27: wire Edges / Vertices ribbon buttons — used to emit nothing.
+  // They now load the matching quick query into the editor + execute it.
+  const showVertices = useCallback(() => { setQuery(QUICK_VERTICES); runGremlin(QUICK_VERTICES); }, [runGremlin]);
+  const showEdges = useCallback(() => { setQuery(QUICK_EDGES); runGremlin(QUICK_EDGES); }, [runGremlin]);
 
   return (
     <ItemEditorChrome
@@ -116,10 +136,15 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
       ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Query', actions: [{ label: 'Run' }, { label: 'Edges' }, { label: 'Vertices' }] }] }]}
       leftPanel={
         <div className={s.treePad}>
-          <div className={s.field}><Label>Gremlin endpoint</Label>
-            <Input value={endpoint} onChange={(_, d) => setEndpoint(d.value)} placeholder="wss://<acct>.gremlin.cosmos.azure.com:443/" />
+          <div className={s.field}><Label>Gremlin endpoint (server-bound)</Label>
+            <Input value={endpoint || '— not configured —'} readOnly placeholder="wss://<acct>.gremlin.cosmos.azure.com:443/" />
+            <Caption1>Configured via <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code>. Editing here is not honored by the BFF.</Caption1>
           </div>
-          <Caption1>Edges / Vertices ribbon actions emit standard <code>g.V()</code> / <code>g.E()</code> queries.</Caption1>
+          <Caption1 style={{ marginTop: 8 }}>Use the buttons below to quick-load <code>g.V()</code> / <code>g.E()</code> previews.</Caption1>
+          <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+            <Button size="small" onClick={showVertices} disabled={loading}>Vertices</Button>
+            <Button size="small" onClick={showEdges} disabled={loading}>Edges</Button>
+          </div>
         </div>
       }
       main={
@@ -132,8 +157,12 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
               Graph visualization (force-directed layout) deferred to v3.x — rows render as JSON for now.
             </MessageBarBody>
           </MessageBar>
-          <textarea className={s.editor} value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="Gremlin query" />
-          <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
+          <MonacoTextarea value={query} onChange={setQuery} language="javascript" height={200} minHeight={160} ariaLabel="Gremlin query" />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
+            <Button appearance="secondary" disabled={loading} onClick={showVertices}>Quick: Vertices</Button>
+            <Button appearance="secondary" disabled={loading} onClick={showEdges}>Quick: Edges</Button>
+          </div>
           <ResultsPreview result={result} />
         </div>
       }
@@ -176,7 +205,7 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
               Cypher-to-KQL translation deferred to v3.x — write KQL directly for now.
             </MessageBarBody>
           </MessageBar>
-          <textarea className={s.editor} value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="Cypher / KQL editor" />
+          <MonacoTextarea value={query} onChange={setQuery} language="kql" height={200} minHeight={160} ariaLabel="Cypher / KQL editor" />
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
           <ResultsPreview result={result} />
         </div>
@@ -188,24 +217,91 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
 // ============================================================
 // GQL
 // ============================================================
+type GqlBackend = 'fabric-graph' | 'cosmos-gremlin-translate' | 'persist-only';
+
 export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [query, setQuery] = useState<string>(SAMPLE_GQL);
+  const [backend, setBackend] = useState<GqlBackend>('persist-only');
+  const [result, setResult] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  // v3.27: F-vaporware fix — Run button now actually does something.
+  // For Fabric Graph backend we POST to the Fabric Graph executeQuery
+  // route (501 deferred until LOOM_FABRIC_GRAPH_WORKSPACE wires the
+  // workspace). For Cosmos-Gremlin-translate we dispatch a best-effort
+  // Cypher-style query through the cosmos-gremlin-graph route. For
+  // persist-only we honestly save the query to item state without
+  // pretending to execute it.
+  const run = useCallback(async () => {
+    setLoading(true); setResult(null);
+    try {
+      if (backend === 'fabric-graph') {
+        const r = await fetch(`/api/items/gql-graph/${id}/query`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ query, backend: 'fabric-graph' }),
+        });
+        setResult(await r.json());
+      } else if (backend === 'cosmos-gremlin-translate') {
+        const r = await fetch(`/api/items/cosmos-gremlin-graph/${id}/query`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ query, lang: 'gql' }),
+        });
+        setResult(await r.json());
+      } else {
+        const r = await fetch(`/api/cosmos-items/gql-graph/${encodeURIComponent(id)}`, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ state: { query, backend } }),
+        });
+        const j = await r.json();
+        setResult(j.ok ? { ok: true, persisted: true, message: 'Query persisted to item state. No backend dispatched (backend=persist-only).' } : j);
+      }
+    } catch (e: any) { setResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setLoading(false); }
+  }, [backend, id, query]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
       ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Query', actions: [{ label: 'Run' }] }] }]}
-      leftPanel={<div className={s.treePad}><Caption1>ISO GQL standard. Compiled to KQL or Gremlin depending on backend.</Caption1></div>}
+      leftPanel={
+        <div className={s.treePad}>
+          <Caption1>ISO GQL standard. Pick a backend below.</Caption1>
+          <div className={s.field} style={{ marginTop: 8 }}>
+            <Label>Backend</Label>
+            <select value={backend} onChange={(e) => setBackend(e.target.value as GqlBackend)} style={{ padding: 6 }}>
+              <option value="persist-only">Persist-only (no dispatch)</option>
+              <option value="fabric-graph">Fabric Graph REST (preview — gated on workspace)</option>
+              <option value="cosmos-gremlin-translate">Cosmos Gremlin (best-effort translate)</option>
+            </select>
+          </div>
+        </div>
+      }
       main={
         <div className={s.pad}>
-          <MessageBar intent="warning">
+          <MessageBar intent={backend === 'persist-only' ? 'warning' : 'info'}>
             <MessageBarBody>
-              <MessageBarTitle>GQL compiler deferred</MessageBarTitle>
-              No GA Azure backend speaks GQL natively today. v3.x will add a parser → KQL/Gremlin compiler.
-              For now the editor persists the query into item state.
+              <MessageBarTitle>
+                {backend === 'fabric-graph' && 'Fabric Graph REST'}
+                {backend === 'cosmos-gremlin-translate' && 'Cosmos Gremlin best-effort'}
+                {backend === 'persist-only' && 'Persist-only mode'}
+              </MessageBarTitle>
+              {backend === 'fabric-graph' && (
+                <>Fabric Graph <code>executeQuery</code> endpoint is preview. Run dispatches to <code>/api/items/gql-graph/[id]/query</code> — returns 501 with a documented gate when <code>LOOM_FABRIC_GRAPH_WORKSPACE</code> isn't bound.</>
+              )}
+              {backend === 'cosmos-gremlin-translate' && (
+                <>The Cosmos Gremlin route accepts <code>lang: 'gql'</code> for best-effort pattern translation. Complex GQL paths may fall back to Gremlin equivalents or return a translation-failed error.</>
+              )}
+              {backend === 'persist-only' && (
+                <>Run saves the query to item state and does <strong>not</strong> dispatch — this is the honest no-backend mode. Switch the backend dropdown to actually execute.</>
+              )}
             </MessageBarBody>
           </MessageBar>
-          <textarea className={s.editor} value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="GQL editor" />
+          <MonacoTextarea value={query} onChange={setQuery} language="sql" height={200} minHeight={160} ariaLabel="GQL editor" />
+          <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>
+            {loading ? 'Running…' : backend === 'persist-only' ? 'Save query' : 'Run'}
+          </Button>
+          <ResultsPreview result={result} />
         </div>
       }
     />
@@ -215,29 +311,97 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
 // ============================================================
 // Vector store
 // ============================================================
-type VectorBackend = 'cosmos-vcore' | 'ai-search' | 'pgvector';
+// v3.27: added `cosmos-nosql` — the Microsoft-recommended native vector
+// backend on Cosmos DB for NoSQL (DiskANN with VectorEmbeddingPolicy +
+// vector index in the indexingPolicy).
+type VectorBackend = 'cosmos-nosql' | 'cosmos-vcore' | 'ai-search' | 'pgvector';
+
+const VECTOR_BACKEND_DESCRIPTIONS: Record<VectorBackend, string> = {
+  'cosmos-nosql': 'Cosmos DB for NoSQL — DiskANN vector index (recommended for new workloads)',
+  'cosmos-vcore': 'Cosmos vCore (Mongo vector index)',
+  'ai-search': 'Azure AI Search (vector profile)',
+  pgvector: 'PostgreSQL pgvector',
+};
+
 export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [backend, setBackend] = useState<VectorBackend>('ai-search');
+  const [backend, setBackend] = useState<VectorBackend>('cosmos-nosql');
   const [indexName, setIndexName] = useState<string>('docs-vec');
   const [dim, setDim] = useState<number>(1536);
   const [metric, setMetric] = useState<'cosine' | 'euclidean' | 'dotProduct'>('cosine');
   const [testQuery, setTestQuery] = useState<string>('');
   const [result, setResult] = useState<any>(null);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
 
-  const createIndex = async () => {
-    // Backend-specific provisioning is deferred. Persist the spec only.
-    const r = await fetch(`/api/items/vector-store`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        workspaceId: 'default',
-        displayName: indexName,
-        state: { backend, indexName, dim, metric },
-      }),
-    });
-    setResult(await r.json());
-  };
+  // v3.28 Phase 4.5: load existing item state from Cosmos on mount so the
+  // form reflects what's persisted. New items render the defaults above.
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`);
+        if (cancelled || r.status === 404) return;
+        const j = await r.json();
+        if (j?.ok && j.item?.state) {
+          const st = j.item.state;
+          if (st.backend) setBackend(st.backend);
+          if (st.indexName) setIndexName(st.indexName);
+          if (typeof st.dim === 'number') setDim(st.dim);
+          if (st.metric) setMetric(st.metric);
+          setSavedAt(j.item.updatedAt || null);
+        }
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  const createIndex = useCallback(async () => {
+    setSaving(true); setResult(null);
+    try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
+    try {
+      // For existing items, PATCH state into Cosmos. For id === 'new', POST creates the item.
+      const isNew = !id || id === 'new';
+      const r = isNew
+        ? await fetch(`/api/items/vector-store`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              workspaceId: 'default',
+              displayName: indexName,
+              state: { backend, indexName, dim, metric },
+            }),
+          })
+        : await fetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ state: { backend, indexName, dim, metric } }),
+          });
+      const j = await r.json();
+      setResult(j);
+      if (j?.ok) {
+        setDirty(false);
+        setSavedAt(j.item?.updatedAt || new Date().toISOString());
+        try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: indexName } })); } catch {}
+      }
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    } finally { setSaving(false); }
+  }, [id, backend, indexName, dim, metric]);
+
+  // Ctrl+S to persist.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (!saving) createIndex();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [saving, createIndex]);
 
   return (
     <ItemEditorChrome
@@ -247,17 +411,17 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
         <div className={s.treePad}>
           <div className={s.field}>
             <Label>Backend</Label>
-            <select value={backend} onChange={(e) => setBackend(e.target.value as VectorBackend)} style={{ padding: 6 }}>
-              <option value="ai-search">Azure AI Search (vector profile)</option>
-              <option value="cosmos-vcore">Cosmos vCore (Mongo vector index)</option>
-              <option value="pgvector">PostgreSQL pgvector</option>
+            <select value={backend} onChange={(e) => { setBackend(e.target.value as VectorBackend); setDirty(true); }} style={{ padding: 6 }}>
+              {(['cosmos-nosql', 'ai-search', 'cosmos-vcore', 'pgvector'] as VectorBackend[]).map(b => (
+                <option key={b} value={b}>{VECTOR_BACKEND_DESCRIPTIONS[b]}</option>
+              ))}
             </select>
           </div>
-          <div className={s.field}><Label>Index name</Label><Input value={indexName} onChange={(_, d) => setIndexName(d.value)} /></div>
-          <div className={s.field}><Label>Dimensions</Label><Input type="number" value={String(dim)} onChange={(_, d) => setDim(Number(d.value || '0'))} /></div>
+          <div className={s.field}><Label>Index name</Label><Input value={indexName} onChange={(_, d) => { setIndexName(d.value); setDirty(true); }} /></div>
+          <div className={s.field}><Label>Dimensions</Label><Input type="number" value={String(dim)} onChange={(_, d) => { setDim(Number(d.value || '0')); setDirty(true); }} /></div>
           <div className={s.field}>
             <Label>Metric</Label>
-            <select value={metric} onChange={(e) => setMetric(e.target.value as any)} style={{ padding: 6 }}>
+            <select value={metric} onChange={(e) => { setMetric(e.target.value as any); setDirty(true); }} style={{ padding: 6 }}>
               <option value="cosine">cosine</option>
               <option value="euclidean">euclidean</option>
               <option value="dotProduct">dotProduct</option>
@@ -272,15 +436,24 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
               <MessageBarTitle>Vector store provisioning</MessageBarTitle>
               v3 persists the index spec. Live creation hits backend REST in v3.x:
               <ul style={{ margin: '4px 0 0 16px' }}>
+                <li><strong>cosmos-nosql</strong>: container <code>VectorEmbeddingPolicy</code> + indexingPolicy <code>vectorIndexes</code> (DiskANN). Recommended path.</li>
                 <li><strong>ai-search</strong>: <code>PUT /indexes/{`{name}`}?api-version=2024-07-01</code> with <code>vectorSearch</code> profile</li>
                 <li><strong>cosmos-vcore</strong>: <code>db.collection.createIndex({`{ vec: 'cosmosSearch' }`}, ...)</code></li>
                 <li><strong>pgvector</strong>: <code>CREATE INDEX ... USING ivfflat</code></li>
               </ul>
             </MessageBarBody>
           </MessageBar>
-          <Button appearance="primary" icon={<Add20Regular />} onClick={createIndex}>Persist index spec</Button>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button appearance="primary" icon={<Add20Regular />} onClick={createIndex} disabled={saving}>
+              {saving ? 'Saving…' : dirty ? 'Save index spec' : 'Saved'}
+            </Button>
+            {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+            {savedAt && !saving && !dirty && (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Saved {new Date(savedAt).toLocaleTimeString()}</Caption1>
+            )}
+          </div>
           <div className={s.field}><Label>Test query embedding (paste JSON array)</Label>
-            <textarea className={s.editor} value={testQuery} onChange={(e) => setTestQuery(e.target.value)} spellCheck={false} aria-label="Test query" />
+            <MonacoTextarea value={testQuery} onChange={setTestQuery} language="json" height={140} minHeight={100} ariaLabel="Test query" />
           </div>
           <Button icon={<Search20Regular />} disabled>Similarity test (v3.x)</Button>
           {result && <ResultsPreview result={result} />}
