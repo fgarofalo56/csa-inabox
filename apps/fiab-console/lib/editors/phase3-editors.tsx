@@ -40,6 +40,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 
 const useStyles = makeStyles({
   monaco: {
@@ -1566,6 +1567,8 @@ function ReportLikeEditor({
   const [reportId, setReportId] = useState('');
   const [report, setReport] = useState<ReportLite | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [embed, setEmbed] = useState<{ token: string; embedUrl: string; reportId: string } | null>(null);
+  const [embedErr, setEmbedErr] = useState<string | null>(null);
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -1589,6 +1592,31 @@ function ReportLikeEditor({
 
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && reportId) loadDetail(workspaceId, reportId); }, [workspaceId, reportId, loadDetail]);
+
+  // Mint a per-report embed token whenever the selected report changes.
+  // Paginated reports use a different SDK (`pbi-paginated`) that we don't
+  // support yet, so skip token issuance for them.
+  useEffect(() => {
+    if (!workspaceId || !reportId || kind === 'paginated') { setEmbed(null); return; }
+    let cancelled = false;
+    (async () => {
+      setEmbedErr(null);
+      try {
+        const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/embed-token`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspaceId, accessLevel: 'View' }),
+        });
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok && j.token && j.embedUrl) setEmbed({ token: j.token, embedUrl: j.embedUrl, reportId: j.reportId });
+        else { setEmbedErr(j.error || `HTTP ${r.status}`); setEmbed(null); }
+      } catch (e: any) {
+        if (!cancelled) setEmbedErr(e?.message || String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceId, reportId, kind]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1622,11 +1650,33 @@ function ReportLikeEditor({
                 <Caption1>modified: {report.modifiedDateTime || '—'} by {report.modifiedBy || '—'}</Caption1>
                 {report.webUrl && <Caption1><a href={report.webUrl} target="_blank" rel="noreferrer">Open in Power BI</a></Caption1>}
               </div>
-              <div className={s.card} style={{ minHeight: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 6, color: tokens.colorNeutralForeground3 }}>
-                <Subtitle2>Embed preview</Subtitle2>
-                <Caption1>v2.1: showing metadata only — full embed via Power BI Embed SDK lands in v2.2.</Caption1>
-                <Caption1>embedUrl: <code style={{ fontSize: 11 }}>{report.embedUrl || '—'}</code></Caption1>
-              </div>
+              {kind === 'paginated' ? (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Paginated report embed not yet wired</MessageBarTitle>
+                    Power BI Paginated Reports use the <code>pbi-paginated</code> SDK which is separate from the
+                    standard powerbi-client. Use "Open in Power BI" above; an in-place embed lands in a follow-up PR.
+                  </MessageBarBody>
+                </MessageBar>
+              ) : embedErr ? (
+                <MessageBar intent="error">
+                  <MessageBarBody>
+                    <MessageBarTitle>Could not mint embed token</MessageBarTitle>
+                    {embedErr}. Confirm the Console UAMI is added to this workspace (Member or above) and that the tenant setting
+                    <strong> "Service principals can use Fabric APIs"</strong> is enabled with the UAMI's security group.
+                  </MessageBarBody>
+                </MessageBar>
+              ) : embed ? (
+                <PowerBIEmbedFrame
+                  embedType="report"
+                  id={embed.reportId}
+                  embedUrl={embed.embedUrl}
+                  accessToken={embed.token}
+                  height={620}
+                />
+              ) : (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loading embed token…</Caption1>
+              )}
             </>
           )}
         </div>
@@ -1657,6 +1707,8 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   const [tiles, setTiles] = useState<TileLite[]>([]);
   const [selectedTile, setSelectedTile] = useState<TileLite | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [embed, setEmbed] = useState<{ token: string; embedUrl: string; dashboardId: string } | null>(null);
+  const [embedErr, setEmbedErr] = useState<string | null>(null);
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -1680,6 +1732,28 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
 
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && dashId) loadDetail(workspaceId, dashId); }, [workspaceId, dashId, loadDetail]);
+
+  useEffect(() => {
+    if (!workspaceId || !dashId) { setEmbed(null); return; }
+    let cancelled = false;
+    (async () => {
+      setEmbedErr(null);
+      try {
+        const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashId)}/embed-token`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspaceId }),
+        });
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok && j.token && j.embedUrl) setEmbed({ token: j.token, embedUrl: j.embedUrl, dashboardId: j.dashboardId });
+        else { setEmbedErr(j.error || `HTTP ${r.status}`); setEmbed(null); }
+      } catch (e: any) {
+        if (!cancelled) setEmbedErr(e?.message || String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceId, dashId]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={REPORT_RIBBON}
@@ -1705,6 +1779,24 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          {embedErr ? (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                <MessageBarTitle>Could not mint embed token</MessageBarTitle>
+                {embedErr}. Confirm the Console UAMI is added to this workspace and that "Service principals can use Fabric APIs" is enabled.
+              </MessageBarBody>
+            </MessageBar>
+          ) : embed ? (
+            <PowerBIEmbedFrame
+              embedType="dashboard"
+              id={embed.dashboardId}
+              embedUrl={embed.embedUrl}
+              accessToken={embed.token}
+              height={620}
+            />
+          ) : (
+            dashId && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loading embed token…</Caption1>
+          )}
           <Subtitle2>Tiles ({tiles.length})</Subtitle2>
           <div className={s.cardGrid}>
             {tiles.map((t) => (
