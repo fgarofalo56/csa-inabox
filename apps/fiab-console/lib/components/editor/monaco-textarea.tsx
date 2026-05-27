@@ -29,6 +29,18 @@ import { useCallback, useEffect, useRef } from 'react';
 import { tokens } from '@fluentui/react-components';
 import type { OnMount, OnChange } from '@monaco-editor/react';
 
+// Self-host the Monaco AMD loader from /monaco/vs (copied at build time by
+// scripts/copy-monaco-assets.mjs). The default @monaco-editor/react config
+// fetches loader.js from cdn.jsdelivr.net which is blocked by our CSP
+// (`script-src 'self' 'unsafe-inline'`) and breaks every code editor in
+// the app. This must be configured before the first MonacoEditor mount.
+if (typeof window !== 'undefined') {
+  // Lazy import so loader.config doesn't trip on SSR.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { loader } = require('@monaco-editor/react');
+  loader.config({ paths: { vs: '/monaco/vs' } });
+}
+
 const MonacoEditor = dynamic(
   () => import('@monaco-editor/react').then(m => m.default),
   { ssr: false, loading: () => null },

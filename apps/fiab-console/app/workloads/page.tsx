@@ -20,9 +20,9 @@ import {
 } from '@fluentui/react-components';
 import {
   Database24Regular, DataLine24Regular, Flow24Regular, Bot24Regular,
-  ServerSurface24Regular, ChartMultiple24Regular, Earth24Regular,
+  ServerRegular, ChartMultiple24Regular, Earth24Regular,
   Shield24Regular, Diversity24Regular, Code24Regular, Cloud24Regular,
-  AppGeneric24Regular, Search24Regular, PuzzlePiece24Regular,
+  AppGeneric24Regular, Search24Regular, PuzzlePieceRegular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
@@ -112,12 +112,12 @@ function workloadIcon(id: string, name: string): React.ReactNode {
   if (key.includes('realtime') || key.includes('rti') || key.includes('stream')) return <DataLine24Regular />;
   if (key.includes('factory') || key.includes('pipeline') || key.includes('engineering')) return <Flow24Regular />;
   if (key.includes('copilot') || key.includes('agent')) return <Bot24Regular />;
-  if (key.includes('database')) return <ServerSurface24Regular />;
+  if (key.includes('database')) return <ServerRegular />;
   if (key.includes('power-bi') || key.includes('powerbi') || key.includes('bi')) return <ChartMultiple24Regular />;
   if (key.includes('geo') || key.includes('map')) return <Earth24Regular />;
   if (key.includes('fedramp') || key.includes('compliance') || key.includes('security')) return <Shield24Regular />;
   if (key.includes('industry')) return <Diversity24Regular />;
-  if (key.includes('graph') || key.includes('vector')) return <PuzzlePiece24Regular />;
+  if (key.includes('graph') || key.includes('vector')) return <PuzzlePieceRegular />;
   if (key.includes('data-science') || key.includes('ml') || key.includes('ai')) return <Code24Regular />;
   if (key.includes('platform') || key.includes('power-platform')) return <Cloud24Regular />;
   return <AppGeneric24Regular />;

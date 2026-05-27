@@ -19,7 +19,7 @@
  * Run: SESSION_SECRET=<from-KV> node apps/fiab-console/tests/walkthrough.mjs
  */
 
-import { chromium } from 'playwright';
+import { chromium } from '@playwright/test';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
