@@ -229,6 +229,36 @@ module cosmos 'cosmos.bicep' = {
 }
 
 // =====================================================================
+// 8. Cosmos Gremlin + NoSQL vector containers
+//
+// Backs the `cosmos-gremlin-graph` and `vector-store` editors. Opt-in via
+// the `cosmosGraphVectorEnabled` flag so deployments that don't need graph
+// + vector workloads avoid the extra cost.
+// =====================================================================
+
+@description('Provision Cosmos Gremlin + NoSQL vector accounts to back the cosmos-gremlin-graph and vector-store editors.')
+param cosmosGraphVectorEnabled bool = true
+
+module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnabled) {
+  name: 'dlz-cosmos-graph-vector'
+  params: {
+    location: location
+    domainName: domainName
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    privateDnsZoneCosmosId: adminPlanePrivateDnsZoneIds.cosmos
+    // Caller is expected to add a privatelink.gremlin.cosmos.azure.com zone
+    // to `adminPlanePrivateDnsZoneIds`. Older admin-planes that haven't
+    // shipped that zone yet fall back to the SQL Cosmos zone (the Gremlin
+    // PE then registers but DNS won't resolve — documented honest-gate
+    // until the network module is bumped).
+    privateDnsZoneCosmosGremlinId: contains(adminPlanePrivateDnsZoneIds, 'cosmosGremlin') ? adminPlanePrivateDnsZoneIds.cosmosGremlin : adminPlanePrivateDnsZoneIds.cosmos
+    workspaceId: adminPlaneLawId
+    consolePrincipalId: consolePrincipalId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // Outputs
 // =====================================================================
 
@@ -250,3 +280,11 @@ output landingZoneContainerUrl string = storage.outputs.landingZoneContainerUrl
 output eventHubsNamespaceFqdn string = eventhubs.outputs.namespaceFqdn
 output cosmosEndpoint string = cosmos.outputs.endpoint
 output storageEventGridTopicId string = storage.outputs.eventGridTopicId
+
+// CSA Loom family — Power Platform / ML / Geo / Graph sweep outputs
+output cosmosGremlinEndpoint string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.gremlinEndpoint : ''
+output cosmosGremlinDatabase string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.gremlinDatabase : ''
+output cosmosGremlinGraph string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.gremlinGraph : ''
+output cosmosVectorEndpoint string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorEndpoint : ''
+output cosmosVectorDatabase string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorDatabase : ''
+output cosmosVectorContainer string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorDefaultContainer : ''

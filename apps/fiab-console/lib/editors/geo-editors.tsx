@@ -31,6 +31,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { splitAdlsPath, joinAdlsPath } from './_family-utils';
 
 /**
  * v3.28 — Phase 4.5 fix: GeoMap / GeoDataset / GeoPipeline used to render
@@ -245,24 +246,9 @@ function useLakehouseContainers() {
   return { containers, error, loading };
 }
 
-// Parse "abfss://container@account.dfs.core.windows.net/path/segments" into
-// { container, suffix } so the existing free-text adlsPath can decompose
-// into the new Select + path-suffix Input without losing data.
-function splitAdlsPath(p: string): { container: string; suffix: string } {
-  const m = p.match(/^abfss:\/\/([^@]+)@[^/]+\/?(.*)$/i);
-  if (m) return { container: m[1], suffix: m[2] || '' };
-  return { container: '', suffix: p };
-}
-
-function joinAdlsPath(container: string, suffix: string, accountUrl?: string): string {
-  if (!container) return suffix;
-  // Reconstruct from the container's discovered URL if available, else
-  // emit a host placeholder so the user sees the shape they need.
-  const host = accountUrl
-    ? accountUrl.replace(/^https:\/\/([^.]+)\.dfs\.core\.windows\.net.*$/i, '$1.dfs.core.windows.net')
-    : '<account>.dfs.core.windows.net';
-  return `abfss://${container}@${host}/${suffix.replace(/^\//, '')}`;
-}
+// `splitAdlsPath` / `joinAdlsPath` live in `_family-utils.ts` so vitest
+// can exercise them. See `lib/editors/__tests__/family-utils.test.ts` for
+// round-trip coverage.
 
 export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
