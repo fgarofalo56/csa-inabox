@@ -21,7 +21,7 @@
  *   - Query persists to ARM via PUT /streamingjobs/{name}/transformations.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner,
   Tab, TabList, Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -34,13 +34,8 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Job', actions: [{ label: 'Start' }, { label: 'Stop' }, { label: 'Refresh' }] },
-    { label: 'Query', actions: [{ label: 'Save' }, { label: 'Test selection' }] },
-    { label: 'Topology', actions: [{ label: 'Inputs' }, { label: 'Outputs' }, { label: 'Functions' }] },
-  ]},
-];
+// (Ribbon defined inside StreamAnalyticsJobEditor via useMemo so onClick handlers
+// can reference inline setState / save / loadList / setTab state.)
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -199,8 +194,29 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
     /Starting|Stopping/i.test(jobState) ? 'warning' :
     /Failed|Degraded/i.test(jobState) ? 'danger' : 'subtle';
 
+  // Ribbon — Start / Stop / Refresh / Save wire to inline handlers; topology
+  // entries switch the local `tab` state to the corresponding pane.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Job', actions: [
+        { label: 'Start', onClick: !busy && selected && !/Started/i.test(jobState) ? () => setState('start') : undefined, disabled: busy || !selected || /Started/i.test(jobState), title: /Started/i.test(jobState) ? 'Job already started' : (!selected ? 'Select a job first' : undefined) },
+        { label: 'Stop', onClick: !busy && selected && !/Stopped/i.test(jobState) ? () => setState('stop') : undefined, disabled: busy || !selected || /Stopped/i.test(jobState), title: /Stopped/i.test(jobState) ? 'Job already stopped' : (!selected ? 'Select a job first' : undefined) },
+        { label: 'Refresh', onClick: () => { loadList(); if (selected) loadDetail(selected); } },
+      ]},
+      { label: 'Query', actions: [
+        { label: busy ? 'Saving…' : 'Save', onClick: !busy && selected && dirty ? save : undefined, disabled: busy || !selected || !dirty, title: !dirty ? 'No unsaved changes' : (!selected ? 'Select a job first' : undefined) },
+        { label: 'Test selection', onClick: () => setTab('query') },
+      ]},
+      { label: 'Topology', actions: [
+        { label: 'Inputs', onClick: () => setTab('inputs') },
+        { label: 'Outputs', onClick: () => setTab('outputs') },
+        { label: 'Functions', disabled: true, title: 'Functions — needs ARM PUT /streamingjobs/{name}/functions BFF route (deferred)' },
+      ]},
+    ]},
+  ], [busy, selected, jobState, setState, loadList, loadDetail, dirty, save]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.pad}>
           <Subtitle2>ASA jobs ({jobs?.length ?? '…'})</Subtitle2>

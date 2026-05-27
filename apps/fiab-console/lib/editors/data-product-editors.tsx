@@ -11,7 +11,7 @@
  *   at child items' updatedAt).
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Card, CardHeader, Input, Label,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -21,6 +21,7 @@ import {
 import { Add20Regular, BoxToolbox20Regular, Rocket20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -50,11 +51,17 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<any>(null);
 
-  useEffect(() => {
-    fetch(`/api/items/data-product-template`)
-      .then((r) => r.json())
-      .then((j) => { if (j.ok) setTemplates(j.curated || []); });
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const r = await fetch(`/api/items/data-product-template`);
+      const j = await r.json();
+      if (j.ok) setTemplates(j.curated || []);
+    } finally { setRefreshing(false); }
   }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
 
   const instantiate = useCallback(async () => {
     if (!selected || !workspaceId || !displayName) return;
@@ -68,13 +75,23 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
     } finally { setBusy(false); }
   }, [selected, workspaceId, displayName]);
 
+  const canSpawn = !!selected && !!workspaceId && !!displayName && !busy;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Library', actions: [
+        { label: 'Browse', disabled: true, title: 'cross-catalog template browser deferred (only curated templates surfaced today)' },
+        { label: refreshing ? 'Refreshing…' : 'Refresh', onClick: refreshing ? undefined : refresh, disabled: refreshing },
+      ]},
+      { label: 'Instantiate', actions: [
+        { label: busy ? 'Spawning…' : 'Spawn into workspace', onClick: canSpawn ? instantiate : undefined, disabled: !canSpawn },
+      ]},
+    ]},
+  ], [refreshing, refresh, busy, canSpawn, instantiate]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [
-        { label: 'Library', actions: [{ label: 'Browse' }, { label: 'Refresh' }] },
-        { label: 'Instantiate', actions: [{ label: 'Spawn into workspace' }] },
-      ]}]}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2>Templates ({templates.length})</Subtitle2>

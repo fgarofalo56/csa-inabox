@@ -26,7 +26,7 @@ import {
   Tab, TabList,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -127,13 +127,6 @@ async function saveItem(itemType: string, id: string, state: Record<string, any>
 // ============================================================================
 // Spark Job Definition
 // ============================================================================
-
-const SPARK_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Run', actions: [{ label: 'Submit' }, { label: 'Refresh runs' }] },
-    { label: 'Edit', actions: [{ label: 'Save' }] },
-  ]},
-];
 
 interface SparkBatchRun {
   id: number;
@@ -245,9 +238,24 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, dirty, busy]);
 
+  const canSubmit = !busy && !!file && !!pool;
+  const canSave = !busy && dirty;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Run', actions: [
+        { label: busy ? 'Submitting…' : 'Submit', onClick: canSubmit ? submit : undefined, disabled: !canSubmit },
+        { label: 'Refresh runs', onClick: busy ? undefined : loadRuns, disabled: busy },
+      ]},
+      { label: 'Edit', actions: [
+        { label: dirty ? 'Save' : 'Saved', onClick: canSave ? save : undefined, disabled: !canSave },
+      ]},
+    ]},
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [busy, canSubmit, canSave, dirty, loadRuns]);
+
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={SPARK_RIBBON} main={
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
         <div className={styles.form}>
           <MessageBar intent="info">
             <MessageBarBody>Create this Spark Job Definition from the workspace catalog,
@@ -259,7 +267,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={SPARK_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={styles.form}>
         <ErrBar error={err || loadError} />
         {loading && <Spinner size="small" label="Loading spec…" labelPosition="after" />}
@@ -363,13 +371,6 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
 // Environment
 // ============================================================================
 
-const ENV_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Edit', actions: [{ label: 'Save' }] },
-    { label: 'Apply', actions: [{ label: 'Apply to pool' }] },
-  ]},
-];
-
 export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const styles = useStyles();
   const pools = usePoolList();
@@ -463,9 +464,23 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
     finally { setBusy(false); }
   };
 
+  const canSaveEnv = !busy && dirty;
+  const canApply = !busy && !!targetPool;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Edit', actions: [
+        { label: dirty ? 'Save' : 'Saved', onClick: canSaveEnv ? save : undefined, disabled: !canSaveEnv },
+      ]},
+      { label: 'Apply', actions: [
+        { label: 'Apply to pool', onClick: canApply ? applyToPool : undefined, disabled: !canApply },
+      ]},
+    ]},
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [busy, dirty, canSaveEnv, canApply]);
+
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={ENV_RIBBON} main={
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
         <div className={styles.form}>
           <MessageBar intent="info">
             <MessageBarBody>Create this Environment from the workspace catalog,
@@ -477,7 +492,7 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ENV_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <>
         <div className={styles.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
@@ -550,13 +565,6 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
 // ============================================================================
 // Copy Job
 // ============================================================================
-
-const COPY_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Edit', actions: [{ label: 'Save' }] },
-    { label: 'Run', actions: [{ label: 'Run now' }, { label: 'Refresh' }] },
-  ]},
-];
 
 interface PipelineRunDTO {
   runId: string;
@@ -665,9 +673,24 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, dirty, busy]);
 
+  const canSaveCopy = !busy && dirty;
+  const canRunCopy = !busy && !!srcLs && !!snkLs;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Edit', actions: [
+        { label: dirty ? 'Save' : 'Saved', onClick: canSaveCopy ? save : undefined, disabled: !canSaveCopy },
+      ]},
+      { label: 'Run', actions: [
+        { label: busy ? 'Running…' : 'Run now', onClick: canRunCopy ? run : undefined, disabled: !canRunCopy },
+        { label: 'Refresh', onClick: busy ? undefined : loadRuns, disabled: busy },
+      ]},
+    ]},
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [busy, dirty, canSaveCopy, canRunCopy, loadRuns]);
+
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={COPY_RIBBON} main={
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
         <div className={styles.form}>
           <MessageBar intent="info">
             <MessageBarBody>Create this Copy Job from the workspace catalog,
@@ -679,7 +702,7 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={COPY_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={styles.form}>
         <ErrBar error={err || loadError} />
         {loading && <Spinner size="small" label="Loading copy-job…" labelPosition="after" />}
@@ -790,13 +813,6 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
 // dbt Job
 // ============================================================================
 
-const DBT_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Edit', actions: [{ label: 'Save' }] },
-    { label: 'Run', actions: [{ label: 'Run dbt' }, { label: 'Refresh' }] },
-  ]},
-];
-
 interface JobRunDTO {
   run_id: number;
   state?: { life_cycle_state?: string; result_state?: string; state_message?: string };
@@ -902,9 +918,24 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, dirty, busy]);
 
+  const canSaveDbt = !busy && dirty;
+  const canRunDbt = !busy && !!repoUrl && !!clusterId;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Edit', actions: [
+        { label: dirty ? 'Save' : 'Saved', onClick: canSaveDbt ? save : undefined, disabled: !canSaveDbt },
+      ]},
+      { label: 'Run', actions: [
+        { label: busy ? 'Running…' : 'Run dbt', onClick: canRunDbt ? run : undefined, disabled: !canRunDbt },
+        { label: 'Refresh', onClick: busy ? undefined : loadRuns, disabled: busy },
+      ]},
+    ]},
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [busy, dirty, canSaveDbt, canRunDbt, loadRuns]);
+
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={DBT_RIBBON} main={
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
         <div className={styles.form}>
           <MessageBar intent="info">
             <MessageBarBody>Create this dbt Job from the workspace catalog,
@@ -916,7 +947,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={DBT_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={styles.form}>
         <ErrBar error={err || loadError} />
         {loading && <Spinner size="small" label="Loading dbt-job…" labelPosition="after" />}

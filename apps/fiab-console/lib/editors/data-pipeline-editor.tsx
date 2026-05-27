@@ -11,7 +11,7 @@
  * Backed by /api/loom/workspaces + /api/items/data-pipeline/**.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
   Tree, TreeItem, TreeItemLayout, Select,
@@ -28,13 +28,6 @@ import { PipelineDagView, extractActivities, type PipelineActivity } from '@/lib
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
-
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Run', actions: [{ label: 'Run' }, { label: 'Run history' }] },
-    { label: 'Item', actions: [{ label: 'New pipeline' }, { label: 'Save' }, { label: 'Delete' }] },
-  ]},
-];
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
@@ -265,8 +258,26 @@ export function DataPipelineEditor({ item, id }: Props) {
     await loadList(workspaceId);
   }, [workspaceId, pipelineId, loadList]);
 
+  const canRun = !running && !!pipelineId;
+  const canSave = !saving && !!pipelineId && dirty;
+  const canDelete = !!pipelineId;
+  const canCreate = !!workspaceId;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Run', actions: [
+        { label: running ? 'Queuing…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
+        { label: 'Run history', onClick: canDelete ? () => loadJobs(workspaceId, pipelineId) : undefined, disabled: !canDelete },
+      ]},
+      { label: 'Item', actions: [
+        { label: 'New pipeline', onClick: canCreate ? () => setCreateOpen(true) : undefined, disabled: !canCreate },
+        { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
+      ]},
+    ]},
+  ], [running, canRun, run, canDelete, loadJobs, workspaceId, pipelineId, canCreate, saving, canSave, save, del]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Pipelines</Subtitle2>

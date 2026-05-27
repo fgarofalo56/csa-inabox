@@ -57,14 +57,6 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1 },
 });
 
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Files', actions: [{ label: 'Upload file' }, { label: 'New folder' }, { label: 'Refresh' }] },
-    { label: 'Query', actions: [{ label: 'Preview' }, { label: 'Query this file' }] },
-    { label: 'Manage', actions: [{ label: 'Permissions' }, { label: 'Settings' }] },
-  ]},
-];
-
 interface ContainerInfo { name: string; url: string }
 interface PathEntry { name: string; isDirectory: boolean; size: number; lastModified?: string; etag?: string }
 
@@ -424,12 +416,32 @@ export function LakehouseEditor({ item, id }: Props) {
     );
   }
 
+  const canFileAction = !!activeContainer;
+  const hasFile = !!activePath && !activePath.isDirectory;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Files', actions: [
+        { label: uploading ? 'Uploading…' : 'Upload file', onClick: canFileAction && !uploading ? onUploadClick : undefined, disabled: !canFileAction || uploading },
+        { label: 'New folder', onClick: canFileAction ? onNewFolder : undefined, disabled: !canFileAction },
+        { label: 'Refresh', onClick: canFileAction ? refreshActive : undefined, disabled: !canFileAction },
+      ]},
+      { label: 'Query', actions: [
+        { label: 'Preview', onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('preview'); } } : undefined, disabled: !hasFile },
+        { label: 'Query this file', onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('sql'); } } : undefined, disabled: !hasFile },
+      ]},
+      { label: 'Manage', actions: [
+        { label: 'Permissions', disabled: true, title: 'ADLS ACL editor BFF not wired (deferred)' },
+        { label: 'Settings', disabled: true, title: 'lakehouse settings BFF not wired (deferred)' },
+      ]},
+    ]},
+  ], [canFileAction, uploading, onUploadClick, onNewFolder, refreshActive, hasFile, activePath, selectFile]);
+
   // ---- render ---------------------------------------------------------
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={RIBBON}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           {containers === null && <Spinner size="tiny" label="Loading containers…" labelPosition="after" />}

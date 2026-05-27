@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Switch, Dropdown, Option, Field,
   Tree, TreeItem, TreeItemLayout,
@@ -81,14 +82,8 @@ type LoadState<T> = { loading: boolean; data: T | null; error?: string };
 // ============================================================
 // ApimApiEditor
 // ============================================================
-
-const API_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'API', actions: [{ label: 'Save' }, { label: 'Reload' }] },
-    { label: 'Definition', actions: [{ label: 'Edit OpenAPI' }, { label: 'Copy spec' }] },
-    { label: 'Policy', actions: [{ label: 'Open policy editor' }] },
-  ]},
-];
+// (Ribbon defined inside the component via useMemo so onClick handlers can
+// reference inline save / load / loadSpec / copySpec state.)
 
 interface ApimApi {
   id: string;
@@ -112,6 +107,7 @@ const PROTOCOLS = ['https', 'http', 'ws', 'wss'] as const;
 
 export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const router = useRouter();
   const isNew = id === 'new';
   const [api, setApi] = useState<LoadState<ApimApi>>({ loading: !isNew, data: null });
   const [ops, setOps] = useState<LoadState<ApimOperation[]>>({ loading: false, data: null });
@@ -222,11 +218,30 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     if (spec.data?.value) navigator.clipboard?.writeText(spec.data.value).catch(() => {});
   };
 
+  // Ribbon — Save / Reload / Copy spec wired inline; Edit OpenAPI is honestly
+  // disabled (no inline editor for the OpenAPI document — APIM Studio is the
+  // path of record). Open policy editor deep-links to the apim-policy item.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'API', actions: [
+        { label: status.kind === 'saving' ? 'Saving…' : 'Save', onClick: status.kind !== 'saving' && (isNew || dirty) && displayName.trim() && path.trim() ? save : undefined, disabled: status.kind === 'saving' || (!isNew && !dirty) || !displayName.trim() || !path.trim(), title: !displayName.trim() || !path.trim() ? 'displayName and path are required' : (!dirty && !isNew ? 'No unsaved changes' : undefined) },
+        { label: 'Reload', onClick: !isNew ? () => { load(); loadOps(); loadSpec(); } : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
+      ]},
+      { label: 'Definition', actions: [
+        { label: 'Edit OpenAPI', disabled: true, title: 'Edit OpenAPI — needs in-browser spec editor (deferred; use APIM Studio for now)' },
+        { label: 'Copy spec', onClick: spec.data?.value ? copySpec : undefined, disabled: !spec.data?.value, title: !spec.data?.value ? 'No spec attached to this API' : undefined },
+      ]},
+      { label: 'Policy', actions: [
+        { label: 'Open policy editor', onClick: !isNew ? () => router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=api&apiId=${encodeURIComponent(id)}`) : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
+      ]},
+    ]},
+  ], [status.kind, isNew, dirty, displayName, path, save, load, loadOps, loadSpec, spec.data, router, id]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={API_RIBBON}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Tree aria-label="API operations" defaultOpenItems={['operations']}>
@@ -318,13 +333,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
 // ============================================================
 // ApimProductEditor
 // ============================================================
-
-const PRODUCT_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Product', actions: [{ label: 'Save' }, { label: 'Reload' }] },
-    { label: 'Lifecycle', actions: [{ label: 'Publish' }, { label: 'Unpublish' }] },
-  ]},
-];
+// (Ribbon defined inside the component via useMemo.)
 
 interface ApimProduct {
   id: string;
@@ -404,8 +413,47 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, status.kind, displayName, save]);
 
+  // Ribbon — Save / Reload wire to inline handlers; Publish/Unpublish flip the
+  // lifecycle state and re-save in one click.
+  const publishToggle = useCallback(async (next: 'published' | 'notPublished') => {
+    setState(next);
+    setDirty(true);
+    // Defer save to next tick so React commits the state change before we read
+    // it from closure. The save() above captures `state` via closure, so we
+    // can't just await save() — instead we hand-roll a parallel PUT here that
+    // takes the override.
+    setStatus({ kind: 'saving' });
+    try {
+      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ displayName, description, state: next, subscriptionRequired, approvalRequired }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
+      setStatus({ kind: 'ok', msg: `${j.product.displayName} (${j.product.state}) at ${new Date().toLocaleTimeString()}` });
+      setProduct({ loading: false, data: j.product });
+      setDirty(false);
+    } catch (e: any) {
+      setStatus({ kind: 'err', msg: e?.message || String(e) });
+    }
+  }, [id, displayName, description, subscriptionRequired, approvalRequired]);
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Product', actions: [
+        { label: status.kind === 'saving' ? 'Saving…' : 'Save', onClick: status.kind !== 'saving' && (isNew || dirty) && displayName.trim() ? save : undefined, disabled: status.kind === 'saving' || (!isNew && !dirty) || !displayName.trim(), title: !displayName.trim() ? 'displayName is required' : (!dirty && !isNew ? 'No unsaved changes' : undefined) },
+        { label: 'Reload', onClick: !isNew ? load : undefined, disabled: isNew, title: isNew ? 'Save the product first' : undefined },
+      ]},
+      { label: 'Lifecycle', actions: [
+        { label: 'Publish', onClick: status.kind !== 'saving' && state !== 'published' && displayName.trim() ? () => publishToggle('published') : undefined, disabled: status.kind === 'saving' || state === 'published' || !displayName.trim(), title: state === 'published' ? 'Already published' : (!displayName.trim() ? 'displayName is required' : undefined) },
+        { label: 'Unpublish', onClick: status.kind !== 'saving' && state === 'published' ? () => publishToggle('notPublished') : undefined, disabled: status.kind === 'saving' || state !== 'published', title: state !== 'published' ? 'Already not published' : undefined },
+      ]},
+    ]},
+  ], [status.kind, isNew, dirty, displayName, save, load, state, publishToggle]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={PRODUCT_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         <div className={s.toolbar}>
           <Badge appearance="filled" color="brand">APIM Product</Badge>
@@ -460,13 +508,8 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
 // ============================================================
 // ApimPolicyEditor
 // ============================================================
-
-const POLICY_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Edit', actions: [{ label: 'Save' }, { label: 'Reload' }, { label: 'Validate XML' }] },
-    { label: 'Scope', actions: [{ label: 'Global' }, { label: 'API' }, { label: 'Product' }, { label: 'Operation' }] },
-  ]},
-];
+// (Ribbon defined inside the component via useMemo so onClick handlers can
+// reference inline save / load / setScopeKind state.)
 
 // v3.27: added 'operation' scope — APIM's finest-grain policy attach point.
 type PolicyScopeKind = 'service' | 'api' | 'product' | 'operation';
@@ -569,8 +612,35 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, status.kind, save]);
 
+  // Ribbon — Save / Reload wired inline; Validate XML runs the existing
+  // isWellFormedXml check; Global/API/Product/Operation set the local scopeKind.
+  const validateXml = useCallback(() => {
+    const check = isWellFormedXml(value);
+    if (check.ok) {
+      setStatus({ kind: 'ok', msg: 'XML is well-formed.' });
+    } else {
+      setStatus({ kind: 'err', msg: `Invalid XML: ${check.error}` });
+    }
+  }, [value]);
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Edit', actions: [
+        { label: status.kind === 'saving' ? 'Saving…' : 'Save', onClick: status.kind !== 'saving' && dirty ? save : undefined, disabled: status.kind === 'saving' || !dirty, title: !dirty ? 'No unsaved changes' : undefined },
+        { label: 'Reload', onClick: load },
+        { label: 'Validate XML', onClick: validateXml },
+      ]},
+      { label: 'Scope', actions: [
+        { label: 'Global', onClick: () => setScopeKind('service') },
+        { label: 'API', onClick: () => setScopeKind('api') },
+        { label: 'Product', onClick: () => setScopeKind('product') },
+        { label: 'Operation', onClick: () => setScopeKind('operation') },
+      ]},
+    ]},
+  ], [status.kind, dirty, save, load, validateXml]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={POLICY_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         <div className={s.toolbar}>
           <Badge appearance="filled" color="brand">APIM Policy</Badge>
@@ -639,13 +709,7 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
 // ============================================================
 // DataProductEditor
 // ============================================================
-
-const DP_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Product', actions: [{ label: 'Save' }, { label: 'Publish to APIM' }] },
-    { label: 'Contract', actions: [{ label: 'Semantic schema' }, { label: 'SLA' }, { label: 'Owner' }] },
-  ]},
-];
+// (Ribbon defined inside the component via useMemo.)
 
 interface DataProductState {
   displayName: string;
@@ -832,8 +896,25 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, status.kind, state.displayName, save]);
 
+  // Ribbon — Save + Publish to APIM wired to inline handlers. Semantic schema /
+  // SLA / Owner stay honestly disabled (the form below is the actual edit
+  // surface; jumping to a separate panel is a future v2 enhancement).
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Product', actions: [
+        { label: status.kind === 'saving' ? 'Saving…' : 'Save', onClick: status.kind !== 'saving' && dirty ? save : undefined, disabled: status.kind === 'saving' || !dirty, title: !dirty ? 'No unsaved changes' : undefined },
+        { label: 'Publish to APIM', onClick: status.kind !== 'saving' && state.displayName ? publishApimMirror : undefined, disabled: status.kind === 'saving' || !state.displayName, title: !state.displayName ? 'displayName is required' : undefined },
+      ]},
+      { label: 'Contract', actions: [
+        { label: 'Semantic schema', disabled: true, title: 'Semantic schema — use the Bundle field below to list semantic contracts (dedicated editor deferred to v2)' },
+        { label: 'SLA', disabled: true, title: 'SLA — use the SLA field in the form below (dedicated editor deferred to v2)' },
+        { label: 'Owner', disabled: true, title: 'Owner — use the Owner field in the form below (dedicated editor deferred to v2)' },
+      ]},
+    ]},
+  ], [status.kind, dirty, save, state.displayName, publishApimMirror]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={DP_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {state.purviewDataProductId ? (
           <MessageBar intent="success">

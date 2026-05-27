@@ -144,13 +144,9 @@ function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loadin
 }
 
 // ----- Eventhouse -----
-const EH_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'New', actions: [{ label: 'New KQL database' }, { label: 'New dashboard' }] },
-    { label: 'Query', actions: [{ label: 'Query with code' }, { label: 'Get data' }] },
-    { label: 'Manage', actions: [{ label: 'Data policies' }, { label: 'OneLake availability' }] },
-  ]},
-];
+// Ribbon is built inside the editor via useMemo so actions have real
+// onClick bindings (see no-vaporware.md: dead ribbons get disabled with
+// a "not yet wired" tooltip rather than rendering enabled-but-broken).
 
 interface EventhouseState {
   ok: boolean;
@@ -200,8 +196,25 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     }
   }, [id, newName, load]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'New', actions: [
+        { label: 'New KQL database', onClick: () => setDialogOpen(true) },
+        { label: 'New dashboard', disabled: true, title: 'KQL dashboard creation not yet wired — use the KQL Dashboard editor' },
+      ]},
+      { label: 'Query', actions: [
+        { label: 'Query with code', disabled: true, title: 'opens KQL Database editor — not yet wired' },
+        { label: 'Get data', disabled: true, title: 'data ingestion wizard not yet wired' },
+      ]},
+      { label: 'Manage', actions: [
+        { label: 'Data policies', disabled: true, title: 'cluster-level policy editor not yet wired' },
+        { label: 'OneLake availability', disabled: true, title: 'OneLake mirroring toggle not yet wired' },
+      ]},
+    ]},
+  ], []);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={EH_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         <div className={s.toolbar}>
           <Badge appearance="filled" color="brand">Eventhouse · shared cluster</Badge>
@@ -272,13 +285,10 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
 }
 
 // ----- KQL Database -----
-const KQL_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'New', actions: [{ label: 'Table' }, { label: 'Materialized view' }, { label: 'Function' }, { label: 'Update policy' }, { label: 'Shortcut' }] },
-    { label: 'Data', actions: [{ label: 'Get data' }, { label: 'Query with code' }] },
-    { label: 'Manage', actions: [{ label: 'Data policies' }, { label: 'OneLake availability' }] },
-  ]},
-];
+// Ribbon is built inside the editor via useMemo. None of the actions
+// below have inline handlers yet (table creation, schema mgmt, ingestion
+// wizards all land in a follow-up PR) so each is disabled with a
+// "not yet wired" tooltip — see no-vaporware.md.
 
 interface KqlDbInfo {
   ok: boolean;
@@ -334,8 +344,31 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     return typeof v === 'number' ? (v / (1024 * 1024)).toFixed(1) : null;
   }, [info]);
 
+  const ribbon: RibbonTab[] = useMemo(() => {
+    const notWired = (label: string, reason: string) => ({ label, disabled: true, title: reason });
+    return [
+      { id: 'home', label: 'Home', groups: [
+        { label: 'New', actions: [
+          notWired('Table', '.create table wizard not yet wired'),
+          notWired('Materialized view', '.create materialized-view wizard not yet wired'),
+          notWired('Function', '.create function wizard not yet wired'),
+          notWired('Update policy', '.alter update policy wizard not yet wired'),
+          notWired('Shortcut', 'OneLake shortcut wizard not yet wired'),
+        ]},
+        { label: 'Data', actions: [
+          notWired('Get data', 'data ingestion wizard not yet wired'),
+          notWired('Query with code', 'Monaco editor is already open — Query with code link not yet wired'),
+        ]},
+        { label: 'Manage', actions: [
+          notWired('Data policies', 'database-level policy editor not yet wired'),
+          notWired('OneLake availability', 'OneLake mirroring toggle not yet wired'),
+        ]},
+      ]},
+    ];
+  }, []);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={KQL_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Tree aria-label="KQL DB explorer" defaultOpenItems={['tables', 'info']}>
@@ -409,12 +442,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
 }
 
 // ----- KQL Queryset -----
-const KQLQS_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Run', actions: [{ label: 'Run' }, { label: 'Cancel' }] },
-    { label: 'Save', actions: [{ label: 'Save query' }, { label: 'Save to dashboard' }, { label: 'Set alert' }] },
-  ]},
-];
+// Ribbon built inside the editor via useMemo so Run/Save bind to the
+// existing inline handlers; the rest stay disabled with reasons.
 
 interface SavedQuery { title: string; kql: string; database?: string; }
 interface QuerysetState {
@@ -565,8 +594,24 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     }
   }, [id, draft]);
 
+  const canRun = !loading && !!draft.kql.trim();
+  const canSave = !saving && queries.length > 0 && dirty;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Run', actions: [
+        { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
+        { label: 'Cancel', disabled: true, title: 'KQL query cancellation not yet wired' },
+      ]},
+      { label: 'Save', actions: [
+        { label: saving ? 'Saving…' : 'Save query', onClick: canSave ? saveAll : undefined, disabled: !canSave },
+        { label: 'Save to dashboard', disabled: true, title: 'pin to KQL Dashboard not yet wired' },
+        { label: 'Set alert', disabled: true, title: 'Activator rule from query not yet wired' },
+      ]},
+    ]},
+  ], [loading, canRun, run, saving, canSave, saveAll]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={KQLQS_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -622,12 +667,8 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
 }
 
 // ----- KQL Dashboard -----
-const KQLD_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Edit', actions: [{ label: 'Add tile' }, { label: 'Add data source' }, { label: 'Parameters' }] },
-    { label: 'View', actions: [{ label: 'Auto-refresh' }, { label: 'Time range' }, { label: 'Share' }] },
-  ]},
-];
+// Ribbon built inside the editor via useMemo so Add tile binds to the
+// existing inline addTile handler; the rest stay disabled with reasons.
 
 interface Tile {
   title: string;
@@ -751,8 +792,23 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     }
   }, [jsonText]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Edit', actions: [
+        { label: 'Add tile', onClick: addTile },
+        { label: 'Add data source', disabled: true, title: 'multi-cluster data source picker not yet wired' },
+        { label: 'Parameters', disabled: true, title: 'dashboard parameter editor not yet wired' },
+      ]},
+      { label: 'View', actions: [
+        { label: 'Auto-refresh', disabled: true, title: 'auto-refresh schedule not yet wired' },
+        { label: 'Time range', disabled: true, title: 'global time-range picker not yet wired' },
+        { label: 'Share', disabled: true, title: 'dashboard share/permissions not yet wired' },
+      ]},
+    ]},
+  ], [addTile]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={KQLD_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         <div className={s.toolbar}>
           <Badge appearance="filled" color="brand">KQL Dashboard</Badge>
@@ -838,14 +894,8 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
 }
 
 // ----- Eventstream -----
-const ES_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Source', actions: [{ label: 'Add source' }, { label: 'Sample data' }] },
-    { label: 'Transform', actions: [{ label: 'Filter' }, { label: 'Aggregate' }, { label: 'Group by' }] },
-    { label: 'Destination', actions: [{ label: 'Add destination' }] },
-    { label: 'Publish', actions: [{ label: 'Save' }, { label: 'Publish' }] },
-  ]},
-];
+// Ribbon built inside the editor via useMemo so Save binds to the
+// existing inline save handler; the rest stay disabled with reasons.
 
 interface StreamCfg {
   source?: Record<string, any>;
@@ -940,8 +990,30 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, saving, save]);
 
+  const canSave = !saving && dirty;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Source', actions: [
+        { label: 'Add source', disabled: true, title: 'visual source picker not yet wired — edit JSON below' },
+        { label: 'Sample data', disabled: true, title: 'sample-data generator not yet wired' },
+      ]},
+      { label: 'Transform', actions: [
+        { label: 'Filter', disabled: true, title: 'visual transform editor not yet wired — edit JSON below' },
+        { label: 'Aggregate', disabled: true, title: 'visual transform editor not yet wired — edit JSON below' },
+        { label: 'Group by', disabled: true, title: 'visual transform editor not yet wired — edit JSON below' },
+      ]},
+      { label: 'Destination', actions: [
+        { label: 'Add destination', disabled: true, title: 'visual destination picker not yet wired — edit JSON below' },
+      ]},
+      { label: 'Publish', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: 'Publish', disabled: true, title: 'runtime publish/start not yet wired — v3 ingestion runtime' },
+      ]},
+    ]},
+  ], [saving, canSave, save]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ES_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -1058,12 +1130,8 @@ function WorkspacePicker({
 // ============================================================
 
 // ----- Activator -----
-const ACT_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Rules', actions: [{ label: 'New rule' }, { label: 'Start' }, { label: 'Stop' }] },
-    { label: 'Actions', actions: [{ label: 'Email' }, { label: 'Teams' }, { label: 'Run pipeline' }, { label: 'Run notebook' }, { label: 'Power Automate' }] },
-  ]},
-];
+// Ribbon built inside the editor via useMemo so New rule binds to the
+// existing setRuleOpen handler; the rest stay disabled with reasons.
 
 interface ActivatorLite {
   id: string; displayName: string; description?: string;
@@ -1177,8 +1245,26 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     else loadRules(workspaceId, selectedId);
   }, [workspaceId, selectedId, loadRules]);
 
+  const canNewRule = !!selectedId && !!workspaceId;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Rules', actions: [
+        { label: 'New rule', onClick: canNewRule ? () => setRuleOpen(true) : undefined, disabled: !canNewRule, title: !canNewRule ? 'select a workspace and reflex first' : undefined },
+        { label: 'Start', disabled: true, title: 'reflex start/enable not yet wired' },
+        { label: 'Stop', disabled: true, title: 'reflex stop/disable not yet wired' },
+      ]},
+      { label: 'Actions', actions: [
+        { label: 'Email', disabled: true, title: 'email action template not yet wired' },
+        { label: 'Teams', disabled: true, title: 'Teams action template not yet wired' },
+        { label: 'Run pipeline', disabled: true, title: 'Data Factory pipeline trigger not yet wired' },
+        { label: 'Run notebook', disabled: true, title: 'notebook trigger action not yet wired' },
+        { label: 'Power Automate', disabled: true, title: 'Power Automate flow trigger not yet wired' },
+      ]},
+    ]},
+  ], [canNewRule]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ACT_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Reflexes</Subtitle2>
@@ -1291,13 +1377,9 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
 }
 
 // ----- Warehouse -----
-const WH_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Query', actions: [{ label: 'New SQL query' }, { label: 'Run' }, { label: 'Save as table' }, { label: 'Open in Excel' }] },
-    { label: 'Modeling', actions: [{ label: 'New measure' }, { label: 'Manage relationships' }] },
-    { label: 'Manage', actions: [{ label: 'Permissions' }, { label: 'Source control' }] },
-  ]},
-];
+// Ribbon built inside the editor via useMemo so Run binds to the
+// existing inline run handler; the rest stay disabled with reasons.
+
 interface WHQueryResult {
   ok: boolean;
   columns?: string[];
@@ -1366,8 +1448,28 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const schemaEntries = Object.entries(schema?.schemas || {});
   const ready = schema?.ok === true;
 
+  const canRun = ready && !loading;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Query', actions: [
+        { label: 'New SQL query', disabled: true, title: 'multi-tab T-SQL editor not yet wired' },
+        { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
+        { label: 'Save as table', disabled: true, title: 'CTAS helper not yet wired' },
+        { label: 'Open in Excel', disabled: true, title: 'Excel ODBC link not yet wired' },
+      ]},
+      { label: 'Modeling', actions: [
+        { label: 'New measure', disabled: true, title: 'warehouse DAX measure editor not yet wired' },
+        { label: 'Manage relationships', disabled: true, title: 'relationship designer not yet wired' },
+      ]},
+      { label: 'Manage', actions: [
+        { label: 'Permissions', disabled: true, title: 'warehouse permissions editor not yet wired' },
+        { label: 'Source control', disabled: true, title: 'git integration not yet wired' },
+      ]},
+    ]},
+  ], [loading, canRun, ready, run]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={WH_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
           <Tree aria-label="Warehouse explorer" defaultOpenItems={['schemas']}>
@@ -1482,12 +1584,8 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
 // ============================================================
 // Semantic Model (Power BI dataset)
 // ============================================================
-const SM_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Model', actions: [{ label: 'New measure' }, { label: 'New role' }, { label: 'New perspective' }] },
-    { label: 'Source', actions: [{ label: 'Refresh' }, { label: 'Direct Lake' }, { label: 'Import' }] },
-  ]},
-];
+// Ribbon built inside SemanticModelEditor via useMemo so Refresh binds
+// to the existing inline refreshNow handler; the rest stay disabled.
 
 interface DatasetLite {
   id: string; name: string; configuredBy?: string; isRefreshable?: boolean; targetStorageMode?: string; createdDate?: string;
@@ -1562,8 +1660,24 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     } finally { setRefreshing(false); }
   }, [workspaceId, datasetId, loadRefreshes]);
 
+  const canRefresh = !!datasetId && !refreshing && detail?.dataset?.isRefreshable !== false;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Model', actions: [
+        { label: 'New measure', disabled: true, title: 'DAX measure editor not yet wired' },
+        { label: 'New role', disabled: true, title: 'RLS role editor not yet wired' },
+        { label: 'New perspective', disabled: true, title: 'perspective editor not yet wired' },
+      ]},
+      { label: 'Source', actions: [
+        { label: refreshing ? 'Queuing…' : 'Refresh', onClick: canRefresh ? refreshNow : undefined, disabled: !canRefresh, title: detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined) },
+        { label: 'Direct Lake', disabled: true, title: 'Direct Lake storage-mode toggle not yet wired' },
+        { label: 'Import', disabled: true, title: 'PBIX/TMSL import not yet wired' },
+      ]},
+    ]},
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={SM_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Datasets</Subtitle2>
@@ -1705,10 +1819,24 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 // ============================================================
 // Report (Power BI)
 // ============================================================
-const REPORT_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Pages', actions: [{ label: 'New page' }, { label: 'Duplicate' }] },
-  { label: 'Visuals', actions: [{ label: 'New visual' }, { label: 'Format' }, { label: 'Bookmark' }] },
-  { label: 'Data', actions: [{ label: 'Refresh' }, { label: 'Filters' }] },
+// Shared disabled-only ribbon for DashboardEditor + ScorecardEditor —
+// none of these actions have inline handlers yet. ReportEditor +
+// PaginatedReportEditor each get their own ribbon built inside
+// ReportLikeEditor (see useMemo there).
+const REPORT_DASHBOARD_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
+  { label: 'Pages', actions: [
+    { label: 'New page', disabled: true, title: 'visual page editor not yet wired' },
+    { label: 'Duplicate', disabled: true, title: 'page duplicate not yet wired' },
+  ]},
+  { label: 'Visuals', actions: [
+    { label: 'New visual', disabled: true, title: 'visual designer not yet wired' },
+    { label: 'Format', disabled: true, title: 'visual format pane not yet wired' },
+    { label: 'Bookmark', disabled: true, title: 'bookmarks not yet wired' },
+  ]},
+  { label: 'Data', actions: [
+    { label: 'Refresh', disabled: true, title: 'inline refresh not yet wired — open in Power BI to refresh' },
+    { label: 'Filters', disabled: true, title: 'filter pane toggle not yet wired' },
+  ]},
 ]}];
 
 interface ReportLite {
@@ -1717,10 +1845,10 @@ interface ReportLite {
 }
 
 function ReportLikeEditor({
-  item, id, kind, ribbon, listPath, detailPathBase,
+  item, id, kind, listPath, detailPathBase,
 }: {
   item: FabricItemType; id: string; kind: 'report' | 'paginated';
-  ribbon: RibbonTab[]; listPath: string; detailPathBase: string;
+  listPath: string; detailPathBase: string;
 }) {
   const s = useStyles();
   const ws = useWorkspaces();
@@ -1754,6 +1882,33 @@ function ReportLikeEditor({
 
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && reportId) loadDetail(workspaceId, reportId); }, [workspaceId, reportId, loadDetail]);
+
+  // Per-editor ribbon — Refresh re-loads the list + selected report
+  // detail (closest honest binding given the PBI embed iframe doesn't
+  // expose a reload hook through PowerBIEmbedFrame yet). Filters and
+  // visual-design actions stay disabled with a "not yet wired" tooltip.
+  const canRefresh = !!workspaceId;
+  const refreshSelected = useCallback(() => {
+    if (workspaceId) loadList(workspaceId);
+    if (workspaceId && reportId) loadDetail(workspaceId, reportId);
+  }, [workspaceId, reportId, loadList, loadDetail]);
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Pages', actions: [
+        { label: 'New page', disabled: true, title: `${kind === 'paginated' ? 'paginated ' : ''}report page editor not yet wired` },
+        { label: 'Duplicate', disabled: true, title: 'page duplicate not yet wired' },
+      ]},
+      { label: 'Visuals', actions: [
+        { label: 'New visual', disabled: true, title: 'visual designer not yet wired' },
+        { label: 'Format', disabled: true, title: 'visual format pane not yet wired' },
+        { label: 'Bookmark', disabled: true, title: 'bookmarks not yet wired' },
+      ]},
+      { label: 'Data', actions: [
+        { label: 'Refresh', onClick: canRefresh ? refreshSelected : undefined, disabled: !canRefresh, title: !canRefresh ? 'select a workspace first' : undefined },
+        { label: 'Filters', disabled: true, title: 'filter pane toggle not yet wired (use the embed iframe filters pane)' },
+      ]},
+    ]},
+  ], [kind, canRefresh, refreshSelected]);
 
   // Mint a per-report embed token whenever the selected report changes.
   // Paginated reports use a different SDK (`pbi-paginated`) that we don't
@@ -1848,10 +2003,10 @@ function ReportLikeEditor({
 }
 
 export function ReportEditor({ item, id }: { item: FabricItemType; id: string }) {
-  return <ReportLikeEditor item={item} id={id} kind="report" ribbon={REPORT_RIBBON} listPath="/api/items/report" detailPathBase="/api/items/report" />;
+  return <ReportLikeEditor item={item} id={id} kind="report" listPath="/api/items/report" detailPathBase="/api/items/report" />;
 }
 export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: string }) {
-  return <ReportLikeEditor item={item} id={id} kind="paginated" ribbon={REPORT_RIBBON} listPath="/api/items/paginated-report" detailPathBase="/api/items/paginated-report" />;
+  return <ReportLikeEditor item={item} id={id} kind="paginated" listPath="/api/items/paginated-report" detailPathBase="/api/items/paginated-report" />;
 }
 
 // ============================================================
@@ -1918,7 +2073,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   }, [workspaceId, dashId]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={REPORT_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={REPORT_DASHBOARD_RIBBON}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Dashboards</Subtitle2>
@@ -2047,7 +2202,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
   }, [entryOpen, entryValue, entryTarget, entryNote, workspaceId, scorecardId, loadGoals]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={REPORT_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={REPORT_DASHBOARD_RIBBON}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Scorecards</Subtitle2>
