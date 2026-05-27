@@ -47,7 +47,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   let body: any;
   try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'bad_json'); }
-  const { itemType, displayName, description } = body || {};
+  const { itemType, displayName, description, folderId } = body || {};
   if (!itemType || typeof itemType !== 'string') return err('itemType is required', 400, 'missing_itemType');
   if (!displayName || typeof displayName !== 'string') return err('displayName is required', 400, 'missing_displayName');
 
@@ -61,6 +61,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       itemType,
       displayName: displayName.trim(),
       description: description?.trim() || undefined,
+      folderId: typeof folderId === 'string' && folderId ? folderId : null,
       state: {},
       createdBy: session.claims.upn || session.claims.email || session.claims.oid,
       createdAt: now,
@@ -69,6 +70,34 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const items = await itemsContainer();
     const { resource } = await items.items.create<WorkspaceItem>(item);
     if (resource) void upsertLoomDoc(docForItem(resource, session.claims.oid));
+
+    // Fabric parity: creating a Lakehouse also provisions a paired SQL
+    // analytics endpoint (a Warehouse-typed item). Both live in the same
+    // workspace + folder; the paired warehouse carries
+    // `state.sqlEndpointFor: <lakehouseId>` so DELETE can cascade. Failures
+    // here are non-fatal — the lakehouse is the primary write.
+    if (resource && itemType === 'lakehouse') {
+      try {
+        const paired: WorkspaceItem = {
+          id: crypto.randomUUID(),
+          workspaceId: ws.id,
+          itemType: 'warehouse',
+          displayName: `${displayName.trim()} (SQL endpoint)`,
+          description: `Auto-paired SQL analytics endpoint for lakehouse "${displayName.trim()}".`,
+          folderId: item.folderId,
+          state: { sqlEndpointFor: resource.id, autoCreated: true },
+          createdBy: session.claims.upn || session.claims.email || session.claims.oid,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const { resource: pairedResource } = await items.items.create<WorkspaceItem>(paired);
+        if (pairedResource) void upsertLoomDoc(docForItem(pairedResource, session.claims.oid));
+      } catch (pairErr) {
+        // eslint-disable-next-line no-console
+        console.warn('[items.POST] failed to auto-create paired SQL endpoint', pairErr);
+      }
+    }
+
     return NextResponse.json(resource, { status: 201 });
   } catch (e: any) {
     return err(e?.message || 'Failed to create item', 500, 'cosmos_error');

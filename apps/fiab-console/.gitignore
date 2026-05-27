@@ -1,0 +1,3 @@
+
+# Monaco assets copied at build time by scripts/copy-monaco-assets.mjs
+public/monaco/

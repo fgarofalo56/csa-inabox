@@ -16,6 +16,19 @@ import {
 import { Bug24Regular, Lightbulb24Regular } from '@fluentui/react-icons';
 import { redact, scrubEnv } from '@/lib/feedback/redaction';
 
+/**
+ * Capture the current route as a client-only string post-mount. Avoids the
+ * SSR vs CSR hydration mismatch the old `typeof window` ternary produced
+ * when the Dialog was ever pre-rendered.
+ */
+function useClientRoute(): string {
+  const [route, setRoute] = useState('—');
+  useEffect(() => {
+    try { setRoute(new URL(window.location.href).pathname); } catch { /* keep — */ }
+  }, []);
+  return route;
+}
+
 const LOOM_VERSION = process.env.NEXT_PUBLIC_LOOM_VERSION || 'dev';
 const EVT_OPEN = 'csaloom:open-feedback';
 
@@ -45,6 +58,7 @@ export function FeedbackWidget() {
   const [desc, setDesc] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
+  const route = useClientRoute();
 
   useEffect(() => {
     const o = () => { reset(); setOpen(true); };
@@ -122,7 +136,7 @@ export function FeedbackWidget() {
                       to the CSA Loom maintainers. Your tenant ID is hashed (irreversible) for de-duplication.
                     </div>
                     <Caption1>
-                      Route: <code>{typeof window !== 'undefined' ? new URL(window.location.href).pathname : '—'}</code>
+                      Route: <code>{route}</code>
                       {'  ·  '}
                       Loom version: <Badge appearance="outline">{LOOM_VERSION}</Badge>
                     </Caption1>
