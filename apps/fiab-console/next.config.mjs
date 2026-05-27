@@ -34,7 +34,14 @@ const nextConfig = {
             key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline'",
+              // Monaco editor creates its language-service workers from
+              // blob: URLs (TypeScript, JSON, CSS, HTML, KQL workers) and
+              // bundles them via base64 data: URIs in some paths — both
+              // need to be explicitly allowed since they fall under
+              // script-src in CSP3.
+              "script-src 'self' 'unsafe-inline' blob: data:",
+              "worker-src 'self' blob: data:",
+              "child-src 'self' blob: data:",
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: https:",
               "font-src 'self' data:",
