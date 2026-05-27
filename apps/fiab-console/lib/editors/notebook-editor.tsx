@@ -534,7 +534,11 @@ export function NotebookEditor({ item, id }: Props) {
           break;
         }
         if (p.runId && p.runId !== runId) runId = p.runId;
-        setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${p.phase ? ' · ' + p.phase : ''}`);
+        const elapsed = Math.floor((Date.now() - start) / 1000);
+        const phaseHint = p.phase === 'session-starting'
+          ? ` · cold-start: Spark pool warming up (~60-90s on first cell)`
+          : p.phase ? ` · ${p.phase}` : '';
+        setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${phaseHint} · ${elapsed}s`);
         if (p.output) {
           updateCell(cell.id, {
             ...cell,
