@@ -1085,9 +1085,19 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
 }
 
 // ============================================================
-// Shared Loom workspace picker (formerly used /api/powerbi/workspaces which
-// confusingly suffixed every workspace name with the capacity SKU label;
-// Activator + other Fabric RTI editors weren't Power BI workspaces at all).
+// Workspace pickers — two flavors, intentionally NOT interchangeable.
+//
+// 1. useWorkspaces() → Loom workspaces (Cosmos-backed catalog used by
+//    Activator, Eventstream, KQL, Lakehouse, etc.). IDs are Loom UUIDs.
+//
+// 2. usePowerBiWorkspaces() → Power BI / Fabric groups (returned by the
+//    Power BI REST API via the Console UAMI). IDs are Power BI groupIds.
+//
+// Power BI editors (Report, Paginated Report, Dashboard, Semantic Model,
+// Scorecard, Dataflow) MUST use (2) because the embed-token / list / detail
+// REST calls expect a Power BI groupId. Passing a Loom UUID returns 404
+// PowerBIEntityNotFound. Keeping the two hooks separate makes the
+// intentional distinction obvious at call sites.
 // ============================================================
 interface PbiWorkspaceLite { id: string; name: string; description?: string; }
 
@@ -1104,6 +1114,55 @@ function useWorkspaces() {
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed to list workspaces'); setHint(j.hint || null); setWorkspaces([]); }
       else { setWorkspaces(j.workspaces || []); }
+    } catch (e: any) {
+      setError(e?.message || String(e));
+      setWorkspaces([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  return { workspaces, error, hint, loading, reload: load };
+}
+
+/**
+ * usePowerBiWorkspaces — list real Power BI groups (NOT Loom workspaces).
+ *
+ * Power BI's list/detail/embed-token REST APIs key on a `workspaceId` that
+ * is a Power BI groupId. Passing a Loom Cosmos UUID to those endpoints
+ * returns 404 PowerBIEntityNotFound. This hook is the dedicated source for
+ * the Report / Paginated Report / Dashboard / Semantic Model / Scorecard /
+ * Dataflow editors.
+ */
+function usePowerBiWorkspaces() {
+  const [workspaces, setWorkspaces] = useState<PbiWorkspaceLite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null); setHint(null);
+    try {
+      const r = await fetch('/api/powerbi/workspaces');
+      const j = await r.json();
+      if (!j.ok) {
+        setError(j.error || 'failed to list Power BI workspaces');
+        setHint(j.hint || null);
+        setWorkspaces([]);
+      } else {
+        // Power BI returns name + capacity SKU; surface the capacity in a
+        // separate description field so the picker can show it as a hint
+        // without polluting the displayed name.
+        setWorkspaces(
+          (j.workspaces || []).map((w: any) => ({
+            id: w.id,
+            name: w.name || w.displayName || w.id,
+            description: w.capacityType ? `${w.capacityType}${w.isOnDedicatedCapacity ? ' · dedicated' : ''}` : undefined,
+          })),
+        );
+      }
     } catch (e: any) {
       setError(e?.message || String(e));
       setWorkspaces([]);
@@ -1646,7 +1705,9 @@ interface RefreshLite {
 
 export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const ws = useWorkspaces();
+  // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
+  // or the embed-token / list calls return 404 PowerBIEntityNotFound.
+  const ws = usePowerBiWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [datasets, setDatasets] = useState<DatasetLite[] | null>(null);
   const [datasetId, setDatasetId] = useState('');
@@ -1896,7 +1957,9 @@ function ReportLikeEditor({
   listPath: string; detailPathBase: string;
 }) {
   const s = useStyles();
-  const ws = useWorkspaces();
+  // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
+  // or the embed-token / list calls return 404 PowerBIEntityNotFound.
+  const ws = usePowerBiWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [reports, setReports] = useState<ReportLite[] | null>(null);
   const [reportId, setReportId] = useState('');
@@ -2062,7 +2125,9 @@ interface TileLite { id: string; title?: string; subTitle?: string; reportId?: s
 
 export function DashboardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const ws = useWorkspaces();
+  // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
+  // or the embed-token / list calls return 404 PowerBIEntityNotFound.
+  const ws = usePowerBiWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [dashboards, setDashboards] = useState<DashboardLite[] | null>(null);
   const [dashId, setDashId] = useState('');
@@ -2193,7 +2258,9 @@ interface GoalLite { id?: string; name?: string; description?: string; currentVa
 
 export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const ws = useWorkspaces();
+  // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
+  // or the embed-token / list calls return 404 PowerBIEntityNotFound.
+  const ws = usePowerBiWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [scorecards, setScorecards] = useState<ScorecardLite[] | null>(null);
   const [scorecardId, setScorecardId] = useState('');
