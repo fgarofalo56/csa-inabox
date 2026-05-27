@@ -4,7 +4,9 @@
   "private": true,
   "description": "CSA Loom Console — Microsoft Fabric workspace experience for Azure Government tenants",
   "scripts": {
+    "predev": "node scripts/copy-monaco-assets.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/copy-monaco-assets.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
