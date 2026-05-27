@@ -195,6 +195,28 @@ The build phase re-runs only if grade < **B**. **No A unless verified live in a 
 
 If ANY of those checks is BLOCKER, the editor cannot get above C.
 
+### Phase 4.5 — Interaction round-trip (MANDATORY, added 2026-05-27)
+
+Added after the dev loop missed a notebook Save bug — clicking Save persisted the pre-Run cell source because `runCell` closed over a stale cell snapshot and overwrote source edits made between Run and output arrival. Static DOM probes can't catch state-mutation bugs. The validator MUST drive a real round-trip per editor:
+
+For EVERY editor that exposes user-editable state (notebooks, T-SQL/KQL queries, JSON/XML configs, form fields):
+
+1. **EDIT** — type a recognizable token into the primary editor surface (e.g. `-- loom-validator-${Date.now()}` for SQL, `# probe-${ts}` for notebooks, a unique GUID in name fields). Verify the typed text appears in the editor immediately.
+2. **DIRTY indicator** — verify the "unsaved" badge / Save button enables. If the editor has no dirty indicator, that's a MINOR gap.
+3. **SAVE** — click Save (or press Ctrl+S). Wait for the success indicator OR error MessageBar. Capture network panel: confirm a `PUT` / `PATCH` / `POST` fired with the user's token in the body. Confirm the response is 200/201 with `ok: true`.
+4. **PERSISTENCE — reload the page** (full page reload, not soft-nav). Re-open the same item. Verify the token typed in step 1 is still there. **Missing = BLOCKER (silent Save failure).**
+5. **RUN-then-EDIT race** — for any editor that has both Run and Edit: click Run, then while the run is in flight type another recognizable token into the source. When the run completes, verify your second token is still in the editor (run output didn't clobber the edit). Click Save. Reload. Confirm both edits persisted. **Clobber = BLOCKER (the exact bug 2026-05-27 caught in notebooks).**
+6. **DELETE flow** — if the editor supports delete, click Delete with cancel first, then confirm. Reload list. Verify the item is gone. Re-create with the same name. Verify no 409. **Broken delete = MAJOR.**
+7. **Per-button click sweep** — for EVERY enabled button visible on the page, click it once and capture the next state (route change / dialog / network request / error). Buttons that fire no network call AND no visible state change = BROKEN.
+
+Phase 4.5 verdicts roll up into the grade matrix per `parity-validation-standard`. **An editor that fails the EDIT-SAVE-RELOAD persistence loop cannot get above D, regardless of how good it looks.**
+
+Recommended Playwright primitives for Phase 4.5:
+- `page.locator('.monaco-editor').first().click()` then `page.keyboard.type('probe-tag')`
+- `page.waitForResponse(r => r.url().includes('/api/items/') && r.request().method() === 'PUT')`
+- `page.reload({ waitUntil: 'networkidle' })`
+- `expect(page.locator('.monaco-editor')).toContainText('probe-tag')`
+
 ## Failure handling
 
 - **Catalog phase fails** (e.g. Fabric login failed, Playwright timeout): retry once with a clean browser context. If still failing, mark UI blocked + ask human for MSAL re-auth.
