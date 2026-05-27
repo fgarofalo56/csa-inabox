@@ -5,7 +5,14 @@ This is the complete manual test script for the work landed today on `loom-conso
 **Live URL:** https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
 **Sign in:** your Entra ID account in the FedCiv DLZ tenant (`d1fc0498-f208-4b49-8376-beb9293acdf6`)
 
-**Expected revision after final deploy:** `loom-console--0000081` (or later) — the deploy chain is described in §10 below.
+**Expected revision after final deploy:** `loom-console--0000082` (or later) — the deploy chain is described in §10 below. **Current live SHA: `146d2158`** (confirmed via `/build-marker.txt`).
+
+**Automated smoke status (last run after PR #345 merge):**
+- ✅ `apps-install-e2e.mjs` — 10/10 apps install + idempotent
+- ✅ `editors-render-smoke.mjs` — 85/85 editors render
+- ⚠️ `walkthrough.mjs` — **46/48 pages pass**. 2 remaining known issues:
+  - `/onelake` — Front Door WAF Bot Manager still 403'ing on initial page-load request burst (partial fix in this PR — see §11 for status)
+  - `/items/eventstream/new` — Monaco JSON worker URL `/monaco/vs/language/json/jsonWorker.js` not served (copy-monaco-assets.mjs needs to include language subdir — see §11)
 
 ---
 
@@ -315,7 +322,8 @@ az containerapp show -n loom-console -g rg-csa-loom-admin-eastus2 --query "prope
 These are explicitly NOT in scope for today's testing — they're tracked as separate work items:
 
 - **Phase 2 — real Fabric/ADX/Synapse provisioning on install** (task #134). Today's apps install populates rich content in Cosmos (Phase 1). Phase 2 will also create the real Fabric notebooks, ADX KQL DBs with ingested rows, AI Search indexes with sample docs, dbt projects deployed to warehouses, etc. This is a multi-PR initiative.
-- **/onelake 403 cascade** (task #130) — likely a Front Door / Container App ingress rule that needs separate triage. Investigation report at `temp/onelake-403-investigation.md`.
+- **/onelake 403 cascade partial fix only**. The HTTP Parameter Pollution diagnosis in `temp/onelake-403-investigation.md` was correct but incomplete — switching the multi-value `?type=A&type=B...` to comma-separated `?types=A,B,...` reduced WAF rule 921180's trigger but Bot Manager is still flagging the initial burst of requests from the page. Next steps: pull Front Door diagnostic logs from FedCiv DLZ Log Analytics, identify which rule is firing, request a WAF exclusion or rate-limit adjustment. Until fixed, `/onelake` shows mostly-empty page with 7 console 403s.
+- **Monaco JSON worker URL** for `/items/eventstream/new`. The eventstream editor uses Monaco's JSON language worker, which expects `/monaco/vs/language/json/jsonWorker.js`. The `scripts/copy-monaco-assets.mjs` only copies `min/vs/` from `monaco-editor` package — language workers may live in `esm/vs/language/` or need to be sourced from `monaco-editor/min-maps/`. Next step: update the copy script to include the JSON language worker bundles, OR move eventstream off JSON Monaco language onto plaintext.
 
 ---
 
