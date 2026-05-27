@@ -38,86 +38,116 @@ interface Workload {
 
 const useStyles = makeStyles({
   hero: {
-    padding: '24px 24px 20px',
-    borderRadius: 12,
+    padding: '28px 32px',
+    borderRadius: 16,
     background: `linear-gradient(135deg, ${tokens.colorBrandBackground2} 0%, ${tokens.colorNeutralBackground1} 100%)`,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    marginBottom: 24,
-    display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap',
+    marginBottom: 32,
+    display: 'flex', gap: 28, alignItems: 'center', flexWrap: 'wrap',
   },
-  heroText: { flex: 1, minWidth: 280 },
-  heroTitle: { fontSize: 22, fontWeight: 600, marginBottom: 6 },
-  heroBody: { color: tokens.colorNeutralForeground2, fontSize: 14, lineHeight: 1.5 },
+  heroText: { flex: 1, minWidth: 320 },
+  heroTitle: { fontSize: 24, fontWeight: 600, marginBottom: 8, lineHeight: 1.3 },
+  heroBody: { color: tokens.colorNeutralForeground2, fontSize: 14, lineHeight: 1.55 },
   heroStat: {
     display: 'flex', flexDirection: 'column',
-    padding: '12px 20px', borderRadius: 8,
+    padding: '16px 24px', borderRadius: 12,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    minWidth: 140,
   },
-  heroStatVal: { fontSize: 28, fontWeight: 600, color: tokens.colorBrandForeground1 },
-  heroStatLabel: { fontSize: 12, color: tokens.colorNeutralForeground3 },
-  section: { marginBottom: 28 },
+  heroStatVal: { fontSize: 30, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.1 },
+  heroStatLabel: { fontSize: 12, color: tokens.colorNeutralForeground3, marginTop: 4 },
+  section: { marginBottom: 36 },
   sectionHeader: {
-    display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12,
+    display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 16,
+    paddingLeft: 4,
   },
-  sectionTitle: { fontSize: 16, fontWeight: 600 },
+  sectionTitle: { fontSize: 17, fontWeight: 600 },
   sectionCount: { color: tokens.colorNeutralForeground3, fontSize: 13 },
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-    gap: 12,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+    gap: 20,
   },
   card: {
-    padding: 14, borderRadius: 8,
+    padding: 20, borderRadius: 14,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     cursor: 'pointer',
-    transition: 'transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
-    display: 'flex', flexDirection: 'column', gap: 6,
+    transition: 'transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease',
+    display: 'flex', flexDirection: 'column', gap: 10,
+    minHeight: 110,
     ':hover': {
-      transform: 'translateY(-2px)',
-      boxShadow: tokens.shadow8,
+      transform: 'translateY(-3px)',
+      boxShadow: tokens.shadow16,
       borderColor: tokens.colorBrandStroke1,
     },
   },
-  cardRow: { display: 'flex', alignItems: 'center', gap: 10 },
+  cardRow: { display: 'flex', alignItems: 'center', gap: 14 },
   iconBox: {
-    width: 36, height: 36, borderRadius: 8,
+    width: 44, height: 44, borderRadius: 10,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     flexShrink: 0,
-    color: tokens.colorBrandForeground1,
-    backgroundColor: tokens.colorBrandBackground2,
+    // background/foreground colors are applied per-icon via inline style
+    // (see iconStyleFor below) so each workload family gets its own
+    // distinct tint instead of every card being brand-blue.
   },
-  name: { fontSize: 14, fontWeight: 600, flex: 1, minWidth: 0 },
+  name: {
+    fontSize: 15, fontWeight: 600,
+    flex: 1, minWidth: 0,
+    paddingRight: 4,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
   desc: {
-    fontSize: 12, color: tokens.colorNeutralForeground2, lineHeight: 1.4,
+    fontSize: 13, color: tokens.colorNeutralForeground2, lineHeight: 1.5,
     overflow: 'hidden', display: '-webkit-box',
     WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-    marginTop: 2,
+    paddingLeft: 58,    // align desc with the title text, past the icon
   },
   ctaCard: {
-    padding: 18, borderRadius: 10,
+    padding: '24px 28px', borderRadius: 14,
     border: `1px dashed ${tokens.colorBrandStroke2}`,
     backgroundColor: tokens.colorBrandBackground2,
-    display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+    display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap',
   },
 });
 
-function workloadIcon(id: string, name: string): React.ReactNode {
+/**
+ * Per-icon palette — each workload family gets a distinct fill so the grid
+ * scans as a visual category map (not 12 identical blue tiles).
+ * Pairs a tile-background tint with a contrasting icon foreground.
+ */
+const ICON_PALETTE = {
+  warehouse:  { bg: '#E3F2FD', fg: '#0d47a1' },    // blue
+  rti:        { bg: '#F3E5F5', fg: '#6a1b9a' },    // purple
+  pipeline:   { bg: '#E0F2F1', fg: '#00695C' },    // teal
+  bot:        { bg: '#E8F5E9', fg: '#2E7D32' },    // green
+  database:   { bg: '#FFF3E0', fg: '#E65100' },    // orange
+  powerbi:    { bg: '#FFFDE7', fg: '#F9A825' },    // amber
+  geo:        { bg: '#E0F7FA', fg: '#00838F' },    // cyan
+  shield:     { bg: '#FFEBEE', fg: '#C62828' },    // red
+  industry:   { bg: '#F1F8E9', fg: '#558B2F' },    // light-green
+  graph:      { bg: '#EDE7F6', fg: '#4527A0' },    // deep-purple
+  ml:         { bg: '#FCE4EC', fg: '#AD1457' },    // pink
+  platform:   { bg: '#ECEFF1', fg: '#37474F' },    // blue-grey
+  default:    { bg: '#F5F5F5', fg: '#424242' },    // neutral
+} as const;
+
+function workloadIcon(id: string, name: string): { node: React.ReactNode; palette: { bg: string; fg: string } } {
   const key = (id + ' ' + name).toLowerCase();
-  if (key.includes('warehouse') || key.includes('sql')) return <Database24Regular />;
-  if (key.includes('realtime') || key.includes('rti') || key.includes('stream')) return <DataLine24Regular />;
-  if (key.includes('factory') || key.includes('pipeline') || key.includes('engineering')) return <Flow24Regular />;
-  if (key.includes('copilot') || key.includes('agent')) return <Bot24Regular />;
-  if (key.includes('database')) return <ServerRegular />;
-  if (key.includes('power-bi') || key.includes('powerbi') || key.includes('bi')) return <ChartMultiple24Regular />;
-  if (key.includes('geo') || key.includes('map')) return <Earth24Regular />;
-  if (key.includes('fedramp') || key.includes('compliance')) return <Shield24Regular />;
-  if (key.includes('industry')) return <Diversity24Regular />;
-  if (key.includes('graph') || key.includes('vector')) return <PuzzlePieceRegular />;
-  if (key.includes('data-science') || key.includes('ml') || key.includes('ai')) return <Code24Regular />;
-  if (key.includes('platform')) return <Cloud24Regular />;
-  return <AppGeneric24Regular />;
+  if (key.includes('warehouse') || key.includes('sql')) return { node: <Database24Regular />, palette: ICON_PALETTE.warehouse };
+  if (key.includes('realtime') || key.includes('rti') || key.includes('stream')) return { node: <DataLine24Regular />, palette: ICON_PALETTE.rti };
+  if (key.includes('factory') || key.includes('pipeline') || key.includes('engineering')) return { node: <Flow24Regular />, palette: ICON_PALETTE.pipeline };
+  if (key.includes('copilot') || key.includes('agent')) return { node: <Bot24Regular />, palette: ICON_PALETTE.bot };
+  if (key.includes('database')) return { node: <ServerRegular />, palette: ICON_PALETTE.database };
+  if (key.includes('power-bi') || key.includes('powerbi') || key.includes('bi')) return { node: <ChartMultiple24Regular />, palette: ICON_PALETTE.powerbi };
+  if (key.includes('geo') || key.includes('map')) return { node: <Earth24Regular />, palette: ICON_PALETTE.geo };
+  if (key.includes('fedramp') || key.includes('compliance')) return { node: <Shield24Regular />, palette: ICON_PALETTE.shield };
+  if (key.includes('industry')) return { node: <Diversity24Regular />, palette: ICON_PALETTE.industry };
+  if (key.includes('graph') || key.includes('vector')) return { node: <PuzzlePieceRegular />, palette: ICON_PALETTE.graph };
+  if (key.includes('data-science') || key.includes('ml') || key.includes('ai')) return { node: <Code24Regular />, palette: ICON_PALETTE.ml };
+  if (key.includes('platform')) return { node: <Cloud24Regular />, palette: ICON_PALETTE.platform };
+  return { node: <AppGeneric24Regular />, palette: ICON_PALETTE.default };
 }
 
 export default function WorkloadHubPage() {
@@ -185,25 +215,28 @@ export default function WorkloadHubPage() {
             <Caption1 className={s.sectionCount}>· {mine.length}</Caption1>
           </div>
           <div className={s.grid}>
-            {mine.map((w) => (
-              <div
-                key={w.id}
-                className={s.card}
-                role="button"
-                tabIndex={0}
-                onClick={() => openWorkload(w)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openWorkload(w); } }}
-              >
-                <div className={s.cardRow}>
-                  <div className={s.iconBox}>{workloadIcon(w.id, w.name)}</div>
-                  <div className={s.name}>{w.name}</div>
-                  {w.category === 'CSA' && (
-                    <Badge appearance="outline" color="brand" size="small">CSA</Badge>
-                  )}
+            {mine.map((w) => {
+              const { node: iconNode, palette } = workloadIcon(w.id, w.name);
+              return (
+                <div
+                  key={w.id}
+                  className={s.card}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openWorkload(w)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openWorkload(w); } }}
+                >
+                  <div className={s.cardRow}>
+                    <div className={s.iconBox} style={{ backgroundColor: palette.bg, color: palette.fg }}>{iconNode}</div>
+                    <div className={s.name}>{w.name}</div>
+                    {w.category === 'CSA' && (
+                      <Badge appearance="outline" color="brand" size="small">CSA</Badge>
+                    )}
+                  </div>
+                  {w.description && <div className={s.desc}>{w.description}</div>}
                 </div>
-                {w.description && <div className={s.desc}>{w.description}</div>}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
