@@ -1,77 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 380" role="img" aria-label="CSA Loom — the Microsoft Fabric experience for Azure tenants where Fabric isn't yet available">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 380" preserveAspectRatio="xMidYMid slice" role="img" aria-label="CSA Loom — Microsoft Fabric experience for Azure tenants where Fabric isn't yet available">
+  <!--
+    Mirrors the live CSA Loom app home-page hero treatment from
+    `apps/fiab-console/app/globals.css`:
+      loom-hero-bg = linear-gradient(135deg,
+                          #3d2e80 0%,    indigo-700 (primary brand)
+                          #1f6feb 55%,   azure-600  (secondary)
+                          #d89f3d 130%)  amber-500  (accent)
+    Plus the two radial highlights from `heroPattern` in
+    `apps/fiab-console/app/page.tsx`:
+      - top-right    : white  18% glow, fades by 45%
+      - bottom-left  : amber  30% glow, fades by 50%
+    Same brand tokens, same composition — keeps the docs landing
+    visually consistent with the live console.
+  -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0A1126"/>
-      <stop offset="100%" stop-color="#1B2147"/>
+    <linearGradient id="loom-hero-bg" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#3d2e80"/>
+      <stop offset="55%" stop-color="#1f6feb"/>
+      <stop offset="100%" stop-color="#d89f3d"/>
     </linearGradient>
-    <linearGradient id="thread" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#FFB100" stop-opacity="0.18"/>
-      <stop offset="50%" stop-color="#FFB100" stop-opacity="0.85"/>
-      <stop offset="100%" stop-color="#FFB100" stop-opacity="0.18"/>
-    </linearGradient>
-    <linearGradient id="thread2" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#4F46E5" stop-opacity="0.15"/>
-      <stop offset="50%" stop-color="#7C7AE6" stop-opacity="0.9"/>
-      <stop offset="100%" stop-color="#4F46E5" stop-opacity="0.15"/>
-    </linearGradient>
+    <radialGradient id="loom-hero-tr" cx="0.9" cy="0.1" r="0.45" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="loom-hero-bl" cx="0.1" cy="1.1" r="0.5" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#d89f3d" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#d89f3d" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="loom-weave" x="0" y="0" width="64" height="64" patternUnits="userSpaceOnUse" patternTransform="rotate(35)">
+      <line x1="0" y1="0" x2="0" y2="64" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+      <line x1="32" y1="0" x2="32" y2="64" stroke="rgba(255,255,255,0.03)" stroke-width="1"/>
+      <line x1="0" y1="32" x2="64" y2="32" stroke="rgba(255,255,255,0.03)" stroke-width="1"/>
+    </pattern>
   </defs>
-
-  <rect width="1600" height="380" fill="url(#bg)"/>
-
-  <!-- Woven loom warp/weft pattern -->
-  <g opacity="0.55">
-    <!-- horizontal threads (warp) - amber -->
-    <line x1="40" y1="80" x2="1560" y2="80" stroke="url(#thread)" stroke-width="2"/>
-    <line x1="40" y1="120" x2="1560" y2="120" stroke="url(#thread)" stroke-width="2"/>
-    <line x1="40" y1="160" x2="1560" y2="160" stroke="url(#thread)" stroke-width="2"/>
-    <line x1="40" y1="200" x2="1560" y2="200" stroke="url(#thread)" stroke-width="2"/>
-    <line x1="40" y1="240" x2="1560" y2="240" stroke="url(#thread)" stroke-width="2"/>
-    <line x1="40" y1="280" x2="1560" y2="280" stroke="url(#thread)" stroke-width="2"/>
-    <line x1="40" y1="320" x2="1560" y2="320" stroke="url(#thread)" stroke-width="2"/>
-
-    <!-- vertical threads (weft) - indigo - spaced into 'columns' that suggest data fabric -->
-    <line x1="120" y1="40" x2="120" y2="360" stroke="url(#thread2)" stroke-width="2"/>
-    <line x1="220" y1="40" x2="220" y2="360" stroke="url(#thread2)" stroke-width="2"/>
-    <line x1="320" y1="40" x2="320" y2="360" stroke="url(#thread2)" stroke-width="2"/>
-    <line x1="420" y1="40" x2="420" y2="360" stroke="url(#thread2)" stroke-width="2"/>
-    <line x1="520" y1="40" x2="520" y2="360" stroke="url(#thread2)" stroke-width="2"/>
-    <line x1="1080" y1="40" x2="1080" y2="360" stroke="url(#thread2)" stroke-width="2"/>
-    <line x1="1180" y1="40" x2="1180" y2="360" stroke="url(#thread2)" stroke-width="2"/>
-    <line x1="1280" y1="40" x2="1280" y2="360" stroke="url(#thread2)" stroke-width="2"/>
-    <line x1="1380" y1="40" x2="1380" y2="360" stroke="url(#thread2)" stroke-width="2"/>
-    <line x1="1480" y1="40" x2="1480" y2="360" stroke="url(#thread2)" stroke-width="2"/>
-  </g>
-
-  <!-- Central title block (over the woven background) -->
-  <rect x="620" y="120" width="360" height="140" rx="14" fill="#0A1126" opacity="0.82"/>
-
-  <!-- 'Loom' wordmark + tagline -->
-  <text x="800" y="180" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="56" font-weight="700" fill="#FFFFFF" text-anchor="middle" letter-spacing="2">CSA Loom</text>
-  <text x="800" y="216" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="18" font-weight="500" fill="#FFB100" text-anchor="middle" letter-spacing="1.2">THE MICROSOFT FABRIC EXPERIENCE</text>
-  <text x="800" y="242" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#C7CAE6" text-anchor="middle" letter-spacing="0.8">in your Azure Government tenant</text>
-
-  <!-- Left + right boundary chips -->
-  <g font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#FFFFFF">
-    <rect x="60" y="320" width="100" height="26" rx="13" fill="#107C10" opacity="0.85"/>
-    <text x="110" y="338" text-anchor="middle">Commercial</text>
-    <rect x="170" y="320" width="70" height="26" rx="13" fill="#0078D4" opacity="0.85"/>
-    <text x="205" y="338" text-anchor="middle">GCC</text>
-    <rect x="250" y="320" width="110" height="26" rx="13" fill="#D83B01" opacity="0.85"/>
-    <text x="305" y="338" text-anchor="middle">GCC-High / IL4</text>
-
-    <rect x="1240" y="320" width="100" height="26" rx="13" fill="#8764B8" opacity="0.85"/>
-    <text x="1290" y="338" text-anchor="middle">DoD IL5 (v1.1)</text>
-    <rect x="1350" y="320" width="190" height="26" rx="13" fill="#5D5A58" opacity="0.85"/>
-    <text x="1445" y="338" text-anchor="middle">Fabric IQ family (v2)</text>
-  </g>
-
-  <!-- Loom-shuttle accent (the weaving "shuttle" sliding through the threads) -->
-  <g transform="translate(420 30)">
-    <path d="M 0 6 Q 60 -10 120 6 Q 60 22 0 6 Z" fill="#FFB100"/>
-    <circle cx="60" cy="6" r="3" fill="#0A1126"/>
-  </g>
-  <g transform="translate(1060 344)">
-    <path d="M 0 6 Q 60 -10 120 6 Q 60 22 0 6 Z" fill="#7C7AE6"/>
-    <circle cx="60" cy="6" r="3" fill="#0A1126"/>
-  </g>
+  <rect width="1600" height="380" fill="url(#loom-hero-bg)"/>
+  <rect width="1600" height="380" fill="url(#loom-weave)"/>
+  <rect width="1600" height="380" fill="url(#loom-hero-tr)"/>
+  <rect width="1600" height="380" fill="url(#loom-hero-bl)"/>
 </svg>
