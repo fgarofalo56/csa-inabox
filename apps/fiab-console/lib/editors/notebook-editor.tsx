@@ -11,7 +11,7 @@
  * Backed by /api/loom/workspaces + /api/items/notebook/**.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
   Tree, TreeItem, TreeItemLayout, Select,
@@ -33,58 +33,9 @@ import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
-// Fabric-parity ribbon: Home / Insert / View / Run / Help.
-// Actions without a wired onClick render disabled via the Ribbon component
-// (closes 74 BROKEN findings without lying about what's available).
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Run', actions: [{ label: 'Run' }, { label: 'Run history' }] },
-    { label: 'Item', actions: [{ label: 'New notebook' }, { label: 'Save' }, { label: 'Delete' }] },
-    { label: 'Workspace', actions: [{ label: 'Switch workspace' }, { label: 'Refresh list' }] },
-  ]},
-  { id: 'insert', label: 'Insert', groups: [
-    { label: 'Cells', actions: [
-      { label: '+ Code cell' },
-      { label: '+ Markdown cell' },
-      { label: 'Move up' },
-      { label: 'Move down' },
-    ]},
-    { label: 'Data', actions: [
-      { label: 'Attach Lakehouse' },
-      { label: 'Attach Warehouse' },
-      { label: 'Attach KQL DB' },
-    ]},
-  ]},
-  { id: 'view', label: 'View', groups: [
-    { label: 'Panes', actions: [
-      { label: 'Outline' },
-      { label: 'Lakehouse explorer' },
-      { label: 'Run history' },
-    ]},
-    { label: 'Display', actions: [
-      { label: 'Full screen' },
-      { label: 'Line numbers' },
-      { label: 'Word wrap' },
-    ]},
-  ]},
-  { id: 'run', label: 'Run', groups: [
-    { label: 'Execute', actions: [
-      { label: 'Run all' },
-      { label: 'Run selected' },
-      { label: 'Cancel run' },
-    ]},
-    { label: 'Compute', actions: [
-      { label: 'Attach Spark pool' },
-      { label: 'Restart session' },
-    ]},
-  ]},
-  { id: 'help', label: 'Help', groups: [
-    { label: 'Resources', actions: [
-      { label: 'Notebook docs', onClick: () => window.open('https://learn.microsoft.com/fabric/data-engineering/how-to-use-notebook', '_blank') },
-      { label: 'Keyboard shortcuts' },
-    ]},
-  ]},
-];
+// Ribbon is now built dynamically inside the component so each action can
+// hold a real onClick wired to the editor's handlers. See `buildRibbon`
+// below the component declarations.
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
@@ -611,8 +562,64 @@ export function NotebookEditor({ item, id }: Props) {
     }
   }, [workspaceId, notebookId, computeId, defaultLang, patchCell, loadJobs]);
 
+  // Build the Fabric-parity ribbon with real handlers. Previously these were
+  // decorative labels with no onClick — the Ribbon component auto-disables
+  // un-wired actions, which gave the user two visually-identical Save buttons
+  // (a disabled ribbon Save + a working toolbar Save). Now both work.
+  const ribbon: RibbonTab[] = useMemo(() => {
+    const activeIdx = cells.findIndex(c => c.id === activeCellId);
+    const insertAfter = activeIdx >= 0 ? activeIdx : cells.length - 1;
+    const canRun = !!notebookId && !running;
+    const canSave = !!notebookId && dirty && !saving;
+    const canDelete = !!notebookId;
+    const canHistory = !!notebookId;
+    return [
+      { id: 'home', label: 'Home', groups: [
+        { label: 'Run', actions: [
+          { label: running ? 'Queuing…' : 'Run all', onClick: canRun ? run : undefined, disabled: !canRun },
+          { label: 'Run history', onClick: canHistory ? () => setHistoryOpen(true) : undefined, disabled: !canHistory },
+        ]},
+        { label: 'Item', actions: [
+          { label: 'New notebook', onClick: workspaceId ? () => setCreateOpen(true) : undefined, disabled: !workspaceId },
+          { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+          { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
+        ]},
+        { label: 'Workspace', actions: [
+          { label: 'Refresh list', onClick: workspaceId ? () => loadList(workspaceId) : undefined, disabled: !workspaceId },
+        ]},
+      ]},
+      { id: 'insert', label: 'Insert', groups: [
+        { label: 'Cells', actions: [
+          { label: '+ Code cell', onClick: () => insertCell(insertAfter, 'code') },
+          { label: '+ Markdown cell', onClick: () => insertCell(insertAfter, 'markdown') },
+        ]},
+        { label: 'Data', actions: [
+          { label: 'Attach Lakehouse', onClick: workspaceId ? openAttach : undefined, disabled: !workspaceId },
+        ]},
+      ]},
+      { id: 'view', label: 'View', groups: [
+        { label: 'Panes', actions: [
+          { label: 'Run history', onClick: canHistory ? () => setHistoryOpen(true) : undefined, disabled: !canHistory },
+        ]},
+      ]},
+      { id: 'run', label: 'Run', groups: [
+        { label: 'Execute', actions: [
+          { label: 'Run all', onClick: canRun ? run : undefined, disabled: !canRun },
+        ]},
+      ]},
+      { id: 'help', label: 'Help', groups: [
+        { label: 'Resources', actions: [
+          { label: 'Notebook docs', onClick: () => window.open('https://learn.microsoft.com/fabric/data-engineering/how-to-use-notebook', '_blank') },
+        ]},
+      ]},
+    ];
+  }, [
+    cells, activeCellId, notebookId, running, dirty, saving, workspaceId,
+    run, save, del, loadList, insertCell, openAttach,
+  ]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Notebooks</Subtitle2>
@@ -707,7 +714,12 @@ export function NotebookEditor({ item, id }: Props) {
                 </DialogBody>
               </DialogSurface>
             </Dialog>
-            <Button appearance="outline" icon={<Save20Regular />} disabled={saving || !notebookId || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save'}</Button>
+            {/*
+              Save lives in the ribbon (Home → Item → Save) now that the
+              ribbon actions are wired. Avoid a second Save here so users
+              aren't confused by two visually-identical Save buttons.
+              Ctrl+S still works from anywhere.
+            */}
             <Button appearance="primary" icon={<Play20Regular />} disabled={running || !notebookId} onClick={run}>{running ? 'Queuing…' : 'Run'}</Button>
             <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
