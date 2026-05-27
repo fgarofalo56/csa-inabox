@@ -987,9 +987,11 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
 }
 
 // ============================================================
-// Shared Power BI / Fabric workspace picker
+// Shared Loom workspace picker (formerly used /api/powerbi/workspaces which
+// confusingly suffixed every workspace name with the capacity SKU label;
+// Activator + other Fabric RTI editors weren't Power BI workspaces at all).
 // ============================================================
-interface PbiWorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
+interface PbiWorkspaceLite { id: string; name: string; description?: string; }
 
 function useWorkspaces() {
   const [workspaces, setWorkspaces] = useState<PbiWorkspaceLite[] | null>(null);
@@ -1000,7 +1002,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/powerbi/workspaces');
+      const r = await fetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed to list workspaces'); setHint(j.hint || null); setWorkspaces([]); }
       else { setWorkspaces(j.workspaces || []); }
@@ -1030,13 +1032,13 @@ function WorkspacePicker({
       <Select value={value} onChange={(_, d) => onChange(d.value)} disabled={loading || (workspaces?.length ?? 0) === 0}>
         {!value && <option value="">{loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
         {(workspaces || []).map((w) => (
-          <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · F/P SKU' : ''}</option>
+          <option key={w.id} value={w.id}>{w.name}</option>
         ))}
       </Select>
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>
-            <MessageBarTitle>Power BI / Fabric not reachable</MessageBarTitle>
+            <MessageBarTitle>Workspaces not reachable</MessageBarTitle>
             {error}{hint ? <><br /><Caption1>{hint}</Caption1></> : null}
           </MessageBarBody>
         </MessageBar>
