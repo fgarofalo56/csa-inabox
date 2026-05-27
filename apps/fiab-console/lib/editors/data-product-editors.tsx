@@ -42,6 +42,28 @@ interface Template {
   components: Array<{ slug: string; label: string; description: string }>;
 }
 
+interface WorkspaceLite { id: string; name: string }
+
+function useWorkspaces() {
+  const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/loom/workspaces');
+        const j = await r.json();
+        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setWorkspaces([]); }
+        else { setWorkspaces(j.workspaces || []); }
+      } catch (e: any) {
+        setError(e?.message || String(e));
+        setWorkspaces([]);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+  return { workspaces, error, loading };
+}
+
 export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -50,6 +72,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
   const [displayName, setDisplayName] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const ws = useWorkspaces();
 
   const [refreshing, setRefreshing] = useState(false);
   const refresh = useCallback(async () => {
@@ -144,8 +167,32 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
                 + one <code>data-product-instance</code> parent that links them.
               </MessageBarBody></MessageBar>
 
-              <div className={s.field}><Label>Target workspace id</Label>
-                <Input value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} />
+              <div className={s.field}><Label>Target workspace</Label>
+                <select
+                  value={workspaceId}
+                  onChange={(e) => setWorkspaceId(e.target.value)}
+                  disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}
+                  style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+                >
+                  {ws.loading && <option value="">Loading workspaces…</option>}
+                  {!ws.loading && (ws.workspaces?.length ?? 0) === 0 && (
+                    <option value="">{ws.error ? 'Workspace discovery failed' : 'No workspaces — create one first'}</option>
+                  )}
+                  {!ws.loading && (ws.workspaces?.length ?? 0) > 0 && !workspaceId && (
+                    <option value="">Select a workspace</option>
+                  )}
+                  {(ws.workspaces || []).map((w) => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
+                {ws.error && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Workspaces not reachable</MessageBarTitle>
+                      {ws.error}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
               </div>
               <div className={s.field}><Label>Instance display name</Label>
                 <Input value={displayName} onChange={(_, d) => setDisplayName(d.value)} placeholder={`${selected.displayName} (prod)`} />
@@ -194,6 +241,10 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
   const [health, setHealth] = useState<Record<string, ComponentHealth>>({});
 
   const loadInstance = useCallback(async () => {
+    // Pre-save gate: /items/data-product-instance/new fires this before any
+    // Cosmos record exists. Skip the fetch — the editor's empty-state UI
+    // will guide the user to instantiate from a template.
+    if (!id || id === 'new') return;
     try {
       const r = await fetch(`/api/items/data-product-instance/${id}`);
       const j = await r.json();

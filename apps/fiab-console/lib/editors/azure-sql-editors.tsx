@@ -260,10 +260,68 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
 // Database editor
 // ============================================================
 
+interface ServerLite { name: string; location?: string; fqdn?: string; state?: string }
+interface DatabaseLite { name: string; status?: string; sku?: { name?: string } }
+
+function useSqlServers() {
+  const [servers, setServers] = useState<ServerLite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/items/azure-sql-server');
+        const j = await r.json();
+        if (!j.ok) {
+          setError(j.error || `HTTP ${r.status}`);
+          setHint('Grant the Console UAMI the Reader role on the subscription, or provision a Microsoft.Sql/servers resource via bicep.');
+          setServers([]);
+        } else {
+          setServers(j.servers || []);
+        }
+      } catch (e: any) {
+        setError(e?.message || String(e));
+        setServers([]);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+  return { servers, error, hint, loading };
+}
+
+function useSqlDatabases(server: string) {
+  const [databases, setDatabases] = useState<DatabaseLite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!server) { setDatabases(null); setError(null); return; }
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        // The /api/items/azure-sql-server/[id]/databases route only reads
+        // the ?server= query param, not the [id] path segment — use a
+        // stable "current" placeholder so the route is satisfied.
+        const r = await fetch(`/api/items/azure-sql-server/current/databases?server=${encodeURIComponent(server)}`);
+        if (cancelled) return;
+        const j = await r.json();
+        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setDatabases([]); }
+        else { setDatabases(j.databases || []); }
+      } catch (e: any) {
+        if (!cancelled) { setError(e?.message || String(e)); setDatabases([]); }
+      } finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [server]);
+  return { databases, error, loading };
+}
+
 export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const srv = useSqlServers();
   const [server, setServer] = useState<string>(process.env.NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_SERVER || '');
   const [database, setDatabase] = useState<string>(process.env.NEXT_PUBLIC_LOOM_AZURE_SQL_DEFAULT_DB || '');
+  const dbs = useSqlDatabases(server);
   const [tab, setTab] = useState<'query' | 'mirroring' | 'replication' | 'sql2025'>('query');
   const [sqlText, setSqlText] = useState<string>(
     `-- Azure SQL database — TDS over AAD MI from the Loom Console BFF.\nSELECT 1 AS smoke, DB_NAME() AS db, SUSER_NAME() AS upn, @@VERSION AS version;`,
@@ -348,13 +406,63 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
       leftPanel={
         <div className={s.treePad}>
           <div className={s.formRow}>
-            <Label>Server (FQDN or short name)</Label>
-            <Input value={server} onChange={(_, d) => setServer(d.value)} placeholder="sql-csa-loom" />
+            <Label>Server</Label>
+            <select
+              value={server}
+              onChange={(e) => { setServer(e.target.value); setDatabase(''); }}
+              disabled={srv.loading || (srv.servers?.length ?? 0) === 0}
+              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+            >
+              {srv.loading && <option value="">Loading servers…</option>}
+              {!srv.loading && (srv.servers?.length ?? 0) === 0 && (
+                <option value="">{srv.error ? 'Discovery failed — see below' : 'No SQL servers found'}</option>
+              )}
+              {!srv.loading && (srv.servers?.length ?? 0) > 0 && !server && (
+                <option value="">Select a server</option>
+              )}
+              {(srv.servers || []).map((sv) => (
+                <option key={sv.name} value={sv.name}>{sv.name}{sv.location ? ` · ${sv.location}` : ''}</option>
+              ))}
+            </select>
           </div>
           <div className={s.formRow}>
             <Label>Database</Label>
-            <Input value={database} onChange={(_, d) => setDatabase(d.value)} placeholder="loomdb" />
+            <select
+              value={database}
+              onChange={(e) => setDatabase(e.target.value)}
+              disabled={!server || dbs.loading || (dbs.databases?.length ?? 0) === 0}
+              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+            >
+              {!server && <option value="">Select a server first</option>}
+              {server && dbs.loading && <option value="">Loading databases…</option>}
+              {server && !dbs.loading && (dbs.databases?.length ?? 0) === 0 && (
+                <option value="">{dbs.error ? 'Discovery failed' : 'No databases on this server'}</option>
+              )}
+              {server && !dbs.loading && (dbs.databases?.length ?? 0) > 0 && !database && (
+                <option value="">Select a database</option>
+              )}
+              {(dbs.databases || []).map((db) => (
+                <option key={db.name} value={db.name}>{db.name}{db.status ? ` · ${db.status}` : ''}</option>
+              ))}
+            </select>
           </div>
+          {srv.error && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>SQL servers not reachable</MessageBarTitle>
+                {srv.error}
+                {srv.hint && <><br /><Caption1>{srv.hint}</Caption1></>}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {server && dbs.error && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Databases not reachable</MessageBarTitle>
+                {dbs.error}
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <Caption1>
             The console MI must be the AAD admin on the server (or a member of the AAD admin group).
             Tables, schemas, and sample queries deferred to v3.x.
@@ -507,8 +615,10 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
 // ============================================================
 export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const srv = useSqlServers();
   const [server, setServer] = useState<string>('');
   const [database, setDatabase] = useState<string>('');
+  const dbs = useSqlDatabases(server);
   const [table, setTable] = useState<string>('docs');
   const [column, setColumn] = useState<string>('embedding');
   const [dim, setDim] = useState<number>(1536);
@@ -545,8 +655,56 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
       ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <div className={s.formRow}><Label>Server</Label><Input value={server} onChange={(_, d) => setServer(d.value)} /></div>
-          <div className={s.formRow}><Label>Database</Label><Input value={database} onChange={(_, d) => setDatabase(d.value)} /></div>
+          <div className={s.formRow}>
+            <Label>Server</Label>
+            <select
+              value={server}
+              onChange={(e) => { setServer(e.target.value); setDatabase(''); }}
+              disabled={srv.loading || (srv.servers?.length ?? 0) === 0}
+              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+            >
+              {srv.loading && <option value="">Loading servers…</option>}
+              {!srv.loading && (srv.servers?.length ?? 0) === 0 && (
+                <option value="">{srv.error ? 'Discovery failed' : 'No SQL servers found'}</option>
+              )}
+              {!srv.loading && (srv.servers?.length ?? 0) > 0 && !server && (
+                <option value="">Select a server</option>
+              )}
+              {(srv.servers || []).map((sv) => (
+                <option key={sv.name} value={sv.name}>{sv.name}{sv.location ? ` · ${sv.location}` : ''}</option>
+              ))}
+            </select>
+          </div>
+          <div className={s.formRow}>
+            <Label>Database</Label>
+            <select
+              value={database}
+              onChange={(e) => setDatabase(e.target.value)}
+              disabled={!server || dbs.loading || (dbs.databases?.length ?? 0) === 0}
+              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+            >
+              {!server && <option value="">Select a server first</option>}
+              {server && dbs.loading && <option value="">Loading databases…</option>}
+              {server && !dbs.loading && (dbs.databases?.length ?? 0) === 0 && (
+                <option value="">{dbs.error ? 'Discovery failed' : 'No databases on this server'}</option>
+              )}
+              {server && !dbs.loading && (dbs.databases?.length ?? 0) > 0 && !database && (
+                <option value="">Select a database</option>
+              )}
+              {(dbs.databases || []).map((db) => (
+                <option key={db.name} value={db.name}>{db.name}{db.status ? ` · ${db.status}` : ''}</option>
+              ))}
+            </select>
+          </div>
+          {srv.error && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>SQL servers not reachable</MessageBarTitle>
+                {srv.error}
+                {srv.hint && <><br /><Caption1>{srv.hint}</Caption1></>}
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <div className={s.formRow}><Label>Table</Label><Input value={table} onChange={(_, d) => setTable(d.value)} /></div>
           <div className={s.formRow}><Label>Vector column</Label><Input value={column} onChange={(_, d) => setColumn(d.value)} /></div>
           <div className={s.formRow}><Label>Dimensions</Label><Input type="number" value={String(dim)} onChange={(_, d) => setDim(Number(d.value || '0'))} /></div>

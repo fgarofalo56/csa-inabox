@@ -29,6 +29,7 @@ import { PipelineDagView, extractActivities, type PipelineActivity } from '@/lib
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { ComputePicker } from '@/lib/components/compute-picker';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -281,6 +282,23 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
             <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={busy || !selected} onClick={() => setAutoPause('resume')}>Reset auto-pause</Button>
             <Button appearance="outline" onClick={() => { if (selected) { loadPool(selected); loadBatches(selected); } }} style={{ marginLeft: 'auto' }}>Refresh</Button>
           </div>
+          {/*
+           * Cross-editor consistency: surface the shared ComputePicker so
+           * users navigating between editors see the same pool selector +
+           * state UI. The left-side Tree remains authoritative for pool
+           * detail loading; this picker mirrors selection via the "spark:"
+           * id prefix used by /api/loom/compute-targets.
+           */}
+          <ComputePicker
+            label="Compute target"
+            filter={['synapse-spark']}
+            value={selected ? `spark:${selected}` : ''}
+            onChange={(picked) => {
+              const bare = picked.startsWith('spark:') ? picked.slice('spark:'.length) : picked;
+              if (bare) setSelected(bare);
+            }}
+            showLifecycle={false}
+          />
           {loading && <Spinner size="tiny" label="Loading Spark pools…" labelPosition="after" />}
           {error && (
             <BackendStateBar error={error} title="Spark API" />

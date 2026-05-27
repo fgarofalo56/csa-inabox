@@ -23,6 +23,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { ComputePicker } from '@/lib/components/compute-picker';
 
 const useStyles = makeStyles({
   pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
@@ -61,6 +62,10 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
   const [model, setModel] = useState<ModelSummary | null>(null);
   const [versions, setVersions] = useState<ModelVersion[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  // Compute target for Apply (PREDICT) — wired even though the Apply BFF
+  // route is deferred to v2.x; at least the user can select compute now and
+  // see lifecycle state instead of staring at a dead button with no context.
+  const [computeId, setComputeId] = useState('');
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -169,6 +174,18 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
                 <Badge appearance="tint">Latest: v{model.latestVersion || '—'}</Badge>
                 <Badge appearance="tint">{versions.length} version(s)</Badge>
               </div>
+              {/*
+               * Compute target for Apply (PREDICT). The Apply BFF is deferred
+               * but exposing the picker now lets users pre-select compute and
+               * see its state (Resume a paused Databricks cluster, etc.) so
+               * v2.x's Apply wiring is one click away from working.
+               */}
+              <ComputePicker
+                label="Predict compute"
+                filter={['synapse-spark', 'databricks-cluster']}
+                value={computeId}
+                onChange={setComputeId}
+              />
               <Subtitle2 style={{ marginTop: 8 }}>Versions</Subtitle2>
               <Table aria-label="Model versions" size="small">
                 <TableHeader><TableRow>
@@ -231,6 +248,10 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
   const [runs, setRuns] = useState<FoundryJob[]>([]);
   const [expName, setExpName] = useState<string>('');
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
+  // Compute target for hypothetical "submit new run" / Register-model flow;
+  // wired even though the submit BFF is deferred so the lifecycle UI is
+  // surfaced now (resume paused Databricks before submitting from a notebook).
+  const [computeId, setComputeId] = useState('');
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -347,6 +368,16 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
               {job.experimentName && <Caption1>Experiment: {job.experimentName}</Caption1>}
             </>
           )}
+          {!loading && !error && (kind === 'experiment' || kind === 'job') && (
+            // Picker for future "submit new run" — exposes Spark / Databricks
+            // lifecycle so users can resume a paused cluster ahead of time.
+            <ComputePicker
+              label="Submission compute"
+              filter={['synapse-spark', 'databricks-cluster']}
+              value={computeId}
+              onChange={setComputeId}
+            />
+          )}
           {!loading && !error && runs.length > 0 && (
             <>
               <Table aria-label="Runs" size="small">
@@ -434,6 +465,13 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
   }, []);
 
   const load = useCallback(async () => {
+    // Pre-save gate: /items/<type>/new fires useItemState before any Cosmos
+    // record exists. Skip the fetch so the editor renders its `fallback`
+    // initial state until the user saves and we have a real id.
+    if (!id || id === 'new') {
+      setLoading(false);
+      return;
+    }
     setLoading(true); setError(null);
     try {
       const r = await fetch(`/api/items/${slug}/${encodeURIComponent(id)}`);
@@ -607,11 +645,39 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
 // ----- User Data Function (Cosmos code+config; deploy is config-only in v2.1) -----
 const UDF_SAMPLE = `import fabric.functions as fn\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    return {"user": user_id, "score": weight * 42}`;
 interface UdfState { runtime: 'python' | 'node' | 'dotnet'; entrypoint: string; source: string; functionAppName: string; connections: string; [k: string]: unknown }
+
+interface FunctionAppDTO {
+  id: string; name: string; location?: string; kind?: string;
+  state?: string; defaultHostName?: string; resourceGroup?: string;
+}
+
+function useFunctionApps() {
+  const [functionApps, setFunctionApps] = useState<FunctionAppDTO[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/azure/function-apps');
+        const j = await r.json();
+        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setHint(j.hint || null); setFunctionApps([]); }
+        else { setFunctionApps(j.functionApps || []); }
+      } catch (e: any) {
+        setError(e?.message || String(e));
+        setFunctionApps([]);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+  return { functionApps, error, hint, loading };
+}
+
 export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<UdfState>('user-data-function', id, {
     runtime: 'python', entrypoint: 'compute_score', source: UDF_SAMPLE, functionAppName: '', connections: '',
   });
+  const fnApps = useFunctionApps();
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Function', actions: [
@@ -650,9 +716,37 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
           </div>
           <div>
             <Caption1>Target Function App (deploy)</Caption1>
-            <Input value={state.functionAppName} onChange={(_, d) => setState((p) => ({ ...p, functionAppName: d.value }))} placeholder="not-yet-provisioned" />
+            <select
+              value={state.functionAppName}
+              onChange={(e) => setState((p) => ({ ...p, functionAppName: e.target.value }))}
+              disabled={fnApps.loading || (fnApps.functionApps?.length ?? 0) === 0}
+              title={fnApps.error ? `Function App discovery failed: ${fnApps.error}` : undefined}
+              style={{ width: '100%', padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+            >
+              {fnApps.loading && <option value="">Loading Function Apps…</option>}
+              {!fnApps.loading && (fnApps.functionApps?.length ?? 0) === 0 && (
+                <option value="">{fnApps.error ? 'Discovery failed — see hint below' : 'No Function Apps found'}</option>
+              )}
+              {!fnApps.loading && (fnApps.functionApps?.length ?? 0) > 0 && !state.functionAppName && (
+                <option value="">Select a Function App</option>
+              )}
+              {(fnApps.functionApps || []).map((fa) => (
+                <option key={fa.id} value={fa.name}>
+                  {fa.name}{fa.location ? ` · ${fa.location}` : ''}{fa.state ? ` · ${fa.state}` : ''}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
+        {fnApps.error && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Function App discovery failed</MessageBarTitle>
+              {fnApps.error}
+              {fnApps.hint && <><br /><Caption1>{fnApps.hint}</Caption1></>}
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <Subtitle2 style={{ marginTop: 8 }}>function_app source</Subtitle2>
         <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="python" height={320} minHeight={240} ariaLabel="Function source" />
         <Caption1>Connections (comma-separated workspace items)</Caption1>

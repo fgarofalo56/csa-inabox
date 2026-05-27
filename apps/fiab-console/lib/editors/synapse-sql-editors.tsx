@@ -27,6 +27,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { ComputePicker } from '@/lib/components/compute-picker';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -303,6 +304,11 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const [loading, setLoading] = useState(false);
   const [resuming, setResuming] = useState(false);
   const pollRef = useRef<number | null>(null);
+  // ComputePicker surfaces sibling Dedicated SQL pools so users can switch
+  // between pools (multi-pool workspaces) and see lifecycle state at a
+  // glance. The actual query still routes to the BFF's wired-in pool from
+  // env — switching is read-only here for v2.x; v2.3 wires per-pool query.
+  const [computeId, setComputeId] = useState('');
 
   const refreshState = useCallback(async () => {
     const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/state`);
@@ -475,6 +481,17 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               Run
             </Button>
           </div>
+          {/*
+           * Surface sibling Dedicated SQL pools via the shared ComputePicker
+           * so users can see/switch between pools and resume a paused one
+           * directly. The query still targets the env-bound pool until v2.3.
+           */}
+          <ComputePicker
+            label="Dedicated SQL pools"
+            filter={['synapse-dedicated-sql']}
+            value={computeId}
+            onChange={setComputeId}
+          />
           {state === 'Resuming' && (
             <MessageBar intent="info">
               <MessageBarBody>

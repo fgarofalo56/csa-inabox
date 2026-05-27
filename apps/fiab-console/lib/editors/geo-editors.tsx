@@ -223,11 +223,55 @@ export function GeoMapEditor({ item, id }: { item: FabricItemType; id: string })
 
 interface GeoDatasetState { adlsPath: string; geomColumn: string; format: 'geojson' | 'parquet' | 'csv'; [k: string]: unknown }
 
+interface ContainerInfoDTO { name: string; url: string }
+
+function useLakehouseContainers() {
+  const [containers, setContainers] = useState<ContainerInfoDTO[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/lakehouse/containers');
+        const j = await r.json();
+        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setContainers([]); }
+        else { setContainers(j.containers || []); }
+      } catch (e: any) {
+        setError(e?.message || String(e));
+        setContainers([]);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+  return { containers, error, loading };
+}
+
+// Parse "abfss://container@account.dfs.core.windows.net/path/segments" into
+// { container, suffix } so the existing free-text adlsPath can decompose
+// into the new Select + path-suffix Input without losing data.
+function splitAdlsPath(p: string): { container: string; suffix: string } {
+  const m = p.match(/^abfss:\/\/([^@]+)@[^/]+\/?(.*)$/i);
+  if (m) return { container: m[1], suffix: m[2] || '' };
+  return { container: '', suffix: p };
+}
+
+function joinAdlsPath(container: string, suffix: string, accountUrl?: string): string {
+  if (!container) return suffix;
+  // Reconstruct from the container's discovered URL if available, else
+  // emit a host placeholder so the user sees the shape they need.
+  const host = accountUrl
+    ? accountUrl.replace(/^https:\/\/([^.]+)\.dfs\.core\.windows\.net.*$/i, '$1.dfs.core.windows.net')
+    : '<account>.dfs.core.windows.net';
+  return `abfss://${container}@${host}/${suffix.replace(/^\//, '')}`;
+}
+
 export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoDatasetState>('geo-dataset', id, {
     adlsPath: '', geomColumn: 'geometry', format: 'parquet',
   });
+  const lh = useLakehouseContainers();
+  const split = splitAdlsPath(state.adlsPath || '');
+  const containerAccountUrl = (lh.containers || []).find((c) => c.name === split.container)?.url;
   const canSave = dirty && !saving;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -246,9 +290,53 @@ export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: strin
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
           <Subtitle2>Geo dataset</Subtitle2>
-          <div className={s.field}><Label>ADLS Gen2 path</Label>
-            <Input value={state.adlsPath} onChange={(_, d) => setState((p) => ({ ...p, adlsPath: d.value }))} placeholder="abfss://lake@<storage>.dfs.core.windows.net/geo/events/" />
+          <div className={s.field}><Label>ADLS container</Label>
+            <select
+              value={split.container}
+              onChange={(e) => {
+                const newContainer = e.target.value;
+                const url = (lh.containers || []).find((c) => c.name === newContainer)?.url;
+                setState((p) => ({ ...p, adlsPath: joinAdlsPath(newContainer, split.suffix, url) }));
+              }}
+              disabled={lh.loading || (lh.containers?.length ?? 0) === 0}
+              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+            >
+              {lh.loading && <option value="">Loading containers…</option>}
+              {!lh.loading && (lh.containers?.length ?? 0) === 0 && (
+                <option value="">{lh.error ? 'Container discovery failed' : 'No ADLS containers found'}</option>
+              )}
+              {!lh.loading && (lh.containers?.length ?? 0) > 0 && !split.container && (
+                <option value="">Select a container</option>
+              )}
+              {(lh.containers || []).map((c) => (
+                <option key={c.name} value={c.name}>{c.name}</option>
+              ))}
+            </select>
           </div>
+          {lh.error && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>ADLS containers not reachable</MessageBarTitle>
+                {lh.error}
+                <br />
+                <Caption1>
+                  Set <code>LOOM_&#123;BRONZE,SILVER,GOLD,LANDING&#125;_URL</code> on the Console Container App
+                  and grant the UAMI Storage Blob Data Reader on the storage account.
+                </Caption1>
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          <div className={s.field}><Label>Path suffix (under selected container)</Label>
+            <Input
+              value={split.suffix}
+              onChange={(_, d) => setState((p) => ({ ...p, adlsPath: joinAdlsPath(split.container, d.value, containerAccountUrl) }))}
+              placeholder="geo/events/"
+              disabled={!split.container}
+            />
+          </div>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Effective path: <code>{state.adlsPath || '(select a container)'}</code>
+          </Caption1>
           <div className={s.field}><Label>Geometry column</Label>
             <Input value={state.geomColumn} onChange={(_, d) => setState((p) => ({ ...p, geomColumn: d.value }))} placeholder="geometry" />
           </div>
@@ -351,11 +439,34 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
 
 interface GeoPipelineState { adfPipelineName: string; enrichH3: boolean; reverseGeocode: boolean; bufferMeters: number; [k: string]: unknown }
 
+interface AdfPipelineLite { name: string; id?: string; properties?: { description?: string } }
+
+function useAdfPipelines() {
+  const [pipelines, setPipelines] = useState<AdfPipelineLite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/items/adf-pipeline');
+        const j = await r.json();
+        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setPipelines([]); }
+        else { setPipelines(j.pipelines || []); }
+      } catch (e: any) {
+        setError(e?.message || String(e));
+        setPipelines([]);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+  return { pipelines, error, loading };
+}
+
 export function GeoPipelineEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoPipelineState>('geo-pipeline', id, {
     adfPipelineName: '', enrichH3: true, reverseGeocode: false, bufferMeters: 0,
   });
+  const adf = useAdfPipelines();
   const [triggering, setTriggering] = useState(false);
   const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
   const triggerRun = useCallback(async () => {
@@ -389,9 +500,37 @@ export function GeoPipelineEditor({ item, id }: { item: FabricItemType; id: stri
       main={
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-          <div className={s.field}><Label>ADF pipeline name (target)</Label>
-            <Input value={state.adfPipelineName} onChange={(_, d) => setState((p) => ({ ...p, adfPipelineName: d.value }))} placeholder="pipe-geo-enrich" />
+          <div className={s.field}><Label>ADF pipeline (target)</Label>
+            <select
+              value={state.adfPipelineName}
+              onChange={(e) => setState((p) => ({ ...p, adfPipelineName: e.target.value }))}
+              disabled={adf.loading || (adf.pipelines?.length ?? 0) === 0}
+              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+            >
+              {adf.loading && <option value="">Loading pipelines…</option>}
+              {!adf.loading && (adf.pipelines?.length ?? 0) === 0 && (
+                <option value="">{adf.error ? 'Discovery failed' : 'No ADF pipelines in factory'}</option>
+              )}
+              {!adf.loading && (adf.pipelines?.length ?? 0) > 0 && !state.adfPipelineName && (
+                <option value="">Select a pipeline</option>
+              )}
+              {(adf.pipelines || []).map((p) => (
+                <option key={p.name} value={p.name}>{p.name}</option>
+              ))}
+            </select>
           </div>
+          {adf.error && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>ADF pipelines not reachable</MessageBarTitle>
+                {adf.error}
+                <br />
+                <Caption1>
+                  Ensure the ADF factory is provisioned and the Console UAMI has Data Factory Contributor on it.
+                </Caption1>
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <div className={s.field}><Label>Enrichments</Label>
             <label><input type="checkbox" checked={state.enrichH3} onChange={(e) => setState((p) => ({ ...p, enrichH3: e.target.checked }))} /> Add H3 cell id at resolution 7</label>
             <label><input type="checkbox" checked={state.reverseGeocode} onChange={(e) => setState((p) => ({ ...p, reverseGeocode: e.target.checked }))} /> Reverse-geocode (requires Azure Maps account)</label>
