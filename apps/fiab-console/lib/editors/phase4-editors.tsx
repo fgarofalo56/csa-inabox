@@ -22,6 +22,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
@@ -464,7 +465,7 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
         <Caption1>Description</Caption1>
         <Input value={state.description} onChange={(_, d) => setState({ ...state, description: d.value })} />
         <Subtitle2 style={{ marginTop: 8 }}>Schema (SDL)</Subtitle2>
-        <textarea className={s.monaco} value={state.sdl} onChange={(e) => setState({ ...state, sdl: e.target.value })} spellCheck={false} aria-label="GraphQL SDL" style={{ minHeight: 260 }} />
+        <MonacoTextarea value={state.sdl} onChange={(v) => setState({ ...state, sdl: v })} language="graphql" height={300} minHeight={240} ariaLabel="GraphQL SDL" />
         {state.lastPublishedAt && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
             Last published {new Date(state.lastPublishedAt).toLocaleString()} → <code>{state.lastPublishedTo}</code>
@@ -528,7 +529,7 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
           </div>
         </div>
         <Subtitle2 style={{ marginTop: 8 }}>function_app source</Subtitle2>
-        <textarea className={s.monaco} value={state.source} onChange={(e) => setState({ ...state, source: e.target.value })} spellCheck={false} aria-label="Function source" style={{ minHeight: 280 }} />
+        <MonacoTextarea value={state.source} onChange={(v) => setState({ ...state, source: v })} language="python" height={320} minHeight={240} ariaLabel="Function source" />
         <Caption1>Connections (comma-separated workspace items)</Caption1>
         <Input value={state.connections} onChange={(_, d) => setState({ ...state, connections: d.value })} placeholder="fin-warehouse, ldn-gold-lakehouse" />
         <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
@@ -755,7 +756,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16 }}>
           <div>
             <Subtitle2>Source ({classes.length} classes)</Subtitle2>
-            <textarea className={s.monaco} value={state.source} onChange={(e) => setState({ ...state, source: e.target.value })} spellCheck={false} aria-label="Ontology source" style={{ minHeight: 360 }} />
+            <MonacoTextarea value={state.source} onChange={(v) => setState({ ...state, source: v })} language="json" height={400} minHeight={320} ariaLabel="Ontology source" />
           </div>
           <div>
             <Subtitle2>Class hierarchy</Subtitle2>
@@ -837,13 +838,11 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <div>
             <Subtitle2>Node types</Subtitle2>
-            <textarea className={s.monaco} defaultValue={JSON.stringify(state.nodes, null, 2)}
-              onBlur={(e) => editJson('nodes', e.target.value)} spellCheck={false} aria-label="Node types JSON" style={{ minHeight: 220 }} />
+            <MonacoTextarea value={JSON.stringify(state.nodes, null, 2)} onChange={(v) => editJson('nodes', v)} language="json" height={260} minHeight={200} ariaLabel="Node types JSON" />
           </div>
           <div>
             <Subtitle2>Edge types</Subtitle2>
-            <textarea className={s.monaco} defaultValue={JSON.stringify(state.edges, null, 2)}
-              onBlur={(e) => editJson('edges', e.target.value)} spellCheck={false} aria-label="Edge types JSON" style={{ minHeight: 220 }} />
+            <MonacoTextarea value={JSON.stringify(state.edges, null, 2)} onChange={(v) => editJson('edges', v)} language="json" height={260} minHeight={200} ariaLabel="Edge types JSON" />
           </div>
         </div>
         {state.lastMaterializedAt && (
@@ -1022,7 +1021,7 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
           </MessageBar>
         )}
         <Subtitle2>GeoJSON ({featureCount} feature{featureCount === 1 ? '' : 's'})</Subtitle2>
-        <textarea className={s.monaco} value={state.geojson} onChange={(e) => setState({ ...state, geojson: e.target.value })} spellCheck={false} aria-label="GeoJSON" style={{ minHeight: 280 }} />
+        <MonacoTextarea value={state.geojson} onChange={(v) => setState({ ...state, geojson: v })} language="json" height={320} minHeight={240} ariaLabel="GeoJSON" />
         {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid JSON: {parseErr}</MessageBarBody></MessageBar>}
         {tileUrl && (
           <>

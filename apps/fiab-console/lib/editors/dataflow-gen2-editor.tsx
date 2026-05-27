@@ -25,6 +25,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
@@ -259,12 +260,13 @@ export function DataflowGen2Editor({ item, id }: Props) {
             <>
               {dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
               <Caption1>Definition part: <code>{partPath}</code></Caption1>
-              <textarea
-                className={s.editor}
-                spellCheck={false}
+              <MonacoTextarea
                 value={defText}
-                onChange={(e) => { setDefText(e.target.value); setDirty(true); }}
-                aria-label="Dataflow definition"
+                onChange={(v) => { setDefText(v); setDirty(true); }}
+                language="json"
+                height={360}
+                minHeight={280}
+                ariaLabel="Dataflow definition"
               />
             </>
           )}

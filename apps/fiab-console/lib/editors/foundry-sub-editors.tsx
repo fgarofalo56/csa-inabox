@@ -28,6 +28,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -263,9 +264,9 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
       {selected && (
         <div className={s.card}>
           <Subtitle2>Flow: {selected}</Subtitle2>
-          <textarea className={s.monaco} value={defText} onChange={(e) => setDefText(e.target.value)} spellCheck={false} />
+          <MonacoTextarea value={defText} onChange={setDefText} language="json" height={300} minHeight={200} ariaLabel="Prompt Flow definition" />
           <Subtitle2 style={{ marginTop: 8 }}>Run inputs (JSON)</Subtitle2>
-          <textarea className={s.monaco} style={{ minHeight: 80 }} value={runInputs} onChange={(e) => setRunInputs(e.target.value)} spellCheck={false} />
+          <MonacoTextarea value={runInputs} onChange={setRunInputs} language="json" height={140} minHeight={80} ariaLabel="Run inputs JSON" />
           <div className={s.toolbar} style={{ marginTop: 8 }}>
             <Button appearance="primary" onClick={runFlow} disabled={running}>{running ? 'Running…' : 'Run flow'}</Button>
             <Button onClick={reload}>Reload list</Button>
