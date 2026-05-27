@@ -39,6 +39,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   monaco: {
@@ -391,13 +392,13 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               </MessageBarBody>
             </MessageBar>
           )}
-          <textarea
-            className={s.monaco}
-            spellCheck={false}
+          <MonacoTextarea
             value={kql}
-            onChange={(e) => setKql(e.target.value)}
-            onKeyDown={(e) => { if (e.shiftKey && e.key === 'Enter') { e.preventDefault(); run(); } }}
-            aria-label="KQL query editor"
+            onChange={setKql}
+            language="kql"
+            height={240}
+            minHeight={180}
+            ariaLabel="KQL query editor"
           />
           <KqlResultsPanel result={result} loading={loading} />
         </div>
@@ -537,13 +538,13 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
             </Button>
           </div>
           {qs && !qs.ok && <MessageBar intent="error"><MessageBarBody>{qs.error}</MessageBarBody></MessageBar>}
-          <textarea
-            className={s.monaco}
-            spellCheck={false}
+          <MonacoTextarea
             value={draft.kql}
-            onChange={(e) => { setDraft({ ...draft, kql: e.target.value }); setDirty(true); }}
-            onKeyDown={(e) => { if (e.shiftKey && e.key === 'Enter') { e.preventDefault(); run(); } }}
-            aria-label="KQL query"
+            onChange={(v) => { setDraft({ ...draft, kql: v }); setDirty(true); }}
+            language="kql"
+            height={240}
+            minHeight={180}
+            ariaLabel="KQL query"
           />
           <KqlResultsPanel result={result} loading={loading} />
         </div>
@@ -821,13 +822,13 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         {parseErr && <MessageBar intent="error"><MessageBarBody>JSON parse error: {parseErr}</MessageBarBody></MessageBar>}
 
         <Caption1>Edit the pipeline definition as JSON. Schema: <code>{`{ source, transforms[], sink }`}</code>.</Caption1>
-        <textarea
-          className={s.monaco}
-          style={{ minHeight: 360 }}
-          spellCheck={false}
+        <MonacoTextarea
           value={cfgText}
-          onChange={(e) => { setCfgText(e.target.value); setDirty(true); }}
-          aria-label="Eventstream JSON config"
+          onChange={(v) => { setCfgText(v); setDirty(true); }}
+          language="json"
+          height={360}
+          minHeight={300}
+          ariaLabel="Eventstream JSON config"
         />
       </div>
     } />
@@ -1270,12 +1271,13 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               </MessageBarBody>
             </MessageBar>
           )}
-          <textarea
-            className={s.monaco}
-            spellCheck={false}
+          <MonacoTextarea
             value={sqlText}
-            onChange={(e) => setSqlText(e.target.value)}
-            aria-label="Warehouse T-SQL editor"
+            onChange={setSqlText}
+            language="tsql"
+            height={260}
+            minHeight={200}
+            ariaLabel="Warehouse T-SQL editor"
           />
           {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}
           {result && !result.ok && (

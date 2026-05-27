@@ -26,6 +26,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -238,12 +239,13 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
               Run
             </Button>
           </div>
-          <textarea
-            className={s.editor}
-            spellCheck={false}
+          <MonacoTextarea
             value={sqlText}
-            onChange={(e) => setSqlText(e.target.value)}
-            aria-label="Serverless T-SQL editor"
+            onChange={setSqlText}
+            language="tsql"
+            height={240}
+            minHeight={200}
+            ariaLabel="Serverless T-SQL editor"
           />
           <ResultsPanel result={result} loading={loading} />
         </div>
@@ -464,12 +466,13 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
               </MessageBarBody>
             </MessageBar>
           )}
-          <textarea
-            className={s.editor}
-            spellCheck={false}
+          <MonacoTextarea
             value={sqlText}
-            onChange={(e) => setSqlText(e.target.value)}
-            aria-label="Dedicated T-SQL editor"
+            onChange={setSqlText}
+            language="tsql"
+            height={240}
+            minHeight={200}
+            ariaLabel="Dedicated T-SQL editor"
           />
           <ResultsPanel result={result} loading={loading} />
         </div>

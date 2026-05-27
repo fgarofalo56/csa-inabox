@@ -27,6 +27,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { PipelineDagView, extractActivities, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
@@ -319,12 +320,13 @@ export function DataPipelineEditor({ item, id }: Props) {
                 emptyHint="No activities in this pipeline yet. Click a palette button above to add one — or edit the JSON below by hand."
               />
               <Caption1>Pipeline definition (JSON)</Caption1>
-              <textarea
-                className={s.editor}
-                spellCheck={false}
+              <MonacoTextarea
                 value={defText}
-                onChange={(e) => { setDefText(e.target.value); setDirty(true); }}
-                aria-label="Pipeline JSON"
+                onChange={(v) => { setDefText(v); setDirty(true); }}
+                language="json"
+                height={260}
+                minHeight={200}
+                ariaLabel="Pipeline JSON"
               />
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Subtitle2>Run history ({jobs.length})</Subtitle2>

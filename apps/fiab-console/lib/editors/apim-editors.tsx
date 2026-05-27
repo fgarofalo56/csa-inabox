@@ -29,6 +29,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -553,12 +554,13 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
             </MessageBarBody>
           </MessageBar>
         )}
-        <textarea
-          className={s.monaco}
-          spellCheck={false}
+        <MonacoTextarea
           value={value}
-          onChange={(e) => setValue(e.target.value)}
-          aria-label="APIM policy XML"
+          onChange={setValue}
+          language="xml"
+          height={320}
+          minHeight={240}
+          ariaLabel="APIM policy XML"
         />
       </div>
     } />

@@ -29,6 +29,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
@@ -319,7 +320,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                 <Caption1>server: <strong>{server || 'not set'}</strong>, db: <strong>{database || 'not set'}</strong></Caption1>
                 <Button appearance="primary" icon={<Play20Regular />} disabled={loading || !server || !database} onClick={run} style={{ marginLeft: 'auto' }}>Run</Button>
               </div>
-              <textarea className={s.editor} spellCheck={false} value={sqlText} onChange={(e) => setSqlText(e.target.value)} aria-label="T-SQL editor" />
+              <MonacoTextarea value={sqlText} onChange={setSqlText} language="tsql" height={240} minHeight={200} ariaLabel="T-SQL editor" />
               <ResultsPanel result={result} loading={loading} />
             </>
           )}
@@ -474,7 +475,7 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
               use the SQL 2025 tab in the Database editor to verify the version first.
             </MessageBarBody>
           </MessageBar>
-          <textarea className={s.editor} spellCheck={false} value={ddl} readOnly aria-label="Vector index DDL" />
+          <MonacoTextarea value={ddl} onChange={() => {}} language="tsql" readOnly height={200} minHeight={160} ariaLabel="Vector index DDL" />
           <Button appearance="primary" icon={<Add20Regular />} disabled={loading} onClick={runDdl}>Create vector index</Button>
           <ResultsPanel result={result} loading={loading} />
         </div>

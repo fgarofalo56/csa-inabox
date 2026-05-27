@@ -25,6 +25,7 @@ import {
 import { Play20Regular, Add20Regular, Search20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -153,7 +154,7 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
               Graph visualization (force-directed layout) deferred to v3.x — rows render as JSON for now.
             </MessageBarBody>
           </MessageBar>
-          <textarea className={s.editor} value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="Gremlin query" />
+          <MonacoTextarea value={query} onChange={setQuery} language="javascript" height={200} minHeight={160} ariaLabel="Gremlin query" />
           <div style={{ display: 'flex', gap: 8 }}>
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
             <Button appearance="secondary" disabled={loading} onClick={showVertices}>Quick: Vertices</Button>
@@ -201,7 +202,7 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
               Cypher-to-KQL translation deferred to v3.x — write KQL directly for now.
             </MessageBarBody>
           </MessageBar>
-          <textarea className={s.editor} value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="Cypher / KQL editor" />
+          <MonacoTextarea value={query} onChange={setQuery} language="kql" height={200} minHeight={160} ariaLabel="Cypher / KQL editor" />
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
           <ResultsPreview result={result} />
         </div>
@@ -293,7 +294,7 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
               )}
             </MessageBarBody>
           </MessageBar>
-          <textarea className={s.editor} value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="GQL editor" />
+          <MonacoTextarea value={query} onChange={setQuery} language="sql" height={200} minHeight={160} ariaLabel="GQL editor" />
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>
             {loading ? 'Running…' : backend === 'persist-only' ? 'Save query' : 'Run'}
           </Button>
@@ -384,7 +385,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
           </MessageBar>
           <Button appearance="primary" icon={<Add20Regular />} onClick={createIndex}>Persist index spec</Button>
           <div className={s.field}><Label>Test query embedding (paste JSON array)</Label>
-            <textarea className={s.editor} value={testQuery} onChange={(e) => setTestQuery(e.target.value)} spellCheck={false} aria-label="Test query" />
+            <MonacoTextarea value={testQuery} onChange={setTestQuery} language="json" height={140} minHeight={100} ariaLabel="Test query" />
           </div>
           <Button icon={<Search20Regular />} disabled>Similarity test (v3.x)</Button>
           {result && <ResultsPreview result={result} />}

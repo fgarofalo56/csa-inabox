@@ -33,6 +33,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   treePad: { padding: 8 },
@@ -639,12 +640,13 @@ export function LakehouseEditor({ item, id }: Props) {
                     Run
                   </Button>
                 </div>
-                <textarea
-                  className={s.editor}
-                  spellCheck={false}
+                <MonacoTextarea
                   value={sqlText}
-                  onChange={(e) => setSqlText(e.target.value)}
-                  aria-label="OPENROWSET T-SQL editor"
+                  onChange={setSqlText}
+                  language="tsql"
+                  height={240}
+                  minHeight={180}
+                  ariaLabel="OPENROWSET T-SQL editor"
                 />
                 {sqlLoading && <Spinner size="small" label="Executing…" labelPosition="after" />}
                 {!sqlLoading && sqlResult && !sqlResult.ok && (

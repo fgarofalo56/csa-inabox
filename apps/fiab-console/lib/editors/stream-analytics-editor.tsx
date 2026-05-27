@@ -32,6 +32,7 @@ import { Play20Regular, Pause20Regular, ArrowSync20Regular, Save20Regular } from
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
@@ -212,8 +213,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
           {tab === 'query' && (
             <>
               <Caption1>SAQL — Stream Analytics Query Language. Reference inputs/outputs by their alias in square brackets, e.g. <code>FROM [input-eventhub]</code>.</Caption1>
-              <textarea className={s.queryArea} value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="ASA query" />
-              <Caption1>v3.28: textarea — Monaco + SAQL syntax highlighting + IntelliSense is queued per the parity-loop v2 build contract.</Caption1>
+              <MonacoTextarea value={query} onChange={setQuery} language="sql" height={280} minHeight={200} ariaLabel="ASA query" />
             </>
           )}
 

@@ -176,3 +176,36 @@ After wave 3 lands: **24 / 85 UIs cataloged**. Then Phase 2 (Build) waves.
 | v3.21–22 | 2026-05-26 | `/api/loom/workspaces` + `/api/loom/compute-targets` + 4-editor Fabric→Loom swap |
 | v3.23–24 | 2026-05-26 | Async notebook Run dispatch (beats FD 30s timeout) |
 | v3.25 | 2026-05-26 | data-pipeline → ADF redirect, dataflow + mirrored to Cosmos, bicep Spark pool |
+
+---
+
+## 2026-05-26 (later) — v2 validator batch (39 editors)
+
+**Session: source-grade Phase 3 + Phase 4 onClick audit** (live Phase 4 blocked by MFA expiry).
+
+**Output**: `docs/fiab/parity-gap/_validation-summary-2026-05-26.md` plus per-family gap docs:
+- `powerplatform-editors.md` (6 editors)
+- `azure-sql-editors.md` (4)
+- `geo-editors.md` (5 including phase4 `map`)
+- `graph-vector-editors.md` (4)
+- `fabric-iq-editors.md` (4)
+- `data-engineering-misc-editors.md` (6)
+- `api-data-product-editors.md` (5)
+- `stream-analytics-job.md` (1 — replaces `usql-job`)
+- `bi-rti-editors.md` (6)
+
+**Grade distribution**: 0 A · 4 B · 18 C · 16 D · 1 F (stream-analytics-job — source C, but slug 404s in deployed bundle).
+
+**B-grade editors (the wins)**:
+- `mirrored-database` — real 8-source-type create wizard, real Fabric REST
+- `variable-library` — 9 types + 4 value sets + per-type validation
+- `data-product-template` — gallery + detail + Instantiate end-to-end
+- `data-product-instance` — Health refresh wired ✓
+
+**Structural blockers** (each affects most of the catalog):
+1. **No Monaco** — every code/query/text editor is `<textarea>` (caps catalog at C until fixed)
+2. **Dead ribbon labels** — ~120 ribbon buttons across the catalog have no `onClick`
+3. **No live output rendering** — most query editors show `<pre>{JSON}</pre>` instead of a result grid
+4. **Read-only Power Platform / Power BI editors** — browse + open-in-other-tool pattern, no in-Loom edit
+
+**Deploy required**: `stream-analytics-job` is in source + registry but NOT in deployed `loom-console--0000075` bundle. Today users opening it hit 404.

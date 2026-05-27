@@ -29,6 +29,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -495,12 +496,13 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               Context: <strong>{activeCatalog}</strong>{activeSchema ? <> · <strong>{activeSchema}</strong></> : null}
             </Caption1>
           )}
-          <textarea
-            className={s.editor}
-            spellCheck={false}
+          <MonacoTextarea
             value={sqlText}
-            onChange={(e) => setSqlText(e.target.value)}
-            aria-label="Databricks SQL editor"
+            onChange={setSqlText}
+            language="sql"
+            height={260}
+            minHeight={200}
+            ariaLabel="Databricks SQL editor"
           />
           <ResultsPanel result={result} loading={loading} />
           {!warehousesError && warehouses.length === 0 && (
@@ -857,13 +859,13 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
           {loadingFile
             ? <Spinner size="small" label="Loading notebook source…" labelPosition="after" />
             : (
-              <textarea
-                className={s.editor}
-                spellCheck={false}
+              <MonacoTextarea
                 value={source}
-                onChange={(e) => setSource(e.target.value)}
-                aria-label="Notebook source"
-                style={{ minHeight: 280 }}
+                onChange={setSource}
+                language="python"
+                height={340}
+                minHeight={280}
+                ariaLabel="Notebook source"
               />
             )
           }
