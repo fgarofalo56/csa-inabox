@@ -10,6 +10,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.11.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.11.0...csa-inabox-v0.11.1) (2026-05-27)
+
+
+### Bug Fixes
+
+* **csa-loom-ci:** copilot-tools probe accepts 401 for unauthed CI ([#339](https://github.com/fgarofalo56/csa-inabox/issues/339)) ([7dbfc96](https://github.com/fgarofalo56/csa-inabox/commit/7dbfc96f7e3a578e8745ac448618c8ef84b375ff))
+
+
+### Documentation
+
+* **csa-loom:** rebuild hero SVG with full content (chip + title + schematic) ([#355](https://github.com/fgarofalo56/csa-inabox/issues/355)) ([79b7701](https://github.com/fgarofalo56/csa-inabox/commit/79b770101832b61889b28c7a1dc1b451bd50c673))
+
 ## [0.11.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.10.0...csa-inabox-v0.11.0) (2026-05-27)
 
 
