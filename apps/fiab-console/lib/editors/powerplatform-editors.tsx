@@ -26,6 +26,9 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+// AI Builder model state/status label mappers extracted for vitest
+// coverage. See `lib/editors/__tests__/family-utils.test.ts`.
+import { aiStateLabel, aiStatusLabel } from './_family-utils';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -682,18 +685,8 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
 
 interface AiModel { msdyn_aimodelid: string; msdyn_name: string; msdyn_modelcreationcontext?: string; msdyn_typename?: string; templateName?: string; statecode?: number; statuscode?: number; createdon?: string; modifiedon?: string; }
 
-function aiStateLabel(s?: number) { return s === 0 ? 'Active' : s === 1 ? 'Inactive' : '—'; }
-function aiStatusLabel(s?: number) {
-  switch (s) {
-    case 1: return 'Draft';
-    case 2: return 'Trained';
-    case 3: return 'Published';
-    case 4: return 'Training';
-    case 5: return 'Training failed';
-    case 6: return 'Publishing';
-    default: return s !== undefined ? String(s) : '—';
-  }
-}
+// `aiStateLabel` / `aiStatusLabel` are imported from `_family-utils`
+// (vitest coverage at `lib/editors/__tests__/family-utils.test.ts`).
 
 export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
