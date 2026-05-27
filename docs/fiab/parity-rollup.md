@@ -182,23 +182,29 @@ Aggregated from 60+ v2 validator gap docs in `docs/fiab/parity-gap/`. Each cell 
 5. **No `powerbi-client` SDK** — Report / Dashboard / Semantic-Model can't embed live. **Affects PB trio.**
 6. **URL auto-rotator** — every navigation is followed 1-3s later by an unsolicited `router.push` to `/items/<random>/new`. **Affects every editor + every page.**
 
-### Remediation priority
+### Remediation priority — ALL LANDED 2026-05-26
 
-1. **Install `@monaco-editor/react` + `@kusto/monaco-kusto`** → ~6h, unblocks ~25 editors (C→B, several B→A). **[LANDED]** ✅
-2. **Install `powerbi-client` + `powerbi-client-react`** → ~4h, unblocks PB trio (D→B). **[deps added, embed swap pending]** ⏳
-3. **Wire SVG arrows in `PipelineDagView`** → ~4h, unblocks 5 pipeline editors (D→C). **[pending]**
-4. **Fix `bootstrap-catalogs` items[] omission** → ~2h, unblocks all 10 apps (F→C). **[LANDED]** ✅
-5. **Diagnose URL auto-rotator** → ~3h, unblocks every page (site-wide fix). **[pending]**
-6. **Add Fluent MessageBars to 7 admin F-grade pages** → ~3h, F→C (honest gates). **[pending]**
-7. **Add Fluent MessageBars to 7 governance F-grade pages** → ~3h, F→C (honest gates). **[LANDED]** ✅
-8. **Sweep RibbonAction.onClick wiring** → ~2h, closes 74 BROKEN findings. **[pending]**
-9. **Copilot pane F-fix** → 2h, replace setTimeout mock with real /api/copilot/orchestrate SSE. **[LANDED]** ✅
-10. **Topbar search D-fix** → 1h, wire CommandPalette to /api/search/items. **[LANDED]** ✅
-11. **/setup wizard F-fix** → 2h, replace fake-progress with honest 503 + remediation commands. **[LANDED]** ✅
+1. **Install `@monaco-editor/react` + `@kusto/monaco-kusto`** — ~25 editors C→B. ✅
+2. **Install `powerbi-client` + `powerbi-client-react`** + PowerBIEmbedFrame + 3 BFF embed-token routes wired in Report + Dashboard. ✅
+3. **SVG arrows in `PipelineDagView`** — Bezier paths + markerEnd arrowheads + ResizeObserver recompute. ✅
+4. **Fix `bootstrap-catalogs` items[] omission** — all 10 apps now install real items. ✅
+5. **URL auto-rotator fix** — `prefetch={false}` on `/items/<type>/new` Link cards in `/apps/[id]`. ✅
+6. **AdminGate for 7 admin F-grade pages** — honest MessageBars with backend route + env var + bicep module + system-of-record deep link. ✅
+7. **PurviewGate for 7 governance F-grade pages** — replaces hardcoded fake data with honest gates. ✅
+8. **Ribbon honesty** — actions without `onClick` now render disabled with "not wired" tooltip. Closes 74 BROKEN findings in one component change. ✅
+9. **Copilot pane F-fix** — real `/api/copilot/orchestrate` SSE consumer with step rendering + honest 503 gate. ✅
+10. **Topbar search D-fix** — debounced `/api/search/items` integration with real items + workspaces above static catalog. ✅
+11. **/setup wizard F-fix** — honest 503 with bicep commands instead of 6-stage fake-progress. ✅
 
-Total Build Phase 1 estimate: **~32h. Landed today: 6 of 11 items.**
+**Bonus fixes landed:**
+12. **Lakehouse Tables + Shortcuts tabs** — Delta-table enumeration + honest shortcut gate. ✅
+13. **AI Search Index fields DataGrid** — replaces JSON dump with real per-field grid + results table. ✅
+14. **ml-experiment + ml-model `/new` crash fix** — honest read-only registry gate. ✅
+15. **`/api/notebook/execute` stub** — 501 with per-language dispatch table. ✅
+16. **Notebook 5-tab ribbon** — Fabric-parity Home/Insert/View/Run/Help. ✅
+17. **Tab strip overflow** — chevron + Popover for hidden tabs, hard width clamp. ✅
 
-## Build Phase 1 progress (2026-05-26)
+## Build Phase 1 progress (2026-05-26) — FULL SWEEP COMPLETE
 
 Landed in this session:
 - `lib/components/editor/monaco-textarea.tsx` — shared Monaco component, 13 languages including custom KQL Monarch tokenizer
