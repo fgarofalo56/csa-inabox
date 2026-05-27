@@ -33,11 +33,56 @@ import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
+// Fabric-parity ribbon: Home / Insert / View / Run / Help.
+// Actions without a wired onClick render disabled via the Ribbon component
+// (closes 74 BROKEN findings without lying about what's available).
 const RIBBON: RibbonTab[] = [
   { id: 'home', label: 'Home', groups: [
     { label: 'Run', actions: [{ label: 'Run' }, { label: 'Run history' }] },
     { label: 'Item', actions: [{ label: 'New notebook' }, { label: 'Save' }, { label: 'Delete' }] },
     { label: 'Workspace', actions: [{ label: 'Switch workspace' }, { label: 'Refresh list' }] },
+  ]},
+  { id: 'insert', label: 'Insert', groups: [
+    { label: 'Cells', actions: [
+      { label: '+ Code cell' },
+      { label: '+ Markdown cell' },
+      { label: 'Move up' },
+      { label: 'Move down' },
+    ]},
+    { label: 'Data', actions: [
+      { label: 'Attach Lakehouse' },
+      { label: 'Attach Warehouse' },
+      { label: 'Attach KQL DB' },
+    ]},
+  ]},
+  { id: 'view', label: 'View', groups: [
+    { label: 'Panes', actions: [
+      { label: 'Outline' },
+      { label: 'Lakehouse explorer' },
+      { label: 'Run history' },
+    ]},
+    { label: 'Display', actions: [
+      { label: 'Full screen' },
+      { label: 'Line numbers' },
+      { label: 'Word wrap' },
+    ]},
+  ]},
+  { id: 'run', label: 'Run', groups: [
+    { label: 'Execute', actions: [
+      { label: 'Run all' },
+      { label: 'Run selected' },
+      { label: 'Cancel run' },
+    ]},
+    { label: 'Compute', actions: [
+      { label: 'Attach Spark pool' },
+      { label: 'Restart session' },
+    ]},
+  ]},
+  { id: 'help', label: 'Help', groups: [
+    { label: 'Resources', actions: [
+      { label: 'Notebook docs', onClick: () => window.open('https://learn.microsoft.com/fabric/data-engineering/how-to-use-notebook', '_blank') },
+      { label: 'Keyboard shortcuts' },
+    ]},
   ]},
 ];
 
