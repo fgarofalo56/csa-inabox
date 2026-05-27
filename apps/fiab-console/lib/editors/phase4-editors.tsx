@@ -10,7 +10,7 @@
  * No mock data; errors surface in MessageBar.
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner,
   Tab, TabList,
@@ -22,6 +22,8 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { ComputePicker } from '@/lib/components/compute-picker';
 
 const useStyles = makeStyles({
   pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
@@ -41,12 +43,6 @@ const useStyles = makeStyles({
 });
 
 // ----- ML Model -----
-const ML_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Versions', actions: [{ label: 'Reload' }, { label: 'Compare versions' }] },
-    { label: 'Apply', actions: [{ label: 'Apply (PREDICT)' }, { label: 'Real-time endpoint' }] },
-  ]},
-];
 
 interface ModelSummary {
   id: string; name: string; description?: string; latestVersion?: string;
@@ -60,13 +56,19 @@ interface ModelVersion {
 
 export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [loading, setLoading] = useState(true);
+  const isNew = id === 'new' || !id;
+  const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<ModelSummary | null>(null);
   const [versions, setVersions] = useState<ModelVersion[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  // Compute target for Apply (PREDICT) — wired even though the Apply BFF
+  // route is deferred to v2.x; at least the user can select compute now and
+  // see lifecycle state instead of staring at a dead button with no context.
+  const [computeId, setComputeId] = useState('');
 
   const load = useCallback(async () => {
+    if (isNew) return;
     setLoading(true); setError(null);
     try {
       const r = await fetch(`/api/items/ml-model/${encodeURIComponent(id)}`);
@@ -80,8 +82,47 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, isNew]);
   useEffect(() => { load(); }, [load]);
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Versions', actions: [
+        { label: 'Reload', onClick: isNew ? undefined : load, disabled: isNew, title: isNew ? 'Read-only registry — open an existing model' : undefined },
+        { label: 'Compare versions', disabled: true, title: 'needs compute target + BFF route (deferred)' },
+      ]},
+      { label: 'Apply', actions: [
+        { label: 'Apply (PREDICT)', disabled: true, title: 'needs compute target + BFF route (deferred)' },
+        { label: 'Real-time endpoint', disabled: true, title: 'needs compute target + BFF route (deferred)' },
+      ]},
+    ]},
+  ], [isNew, load]);
+
+  // v2 validator finding: /items/ml-model/new used to crash because the
+  // editor immediately fetched the registry with id='new' and got 404.
+  // ML Model is a read-only registry view — there's no "new" entity to
+  // create. Show an honest gate redirecting to Azure ML.
+  if (isNew) {
+    return (
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+        main={
+          <div className={s.pad}>
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>ML models are registered in Azure ML, not authored in Loom</MessageBarTitle>
+                The Loom ML Model editor is a read-only registry view. To register a model:
+                <ol style={{ marginTop: 6, paddingLeft: 18 }}>
+                  <li>Run a training job in <code>/items/ml-experiment</code> (or Azure ML / Databricks MLflow).</li>
+                  <li>The run automatically logs to MLflow; the trained model appears here.</li>
+                </ol>
+                Open <a href="https://ml.azure.com/" target="_blank" rel="noreferrer">Azure ML Studio</a> for hands-on model registration.
+              </MessageBarBody>
+            </MessageBar>
+          </div>
+        }
+      />
+    );
+  }
 
   const current = versions.find((v) => v.version === selected) || versions[0];
 
@@ -89,7 +130,7 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ML_RIBBON}
+      ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
           <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>
@@ -133,6 +174,18 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
                 <Badge appearance="tint">Latest: v{model.latestVersion || '—'}</Badge>
                 <Badge appearance="tint">{versions.length} version(s)</Badge>
               </div>
+              {/*
+               * Compute target for Apply (PREDICT). The Apply BFF is deferred
+               * but exposing the picker now lets users pre-select compute and
+               * see its state (Resume a paused Databricks cluster, etc.) so
+               * v2.x's Apply wiring is one click away from working.
+               */}
+              <ComputePicker
+                label="Predict compute"
+                filter={['synapse-spark', 'databricks-cluster']}
+                value={computeId}
+                onChange={setComputeId}
+              />
               <Subtitle2 style={{ marginTop: 8 }}>Versions</Subtitle2>
               <Table aria-label="Model versions" size="small">
                 <TableHeader><TableRow>
@@ -177,12 +230,6 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
 }
 
 // ----- ML Experiment -----
-const MLE_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Runs', actions: [{ label: 'Reload' }, { label: 'Register model' }] },
-    { label: 'Charts', actions: [{ label: 'Parallel coordinates' }, { label: 'Scatter' }] },
-  ]},
-];
 
 interface FoundryJob {
   id: string; name: string; displayName?: string; jobType?: string;
@@ -193,15 +240,21 @@ interface FoundryJob {
 
 export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [loading, setLoading] = useState(true);
+  const isNew = id === 'new' || !id;
+  const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<'job' | 'experiment' | null>(null);
   const [job, setJob] = useState<FoundryJob | null>(null);
   const [runs, setRuns] = useState<FoundryJob[]>([]);
   const [expName, setExpName] = useState<string>('');
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
+  // Compute target for hypothetical "submit new run" / Register-model flow;
+  // wired even though the submit BFF is deferred so the lifecycle UI is
+  // surfaced now (resume paused Databricks before submitting from a notebook).
+  const [computeId, setComputeId] = useState('');
 
   const load = useCallback(async () => {
+    if (isNew) return;
     setLoading(true); setError(null);
     try {
       const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}`);
@@ -219,16 +272,52 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, isNew]);
   useEffect(() => { load(); }, [load]);
 
   const current = runs.find((r) => r.name === selectedRun) || runs[0] || job;
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Runs', actions: [
+        { label: 'Reload', onClick: isNew ? undefined : load, disabled: isNew, title: isNew ? 'Read-only — open an existing experiment' : undefined },
+        { label: 'Register model', disabled: true, title: 'needs MLflow registry write + BFF route (deferred)' },
+      ]},
+      { label: 'Charts', actions: [
+        { label: 'Parallel coordinates', disabled: true, title: 'chart renderer deferred to v2.x' },
+        { label: 'Scatter', disabled: true, title: 'chart renderer deferred to v2.x' },
+      ]},
+    ]},
+  ], [isNew, load]);
+
+  if (isNew) {
+    return (
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+        main={
+          <div className={s.pad}>
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>ML experiments / jobs are submitted via Azure ML, not authored here</MessageBarTitle>
+                The Loom ML Experiment editor is a read-only view of MLflow runs. To submit a new training run:
+                <ol style={{ marginTop: 6, paddingLeft: 18 }}>
+                  <li>Open a notebook (<code>/items/notebook</code> or <code>/items/databricks-notebook</code>).</li>
+                  <li>Use MLflow's <code>start_run()</code> / <code>log_metric()</code> APIs.</li>
+                  <li>The run will appear here once logged.</li>
+                </ol>
+                Open <a href="https://ml.azure.com/" target="_blank" rel="noreferrer">Azure ML Studio</a> for the full job-submission UI.
+              </MessageBarBody>
+            </MessageBar>
+          </div>
+        }
+      />
+    );
+  }
 
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={MLE_RIBBON}
+      ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
           <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>
@@ -278,6 +367,16 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
               <Subtitle2>{job.displayName || job.name}</Subtitle2>
               {job.experimentName && <Caption1>Experiment: {job.experimentName}</Caption1>}
             </>
+          )}
+          {!loading && !error && (kind === 'experiment' || kind === 'job') && (
+            // Picker for future "submit new run" — exposes Spark / Databricks
+            // lifecycle so users can resume a paused cluster ahead of time.
+            <ComputePicker
+              label="Submission compute"
+              filter={['synapse-spark', 'databricks-cluster']}
+              value={computeId}
+              onChange={setComputeId}
+            />
           )}
           {!loading && !error && runs.length > 0 && (
             <>
@@ -352,9 +451,27 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
-  const [state, setState] = useState<T>(fallback);
+  const [state, setStateRaw] = useState<T>(fallback);
+  // Phase 4.5 — dirty flag: any external setState call (typing, button click,
+  // patch/etc.) flips this true. load() / save() reset it false. SaveBar +
+  // Ctrl+S handler read it to gate behavior.
+  const [dirty, setDirty] = useState(false);
+  // Suppress dirty when load() applies server state.
+  const suppressDirty = useRef(false);
+
+  const setState = useCallback<typeof setStateRaw>((updater) => {
+    setStateRaw(updater as any);
+    if (!suppressDirty.current) setDirty(true);
+  }, []);
 
   const load = useCallback(async () => {
+    // Pre-save gate: /items/<type>/new fires useItemState before any Cosmos
+    // record exists. Skip the fetch so the editor renders its `fallback`
+    // initial state until the user saves and we have a real id.
+    if (!id || id === 'new') {
+      setLoading(false);
+      return;
+    }
     setLoading(true); setError(null);
     try {
       const r = await fetch(`/api/items/${slug}/${encodeURIComponent(id)}`);
@@ -362,7 +479,12 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
       if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); return; }
       const doc = j as ItemDoc;
       if (doc.state && typeof doc.state === 'object') {
-        setState({ ...fallback, ...(doc.state as T) });
+        suppressDirty.current = true;
+        setStateRaw({ ...fallback, ...(doc.state as T) });
+        setDirty(false);
+        // Release the suppression on next tick so user-triggered setState
+        // calls after this load() correctly mark dirty.
+        queueMicrotask(() => { suppressDirty.current = false; });
       }
       setSavedAt(doc.updatedAt || null);
     } catch (e: any) { setError(e?.message || String(e)); }
@@ -384,21 +506,43 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
       const j = await r.json();
       if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); return false; }
       setSavedAt(j?.updatedAt || new Date().toISOString());
+      // Phase 4.5: explicit save success → no longer dirty. When called
+      // programmatically with a `next` arg (publish-then-save, materialize-
+      // then-save, deploy-then-save), also clear dirty — the next arg IS
+      // the snapshot we just persisted.
+      setDirty(false);
       return true;
     } catch (e: any) { setError(e?.message || String(e)); return false; }
     finally { setSaving(false); }
   }, [slug, id, state]);
 
-  return { state, setState, loading, saving, error, savedAt, save, reload: load };
+  // Phase 4.5 — Ctrl+S / Cmd+S shortcut.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (dirty && !saving) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dirty, saving, save]);
+
+  return { state, setState, loading, saving, error, savedAt, save, reload: load, dirty };
 }
 
-function SaveBar({ saving, savedAt, error, onSave, extraRight }: {
+function SaveBar({ saving, savedAt, error, onSave, extraRight, dirty }: {
   saving: boolean; savedAt: string | null; error: string | null;
   onSave: () => void; extraRight?: ReactNode;
+  // Phase 4.5 — when provided, gates Save button + shows "unsaved" badge.
+  dirty?: boolean;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
-      <Button appearance="primary" onClick={onSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+      <Button appearance="primary" onClick={onSave} disabled={saving || dirty === false}>
+        {saving ? 'Saving…' : dirty === false ? 'Saved' : 'Save (Ctrl+S)'}
+      </Button>
+      {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
       {savedAt && !saving && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Saved {new Date(savedAt).toLocaleTimeString()}</Caption1>}
       {error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{error}</Caption1>}
       <div style={{ flex: 1 }} />
@@ -409,16 +553,10 @@ function SaveBar({ saving, savedAt, error, onSave, extraRight }: {
 
 // ----- GraphQL API (Cosmos state + real APIM publish) -----
 const GQL_SAMPLE = `type Query {\n  customers(region: String, first: Int = 10): [Customer!]!\n}\ntype Customer { id: ID! name: String! orders: [Order!]! }\ntype Order { id: ID! total: Float! }`;
-const GQL_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Schema', actions: [{ label: 'Reload' }, { label: 'Publish to APIM' }] },
-    { label: 'Auth', actions: [{ label: 'Subscription required' }] },
-  ]},
-];
 interface GqlState { displayName: string; path: string; serviceUrl: string; sdl: string; description: string; subscriptionRequired: boolean; lastPublishedAt?: string; lastPublishedTo?: string; [k: string]: unknown }
 export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<GqlState>('graphql-api', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<GqlState>('graphql-api', id, {
     displayName: '', path: '', serviceUrl: '', sdl: GQL_SAMPLE, description: '', subscriptionRequired: true,
   });
   const [publishing, setPublishing] = useState(false);
@@ -443,28 +581,48 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
       });
       const j = await r.json();
       if (!r.ok || !j.ok) { setPublishMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
-      const next = { ...state, lastPublishedAt: new Date().toISOString(), lastPublishedTo: j.api?.id || id };
-      setState(next); await save(next);
+      // v3.28 Phase 4.5: functional setState so SDL/path edits made WHILE the
+      // publish POST is in flight aren't reset by the old `state` snapshot.
+      let merged: GqlState | null = null;
+      setState((prev) => {
+        merged = { ...prev, lastPublishedAt: new Date().toISOString(), lastPublishedTo: j.api?.id || id };
+        return merged;
+      });
+      if (merged) await save(merged);
       setPublishMsg({ intent: 'success', text: `Published to APIM as ${j.api?.name || id}` });
     } catch (e: any) { setPublishMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setPublishing(false); }
   }, [id, item.displayName, state, save, setState]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Schema', actions: [
+        { label: 'Reload', onClick: reload },
+        { label: publishing ? 'Publishing…' : 'Publish to APIM', onClick: publish, disabled: publishing || saving },
+      ]},
+      { label: 'Auth', actions: [
+        { label: 'Subscription required', disabled: true, title: 'authoring of subscription requirements via UI deferred — toggle persists from form below' },
+      ]},
+    ]},
+  ], [reload, publish, publishing, saving]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={GQL_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <Subtitle2>API configuration</Subtitle2>
+        {/* v3.28 Phase 4.5: functional setState so publish-to-APIM (which calls
+            setState(next) after the request) doesn't clobber concurrent typing. */}
         <Caption1>Display name</Caption1>
-        <Input value={state.displayName} onChange={(_, d) => setState({ ...state, displayName: d.value })} placeholder={item.displayName || id} />
+        <Input value={state.displayName} onChange={(_, d) => setState((p) => ({ ...p, displayName: d.value }))} placeholder={item.displayName || id} />
         <Caption1>URL path suffix (under APIM gateway)</Caption1>
-        <Input value={state.path} onChange={(_, d) => setState({ ...state, path: d.value })} placeholder={id} />
+        <Input value={state.path} onChange={(_, d) => setState((p) => ({ ...p, path: d.value }))} placeholder={id} />
         <Caption1>Backend service URL (optional resolver target)</Caption1>
-        <Input value={state.serviceUrl} onChange={(_, d) => setState({ ...state, serviceUrl: d.value })} placeholder="https://backend.example.com/graphql" />
+        <Input value={state.serviceUrl} onChange={(_, d) => setState((p) => ({ ...p, serviceUrl: d.value }))} placeholder="https://backend.example.com/graphql" />
         <Caption1>Description</Caption1>
-        <Input value={state.description} onChange={(_, d) => setState({ ...state, description: d.value })} />
+        <Input value={state.description} onChange={(_, d) => setState((p) => ({ ...p, description: d.value }))} />
         <Subtitle2 style={{ marginTop: 8 }}>Schema (SDL)</Subtitle2>
-        <textarea className={s.monaco} value={state.sdl} onChange={(e) => setState({ ...state, sdl: e.target.value })} spellCheck={false} aria-label="GraphQL SDL" style={{ minHeight: 260 }} />
+        <MonacoTextarea value={state.sdl} onChange={(v) => setState((p) => ({ ...p, sdl: v }))} language="graphql" height={300} minHeight={240} ariaLabel="GraphQL SDL" />
         {state.lastPublishedAt && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
             Last published {new Date(state.lastPublishedAt).toLocaleString()} → <code>{state.lastPublishedTo}</code>
@@ -476,7 +634,7 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
           </MessageBar>
         )}
         <SaveBar
-          saving={saving} savedAt={savedAt} error={error} onSave={() => save()}
+          saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
           extraRight={<Button onClick={publish} disabled={publishing || saving}>{publishing ? 'Publishing…' : 'Publish to APIM'}</Button>}
         />
       </div>
@@ -486,20 +644,53 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
 
 // ----- User Data Function (Cosmos code+config; deploy is config-only in v2.1) -----
 const UDF_SAMPLE = `import fabric.functions as fn\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    return {"user": user_id, "score": weight * 42}`;
-const UDF_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Function', actions: [{ label: 'Reload' }, { label: 'Save' }] },
-    { label: 'Deploy', actions: [{ label: 'Deploy to Function App' }] },
-  ]},
-];
 interface UdfState { runtime: 'python' | 'node' | 'dotnet'; entrypoint: string; source: string; functionAppName: string; connections: string; [k: string]: unknown }
+
+interface FunctionAppDTO {
+  id: string; name: string; location?: string; kind?: string;
+  state?: string; defaultHostName?: string; resourceGroup?: string;
+}
+
+function useFunctionApps() {
+  const [functionApps, setFunctionApps] = useState<FunctionAppDTO[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/azure/function-apps');
+        const j = await r.json();
+        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setHint(j.hint || null); setFunctionApps([]); }
+        else { setFunctionApps(j.functionApps || []); }
+      } catch (e: any) {
+        setError(e?.message || String(e));
+        setFunctionApps([]);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+  return { functionApps, error, hint, loading };
+}
+
 export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<UdfState>('user-data-function', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<UdfState>('user-data-function', id, {
     runtime: 'python', entrypoint: 'compute_score', source: UDF_SAMPLE, functionAppName: '', connections: '',
   });
+  const fnApps = useFunctionApps();
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Function', actions: [
+        { label: 'Reload', onClick: reload },
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+      ]},
+      { label: 'Deploy', actions: [
+        { label: 'Deploy to Function App', disabled: true, title: 'v2.x — requires Function App ARM mutation' },
+      ]},
+    ]},
+  ], [reload, save, saving, dirty]);
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={UDF_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info">
@@ -509,9 +700,10 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
           </MessageBarBody>
         </MessageBar>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          {/* v3.28 Phase 4.5: functional setState everywhere. */}
           <div>
             <Caption1>Runtime</Caption1>
-            <select value={state.runtime} onChange={(e) => setState({ ...state, runtime: e.target.value as UdfState['runtime'] })}
+            <select value={state.runtime} onChange={(e) => setState((p) => ({ ...p, runtime: e.target.value as UdfState['runtime'] }))}
               style={{ width: '100%', padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
               <option value="python">python</option>
               <option value="node">node</option>
@@ -520,30 +712,52 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
           </div>
           <div>
             <Caption1>Entrypoint</Caption1>
-            <Input value={state.entrypoint} onChange={(_, d) => setState({ ...state, entrypoint: d.value })} />
+            <Input value={state.entrypoint} onChange={(_, d) => setState((p) => ({ ...p, entrypoint: d.value }))} />
           </div>
           <div>
             <Caption1>Target Function App (deploy)</Caption1>
-            <Input value={state.functionAppName} onChange={(_, d) => setState({ ...state, functionAppName: d.value })} placeholder="not-yet-provisioned" />
+            <select
+              value={state.functionAppName}
+              onChange={(e) => setState((p) => ({ ...p, functionAppName: e.target.value }))}
+              disabled={fnApps.loading || (fnApps.functionApps?.length ?? 0) === 0}
+              title={fnApps.error ? `Function App discovery failed: ${fnApps.error}` : undefined}
+              style={{ width: '100%', padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+            >
+              {fnApps.loading && <option value="">Loading Function Apps…</option>}
+              {!fnApps.loading && (fnApps.functionApps?.length ?? 0) === 0 && (
+                <option value="">{fnApps.error ? 'Discovery failed — see hint below' : 'No Function Apps found'}</option>
+              )}
+              {!fnApps.loading && (fnApps.functionApps?.length ?? 0) > 0 && !state.functionAppName && (
+                <option value="">Select a Function App</option>
+              )}
+              {(fnApps.functionApps || []).map((fa) => (
+                <option key={fa.id} value={fa.name}>
+                  {fa.name}{fa.location ? ` · ${fa.location}` : ''}{fa.state ? ` · ${fa.state}` : ''}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
+        {fnApps.error && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Function App discovery failed</MessageBarTitle>
+              {fnApps.error}
+              {fnApps.hint && <><br /><Caption1>{fnApps.hint}</Caption1></>}
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <Subtitle2 style={{ marginTop: 8 }}>function_app source</Subtitle2>
-        <textarea className={s.monaco} value={state.source} onChange={(e) => setState({ ...state, source: e.target.value })} spellCheck={false} aria-label="Function source" style={{ minHeight: 280 }} />
+        <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="python" height={320} minHeight={240} ariaLabel="Function source" />
         <Caption1>Connections (comma-separated workspace items)</Caption1>
-        <Input value={state.connections} onChange={(_, d) => setState({ ...state, connections: d.value })} placeholder="fin-warehouse, ldn-gold-lakehouse" />
-        <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+        <Input value={state.connections} onChange={(_, d) => setState((p) => ({ ...p, connections: d.value }))} placeholder="fin-warehouse, ldn-gold-lakehouse" />
+        <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
     } />
   );
 }
 
 // ----- Variable Library (Cosmos, typed key/value with value sets) -----
-const VL_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Variables', actions: [{ label: 'New variable' }, { label: 'Save' }] },
-    { label: 'Value sets', actions: [{ label: 'dev' }, { label: 'test' }, { label: 'prod' }] },
-  ]},
-];
 // v3.27: extended to Fabric's 7 variable types — String/Integer/Number/
 // Boolean/DateTime/Guid/ItemReference/ConnectionReference. Plus the
 // Loom-native `secret-ref` for KV / env-var lookups.
@@ -598,7 +812,7 @@ function validateVarValue(type: VarType, value: string): string | null {
 
 export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<VlState>('variable-library', id, {
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<VlState>('variable-library', id, {
     variables: [
       { name: 'ENV', type: 'string', default: 'dev' },
       { name: 'BatchSize', type: 'number', default: '5000' },
@@ -606,17 +820,42 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
     ],
   });
   const [tab, setTab] = useState<typeof VL_VALUE_SETS[number]>('default');
+  // v3.28 Phase 4.5: functional setState so concurrent edits + the auto-reload
+  // from useItemState's PATCH response don't clobber rapid typing.
   const update = (idx: number, patch: Partial<VarDef>) => {
-    const next = [...state.variables];
-    next[idx] = { ...next[idx], ...patch };
-    setState({ ...state, variables: next });
+    setState((prev) => {
+      const next = [...prev.variables];
+      next[idx] = { ...next[idx], ...patch };
+      return { ...prev, variables: next };
+    });
   };
-  const addRow = () => setState({ ...state, variables: [...state.variables, { name: `var${state.variables.length + 1}`, type: 'string', default: '' }] });
-  const deleteRow = (idx: number) => setState({ ...state, variables: state.variables.filter((_, i) => i !== idx) });
+  const addRow = () => setState((prev) => ({
+    ...prev,
+    variables: [...prev.variables, { name: `var${prev.variables.length + 1}`, type: 'string', default: '' }],
+  }));
+  const deleteRow = (idx: number) => setState((prev) => ({
+    ...prev,
+    variables: prev.variables.filter((_, i) => i !== idx),
+  }));
   const valueKey = tab === 'default' ? 'default' : tab;
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Variables', actions: [
+        { label: 'New variable', onClick: addRow },
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+      ]},
+      { label: 'Value sets', actions: [
+        { label: 'dev', onClick: () => setTab('dev'), appearance: tab === 'dev' ? 'primary' : 'subtle' },
+        { label: 'test', onClick: () => setTab('test'), appearance: tab === 'test' ? 'primary' : 'subtle' },
+        { label: 'prod', onClick: () => setTab('prod'), appearance: tab === 'prod' ? 'primary' : 'subtle' },
+      ]},
+    ]},
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [save, saving, dirty, tab, addRow]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={VL_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <>
         <div className={s.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
@@ -668,7 +907,7 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
             </TableBody>
           </Table>
           <Button onClick={addRow} style={{ alignSelf: 'flex-start' }}>+ New variable</Button>
-          <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+          <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
         </div>
       </>
     } />
@@ -692,7 +931,7 @@ function parseOntologyHierarchy(src: string): { name: string; parent?: string; d
 
 export function OntologyEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<OntoState>('ontology', id, { source: ONTO_SAMPLE });
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<OntoState>('ontology', id, { source: ONTO_SAMPLE });
   const classes = parseOntologyHierarchy(state.source || '');
   const [materializing, setMaterializing] = useState(false);
   const [matMsg, setMatMsg] = useState<string | null>(null);
@@ -742,8 +981,21 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
     } finally { setMaterializing(false); }
   }, [classes, id, item.label]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Author', actions: [
+        { label: 'Add entity', disabled: true, title: 'use the Source editor below to add classes (e.g. `MyEntity : Parent -- description`)' },
+        { label: 'Add relationship', disabled: true, title: 'parent : child syntax in Source editor; richer relationship authoring deferred' },
+      ]},
+      { label: 'Bind', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: materializing ? 'Materializing…' : 'Materialize', onClick: materializeToGraphModel, disabled: materializing || classes.length === 0 },
+      ]},
+    ]},
+  ], [save, saving, dirty, materializeToGraphModel, materializing, classes.length]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={IQ_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info">
@@ -755,7 +1007,9 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16 }}>
           <div>
             <Subtitle2>Source ({classes.length} classes)</Subtitle2>
-            <textarea className={s.monaco} value={state.source} onChange={(e) => setState({ ...state, source: e.target.value })} spellCheck={false} aria-label="Ontology source" style={{ minHeight: 360 }} />
+            {/* v3.28 Phase 4.5: functional setState — materializeToGraphModel
+                does NOT write back to state, so this is defensive but cheap. */}
+            <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="json" height={400} minHeight={320} ariaLabel="Ontology source" />
           </div>
           <div>
             <Subtitle2>Class hierarchy</Subtitle2>
@@ -779,23 +1033,19 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
             )}
           </div>
         </div>
-        <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+        <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
     } />
   );
 }
 
 // ----- Graph Model (Cosmos config + real ADX materialize) -----
-const IQ_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Author', actions: [{ label: 'Add entity' }, { label: 'Add relationship' }] },
-  { label: 'Bind', actions: [{ label: 'Save' }, { label: 'Materialize' }] },
-]}];
 interface GraphDecl { name: string; properties: { name: string; type: string }[] }
 interface GraphState { nodes: GraphDecl[]; edges: GraphDecl[]; database: string; lastMaterializedAt?: string; [k: string]: unknown }
 
 export function GraphModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<GraphState>('graph-model', id, {
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<GraphState>('graph-model', id, {
     nodes: [{ name: 'Customer', properties: [{ name: 'name', type: 'string' }] }],
     edges: [{ name: 'PLACED', properties: [{ name: 'at', type: 'datetime' }] }],
     database: 'loomdb-default',
@@ -816,34 +1066,56 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
       const j = await r.json();
       setMatResult(j);
       if (r.ok && j.ok) {
-        const next = { ...state, lastMaterializedAt: new Date().toISOString() };
-        setState(next); await save(next);
+        // v3.28 Phase 4.5: stale-closure fix. Previously `next = { ...state, ... }`
+        // captured `state` at click-time and clobbered any typing that happened
+        // during the in-flight POST. Use functional setState + capture the merged
+        // result for the immediate save() call so what we PATCH matches what
+        // the user sees.
+        let merged: GraphState | null = null;
+        setState((prev) => {
+          merged = { ...prev, lastMaterializedAt: new Date().toISOString() };
+          return merged;
+        });
+        if (merged) await save(merged);
       }
     } catch (e: any) { setMatResult({ ok: false, error: e?.message || String(e) }); }
     finally { setMaterializing(false); }
-  }, [id, state, save, setState]);
+  }, [id, save, setState]);
 
   const editJson = (key: 'nodes' | 'edges', text: string) => {
-    try { const parsed = JSON.parse(text); if (Array.isArray(parsed)) setState({ ...state, [key]: parsed }); }
-    catch { /* leave previous */ }
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) setState((p) => ({ ...p, [key]: parsed }));
+    } catch { /* leave previous */ }
   };
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Author', actions: [
+        { label: 'Add entity', disabled: true, title: 'edit the Node types JSON below to add node types' },
+        { label: 'Add relationship', disabled: true, title: 'edit the Edge types JSON below to add edge types' },
+      ]},
+      { label: 'Bind', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: materializing ? 'Materializing…' : 'Materialize', onClick: materialize, disabled: materializing || saving },
+      ]},
+    ]},
+  ], [save, saving, dirty, materialize, materializing]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={IQ_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <Caption1>Target ADX database</Caption1>
-        <Input value={state.database} onChange={(_, d) => setState({ ...state, database: d.value })} />
+        <Input value={state.database} onChange={(_, d) => setState((p) => ({ ...p, database: d.value }))} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <div>
             <Subtitle2>Node types</Subtitle2>
-            <textarea className={s.monaco} defaultValue={JSON.stringify(state.nodes, null, 2)}
-              onBlur={(e) => editJson('nodes', e.target.value)} spellCheck={false} aria-label="Node types JSON" style={{ minHeight: 220 }} />
+            <MonacoTextarea value={JSON.stringify(state.nodes, null, 2)} onChange={(v) => editJson('nodes', v)} language="json" height={260} minHeight={200} ariaLabel="Node types JSON" />
           </div>
           <div>
             <Subtitle2>Edge types</Subtitle2>
-            <textarea className={s.monaco} defaultValue={JSON.stringify(state.edges, null, 2)}
-              onBlur={(e) => editJson('edges', e.target.value)} spellCheck={false} aria-label="Edge types JSON" style={{ minHeight: 220 }} />
+            <MonacoTextarea value={JSON.stringify(state.edges, null, 2)} onChange={(v) => editJson('edges', v)} language="json" height={260} minHeight={200} ariaLabel="Edge types JSON" />
           </div>
         </div>
         {state.lastMaterializedAt && (
@@ -867,7 +1139,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
           </MessageBar>
         )}
         <SaveBar
-          saving={saving} savedAt={savedAt} error={error} onSave={() => save()}
+          saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
           extraRight={<Button onClick={materialize} disabled={materializing || saving}>{materializing ? 'Materializing…' : 'Materialize to ADX'}</Button>}
         />
       </div>
@@ -878,20 +1150,29 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
 // ----- Plan (Cosmos task list) -----
 interface PlanTask { title: string; owner: string; due: string; status: 'todo' | 'doing' | 'done'; dependsOn?: string }
 interface PlanState { tasks: PlanTask[]; [k: string]: unknown }
-const PLAN_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Tasks', actions: [{ label: 'New task' }, { label: 'Save' }] },
-]}];
 
 export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<PlanState>('plan', id, {
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<PlanState>('plan', id, {
     tasks: [{ title: 'Define semantic model', owner: '', due: '', status: 'todo' }],
   });
+  // v3.28 Phase 4.5: functional setState so rapid Update/Add/Delete edits don't
+  // clobber each other via the stale `state` captured at click-time.
   const update = (idx: number, patch: Partial<PlanTask>) => {
-    const next = [...state.tasks]; next[idx] = { ...next[idx], ...patch }; setState({ ...state, tasks: next });
+    setState((prev) => {
+      const next = [...prev.tasks];
+      next[idx] = { ...next[idx], ...patch };
+      return { ...prev, tasks: next };
+    });
   };
-  const add = () => setState({ ...state, tasks: [...state.tasks, { title: '', owner: '', due: '', status: 'todo' }] });
-  const remove = (idx: number) => setState({ ...state, tasks: state.tasks.filter((_, i) => i !== idx) });
+  const add = () => setState((prev) => ({
+    ...prev,
+    tasks: [...prev.tasks, { title: '', owner: '', due: '', status: 'todo' }],
+  }));
+  const remove = (idx: number) => setState((prev) => ({
+    ...prev,
+    tasks: prev.tasks.filter((_, i) => i !== idx),
+  }));
 
   // v3.27: D-upgrade — compute and surface progress + overdue counts.
   const counts = state.tasks.reduce(
@@ -906,8 +1187,18 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const today = new Date().toISOString().slice(0, 10);
   const overdue = state.tasks.filter(t => t.status !== 'done' && t.due && t.due < today).length;
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Tasks', actions: [
+        { label: 'New task', onClick: add },
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+      ]},
+    ]},
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [save, saving, dirty, add]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={PLAN_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info">
@@ -955,7 +1246,7 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
           </TableBody>
         </Table>
         <Button onClick={add} style={{ alignSelf: 'flex-start' }}>+ New task</Button>
-        <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+        <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
     } />
   );
@@ -964,13 +1255,11 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
 // ----- Map (Cosmos GeoJSON + JSON preview) -----
 const GEO_SAMPLE = `{\n  "type": "FeatureCollection",\n  "features": [\n    { "type": "Feature", "properties": { "name": "Seattle" }, "geometry": { "type": "Point", "coordinates": [-122.33, 47.61] } }\n  ]\n}`;
 interface MapState { geojson: string; [k: string]: unknown }
-const MAP_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Layer', actions: [{ label: 'Save' }, { label: 'Validate' }] },
-]}];
 
 export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save } = useItemState<MapState>('map', id, { geojson: GEO_SAMPLE });
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<MapState>('map', id, { geojson: GEO_SAMPLE });
+  const [validateMsg, setValidateMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   let parseErr: string | null = null;
   let featureCount = 0;
   let bbox: { minLon: number; maxLon: number; minLat: number; maxLat: number } | null = null;
@@ -1009,8 +1298,27 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
     ? `https://atlas.microsoft.com/map/static?api-version=2024-04-01&style=main&zoom=${zoom}&center=${centerLon},${centerLat}&width=640&height=320&subscription-key=${mapsKey}`
     : null;
 
+  const runValidate = useCallback(() => {
+    try {
+      const j = JSON.parse(state.geojson);
+      const fc = Array.isArray(j?.features) ? j.features.length : 0;
+      setValidateMsg({ intent: 'success', text: `Valid GeoJSON — ${fc} feature(s) parsed.` });
+    } catch (e: any) {
+      setValidateMsg({ intent: 'error', text: `Invalid JSON: ${e?.message || String(e)}` });
+    }
+  }, [state.geojson]);
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Layer', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: 'Validate', onClick: runValidate },
+      ]},
+    ]},
+  ], [save, saving, dirty, runValidate]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={MAP_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         {!mapsKey && (
@@ -1022,8 +1330,9 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
           </MessageBar>
         )}
         <Subtitle2>GeoJSON ({featureCount} feature{featureCount === 1 ? '' : 's'})</Subtitle2>
-        <textarea className={s.monaco} value={state.geojson} onChange={(e) => setState({ ...state, geojson: e.target.value })} spellCheck={false} aria-label="GeoJSON" style={{ minHeight: 280 }} />
+        <MonacoTextarea value={state.geojson} onChange={(v) => setState((p) => ({ ...p, geojson: v }))} language="json" height={320} minHeight={240} ariaLabel="GeoJSON" />
         {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid JSON: {parseErr}</MessageBarBody></MessageBar>}
+        {validateMsg && <MessageBar intent={validateMsg.intent}><MessageBarBody>{validateMsg.text}</MessageBarBody></MessageBar>}
         {tileUrl && (
           <>
             <Subtitle2>Azure Maps preview (zoom {zoom}, center {centerLat.toFixed(3)}, {centerLon.toFixed(3)})</Subtitle2>
@@ -1032,16 +1341,13 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
             <Caption1>Static-map preview only — features above are NOT rendered as overlays in this snapshot. Use the vector overlay path in v2.x for live layer rendering.</Caption1>
           </>
         )}
-        <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
+        <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
     } />
   );
 }
 
 // ----- Operations Agent (Cosmos config + Phase 1 Foundry deploy stub) -----
-const OPS_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Agent', actions: [{ label: 'Save' }, { label: 'Deploy to Foundry' }] },
-]}];
 interface AgentState {
   systemPrompt: string; model: string; tools: string;
   eventhouse: string; ontology: string;
@@ -1061,7 +1367,7 @@ interface DeployResponse {
 
 export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, reload } = useItemState<AgentState>('operations-agent', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<AgentState>('operations-agent', id, {
     systemPrompt: 'You monitor real-time operational signals and trigger actions when thresholds are breached.',
     model: 'gpt-4o', tools: 'eventhouse-query, activator-trigger', eventhouse: '', ontology: '',
   });
@@ -1091,8 +1397,17 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
   const deployedAgentId = state.foundryAgentId;
   const deployedAt = state.lastDeployedAt;
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Agent', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: deploying ? 'Deploying…' : 'Deploy to Foundry', onClick: onDeploy, disabled: deploying || saving },
+      ]},
+    ]},
+  ], [save, saving, dirty, onDeploy, deploying]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={OPS_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="warning">
@@ -1109,13 +1424,14 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
             {deployedAt && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>last deployed {new Date(deployedAt).toLocaleString()}</Caption1>}
           </div>
         )}
+        {/* v3.28 Phase 4.5: functional setState so deploy/reload doesn't clobber typing. */}
         <Caption1>System prompt</Caption1>
-        <Textarea value={state.systemPrompt} onChange={(_, d) => setState({ ...state, systemPrompt: d.value })} rows={6} />
+        <Textarea value={state.systemPrompt} onChange={(_, d) => setState((p) => ({ ...p, systemPrompt: d.value }))} rows={6} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState({ ...state, model: d.value })} /></div>
-          <div><Caption1>Tools (comma)</Caption1><Input value={state.tools} onChange={(_, d) => setState({ ...state, tools: d.value })} /></div>
-          <div><Caption1>Eventhouse binding</Caption1><Input value={state.eventhouse} onChange={(_, d) => setState({ ...state, eventhouse: d.value })} placeholder="eventhouse item id" /></div>
-          <div><Caption1>Ontology binding</Caption1><Input value={state.ontology} onChange={(_, d) => setState({ ...state, ontology: d.value })} placeholder="ontology item id" /></div>
+          <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState((p) => ({ ...p, model: d.value }))} /></div>
+          <div><Caption1>Tools (comma)</Caption1><Input value={state.tools} onChange={(_, d) => setState((p) => ({ ...p, tools: d.value }))} /></div>
+          <div><Caption1>Eventhouse binding</Caption1><Input value={state.eventhouse} onChange={(_, d) => setState((p) => ({ ...p, eventhouse: d.value }))} placeholder="eventhouse item id" /></div>
+          <div><Caption1>Ontology binding</Caption1><Input value={state.ontology} onChange={(_, d) => setState((p) => ({ ...p, ontology: d.value }))} placeholder="ontology item id" /></div>
         </div>
         {deployResult && (
           <MessageBar intent={deployResult.ok ? 'success' : deployResult.deferred ? 'warning' : 'error'}>
@@ -1134,7 +1450,7 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
           </MessageBar>
         )}
         <SaveBar
-          saving={saving} savedAt={savedAt} error={error} onSave={() => save()}
+          saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
           extraRight={
             <Button appearance="primary" onClick={onDeploy} disabled={deploying || saving}>
               {deploying ? 'Deploying…' : 'Deploy to Foundry'}
@@ -1147,10 +1463,6 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
 }
 
 // ----- Data Agent (Cosmos config + Phase 1 Foundry deploy stub) -----
-const DA_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Sources', actions: [{ label: 'Save' }, { label: 'Deploy to Foundry' }] },
-  { label: 'Test', actions: [{ label: 'Chat preview' }] },
-]}];
 interface DataAgentState {
   systemPrompt: string; model: string; sources: string;
   sqlEndpoints: string; kqlDatabases: string; lakehousePaths: string; examples: string;
@@ -1159,7 +1471,7 @@ interface DataAgentState {
 }
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, reload } = useItemState<DataAgentState>('data-agent', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<DataAgentState>('data-agent', id, {
     systemPrompt: 'You are a finance analyst. Always use dim_date and roll metrics by quarter unless asked otherwise.',
     model: 'gpt-4o',
     sources: 'fin-warehouse, orders semantic model, ldn-gold-lakehouse, ontology-finance',
@@ -1191,8 +1503,20 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const deployedAgentId = state.foundryAgentId;
   const deployedAt = state.lastDeployedAt;
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Sources', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: deploying ? 'Deploying…' : 'Deploy to Foundry', onClick: onDeploy, disabled: deploying || saving },
+      ]},
+      { label: 'Test', actions: [
+        { label: 'Chat preview', disabled: true, title: 'test chat pane deferred — see docs/fiab/data-agent-parity-spec.md' },
+      ]},
+    ]},
+  ], [save, saving, dirty, onDeploy, deploying]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={DA_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="warning">
@@ -1209,20 +1533,21 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
             {deployedAt && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>last deployed {new Date(deployedAt).toLocaleString()}</Caption1>}
           </div>
         )}
+        {/* v3.28 Phase 4.5: functional setState so deploy/reload doesn't clobber typing. */}
         <Caption1>System prompt / AI instructions</Caption1>
-        <Textarea value={state.systemPrompt} onChange={(_, d) => setState({ ...state, systemPrompt: d.value })} rows={5} />
+        <Textarea value={state.systemPrompt} onChange={(_, d) => setState((p) => ({ ...p, systemPrompt: d.value }))} rows={5} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState({ ...state, model: d.value })} /></div>
-          <div><Caption1>Sources (free text)</Caption1><Input value={state.sources} onChange={(_, d) => setState({ ...state, sources: d.value })} /></div>
-          <div><Caption1>Synapse Serverless SQL endpoints</Caption1><Input value={state.sqlEndpoints} onChange={(_, d) => setState({ ...state, sqlEndpoints: d.value })} placeholder="serverless-sql-pool name" /></div>
-          <div><Caption1>KQL databases</Caption1><Input value={state.kqlDatabases} onChange={(_, d) => setState({ ...state, kqlDatabases: d.value })} placeholder="loomdb-default" /></div>
+          <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState((p) => ({ ...p, model: d.value }))} /></div>
+          <div><Caption1>Sources (free text)</Caption1><Input value={state.sources} onChange={(_, d) => setState((p) => ({ ...p, sources: d.value }))} /></div>
+          <div><Caption1>Synapse Serverless SQL endpoints</Caption1><Input value={state.sqlEndpoints} onChange={(_, d) => setState((p) => ({ ...p, sqlEndpoints: d.value }))} placeholder="serverless-sql-pool name" /></div>
+          <div><Caption1>KQL databases</Caption1><Input value={state.kqlDatabases} onChange={(_, d) => setState((p) => ({ ...p, kqlDatabases: d.value }))} placeholder="loomdb-default" /></div>
           <div style={{ gridColumn: 'span 2' }}>
             <Caption1>Lakehouse paths (abfss://...)</Caption1>
-            <Textarea value={state.lakehousePaths} onChange={(_, d) => setState({ ...state, lakehousePaths: d.value })} rows={3} />
+            <Textarea value={state.lakehousePaths} onChange={(_, d) => setState((p) => ({ ...p, lakehousePaths: d.value }))} rows={3} />
           </div>
         </div>
         <Caption1>Example queries (one per line)</Caption1>
-        <Textarea value={state.examples} onChange={(_, d) => setState({ ...state, examples: d.value })} rows={4} />
+        <Textarea value={state.examples} onChange={(_, d) => setState((p) => ({ ...p, examples: d.value }))} rows={4} />
         {deployResult && (
           <MessageBar intent={deployResult.ok ? 'success' : deployResult.deferred ? 'warning' : 'error'}>
             <MessageBarBody>
@@ -1240,7 +1565,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
           </MessageBar>
         )}
         <SaveBar
-          saving={saving} savedAt={savedAt} error={error} onSave={() => save()}
+          saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
           extraRight={
             <Button appearance="primary" onClick={onDeploy} disabled={deploying || saving}>
               {deploying ? 'Deploying…' : 'Deploy to Foundry'}

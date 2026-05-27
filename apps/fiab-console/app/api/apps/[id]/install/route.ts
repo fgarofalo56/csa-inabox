@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { appsCatalogContainer, itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
+import { resolveBundleItem, getBundle } from '@/lib/apps/content-bundles';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -86,9 +87,30 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     (existing as any[]).map(e => `${e.itemType}::${(e.displayName || '').toLowerCase()}`),
   );
 
+  // When a bundle is registered for this app, its items[] is the source
+  // of truth (it may add extra items beyond the Cosmos catalog shape, such
+  // as walkthrough notebooks). Otherwise fall back to the Cosmos catalog.
+  const bundleForApp = getBundle(app.id);
+  const refs: AppItemRef[] = bundleForApp
+    ? bundleForApp.items.map(b => ({ type: b.itemType, displayName: b.displayName }))
+    : (app.items || []);
+
   const installed: Array<{ itemType: string; id?: string; displayName: string; status: string; error?: string }> = [];
-  for (const ref of app.items || []) {
-    const displayName = ref.displayName || `${app.name} · ${ref.type}`;
+  for (const ref of refs) {
+    // Resolve rich starter content (notebook cells, KQL DDL, dbt models,
+    // dashboard tiles, etc.) from the in-process bundle registry. The
+    // registry mirrors the canonical examples/<industry>/ reference
+    // architectures — when a bundle exists, the editor opens with a fully
+    // pre-populated workspace instead of an empty editor.
+    const bundle = resolveBundleItem(app.id, ref.type);
+    const displayName = bundle?.displayName || ref.displayName || `${app.name} · ${ref.type}`;
+    const description = bundle?.description || `Installed from app '${app.name}'${ref.template ? ` · template: ${ref.template}` : ''}`;
+    const state: Record<string, unknown> = {
+      sourceApp: app.id,
+      ...(ref.template ? { template: ref.template } : {}),
+      ...(bundle?.content ? { content: bundle.content } : {}),
+      ...(bundle?.learnDoc ? { learnDoc: bundle.learnDoc } : {}),
+    };
     const key = `${ref.type}::${displayName.toLowerCase()}`;
     if (existsKey.has(key)) {
       const match = (existing as any[]).find(e => e.itemType === ref.type && (e.displayName || '').toLowerCase() === displayName.toLowerCase());
@@ -98,8 +120,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const r = await createOwnedItem(s, ref.type, {
       workspaceId,
       displayName,
-      description: `Installed from app '${app.name}'${ref.template ? ` · template: ${ref.template}` : ''}`,
-      state: ref.template ? { template: ref.template, sourceApp: app.id } : { sourceApp: app.id },
+      description,
+      state,
     });
     if (r.ok) installed.push({ itemType: ref.type, id: r.item.id, displayName, status: 'created' });
     else installed.push({ itemType: ref.type, displayName, status: 'failed', error: r.error });

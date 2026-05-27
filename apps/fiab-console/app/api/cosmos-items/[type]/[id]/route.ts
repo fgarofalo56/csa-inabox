@@ -86,6 +86,26 @@ export async function DELETE(_req: NextRequest, { params }: { params: { type: st
     const item = await loadItem(params.id, params.type, session.claims.oid);
     if (!item) return err('Item not found', 404, 'not_found');
     const items = await itemsContainer();
+
+    // Cascade: when a lakehouse is deleted, also drop its auto-paired SQL
+    // analytics endpoint (warehouse item w/ state.sqlEndpointFor === lakehouse.id).
+    if (params.type === 'lakehouse') {
+      try {
+        const { resources: paired } = await items.items
+          .query<WorkspaceItem>({
+            query: 'SELECT * FROM c WHERE c.workspaceId = @w AND c.state.sqlEndpointFor = @id',
+            parameters: [
+              { name: '@w', value: item.workspaceId },
+              { name: '@id', value: item.id },
+            ],
+          }, { partitionKey: item.workspaceId })
+          .fetchAll();
+        for (const p of paired) {
+          try { await items.item(p.id, p.workspaceId).delete(); } catch { /* ignore */ }
+        }
+      } catch { /* best-effort */ }
+    }
+
     await items.item(item.id, item.workspaceId).delete();
     return NextResponse.json({ ok: true });
   } catch (e: any) {

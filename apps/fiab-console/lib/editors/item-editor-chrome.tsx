@@ -12,6 +12,7 @@ import { Badge, makeStyles, tokens } from '@fluentui/react-components';
 import { PageShell } from '@/lib/components/page-shell';
 import { Ribbon, type RibbonTab } from '@/lib/components/ribbon';
 import { ItemSidePanel } from '@/lib/components/item-side-panel';
+import { BundleContentBar } from '@/lib/components/bundle-content-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 
 const useStyles = makeStyles({
@@ -81,6 +82,7 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main }: Props) {
     >
       <div className={styles.layout}>
         <Ribbon tabs={ribbon} />
+        <BundleContentBar itemType={item.slug} itemId={id} />
         <div className={leftPanel ? styles.body : ''}>
           {leftPanel && <div className={styles.leftPanel}>{leftPanel}</div>}
           {leftPanel ? <div className={styles.mainPanel}>{main}</div> : <div className={styles.singlePanel}>{main}</div>}

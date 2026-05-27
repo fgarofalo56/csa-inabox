@@ -11,7 +11,7 @@
  * Backed by /api/loom/workspaces + /api/items/data-pipeline/**.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
   Tree, TreeItem, TreeItemLayout, Select,
@@ -27,13 +27,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { PipelineDagView, extractActivities, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
-
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Run', actions: [{ label: 'Run' }, { label: 'Run history' }] },
-    { label: 'Item', actions: [{ label: 'New pipeline' }, { label: 'Save' }, { label: 'Delete' }] },
-  ]},
-];
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
@@ -166,12 +160,17 @@ export function DataPipelineEditor({ item, id }: Props) {
 
   const save = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
-    setParseErr(null); setDetailErr(null);
-    try { JSON.parse(defText); } catch (e: any) { setParseErr(e?.message || 'invalid JSON'); return; }
+    setParseErr(null); setDetailErr(null); setRunMsg('Saving pipeline…');
+    // Phase 4.5 — read defText via functional setter to guarantee the freshest
+    // user edit gets persisted even if save() was memoised with a stale closure.
+    // Modeled after notebook-editor.tsx patchCell fix.
+    let textSnapshot = defText;
+    setDefText((prev) => { textSnapshot = prev; return prev; });
+    try { JSON.parse(textSnapshot); } catch (e: any) { setParseErr(e?.message || 'invalid JSON'); setRunMsg(null); return; }
     setSaving(true);
     try {
       const definition = {
-        parts: [{ path: 'pipeline-content.json', payload: toB64(defText), payloadType: 'InlineBase64' }],
+        parts: [{ path: 'pipeline-content.json', payload: toB64(textSnapshot), payloadType: 'InlineBase64' }],
       };
       const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
@@ -179,10 +178,30 @@ export function DataPipelineEditor({ item, id }: Props) {
         body: JSON.stringify({ definition }),
       });
       const j = await r.json();
-      if (!j.ok) setDetailErr(j.error || 'save failed');
-      else setDirty(false);
+      if (!j.ok) {
+        setDetailErr(j.error || 'save failed');
+        setRunMsg(`Save failed: ${j.error || 'unknown'}`);
+      } else {
+        setDirty(false);
+        setRunMsg(`Saved at ${new Date().toLocaleTimeString()}`);
+      }
+    } catch (e: any) {
+      setDetailErr(e?.message || String(e));
+      setRunMsg(`Save failed: ${e?.message || e}`);
     } finally { setSaving(false); }
   }, [workspaceId, pipelineId, defText]);
+
+  // Phase 4.5 — Ctrl+S / Cmd+S keyboard shortcut for Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (workspaceId && pipelineId && dirty && !saving) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [workspaceId, pipelineId, dirty, saving, save]);
 
   const run = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
@@ -239,8 +258,26 @@ export function DataPipelineEditor({ item, id }: Props) {
     await loadList(workspaceId);
   }, [workspaceId, pipelineId, loadList]);
 
+  const canRun = !running && !!pipelineId;
+  const canSave = !saving && !!pipelineId && dirty;
+  const canDelete = !!pipelineId;
+  const canCreate = !!workspaceId;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Run', actions: [
+        { label: running ? 'Queuing…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
+        { label: 'Run history', onClick: canDelete ? () => loadJobs(workspaceId, pipelineId) : undefined, disabled: !canDelete },
+      ]},
+      { label: 'Item', actions: [
+        { label: 'New pipeline', onClick: canCreate ? () => setCreateOpen(true) : undefined, disabled: !canCreate },
+        { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
+      ]},
+    ]},
+  ], [running, canRun, run, canDelete, loadJobs, workspaceId, pipelineId, canCreate, saving, canSave, save, del]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Pipelines</Subtitle2>
@@ -319,12 +356,13 @@ export function DataPipelineEditor({ item, id }: Props) {
                 emptyHint="No activities in this pipeline yet. Click a palette button above to add one — or edit the JSON below by hand."
               />
               <Caption1>Pipeline definition (JSON)</Caption1>
-              <textarea
-                className={s.editor}
-                spellCheck={false}
+              <MonacoTextarea
                 value={defText}
-                onChange={(e) => { setDefText(e.target.value); setDirty(true); }}
-                aria-label="Pipeline JSON"
+                onChange={(v) => { setDefText(v); setDirty(true); }}
+                language="json"
+                height={260}
+                minHeight={200}
+                ariaLabel="Pipeline JSON"
               />
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Subtitle2>Run history ({jobs.length})</Subtitle2>

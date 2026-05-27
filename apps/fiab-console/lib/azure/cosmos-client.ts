@@ -33,6 +33,7 @@ let _searchHistory: Container | null = null;
 let _wsPermissions: Container | null = null;
 let _wsGit: Container | null = null;
 let _tenantThemes: Container | null = null;
+let _tenantSettings: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -97,6 +98,7 @@ async function ensure() {
   _wsPermissions = await mk('workspace-permissions', '/workspaceId');
   _wsGit = await mk('workspace-git', '/workspaceId');
   _tenantThemes = await mk('tenant-themes', '/tenantId');
+  _tenantSettings = await mk('tenant-settings', '/tenantId');
   _ensured = true;
 }
 
@@ -129,3 +131,4 @@ export async function searchHistoryContainer(): Promise<Container> { await ensur
 export async function workspacePermissionsContainer(): Promise<Container> { await ensure(); return _wsPermissions!; }
 export async function workspaceGitContainer(): Promise<Container> { await ensure(); return _wsGit!; }
 export async function tenantThemesContainer(): Promise<Container> { await ensure(); return _tenantThemes!; }
+export async function tenantSettingsContainer(): Promise<Container> { await ensure(); return _tenantSettings!; }

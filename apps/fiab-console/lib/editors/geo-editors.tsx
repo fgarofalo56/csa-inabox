@@ -19,16 +19,117 @@
  * pipelines are NOT deployed in this Loom instance — the MessageBars say so.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Label,
+  Subtitle2, Body1, Caption1, Badge, Button, Input, Label, Spinner,
   TabList, Tab,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Map20Regular, Folder20Regular, Play20Regular, Flow20Regular } from '@fluentui/react-icons';
+import { Map20Regular, Folder20Regular, Play20Regular, Flow20Regular, Save20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import type { RibbonTab } from '@/lib/components/ribbon';
+
+/**
+ * v3.28 — Phase 4.5 fix: GeoMap / GeoDataset / GeoPipeline used to render
+ * inputs whose state lived only in component memory. The MessageBars claimed
+ * "saved into item state" / "the flags persist" but no Save button existed
+ * and no PATCH ever ran. Per `no-vaporware.md` and the Phase 4.5 round-trip
+ * standard, that's vaporware. This module now wires each editor to the
+ * generic Cosmos item route:
+ *   GET   /api/cosmos-items/<slug>/<id>           — load
+ *   PATCH /api/cosmos-items/<slug>/<id>  { state } — save
+ * with a dirty indicator + Ctrl+S handler.
+ */
+
+function useGeoItemState<T extends Record<string, unknown>>(slug: string, id: string, fallback: T) {
+  const [state, setState] = useState<T>(fallback);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+
+  // Replace state via a wrapper that flips dirty=true so the Save button
+  // surfaces unsaved edits.
+  const update = useCallback((next: T | ((prev: T) => T)) => {
+    setState((prev) => {
+      const merged = typeof next === 'function' ? (next as (p: T) => T)(prev) : next;
+      return merged;
+    });
+    setDirty(true);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!id || id === 'new') { setLoading(false); return; }
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const r = await fetch(`/api/cosmos-items/${encodeURIComponent(slug)}/${encodeURIComponent(id)}`);
+        if (cancelled) return;
+        if (r.status === 404) { setLoading(false); return; }
+        const j = await r.json();
+        if (j?.ok && j.item?.state) {
+          setState((prev) => ({ ...prev, ...(j.item.state as T) }));
+          setSavedAt(j.item.updatedAt || null);
+        }
+      } catch (e: any) { if (!cancelled) setError(e?.message || String(e)); }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [id, slug]);
+
+  const save = useCallback(async () => {
+    if (!id || id === 'new') { setError('Save requires a real item id — open from the workspace list.'); return false; }
+    setSaving(true); setError(null);
+    try {
+      const r = await fetch(`/api/cosmos-items/${encodeURIComponent(slug)}/${encodeURIComponent(id)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ state }),
+      });
+      const j = await r.json();
+      if (!j?.ok) { setError(j?.error || `HTTP ${r.status}`); return false; }
+      setSavedAt(j.item?.updatedAt || new Date().toISOString());
+      setDirty(false);
+      return true;
+    } catch (e: any) { setError(e?.message || String(e)); return false; }
+    finally { setSaving(false); }
+  }, [slug, id, state]);
+
+  // Ctrl+S handler.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (dirty && !saving) void save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dirty, saving, save]);
+
+  return { state, setState: update, loading, saving, savedAt, error, dirty, save };
+}
+
+function GeoSaveBar({ saving, dirty, savedAt, error, onSave }: {
+  saving: boolean; dirty: boolean; savedAt: string | null; error: string | null; onSave: () => void;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
+      <Button appearance="primary" icon={<Save20Regular />} onClick={onSave} disabled={saving || !dirty}>
+        {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
+      </Button>
+      {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+      {savedAt && !saving && !dirty && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Saved {new Date(savedAt).toLocaleTimeString()}</Caption1>
+      )}
+      {error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{error}</Caption1>}
+    </div>
+  );
+}
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -71,18 +172,30 @@ GROUP BY H3_LATLON_TO_CELL(lat, lon, 7)
 ORDER BY hits DESC;
 `;
 
+interface GeoMapState { account: string; style: string; tileLayerUrl: string; [k: string]: unknown }
+
 export function GeoMapEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [account, setAccount] = useState<string>('');
-  const [style, setStyle] = useState<string>('main');
-  const [tileLayerUrl, setTileLayerUrl] = useState<string>('');
+  const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoMapState>('geo-map', id, {
+    account: '', style: 'main', tileLayerUrl: '',
+  });
+  const canSave = dirty && !saving;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Map', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: 'Preview', disabled: true, title: 'tile preview helper not yet wired in this editor (deferred)' },
+      ]},
+    ]},
+  ], [canSave, saving, save]);
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Map', actions: [{ label: 'Save' }, { label: 'Preview' }] }] }]}
+      ribbon={ribbon}
       leftPanel={<div className={s.treePad}><Caption1>Map config — style, tile layer, and tokens.</Caption1></div>}
       main={
         <div className={s.pad}>
+          {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
           <MessageBar intent="warning">
             <MessageBarBody>
               <MessageBarTitle>Runtime deferred</MessageBarTitle>
@@ -92,42 +205,143 @@ export function GeoMapEditor({ item, id }: { item: FabricItemType; id: string })
             </MessageBarBody>
           </MessageBar>
           <div className={s.field}><Label>Azure Maps account name</Label>
-            <Input value={account} onChange={(_, d) => setAccount(d.value)} placeholder="maps-csa-loom" />
+            <Input value={state.account} onChange={(_, d) => setState((p) => ({ ...p, account: d.value }))} placeholder="maps-csa-loom" />
           </div>
           <div className={s.field}><Label>Style</Label>
-            <Input value={style} onChange={(_, d) => setStyle(d.value)} placeholder="main" />
+            <Input value={state.style} onChange={(_, d) => setState((p) => ({ ...p, style: d.value }))} placeholder="main" />
           </div>
           <div className={s.field}><Label>Tile layer URL (GeoJSON / TMS)</Label>
-            <Input value={tileLayerUrl} onChange={(_, d) => setTileLayerUrl(d.value)} placeholder="https://…/tiles/{z}/{x}/{y}.pbf" />
+            <Input value={state.tileLayerUrl} onChange={(_, d) => setState((p) => ({ ...p, tileLayerUrl: d.value }))} placeholder="https://…/tiles/{z}/{x}/{y}.pbf" />
           </div>
-          <Caption1>Saved into the item state. Hooks into the GeoQuery editor for layered visualization (v3.x).</Caption1>
+          <Caption1>Persisted into Cosmos item state via PATCH /api/cosmos-items/geo-map/{`{id}`}. Hooks into the GeoQuery editor for layered visualization (v3.x).</Caption1>
+          <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
         </div>
       }
     />
   );
 }
 
+interface GeoDatasetState { adlsPath: string; geomColumn: string; format: 'geojson' | 'parquet' | 'csv'; [k: string]: unknown }
+
+interface ContainerInfoDTO { name: string; url: string }
+
+function useLakehouseContainers() {
+  const [containers, setContainers] = useState<ContainerInfoDTO[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/lakehouse/containers');
+        const j = await r.json();
+        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setContainers([]); }
+        else { setContainers(j.containers || []); }
+      } catch (e: any) {
+        setError(e?.message || String(e));
+        setContainers([]);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+  return { containers, error, loading };
+}
+
+// Parse "abfss://container@account.dfs.core.windows.net/path/segments" into
+// { container, suffix } so the existing free-text adlsPath can decompose
+// into the new Select + path-suffix Input without losing data.
+function splitAdlsPath(p: string): { container: string; suffix: string } {
+  const m = p.match(/^abfss:\/\/([^@]+)@[^/]+\/?(.*)$/i);
+  if (m) return { container: m[1], suffix: m[2] || '' };
+  return { container: '', suffix: p };
+}
+
+function joinAdlsPath(container: string, suffix: string, accountUrl?: string): string {
+  if (!container) return suffix;
+  // Reconstruct from the container's discovered URL if available, else
+  // emit a host placeholder so the user sees the shape they need.
+  const host = accountUrl
+    ? accountUrl.replace(/^https:\/\/([^.]+)\.dfs\.core\.windows\.net.*$/i, '$1.dfs.core.windows.net')
+    : '<account>.dfs.core.windows.net';
+  return `abfss://${container}@${host}/${suffix.replace(/^\//, '')}`;
+}
+
 export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [adlsPath, setAdlsPath] = useState<string>('');
-  const [geomColumn, setGeomColumn] = useState<string>('geometry');
-  const [format, setFormat] = useState<'geojson' | 'parquet' | 'csv'>('parquet');
+  const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoDatasetState>('geo-dataset', id, {
+    adlsPath: '', geomColumn: 'geometry', format: 'parquet',
+  });
+  const lh = useLakehouseContainers();
+  const split = splitAdlsPath(state.adlsPath || '');
+  const containerAccountUrl = (lh.containers || []).find((c) => c.name === split.container)?.url;
+  const canSave = dirty && !saving;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Dataset', actions: [
+        { label: 'Inspect', disabled: true, title: 'needs OPENROWSET probe BFF (deferred)' },
+        { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+      ]},
+    ]},
+  ], [canSave, saving, save]);
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Dataset', actions: [{ label: 'Inspect' }, { label: 'Save' }] }] }]}
+      ribbon={ribbon}
       leftPanel={<div className={s.treePad}><Caption1>Browse ADLS Gen2 — geometry-column inspector deferred to v3.x.</Caption1></div>}
       main={
         <div className={s.pad}>
+          {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
           <Subtitle2>Geo dataset</Subtitle2>
-          <div className={s.field}><Label>ADLS Gen2 path</Label>
-            <Input value={adlsPath} onChange={(_, d) => setAdlsPath(d.value)} placeholder="abfss://lake@<storage>.dfs.core.windows.net/geo/events/" />
+          <div className={s.field}><Label>ADLS container</Label>
+            <select
+              value={split.container}
+              onChange={(e) => {
+                const newContainer = e.target.value;
+                const url = (lh.containers || []).find((c) => c.name === newContainer)?.url;
+                setState((p) => ({ ...p, adlsPath: joinAdlsPath(newContainer, split.suffix, url) }));
+              }}
+              disabled={lh.loading || (lh.containers?.length ?? 0) === 0}
+              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+            >
+              {lh.loading && <option value="">Loading containers…</option>}
+              {!lh.loading && (lh.containers?.length ?? 0) === 0 && (
+                <option value="">{lh.error ? 'Container discovery failed' : 'No ADLS containers found'}</option>
+              )}
+              {!lh.loading && (lh.containers?.length ?? 0) > 0 && !split.container && (
+                <option value="">Select a container</option>
+              )}
+              {(lh.containers || []).map((c) => (
+                <option key={c.name} value={c.name}>{c.name}</option>
+              ))}
+            </select>
           </div>
+          {lh.error && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>ADLS containers not reachable</MessageBarTitle>
+                {lh.error}
+                <br />
+                <Caption1>
+                  Set <code>LOOM_&#123;BRONZE,SILVER,GOLD,LANDING&#125;_URL</code> on the Console Container App
+                  and grant the UAMI Storage Blob Data Reader on the storage account.
+                </Caption1>
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          <div className={s.field}><Label>Path suffix (under selected container)</Label>
+            <Input
+              value={split.suffix}
+              onChange={(_, d) => setState((p) => ({ ...p, adlsPath: joinAdlsPath(split.container, d.value, containerAccountUrl) }))}
+              placeholder="geo/events/"
+              disabled={!split.container}
+            />
+          </div>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Effective path: <code>{state.adlsPath || '(select a container)'}</code>
+          </Caption1>
           <div className={s.field}><Label>Geometry column</Label>
-            <Input value={geomColumn} onChange={(_, d) => setGeomColumn(d.value)} placeholder="geometry" />
+            <Input value={state.geomColumn} onChange={(_, d) => setState((p) => ({ ...p, geomColumn: d.value }))} placeholder="geometry" />
           </div>
           <div className={s.field}><Label>Format</Label>
-            <select value={format} onChange={(e) => setFormat(e.target.value as any)} style={{ padding: 6 }}>
+            <select value={state.format} onChange={(e) => setState((p) => ({ ...p, format: e.target.value as GeoDatasetState['format'] }))} style={{ padding: 6 }}>
               <option value="parquet">Parquet (+ WKB geometry)</option>
               <option value="geojson">GeoJSON (line-delimited)</option>
               <option value="csv">CSV (lat / lon columns)</option>
@@ -136,10 +350,11 @@ export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: strin
           <MessageBar intent="info">
             <MessageBarBody>
               Inspector probes the first row via Serverless OPENROWSET and parses the geometry column with
-              <code> GEOGRAPHY::STGeomFromWKB</code>. Wiring deferred to v3.x — for now the path + column are
-              persisted into item state.
+              <code> GEOGRAPHY::STGeomFromWKB</code>. Wiring deferred to v3.x — the path + column persist to
+              Cosmos via PATCH /api/cosmos-items/geo-dataset/{`{id}`}.
             </MessageBarBody>
           </MessageBar>
+          <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
         </div>
       }
     />
@@ -176,13 +391,22 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
     finally { setLoading(false); }
   }, [id, engine, text]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Engine', actions: [
+        { label: 'KQL', onClick: () => onEngineChange('kql'), disabled: engine === 'kql' },
+        { label: 'T-SQL', onClick: () => onEngineChange('tsql'), disabled: engine === 'tsql' },
+      ]},
+      { label: 'Run', actions: [
+        { label: loading ? 'Running…' : 'Execute', onClick: loading ? undefined : run, disabled: loading },
+      ]},
+    ]},
+  ], [engine, loading, run]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [
-        { label: 'Engine', actions: [{ label: 'KQL' }, { label: 'T-SQL' }] },
-        { label: 'Run', actions: [{ label: 'Execute' }] },
-      ]}]}
+      ribbon={ribbon}
       leftPanel={<div className={s.treePad}>
         <Caption1>Functions:</Caption1>
         <Body1><code>geo_distance_2points</code></Body1>
@@ -196,7 +420,7 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
             <Tab value="kql">KQL (Kusto)</Tab>
             <Tab value="tsql">T-SQL (Synapse Serverless)</Tab>
           </TabList>
-          <textarea className={s.editor} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} aria-label="Geo query editor" />
+          <MonacoTextarea value={text} onChange={setText} language="sql" height={220} minHeight={180} ariaLabel="Geo query editor" />
           <Button appearance="primary" icon={<Play20Regular />} onClick={run} disabled={loading}>Run</Button>
           {result && (
             <pre style={{ fontSize: 12, maxHeight: 240, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>
@@ -213,35 +437,116 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
   );
 }
 
+interface GeoPipelineState { adfPipelineName: string; enrichH3: boolean; reverseGeocode: boolean; bufferMeters: number; [k: string]: unknown }
+
+interface AdfPipelineLite { name: string; id?: string; properties?: { description?: string } }
+
+function useAdfPipelines() {
+  const [pipelines, setPipelines] = useState<AdfPipelineLite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/items/adf-pipeline');
+        const j = await r.json();
+        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setPipelines([]); }
+        else { setPipelines(j.pipelines || []); }
+      } catch (e: any) {
+        setError(e?.message || String(e));
+        setPipelines([]);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+  return { pipelines, error, loading };
+}
+
 export function GeoPipelineEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [adfPipelineName, setAdfPipelineName] = useState<string>('');
-  const [enrichH3, setEnrichH3] = useState<boolean>(true);
-  const [reverseGeocode, setReverseGeocode] = useState<boolean>(false);
-  const [bufferMeters, setBufferMeters] = useState<number>(0);
+  const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoPipelineState>('geo-pipeline', id, {
+    adfPipelineName: '', enrichH3: true, reverseGeocode: false, bufferMeters: 0,
+  });
+  const adf = useAdfPipelines();
+  const [triggering, setTriggering] = useState(false);
+  const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
+  const triggerRun = useCallback(async () => {
+    if (!state.adfPipelineName) { setTriggerMsg('Set ADF pipeline name first.'); return; }
+    setTriggering(true); setTriggerMsg(null);
+    try {
+      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(state.adfPipelineName)}/run`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ parameters: { enrichH3: state.enrichH3, reverseGeocode: state.reverseGeocode, bufferMeters: state.bufferMeters } }),
+      });
+      const j = await r.json();
+      setTriggerMsg(j?.ok ? `Triggered run ${j.runId || ''}` : (j?.error || `HTTP ${r.status}`));
+    } catch (e: any) { setTriggerMsg(e?.message || String(e)); }
+    finally { setTriggering(false); }
+  }, [state.adfPipelineName, state.enrichH3, state.reverseGeocode, state.bufferMeters]);
+  const canSave = dirty && !saving;
+  const canTrigger = !!state.adfPipelineName && !triggering;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Pipeline', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: triggering ? 'Triggering…' : 'Trigger run', onClick: canTrigger ? triggerRun : undefined, disabled: !canTrigger },
+      ]},
+    ]},
+  ], [canSave, saving, save, canTrigger, triggering, triggerRun]);
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Pipeline', actions: [{ label: 'Save' }, { label: 'Trigger run' }] }] }]}
+      ribbon={ribbon}
       leftPanel={<div className={s.treePad}><Caption1>Underlying ADF pipeline (existing slug <code>adf-pipeline</code>) does the work; this item layers on geo enrichment flags.</Caption1></div>}
       main={
         <div className={s.pad}>
-          <div className={s.field}><Label>ADF pipeline name (target)</Label>
-            <Input value={adfPipelineName} onChange={(_, d) => setAdfPipelineName(d.value)} placeholder="pipe-geo-enrich" />
+          {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+          <div className={s.field}><Label>ADF pipeline (target)</Label>
+            <select
+              value={state.adfPipelineName}
+              onChange={(e) => setState((p) => ({ ...p, adfPipelineName: e.target.value }))}
+              disabled={adf.loading || (adf.pipelines?.length ?? 0) === 0}
+              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+            >
+              {adf.loading && <option value="">Loading pipelines…</option>}
+              {!adf.loading && (adf.pipelines?.length ?? 0) === 0 && (
+                <option value="">{adf.error ? 'Discovery failed' : 'No ADF pipelines in factory'}</option>
+              )}
+              {!adf.loading && (adf.pipelines?.length ?? 0) > 0 && !state.adfPipelineName && (
+                <option value="">Select a pipeline</option>
+              )}
+              {(adf.pipelines || []).map((p) => (
+                <option key={p.name} value={p.name}>{p.name}</option>
+              ))}
+            </select>
           </div>
+          {adf.error && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>ADF pipelines not reachable</MessageBarTitle>
+                {adf.error}
+                <br />
+                <Caption1>
+                  Ensure the ADF factory is provisioned and the Console UAMI has Data Factory Contributor on it.
+                </Caption1>
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <div className={s.field}><Label>Enrichments</Label>
-            <label><input type="checkbox" checked={enrichH3} onChange={(e) => setEnrichH3(e.target.checked)} /> Add H3 cell id at resolution 7</label>
-            <label><input type="checkbox" checked={reverseGeocode} onChange={(e) => setReverseGeocode(e.target.checked)} /> Reverse-geocode (requires Azure Maps account)</label>
+            <label><input type="checkbox" checked={state.enrichH3} onChange={(e) => setState((p) => ({ ...p, enrichH3: e.target.checked }))} /> Add H3 cell id at resolution 7</label>
+            <label><input type="checkbox" checked={state.reverseGeocode} onChange={(e) => setState((p) => ({ ...p, reverseGeocode: e.target.checked }))} /> Reverse-geocode (requires Azure Maps account)</label>
           </div>
           <div className={s.field}><Label>Buffer (meters; 0 = no buffer)</Label>
-            <Input type="number" value={String(bufferMeters)} onChange={(_, d) => setBufferMeters(Number(d.value || '0'))} />
+            <Input type="number" value={String(state.bufferMeters)} onChange={(_, d) => setState((p) => ({ ...p, bufferMeters: Number(d.value || '0') }))} />
           </div>
           <MessageBar intent="info">
             <MessageBarBody>
               Hooks into the existing <code>adf-pipeline</code> slug — at trigger time, the geo flags are
-              materialized as parameters on the run. Wiring deferred to v3.x; today the flags persist.
+              materialized as parameters on the run. Wiring deferred to v3.x; today the flags persist to
+              Cosmos via PATCH /api/cosmos-items/geo-pipeline/{`{id}`}.
             </MessageBarBody>
           </MessageBar>
+          {triggerMsg && <Caption1>{triggerMsg}</Caption1>}
+          <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
         </div>
       }
     />

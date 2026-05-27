@@ -8,6 +8,7 @@ import {
   ArrowMaximize16Regular, ArrowMinimize16Regular,
 } from '@fluentui/react-icons';
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
+import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   shell: {
@@ -180,13 +181,15 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onDelete, onM
         <Button size="small" appearance="subtle" icon={<ChevronDown16Regular />} disabled={!canMoveDown} onClick={(e) => { e.stopPropagation(); onMoveDown?.(); }} aria-label="Move cell down" />
         <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={(e) => { e.stopPropagation(); onDelete?.(); }} aria-label="Delete cell" />
       </div>
-      <textarea
-        className={mergeClasses(s.editor, locked && s.editorLocked, maximized && s.editorMaximized)}
+      <MonacoTextarea
         value={cell.source}
-        spellCheck={false}
+        onChange={setSource}
+        language={(cell.lang || 'pyspark') as MonacoLanguage}
         readOnly={locked}
-        onChange={(e) => setSource(e.target.value)}
-        aria-label={`Code cell ${cell.id}`}
+        height={maximized ? 'calc(100% - 200px)' : 160}
+        minHeight={80}
+        ariaLabel={`Code cell ${cell.id}`}
+        className={mergeClasses(locked && s.editorLocked)}
       />
       {cell.output && (
         <div className={mergeClasses(

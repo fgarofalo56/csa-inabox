@@ -40,9 +40,14 @@ export async function GET(req: NextRequest, ctx: { params: { id: string; runId: 
     // Per-cell run uses pendingRuns[runId] cached at dispatch; fall back to whole-notebook code.
     const pending = state.pendingRuns?.[runId];
     const code: string = pending?.source || state.code || '';
-    const lang: 'spark' | 'pyspark' = (() => {
+    // v3.x bug fix: previously 'sparksql' was bucketed into Scala-kind 'spark'
+    // which made `show databases` hang because Livy tried to parse SQL as
+    // Scala. Use Livy's per-statement kind 'sql' for Spark SQL cells.
+    const lang: 'sql' | 'spark' | 'pyspark' | 'sparkr' = (() => {
       const l = (pending?.lang || state.lang || '').toLowerCase();
-      if (l === 'spark' || l === 'sparksql' || l === 'sql') return 'spark';
+      if (l === 'sql' || l === 'sparksql' || l === 'spark-sql') return 'sql';
+      if (l === 'spark' || l === 'scala') return 'spark';
+      if (l === 'sparkr' || l === 'r') return 'sparkr';
       return 'pyspark';
     })();
 
@@ -86,6 +91,30 @@ export async function GET(req: NextRequest, ctx: { params: { id: string; runId: 
       // Phase 2: statement in flight
       const stmt = await getLivyStatement(pool, sessionId, stmtId);
       const out = (stmt as any).output || {};
+      // For Spark SQL statements, Livy returns rows under
+      //   output.data['application/json'] = { schema:{fields:[]}, data:[[]] }
+      // The default textPlain is empty. Format an ASCII table so the cell
+      // renders something readable.
+      function formatSqlTable(payload: any): string | undefined {
+        if (!payload || !Array.isArray(payload.data)) return undefined;
+        const cols: string[] = (payload.schema?.fields || []).map((f: any) => f.name || '');
+        if (cols.length === 0 && payload.data[0]) {
+          for (let i = 0; i < payload.data[0].length; i++) cols.push(`c${i}`);
+        }
+        const widths = cols.map((c, i) => Math.max(
+          c.length,
+          ...payload.data.map((row: any[]) => String(row[i] ?? '').length),
+        ));
+        const fmtRow = (row: any[]) =>
+          row.map((v, i) => String(v ?? '').padEnd(widths[i])).join(' | ');
+        const header = fmtRow(cols);
+        const sep = widths.map((w) => '-'.repeat(w)).join('-+-');
+        const body = payload.data.slice(0, 100).map(fmtRow).join('\n');
+        const more = payload.data.length > 100 ? `\n… ${payload.data.length - 100} more rows` : '';
+        return `${header}\n${sep}\n${body}${more}`;
+      }
+      const sqlJson = out?.data?.['application/json'];
+      const sqlTable = sqlJson && Array.isArray(sqlJson.data) ? formatSqlTable(sqlJson) : undefined;
       return NextResponse.json({
         ok: true,
         status: stmt.state,
@@ -94,7 +123,8 @@ export async function GET(req: NextRequest, ctx: { params: { id: string; runId: 
         output: out.status === 'ok' ? {
           status: 'ok',
           data: out.data || {},
-          textPlain: out.data?.['text/plain'],
+          textPlain: sqlTable || out.data?.['text/plain'] || '(no output)',
+          rowCount: sqlJson?.data?.length,
         } : out.status === 'error' ? {
           status: 'error',
           ename: out.ename,

@@ -1,18 +1,33 @@
 'use client';
 
 /**
- * CopilotPane — collapsible right rail. v1.5 change: no floating
- * button (it covered the brand). Toggled exclusively via the topbar
- * Sparkle button, the openCopilot() export, or Ctrl+/.
+ * CopilotPane — collapsible right rail wired to the real
+ * `/api/copilot/orchestrate` SSE endpoint backed by Foundry-resolved
+ * Azure OpenAI. Streams assistant tokens + tool-call steps live; surfaces
+ * a Fluent MessageBar with the AOAI-deep-link CTA when the BFF returns
+ * 503 (no deployment wired) per the no-vaporware contract.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Button, Input, makeStyles, tokens, Caption1, Body1, Subtitle2,
+  Button, Input, MessageBar, MessageBarBody, MessageBarTitle,
+  makeStyles, tokens, Caption1, Body1, Subtitle2, Spinner,
 } from '@fluentui/react-components';
 import { Send24Regular, Sparkle24Regular, Dismiss20Regular } from '@fluentui/react-icons';
 
-interface Msg { who: 'you' | 'copilot'; text: string; }
+type Step =
+  | { kind: 'thought'; content: string }
+  | { kind: 'tool_call'; name: string; callId: string }
+  | { kind: 'tool_result'; name: string; callId: string; durationMs: number; error?: string }
+  | { kind: 'final'; content: string }
+  | { kind: 'error'; error: string };
+
+interface Msg {
+  who: 'you' | 'copilot' | 'system';
+  text: string;
+  steps?: Step[];
+  streaming?: boolean;
+}
 
 const SEED: Msg[] = [
   { who: 'copilot', text: 'Hi! I can help you build pipelines, write KQL or T-SQL, summarize a report, or set up an Activator rule. What are we working on?' },
@@ -21,7 +36,6 @@ const SEED: Msg[] = [
 const EVT_OPEN = 'csaloom:open-copilot';
 const EVT_TOGGLE = 'csaloom:toggle-copilot';
 
-/** Imperative API for non-React triggers (topbar button etc.). */
 export function openCopilot() {
   window.dispatchEvent(new Event(EVT_OPEN));
 }
@@ -31,54 +45,56 @@ export function toggleCopilot() {
 
 const useStyles = makeStyles({
   panel: {
-    position: 'fixed',
-    right: 0,
-    top: 'var(--loom-topbar-height)',
-    bottom: 0,
-    width: 380,
+    position: 'fixed', right: 0, top: 'var(--loom-topbar-height)', bottom: 0,
+    width: 420,
     backgroundColor: tokens.colorNeutralBackground1,
     borderLeft: `1px solid ${tokens.colorNeutralStroke2}`,
     boxShadow: '-8px 0 24px rgba(0,0,0,0.10)',
-    display: 'flex',
-    flexDirection: 'column',
-    zIndex: 1000,
+    display: 'flex', flexDirection: 'column', zIndex: 1000,
   },
   header: {
-    padding: 12,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     display: 'flex', alignItems: 'center', gap: 8,
     background: 'linear-gradient(90deg, rgba(125,108,255,0.10), transparent)',
   },
-  body: {
-    flex: 1, overflowY: 'auto', padding: 12,
-    display: 'flex', flexDirection: 'column', gap: 8,
+  body: { flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
+  msg: { padding: '10px 14px', borderRadius: 14, maxWidth: '92%' },
+  msgCopilot: { backgroundColor: tokens.colorNeutralBackground2, alignSelf: 'flex-start', borderTopLeftRadius: 4 },
+  msgYou: { backgroundColor: tokens.colorBrandBackground2, alignSelf: 'flex-end', borderTopRightRadius: 4 },
+  msgSystem: { backgroundColor: tokens.colorNeutralBackground3, alignSelf: 'stretch' },
+  stepRow: {
+    display: 'flex', alignItems: 'center', gap: 6,
+    color: tokens.colorNeutralForeground3, fontSize: 12,
+    paddingLeft: 4, marginTop: 4,
   },
-  msg: {
-    padding: '10px 14px',
-    borderRadius: 14,
-    maxWidth: '88%',
-  },
-  msgCopilot: {
-    backgroundColor: tokens.colorNeutralBackground2,
-    alignSelf: 'flex-start',
-    borderTopLeftRadius: 4,
-  },
-  msgYou: {
-    backgroundColor: tokens.colorBrandBackground2,
-    alignSelf: 'flex-end',
-    borderTopRightRadius: 4,
-  },
-  composer: {
-    padding: 12, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: 'flex', gap: 8,
-  },
+  composer: { padding: 12, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, display: 'flex', gap: 8 },
 });
+
+function parseSse(buffer: string): { events: Array<{ event: string; data: string }>; remaining: string } {
+  const out: Array<{ event: string; data: string }> = [];
+  const blocks = buffer.split(/\n\n/);
+  const remaining = blocks.pop() ?? '';
+  for (const block of blocks) {
+    let event = 'message';
+    let data = '';
+    for (const line of block.split(/\n/)) {
+      if (line.startsWith('event: ')) event = line.slice(7).trim();
+      else if (line.startsWith('data: ')) data += (data ? '\n' : '') + line.slice(6);
+    }
+    if (data) out.push({ event, data });
+  }
+  return { events: out, remaining };
+}
 
 export function CopilotPane() {
   const s = useStyles();
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>(SEED);
   const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [gateError, setGateError] = useState<string | null>(null);
+  const sessionRef = useRef<string | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const o = () => setOpen(true);
@@ -96,18 +112,74 @@ export function CopilotPane() {
     };
   }, []);
 
-  function send() {
-    const t = draft.trim();
-    if (!t) return;
-    const next: Msg[] = [...msgs, { who: 'you' as const, text: t }];
-    setMsgs(next);
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+  }, [msgs]);
+
+  async function send() {
+    const text = draft.trim();
+    if (!text || busy) return;
     setDraft('');
-    setTimeout(() => {
-      setMsgs((m) => [...m, {
-        who: 'copilot' as const,
-        text: `For "${t.substring(0, 80)}", here's what I'd try:\n\n• Open the most relevant item editor.\n• Draft the KQL / DAX / T-SQL.\n• Wire an Activator rule if you want alerts.\n\n(Wire me to a real LLM by setting AZURE_OPENAI_ENDPOINT.)`,
-      }]);
-    }, 400);
+    setGateError(null);
+    setBusy(true);
+    setMsgs((m) => [...m, { who: 'you', text }, { who: 'copilot', text: '', steps: [], streaming: true }]);
+
+    try {
+      const res = await fetch('/api/copilot/orchestrate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt: text, sessionId: sessionRef.current ?? undefined }),
+      });
+
+      if (res.status === 503) {
+        const j = await res.json().catch(() => ({ error: 'Copilot AOAI not wired' }));
+        setGateError(j.error || 'Copilot AOAI deployment not wired');
+        setMsgs((m) => m.filter((x) => !x.streaming));
+        return;
+      }
+      if (!res.ok || !res.body) {
+        const j = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        setMsgs((m) => m.map((x) => x.streaming ? { ...x, text: `Error: ${j.error || res.statusText}`, streaming: false } : x));
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const { events, remaining } = parseSse(buffer);
+        buffer = remaining;
+
+        for (const ev of events) {
+          if (ev.event === 'session') {
+            try {
+              const data = JSON.parse(ev.data);
+              if (data.sessionId) sessionRef.current = data.sessionId;
+            } catch {}
+          } else if (ev.event === 'step') {
+            try {
+              const step = JSON.parse(ev.data) as Step;
+              setMsgs((m) => m.map((x) => {
+                if (!x.streaming) return x;
+                if (step.kind === 'final') return { ...x, text: step.content, streaming: false };
+                if (step.kind === 'error') return { ...x, text: `Error: ${step.error}`, streaming: false };
+                return { ...x, steps: [...(x.steps ?? []), step] };
+              }));
+            } catch {}
+          } else if (ev.event === 'done') {
+            setMsgs((m) => m.map((x) => x.streaming ? { ...x, streaming: false } : x));
+          }
+        }
+      }
+    } catch (e: any) {
+      setMsgs((m) => m.map((x) => x.streaming ? { ...x, text: `Network error: ${e?.message || e}`, streaming: false } : x));
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!open) return null;
@@ -120,10 +192,39 @@ export function CopilotPane() {
         <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 'auto' }}>Ctrl + /</Caption1>
         <Button appearance="subtle" icon={<Dismiss20Regular />} onClick={() => setOpen(false)} aria-label="Close Copilot" />
       </div>
-      <div className={s.body}>
+      <div className={s.body} ref={bodyRef}>
+        {gateError && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Copilot AOAI deployment not wired</MessageBarTitle>
+              {gateError} — set up the AI Foundry hub + a chat-completions deployment.
+              Open the AI Foundry editor and click <strong>Deployments → New</strong>.
+            </MessageBarBody>
+          </MessageBar>
+        )}
         {msgs.map((m, i) => (
-          <div key={i} className={`${s.msg} ${m.who === 'copilot' ? s.msgCopilot : s.msgYou}`}>
-            <Body1 style={{ whiteSpace: 'pre-wrap' }}>{m.text}</Body1>
+          <div key={i} className={`${s.msg} ${m.who === 'copilot' ? s.msgCopilot : m.who === 'you' ? s.msgYou : s.msgSystem}`}>
+            {m.text && <Body1 style={{ whiteSpace: 'pre-wrap' }}>{m.text}</Body1>}
+            {m.steps?.map((step, j) => {
+              if (step.kind === 'tool_call') {
+                return <div key={j} className={s.stepRow}>↪ calling <strong>{step.name}</strong>…</div>;
+              }
+              if (step.kind === 'tool_result') {
+                return (
+                  <div key={j} className={s.stepRow}>
+                    {step.error ? '⚠' : '✓'} {step.name} <span>({step.durationMs}ms)</span>
+                    {step.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {step.error}</span>}
+                  </div>
+                );
+              }
+              if (step.kind === 'thought') {
+                return <div key={j} className={s.stepRow}>💭 {step.content.slice(0, 120)}</div>;
+              }
+              return null;
+            })}
+            {m.streaming && !m.text && (
+              <div className={s.stepRow}><Spinner size="extra-tiny" /> Thinking…</div>
+            )}
           </div>
         ))}
       </div>
@@ -132,11 +233,12 @@ export function CopilotPane() {
           style={{ flex: 1 }}
           value={draft}
           onChange={(_, d) => setDraft(d.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
-          placeholder="Ask Copilot…"
+          onKeyDown={(e) => { if (e.key === 'Enter' && !busy) send(); }}
+          placeholder={busy ? 'Working…' : 'Ask Copilot…'}
+          disabled={busy}
           aria-label="Message Copilot"
         />
-        <Button appearance="primary" icon={<Send24Regular />} onClick={send} aria-label="Send message" />
+        <Button appearance="primary" icon={<Send24Regular />} onClick={send} disabled={busy} aria-label="Send message" />
       </div>
     </aside>
   );

@@ -50,28 +50,49 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
     const code = cellSource || state.code || '';
     if (!code.trim()) return err('notebook is empty — write code before running', 400);
 
-    // Map cell-lang to compute-lang.
-    function effectiveLang(): 'pyspark' | 'spark' | 'tsql' | 'sql' {
+    // Map cell-lang to the statement-kind that Livy / Databricks expects.
+    // Livy session-kind affects cold-start; statement-kind controls per-cell
+    // interpretation. We always start a 'pyspark' session because it can
+    // host pyspark / spark / sql / sparkr statements via per-statement kind
+    // override (sparkr requires its own session kind, handled separately).
+    function statementKind(): 'pyspark' | 'spark' | 'sql' | 'sparkr' {
       const l = (cellLang || state.lang || 'pyspark').toLowerCase();
-      if (l === 'sparksql' || l === 'spark-sql' || l === 'sql') return 'spark';
-      if (l === 'tsql' || l === 't-sql') return 'tsql';
-      if (l === 'pyspark' || l === 'python') return 'pyspark';
+      if (l === 'sparksql' || l === 'spark-sql' || l === 'sql') return 'sql';
+      if (l === 'spark' || l === 'scala') return 'spark';
+      if (l === 'sparkr' || l === 'r') return 'sparkr';
+      return 'pyspark'; // python / pyspark / unspecified
+    }
+    function sessionKind(stmt: 'pyspark' | 'spark' | 'sql' | 'sparkr'): 'pyspark' | 'spark' | 'sparkr' | 'sql' {
+      // Livy interactive sessions are typed; per-statement override works for
+      // sql + spark + pyspark within a pyspark session, but NOT sparkr.
+      if (stmt === 'sparkr') return 'sparkr';
       return 'pyspark';
     }
-    const livyKind = effectiveLang();
+    function tsqlMode(): boolean {
+      const l = (cellLang || state.lang || '').toLowerCase();
+      return l === 'tsql' || l === 't-sql';
+    }
+    const stmtKind = statementKind();
+    const sessKind = sessionKind(stmtKind);
+    if (tsqlMode()) {
+      // T-SQL belongs to Synapse Dedicated / Serverless, not Spark — route
+      // the user to the right editor instead of stalling on Livy.
+      return NextResponse.json({
+        ok: false,
+        error: 'T-SQL cells run on a SQL pool, not a Spark pool. Open the Warehouse or Synapse SQL pool editor and run the query there.',
+      }, { status: 400 });
+    }
 
     if (compute.startsWith('spark:')) {
       const pool = compute.slice('spark:'.length);
       const { createLivySessionAsync } = await import('@/lib/azure/synapse-dev-client');
-      const sess = await createLivySessionAsync(pool, livyKind === 'spark' ? 'spark' : 'pyspark');
+      const sess = await createLivySessionAsync(pool, sessKind);
       const runIdStr = `spark:${pool}:${sess.id}`;
-      // Cache the per-cell source so the poll endpoint can submit the right
-      // statement when the session reaches 'idle'. Lives in nb.state.pendingRuns[runId].
       if (cellSource) {
         try {
           const items = await itemsContainer();
           const pendingRuns = { ...(state.pendingRuns || {}) };
-          pendingRuns[runIdStr] = { source: cellSource, lang: livyKind, cellId };
+          pendingRuns[runIdStr] = { source: cellSource, lang: stmtKind, cellId };
           await items.item(nb.id, workspaceId).replace({
             ...nb,
             state: { ...state, pendingRuns },
@@ -92,7 +113,11 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
     if (compute.startsWith('databricks:')) {
       const clusterId = compute.slice('databricks:'.length);
       const { runOneTimeNotebook } = await import('@/lib/azure/databricks-client');
-      const dbLang = livyKind === 'spark' ? 'SCALA' : livyKind === 'tsql' ? 'SQL' : 'PYTHON';
+      const dbLang =
+        stmtKind === 'spark' ? 'SCALA' :
+        stmtKind === 'sql' ? 'SQL' :
+        stmtKind === 'sparkr' ? 'R' :
+        'PYTHON';
       const runRes = await runOneTimeNotebook({
         clusterId,
         code,

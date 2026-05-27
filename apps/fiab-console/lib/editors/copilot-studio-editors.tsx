@@ -34,6 +34,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -245,13 +246,6 @@ function AgentPicker({
 // CopilotStudioAgentEditor
 // ============================================================
 
-const AGENT_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Agent', actions: [{ label: 'New' }, { label: 'Save' }, { label: 'Publish' }, { label: 'Delete' }] },
-    { label: 'Surface', actions: [{ label: 'Knowledge' }, { label: 'Topics' }, { label: 'Actions' }, { label: 'Channels' }, { label: 'Analytics' }] },
-  ]},
-];
-
 export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [envId, setEnvId] = useState('');
@@ -260,10 +254,21 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
   const [form, setForm] = useState<{ name: string; description: string; instructions: string; modelDeployment: string }>({
     name: '', description: '', instructions: '', modelDeployment: 'gpt-4o',
   });
+  // Phase 4.5 — dirty flag protects in-flight edits from being clobbered by
+  // the agents-list reload that runs after save/refresh/publish.
+  const [dirty, setDirty] = useState(false);
   const [tab, setTab] = useState<'edit' | 'knowledge' | 'topics' | 'actions' | 'channels'>('edit');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
+
+  const setFormField = useCallback(
+    <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
+      setForm((f) => ({ ...f, [key]: value }));
+      setDirty(true);
+    },
+    [],
+  );
 
   const refreshAgents = useCallback(async () => {
     if (!envId) return;
@@ -276,9 +281,16 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
     } catch (e: any) { setError(e?.message || String(e)); }
   }, [envId]);
 
-  useEffect(() => { setAgents(null); setSelectedId(''); refreshAgents(); }, [envId, refreshAgents]);
+  useEffect(() => { setAgents(null); setSelectedId(''); setDirty(false); refreshAgents(); }, [envId, refreshAgents]);
+
+  // When the selectedId changes (user clicked a different agent in the
+  // sidebar), reset dirty so the form sync effect adopts the new agent.
+  useEffect(() => { setDirty(false); }, [selectedId]);
 
   useEffect(() => {
+    // Phase 4.5 — never clobber unsaved edits when the list reloads. The
+    // form only adopts server values when the user has no in-flight edits.
+    if (dirty) return;
     const a = agents?.find((x) => x.id === selectedId);
     if (a) {
       setForm({
@@ -288,6 +300,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
         modelDeployment: a.modelDeployment || 'gpt-4o',
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, agents]);
 
   const save = useCallback(async () => {
@@ -305,12 +318,25 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
       });
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'save failed'); return; }
-      setSuccess(isNew ? 'Agent created' : 'Agent updated');
+      setSuccess(isNew ? `Saved at ${new Date().toLocaleTimeString()}` : `Saved at ${new Date().toLocaleTimeString()}`);
+      setDirty(false);
       await refreshAgents();
       if (isNew && j.agent?.id) setSelectedId(j.agent.id);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [envId, selectedId, form, refreshAgents]);
+
+  // Phase 4.5 — Ctrl+S / Cmd+S shortcut.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (envId && form.name && !busy && dirty) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [envId, form.name, busy, dirty, save]);
 
   const publish = useCallback(async () => {
     if (!envId || !selectedId) return;
@@ -340,16 +366,53 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
       setSuccess('Deleted');
       setSelectedId('');
       setForm({ name: '', description: '', instructions: '', modelDeployment: 'gpt-4o' });
+      setDirty(false);
       await refreshAgents();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [envId, selectedId, refreshAgents]);
 
+  // Wire the Fabric-style ribbon to the editor's real handlers. Previously the
+  // 9 actions in AGENT_RIBBON had no onClick and the Ribbon component
+  // auto-disabled them with a "not wired" tooltip — surfacing 9 dead buttons.
+  const startNew = useCallback(() => {
+    if (dirty && !window.confirm('Discard unsaved changes to the current agent?')) return;
+    setSelectedId('');
+    setForm({ name: '', description: '', instructions: '', modelDeployment: 'gpt-4o' });
+    setDirty(false);
+  }, [dirty]);
+  const ribbon: RibbonTab[] = useMemo(() => {
+    const canSave = !!envId && !!form.name && !busy && (!selectedId || dirty);
+    const canPublish = !!selectedId && !busy;
+    const canDelete = !!selectedId && !busy;
+    return [
+      { id: 'home', label: 'Home', groups: [
+        { label: 'Agent', actions: [
+          { label: 'New', onClick: startNew },
+          { label: 'Save', onClick: canSave ? save : undefined, disabled: !canSave,
+            title: canSave ? undefined : 'Save — pick an environment, set a name, and edit something to enable' },
+          { label: 'Publish', onClick: canPublish ? publish : undefined, disabled: !canPublish,
+            title: canPublish ? undefined : 'Publish — select a saved agent first' },
+          { label: 'Delete', onClick: canDelete ? remove : undefined, disabled: !canDelete,
+            title: canDelete ? undefined : 'Delete — select an agent first' },
+        ]},
+        { label: 'Surface', actions: [
+          { label: 'Knowledge', onClick: () => setTab('knowledge') },
+          { label: 'Topics', onClick: () => setTab('topics') },
+          { label: 'Actions', onClick: () => setTab('actions') },
+          { label: 'Channels', onClick: () => setTab('channels') },
+          { label: 'Analytics', disabled: true,
+            title: 'Analytics — open the dedicated Copilot Analytics editor (not a tab in the Agent editor)' },
+        ]},
+      ]},
+    ];
+  }, [envId, form.name, busy, selectedId, dirty, startNew, save, publish, remove]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={AGENT_RIBBON}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Tree aria-label="Agents" defaultOpenItems={['agents']}>
@@ -361,12 +424,22 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
                 <TreeItem
                   itemType="leaf"
                   value="new"
-                  onClick={() => { setSelectedId(''); setForm({ name: '', description: '', instructions: '', modelDeployment: 'gpt-4o' }); }}
+                  onClick={() => {
+                    // Phase 4.5 — confirm before discarding unsaved edits.
+                    if (dirty && !window.confirm('Discard unsaved changes to the current agent?')) return;
+                    setSelectedId('');
+                    setForm({ name: '', description: '', instructions: '', modelDeployment: 'gpt-4o' });
+                    setDirty(false);
+                  }}
                 >
                   <TreeItemLayout iconBefore={<Add20Regular />}>+ New agent</TreeItemLayout>
                 </TreeItem>
                 {(agents || []).map((a) => (
-                  <TreeItem key={a.id} itemType="leaf" value={a.id} onClick={() => setSelectedId(a.id)}>
+                  <TreeItem key={a.id} itemType="leaf" value={a.id} onClick={() => {
+                    if (a.id === selectedId) return;
+                    if (dirty && !window.confirm('Discard unsaved changes to the current agent?')) return;
+                    setSelectedId(a.id);
+                  }}>
                     <TreeItemLayout iconBefore={<Bot20Regular />}>
                       {a.name} {a.state === 'Published' && <Badge size="small" color="success" appearance="outline">Published</Badge>}
                     </TreeItemLayout>
@@ -382,8 +455,9 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Copilot Studio</Badge>
             <Caption1>Env: <strong>{envId || 'select an environment'}</strong></Caption1>
-            <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !envId || !form.name} onClick={save}>
-              {selectedId ? 'Save' : 'Create'}
+            {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+            <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !envId || !form.name || (!!selectedId && !dirty)} onClick={save}>
+              {selectedId ? (dirty ? 'Save (Ctrl+S)' : 'Saved') : 'Create'}
             </Button>
             <Button appearance="outline" icon={<CloudArrowUp20Regular />} disabled={busy || !selectedId} onClick={publish}>
               Publish
@@ -409,18 +483,18 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
             <div className={s.form}>
               <div className={s.formCol}>
                 <Field label="Name" required>
-                  <Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
+                  <Input value={form.name} onChange={(_, d) => setFormField('name', d.value)} />
                 </Field>
                 <Field label="Description">
-                  <Textarea rows={3} value={form.description} onChange={(_, d) => setForm((f) => ({ ...f, description: d.value }))} />
+                  <Textarea rows={3} value={form.description} onChange={(_, d) => setFormField('description', d.value)} />
                 </Field>
                 <Field label="Model deployment" hint="Azure OpenAI deployment name bound to this agent.">
-                  <Input value={form.modelDeployment} onChange={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.value }))} />
+                  <Input value={form.modelDeployment} onChange={(_, d) => setFormField('modelDeployment', d.value)} />
                 </Field>
               </div>
               <div className={s.formCol}>
                 <Field label="Instructions (system prompt)">
-                  <Textarea rows={12} value={form.instructions} onChange={(_, d) => setForm((f) => ({ ...f, instructions: d.value }))} />
+                  <Textarea rows={12} value={form.instructions} onChange={(_, d) => setFormField('instructions', d.value)} />
                 </Field>
               </div>
             </div>
@@ -518,7 +592,7 @@ function KnowledgePanel({ envId, agentId }: { envId: string; agentId: string }) 
           </Dropdown>
         </Field>
         <Field label="Name">
-          <Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
+          <Input id="ks-name-input" value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
         </Field>
         <Field label="URI / location" hint="URL, file URI, SharePoint site URL, or Dataverse table logical name">
           <Input value={form.uri} onChange={(_, d) => setForm((f) => ({ ...f, uri: d.value }))} />
@@ -560,17 +634,30 @@ function KnowledgePanel({ envId, agentId }: { envId: string; agentId: string }) 
   );
 }
 
-const KS_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [{ label: 'Knowledge', actions: [{ label: 'Add' }, { label: 'Remove' }] }] }];
-
 export function CopilotKnowledgeEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [envId, setEnvId] = useState('');
   const [agentId, setAgentId] = useState('');
+  // The inline KnowledgePanel owns the form state for the Add row and the
+  // per-row Remove buttons. The ribbon's Add focuses+scrolls the Name input
+  // (it can't submit alone — the user still has to pick a Type/URI). Remove
+  // is inherently row-specific and stays disabled with a clear tooltip.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [{ label: 'Knowledge', actions: [
+      { label: 'Add', onClick: () => {
+        const el = document.getElementById('ks-name-input') as HTMLInputElement | null;
+        if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); }
+      }, disabled: !agentId,
+        title: agentId ? undefined : 'Add — pick an environment + agent first' },
+      { label: 'Remove', disabled: true,
+        title: 'Remove — use the per-row Remove button on a specific knowledge source' },
+    ]}]},
+  ], [agentId]);
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={KS_RIBBON}
+      ribbon={ribbon}
       main={
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
@@ -595,6 +682,18 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   const [form, setForm] = useState<{ name: string; triggerText: string; flowYaml: string }>({
     name: '', triggerText: '', flowYaml: 'kind: AdaptiveDialog\nbeginDialog:\n  - kind: SendActivity\n    activity: "Hello"',
   });
+  // Phase 4.5 — dirty flag prevents the topics-reload effect from
+  // clobbering in-flight edits after save/refresh.
+  const [dirty, setDirty] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  const setFormField = useCallback(
+    <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
+      setForm((f) => ({ ...f, [key]: value }));
+      setDirty(true);
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
     if (!envId || !agentId) { setTopics(null); return; }
@@ -608,7 +707,11 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   }, [envId, agentId]);
   useEffect(() => { refresh(); }, [refresh]);
 
+  useEffect(() => { setDirty(false); }, [selectedId]);
+
   useEffect(() => {
+    // Phase 4.5 — don't clobber unsaved edits when topics list reloads.
+    if (dirty) return;
     const t = topics?.find((x) => x.id === selectedId);
     if (t) {
       setForm({
@@ -617,11 +720,12 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
         flowYaml: t.flowYaml || '',
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, topics]);
 
   const save = useCallback(async () => {
     if (!envId || !agentId) return;
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setSaveMsg('Saving…');
     const triggerPhrases = form.triggerText.split('\n').map((s) => s.trim()).filter(Boolean);
     try {
       const isNew = !selectedId;
@@ -634,12 +738,26 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
         body: JSON.stringify({ envId, agentId, name: form.name, triggerPhrases, flowYaml: form.flowYaml }),
       });
       const j = await r.json();
-      if (!j.ok) { setError(j.error || 'save failed'); return; }
+      if (!j.ok) { setError(j.error || 'save failed'); setSaveMsg(null); return; }
+      setDirty(false);
+      setSaveMsg(`Saved at ${new Date().toLocaleTimeString()}`);
       await refresh();
       if (isNew && j.topic?.id) setSelectedId(j.topic.id);
-    } catch (e: any) { setError(e?.message || String(e)); }
+    } catch (e: any) { setError(e?.message || String(e)); setSaveMsg(null); }
     finally { setBusy(false); }
   }, [envId, agentId, selectedId, form, refresh]);
+
+  // Phase 4.5 — Ctrl+S / Cmd+S shortcut.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (envId && agentId && form.name && !busy && dirty) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [envId, agentId, form.name, busy, dirty, save]);
 
   const remove = useCallback(async (tid: string) => {
     if (!envId) return;
@@ -657,26 +775,34 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
       <ErrorBar error={error} hint={TENANT_HINT} />
       <div className={s.toolbar}>
         <Button icon={<Add20Regular />} appearance="outline" onClick={() => {
+          if (dirty && !window.confirm('Discard unsaved changes to the current topic?')) return;
           setSelectedId('');
           setForm({ name: '', triggerText: '', flowYaml: 'kind: AdaptiveDialog\nbeginDialog:\n  - kind: SendActivity\n    activity: "Hello"' });
+          setDirty(false);
         }}>New topic</Button>
-        <Button icon={<Save20Regular />} appearance="primary" disabled={busy || !form.name} onClick={save}>
-          {selectedId ? 'Save topic' : 'Create topic'}
+        <Button icon={<Save20Regular />} appearance="primary" disabled={busy || !form.name || (!!selectedId && !dirty)} onClick={save}>
+          {selectedId ? (dirty ? 'Save topic (Ctrl+S)' : 'Saved') : 'Create topic'}
         </Button>
+        {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
         <Button icon={<ArrowSync20Regular />} appearance="subtle" disabled={busy} onClick={refresh}>Refresh</Button>
+        {saveMsg && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
       </div>
       <div className={s.form}>
         <div className={s.formCol}>
           <Field label="Topic name" required>
-            <Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
+            <Input id="topic-name-input" value={form.name} onChange={(_, d) => setFormField('name', d.value)} />
           </Field>
           <Field label="Trigger phrases (one per line)">
-            <Textarea rows={8} value={form.triggerText} onChange={(_, d) => setForm((f) => ({ ...f, triggerText: d.value }))} />
+            <Textarea rows={8} value={form.triggerText} onChange={(_, d) => setFormField('triggerText', d.value)} />
           </Field>
           <Subtitle2>Existing topics ({topics?.length ?? 0})</Subtitle2>
           {(topics || []).map((t) => (
             <div key={t.id} className={s.card} style={{ cursor: 'pointer', borderColor: t.id === selectedId ? tokens.colorBrandStroke1 : undefined }}
-                 onClick={() => setSelectedId(t.id)}>
+                 onClick={() => {
+                   if (t.id === selectedId) return;
+                   if (dirty && !window.confirm('Discard unsaved changes to the current topic?')) return;
+                   setSelectedId(t.id);
+                 }}>
               <Body1><strong>{t.name}</strong></Body1>
               <div className={s.tagRow}>
                 {(t.triggerPhrases || []).slice(0, 6).map((p, i) => <Badge key={i} appearance="outline" size="small">{p}</Badge>)}
@@ -689,12 +815,13 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
         </div>
         <div className={s.formCol}>
           <Field label="Flow YAML">
-            <textarea
-              className={s.yaml}
-              spellCheck={false}
+            <MonacoTextarea
               value={form.flowYaml}
-              onChange={(e) => setForm((f) => ({ ...f, flowYaml: e.target.value }))}
-              aria-label="Topic flow YAML"
+              onChange={(v) => setFormField('flowYaml', v)}
+              language="plaintext"
+              height={320}
+              minHeight={240}
+              ariaLabel="Topic flow YAML"
             />
           </Field>
         </div>
@@ -703,17 +830,31 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   );
 }
 
-const TOPIC_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [{ label: 'Topic', actions: [{ label: 'New' }, { label: 'Save' }, { label: 'Delete' }] }] }];
-
 export function CopilotTopicEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [envId, setEnvId] = useState('');
   const [agentId, setAgentId] = useState('');
+  // TopicsPanel owns Save (form-dependent) and per-row Delete. The ribbon's
+  // New focuses the inline "New topic" button; Save/Delete are inherently
+  // bound to the in-panel selection and stay disabled with explanations.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [{ label: 'Topic', actions: [
+      { label: 'New', onClick: () => {
+        const el = document.getElementById('topic-name-input') as HTMLInputElement | null;
+        if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); }
+      }, disabled: !agentId,
+        title: agentId ? undefined : 'New — pick an environment + agent first' },
+      { label: 'Save', disabled: true,
+        title: 'Save — use the inline "Save topic" button (Ctrl+S also works while editing)' },
+      { label: 'Delete', disabled: true,
+        title: 'Delete — use the per-row Delete button on a specific topic card' },
+    ]}]},
+  ], [agentId]);
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={TOPIC_RIBBON}
+      ribbon={ribbon}
       main={
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
@@ -781,7 +922,7 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
       <ErrorBar error={error} hint={TENANT_HINT} />
       <div className={s.form}>
         <Field label="Action name" required>
-          <Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
+          <Input id="action-name-input" value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
         </Field>
         <Field label="Type">
           <Dropdown
@@ -839,17 +980,28 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   );
 }
 
-const ACTION_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [{ label: 'Action', actions: [{ label: 'Bind' }, { label: 'Remove' }] }] }];
-
 export function CopilotActionEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [envId, setEnvId] = useState('');
   const [agentId, setAgentId] = useState('');
+  // ActionsPanel owns Bind (form-dependent) and per-row Remove. The ribbon's
+  // Bind focuses the inline form's Name input; Remove is row-specific.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [{ label: 'Action', actions: [
+      { label: 'Bind', onClick: () => {
+        const el = document.getElementById('action-name-input') as HTMLInputElement | null;
+        if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); }
+      }, disabled: !agentId,
+        title: agentId ? undefined : 'Bind — pick an environment + agent first' },
+      { label: 'Remove', disabled: true,
+        title: 'Remove — use the per-row Remove button on a specific bound action' },
+    ]}]},
+  ], [agentId]);
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ACTION_RIBBON}
+      ribbon={ribbon}
       main={
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
@@ -874,7 +1026,7 @@ const CHANNEL_TYPES: { type: string; label: string; description: string }[] = [
   { type: 'custom', label: 'Custom channel', description: 'Adapter-backed custom channel; provide raw JSON config.' },
 ];
 
-function ChannelsPanel({ envId, agentId }: { envId: string; agentId: string }) {
+function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agentId: string; refreshSignal?: number }) {
   const s = useStyles();
   const [items, setItems] = useState<Channel[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -892,6 +1044,8 @@ function ChannelsPanel({ envId, agentId }: { envId: string; agentId: string }) {
     } catch (e: any) { setError(e?.message || String(e)); }
   }, [envId, agentId]);
   useEffect(() => { refresh(); }, [refresh]);
+  // External nonce-driven refresh from the parent's ribbon Refresh action.
+  useEffect(() => { if (refreshSignal && refreshSignal > 0) refresh(); }, [refreshSignal, refresh]);
 
   const publish = useCallback(async (channelType: string) => {
     if (!envId || !agentId) return;
@@ -953,22 +1107,32 @@ function ChannelsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   );
 }
 
-const CHANNEL_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [{ label: 'Channel', actions: [{ label: 'Publish' }, { label: 'Refresh' }] }] }];
-
 export function CopilotChannelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [envId, setEnvId] = useState('');
   const [agentId, setAgentId] = useState('');
+  const [refreshSignal, setRefreshSignal] = useState(0);
+  // Publish is per-channel-type (lives on each card); the ribbon disables it
+  // with a tooltip pointing the user at the per-card Publish button. Refresh
+  // bumps a signal that ChannelsPanel watches.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [{ label: 'Channel', actions: [
+      { label: 'Publish', disabled: true,
+        title: 'Publish — use the per-card "Publish to channel" button (each channel type has its own config)' },
+      { label: 'Refresh', onClick: () => setRefreshSignal((n) => n + 1), disabled: !agentId,
+        title: agentId ? undefined : 'Refresh — pick an environment + agent first' },
+    ]}]},
+  ], [agentId]);
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={CHANNEL_RIBBON}
+      ribbon={ribbon}
       main={
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
           <AgentPicker envId={envId} value={agentId} onChange={setAgentId} />
-          <ChannelsPanel envId={envId} agentId={agentId} />
+          <ChannelsPanel envId={envId} agentId={agentId} refreshSignal={refreshSignal} />
         </div>
       }
     />
@@ -978,8 +1142,6 @@ export function CopilotChannelEditor({ item, id }: { item: FabricItemType; id: s
 // ============================================================
 // CopilotAnalyticsEditor
 // ============================================================
-
-const ANALYTICS_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [{ label: 'Window', actions: [{ label: '7d' }, { label: '30d' }, { label: '90d' }] }] }];
 
 export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -1005,11 +1167,21 @@ export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id:
 
   const maxDaily = useMemo(() => Math.max(1, ...(data?.daily || []).map((d) => d.sessions)), [data]);
 
+  // Wire the timeframe ribbon to the inline `days` state. Each window button
+  // sets the days count, which drives the analytics fetch via `refresh`.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [{ label: 'Window', actions: [
+      { label: '7d', onClick: () => setDays(7) },
+      { label: '30d', onClick: () => setDays(30) },
+      { label: '90d', onClick: () => setDays(90) },
+    ]}]},
+  ], []);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ANALYTICS_RIBBON}
+      ribbon={ribbon}
       main={
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
@@ -1067,8 +1239,6 @@ export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id:
 // CopilotTemplateLibraryEditor
 // ============================================================
 
-const TEMPLATE_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [{ label: 'Template', actions: [{ label: 'Refresh' }, { label: 'Use template' }] }] }];
-
 export function CopilotTemplateLibraryEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [envId, setEnvId] = useState('');
@@ -1113,11 +1283,22 @@ export function CopilotTemplateLibraryEditor({ item, id }: { item: FabricItemTyp
     return Array.from(m.entries());
   }, [templates]);
 
+  // Wire the ribbon: Refresh reloads the template list; "Use template" is
+  // inherently per-template (each card has its own Use button) so the ribbon
+  // entry disables with a tooltip pointing at the per-card button.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [{ label: 'Template', actions: [
+      { label: 'Refresh', onClick: refresh },
+      { label: 'Use template', disabled: true,
+        title: 'Use template — click the "Use template" button on a specific template card' },
+    ]}]},
+  ], [refresh]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={TEMPLATE_RIBBON}
+      ribbon={ribbon}
       main={
         <div className={s.pad}>
           <div className={s.toolbar}>

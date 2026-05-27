@@ -11,7 +11,7 @@
  * Backed by /api/loom/workspaces + /api/items/notebook/**.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
   Tree, TreeItem, TreeItemLayout, Select,
@@ -33,13 +33,9 @@ import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Run', actions: [{ label: 'Run' }, { label: 'Run history' }] },
-    { label: 'Item', actions: [{ label: 'New notebook' }, { label: 'Save' }, { label: 'Delete' }] },
-    { label: 'Workspace', actions: [{ label: 'Switch workspace' }, { label: 'Refresh list' }] },
-  ]},
-];
+// Ribbon is now built dynamically inside the component so each action can
+// hold a real onClick wired to the editor's handlers. See `buildRibbon`
+// below the component declarations.
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
@@ -173,6 +169,28 @@ export function NotebookEditor({ item, id }: Props) {
     }
   }, [cp.computes, computeId]);
 
+  // v3.28: honor URL deep-link — when /items/notebook/{id} loads, discover
+  // the owning workspace from the Cosmos record and auto-select it so the
+  // cells actually render. Previously workspaceId stayed empty until the
+  // user manually picked from the dropdown, leaving the editor blank.
+  useEffect(() => {
+    if (id === 'new' || !id || workspaceId || notebookId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/notebook/${encodeURIComponent(id)}`);
+        if (!r.ok) return;
+        const j = await r.json();
+        if (cancelled) return;
+        if (j?.workspaceId) {
+          setWorkspaceId(j.workspaceId);
+          setNotebookId(id);
+        }
+      } catch { /* ignore — user can still pick manually */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id, workspaceId, notebookId]);
+
   // Pick up Lakehouse "Open in notebook" prefill (stored in localStorage before route push).
   useEffect(() => {
     if (typeof window === 'undefined' || id !== 'new') return;
@@ -243,17 +261,45 @@ export function NotebookEditor({ item, id }: Props) {
   const save = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
     setSaving(true); setDetailErr(null);
+    setRunMsg('Saving notebook…');
     try {
+      // Strip per-cell output before persisting — it's runtime-only state
+      // and can blow past Cosmos 2MB doc limits when cells return large
+      // tables. The execution count stays.
+      const cellsForSave = cells.map(c => ({
+        ...c,
+        output: undefined,
+      }));
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ definition: { cells, defaultLang, attachedSources } }),
+        body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources } }),
       });
       const j = await r.json();
-      if (!j.ok) setDetailErr(j.error || 'save failed');
-      else setDirty(false);
+      if (!j.ok) {
+        setDetailErr(j.error || 'save failed');
+        setRunMsg(`Save failed: ${j.error || 'unknown error'}`);
+      } else {
+        setDirty(false);
+        setRunMsg(`Saved at ${new Date().toLocaleTimeString()}`);
+      }
+    } catch (e: any) {
+      setDetailErr(e?.message || String(e));
+      setRunMsg(`Save failed: ${e?.message || e}`);
     } finally { setSaving(false); }
   }, [workspaceId, notebookId, cells, defaultLang, attachedSources]);
+
+  // Ctrl+S / Cmd+S to save when there are unsaved changes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (notebookId && workspaceId && dirty && !saving) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [notebookId, workspaceId, dirty, saving, save]);
 
   // Phase 2: load lakehouses in the current workspace for the attach modal.
   const loadLakehouses = useCallback(async () => {
@@ -392,6 +438,18 @@ export function NotebookEditor({ item, id }: Props) {
     setDirty(true);
   }, []);
 
+  /**
+   * Patch only specific fields on a cell — used by the Run flow so output
+   * arriving after a user edit doesn't clobber the new source. Without
+   * this the stale `cell` captured at runCell-start would overwrite
+   * subsequent typing, and clicking Save would persist the OLD source.
+   * Does NOT mark the notebook dirty — output mutations are not user
+   * edits and shouldn't enable the Save button on their own.
+   */
+  const patchCell = useCallback((id: string, patch: Partial<NotebookCell>) => {
+    setCells(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
+  }, []);
+
   const deleteCell = useCallback((id: string) => {
     setCells(prev => prev.length <= 1 ? prev : prev.filter(c => c.id !== id));
     setDirty(true);
@@ -437,12 +495,17 @@ export function NotebookEditor({ item, id }: Props) {
   }, []);
 
   // Per-cell run: dispatches a single cell's source to the notebook /run endpoint with cellId, then polls.
+  // CRITICAL: use patchCell (not updateCell) for output mutations so source
+  // edits the user makes WHILE the cell is running don't get overwritten
+  // by the stale `cell` snapshot captured here. That bug caused Save to
+  // appear broken — clicking Save persisted the pre-Run cell source.
   const runCell = useCallback(async (cell: NotebookCell) => {
     if (!workspaceId || !notebookId) return;
     if (!computeId) { setRunMsg('Pick a compute target before running.'); return; }
     if (cell.type !== 'code') return;
-    updateCell(cell.id, { ...cell, output: { status: 'pending' } });
+    patchCell(cell.id, { output: { status: 'pending' } });
     setRunMsg(`Running cell ${cell.id.slice(0, 6)}…`);
+    const prevExec = cell.executionCount || 0;
     try {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
@@ -451,7 +514,7 @@ export function NotebookEditor({ item, id }: Props) {
       });
       const j = await r.json();
       if (!j.ok) {
-        updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'DispatchError', evalue: j.error || 'dispatch failed' } });
+        patchCell(cell.id, { output: { status: 'error', ename: 'DispatchError', evalue: j.error || 'dispatch failed' } });
         setRunMsg(`Cell run failed: ${j.error}`);
         return;
       }
@@ -463,15 +526,18 @@ export function NotebookEditor({ item, id }: Props) {
         const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const p = await pollRes.json();
         if (!p.ok) {
-          updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } });
+          patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } });
           break;
         }
         if (p.runId && p.runId !== runId) runId = p.runId;
-        setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${p.phase ? ' · ' + p.phase : ''}`);
+        const elapsed = Math.floor((Date.now() - start) / 1000);
+        const phaseHint = p.phase === 'session-starting'
+          ? ` · cold-start: Spark pool warming up (~60-90s on first cell)`
+          : p.phase ? ` · ${p.phase}` : '';
+        setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${phaseHint} · ${elapsed}s`);
         if (p.output) {
-          updateCell(cell.id, {
-            ...cell,
-            executionCount: (cell.executionCount || 0) + 1,
+          patchCell(cell.id, {
+            executionCount: prevExec + 1,
             output: {
               status: p.output.status === 'ok' ? 'ok' : 'error',
               textPlain: p.output.textPlain,
@@ -486,18 +552,74 @@ export function NotebookEditor({ item, id }: Props) {
           break;
         }
         if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
-          updateCell(cell.id, { ...cell, output: { status: 'error', ename: p.status, evalue: p.resultState || '' } });
+          patchCell(cell.id, { output: { status: 'error', ename: p.status, evalue: p.resultState || '' } });
           break;
         }
       }
       loadJobs(workspaceId, notebookId);
     } catch (e: any) {
-      updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
+      patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
     }
-  }, [workspaceId, notebookId, computeId, defaultLang, updateCell, loadJobs]);
+  }, [workspaceId, notebookId, computeId, defaultLang, patchCell, loadJobs]);
+
+  // Build the Fabric-parity ribbon with real handlers. Previously these were
+  // decorative labels with no onClick — the Ribbon component auto-disables
+  // un-wired actions, which gave the user two visually-identical Save buttons
+  // (a disabled ribbon Save + a working toolbar Save). Now both work.
+  const ribbon: RibbonTab[] = useMemo(() => {
+    const activeIdx = cells.findIndex(c => c.id === activeCellId);
+    const insertAfter = activeIdx >= 0 ? activeIdx : cells.length - 1;
+    const canRun = !!notebookId && !running;
+    const canSave = !!notebookId && dirty && !saving;
+    const canDelete = !!notebookId;
+    const canHistory = !!notebookId;
+    return [
+      { id: 'home', label: 'Home', groups: [
+        { label: 'Run', actions: [
+          { label: running ? 'Queuing…' : 'Run all', onClick: canRun ? run : undefined, disabled: !canRun },
+          { label: 'Run history', onClick: canHistory ? () => setHistoryOpen(true) : undefined, disabled: !canHistory },
+        ]},
+        { label: 'Item', actions: [
+          { label: 'New notebook', onClick: workspaceId ? () => setCreateOpen(true) : undefined, disabled: !workspaceId },
+          { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+          { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
+        ]},
+        { label: 'Workspace', actions: [
+          { label: 'Refresh list', onClick: workspaceId ? () => loadList(workspaceId) : undefined, disabled: !workspaceId },
+        ]},
+      ]},
+      { id: 'insert', label: 'Insert', groups: [
+        { label: 'Cells', actions: [
+          { label: '+ Code cell', onClick: () => insertCell(insertAfter, 'code') },
+          { label: '+ Markdown cell', onClick: () => insertCell(insertAfter, 'markdown') },
+        ]},
+        { label: 'Data', actions: [
+          { label: 'Attach Lakehouse', onClick: workspaceId ? openAttach : undefined, disabled: !workspaceId },
+        ]},
+      ]},
+      { id: 'view', label: 'View', groups: [
+        { label: 'Panes', actions: [
+          { label: 'Run history', onClick: canHistory ? () => setHistoryOpen(true) : undefined, disabled: !canHistory },
+        ]},
+      ]},
+      { id: 'run', label: 'Run', groups: [
+        { label: 'Execute', actions: [
+          { label: 'Run all', onClick: canRun ? run : undefined, disabled: !canRun },
+        ]},
+      ]},
+      { id: 'help', label: 'Help', groups: [
+        { label: 'Resources', actions: [
+          { label: 'Notebook docs', onClick: () => window.open('https://learn.microsoft.com/fabric/data-engineering/how-to-use-notebook', '_blank') },
+        ]},
+      ]},
+    ];
+  }, [
+    cells, activeCellId, notebookId, running, dirty, saving, workspaceId,
+    run, save, del, loadList, insertCell, openAttach,
+  ]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Notebooks</Subtitle2>
@@ -592,7 +714,12 @@ export function NotebookEditor({ item, id }: Props) {
                 </DialogBody>
               </DialogSurface>
             </Dialog>
-            <Button appearance="outline" icon={<Save20Regular />} disabled={saving || !notebookId || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save'}</Button>
+            {/*
+              Save lives in the ribbon (Home → Item → Save) now that the
+              ribbon actions are wired. Avoid a second Save here so users
+              aren't confused by two visually-identical Save buttons.
+              Ctrl+S still works from anywhere.
+            */}
             <Button appearance="primary" icon={<Play20Regular />} disabled={running || !notebookId} onClick={run}>{running ? 'Queuing…' : 'Run'}</Button>
             <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>

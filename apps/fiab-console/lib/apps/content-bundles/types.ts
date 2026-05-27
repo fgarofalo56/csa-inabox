@@ -1,0 +1,190 @@
+/**
+ * Per-app starter-content bundles.
+ *
+ * Each `BundleItem` declares the workspace item to provision when an app
+ * is installed, along with the rich starter content that gets stamped
+ * onto the Cosmos `items` doc's `state.content`. Editors read this on
+ * first open so the user sees a fully-formed workspace experience instead
+ * of an empty editor (Phase 1 of the apps-content initiative).
+ *
+ * Phase 2 (tracked separately) will additionally trigger real
+ * Fabric/ADX/Synapse resource creation + sample data ingestion at install
+ * time. Until then the content here is the source-of-truth template until
+ * the user clicks Save and pushes it to the live backing service.
+ */
+import type { NotebookCell } from '@/lib/types/notebook-cell';
+
+export interface NotebookContent {
+  kind: 'notebook';
+  defaultLang: 'pyspark' | 'sparksql' | 'spark' | 'sparkr';
+  cells: NotebookCell[];
+}
+
+export interface KqlDatabaseContent {
+  kind: 'kql-database';
+  tables: { name: string; columns: { name: string; type: string }[]; sample?: any[][] }[];
+  functions?: { name: string; body: string }[];
+  ingestionPolicies?: { table: string; policy: string }[];
+  starterQueries?: { name: string; kql: string }[];
+}
+
+export interface KqlDashboardContent {
+  kind: 'kql-dashboard';
+  tiles: { title: string; kql: string; viz: 'card' | 'line' | 'bar' | 'table' | 'pie' }[];
+}
+
+export interface EventstreamContent {
+  kind: 'eventstream';
+  sources: { id: string; type: string; config: Record<string, any> }[];
+  destinations: { id: string; type: string; config: Record<string, any> }[];
+  transforms?: { id: string; type: string; config: Record<string, any> }[];
+}
+
+export interface WarehouseContent {
+  kind: 'warehouse';
+  ddl: string;
+  dbtProject?: string;
+  dbtModels?: { layer: 'bronze' | 'silver' | 'gold'; name: string; sql: string }[];
+  starterQueries?: { name: string; sql: string }[];
+}
+
+export interface LakehouseContent {
+  kind: 'lakehouse';
+  folders: { path: string; description?: string }[];
+  deltaTables?: { name: string; ddl: string; sampleRows?: any[][] }[];
+  shortcuts?: { name: string; target: string; description?: string }[];
+}
+
+export interface SemanticModelContent {
+  kind: 'semantic-model';
+  tables: { name: string; columns: { name: string; dataType: string }[] }[];
+  measures: { table: string; name: string; expression: string; formatString?: string }[];
+  relationships?: { from: string; to: string; cardinality: '1:1' | '1:many' | 'many:many' }[];
+}
+
+export interface ReportContent {
+  kind: 'report';
+  pages: { name: string; visuals: { type: string; title: string; field?: string; config?: any }[] }[];
+}
+
+export interface ActivatorContent {
+  kind: 'activator';
+  rule: {
+    name: string;
+    condition: { metric: string; op: string; threshold: number | string };
+    window?: string;
+    action: { kind: 'email' | 'teams' | 'webhook' | 'flow'; config: Record<string, any> };
+  };
+}
+
+export interface MirroredDatabaseContent {
+  kind: 'mirrored-database';
+  source: { kind: 'azure-sql' | 'snowflake' | 'cosmos' | 'bigquery'; server?: string; database?: string; tables: string[] };
+}
+
+export interface ScorecardContent {
+  kind: 'scorecard';
+  okrs: { id: string; name: string; description?: string; metric: string; target: number | string; current?: number | string }[];
+}
+
+export interface DataProductContent {
+  kind: 'data-product';
+  datasets: { id: string; name: string; description: string; classification: string }[];
+  glossaryTerms?: { term: string; definition: string }[];
+  owner: { name: string; email?: string };
+  endorsement?: 'promoted' | 'certified' | null;
+}
+
+export interface AiSearchIndexContent {
+  kind: 'ai-search-index';
+  schema: { fields: { name: string; type: string; searchable?: boolean; filterable?: boolean; key?: boolean }[] };
+  scoringProfiles?: { name: string; description: string }[];
+  sampleDocs?: any[];
+  vectorConfig?: { dimensions: number; algorithm: string };
+}
+
+export interface PromptFlowContent {
+  kind: 'prompt-flow';
+  nodes: { id: string; kind: 'input' | 'llm' | 'tool' | 'python' | 'output'; name: string; config: Record<string, any> }[];
+  edges: { from: string; to: string }[];
+  systemPrompt?: string;
+}
+
+export interface EvaluationContent {
+  kind: 'evaluation';
+  datasetRef?: string;
+  metrics: { name: string; description: string }[];
+  baseline?: { runId: string; results: Record<string, number> };
+}
+
+export interface MlModelContent {
+  kind: 'ml-model';
+  algorithm: string;
+  framework: 'sklearn' | 'pytorch' | 'tensorflow' | 'xgboost' | 'lightgbm';
+  hyperparameters: Record<string, any>;
+  trainingCode?: string;
+  features?: { name: string; type: string }[];
+  target?: string;
+}
+
+export interface SynapsePipelineContent {
+  kind: 'synapse-pipeline';
+  activities: { name: string; type: string; config: any; dependsOn?: string[] }[];
+  parameters?: Record<string, { type: string; defaultValue?: any }>;
+}
+
+export interface AdfPipelineContent {
+  kind: 'adf-pipeline';
+  activities: { name: string; type: string; config: any; dependsOn?: string[] }[];
+  parameters?: Record<string, { type: string; defaultValue?: any }>;
+}
+
+export interface DatabricksJobContent {
+  kind: 'databricks-job';
+  tasks: { name: string; type: string; notebookPath?: string; config: any }[];
+  cluster: { sparkVersion: string; nodeType: string; numWorkers: number };
+}
+
+export type AnyContent =
+  | NotebookContent
+  | KqlDatabaseContent
+  | KqlDashboardContent
+  | EventstreamContent
+  | WarehouseContent
+  | LakehouseContent
+  | SemanticModelContent
+  | ReportContent
+  | ActivatorContent
+  | MirroredDatabaseContent
+  | ScorecardContent
+  | DataProductContent
+  | AiSearchIndexContent
+  | PromptFlowContent
+  | EvaluationContent
+  | MlModelContent
+  | SynapsePipelineContent
+  | AdfPipelineContent
+  | DatabricksJobContent;
+
+export interface BundleItem {
+  /** Editor type — must match an entry in lib/editors/registry.ts. */
+  itemType: string;
+  /** Human-readable name shown in the workspace + tab strip. */
+  displayName: string;
+  /** Short description, surfaced in workspace list + tab tooltip. */
+  description: string;
+  /** Rich starter content stamped into Cosmos item.state.content. */
+  content: AnyContent;
+  /** Optional learn doc slug (links to docs/learn/...). */
+  learnDoc?: string;
+}
+
+export interface AppBundle {
+  appId: string;
+  /** Optional intro markdown shown on the workspace landing card. */
+  intro?: string;
+  /** Items provisioned at install time, with rich starter content. */
+  items: BundleItem[];
+  /** Source docs / examples this bundle draws from. */
+  sourceDocs?: string[];
+}

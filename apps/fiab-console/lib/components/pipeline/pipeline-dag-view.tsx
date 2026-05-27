@@ -19,7 +19,7 @@
  *   queued for Phase 3.
  */
 
-import { useMemo } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Badge, Button, Caption1, MessageBar, MessageBarBody, makeStyles, tokens } from '@fluentui/react-components';
 
 const useStyles = makeStyles({
@@ -45,6 +45,7 @@ const useStyles = makeStyles({
     display: 'flex',
     gap: 32,
     alignItems: 'flex-start',
+    zIndex: 1,
   },
   column: {
     display: 'flex',
@@ -71,8 +72,10 @@ const useStyles = makeStyles({
   },
   edgeOverlay: {
     position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
+    top: 0, left: 0,
     pointerEvents: 'none',
+    zIndex: 0,
+    overflow: 'visible',
   },
   palette: {
     display: 'flex',
@@ -266,8 +269,13 @@ export interface PipelineDagViewProps {
   onActivityAdd?: (activity: PipelineActivity) => void;
 }
 
+interface EdgePath { d: string; color: string; key: string; }
+
 export function PipelineDagView({ activities, emptyHint, onActivityAdd }: PipelineDagViewProps) {
   const s = useStyles();
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [paths, setPaths] = useState<EdgePath[]>([]);
+  const [svgSize, setSvgSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 
   const palette = onActivityAdd ? (
     <div className={s.palette} role="toolbar" aria-label="Add activity">
@@ -292,6 +300,64 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
       })}
     </div>
   ) : null;
+
+  // Measure node positions after layout to compute SVG paths between them.
+  // Runs whenever the activities array (or edges) change.
+  useLayoutEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) return;
+    const computePaths = () => {
+      const shellRect = shell.getBoundingClientRect();
+      const next: EdgePath[] = [];
+      let maxW = 0, maxH = 0;
+      for (const a of activities) {
+        for (const dep of a.dependsOn || []) {
+          const fromEl = shell.querySelector<HTMLElement>(`#activity-node-${CSS.escape(dep.activity)}`);
+          const toEl = shell.querySelector<HTMLElement>(`#activity-node-${CSS.escape(a.name)}`);
+          if (!fromEl || !toEl) continue;
+          const fr = fromEl.getBoundingClientRect();
+          const tr = toEl.getBoundingClientRect();
+          const sx = fr.right - shellRect.left + shell.scrollLeft;
+          const sy = fr.top + fr.height / 2 - shellRect.top + shell.scrollTop;
+          const ex = tr.left - shellRect.left + shell.scrollLeft;
+          const ey = tr.top + tr.height / 2 - shellRect.top + shell.scrollTop;
+          const dx = Math.max(40, (ex - sx) / 2);
+          const conds = dep.dependencyConditions || [];
+          if (conds.length === 0) {
+            next.push({
+              d: `M ${sx} ${sy} C ${sx + dx} ${sy}, ${ex - dx} ${ey}, ${ex} ${ey}`,
+              color: '#888',
+              key: `${dep.activity}->${a.name}`,
+            });
+          } else {
+            // Slight vertical offset per condition so multiple edges between
+            // the same pair don't overlap.
+            conds.forEach((c, i) => {
+              const off = (i - (conds.length - 1) / 2) * 6;
+              next.push({
+                d: `M ${sx} ${sy + off} C ${sx + dx} ${sy + off}, ${ex - dx} ${ey + off}, ${ex} ${ey + off}`,
+                color: condColor(c),
+                key: `${dep.activity}->${a.name}:${c}`,
+              });
+            });
+          }
+          maxW = Math.max(maxW, ex + 8);
+          maxH = Math.max(maxH, ey + 8, sy + 8);
+        }
+      }
+      setPaths(next);
+      setSvgSize({
+        w: Math.max(shell.scrollWidth, maxW),
+        h: Math.max(shell.scrollHeight, maxH),
+      });
+    };
+    // After the columns render, measure on next frame so layout is stable.
+    const raf = requestAnimationFrame(computePaths);
+    // Recompute on resize too — pipelines can be wide.
+    const ro = new ResizeObserver(computePaths);
+    ro.observe(shell);
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, [activities]);
 
   const { columns, edges } = useMemo(() => {
     const ranks = computeRanks(activities);
@@ -331,7 +397,7 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
   }
 
   return (
-    <div className={s.shell}>
+    <div className={s.shell} ref={shellRef}>
       {palette}
       <div className={s.legend}>
         <Caption1>Edge color:</Caption1>
@@ -340,6 +406,44 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
         <Badge appearance="filled" color="brand" size="small">Completed</Badge>
         <Badge appearance="filled" color="subtle" size="small">Skipped</Badge>
       </div>
+      <svg
+        className={s.edgeOverlay}
+        width={svgSize.w || '100%'}
+        height={svgSize.h || '100%'}
+        viewBox={svgSize.w && svgSize.h ? `0 0 ${svgSize.w} ${svgSize.h}` : undefined}
+        aria-hidden="true"
+      >
+        <defs>
+          {Object.entries(COND_COLORS).concat([['default', '#888']]).map(([k, c]) => (
+            <marker
+              key={k}
+              id={`arrow-${k}`}
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill={c} />
+            </marker>
+          ))}
+        </defs>
+        {paths.map((p) => {
+          // Match color back to its marker id so arrowheads stay color-consistent.
+          const markerKey = (Object.entries(COND_COLORS).find(([, v]) => v === p.color)?.[0]) || 'default';
+          return (
+            <path
+              key={p.key}
+              d={p.d}
+              stroke={p.color}
+              strokeWidth={1.5}
+              fill="none"
+              markerEnd={`url(#arrow-${markerKey})`}
+            />
+          );
+        })}
+      </svg>
       <div className={s.grid}>
         {columns.map((col, ci) => (
           <div key={ci} className={s.column}>
@@ -368,18 +472,7 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
       </div>
       {edges.length > 0 && (
         <Caption1 style={{ marginTop: 8, display: 'block', color: tokens.colorNeutralForeground3 }}>
-          {edges.length} dependency edge{edges.length === 1 ? '' : 's'} — direction inferred from
-          {' '}<code>dependsOn[]</code>. Hover an activity card to see its name.
-          {edges.length > 0 && (
-            <>
-              {' '}First few:
-              {' '}{edges.slice(0, 5).map((e, i) => (
-                <span key={i} style={{ color: condColor(e.cond), marginLeft: 4 }}>
-                  {e.from} → {e.to}{e.cond ? ` (${e.cond})` : ''}
-                </span>
-              ))}{edges.length > 5 && ` … +${edges.length - 5} more`}
-            </>
-          )}
+          {edges.length} dependency edge{edges.length === 1 ? '' : 's'} drawn from <code>dependsOn[]</code>.
         </Caption1>
       )}
     </div>

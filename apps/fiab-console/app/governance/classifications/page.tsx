@@ -1,80 +1,95 @@
 'use client';
 
-import { GovernanceShell } from '@/lib/components/governance-shell';
+import { useEffect, useState } from 'react';
 import {
-  Body1, Caption1, Subtitle2, Badge, Button, Input,
+  Spinner, Badge, Caption1, Body1, Subtitle2, Button,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  Tab, TabList,
+  MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { useState } from 'react';
+import { ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
+import { GovernanceShell } from '@/lib/components/governance-shell';
 
-const BUILT_IN = [
-  { name: 'Email Address',            kind: 'Regex',     hits: 4_120 },
-  { name: 'Credit Card Number',       kind: 'Regex',     hits: 372 },
-  { name: 'US Social Security Number',kind: 'Regex',     hits: 18 },
-  { name: 'IBAN Code',                kind: 'Regex',     hits: 2_204 },
-  { name: 'IP Address (v4)',          kind: 'Regex',     hits: 65_002 },
-  { name: 'US Passport Number',       kind: 'Regex',     hits: 0 },
-  { name: 'Date of Birth',            kind: 'Dictionary',hits: 1_482 },
-  { name: 'Driver License (US)',      kind: 'Regex',     hits: 32 },
-];
-const CUSTOM = [
-  { name: 'Employee ID (Contoso)',    kind: 'Regex',     hits: 8_402 },
-  { name: 'Project Code',             kind: 'Dictionary',hits: 1_240 },
-  { name: 'Customer Tier',            kind: 'Dictionary',hits: 6_018 },
-];
+interface Classification {
+  name: string; count: number;
+  samples: Array<{ id: string; displayName: string; itemType: string; workspaceId: string }>;
+}
 
 const useStyles = makeStyles({
-  bar: { display: 'flex', gap: 12, marginBottom: 12 },
+  empty: { padding: 32, color: tokens.colorNeutralForeground3, fontSize: 13, textAlign: 'center' },
+  chip: { fontSize: 11, padding: '2px 8px', borderRadius: 999, backgroundColor: tokens.colorPaletteBlueBackground2, color: tokens.colorPaletteBlueForeground2 },
 });
 
 export default function ClassificationsPage() {
   const s = useStyles();
-  const [tab, setTab] = useState<'built' | 'custom' | 'rulesets'>('built');
-  const data = tab === 'built' ? BUILT_IN : tab === 'custom' ? CUSTOM : [];
+  const [data, setData] = useState<Classification[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true); setError(null);
+    try {
+      const r = await fetch('/api/governance/classifications');
+      const j = await r.json();
+      if (!j.ok) { setError(j.error); return; }
+      setData(j.classifications);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
   return (
     <GovernanceShell sectionTitle="Classifications">
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
-        Sensitive-information types that scans look for. Loom ships Purview&apos;s 200+ built-ins and lets you author custom regex / dictionary classifiers + scan rule sets that bundle them.
+        Distinct classifications applied across your tenant's data assets, derived live from each item's
+        <code> state.classifications</code> array.
       </Body1>
-      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'built' | 'custom' | 'rulesets')}>
-        <Tab value="built">Built-in ({BUILT_IN.length})</Tab>
-        <Tab value="custom">Custom ({CUSTOM.length})</Tab>
-        <Tab value="rulesets">Scan rule sets (4)</Tab>
-      </TabList>
-      <div className={s.bar} style={{ marginTop: 12 }}>
-        <Input placeholder="Search classifiers" style={{ flex: 1 }} />
-        <Button appearance="primary">+ New classifier</Button>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
       </div>
-      {tab !== 'rulesets' ? (
+
+      {error && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Could not load classifications</MessageBarTitle>
+            {error}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {loading && !error && <Spinner label="Aggregating classifications…" />}
+      {!loading && !error && (data?.length ?? 0) === 0 && (
+        <div className={s.empty}>
+          No classifications tagged yet. Apply classifications via item editors (Lakehouse, Data Product, Semantic Model).
+        </div>
+      )}
+      {data && data.length > 0 && (
         <Table aria-label="Classifications">
           <TableHeader>
             <TableRow>
-              <TableHeaderCell>Name</TableHeaderCell>
-              <TableHeaderCell>Kind</TableHeaderCell>
-              <TableHeaderCell>Recent hits (30 d)</TableHeaderCell>
+              <TableHeaderCell>Classification</TableHeaderCell>
+              <TableHeaderCell>Hits</TableHeaderCell>
+              <TableHeaderCell>Sample items</TableHeaderCell>
             </TableRow>
           </TableHeader>
           <TableBody>
             {data.map((c) => (
               <TableRow key={c.name}>
-                <TableCell>{c.name}</TableCell>
-                <TableCell><Badge appearance="outline">{c.kind}</Badge></TableCell>
-                <TableCell>{c.hits.toLocaleString()}</TableCell>
+                <TableCell><span className={s.chip}>{c.name}</span></TableCell>
+                <TableCell><strong>{c.count}</strong></TableCell>
+                <TableCell>
+                  {c.samples.slice(0, 3).map((sm) => (
+                    <a key={sm.id} href={`/items/${sm.itemType}/${sm.id}`}
+                       style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 12, fontSize: 12 }}>
+                      {sm.displayName} <Open16Regular />
+                    </a>
+                  ))}
+                  {c.samples.length > 3 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>+{c.samples.length - 3} more</Caption1>}
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
-      ) : (
-        <div>
-          {['Default scan rule set (Microsoft)', 'Finance — strict', 'Engineering — broad', 'Security — paranoid'].map((r) => (
-            <div key={r} style={{ padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, marginBottom: 8 }}>
-              <Subtitle2>{r}</Subtitle2>
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Applied to 12 sources · 8 file types · 47 classifiers</Caption1>
-            </div>
-          ))}
-        </div>
       )}
     </GovernanceShell>
   );

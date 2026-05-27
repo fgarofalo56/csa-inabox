@@ -21,17 +21,34 @@ export const dynamic = 'force-dynamic';
 
 const TENANT = 'GLOBAL';
 
+/**
+ * items[] is what the /api/apps/[id]/install route reads to create
+ * workspace items in Cosmos. v3.27 omitted items[] which made every
+ * app install report `installed: []` — the F-grade vaporware finding
+ * called out in docs/fiab/parity-gap/apps-catalog-rollup.md.
+ * Mirrored from scripts/csa-loom/seed-catalogs.sh.
+ */
 const APPS = [
-  { id:'app-fedramp-tracker', name:'FedRAMP Compliance Tracker', description:'Track FedRAMP control implementation across Loom-deployed services. Maps Synapse, Databricks, ADX, APIM, AI Foundry to NIST 800-53 controls.', category:'Compliance', publisher:'CSA' },
-  { id:'app-data-steward', name:'Data Steward Console', description:'Curate datasets, manage classifications, certify endorsements. Wires Purview + AI Search + Synapse Serverless for lineage + search.', category:'Governance', publisher:'CSA' },
-  { id:'app-rag-builder', name:'RAG Builder', description:'Stand up a Retrieval-Augmented Generation pipeline. Builds an AI Search index, wires Foundry prompt-flow, deploys an evaluation suite.', category:'AI', publisher:'CSA' },
-  { id:'app-lakehouse-inspector', name:'Lakehouse Inspector', description:'Browse bronze/silver/gold ADLS containers, preview Parquet/Delta files via Synapse Serverless, profile data quality.', category:'Data', publisher:'CSA' },
-  { id:'app-pipeline-designer', name:'Pipeline Designer', description:'Visual + JSON authoring for Synapse pipelines, ADF, Databricks Jobs. Common run history + alerting.', category:'Data Engineering', publisher:'CSA' },
-  { id:'app-casino-analytics', name:'Casino Analytics', description:'Reference architecture: player-grain facts, table games, real-time win/loss, Activator alerts for high-roller events.', category:'Industry', publisher:'CSA' },
-  { id:'app-healthcare-popmgt', name:'Healthcare Population Health', description:'FHIR-on-Lakehouse + risk stratification model + Power BI patient dashboards. HIPAA-aligned.', category:'Industry', publisher:'CSA' },
-  { id:'app-iot-realtime', name:'IoT Real-Time Insights', description:'IoT Hub → Event Hubs → ADX → KQL dashboards. Activator alerts on device anomalies. End-to-end in one workspace.', category:'Real-Time', publisher:'CSA' },
-  { id:'app-finops-cost', name:'FinOps Cost Optimizer', description:'Per-domain chargeback report, Synapse pool auto-pause schedule, idle workload finder. Cosmos-backed budgets.', category:'Operations', publisher:'CSA' },
-  { id:'app-fabric-mirror-onboard', name:'Fabric Mirror Onboarding', description:'One-click setup for Fabric Mirroring: Azure SQL Mirror, Snowflake Mirror, Cosmos Mirror with target workspace + RBAC.', category:'Data', publisher:'CSA' },
+  { id:'app-fedramp-tracker', name:'FedRAMP Compliance Tracker', description:'Track FedRAMP control implementation across Loom-deployed services. Maps Synapse, Databricks, ADX, APIM, AI Foundry to NIST 800-53 controls.', category:'Compliance', publisher:'CSA',
+    items:[{type:'scorecard',template:'fedramp-controls'},{type:'kql-dashboard',template:'compliance-events'}] },
+  { id:'app-data-steward', name:'Data Steward Console', description:'Curate datasets, manage classifications, certify endorsements. Wires Purview + AI Search + Synapse Serverless for lineage + search.', category:'Governance', publisher:'CSA',
+    items:[{type:'data-product',template:'steward-default'},{type:'semantic-model',template:'steward-glossary'}] },
+  { id:'app-rag-builder', name:'RAG Builder', description:'Stand up a Retrieval-Augmented Generation pipeline. Builds an AI Search index, wires Foundry prompt-flow, deploys an evaluation suite.', category:'AI', publisher:'CSA',
+    items:[{type:'ai-search-index',template:'rag-default'},{type:'prompt-flow',template:'rag-basic'},{type:'evaluation',template:'rag-quality'}] },
+  { id:'app-lakehouse-inspector', name:'Lakehouse Inspector', description:'Browse bronze/silver/gold ADLS containers, preview Parquet/Delta files via Synapse Serverless, profile data quality.', category:'Data', publisher:'CSA',
+    items:[{type:'lakehouse',template:'medallion'}] },
+  { id:'app-pipeline-designer', name:'Pipeline Designer', description:'Visual + JSON authoring for Synapse pipelines, ADF, Databricks Jobs. Common run history + alerting.', category:'Data Engineering', publisher:'CSA',
+    items:[{type:'synapse-pipeline',template:'blank'},{type:'adf-pipeline',template:'blank'},{type:'databricks-job',template:'blank'}] },
+  { id:'app-casino-analytics', name:'Casino Analytics', description:'Reference architecture: player-grain facts, table games, real-time win/loss, Activator alerts for high-roller events.', category:'Industry', publisher:'CSA',
+    items:[{type:'warehouse',template:'casino-dw'},{type:'activator',template:'high-roller-alert'}] },
+  { id:'app-healthcare-popmgt', name:'Healthcare Population Health', description:'FHIR-on-Lakehouse + risk stratification model + Power BI patient dashboards. HIPAA-aligned.', category:'Industry', publisher:'CSA',
+    items:[{type:'lakehouse',template:'fhir-medallion'},{type:'ml-model',template:'risk-stratification'}] },
+  { id:'app-iot-realtime', name:'IoT Real-Time Insights', description:'IoT Hub → Event Hubs → ADX → KQL dashboards. Activator alerts on device anomalies. End-to-end in one workspace.', category:'Real-Time', publisher:'CSA',
+    items:[{type:'eventstream',template:'iot-default'},{type:'kql-database',template:'iot-telemetry'},{type:'kql-dashboard',template:'device-health'}] },
+  { id:'app-finops-cost', name:'FinOps Cost Optimizer', description:'Per-domain chargeback report, Synapse pool auto-pause schedule, idle workload finder. Cosmos-backed budgets.', category:'Operations', publisher:'CSA',
+    items:[{type:'semantic-model',template:'finops-cost'},{type:'report',template:'finops-monthly'}] },
+  { id:'app-fabric-mirror-onboard', name:'Fabric Mirror Onboarding', description:'One-click setup for Fabric Mirroring: Azure SQL Mirror, Snowflake Mirror, Cosmos Mirror with target workspace + RBAC.', category:'Data', publisher:'CSA',
+    items:[{type:'mirrored-database',template:'azure-sql-mirror'}] },
 ];
 
 const WORKLOADS = [
