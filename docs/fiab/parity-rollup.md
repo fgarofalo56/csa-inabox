@@ -184,14 +184,29 @@ Aggregated from 60+ v2 validator gap docs in `docs/fiab/parity-gap/`. Each cell 
 
 ### Remediation priority
 
-1. **Install `@monaco-editor/react` + `@kusto/monaco-kusto`** → ~6h, unblocks ~25 editors (C→B, several B→A).
-2. **Install `powerbi-client` + `powerbi-client-react`** → ~4h, unblocks PB trio (D→B).
-3. **Wire SVG arrows in `PipelineDagView`** → ~4h, unblocks 5 pipeline editors (D→C).
-4. **Fix `bootstrap-catalogs` items[] omission** → ~2h, unblocks all 10 apps (F→C).
-5. **Diagnose URL auto-rotator** → ~3h, unblocks every page (site-wide fix).
-6. **Add Fluent MessageBars to 7 admin F-grade pages** → ~3h, F→C (honest gates).
-7. **Sweep RibbonAction.onClick wiring** → ~2h, closes 74 BROKEN findings.
+1. **Install `@monaco-editor/react` + `@kusto/monaco-kusto`** → ~6h, unblocks ~25 editors (C→B, several B→A). **[LANDED]** ✅
+2. **Install `powerbi-client` + `powerbi-client-react`** → ~4h, unblocks PB trio (D→B). **[deps added, embed swap pending]** ⏳
+3. **Wire SVG arrows in `PipelineDagView`** → ~4h, unblocks 5 pipeline editors (D→C). **[pending]**
+4. **Fix `bootstrap-catalogs` items[] omission** → ~2h, unblocks all 10 apps (F→C). **[LANDED]** ✅
+5. **Diagnose URL auto-rotator** → ~3h, unblocks every page (site-wide fix). **[pending]**
+6. **Add Fluent MessageBars to 7 admin F-grade pages** → ~3h, F→C (honest gates). **[pending]**
+7. **Add Fluent MessageBars to 7 governance F-grade pages** → ~3h, F→C (honest gates). **[LANDED]** ✅
+8. **Sweep RibbonAction.onClick wiring** → ~2h, closes 74 BROKEN findings. **[pending]**
+9. **Copilot pane F-fix** → 2h, replace setTimeout mock with real /api/copilot/orchestrate SSE. **[LANDED]** ✅
+10. **Topbar search D-fix** → 1h, wire CommandPalette to /api/search/items. **[LANDED]** ✅
+11. **/setup wizard F-fix** → 2h, replace fake-progress with honest 503 + remediation commands. **[LANDED]** ✅
 
-Total Build Phase 1 estimate: **~24h to lift portal-wide average from D to B-.**
+Total Build Phase 1 estimate: **~32h. Landed today: 6 of 11 items.**
+
+## Build Phase 1 progress (2026-05-26)
+
+Landed in this session:
+- `lib/components/editor/monaco-textarea.tsx` — shared Monaco component, 13 languages including custom KQL Monarch tokenizer
+- 22 textarea→Monaco swaps across 12 editor files (notebook code-cell, synapse, databricks, stream-analytics, apim, data-pipeline, phase3 × 4, azure-sql × 2, lakehouse, graph × 4, foundry × 2, phase4 × 6, dataflow)
+- `lib/components/copilot-pane.tsx` — rewired to real /api/copilot/orchestrate SSE with thought/tool_call/tool_result step rendering + honest 503 gate
+- `lib/components/command-palette.tsx` — debounced /api/search/items integration; real items + workspaces above static catalog
+- `app/api/admin/bootstrap-catalogs/route.ts` — items[] restored mirroring seed-catalogs.sh; the 10 apps now produce real items on install
+- `app/api/setup/deploy/route.ts` + `lib/panes/setup-wizard.tsx` — honest 503 with bicep commands; removed the 6-stage fake setTimeout progress loop
+- `lib/components/purview-gate.tsx` + 7 governance pages — all hardcoded fakes (alice/bob/eve, static SVG, etc.) replaced with structured Purview gate MessageBars
 
 The rollup is updated by every validator agent. Each gap doc dropped under `docs/fiab/parity-gap/` is appended here under the right family.
