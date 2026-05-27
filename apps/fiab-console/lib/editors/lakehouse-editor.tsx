@@ -457,8 +457,10 @@ export function LakehouseEditor({ item, id }: Props) {
           <div className={s.tabs}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
               <Tab value="files">Files</Tab>
+              <Tab value="tables">Tables</Tab>
               <Tab value="preview">Preview</Tab>
               <Tab value="sql">SQL</Tab>
+              <Tab value="shortcuts">Shortcuts</Tab>
             </TabList>
           </div>
           <div className={s.pad}>
@@ -570,6 +572,106 @@ export function LakehouseEditor({ item, id }: Props) {
                     </Table>
                   </div>
                 )}
+              </>
+            )}
+
+            {tab === 'tables' && (
+              <>
+                <div className={s.toolbar}>
+                  <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
+                  <Caption1>Delta tables under <code>/Tables/</code></Caption1>
+                  <Button appearance="outline" icon={<ArrowSync20Regular />}
+                    disabled={!activeContainer}
+                    onClick={() => activeContainer && loadPaths(activeContainer, 'Tables')}>
+                    Refresh
+                  </Button>
+                </div>
+                {(() => {
+                  if (!activeContainer) return <Caption1>Select a container.</Caption1>;
+                  const tableListing = openPrefixes[cacheKey(activeContainer, 'Tables')];
+                  if (tableListing === 'loading') return <Spinner size="small" label="Listing tables…" labelPosition="after" />;
+                  if (!tableListing) {
+                    return (
+                      <Button onClick={() => loadPaths(activeContainer, 'Tables')}>Load tables</Button>
+                    );
+                  }
+                  if ('error' in tableListing) {
+                    return (
+                      <MessageBar intent="error">
+                        <MessageBarBody>
+                          <MessageBarTitle>Could not list tables</MessageBarTitle>
+                          {tableListing.error}
+                        </MessageBarBody>
+                      </MessageBar>
+                    );
+                  }
+                  const tables = (tableListing as PathEntry[]).filter(e => e.isDirectory);
+                  if (tables.length === 0) {
+                    return (
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          No Delta tables yet. From the Files tab, right-click a Parquet / CSV / JSON
+                          file and choose <strong>Load to Tables (Delta)</strong> to create one.
+                        </MessageBarBody>
+                      </MessageBar>
+                    );
+                  }
+                  return (
+                    <Table aria-label="Tables">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHeaderCell>Table</TableHeaderCell>
+                          <TableHeaderCell>Path</TableHeaderCell>
+                          <TableHeaderCell>Last modified</TableHeaderCell>
+                          <TableHeaderCell></TableHeaderCell>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {tables.map((t) => {
+                          const tableName = leafName(t.name);
+                          return (
+                            <TableRow key={t.name}>
+                              <TableCell><strong>{tableName}</strong></TableCell>
+                              <TableCell><code style={{ fontSize: 11 }}>/{t.name}</code></TableCell>
+                              <TableCell>{t.lastModified ? new Date(t.lastModified).toLocaleString() : '—'}</TableCell>
+                              <TableCell>
+                                <Button size="small" appearance="primary"
+                                  onClick={() => {
+                                    setSqlText(`-- Read Delta table\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
+                                    setTab('sql');
+                                  }}>
+                                  Query
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  );
+                })()}
+              </>
+            )}
+
+            {tab === 'shortcuts' && (
+              <>
+                <div className={s.toolbar}>
+                  <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
+                  <Caption1>OneLake shortcuts — point at external storage without copying data</Caption1>
+                </div>
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Create Shortcut not wired in this deployment</MessageBarTitle>
+                    OneLake shortcuts (ADLS Gen2 / S3 / GCS / Dataverse / external Fabric workspace)
+                    require the Fabric REST shortcuts endpoint and Console UAMI workspace membership:
+                    <ul style={{ marginTop: 6, marginBottom: 6, paddingLeft: 18 }}>
+                      <li>Backend route <code>/api/items/lakehouse/[id]/shortcuts</code> (not yet implemented)</li>
+                      <li>Calls Fabric REST <code>POST /v1/workspaces/{'{ws}'}/items/{'{lakehouse}'}/shortcuts</code></li>
+                      <li>Requires Console UAMI as Member/Admin on the target workspace</li>
+                    </ul>
+                    For now create shortcuts directly in the Fabric portal: <a href="https://app.fabric.microsoft.com/" target="_blank" rel="noreferrer">app.fabric.microsoft.com</a> → Lakehouse → New shortcut.
+                  </MessageBarBody>
+                </MessageBar>
               </>
             )}
 

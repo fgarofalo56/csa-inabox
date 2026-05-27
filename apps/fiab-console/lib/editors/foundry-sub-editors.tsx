@@ -529,20 +529,99 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
     </Shell>;
   }
 
+  const idx = detail.data?.index;
+  const fields: any[] = idx?.fields || [];
+  const docs: any[] = hits?.ok ? (hits.result?.value || hits.result?.['value'] || []) : [];
+
   return <Shell item={item} id={id}>
     <div className={s.pad}>
-      {detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.index && (
+      {detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : idx && (
         <>
-          <Subtitle2>Index: {detail.data.index.name}</Subtitle2>
+          <Subtitle2>Index: {idx.name}</Subtitle2>
           <div className={s.toolbar}>
-            <Field label="Query"><Input value={query} onChange={(_, d) => setQuery(d.value)} /></Field>
+            <Field label="Search query"><Input value={query} onChange={(_, d) => setQuery(d.value)} /></Field>
             <Button appearance="primary" onClick={runSearch} disabled={busy}>{busy ? 'Searching…' : 'Search'}</Button>
           </div>
-          <Subtitle2 style={{ marginTop: 8 }}>Definition</Subtitle2>
-          <pre className={s.monaco}>{JSON.stringify(detail.data.index, null, 2)}</pre>
-          {hits && (hits.ok
-            ? <pre className={s.monaco}>{JSON.stringify(hits.result, null, 2)}</pre>
-            : <ErrorBar msg={hits.error} hint={hits.hint} notDeployed={hits.notDeployed} />)}
+          <Subtitle2 style={{ marginTop: 12 }}>Fields ({fields.length})</Subtitle2>
+          <div className={s.tableWrap}>
+            <Table size="small" aria-label="Index fields">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>Name</TableHeaderCell>
+                  <TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>Key</TableHeaderCell>
+                  <TableHeaderCell>Searchable</TableHeaderCell>
+                  <TableHeaderCell>Filterable</TableHeaderCell>
+                  <TableHeaderCell>Sortable</TableHeaderCell>
+                  <TableHeaderCell>Facetable</TableHeaderCell>
+                  <TableHeaderCell>Retrievable</TableHeaderCell>
+                  <TableHeaderCell>Dims</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {fields.map((f: any) => (
+                  <TableRow key={f.name}>
+                    <TableCell className={s.cell}><strong>{f.name}</strong></TableCell>
+                    <TableCell className={s.cell}><code>{f.type}</code></TableCell>
+                    <TableCell className={s.cell}>{f.key ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.searchable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.filterable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.sortable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.facetable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.retrievable !== false ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.dimensions || ''}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          {idx.vectorSearch && (
+            <Caption1 style={{ marginTop: 8 }}>
+              Vector search enabled · profiles: {(idx.vectorSearch?.profiles || []).map((p: any) => p.name).join(', ') || '—'}
+            </Caption1>
+          )}
+          {hits && !hits.ok && (
+            <ErrorBar msg={hits.error} hint={hits.hint} notDeployed={hits.notDeployed} />
+          )}
+          {hits?.ok && (
+            <>
+              <Subtitle2 style={{ marginTop: 12 }}>Results ({docs.length})</Subtitle2>
+              {docs.length === 0 ? (
+                <Caption1>No documents matched.</Caption1>
+              ) : (
+                <div className={s.tableWrap}>
+                  <Table size="small" aria-label="Search results">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHeaderCell>Score</TableHeaderCell>
+                        {/* Show all retrievable fields; cap at 6 to keep the grid readable. */}
+                        {fields.filter(f => f.retrievable !== false).slice(0, 6).map((f) => (
+                          <TableHeaderCell key={f.name}>{f.name}</TableHeaderCell>
+                        ))}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {docs.map((d, i) => (
+                        <TableRow key={i}>
+                          <TableCell className={s.cell}>{(d['@search.score'] || 0).toFixed(3)}</TableCell>
+                          {fields.filter(f => f.retrievable !== false).slice(0, 6).map((f) => (
+                            <TableCell key={f.name} className={s.cell}>
+                              {(() => {
+                                const v = d[f.name];
+                                if (v === undefined || v === null) return '—';
+                                const s = typeof v === 'string' ? v : JSON.stringify(v);
+                                return s.length > 80 ? s.slice(0, 80) + '…' : s;
+                              })()}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
     </div>
