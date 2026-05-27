@@ -30,6 +30,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   form: { padding: '20px', display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 820 },
@@ -273,8 +274,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
         </div>
         <div className={styles.field}>
           <Caption1>Spark conf (JSON: {`{ "spark.sql.shuffle.partitions": "200" }`})</Caption1>
-          <textarea className={styles.json} value={confText}
-            onChange={(e) => setConfText(e.target.value)} rows={5} />
+          <MonacoTextarea value={confText} onChange={setConfText} language="json" height={140} minHeight={100} ariaLabel="Spark conf JSON" />
         </div>
         <div className={styles.toolbar}>
           <Button appearance="primary" onClick={submit} disabled={busy || !file || !pool}>Submit Spark batch</Button>
@@ -458,8 +458,7 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
           {tab === 'conf' && (
             <>
               <Subtitle2>Spark configuration (JSON map)</Subtitle2>
-              <textarea className={styles.json} value={confText}
-                onChange={(e) => setConfText(e.target.value)} rows={10} />
+              <MonacoTextarea value={confText} onChange={setConfText} language="json" height={240} minHeight={180} ariaLabel="Spark conf JSON" />
             </>
           )}
           {tab === 'jars' && (
@@ -656,8 +655,7 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
 
         <Subtitle2 style={{ marginTop: 8 }}>Column mappings</Subtitle2>
         <Caption1>JSON array of {`{ "source": "...", "sink": "..." }`}</Caption1>
-        <textarea className={styles.json} value={mappingsText}
-          onChange={(e) => setMappingsText(e.target.value)} rows={6} />
+        <MonacoTextarea value={mappingsText} onChange={setMappingsText} language="json" height={180} minHeight={140} ariaLabel="Column mappings JSON" />
 
         <div className={styles.toolbar}>
           <Button appearance="primary" onClick={run} disabled={busy || !srcLs || !snkLs}>Run now</Button>

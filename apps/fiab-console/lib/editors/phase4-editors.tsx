@@ -61,13 +61,15 @@ interface ModelVersion {
 
 export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [loading, setLoading] = useState(true);
+  const isNew = id === 'new' || !id;
+  const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<ModelSummary | null>(null);
   const [versions, setVersions] = useState<ModelVersion[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (isNew) return;
     setLoading(true); setError(null);
     try {
       const r = await fetch(`/api/items/ml-model/${encodeURIComponent(id)}`);
@@ -81,8 +83,34 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, isNew]);
   useEffect(() => { load(); }, [load]);
+
+  // v2 validator finding: /items/ml-model/new used to crash because the
+  // editor immediately fetched the registry with id='new' and got 404.
+  // ML Model is a read-only registry view — there's no "new" entity to
+  // create. Show an honest gate redirecting to Azure ML.
+  if (isNew) {
+    return (
+      <ItemEditorChrome item={item} id={id} ribbon={ML_RIBBON}
+        main={
+          <div className={s.pad}>
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>ML models are registered in Azure ML, not authored in Loom</MessageBarTitle>
+                The Loom ML Model editor is a read-only registry view. To register a model:
+                <ol style={{ marginTop: 6, paddingLeft: 18 }}>
+                  <li>Run a training job in <code>/items/ml-experiment</code> (or Azure ML / Databricks MLflow).</li>
+                  <li>The run automatically logs to MLflow; the trained model appears here.</li>
+                </ol>
+                Open <a href="https://ml.azure.com/" target="_blank" rel="noreferrer">Azure ML Studio</a> for hands-on model registration.
+              </MessageBarBody>
+            </MessageBar>
+          </div>
+        }
+      />
+    );
+  }
 
   const current = versions.find((v) => v.version === selected) || versions[0];
 
@@ -194,7 +222,8 @@ interface FoundryJob {
 
 export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [loading, setLoading] = useState(true);
+  const isNew = id === 'new' || !id;
+  const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<'job' | 'experiment' | null>(null);
   const [job, setJob] = useState<FoundryJob | null>(null);
@@ -203,6 +232,7 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (isNew) return;
     setLoading(true); setError(null);
     try {
       const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}`);
@@ -220,10 +250,33 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, isNew]);
   useEffect(() => { load(); }, [load]);
 
   const current = runs.find((r) => r.name === selectedRun) || runs[0] || job;
+
+  if (isNew) {
+    return (
+      <ItemEditorChrome item={item} id={id} ribbon={MLE_RIBBON}
+        main={
+          <div className={s.pad}>
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>ML experiments / jobs are submitted via Azure ML, not authored here</MessageBarTitle>
+                The Loom ML Experiment editor is a read-only view of MLflow runs. To submit a new training run:
+                <ol style={{ marginTop: 6, paddingLeft: 18 }}>
+                  <li>Open a notebook (<code>/items/notebook</code> or <code>/items/databricks-notebook</code>).</li>
+                  <li>Use MLflow's <code>start_run()</code> / <code>log_metric()</code> APIs.</li>
+                  <li>The run will appear here once logged.</li>
+                </ol>
+                Open <a href="https://ml.azure.com/" target="_blank" rel="noreferrer">Azure ML Studio</a> for the full job-submission UI.
+              </MessageBarBody>
+            </MessageBar>
+          </div>
+        }
+      />
+    );
+  }
 
   return (
     <ItemEditorChrome

@@ -34,6 +34,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -689,12 +690,13 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
         </div>
         <div className={s.formCol}>
           <Field label="Flow YAML">
-            <textarea
-              className={s.yaml}
-              spellCheck={false}
+            <MonacoTextarea
               value={form.flowYaml}
-              onChange={(e) => setForm((f) => ({ ...f, flowYaml: e.target.value }))}
-              aria-label="Topic flow YAML"
+              onChange={(v) => setForm((f) => ({ ...f, flowYaml: v }))}
+              language="plaintext"
+              height={320}
+              minHeight={240}
+              ariaLabel="Topic flow YAML"
             />
           </Field>
         </div>

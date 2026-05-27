@@ -29,6 +29,7 @@ import {
 import { Map20Regular, Folder20Regular, Play20Regular, Flow20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -196,7 +197,7 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
             <Tab value="kql">KQL (Kusto)</Tab>
             <Tab value="tsql">T-SQL (Synapse Serverless)</Tab>
           </TabList>
-          <textarea className={s.editor} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} aria-label="Geo query editor" />
+          <MonacoTextarea value={text} onChange={setText} language="sql" height={220} minHeight={180} ariaLabel="Geo query editor" />
           <Button appearance="primary" icon={<Play20Regular />} onClick={run} disabled={loading}>Run</Button>
           {result && (
             <pre style={{ fontSize: 12, maxHeight: 240, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>
