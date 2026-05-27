@@ -217,6 +217,34 @@ Recommended Playwright primitives for Phase 4.5:
 - `page.reload({ waitUntil: 'networkidle' })`
 - `expect(page.locator('.monaco-editor')).toContainText('probe-tag')`
 
+### Phase 4.6 — Ribbon, compute, and backing-service wiring (MANDATORY, added 2026-05-27)
+
+Added after the user-reported gap: "any diag that have the header bar right under the Home and the diag editor non of the button on any of the ui/editors work … if it requires capacity or azure services tied to it, it has the options to select, create, start, stop." Static-DOM probes and EDIT-SAVE-RELOAD don't catch dead ribbon buttons or missing compute / backing-service attach surfaces.
+
+For EVERY editor under test:
+
+1. **Ribbon enumerate + click** — locate the `.fui-Ribbon` (or whatever class wraps it; today it's the body of `<Ribbon>` from `lib/components/ribbon.tsx`). For every button rendered there:
+   - If `disabled` AND has a non-empty `title` attribute → OK (honest disclosure per `no-vaporware.md`).
+   - If `disabled` AND no `title` → BROKEN (silent dead button).
+   - If NOT disabled → click it; expect EITHER a network call, OR a dialog/route change, OR a visible state change within 1.5s. None of those = BROKEN.
+   **Any silent dead ribbon button = MAJOR.**
+
+2. **Compute-attach surface** — for editors whose Run/Submit action targets Azure compute (Spark pool, Databricks cluster, Synapse Dedicated SQL pool, ADX cluster, ML compute):
+   - Confirm a compute picker is visible (Fluent UI `Select` or the shared `<ComputePicker>`). **Missing = MAJOR.**
+   - Confirm the picker entries show state badges (Running / Paused / Stopped). **Missing badges = MINOR.**
+   - If the selected compute is in a paused state, confirm a Resume/Start button appears AND clicking it fires `POST /api/loom/compute-targets/{id}/start`. **Missing = MAJOR.**
+   - If `/api/loom/compute-targets` returns no entries, confirm the editor surfaces a MessageBar with a "Create compute" affordance (deep-link to portal or bicep module). **Silent empty list = BROKEN.**
+
+3. **Backing-service attach surface** — for editors that require an Azure backing resource (Fabric workspace, AI Search service, AI Foundry hub, Cosmos account, Azure SQL server, ADX cluster, APIM instance, ADF factory, Function App):
+   - Confirm a resource picker is visible (workspace dropdown, server dropdown, etc.). Free-text Input where the user must paste a resource name = BLOCKER (the user reported this exact pattern as unusable).
+   - Confirm the picker is populated from a real BFF route (NOT hard-coded). Empty list must show MessageBar with what's missing (env var / role grant / bicep module). **Silent empty list = BROKEN.**
+
+4. **Lifecycle disclosure** — if compute can be paused (Dedicated SQL pool, Databricks cluster, Synapse Spark with auto-pause), the editor must surface either an inline Resume button OR a clear "compute is paused — click Resume in the picker" MessageBar before Run is enabled. **Run on paused compute that just hangs = BLOCKER.**
+
+Phase 4.6 verdicts roll up into the grade matrix. **An editor that fails any of these checks cannot get above C, regardless of how good it looks.**
+
+Reference picker implementation: `apps/fiab-console/lib/components/compute-picker.tsx` (`<ComputePicker filter={['databricks-cluster']} showLifecycle />`). Reference workspace picker: `useWorkspaces()` + `<WorkspacePicker>` in `apps/fiab-console/lib/editors/phase3-editors.tsx` (now pointing at `/api/loom/workspaces`).
+
 ## Failure handling
 
 - **Catalog phase fails** (e.g. Fabric login failed, Playwright timeout): retry once with a clean browser context. If still failing, mark UI blocked + ask human for MSAL re-auth.

@@ -41,6 +41,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
+import { ComputePicker } from '@/lib/components/compute-picker';
 
 const useStyles = makeStyles({
   monaco: {
@@ -165,6 +166,9 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const load = useCallback(async () => {
+    // Pre-save gate: /items/eventhouse/new fires this before any record exists.
+    // Skip the fetch — the editor renders its "create database" flow instead.
+    if (!id || id === 'new') return;
     try {
       const r = await fetch(`/api/items/eventhouse/${id}`);
       const j = (await r.json()) as EventhouseState;
@@ -311,6 +315,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
+    // Pre-save gate: /items/kql-database/new fires this before any record exists.
+    if (!id || id === 'new') return;
     try {
       const r = await fetch(`/api/items/kql-database/${id}`);
       const j = (await r.json()) as KqlDbInfo;
@@ -469,6 +475,8 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    // Pre-save gate: /items/kql-queryset/new fires this before any record exists.
+    if (!id || id === 'new') return;
     try {
       const r = await fetch(`/api/items/kql-queryset/${id}`);
       const j = (await r.json()) as QuerysetState;
@@ -701,6 +709,8 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const [jsonErr, setJsonErr] = useState<string | null>(null);
 
   const load = useCallback(async (runTiles = false) => {
+    // Pre-save gate: /items/kql-dashboard/new fires this before any record exists.
+    if (!id || id === 'new') return;
     try {
       const r = await fetch(`/api/items/kql-dashboard/${id}${runTiles ? '?run=1' : ''}`);
       const j = (await r.json()) as DashboardState;
@@ -919,6 +929,8 @@ const DEFAULT_ES_CFG: StreamCfg = {
 
 export function EventstreamEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const ws = useWorkspaces();
+  const [workspaceId, setWorkspaceId] = useState('');
   const [state, setState] = useState<EventstreamState | null>(null);
   const [cfgText, setCfgText] = useState(JSON.stringify(DEFAULT_ES_CFG, null, 2));
   const [dirty, setDirty] = useState(false);
@@ -927,7 +939,20 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
+  // Auto-pick the first workspace once loaded so the editor isn't blocked
+  // on a manual click for the common single-workspace deployments. Users
+  // can still switch via the picker below.
+  useEffect(() => {
+    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) {
+      setWorkspaceId(ws.workspaces[0].id);
+    }
+  }, [workspaceId, ws.workspaces]);
+
   const load = useCallback(async () => {
+    // Pre-save gate: /items/eventstream/new fires this before any record exists
+    // (was returning 404 on the walkthrough validator). Skip the fetch so the
+    // editor renders its default DEFAULT_ES_CFG until the user saves.
+    if (!id || id === 'new') return;
     try {
       const r = await fetch(`/api/items/eventstream/${id}`);
       const j = (await r.json()) as EventstreamState;
@@ -1024,6 +1049,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
 
         <div className={s.toolbar}>
           <Badge appearance="filled" color="brand">Eventstream</Badge>
+          <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
           {state?.runtimeStatus && <Badge appearance="outline">{state.runtimeStatus}</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
           <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Reload</Button>
@@ -1417,8 +1443,16 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const [schema, setSchema] = useState<WHSchemaResp | null>(null);
   const [result, setResult] = useState<WHQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Surface the underlying Synapse Dedicated SQL pool via ComputePicker so
+  // users can Resume the pool when paused without leaving the Warehouse
+  // editor. Selection is informational here — Warehouse query routes to the
+  // wired-in pool — but the lifecycle controls (Resume / Pause) are wired.
+  const [computeId, setComputeId] = useState('');
 
   const loadSchema = useCallback(async () => {
+    // Pre-save gate: /items/warehouse/new fires this before any record exists
+    // (was returning 409 on the walkthrough validator). Skip until saved.
+    if (!id || id === 'new') return;
     try {
       const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/schema`);
       const j = (await r.json()) as WHSchemaResp;
@@ -1525,10 +1559,21 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             <MessageBar intent="info">
               <MessageBarBody>
                 <MessageBarTitle>Warehouse compute is {schema.state}</MessageBarTitle>
-                {schema.message || 'Open the Synapse Dedicated SQL pool editor and click Resume.'}
+                {schema.message || 'Pick the Synapse Dedicated SQL pool below and click Resume.'}
               </MessageBarBody>
             </MessageBar>
           )}
+          {/*
+           * Compute picker so users can Resume the underlying Synapse
+           * Dedicated SQL pool when paused, directly from the Warehouse
+           * editor instead of round-tripping to the dedicated-pool editor.
+           */}
+          <ComputePicker
+            label="Backing compute (Synapse Dedicated SQL)"
+            filter={['synapse-dedicated-sql']}
+            value={computeId}
+            onChange={setComputeId}
+          />
           <MonacoTextarea
             value={sqlText}
             onChange={setSqlText}

@@ -77,7 +77,13 @@ export function ItemsByTypePane({ types, emptyHint }: Props) {
   const [q, setQ] = useState('');
 
   useEffect(() => {
-    const qs = types.map(t => `type=${encodeURIComponent(t)}`).join('&');
+    // v3.4: switch from repeated ?type=A&type=B&... to a single
+    // ?types=A,B,... param. Azure Front Door Premium DRS 2.1 (managed
+    // rule 921180 "HTTP Parameter Pollution") was blocking the
+    // 6-value variant on /onelake at the edge with 403, which also
+    // poisoned subsequent requests on the page (logo, /api/me, etc.).
+    // BFF accepts both forms — see app/api/items/by-type/route.ts.
+    const qs = `types=${encodeURIComponent(types.join(','))}`;
     fetch(`/api/items/by-type?${qs}`).then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); setItems([]); return null; }
       return r.json();
