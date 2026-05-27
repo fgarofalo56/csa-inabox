@@ -133,6 +133,15 @@ param loomStorageAccount string = ''
 @description('Loom Cosmos account name. When empty, Cosmos env vars omitted.')
 param loomCosmosAccount string = ''
 
+@description('Purview account name (short, NOT full URL) — e.g. "purview-csa-loom-eastus2". When empty, /admin/security Purview tab + /api/items/data-product/*/register-purview return HTTP 503 with a structured remediation hint.')
+param loomPurviewAccount string = ''
+
+@description('Enable Microsoft Information Protection (sensitivity labels / label policies) calls via Microsoft Graph. Requires the Console UAMI to have InformationProtectionPolicy.Read.All admin-consented. When false, /admin/security Information Protection tab returns 503.')
+param loomMipEnabled bool = false
+
+@description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
+param loomDlpEnabled bool = false
+
 @description('Azure AD tenant ID for MSAL on the Console.')
 param loomMsalTenantId string = subscription().tenantId
 
@@ -417,6 +426,19 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SILVER_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/silver' }
             { name: 'LOOM_GOLD_URL',    value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/gold' }
             { name: 'LOOM_LANDING_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/landing' }
+          ] : [],
+          // Purview + Information Protection + DLP env wiring. Each is
+          // gated independently. When omitted, the /admin/security panel
+          // surfaces a Fluent MessageBar naming the missing env var and
+          // the Graph AppRole / Purview portal role that must be granted.
+          !empty(loomPurviewAccount) ? [
+            { name: 'LOOM_PURVIEW_ACCOUNT', value: loomPurviewAccount }
+          ] : [],
+          loomMipEnabled ? [
+            { name: 'LOOM_MIP_ENABLED', value: 'true' }
+          ] : [],
+          loomDlpEnabled ? [
+            { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],
           !empty(loomMsalClientId) ? [
             { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }

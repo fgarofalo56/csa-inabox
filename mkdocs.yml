@@ -1988,6 +1988,12 @@ nav:
       - Live Deploy Status (2026-05-23): fiab/live-deploy-status.md
       - UAT Report (Iteration 1): fiab/uat-report.md
       - Console Access Patterns: fiab/access-patterns.md
+      - Admin — Security & Governance:
+          - Overview: fiab/admin/security/index.md
+          - Purview tab: fiab/admin/security/purview.md
+          - Information Protection tab: fiab/admin/security/information-protection.md
+          - DLP tab: fiab/admin/security/dlp.md
+          - Audit tab: fiab/admin/security/audit.md
       - v1 Final Status + v2 Plan: fiab/v1-final-status-and-v2-plan.md
       - Releases:
           - "2026-05-27: App bundles + console wiring sweep": fiab/releases/2026-05-27-apps-bundles-and-wiring-sweep.md
