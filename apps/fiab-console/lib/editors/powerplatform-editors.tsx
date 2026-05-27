@@ -327,6 +327,15 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
       <div className={s.pad}>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Power Apps cannot be authored inside Loom</MessageBarTitle>
+            The canvas designer is a proprietary Microsoft client. This editor is a read-only registry view —
+            it lists existing apps in the selected environment, shows owner / type / Play URL, and that's it.
+            To create or edit an app, click the <strong>Play</strong> link to open Maker Studio at
+            <code> make.powerapps.com</code>.
+          </MessageBarBody>
+        </MessageBar>
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadList}>Reload</Button>
@@ -561,6 +570,15 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
   return (
     <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
       <div className={s.pad}>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Power Pages cannot be authored inside Loom</MessageBarTitle>
+            Pages, templates, web roles, and content snippets edit in the proprietary Power Pages design
+            studio. This editor is a read-only registry view that lists deployed sites in the selected
+            environment with their primary domain and status. Click a site URL to open the live page; click
+            the site row for metadata. To edit, open Maker Studio at <code>make.powerpages.microsoft.com</code>.
+          </MessageBarBody>
+        </MessageBar>
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={reloadList}>Reload</Button>

@@ -167,12 +167,17 @@ export function DataPipelineEditor({ item, id }: Props) {
 
   const save = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
-    setParseErr(null); setDetailErr(null);
-    try { JSON.parse(defText); } catch (e: any) { setParseErr(e?.message || 'invalid JSON'); return; }
+    setParseErr(null); setDetailErr(null); setRunMsg('Saving pipeline…');
+    // Phase 4.5 — read defText via functional setter to guarantee the freshest
+    // user edit gets persisted even if save() was memoised with a stale closure.
+    // Modeled after notebook-editor.tsx patchCell fix.
+    let textSnapshot = defText;
+    setDefText((prev) => { textSnapshot = prev; return prev; });
+    try { JSON.parse(textSnapshot); } catch (e: any) { setParseErr(e?.message || 'invalid JSON'); setRunMsg(null); return; }
     setSaving(true);
     try {
       const definition = {
-        parts: [{ path: 'pipeline-content.json', payload: toB64(defText), payloadType: 'InlineBase64' }],
+        parts: [{ path: 'pipeline-content.json', payload: toB64(textSnapshot), payloadType: 'InlineBase64' }],
       };
       const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
@@ -180,10 +185,30 @@ export function DataPipelineEditor({ item, id }: Props) {
         body: JSON.stringify({ definition }),
       });
       const j = await r.json();
-      if (!j.ok) setDetailErr(j.error || 'save failed');
-      else setDirty(false);
+      if (!j.ok) {
+        setDetailErr(j.error || 'save failed');
+        setRunMsg(`Save failed: ${j.error || 'unknown'}`);
+      } else {
+        setDirty(false);
+        setRunMsg(`Saved at ${new Date().toLocaleTimeString()}`);
+      }
+    } catch (e: any) {
+      setDetailErr(e?.message || String(e));
+      setRunMsg(`Save failed: ${e?.message || e}`);
     } finally { setSaving(false); }
   }, [workspaceId, pipelineId, defText]);
+
+  // Phase 4.5 — Ctrl+S / Cmd+S keyboard shortcut for Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (workspaceId && pipelineId && dirty && !saving) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [workspaceId, pipelineId, dirty, saving, save]);
 
   const run = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;

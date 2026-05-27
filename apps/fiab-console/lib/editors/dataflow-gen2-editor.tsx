@@ -141,17 +141,41 @@ export function DataflowGen2Editor({ item, id }: Props) {
 
   const save = useCallback(async () => {
     if (!workspaceId || !dataflowId) return;
-    setSaving(true); setDetailErr(null);
+    setSaving(true); setDetailErr(null); setRefreshMsg('Saving dataflow…');
+    // Phase 4.5 — snapshot defText via functional setter so a Run-then-Edit
+    // race doesn't clobber in-flight edits with a stale closure capture.
+    let textSnapshot = defText;
+    setDefText((prev) => { textSnapshot = prev; return prev; });
     try {
-      const definition = { parts: [{ path: partPath, payload: toB64(defText), payloadType: 'InlineBase64' }] };
+      const definition = { parts: [{ path: partPath, payload: toB64(textSnapshot), payloadType: 'InlineBase64' }] };
       const r = await fetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ definition }),
       });
       const j = await r.json();
-      if (!j.ok) setDetailErr(j.error || 'save failed');
-      else setDirty(false);
+      if (!j.ok) {
+        setDetailErr(j.error || 'save failed');
+        setRefreshMsg(`Save failed: ${j.error || 'unknown'}`);
+      } else {
+        setDirty(false);
+        setRefreshMsg(`Saved at ${new Date().toLocaleTimeString()}`);
+      }
+    } catch (e: any) {
+      setDetailErr(e?.message || String(e));
+      setRefreshMsg(`Save failed: ${e?.message || e}`);
     } finally { setSaving(false); }
   }, [workspaceId, dataflowId, partPath, defText]);
+
+  // Phase 4.5 — Ctrl+S / Cmd+S keyboard shortcut for Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (workspaceId && dataflowId && dirty && !saving) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [workspaceId, dataflowId, dirty, saving, save]);
 
   const refresh = useCallback(async () => {
     if (!workspaceId || !dataflowId) return;
@@ -263,7 +287,10 @@ export function DataflowGen2Editor({ item, id }: Props) {
               <MonacoTextarea
                 value={defText}
                 onChange={(v) => { setDefText(v); setDirty(true); }}
-                language="json"
+                /* Pick a sensible Monaco language based on the active part: .pq/.m
+                   is Power Query M (no first-class Monaco mode — fall back to
+                   plaintext); queryMetadata.json + the rest are JSON. */
+                language={/\.(pq|m)$/i.test(partPath) ? 'plaintext' : 'json'}
                 height={360}
                 minHeight={280}
                 ariaLabel="Dataflow definition"

@@ -21,7 +21,7 @@
  *   - Query persists to ARM via PUT /streamingjobs/{name}/transformations.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner,
   Tab, TabList, Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -98,6 +98,12 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  // Track dirty state via ref so async loadDetail callbacks (triggered by
+  // refresh / setState polling) don't clobber user edits made between the
+  // request firing and the response arriving. Mirrors the notebook patchCell
+  // pattern landed 2026-05-27 — async writes must check current state, not
+  // the snapshot captured when the call started.
+  const dirtyRef = useRef(false);
 
   const loadList = useCallback(async () => {
     setError(null); setHint(null);
@@ -110,7 +116,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
     } catch (e: any) { setError(e?.message || String(e)); setJobs([]); }
   }, [selected]);
 
-  const loadDetail = useCallback(async (name: string) => {
+  const loadDetail = useCallback(async (name: string, opts?: { force?: boolean }) => {
     if (!name) return;
     setError(null);
     try {
@@ -119,12 +125,21 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
       if (!j.ok) { setError(j.error); setHint(j.hint); return; }
       setJob(j.job);
       const q = j.job?.query || STARTER_QUERY;
-      setQuery(q); setOrigQuery(q);
+      // Only overwrite the editor buffer when the user has no unsaved
+      // edits, OR when caller explicitly forces (e.g. selecting a
+      // different job in the list). Always update origQuery so dirty
+      // calculation reflects the server-side truth.
+      setOrigQuery(q);
+      if (opts?.force || !dirtyRef.current) {
+        setQuery(q);
+      }
     } catch (e: any) { setError(e?.message || String(e)); }
   }, []);
 
   useEffect(() => { loadList(); }, [loadList]);
-  useEffect(() => { if (selected) loadDetail(selected); }, [selected, loadDetail]);
+  // When switching jobs, force-load (user expects buffer to reset to that
+  // job's persisted query). On other refreshes we respect dirty edits.
+  useEffect(() => { if (selected) loadDetail(selected, { force: true }); }, [selected, loadDetail]);
 
   const save = useCallback(async () => {
     if (!selected) return;
@@ -157,6 +172,21 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   }, [selected, loadDetail]);
 
   const dirty = query !== origQuery;
+  // Keep ref in sync so async callbacks see the latest dirty state.
+  dirtyRef.current = dirty;
+
+  // Ctrl/Cmd+S to save query when dirty + not busy. Matches notebook editor.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (selected && dirty && !busy) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, dirty, busy, save]);
+
   const jobState = job?.jobState || job?.state || '—';
   const stateColor: 'success' | 'warning' | 'danger' | 'subtle' =
     /Started/i.test(jobState) ? 'success' :

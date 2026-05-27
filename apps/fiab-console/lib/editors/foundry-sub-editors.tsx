@@ -343,10 +343,10 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
       <div className={s.card}>
         <Subtitle2>New evaluation</Subtitle2>
         <div className={s.formRow}>
-          <span>Display name</span><Input value={form.displayName} onChange={(_, d) => setForm({ ...form, displayName: d.value })} />
-          <span>Dataset ID</span><Input value={form.datasetId} onChange={(_, d) => setForm({ ...form, datasetId: d.value })} placeholder="azureml://datastores/.../paths/..." />
-          <span>Model deployment</span><Input value={form.modelDeployment} onChange={(_, d) => setForm({ ...form, modelDeployment: d.value })} placeholder="gpt-4o-mini" />
-          <span>Evaluators</span><Input value={form.evaluators} onChange={(_, d) => setForm({ ...form, evaluators: d.value })} placeholder="comma-separated" />
+          <span>Display name</span><Input value={form.displayName} onChange={(_, d) => setForm((f) => ({ ...f, displayName: d.value }))} />
+          <span>Dataset ID</span><Input value={form.datasetId} onChange={(_, d) => setForm((f) => ({ ...f, datasetId: d.value }))} placeholder="azureml://datastores/.../paths/..." />
+          <span>Model deployment</span><Input value={form.modelDeployment} onChange={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.value }))} placeholder="gpt-4o-mini" />
+          <span>Evaluators</span><Input value={form.evaluators} onChange={(_, d) => setForm((f) => ({ ...f, evaluators: d.value }))} placeholder="comma-separated" />
         </div>
         <div className={s.toolbar} style={{ marginTop: 8 }}>
           <Button appearance="primary" onClick={create} disabled={busy}>{busy ? 'Submitting…' : 'Create evaluation'}</Button>
@@ -665,17 +665,19 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
         <div className={s.card}>
           <Subtitle2>New compute</Subtitle2>
           <div className={s.formRow}>
-            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm({ ...form, name: d.value })} />
+            {/* v3.28 Phase 4.5: functional setForm so the Start/Stop polling
+                refresh + concurrent typing don't clobber form edits. */}
+            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
             <span>Type</span>
             <Dropdown value={form.computeType} selectedOptions={[form.computeType]}
-              onOptionSelect={(_, d) => d.optionValue && setForm({ ...form, computeType: d.optionValue })}>
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, computeType: d.optionValue! }))}>
               <Option value="AmlCompute">AmlCompute (cluster)</Option>
               <Option value="ComputeInstance">ComputeInstance</Option>
             </Dropdown>
-            <span>VM size</span><Input value={form.vmSize} onChange={(_, d) => setForm({ ...form, vmSize: d.value })} />
+            <span>VM size</span><Input value={form.vmSize} onChange={(_, d) => setForm((f) => ({ ...f, vmSize: d.value }))} />
             {form.computeType === 'AmlCompute' && <>
-              <span>Min nodes</span><Input type="number" value={String(form.minNodeCount)} onChange={(_, d) => setForm({ ...form, minNodeCount: Number(d.value) })} />
-              <span>Max nodes</span><Input type="number" value={String(form.maxNodeCount)} onChange={(_, d) => setForm({ ...form, maxNodeCount: Number(d.value) })} />
+              <span>Min nodes</span><Input type="number" value={String(form.minNodeCount)} onChange={(_, d) => setForm((f) => ({ ...f, minNodeCount: Number(d.value) }))} />
+              <span>Max nodes</span><Input type="number" value={String(form.maxNodeCount)} onChange={(_, d) => setForm((f) => ({ ...f, maxNodeCount: Number(d.value) }))} />
             </>}
           </div>
           <Button appearance="primary" onClick={create} disabled={busy || !form.name}>{busy ? 'Creating…' : 'Create compute'}</Button>
@@ -787,17 +789,17 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
         <div className={s.card}>
           <Subtitle2>New asset</Subtitle2>
           <div className={s.formRow}>
-            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm({ ...form, name: d.value })} />
+            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
             <span>Type</span>
             <Dropdown value={form.dataType} selectedOptions={[form.dataType]}
-              onOptionSelect={(_, d) => d.optionValue && setForm({ ...form, dataType: d.optionValue })}>
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, dataType: d.optionValue! }))}>
               <Option value="uri_file">uri_file</Option>
               <Option value="uri_folder">uri_folder</Option>
               <Option value="mltable">mltable</Option>
             </Dropdown>
-            <span>URI</span><Input value={form.dataUri} onChange={(_, d) => setForm({ ...form, dataUri: d.value })} placeholder="azureml:// or abfss://..." />
-            <span>Version</span><Input value={form.version} onChange={(_, d) => setForm({ ...form, version: d.value })} />
-            <span>Description</span><Input value={form.description} onChange={(_, d) => setForm({ ...form, description: d.value })} />
+            <span>URI</span><Input value={form.dataUri} onChange={(_, d) => setForm((f) => ({ ...f, dataUri: d.value }))} placeholder="azureml:// or abfss://..." />
+            <span>Version</span><Input value={form.version} onChange={(_, d) => setForm((f) => ({ ...f, version: d.value }))} />
+            <span>Description</span><Input value={form.description} onChange={(_, d) => setForm((f) => ({ ...f, description: d.value }))} />
           </div>
           <Button appearance="primary" onClick={create} disabled={!form.name || !form.dataUri}>Create asset</Button>
           {msg && <Caption1> {msg}</Caption1>}

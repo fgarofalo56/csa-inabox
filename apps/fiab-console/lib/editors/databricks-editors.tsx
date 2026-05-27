@@ -606,6 +606,11 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
   const [savingFile, setSavingFile] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileMessage, setFileMessage] = useState<string | null>(null);
+  // Track the server-side source so we can mark the buffer dirty and gate
+  // Ctrl+S. setSource happens via Monaco onChange so dirty falls out from
+  // a direct comparison.
+  const [origSource, setOrigSource] = useState<string>('');
+  const dirty = source !== origSource;
 
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [clusterId, setClusterId] = useState<string>('');
@@ -659,7 +664,9 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
       const r = await fetch(`/api/items/databricks-notebook/${id}?path=${encodeURIComponent(path)}`);
       const j = await r.json();
       if (!j.ok) { setFileError(j.error || `HTTP ${r.status}`); return; }
-      setSource(j.content || '');
+      const content = j.content || '';
+      setSource(content);
+      setOrigSource(content);
       setLanguage(((lang || j.language || 'PYTHON').toUpperCase() as any));
     } catch (e: any) {
       setFileError(e?.message || String(e));
@@ -673,21 +680,44 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     setSavingFile(true);
     setFileError(null);
     setFileMessage(null);
+    // Snapshot the source we are about to send so when the PUT succeeds
+    // we can mark exactly that text as the new "saved" baseline. If the
+    // user keeps typing during the await, origSource will land on the
+    // bytes the server actually accepted — not whatever the editor now
+    // contains. Matches the notebook editor's snapshot-then-confirm
+    // pattern landed 2026-05-27.
+    const snapshot = source;
     try {
       const r = await fetch(`/api/items/databricks-notebook/${id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: selectedPath, language, content: source }),
+        body: JSON.stringify({ path: selectedPath, language, content: snapshot }),
       });
       const j = await r.json();
       if (!j.ok) setFileError(j.error || `HTTP ${r.status}`);
-      else setFileMessage(`Saved to ${selectedPath}`);
+      else {
+        setOrigSource(snapshot);
+        setFileMessage(`Saved to ${selectedPath} at ${new Date().toLocaleTimeString()}`);
+      }
     } catch (e: any) {
       setFileError(e?.message || String(e));
     } finally {
       setSavingFile(false);
     }
   }, [id, selectedPath, language, source]);
+
+  // Ctrl/Cmd+S to save when there are unsaved changes. Matches the Fabric
+  // notebook editor's keybinding so muscle memory works across the family.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (selectedPath && dirty && !savingFile) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedPath, dirty, savingFile, save]);
 
   const runOn = useCallback(async () => {
     if (!selectedPath || !clusterId) return;
@@ -819,10 +849,10 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
             <Button
               appearance="primary"
               icon={<Save20Regular />}
-              disabled={!selectedPath || savingFile}
+              disabled={!selectedPath || savingFile || !dirty}
               onClick={save}
             >
-              {savingFile ? 'Saving…' : 'Save'}
+              {savingFile ? 'Saving…' : dirty ? 'Save *' : 'Save'}
             </Button>
             <Dropdown
               placeholder="Cluster"
@@ -1108,6 +1138,18 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       setRunning(false);
     }
   }, [id, jobId]);
+
+  // Ctrl/Cmd+S to save the job spec.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (!saving) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [saving, save]);
 
   return (
     <ItemEditorChrome
@@ -1439,6 +1481,20 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     setCluster(null);
     await loadClusters();
   }, [id, clusterId, loadClusters]);
+
+  // Ctrl/Cmd+S to save when not already busy. Only meaningful for the
+  // create flow (clusterId === null); edit-after-create is gated by the
+  // Databricks REST surface, but matching the family-wide muscle memory.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (!saving && !clusterId) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [saving, clusterId, save]);
 
   const state = cluster?.state || (clusterId ? 'UNKNOWN' : 'NEW');
 

@@ -158,15 +158,23 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
   const [err, setErr] = useState<string | null>(null);
   const [runs, setRuns] = useState<SparkBatchRun[]>([]);
   const [lastSubmit, setLastSubmit] = useState<any>(null);
+  // Phase 4.5 — dirty flag prevents the post-save reload from clobbering
+  // unsaved edits if the user kept typing while save() was in flight.
+  const [dirty, setDirty] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const spec = (cosmosItem?.state as any)?.spec;
     if (!spec) return;
+    // Phase 4.5 — never overwrite local edits-in-flight when the cosmosItem
+    // reference changes (e.g. after a post-save reload).
+    if (dirty) return;
     setFile(spec.file || '');
     setClassName(spec.className || '');
     setArgsText((spec.args || []).join('\n'));
     setConfText(JSON.stringify(spec.conf || {}, null, 2));
     setPool(spec.pool || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cosmosItem]);
 
   const loadRuns = useCallback(async () => {
@@ -195,12 +203,14 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
   };
 
   const save = async () => {
-    setBusy(true); setErr(null);
+    setBusy(true); setErr(null); setSaveMsg('Saving spec…');
     try {
       const spec = buildSpec();
       await saveItem('spark-job-definition', id, { ...(cosmosItem?.state || {}), spec });
+      setDirty(false);
+      setSaveMsg(`Saved at ${new Date().toLocaleTimeString()}`);
       await reload();
-    } catch (e: any) { setErr(e?.message || String(e)); }
+    } catch (e: any) { setErr(e?.message || String(e)); setSaveMsg(null); }
     finally { setBusy(false); }
   };
 
@@ -210,6 +220,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
       const spec = buildSpec();
       // Persist before submit so /submit reads the freshest spec.
       await saveItem('spark-job-definition', id, { ...(cosmosItem?.state || {}), spec });
+      setDirty(false);
       const r = await fetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/submit`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
       });
@@ -220,6 +231,19 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
   };
+
+  // Phase 4.5 — Ctrl+S / Cmd+S shortcut for Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (id !== 'new' && dirty && !busy) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, dirty, busy]);
 
   if (id === 'new') {
     return (
@@ -244,20 +268,20 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
         <div className={styles.row}>
           <div className={styles.field}>
             <Caption1>Main file (abfss:// or wasbs:// URI)</Caption1>
-            <Input value={file} onChange={(_, d) => setFile(d.value)}
+            <Input value={file} onChange={(_, d) => { setFile(d.value); setDirty(true); }}
               placeholder="abfss://files@<account>.dfs.core.windows.net/jobs/main.py" />
           </div>
         </div>
         <div className={styles.row}>
           <div className={styles.field}>
             <Caption1>Main class (Scala/Java; leave blank for Python)</Caption1>
-            <Input value={className} onChange={(_, d) => setClassName(d.value)}
+            <Input value={className} onChange={(_, d) => { setClassName(d.value); setDirty(true); }}
               placeholder="com.example.Main" />
           </div>
           <div className={styles.field}>
             <Caption1>Spark pool</Caption1>
             <Dropdown value={pool} selectedOptions={pool ? [pool] : []}
-              onOptionSelect={(_, d) => setPool(d.optionValue || '')}>
+              onOptionSelect={(_, d) => { setPool(d.optionValue || ''); setDirty(true); }}>
               {pools.length === 0 && <Option value="">(no pools — refresh or check workspace)</Option>}
               {pools.map((p) => (
                 <Option key={p.name} value={p.name}>
@@ -269,18 +293,20 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
         </div>
         <div className={styles.field}>
           <Caption1>Arguments (one per line)</Caption1>
-          <Textarea value={argsText} onChange={(_, d) => setArgsText(d.value)} rows={3}
+          <Textarea value={argsText} onChange={(_, d) => { setArgsText(d.value); setDirty(true); }} rows={3}
             placeholder={'--input gold/sales\n--output gold/sales_agg'} />
         </div>
         <div className={styles.field}>
           <Caption1>Spark conf (JSON: {`{ "spark.sql.shuffle.partitions": "200" }`})</Caption1>
-          <MonacoTextarea value={confText} onChange={setConfText} language="json" height={140} minHeight={100} ariaLabel="Spark conf JSON" />
+          <MonacoTextarea value={confText} onChange={(v) => { setConfText(v); setDirty(true); }} language="json" height={140} minHeight={100} ariaLabel="Spark conf JSON" />
         </div>
+        {saveMsg && <MessageBar intent="success"><MessageBarBody>{saveMsg}</MessageBarBody></MessageBar>}
         <div className={styles.toolbar}>
           <Button appearance="primary" onClick={submit} disabled={busy || !file || !pool}>Submit Spark batch</Button>
-          <Button onClick={save} disabled={busy}>Save spec</Button>
+          <Button onClick={save} disabled={busy || !dirty}>{dirty ? 'Save spec' : 'Saved'}</Button>
           <Button onClick={loadRuns} disabled={busy}>Refresh runs</Button>
           {busy && <Spinner size="tiny" />}
+          {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
         </div>
 
         {lastSubmit && (
@@ -357,12 +383,17 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [applyMsg, setApplyMsg] = useState<string | null>(null);
+  // Phase 4.5 — see SparkJobDefinitionEditor for rationale.
+  const [dirty, setDirty] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const s: any = cosmosItem?.state || {};
+    if (dirty) return; // never clobber in-flight edits when cosmosItem reloads
     setRequirements(s.requirements || '');
     setConfText(JSON.stringify(s.conf || {}, null, 2));
     setJarsText((s.jars || []).join('\n'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cosmosItem]);
 
   const buildState = () => {
@@ -377,13 +408,28 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
   };
 
   const save = async () => {
-    setBusy(true); setErr(null); setApplyMsg(null);
+    setBusy(true); setErr(null); setApplyMsg(null); setSaveMsg('Saving environment…');
     try {
       await saveItem('environment', id, buildState());
+      setDirty(false);
+      setSaveMsg(`Saved at ${new Date().toLocaleTimeString()}`);
       await reload();
-    } catch (e: any) { setErr(e?.message || String(e)); }
+    } catch (e: any) { setErr(e?.message || String(e)); setSaveMsg(null); }
     finally { setBusy(false); }
   };
+
+  // Phase 4.5 — Ctrl+S / Cmd+S shortcut for Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (id !== 'new' && dirty && !busy) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, dirty, busy]);
 
   const applyToPool = async () => {
     if (!targetPool) { setErr('Select a target pool first.'); return; }
@@ -451,20 +497,20 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
           {tab === 'requirements' && (
             <>
               <Subtitle2>requirements.txt</Subtitle2>
-              <Textarea value={requirements} onChange={(_, d) => setRequirements(d.value)} rows={10}
+              <Textarea value={requirements} onChange={(_, d) => { setRequirements(d.value); setDirty(true); }} rows={10}
                 placeholder={'pandas==2.2.2\nscikit-learn==1.4.2\nmlflow==2.13.0'} />
             </>
           )}
           {tab === 'conf' && (
             <>
               <Subtitle2>Spark configuration (JSON map)</Subtitle2>
-              <MonacoTextarea value={confText} onChange={setConfText} language="json" height={240} minHeight={180} ariaLabel="Spark conf JSON" />
+              <MonacoTextarea value={confText} onChange={(v) => { setConfText(v); setDirty(true); }} language="json" height={240} minHeight={180} ariaLabel="Spark conf JSON" />
             </>
           )}
           {tab === 'jars' && (
             <>
               <Subtitle2>Custom JAR URIs (one per line)</Subtitle2>
-              <Textarea value={jarsText} onChange={(_, d) => setJarsText(d.value)} rows={6}
+              <Textarea value={jarsText} onChange={(_, d) => { setJarsText(d.value); setDirty(true); }} rows={6}
                 placeholder={'abfss://libs@<account>.dfs.core.windows.net/myudf.jar'} />
             </>
           )}
@@ -488,10 +534,12 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
             </>
           )}
 
+          {saveMsg && <MessageBar intent="success"><MessageBarBody>{saveMsg}</MessageBarBody></MessageBar>}
           <div className={styles.toolbar}>
-            <Button appearance="primary" onClick={save} disabled={busy}>Save environment</Button>
+            <Button appearance="primary" onClick={save} disabled={busy || !dirty}>{dirty ? 'Save environment' : 'Saved'}</Button>
             <Button onClick={applyToPool} disabled={busy || !targetPool}>Apply to pool</Button>
             {busy && <Spinner size="tiny" />}
+            {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
           </div>
         </div>
       </>
@@ -537,9 +585,13 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   const [err, setErr] = useState<string | null>(null);
   const [runs, setRuns] = useState<PipelineRunDTO[]>([]);
   const [lastRun, setLastRun] = useState<string | null>(null);
+  // Phase 4.5 — see SparkJobDefinitionEditor for rationale.
+  const [dirty, setDirty] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const s: any = cosmosItem?.state || {};
+    if (dirty) return; // never clobber in-flight edits when cosmosItem reloads
     setSrcLs(s.source?.linkedService || '');
     setSrcType(s.source?.type || 'AzureSqlSource');
     setSrcQuery(s.source?.query || '');
@@ -547,6 +599,7 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
     setSnkType(s.sink?.type || 'AzureSqlSink');
     setSnkTable(s.sink?.table || '');
     setMappingsText(JSON.stringify(s.mappings || [], null, 2));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cosmosItem]);
 
   const loadRuns = useCallback(async () => {
@@ -573,9 +626,13 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   };
 
   const save = async () => {
-    setBusy(true); setErr(null);
-    try { await saveItem('copy-job', id, buildState()); await reload(); }
-    catch (e: any) { setErr(e?.message || String(e)); }
+    setBusy(true); setErr(null); setSaveMsg('Saving copy-job…');
+    try {
+      await saveItem('copy-job', id, buildState());
+      setDirty(false);
+      setSaveMsg(`Saved at ${new Date().toLocaleTimeString()}`);
+      await reload();
+    } catch (e: any) { setErr(e?.message || String(e)); setSaveMsg(null); }
     finally { setBusy(false); }
   };
 
@@ -583,6 +640,7 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
     setBusy(true); setErr(null); setLastRun(null);
     try {
       await saveItem('copy-job', id, buildState());
+      setDirty(false);
       const r = await fetch(`/api/items/copy-job/${encodeURIComponent(id)}/run`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
       });
@@ -593,6 +651,19 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
   };
+
+  // Phase 4.5 — Ctrl+S / Cmd+S shortcut for Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (id !== 'new' && dirty && !busy) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, dirty, busy]);
 
   if (id === 'new') {
     return (
@@ -617,19 +688,19 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
         <div className={styles.row}>
           <div className={styles.field}>
             <Caption1>Linked service name</Caption1>
-            <Input value={srcLs} onChange={(_, d) => setSrcLs(d.value)} placeholder="MyAzureSqlLinkedService" />
+            <Input value={srcLs} onChange={(_, d) => { setSrcLs(d.value); setDirty(true); }} placeholder="MyAzureSqlLinkedService" />
           </div>
           <div className={styles.field}>
             <Caption1>Source type</Caption1>
             <Dropdown value={srcType} selectedOptions={[srcType]}
-              onOptionSelect={(_, d) => setSrcType(d.optionValue || srcType)}>
+              onOptionSelect={(_, d) => { setSrcType(d.optionValue || srcType); setDirty(true); }}>
               {COPY_SOURCE_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
             </Dropdown>
           </div>
         </div>
         <div className={styles.field}>
           <Caption1>Source query (for SQL sources)</Caption1>
-          <Textarea value={srcQuery} onChange={(_, d) => setSrcQuery(d.value)} rows={3}
+          <Textarea value={srcQuery} onChange={(_, d) => { setSrcQuery(d.value); setDirty(true); }} rows={3}
             placeholder="SELECT id, name, amount FROM dbo.orders WHERE updated_at > '2025-01-01'" />
         </div>
 
@@ -637,31 +708,33 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
         <div className={styles.row}>
           <div className={styles.field}>
             <Caption1>Linked service name</Caption1>
-            <Input value={snkLs} onChange={(_, d) => setSnkLs(d.value)} placeholder="MyLakehouseLinkedService" />
+            <Input value={snkLs} onChange={(_, d) => { setSnkLs(d.value); setDirty(true); }} placeholder="MyLakehouseLinkedService" />
           </div>
           <div className={styles.field}>
             <Caption1>Sink type</Caption1>
             <Dropdown value={snkType} selectedOptions={[snkType]}
-              onOptionSelect={(_, d) => setSnkType(d.optionValue || snkType)}>
+              onOptionSelect={(_, d) => { setSnkType(d.optionValue || snkType); setDirty(true); }}>
               {COPY_SINK_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
             </Dropdown>
           </div>
         </div>
         <div className={styles.field}>
           <Caption1>Sink table / path</Caption1>
-          <Input value={snkTable} onChange={(_, d) => setSnkTable(d.value)}
+          <Input value={snkTable} onChange={(_, d) => { setSnkTable(d.value); setDirty(true); }}
             placeholder="bronze.orders  or  files/bronze/orders/" />
         </div>
 
         <Subtitle2 style={{ marginTop: 8 }}>Column mappings</Subtitle2>
         <Caption1>JSON array of {`{ "source": "...", "sink": "..." }`}</Caption1>
-        <MonacoTextarea value={mappingsText} onChange={setMappingsText} language="json" height={180} minHeight={140} ariaLabel="Column mappings JSON" />
+        <MonacoTextarea value={mappingsText} onChange={(v) => { setMappingsText(v); setDirty(true); }} language="json" height={180} minHeight={140} ariaLabel="Column mappings JSON" />
 
+        {saveMsg && <MessageBar intent="success"><MessageBarBody>{saveMsg}</MessageBarBody></MessageBar>}
         <div className={styles.toolbar}>
           <Button appearance="primary" onClick={run} disabled={busy || !srcLs || !snkLs}>Run now</Button>
-          <Button onClick={save} disabled={busy}>Save</Button>
+          <Button onClick={save} disabled={busy || !dirty}>{dirty ? 'Save' : 'Saved'}</Button>
           <Button onClick={loadRuns} disabled={busy}>Refresh runs</Button>
           {busy && <Spinner size="tiny" />}
+          {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
         </div>
 
         {lastRun && (
@@ -747,9 +820,13 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
   const [err, setErr] = useState<string | null>(null);
   const [runs, setRuns] = useState<JobRunDTO[]>([]);
   const [lastRun, setLastRun] = useState<number | null>(null);
+  // Phase 4.5 — see SparkJobDefinitionEditor for rationale.
+  const [dirty, setDirty] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const s: any = cosmosItem?.state || {};
+    if (dirty) return; // never clobber in-flight edits when cosmosItem reloads
     setRepoUrl(s.repoUrl || '');
     setBranch(s.branch || 'main');
     setTarget(s.target || 'prod');
@@ -758,6 +835,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
     setCommandsText((s.commands || []).join('\n'));
     setClusterId(s.clusterId || '');
     setDatabricksJobId(s.databricksJobId ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cosmosItem]);
 
   const loadRuns = useCallback(async () => {
@@ -784,9 +862,13 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
   });
 
   const save = async () => {
-    setBusy(true); setErr(null);
-    try { await saveItem('dbt-job', id, buildState()); await reload(); }
-    catch (e: any) { setErr(e?.message || String(e)); }
+    setBusy(true); setErr(null); setSaveMsg('Saving dbt-job…');
+    try {
+      await saveItem('dbt-job', id, buildState());
+      setDirty(false);
+      setSaveMsg(`Saved at ${new Date().toLocaleTimeString()}`);
+      await reload();
+    } catch (e: any) { setErr(e?.message || String(e)); setSaveMsg(null); }
     finally { setBusy(false); }
   };
 
@@ -794,6 +876,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
     setBusy(true); setErr(null); setLastRun(null);
     try {
       await saveItem('dbt-job', id, buildState());
+      setDirty(false);
       const r = await fetch(`/api/items/dbt-job/${encodeURIComponent(id)}/run`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
       });
@@ -805,6 +888,19 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
   };
+
+  // Phase 4.5 — Ctrl+S / Cmd+S shortcut for Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (id !== 'new' && dirty && !busy) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, dirty, busy]);
 
   if (id === 'new') {
     return (
@@ -829,45 +925,47 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
         <div className={styles.row}>
           <div className={styles.field}>
             <Caption1>Git repo URL</Caption1>
-            <Input value={repoUrl} onChange={(_, d) => setRepoUrl(d.value)} placeholder="https://github.com/contoso/dbt-prod" />
+            <Input value={repoUrl} onChange={(_, d) => { setRepoUrl(d.value); setDirty(true); }} placeholder="https://github.com/contoso/dbt-prod" />
           </div>
           <div className={styles.field}>
             <Caption1>Branch</Caption1>
-            <Input value={branch} onChange={(_, d) => setBranch(d.value)} />
+            <Input value={branch} onChange={(_, d) => { setBranch(d.value); setDirty(true); }} />
           </div>
         </div>
         <div className={styles.row}>
           <div className={styles.field}>
             <Caption1>Target profile</Caption1>
-            <Input value={target} onChange={(_, d) => setTarget(d.value)} placeholder="prod" />
+            <Input value={target} onChange={(_, d) => { setTarget(d.value); setDirty(true); }} placeholder="prod" />
           </div>
           <div className={styles.field}>
             <Caption1>Databricks cluster ID</Caption1>
-            <Input value={clusterId} onChange={(_, d) => setClusterId(d.value)}
+            <Input value={clusterId} onChange={(_, d) => { setClusterId(d.value); setDirty(true); }}
               placeholder="0303-184849-xyz123 (existing all-purpose cluster)" />
           </div>
         </div>
         <div className={styles.field}>
           <Caption1>Model selection (--select, one per line; blank = all)</Caption1>
-          <Textarea value={modelsText} onChange={(_, d) => setModelsText(d.value)} rows={3}
+          <Textarea value={modelsText} onChange={(_, d) => { setModelsText(d.value); setDirty(true); }} rows={3}
             placeholder={'tag:nightly\nstg_orders+'} />
         </div>
         <div className={styles.field}>
           <Caption1>Override commands (one per line; blank = default dbt deps + dbt run)</Caption1>
-          <Textarea value={commandsText} onChange={(_, d) => setCommandsText(d.value)} rows={3}
+          <Textarea value={commandsText} onChange={(_, d) => { setCommandsText(d.value); setDirty(true); }} rows={3}
             placeholder={'dbt deps\ndbt seed\ndbt run\ndbt test'} />
         </div>
         <div className={styles.field}>
           <Caption1>profiles.yml (informational — copy into your repo)</Caption1>
-          <Textarea value={profilesYaml} onChange={(_, d) => setProfilesYaml(d.value)} rows={6}
+          <Textarea value={profilesYaml} onChange={(_, d) => { setProfilesYaml(d.value); setDirty(true); }} rows={6}
             placeholder={'prod:\n  target: prod\n  outputs:\n    prod:\n      type: databricks\n      ...'} />
         </div>
 
+        {saveMsg && <MessageBar intent="success"><MessageBarBody>{saveMsg}</MessageBarBody></MessageBar>}
         <div className={styles.toolbar}>
           <Button appearance="primary" onClick={run} disabled={busy || !repoUrl || !clusterId}>Run dbt</Button>
-          <Button onClick={save} disabled={busy}>Save</Button>
+          <Button onClick={save} disabled={busy || !dirty}>{dirty ? 'Save' : 'Saved'}</Button>
           <Button onClick={loadRuns} disabled={busy}>Refresh runs</Button>
           {busy && <Spinner size="tiny" />}
+          {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
           {databricksJobId !== null && (
             <Badge appearance="outline">Databricks job_id {databricksJobId}</Badge>
           )}

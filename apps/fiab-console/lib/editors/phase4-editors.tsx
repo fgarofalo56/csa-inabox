@@ -497,8 +497,14 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
       });
       const j = await r.json();
       if (!r.ok || !j.ok) { setPublishMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
-      const next = { ...state, lastPublishedAt: new Date().toISOString(), lastPublishedTo: j.api?.id || id };
-      setState(next); await save(next);
+      // v3.28 Phase 4.5: functional setState so SDL/path edits made WHILE the
+      // publish POST is in flight aren't reset by the old `state` snapshot.
+      let merged: GqlState | null = null;
+      setState((prev) => {
+        merged = { ...prev, lastPublishedAt: new Date().toISOString(), lastPublishedTo: j.api?.id || id };
+        return merged;
+      });
+      if (merged) await save(merged);
       setPublishMsg({ intent: 'success', text: `Published to APIM as ${j.api?.name || id}` });
     } catch (e: any) { setPublishMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setPublishing(false); }
@@ -509,16 +515,18 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <Subtitle2>API configuration</Subtitle2>
+        {/* v3.28 Phase 4.5: functional setState so publish-to-APIM (which calls
+            setState(next) after the request) doesn't clobber concurrent typing. */}
         <Caption1>Display name</Caption1>
-        <Input value={state.displayName} onChange={(_, d) => setState({ ...state, displayName: d.value })} placeholder={item.displayName || id} />
+        <Input value={state.displayName} onChange={(_, d) => setState((p) => ({ ...p, displayName: d.value }))} placeholder={item.displayName || id} />
         <Caption1>URL path suffix (under APIM gateway)</Caption1>
-        <Input value={state.path} onChange={(_, d) => setState({ ...state, path: d.value })} placeholder={id} />
+        <Input value={state.path} onChange={(_, d) => setState((p) => ({ ...p, path: d.value }))} placeholder={id} />
         <Caption1>Backend service URL (optional resolver target)</Caption1>
-        <Input value={state.serviceUrl} onChange={(_, d) => setState({ ...state, serviceUrl: d.value })} placeholder="https://backend.example.com/graphql" />
+        <Input value={state.serviceUrl} onChange={(_, d) => setState((p) => ({ ...p, serviceUrl: d.value }))} placeholder="https://backend.example.com/graphql" />
         <Caption1>Description</Caption1>
-        <Input value={state.description} onChange={(_, d) => setState({ ...state, description: d.value })} />
+        <Input value={state.description} onChange={(_, d) => setState((p) => ({ ...p, description: d.value }))} />
         <Subtitle2 style={{ marginTop: 8 }}>Schema (SDL)</Subtitle2>
-        <MonacoTextarea value={state.sdl} onChange={(v) => setState({ ...state, sdl: v })} language="graphql" height={300} minHeight={240} ariaLabel="GraphQL SDL" />
+        <MonacoTextarea value={state.sdl} onChange={(v) => setState((p) => ({ ...p, sdl: v }))} language="graphql" height={300} minHeight={240} ariaLabel="GraphQL SDL" />
         {state.lastPublishedAt && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
             Last published {new Date(state.lastPublishedAt).toLocaleString()} → <code>{state.lastPublishedTo}</code>
@@ -563,9 +571,10 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
           </MessageBarBody>
         </MessageBar>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+          {/* v3.28 Phase 4.5: functional setState everywhere. */}
           <div>
             <Caption1>Runtime</Caption1>
-            <select value={state.runtime} onChange={(e) => setState({ ...state, runtime: e.target.value as UdfState['runtime'] })}
+            <select value={state.runtime} onChange={(e) => setState((p) => ({ ...p, runtime: e.target.value as UdfState['runtime'] }))}
               style={{ width: '100%', padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
               <option value="python">python</option>
               <option value="node">node</option>
@@ -574,17 +583,17 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
           </div>
           <div>
             <Caption1>Entrypoint</Caption1>
-            <Input value={state.entrypoint} onChange={(_, d) => setState({ ...state, entrypoint: d.value })} />
+            <Input value={state.entrypoint} onChange={(_, d) => setState((p) => ({ ...p, entrypoint: d.value }))} />
           </div>
           <div>
             <Caption1>Target Function App (deploy)</Caption1>
-            <Input value={state.functionAppName} onChange={(_, d) => setState({ ...state, functionAppName: d.value })} placeholder="not-yet-provisioned" />
+            <Input value={state.functionAppName} onChange={(_, d) => setState((p) => ({ ...p, functionAppName: d.value }))} placeholder="not-yet-provisioned" />
           </div>
         </div>
         <Subtitle2 style={{ marginTop: 8 }}>function_app source</Subtitle2>
-        <MonacoTextarea value={state.source} onChange={(v) => setState({ ...state, source: v })} language="python" height={320} minHeight={240} ariaLabel="Function source" />
+        <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="python" height={320} minHeight={240} ariaLabel="Function source" />
         <Caption1>Connections (comma-separated workspace items)</Caption1>
-        <Input value={state.connections} onChange={(_, d) => setState({ ...state, connections: d.value })} placeholder="fin-warehouse, ldn-gold-lakehouse" />
+        <Input value={state.connections} onChange={(_, d) => setState((p) => ({ ...p, connections: d.value }))} placeholder="fin-warehouse, ldn-gold-lakehouse" />
         <SaveBar saving={saving} savedAt={savedAt} error={error} onSave={() => save()} />
       </div>
     } />
@@ -660,13 +669,23 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
     ],
   });
   const [tab, setTab] = useState<typeof VL_VALUE_SETS[number]>('default');
+  // v3.28 Phase 4.5: functional setState so concurrent edits + the auto-reload
+  // from useItemState's PATCH response don't clobber rapid typing.
   const update = (idx: number, patch: Partial<VarDef>) => {
-    const next = [...state.variables];
-    next[idx] = { ...next[idx], ...patch };
-    setState({ ...state, variables: next });
+    setState((prev) => {
+      const next = [...prev.variables];
+      next[idx] = { ...next[idx], ...patch };
+      return { ...prev, variables: next };
+    });
   };
-  const addRow = () => setState({ ...state, variables: [...state.variables, { name: `var${state.variables.length + 1}`, type: 'string', default: '' }] });
-  const deleteRow = (idx: number) => setState({ ...state, variables: state.variables.filter((_, i) => i !== idx) });
+  const addRow = () => setState((prev) => ({
+    ...prev,
+    variables: [...prev.variables, { name: `var${prev.variables.length + 1}`, type: 'string', default: '' }],
+  }));
+  const deleteRow = (idx: number) => setState((prev) => ({
+    ...prev,
+    variables: prev.variables.filter((_, i) => i !== idx),
+  }));
   const valueKey = tab === 'default' ? 'default' : tab;
 
   return (
@@ -809,7 +828,9 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 16 }}>
           <div>
             <Subtitle2>Source ({classes.length} classes)</Subtitle2>
-            <MonacoTextarea value={state.source} onChange={(v) => setState({ ...state, source: v })} language="json" height={400} minHeight={320} ariaLabel="Ontology source" />
+            {/* v3.28 Phase 4.5: functional setState — materializeToGraphModel
+                does NOT write back to state, so this is defensive but cheap. */}
+            <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="json" height={400} minHeight={320} ariaLabel="Ontology source" />
           </div>
           <div>
             <Subtitle2>Class hierarchy</Subtitle2>
@@ -870,16 +891,27 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
       const j = await r.json();
       setMatResult(j);
       if (r.ok && j.ok) {
-        const next = { ...state, lastMaterializedAt: new Date().toISOString() };
-        setState(next); await save(next);
+        // v3.28 Phase 4.5: stale-closure fix. Previously `next = { ...state, ... }`
+        // captured `state` at click-time and clobbered any typing that happened
+        // during the in-flight POST. Use functional setState + capture the merged
+        // result for the immediate save() call so what we PATCH matches what
+        // the user sees.
+        let merged: GraphState | null = null;
+        setState((prev) => {
+          merged = { ...prev, lastMaterializedAt: new Date().toISOString() };
+          return merged;
+        });
+        if (merged) await save(merged);
       }
     } catch (e: any) { setMatResult({ ok: false, error: e?.message || String(e) }); }
     finally { setMaterializing(false); }
-  }, [id, state, save, setState]);
+  }, [id, save, setState]);
 
   const editJson = (key: 'nodes' | 'edges', text: string) => {
-    try { const parsed = JSON.parse(text); if (Array.isArray(parsed)) setState({ ...state, [key]: parsed }); }
-    catch { /* leave previous */ }
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) setState((p) => ({ ...p, [key]: parsed }));
+    } catch { /* leave previous */ }
   };
 
   return (
@@ -887,7 +919,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <Caption1>Target ADX database</Caption1>
-        <Input value={state.database} onChange={(_, d) => setState({ ...state, database: d.value })} />
+        <Input value={state.database} onChange={(_, d) => setState((p) => ({ ...p, database: d.value }))} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <div>
             <Subtitle2>Node types</Subtitle2>
@@ -939,11 +971,23 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const { state, setState, loading, saving, error, savedAt, save } = useItemState<PlanState>('plan', id, {
     tasks: [{ title: 'Define semantic model', owner: '', due: '', status: 'todo' }],
   });
+  // v3.28 Phase 4.5: functional setState so rapid Update/Add/Delete edits don't
+  // clobber each other via the stale `state` captured at click-time.
   const update = (idx: number, patch: Partial<PlanTask>) => {
-    const next = [...state.tasks]; next[idx] = { ...next[idx], ...patch }; setState({ ...state, tasks: next });
+    setState((prev) => {
+      const next = [...prev.tasks];
+      next[idx] = { ...next[idx], ...patch };
+      return { ...prev, tasks: next };
+    });
   };
-  const add = () => setState({ ...state, tasks: [...state.tasks, { title: '', owner: '', due: '', status: 'todo' }] });
-  const remove = (idx: number) => setState({ ...state, tasks: state.tasks.filter((_, i) => i !== idx) });
+  const add = () => setState((prev) => ({
+    ...prev,
+    tasks: [...prev.tasks, { title: '', owner: '', due: '', status: 'todo' }],
+  }));
+  const remove = (idx: number) => setState((prev) => ({
+    ...prev,
+    tasks: prev.tasks.filter((_, i) => i !== idx),
+  }));
 
   // v3.27: D-upgrade — compute and surface progress + overdue counts.
   const counts = state.tasks.reduce(
@@ -1074,7 +1118,7 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
           </MessageBar>
         )}
         <Subtitle2>GeoJSON ({featureCount} feature{featureCount === 1 ? '' : 's'})</Subtitle2>
-        <MonacoTextarea value={state.geojson} onChange={(v) => setState({ ...state, geojson: v })} language="json" height={320} minHeight={240} ariaLabel="GeoJSON" />
+        <MonacoTextarea value={state.geojson} onChange={(v) => setState((p) => ({ ...p, geojson: v }))} language="json" height={320} minHeight={240} ariaLabel="GeoJSON" />
         {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid JSON: {parseErr}</MessageBarBody></MessageBar>}
         {tileUrl && (
           <>
@@ -1161,13 +1205,14 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
             {deployedAt && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>last deployed {new Date(deployedAt).toLocaleString()}</Caption1>}
           </div>
         )}
+        {/* v3.28 Phase 4.5: functional setState so deploy/reload doesn't clobber typing. */}
         <Caption1>System prompt</Caption1>
-        <Textarea value={state.systemPrompt} onChange={(_, d) => setState({ ...state, systemPrompt: d.value })} rows={6} />
+        <Textarea value={state.systemPrompt} onChange={(_, d) => setState((p) => ({ ...p, systemPrompt: d.value }))} rows={6} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState({ ...state, model: d.value })} /></div>
-          <div><Caption1>Tools (comma)</Caption1><Input value={state.tools} onChange={(_, d) => setState({ ...state, tools: d.value })} /></div>
-          <div><Caption1>Eventhouse binding</Caption1><Input value={state.eventhouse} onChange={(_, d) => setState({ ...state, eventhouse: d.value })} placeholder="eventhouse item id" /></div>
-          <div><Caption1>Ontology binding</Caption1><Input value={state.ontology} onChange={(_, d) => setState({ ...state, ontology: d.value })} placeholder="ontology item id" /></div>
+          <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState((p) => ({ ...p, model: d.value }))} /></div>
+          <div><Caption1>Tools (comma)</Caption1><Input value={state.tools} onChange={(_, d) => setState((p) => ({ ...p, tools: d.value }))} /></div>
+          <div><Caption1>Eventhouse binding</Caption1><Input value={state.eventhouse} onChange={(_, d) => setState((p) => ({ ...p, eventhouse: d.value }))} placeholder="eventhouse item id" /></div>
+          <div><Caption1>Ontology binding</Caption1><Input value={state.ontology} onChange={(_, d) => setState((p) => ({ ...p, ontology: d.value }))} placeholder="ontology item id" /></div>
         </div>
         {deployResult && (
           <MessageBar intent={deployResult.ok ? 'success' : deployResult.deferred ? 'warning' : 'error'}>
@@ -1261,20 +1306,21 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
             {deployedAt && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>last deployed {new Date(deployedAt).toLocaleString()}</Caption1>}
           </div>
         )}
+        {/* v3.28 Phase 4.5: functional setState so deploy/reload doesn't clobber typing. */}
         <Caption1>System prompt / AI instructions</Caption1>
-        <Textarea value={state.systemPrompt} onChange={(_, d) => setState({ ...state, systemPrompt: d.value })} rows={5} />
+        <Textarea value={state.systemPrompt} onChange={(_, d) => setState((p) => ({ ...p, systemPrompt: d.value }))} rows={5} />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState({ ...state, model: d.value })} /></div>
-          <div><Caption1>Sources (free text)</Caption1><Input value={state.sources} onChange={(_, d) => setState({ ...state, sources: d.value })} /></div>
-          <div><Caption1>Synapse Serverless SQL endpoints</Caption1><Input value={state.sqlEndpoints} onChange={(_, d) => setState({ ...state, sqlEndpoints: d.value })} placeholder="serverless-sql-pool name" /></div>
-          <div><Caption1>KQL databases</Caption1><Input value={state.kqlDatabases} onChange={(_, d) => setState({ ...state, kqlDatabases: d.value })} placeholder="loomdb-default" /></div>
+          <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState((p) => ({ ...p, model: d.value }))} /></div>
+          <div><Caption1>Sources (free text)</Caption1><Input value={state.sources} onChange={(_, d) => setState((p) => ({ ...p, sources: d.value }))} /></div>
+          <div><Caption1>Synapse Serverless SQL endpoints</Caption1><Input value={state.sqlEndpoints} onChange={(_, d) => setState((p) => ({ ...p, sqlEndpoints: d.value }))} placeholder="serverless-sql-pool name" /></div>
+          <div><Caption1>KQL databases</Caption1><Input value={state.kqlDatabases} onChange={(_, d) => setState((p) => ({ ...p, kqlDatabases: d.value }))} placeholder="loomdb-default" /></div>
           <div style={{ gridColumn: 'span 2' }}>
             <Caption1>Lakehouse paths (abfss://...)</Caption1>
-            <Textarea value={state.lakehousePaths} onChange={(_, d) => setState({ ...state, lakehousePaths: d.value })} rows={3} />
+            <Textarea value={state.lakehousePaths} onChange={(_, d) => setState((p) => ({ ...p, lakehousePaths: d.value }))} rows={3} />
           </div>
         </div>
         <Caption1>Example queries (one per line)</Caption1>
-        <Textarea value={state.examples} onChange={(_, d) => setState({ ...state, examples: d.value })} rows={4} />
+        <Textarea value={state.examples} onChange={(_, d) => setState((p) => ({ ...p, examples: d.value }))} rows={4} />
         {deployResult && (
           <MessageBar intent={deployResult.ok ? 'success' : deployResult.deferred ? 'warning' : 'error'}>
             <MessageBarBody>
