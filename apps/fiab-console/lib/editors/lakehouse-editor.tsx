@@ -266,11 +266,31 @@ export function LakehouseEditor({ item, id }: Props) {
       fd.set('path', targetPath);
       fd.set('file', file);
       const r = await fetch('/api/lakehouse/upload', { method: 'POST', body: fd });
-      const j = await r.json();
-      if (!r.ok || j.ok === false) {
-        setActionError(j.error || `Upload failed (HTTP ${r.status})`);
+      // Defensive JSON parse — if the gateway / Container App / WAF returns
+      // an HTML error page (5xx, 413, 502), JSON.parse blows up with
+      // "Unexpected token '<'". Sniff the Content-Type first and only call
+      // .json() when the response is actually JSON; otherwise surface the
+      // status + a trimmed text body to the user.
+      const ct = r.headers.get('content-type') || '';
+      let j: any = null;
+      let bodyText: string | null = null;
+      if (ct.includes('application/json')) {
+        try { j = await r.json(); } catch { /* fall through to text */ }
+      }
+      if (!j) {
+        try { bodyText = (await r.text()).slice(0, 240); } catch { /* ignore */ }
+      }
+      if (!r.ok || j?.ok === false) {
+        const msg = j?.error
+          || (r.status === 413 ? `File too large (${file.size.toLocaleString()} bytes). Max 4 GB.`
+          : r.status === 502 ? `Upstream storage error (502). Check ADLS network/role assignments.`
+          : r.status === 401 ? `Sign in expired. Reload and re-authenticate.`
+          : `Upload failed (HTTP ${r.status}).${bodyText ? ` Server said: ${bodyText}` : ''}`);
+        setActionError(msg);
       } else {
-        setActionStatus(`Uploaded ${file.name} at ${new Date().toLocaleTimeString()}`);
+        const fmt = j.sparkFormat;
+        const fmtLabel = fmt?.label ? ` — detected ${fmt.label}` : '';
+        setActionStatus(`Uploaded ${file.name}${fmtLabel} at ${new Date().toLocaleTimeString()}`);
       }
     } catch (e: any) {
       setActionError(e?.message || String(e));
