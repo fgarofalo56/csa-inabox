@@ -310,17 +310,45 @@ export function NotebookEditor({ item, id }: Props) {
   const save = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
     setSaving(true); setDetailErr(null);
+    setRunMsg('Saving notebook…');
     try {
+      // Strip per-cell output before persisting — it's runtime-only state
+      // and can blow past Cosmos 2MB doc limits when cells return large
+      // tables. The execution count stays.
+      const cellsForSave = cells.map(c => ({
+        ...c,
+        output: undefined,
+      }));
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ definition: { cells, defaultLang, attachedSources } }),
+        body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources } }),
       });
       const j = await r.json();
-      if (!j.ok) setDetailErr(j.error || 'save failed');
-      else setDirty(false);
+      if (!j.ok) {
+        setDetailErr(j.error || 'save failed');
+        setRunMsg(`Save failed: ${j.error || 'unknown error'}`);
+      } else {
+        setDirty(false);
+        setRunMsg(`Saved at ${new Date().toLocaleTimeString()}`);
+      }
+    } catch (e: any) {
+      setDetailErr(e?.message || String(e));
+      setRunMsg(`Save failed: ${e?.message || e}`);
     } finally { setSaving(false); }
   }, [workspaceId, notebookId, cells, defaultLang, attachedSources]);
+
+  // Ctrl+S / Cmd+S to save when there are unsaved changes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (notebookId && workspaceId && dirty && !saving) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [notebookId, workspaceId, dirty, saving, save]);
 
   // Phase 2: load lakehouses in the current workspace for the attach modal.
   const loadLakehouses = useCallback(async () => {
@@ -459,6 +487,18 @@ export function NotebookEditor({ item, id }: Props) {
     setDirty(true);
   }, []);
 
+  /**
+   * Patch only specific fields on a cell — used by the Run flow so output
+   * arriving after a user edit doesn't clobber the new source. Without
+   * this the stale `cell` captured at runCell-start would overwrite
+   * subsequent typing, and clicking Save would persist the OLD source.
+   * Does NOT mark the notebook dirty — output mutations are not user
+   * edits and shouldn't enable the Save button on their own.
+   */
+  const patchCell = useCallback((id: string, patch: Partial<NotebookCell>) => {
+    setCells(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
+  }, []);
+
   const deleteCell = useCallback((id: string) => {
     setCells(prev => prev.length <= 1 ? prev : prev.filter(c => c.id !== id));
     setDirty(true);
@@ -504,12 +544,17 @@ export function NotebookEditor({ item, id }: Props) {
   }, []);
 
   // Per-cell run: dispatches a single cell's source to the notebook /run endpoint with cellId, then polls.
+  // CRITICAL: use patchCell (not updateCell) for output mutations so source
+  // edits the user makes WHILE the cell is running don't get overwritten
+  // by the stale `cell` snapshot captured here. That bug caused Save to
+  // appear broken — clicking Save persisted the pre-Run cell source.
   const runCell = useCallback(async (cell: NotebookCell) => {
     if (!workspaceId || !notebookId) return;
     if (!computeId) { setRunMsg('Pick a compute target before running.'); return; }
     if (cell.type !== 'code') return;
-    updateCell(cell.id, { ...cell, output: { status: 'pending' } });
+    patchCell(cell.id, { output: { status: 'pending' } });
     setRunMsg(`Running cell ${cell.id.slice(0, 6)}…`);
+    const prevExec = cell.executionCount || 0;
     try {
       const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
@@ -518,7 +563,7 @@ export function NotebookEditor({ item, id }: Props) {
       });
       const j = await r.json();
       if (!j.ok) {
-        updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'DispatchError', evalue: j.error || 'dispatch failed' } });
+        patchCell(cell.id, { output: { status: 'error', ename: 'DispatchError', evalue: j.error || 'dispatch failed' } });
         setRunMsg(`Cell run failed: ${j.error}`);
         return;
       }
@@ -530,7 +575,7 @@ export function NotebookEditor({ item, id }: Props) {
         const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const p = await pollRes.json();
         if (!p.ok) {
-          updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } });
+          patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } });
           break;
         }
         if (p.runId && p.runId !== runId) runId = p.runId;
@@ -540,9 +585,8 @@ export function NotebookEditor({ item, id }: Props) {
           : p.phase ? ` · ${p.phase}` : '';
         setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${phaseHint} · ${elapsed}s`);
         if (p.output) {
-          updateCell(cell.id, {
-            ...cell,
-            executionCount: (cell.executionCount || 0) + 1,
+          patchCell(cell.id, {
+            executionCount: prevExec + 1,
             output: {
               status: p.output.status === 'ok' ? 'ok' : 'error',
               textPlain: p.output.textPlain,
@@ -557,15 +601,15 @@ export function NotebookEditor({ item, id }: Props) {
           break;
         }
         if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
-          updateCell(cell.id, { ...cell, output: { status: 'error', ename: p.status, evalue: p.resultState || '' } });
+          patchCell(cell.id, { output: { status: 'error', ename: p.status, evalue: p.resultState || '' } });
           break;
         }
       }
       loadJobs(workspaceId, notebookId);
     } catch (e: any) {
-      updateCell(cell.id, { ...cell, output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
+      patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
     }
-  }, [workspaceId, notebookId, computeId, defaultLang, updateCell, loadJobs]);
+  }, [workspaceId, notebookId, computeId, defaultLang, patchCell, loadJobs]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
