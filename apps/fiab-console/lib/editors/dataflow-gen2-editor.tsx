@@ -8,10 +8,10 @@
  * Auth gate: requires Console UAMI SP authorized in the Fabric tenant and
  * added to the target workspace. Underlying 401/403 surface verbatim.
  *
- * Backed by /api/fabric/workspaces + /api/items/dataflow/**.
+ * Backed by /api/loom/workspaces + /api/items/dataflow/**.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
   Tree, TreeItem, TreeItemLayout, Select,
@@ -25,13 +25,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
-
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Refresh', actions: [{ label: 'Refresh now' }] },
-    { label: 'Item', actions: [{ label: 'New dataflow' }, { label: 'Save' }, { label: 'Delete' }] },
-  ]},
-];
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
@@ -57,7 +51,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/fabric/workspaces');
+      const r = await fetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setHint(j.hint || null); setWorkspaces([]); }
       else setWorkspaces(j.workspaces || []);
@@ -140,17 +134,41 @@ export function DataflowGen2Editor({ item, id }: Props) {
 
   const save = useCallback(async () => {
     if (!workspaceId || !dataflowId) return;
-    setSaving(true); setDetailErr(null);
+    setSaving(true); setDetailErr(null); setRefreshMsg('Saving dataflow…');
+    // Phase 4.5 — snapshot defText via functional setter so a Run-then-Edit
+    // race doesn't clobber in-flight edits with a stale closure capture.
+    let textSnapshot = defText;
+    setDefText((prev) => { textSnapshot = prev; return prev; });
     try {
-      const definition = { parts: [{ path: partPath, payload: toB64(defText), payloadType: 'InlineBase64' }] };
+      const definition = { parts: [{ path: partPath, payload: toB64(textSnapshot), payloadType: 'InlineBase64' }] };
       const r = await fetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ definition }),
       });
       const j = await r.json();
-      if (!j.ok) setDetailErr(j.error || 'save failed');
-      else setDirty(false);
+      if (!j.ok) {
+        setDetailErr(j.error || 'save failed');
+        setRefreshMsg(`Save failed: ${j.error || 'unknown'}`);
+      } else {
+        setDirty(false);
+        setRefreshMsg(`Saved at ${new Date().toLocaleTimeString()}`);
+      }
+    } catch (e: any) {
+      setDetailErr(e?.message || String(e));
+      setRefreshMsg(`Save failed: ${e?.message || e}`);
     } finally { setSaving(false); }
   }, [workspaceId, dataflowId, partPath, defText]);
+
+  // Phase 4.5 — Ctrl+S / Cmd+S keyboard shortcut for Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (workspaceId && dataflowId && dirty && !saving) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [workspaceId, dataflowId, dirty, saving, save]);
 
   const refresh = useCallback(async () => {
     if (!workspaceId || !dataflowId) return;
@@ -187,8 +205,25 @@ export function DataflowGen2Editor({ item, id }: Props) {
     await loadList(workspaceId);
   }, [workspaceId, dataflowId, loadList]);
 
+  const canRefresh = !refreshing && !!dataflowId;
+  const canSave = !saving && !!dataflowId && dirty;
+  const canDelete = !!dataflowId;
+  const canCreate = !!workspaceId;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Refresh', actions: [
+        { label: refreshing ? 'Refreshing…' : 'Refresh now', onClick: canRefresh ? refresh : undefined, disabled: !canRefresh },
+      ]},
+      { label: 'Item', actions: [
+        { label: 'New dataflow', onClick: canCreate ? () => setCreateOpen(true) : undefined, disabled: !canCreate },
+        { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
+      ]},
+    ]},
+  ], [refreshing, canRefresh, refresh, canCreate, saving, canSave, save, canDelete, del]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Dataflows Gen2</Subtitle2>
@@ -259,12 +294,16 @@ export function DataflowGen2Editor({ item, id }: Props) {
             <>
               {dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
               <Caption1>Definition part: <code>{partPath}</code></Caption1>
-              <textarea
-                className={s.editor}
-                spellCheck={false}
+              <MonacoTextarea
                 value={defText}
-                onChange={(e) => { setDefText(e.target.value); setDirty(true); }}
-                aria-label="Dataflow definition"
+                onChange={(v) => { setDefText(v); setDirty(true); }}
+                /* Pick a sensible Monaco language based on the active part: .pq/.m
+                   is Power Query M (no first-class Monaco mode — fall back to
+                   plaintext); queryMetadata.json + the rest are JSON. */
+                language={/\.(pq|m)$/i.test(partPath) ? 'plaintext' : 'json'}
+                height={360}
+                minHeight={280}
+                ariaLabel="Dataflow definition"
               />
             </>
           )}

@@ -1,13 +1,19 @@
 import { PageShell } from '@/lib/components/page-shell';
-import { RealTimeHubPane } from '@/lib/panes/real-time-hub';
+import { ItemsByTypePane } from '@/lib/components/items-by-type-pane';
 
 export default function RealTimeHubPage() {
   return (
     <PageShell
       title="Real-Time hub"
-      subtitle="Discover, subscribe to, and act on streaming event sources — Azure, external clouds, Fabric events, and OneLake events."
+      subtitle="Streaming sources and the destinations they feed — Eventstream, Eventhouse, KQL databases, KQL dashboards, and Activator alerts."
     >
-      <RealTimeHubPane />
+      <ItemsByTypePane
+        types={[
+          'eventstream', 'eventhouse', 'kql-database',
+          'kql-queryset', 'kql-dashboard', 'activator',
+        ]}
+        emptyHint="No real-time items in this tenant yet."
+      />
     </PageShell>
   );
 }

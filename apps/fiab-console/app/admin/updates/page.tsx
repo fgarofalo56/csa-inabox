@@ -1,12 +1,133 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import {
   Body1, Caption1, Subtitle2, Badge, Button, Title3,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, Checkmark24Filled, ArrowDownload24Regular } from '@fluentui/react-icons';
+
+/**
+ * Lightweight markdown → JSX renderer. Covers the subset GitHub release
+ * notes typically use: headings (#-####), bullets (-/*), code spans
+ * (`x`), bold (**x**), italics (*x*), links ([t](u)), and paragraphs.
+ * No external dep — pulling in react-markdown for ~5 markdown nodes per
+ * release note would be overkill.
+ */
+function renderInline(line: string, key: number): React.ReactNode {
+  // [text](url)
+  let parts: React.ReactNode[] = [line];
+  parts = parts.flatMap((p, i) => {
+    if (typeof p !== 'string') return [p];
+    const out: React.ReactNode[] = [];
+    let last = 0;
+    const re = /\[([^\]]+)\]\(([^)]+)\)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(p)) !== null) {
+      if (m.index > last) out.push(p.slice(last, m.index));
+      out.push(<a key={`l${key}-${i}-${m.index}`} href={m[2]} target="_blank" rel="noreferrer">{m[1]}</a>);
+      last = m.index + m[0].length;
+    }
+    if (last < p.length) out.push(p.slice(last));
+    return out;
+  });
+  // **bold**
+  parts = parts.flatMap((p, i) => {
+    if (typeof p !== 'string') return [p];
+    const segs = p.split(/(\*\*[^*]+\*\*)/g);
+    return segs.map((seg, j) =>
+      seg.startsWith('**') && seg.endsWith('**')
+        ? <strong key={`b${key}-${i}-${j}`}>{seg.slice(2, -2)}</strong>
+        : seg
+    );
+  });
+  // `code`
+  parts = parts.flatMap((p, i) => {
+    if (typeof p !== 'string') return [p];
+    const segs = p.split(/(`[^`]+`)/g);
+    return segs.map((seg, j) =>
+      seg.startsWith('`') && seg.endsWith('`')
+        ? <code key={`c${key}-${i}-${j}`} style={{ fontFamily: 'Consolas, monospace', fontSize: '0.9em', background: 'rgba(127,127,127,0.15)', padding: '1px 4px', borderRadius: 3 }}>{seg.slice(1, -1)}</code>
+        : seg
+    );
+  });
+  return parts;
+}
+
+function MarkdownNotes({ text }: { text: string }) {
+  const blocks = useMemo(() => {
+    if (!text?.trim()) return [];
+    const lines = text.replace(/\r\n/g, '\n').split('\n');
+    type Block =
+      | { kind: 'h'; level: number; text: string }
+      | { kind: 'ul'; items: string[] }
+      | { kind: 'p'; text: string }
+      | { kind: 'code'; text: string };
+    const out: Block[] = [];
+    let i = 0;
+    while (i < lines.length) {
+      const ln = lines[i];
+      if (/^#{1,4}\s+/.test(ln)) {
+        const m = ln.match(/^(#{1,4})\s+(.*)$/)!;
+        out.push({ kind: 'h', level: m[1].length, text: m[2] });
+        i++;
+      } else if (ln.startsWith('```')) {
+        const code: string[] = [];
+        i++;
+        while (i < lines.length && !lines[i].startsWith('```')) { code.push(lines[i]); i++; }
+        i++;
+        out.push({ kind: 'code', text: code.join('\n') });
+      } else if (/^[*-]\s+/.test(ln)) {
+        const items: string[] = [];
+        while (i < lines.length && /^[*-]\s+/.test(lines[i])) {
+          items.push(lines[i].replace(/^[*-]\s+/, ''));
+          i++;
+        }
+        out.push({ kind: 'ul', items });
+      } else if (ln.trim() === '') {
+        i++;
+      } else {
+        // Paragraph: collect until blank line / heading / bullet / code
+        const para: string[] = [ln];
+        i++;
+        while (i < lines.length && lines[i].trim() && !/^#{1,4}\s+/.test(lines[i]) && !/^[*-]\s+/.test(lines[i]) && !lines[i].startsWith('```')) {
+          para.push(lines[i]); i++;
+        }
+        out.push({ kind: 'p', text: para.join(' ') });
+      }
+    }
+    return out;
+  }, [text]);
+
+  return (
+    <>
+      {blocks.map((b, i) => {
+        if (b.kind === 'h') {
+          const size = b.level === 1 ? 18 : b.level === 2 ? 16 : 14;
+          return <div key={i} style={{ fontSize: size, fontWeight: 600, marginTop: i ? 12 : 0, marginBottom: 6 }}>{renderInline(b.text, i)}</div>;
+        }
+        if (b.kind === 'ul') {
+          return (
+            <ul key={i} style={{ marginTop: 4, marginBottom: 4, paddingLeft: 20 }}>
+              {b.items.map((it, j) => <li key={j} style={{ marginBottom: 2 }}>{renderInline(it, j)}</li>)}
+            </ul>
+          );
+        }
+        if (b.kind === 'code') {
+          return (
+            <pre key={i} style={{
+              fontFamily: 'Consolas, monospace', fontSize: 12, padding: 8,
+              backgroundColor: 'rgba(127,127,127,0.15)', borderRadius: 4,
+              overflow: 'auto', margin: '8px 0',
+            }}>{b.text}</pre>
+          );
+        }
+        return <p key={i} style={{ margin: '6px 0', lineHeight: 1.5 }}>{renderInline(b.text, i)}</p>;
+      })}
+    </>
+  );
+}
 
 interface VersionInfo {
   current: string;
@@ -39,7 +160,7 @@ const useStyles = makeStyles({
     padding: 12, marginTop: 12, borderRadius: 6,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    whiteSpace: 'pre-wrap', fontSize: 13, maxHeight: 280, overflowY: 'auto',
+    fontSize: 13, maxHeight: 360, overflowY: 'auto',
   },
 });
 
@@ -107,7 +228,11 @@ export default function UpdatesPage() {
             <>
               <Title3 as="h3" style={{ marginTop: 24 }}>Release notes — {info.upstream.tag}</Title3>
               <Caption1>Published {new Date(info.upstream.publishedAt).toLocaleString()}</Caption1>
-              <div className={s.notes}>{info.upstream.notes || '(no release notes)'}</div>
+              <div className={s.notes}>
+                {info.upstream.notes
+                  ? <MarkdownNotes text={info.upstream.notes} />
+                  : '(no release notes)'}
+              </div>
             </>
           )}
 

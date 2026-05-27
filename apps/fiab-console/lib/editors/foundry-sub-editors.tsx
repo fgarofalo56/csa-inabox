@@ -18,7 +18,7 @@
  *   DatasetEditor          → /api/items/dataset
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Field, Dropdown, Option,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -28,6 +28,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -46,11 +47,29 @@ const useStyles = makeStyles({
   formRow: { display: 'grid', gridTemplateColumns: '160px 1fr', gap: '6px 16px', alignItems: 'center' },
 });
 
-const BASE_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Item', actions: [{ label: 'Reload' }, { label: 'Open in Azure portal' }] },
-  ]},
-];
+/**
+ * Factory for the per-editor base ribbon. Each editor binds its own `reload`
+ * handler + computes a portal deep-link from its detail data. When the editor
+ * doesn't have a portal-targetable resource (e.g. nothing selected yet), pass
+ * `portalUrl: null` to mark that action disabled with a precise tooltip.
+ *
+ * Previously this was a static `BASE_RIBBON` constant whose `Reload` and
+ * `Open in Azure portal` actions had no onClick — the Ribbon auto-disabled
+ * them with a "not wired" tooltip, surfacing 2 dead buttons across 8 editors
+ * (16 total dead actions). This refactor wires them per-editor.
+ */
+function buildBaseRibbon(reload: () => void, portalUrl: string | null): RibbonTab[] {
+  return [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Item', actions: [
+        { label: 'Reload', onClick: reload },
+        portalUrl
+          ? { label: 'Open in Azure portal', onClick: () => window.open(portalUrl, '_blank', 'noopener,noreferrer') }
+          : { label: 'Open in Azure portal', disabled: true, title: 'Open in Azure portal — no resource selected (open a specific item to enable)' },
+      ]},
+    ]},
+  ];
+}
 
 function ErrorBar({ msg, hint, notDeployed }: { msg: string; hint?: string; notDeployed?: boolean }) {
   return (
@@ -87,8 +106,8 @@ function useApi<T>(url: string | null, deps: unknown[] = []) {
   return [state, reload] as const;
 }
 
-function Shell({ item, id, children }: { item: FabricItemType; id: string; children: ReactNode }) {
-  return <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={children} />;
+function Shell({ item, id, ribbon, children }: { item: FabricItemType; id: string; ribbon: RibbonTab[]; children: ReactNode }) {
+  return <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={children} />;
 }
 
 // =====================================================================
@@ -100,6 +119,15 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
   const isNew = id === 'new' || id === 'create';
   const [list, reload] = useApi<{ projects: any[] }>(isNew ? '/api/items/ai-foundry-project' : null);
   const [detail, reloadDetail] = useApi<{ project: any }>(isNew ? null : `/api/items/ai-foundry-project/${encodeURIComponent(id)}`, [id]);
+
+  // Ribbon: bind Reload to whichever fetch is active; deep-link to ai.azure.com
+  // for a known project or omit when listing.
+  const ribbon = useMemo(() => {
+    const portalUrl = !isNew && detail.data?.project?.name
+      ? `https://ai.azure.com/projects/${encodeURIComponent(detail.data.project.name)}`
+      : null;
+    return buildBaseRibbon(isNew ? reload : reloadDetail, portalUrl);
+  }, [isNew, reload, reloadDetail, detail.data]);
 
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
@@ -120,7 +148,7 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
   };
 
   if (isNew) {
-    return <Shell item={item} id={id}>
+    return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
         <Subtitle2>AI Foundry projects</Subtitle2>
         <Caption1>Child workspaces of the Foundry hub. Inherit hub-level connections; scope flows + evaluations + data assets.</Caption1>
@@ -160,7 +188,7 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
     </Shell>;
   }
 
-  return <Shell item={item} id={id}>
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.project ? (
         <>
@@ -210,6 +238,10 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
   const [list, reload] = useApi<{ flows: any[] }>(project ? `/api/items/prompt-flow?project=${encodeURIComponent(project)}` : null, [project]);
   const [selected, setSelected] = useState<string | null>(null);
   const [defText, setDefText] = useState('');
+  // Phase 4.5 — track whether the user has typed into defText. Without this
+  // the useEffect that syncs from detail.data would clobber unsaved edits
+  // whenever the list reloads (background polling, user clicked Reload, etc).
+  const [defDirty, setDefDirty] = useState(false);
   const [runInputs, setRunInputs] = useState('{}');
   const [runResult, setRunResult] = useState<any>(null);
   const [running, setRunning] = useState(false);
@@ -218,7 +250,17 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
 
   const detailUrl = project && selected ? `/api/items/prompt-flow/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}` : null;
   const [detail] = useApi<{ flow: any }>(detailUrl, [project, selected]);
-  useEffect(() => { if (detail.data?.flow) setDefText(JSON.stringify(detail.data.flow.flowDefinition || detail.data.flow, null, 2)); }, [detail.data]);
+  useEffect(() => {
+    // Only adopt server flow definition when the user hasn't typed into the
+    // local editor since the last selection. Prevents clobbering edits.
+    if (detail.data?.flow && !defDirty) {
+      setDefText(JSON.stringify(detail.data.flow.flowDefinition || detail.data.flow, null, 2));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.data]);
+
+  // Resetting selection clears the dirty flag so the next flow's body loads.
+  useEffect(() => { setDefDirty(false); }, [selected]);
 
   const runFlow = async () => {
     if (!project || !selected) return;
@@ -234,7 +276,14 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
     setRunning(false);
   };
 
-  return <Shell item={item} id={id}>
+  const ribbon = useMemo(() => {
+    const portalUrl = project
+      ? `https://ai.azure.com/projects/${encodeURIComponent(project)}/prompt-flow`
+      : null;
+    return buildBaseRibbon(reload, portalUrl);
+  }, [reload, project]);
+
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       <ProjectPicker value={project} onChange={setProject} />
       {!project ? <Caption1>Pick a project to list its prompt flows.</Caption1> : list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
@@ -263,9 +312,18 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
       {selected && (
         <div className={s.card}>
           <Subtitle2>Flow: {selected}</Subtitle2>
-          <textarea className={s.monaco} value={defText} onChange={(e) => setDefText(e.target.value)} spellCheck={false} />
+          <MessageBar intent="info">
+            <MessageBarBody>
+              <MessageBarTitle>Definition is view-only in v2.5</MessageBarTitle>
+              The flow JSON is fetched from the Foundry runtime for inspection. Editing-and-saving the
+              flow definition (PUT against the Foundry prompt-flow API) lands in v2.6 — edits here
+              affect only the Run preview below and are not persisted.
+            </MessageBarBody>
+          </MessageBar>
+          <MonacoTextarea value={defText} onChange={(v) => { setDefText(v); setDefDirty(true); }} language="json" height={300} minHeight={200} ariaLabel="Prompt Flow definition" />
+          {defDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Edits are local-only; Run uses the edited JSON for this session.</Caption1>}
           <Subtitle2 style={{ marginTop: 8 }}>Run inputs (JSON)</Subtitle2>
-          <textarea className={s.monaco} style={{ minHeight: 80 }} value={runInputs} onChange={(e) => setRunInputs(e.target.value)} spellCheck={false} />
+          <MonacoTextarea value={runInputs} onChange={setRunInputs} language="json" height={140} minHeight={80} ariaLabel="Run inputs JSON" />
           <div className={s.toolbar} style={{ marginTop: 8 }}>
             <Button appearance="primary" onClick={runFlow} disabled={running}>{running ? 'Running…' : 'Run flow'}</Button>
             <Button onClick={reload}>Reload list</Button>
@@ -314,7 +372,14 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
     if (!j.ok) setMsg(j.error || `HTTP ${r.status}`); else { setMsg(`Created evaluation`); reload(); }
   };
 
-  return <Shell item={item} id={id}>
+  const ribbon = useMemo(() => {
+    const portalUrl = project
+      ? `https://ai.azure.com/projects/${encodeURIComponent(project)}/evaluations`
+      : null;
+    return buildBaseRibbon(reload, portalUrl);
+  }, [reload, project]);
+
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       <ProjectPicker value={project} onChange={setProject} />
       {project && (list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
@@ -342,10 +407,10 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
       <div className={s.card}>
         <Subtitle2>New evaluation</Subtitle2>
         <div className={s.formRow}>
-          <span>Display name</span><Input value={form.displayName} onChange={(_, d) => setForm({ ...form, displayName: d.value })} />
-          <span>Dataset ID</span><Input value={form.datasetId} onChange={(_, d) => setForm({ ...form, datasetId: d.value })} placeholder="azureml://datastores/.../paths/..." />
-          <span>Model deployment</span><Input value={form.modelDeployment} onChange={(_, d) => setForm({ ...form, modelDeployment: d.value })} placeholder="gpt-4o-mini" />
-          <span>Evaluators</span><Input value={form.evaluators} onChange={(_, d) => setForm({ ...form, evaluators: d.value })} placeholder="comma-separated" />
+          <span>Display name</span><Input value={form.displayName} onChange={(_, d) => setForm((f) => ({ ...f, displayName: d.value }))} />
+          <span>Dataset ID</span><Input value={form.datasetId} onChange={(_, d) => setForm((f) => ({ ...f, datasetId: d.value }))} placeholder="azureml://datastores/.../paths/..." />
+          <span>Model deployment</span><Input value={form.modelDeployment} onChange={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.value }))} placeholder="gpt-4o-mini" />
+          <span>Evaluators</span><Input value={form.evaluators} onChange={(_, d) => setForm((f) => ({ ...f, evaluators: d.value }))} placeholder="comma-separated" />
         </div>
         <div className={s.toolbar} style={{ marginTop: 8 }}>
           <Button appearance="primary" onClick={create} disabled={busy}>{busy ? 'Submitting…' : 'Create evaluation'}</Button>
@@ -378,11 +443,19 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
 
 export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [policies] = useApi<{ policies: any[] }>('/api/items/content-safety');
+  const [policies, reloadPolicies] = useApi<{ policies: any[] }>('/api/items/content-safety');
   const [text, setText] = useState('');
   const [result, setResult] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [imgB64, setImgB64] = useState('');
+
+  // Content Safety is a tenant-level Azure AI Content Safety resource; without
+  // an ARM id in the policies response, the most useful deep-link is the
+  // Content Safety Studio app at contentsafety.azure.com.
+  const ribbon = useMemo(
+    () => buildBaseRibbon(reloadPolicies, 'https://contentsafety.cognitive.azure.com/'),
+    [reloadPolicies],
+  );
 
   const analyze = async (kind: 'text' | 'image') => {
     setBusy(true); setResult(null);
@@ -408,7 +481,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
     reader.readAsDataURL(f);
   };
 
-  return <Shell item={item} id={id}>
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       {policies.error
         ? <ErrorBar msg={policies.error} hint={policies.hint} notDeployed={policies.notDeployed} />
@@ -446,7 +519,15 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
   const url = `/api/items/tracing?hours=${hours}${op ? `&operation=${encodeURIComponent(op)}` : ''}`;
   const [state, reload] = useApi<{ traces: any[] }>(url, [hours, op]);
 
-  return <Shell item={item} id={id}>
+  // Traces live in the backing Application Insights resource. Without an ARM
+  // id on the response, the Foundry tracing surface itself is the cleanest
+  // deep-link.
+  const ribbon = useMemo(
+    () => buildBaseRibbon(reload, 'https://ai.azure.com/tracing'),
+    [reload],
+  );
+
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       <Subtitle2>Foundry traces</Subtitle2>
       <div className={s.toolbar}>
@@ -488,11 +569,21 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
 export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const isNew = id === 'new' || id === 'create';
-  const [list] = useApi<{ indexes: any[] }>(isNew ? '/api/items/ai-search-index' : null);
-  const [detail] = useApi<{ index: any }>(isNew ? null : `/api/items/ai-search-index/${encodeURIComponent(id)}`, [id]);
+  const [list, reloadList] = useApi<{ indexes: any[] }>(isNew ? '/api/items/ai-search-index' : null);
+  const [detail, reloadDetail] = useApi<{ index: any }>(isNew ? null : `/api/items/ai-search-index/${encodeURIComponent(id)}`, [id]);
   const [query, setQuery] = useState('*');
   const [hits, setHits] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+
+  // Deep-link to the index blade when we have an ARM id on the index payload;
+  // fall back to the generic portal landing page otherwise.
+  const ribbon = useMemo(() => {
+    const armId = detail.data?.index?.id || detail.data?.index?.armId;
+    const portalUrl = armId
+      ? `https://portal.azure.com/#@/resource${armId}/overview`
+      : 'https://portal.azure.com/';
+    return buildBaseRibbon(isNew ? reloadList : reloadDetail, portalUrl);
+  }, [isNew, reloadList, reloadDetail, detail.data]);
 
   const runSearch = async () => {
     setBusy(true); setHits(null);
@@ -506,7 +597,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   };
 
   if (isNew) {
-    return <Shell item={item} id={id}>
+    return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
         <Subtitle2>Azure AI Search indexes</Subtitle2>
         {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
@@ -528,20 +619,99 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
     </Shell>;
   }
 
-  return <Shell item={item} id={id}>
+  const idx = detail.data?.index;
+  const fields: any[] = idx?.fields || [];
+  const docs: any[] = hits?.ok ? (hits.result?.value || hits.result?.['value'] || []) : [];
+
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      {detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.index && (
+      {detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : idx && (
         <>
-          <Subtitle2>Index: {detail.data.index.name}</Subtitle2>
+          <Subtitle2>Index: {idx.name}</Subtitle2>
           <div className={s.toolbar}>
-            <Field label="Query"><Input value={query} onChange={(_, d) => setQuery(d.value)} /></Field>
+            <Field label="Search query"><Input value={query} onChange={(_, d) => setQuery(d.value)} /></Field>
             <Button appearance="primary" onClick={runSearch} disabled={busy}>{busy ? 'Searching…' : 'Search'}</Button>
           </div>
-          <Subtitle2 style={{ marginTop: 8 }}>Definition</Subtitle2>
-          <pre className={s.monaco}>{JSON.stringify(detail.data.index, null, 2)}</pre>
-          {hits && (hits.ok
-            ? <pre className={s.monaco}>{JSON.stringify(hits.result, null, 2)}</pre>
-            : <ErrorBar msg={hits.error} hint={hits.hint} notDeployed={hits.notDeployed} />)}
+          <Subtitle2 style={{ marginTop: 12 }}>Fields ({fields.length})</Subtitle2>
+          <div className={s.tableWrap}>
+            <Table size="small" aria-label="Index fields">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>Name</TableHeaderCell>
+                  <TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>Key</TableHeaderCell>
+                  <TableHeaderCell>Searchable</TableHeaderCell>
+                  <TableHeaderCell>Filterable</TableHeaderCell>
+                  <TableHeaderCell>Sortable</TableHeaderCell>
+                  <TableHeaderCell>Facetable</TableHeaderCell>
+                  <TableHeaderCell>Retrievable</TableHeaderCell>
+                  <TableHeaderCell>Dims</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {fields.map((f: any) => (
+                  <TableRow key={f.name}>
+                    <TableCell className={s.cell}><strong>{f.name}</strong></TableCell>
+                    <TableCell className={s.cell}><code>{f.type}</code></TableCell>
+                    <TableCell className={s.cell}>{f.key ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.searchable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.filterable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.sortable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.facetable ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.retrievable !== false ? '✓' : ''}</TableCell>
+                    <TableCell className={s.cell}>{f.dimensions || ''}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          {idx.vectorSearch && (
+            <Caption1 style={{ marginTop: 8 }}>
+              Vector search enabled · profiles: {(idx.vectorSearch?.profiles || []).map((p: any) => p.name).join(', ') || '—'}
+            </Caption1>
+          )}
+          {hits && !hits.ok && (
+            <ErrorBar msg={hits.error} hint={hits.hint} notDeployed={hits.notDeployed} />
+          )}
+          {hits?.ok && (
+            <>
+              <Subtitle2 style={{ marginTop: 12 }}>Results ({docs.length})</Subtitle2>
+              {docs.length === 0 ? (
+                <Caption1>No documents matched.</Caption1>
+              ) : (
+                <div className={s.tableWrap}>
+                  <Table size="small" aria-label="Search results">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHeaderCell>Score</TableHeaderCell>
+                        {/* Show all retrievable fields; cap at 6 to keep the grid readable. */}
+                        {fields.filter(f => f.retrievable !== false).slice(0, 6).map((f) => (
+                          <TableHeaderCell key={f.name}>{f.name}</TableHeaderCell>
+                        ))}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {docs.map((d, i) => (
+                        <TableRow key={i}>
+                          <TableCell className={s.cell}>{(d['@search.score'] || 0).toFixed(3)}</TableCell>
+                          {fields.filter(f => f.retrievable !== false).slice(0, 6).map((f) => (
+                            <TableCell key={f.name} className={s.cell}>
+                              {(() => {
+                                const v = d[f.name];
+                                if (v === undefined || v === null) return '—';
+                                const s = typeof v === 'string' ? v : JSON.stringify(v);
+                                return s.length > 80 ? s.slice(0, 80) + '…' : s;
+                              })()}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
     </div>
@@ -578,24 +748,33 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
     if (!j.ok) setMsg(j.error); else { setMsg(`${action} requested`); reload(); reloadDetail(); }
   };
 
+  // Compute resources are managed inside the Foundry workspace; ai.azure.com's
+  // compute surface is the canonical deep-link.
+  const ribbon = useMemo(
+    () => buildBaseRibbon(isNew ? reload : reloadDetail, 'https://ai.azure.com/compute'),
+    [isNew, reload, reloadDetail],
+  );
+
   if (isNew) {
-    return <Shell item={item} id={id}>
+    return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
         <Subtitle2>Foundry computes</Subtitle2>
         <div className={s.card}>
           <Subtitle2>New compute</Subtitle2>
           <div className={s.formRow}>
-            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm({ ...form, name: d.value })} />
+            {/* v3.28 Phase 4.5: functional setForm so the Start/Stop polling
+                refresh + concurrent typing don't clobber form edits. */}
+            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
             <span>Type</span>
             <Dropdown value={form.computeType} selectedOptions={[form.computeType]}
-              onOptionSelect={(_, d) => d.optionValue && setForm({ ...form, computeType: d.optionValue })}>
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, computeType: d.optionValue! }))}>
               <Option value="AmlCompute">AmlCompute (cluster)</Option>
               <Option value="ComputeInstance">ComputeInstance</Option>
             </Dropdown>
-            <span>VM size</span><Input value={form.vmSize} onChange={(_, d) => setForm({ ...form, vmSize: d.value })} />
+            <span>VM size</span><Input value={form.vmSize} onChange={(_, d) => setForm((f) => ({ ...f, vmSize: d.value }))} />
             {form.computeType === 'AmlCompute' && <>
-              <span>Min nodes</span><Input type="number" value={String(form.minNodeCount)} onChange={(_, d) => setForm({ ...form, minNodeCount: Number(d.value) })} />
-              <span>Max nodes</span><Input type="number" value={String(form.maxNodeCount)} onChange={(_, d) => setForm({ ...form, maxNodeCount: Number(d.value) })} />
+              <span>Min nodes</span><Input type="number" value={String(form.minNodeCount)} onChange={(_, d) => setForm((f) => ({ ...f, minNodeCount: Number(d.value) }))} />
+              <span>Max nodes</span><Input type="number" value={String(form.maxNodeCount)} onChange={(_, d) => setForm((f) => ({ ...f, maxNodeCount: Number(d.value) }))} />
             </>}
           </div>
           <Button appearance="primary" onClick={create} disabled={busy || !form.name}>{busy ? 'Creating…' : 'Create compute'}</Button>
@@ -630,7 +809,7 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
     </Shell>;
   }
 
-  return <Shell item={item} id={id}>
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.compute && (
         <>
@@ -663,7 +842,16 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
   const [project, setProject] = useState<string>('');
   const listUrl = `/api/items/dataset${project ? `?project=${encodeURIComponent(project)}` : ''}`;
   const [list, reload] = useApi<{ assets: any[] }>(isNew ? listUrl : null, [project]);
-  const [detail] = useApi<{ asset: any; versions: any[] }>(isNew ? null : `/api/items/dataset/${encodeURIComponent(id)}${project ? `?project=${encodeURIComponent(project)}` : ''}`, [id, project]);
+  const [detail, reloadDetail] = useApi<{ asset: any; versions: any[] }>(isNew ? null : `/api/items/dataset/${encodeURIComponent(id)}${project ? `?project=${encodeURIComponent(project)}` : ''}`, [id, project]);
+
+  // Datasets live under the Foundry project; deep-link to the project's data
+  // surface when scoped, otherwise to the hub-level data tab.
+  const ribbon = useMemo(() => {
+    const portalUrl = project
+      ? `https://ai.azure.com/projects/${encodeURIComponent(project)}/data`
+      : 'https://ai.azure.com/data';
+    return buildBaseRibbon(isNew ? reload : reloadDetail, portalUrl);
+  }, [isNew, reload, reloadDetail, project]);
 
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [form, setForm] = useState({ name: '', dataType: 'uri_folder', dataUri: '', version: '1', description: '' });
@@ -682,7 +870,7 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
   const filtered = (list.data?.assets || []).filter((a: any) => !typeFilter || a.dataType === typeFilter);
 
   if (isNew) {
-    return <Shell item={item} id={id}>
+    return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
         <Subtitle2>Foundry datasets</Subtitle2>
         <div className={s.toolbar}>
@@ -707,17 +895,17 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
         <div className={s.card}>
           <Subtitle2>New asset</Subtitle2>
           <div className={s.formRow}>
-            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm({ ...form, name: d.value })} />
+            <span>Name</span><Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
             <span>Type</span>
             <Dropdown value={form.dataType} selectedOptions={[form.dataType]}
-              onOptionSelect={(_, d) => d.optionValue && setForm({ ...form, dataType: d.optionValue })}>
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, dataType: d.optionValue! }))}>
               <Option value="uri_file">uri_file</Option>
               <Option value="uri_folder">uri_folder</Option>
               <Option value="mltable">mltable</Option>
             </Dropdown>
-            <span>URI</span><Input value={form.dataUri} onChange={(_, d) => setForm({ ...form, dataUri: d.value })} placeholder="azureml:// or abfss://..." />
-            <span>Version</span><Input value={form.version} onChange={(_, d) => setForm({ ...form, version: d.value })} />
-            <span>Description</span><Input value={form.description} onChange={(_, d) => setForm({ ...form, description: d.value })} />
+            <span>URI</span><Input value={form.dataUri} onChange={(_, d) => setForm((f) => ({ ...f, dataUri: d.value }))} placeholder="azureml:// or abfss://..." />
+            <span>Version</span><Input value={form.version} onChange={(_, d) => setForm((f) => ({ ...f, version: d.value }))} />
+            <span>Description</span><Input value={form.description} onChange={(_, d) => setForm((f) => ({ ...f, description: d.value }))} />
           </div>
           <Button appearance="primary" onClick={create} disabled={!form.name || !form.dataUri}>Create asset</Button>
           {msg && <Caption1> {msg}</Caption1>}
@@ -746,7 +934,7 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
     </Shell>;
   }
 
-  return <Shell item={item} id={id}>
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.asset && (
         <>

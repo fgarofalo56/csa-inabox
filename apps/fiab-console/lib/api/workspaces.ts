@@ -9,9 +9,15 @@ export interface Workspace {
   description?: string;
   capacity?: string;
   domain?: string;
+  /** Derived: LOOM_ONELAKE_BASE + name. Only present on GET /api/workspaces/[id]. */
+  oneLake?: string | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  /** ISO timestamp of the most recent open. Optional — older docs may lack it. */
+  lastAccessedAt?: string;
+  /** Aggregated item count. Only present on GET /api/workspaces?count=true. */
+  itemCount?: number;
 }
 
 export interface WorkspaceItem {
@@ -20,10 +26,21 @@ export interface WorkspaceItem {
   itemType: string;
   displayName: string;
   description?: string;
+  /** Optional folder this item lives in (null = workspace root). */
+  folderId?: string | null;
   state?: Record<string, unknown>;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface WorkspaceFolder {
+  id: string;
+  workspaceId: string;
+  name: string;
+  parent?: string | null;
+  createdBy: string;
+  createdAt: string;
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '';
@@ -44,6 +61,15 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function listWorkspaces(): Promise<Workspace[]> {
   return fetchJson<Workspace[]>('/api/workspaces');
+}
+
+/**
+ * List workspaces enriched with `itemCount` per workspace. Uses a single
+ * cross-partition aggregate on the items container. If the aggregate fails,
+ * the BFF gracefully falls back to the un-enriched list (no `itemCount`).
+ */
+export async function listWorkspacesWithCounts(): Promise<Workspace[]> {
+  return fetchJson<Workspace[]>('/api/workspaces?count=true');
 }
 
 export async function getWorkspace(id: string): Promise<Workspace> {
@@ -89,16 +115,76 @@ export async function createItem(workspaceId: string, input: {
 }
 
 export async function getItem(type: string, id: string): Promise<WorkspaceItem> {
-  return fetchJson<WorkspaceItem>(`/api/items/${type}/${id}`);
+  return fetchJson<WorkspaceItem>(`/api/cosmos-items/${type}/${id}`);
 }
 
 export async function updateItem(type: string, id: string, patch: Partial<Pick<WorkspaceItem, 'displayName' | 'description' | 'state'>>): Promise<WorkspaceItem> {
-  return fetchJson<WorkspaceItem>(`/api/items/${type}/${id}`, {
+  return fetchJson<WorkspaceItem>(`/api/cosmos-items/${type}/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
 }
 
 export async function deleteItem(type: string, id: string): Promise<void> {
-  await fetchJson<{ ok: boolean }>(`/api/items/${type}/${id}`, { method: 'DELETE' });
+  await fetchJson<{ ok: boolean }>(`/api/cosmos-items/${type}/${id}`, { method: 'DELETE' });
+}
+
+// --- Folders --------------------------------------------------------------
+
+export async function listFolders(workspaceId: string): Promise<WorkspaceFolder[]> {
+  const res = await fetchJson<{ ok: boolean; folders: WorkspaceFolder[] }>(
+    `/api/workspaces/${workspaceId}/folders`,
+  );
+  return res.folders ?? [];
+}
+
+export async function createFolder(
+  workspaceId: string,
+  input: { name: string; parent?: string | null },
+): Promise<WorkspaceFolder> {
+  const res = await fetchJson<{ ok: boolean; folder: WorkspaceFolder }>(
+    `/api/workspaces/${workspaceId}/folders`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+  return res.folder;
+}
+
+export async function renameFolder(
+  workspaceId: string,
+  folderId: string,
+  name: string,
+): Promise<WorkspaceFolder> {
+  const res = await fetchJson<{ ok: boolean; folder: WorkspaceFolder }>(
+    `/api/workspaces/${workspaceId}/folders`,
+    { method: 'PATCH', body: JSON.stringify({ id: folderId, name }) },
+  );
+  return res.folder;
+}
+
+export async function deleteFolder(workspaceId: string, folderId: string): Promise<void> {
+  await fetchJson<{ ok: boolean }>(
+    `/api/workspaces/${workspaceId}/folders?id=${encodeURIComponent(folderId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+// --- Item-in-workspace ops (move / rename / delete) ----------------------
+
+export async function patchWorkspaceItem(
+  workspaceId: string,
+  itemId: string,
+  patch: { folderId?: string | null; displayName?: string },
+): Promise<WorkspaceItem> {
+  const res = await fetchJson<{ ok: boolean; item: WorkspaceItem }>(
+    `/api/workspaces/${workspaceId}/items/${itemId}`,
+    { method: 'PATCH', body: JSON.stringify(patch) },
+  );
+  return res.item;
+}
+
+export async function deleteWorkspaceItem(workspaceId: string, itemId: string): Promise<void> {
+  await fetchJson<{ ok: boolean }>(
+    `/api/workspaces/${workspaceId}/items/${itemId}`,
+    { method: 'DELETE' },
+  );
 }

@@ -27,7 +27,34 @@ export type WorkloadCategory =
   | 'Azure Databricks'
   | 'Azure Data Factory'
   | 'Azure Data Lake Analytics'
-  | 'Azure AI Foundry';
+  | 'Azure AI Foundry'
+  | 'Azure SQL Database'
+  | 'Azure Geoanalytics'
+  | 'Azure Graph + Vector'
+  | 'CSA Data Products'
+  | 'Copilot Studio'
+  | 'Power Platform'
+  | 'AI & Agents';
+
+export interface LearnStep {
+  title: string;
+  body: string;
+  /** Optional screenshot path under /public */
+  screenshot?: string;
+}
+
+export interface LearnContent {
+  /** 1-3 sentence overview shown on the Learn dialog's first pane. */
+  overview: string;
+  /** Numbered getting-started walkthrough — 3-5 steps. */
+  steps: LearnStep[];
+  /** Optional embed URL for an explainer video. */
+  videoUrl?: string;
+  /** Authoritative docs link (Microsoft Learn for Fabric/Azure concepts, Loom docs for Loom-only). */
+  docsUrl?: string;
+  /** Optional sample-data dataset suggestions. */
+  sampleData?: string[];
+}
 
 export interface FabricItemType {
   /** Route slug — used at /items/[slug]/[id] */
@@ -44,6 +71,8 @@ export interface FabricItemType {
   preview?: boolean;
   /** True when no Fabric REST API exists (Scorecard, Dataflow Gen1) */
   noRestApi?: boolean;
+  /** Learn / Getting started popup content. Required for every type. */
+  learnContent?: LearnContent;
 }
 
 export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
@@ -165,9 +194,9 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     description: 'Typed dataset over linked services — JSON, Parquet, Delimited, SQL, REST, etc.' },
   { slug: 'adf-trigger',                 displayName: 'ADF trigger',                 restType: 'AdfTrigger',                category: 'Azure Data Factory',
     description: 'Schedule, tumbling window, storage event, or custom event trigger.' },
-  // Azure Data Lake Analytics
-  { slug: 'usql-job',                    displayName: 'U-SQL job',                   restType: 'UsqlJob',                   category: 'Azure Data Lake Analytics',
-    description: 'U-SQL script over ADLS Gen1/Gen2 with C# UDFs. Legacy ADLA workloads, native in Loom.' },
+  // Azure Stream Analytics — real-time streaming SQL over Event Hubs / IoT Hub / Blob
+  { slug: 'stream-analytics-job',        displayName: 'Stream Analytics job',        restType: 'StreamAnalyticsJob',        category: 'Streaming analytics',
+    description: 'Continuous SQL-style queries over real-time streams (Event Hubs / IoT Hub / Blob) writing to Blob / SQL / Power BI / Event Hub / ADX / Cosmos.' },
 
   // --- API-first surfacing: APIM is the runtime glue for every Loom-managed function, ML endpoint, and data product ---
   { slug: 'apim-api',                    displayName: 'APIM API',                    restType: 'ApimApi',                   category: 'APIs and functions',
@@ -200,6 +229,76 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     description: 'AML compute instances + clusters. Create, start, stop, scale, delete. Used by prompt flows, evaluations, training jobs.' },
   { slug: 'dataset',                     displayName: 'Foundry dataset',             restType: 'FoundryDataset',            category: 'Azure AI Foundry',
     description: 'AML data asset — URI file, URI folder, or MLTable. Versioned, used by prompt flows + evaluations + training runs.' },
+
+  // --- v3 — Copilot Studio (Power Platform / Dataverse-backed agents) ---
+  { slug: 'copilot-studio-agent',        displayName: 'Copilot Studio agent',        restType: 'CopilotStudioAgent',        category: 'Copilot Studio',
+    description: 'Conversational agent stored in Power Platform Dataverse. Instructions, knowledge, topics, actions, channels — native in Loom.' },
+  { slug: 'copilot-studio-knowledge',    displayName: 'Copilot knowledge source',    restType: 'CopilotKnowledgeSource',    category: 'Copilot Studio',
+    description: 'Grounding source for an agent — URL, file, SharePoint site, or Dataverse table.' },
+  { slug: 'copilot-studio-topic',        displayName: 'Copilot topic',               restType: 'CopilotTopic',              category: 'Copilot Studio',
+    description: 'Trigger-phrase-driven dialog flow authored in Copilot Studio YAML.' },
+  { slug: 'copilot-studio-action',       displayName: 'Copilot action',              restType: 'CopilotAction',             category: 'Copilot Studio',
+    description: 'Power Automate flow, custom connector, or prebuilt action bound to a Copilot Studio agent.' },
+  { slug: 'copilot-studio-channel',      displayName: 'Copilot channel',             restType: 'CopilotChannel',            category: 'Copilot Studio',
+    description: 'Publish an agent to Teams, Web chat, Direct Line, Slack, or a custom channel.' },
+  { slug: 'copilot-studio-analytics',    displayName: 'Copilot analytics',           restType: 'CopilotAnalytics',          category: 'Copilot Studio',
+    description: 'Sessions, resolution rate, escalation rate, and CSAT for a Copilot Studio agent (last 30 days by default).' },
+  { slug: 'copilot-template-library',    displayName: 'Copilot template library',    restType: 'CopilotTemplateLibrary',    category: 'Copilot Studio',
+    description: 'CSA-curated agent templates: data steward, contract analyzer, RFP responder, etc.' },
+
+  // --- v3 — Power Platform (Environments, Dataverse, Power Apps, Power Automate, Power Pages, AI Builder) ---
+  { slug: 'powerplatform-environment',   displayName: 'Power Platform environment',  restType: 'PowerPlatformEnvironment',  category: 'Power Platform',
+    description: 'Power Platform environment surfaced via the BAP admin API — SKU, region, Dataverse domain, security group, DLP summary.' },
+  { slug: 'dataverse-table',             displayName: 'Dataverse table',             restType: 'DataverseTable',            category: 'Power Platform',
+    description: 'Dataverse EntityDefinition — schema, attributes, primary keys, custom vs system. Sourced from Dataverse Web API v9.2.' },
+  { slug: 'power-app',                   displayName: 'Power App',                   restType: 'PowerApp',                  category: 'Power Platform',
+    description: 'Canvas or model-driven Power App in an environment — owner, last modified, play link. Sourced from the PowerApps admin API.' },
+  { slug: 'power-automate-flow',         displayName: 'Power Automate flow',         restType: 'PowerAutomateFlow',         category: 'Power Platform',
+    description: 'Cloud flow in Power Automate — state, trigger, run history, manual run. Sourced from the Flow admin API.' },
+  { slug: 'power-page',                  displayName: 'Power Pages site',            restType: 'PowerPagesSite',            category: 'Power Platform',
+    description: 'Power Pages website (mspp_website / adx_website) — domain, status, type. Sourced from Dataverse Web API.' },
+  { slug: 'ai-builder-model',            displayName: 'AI Builder model',            restType: 'AiBuilderModel',            category: 'Power Platform',
+    description: 'AI Builder model (msdyn_aimodel) — prediction / extraction / classification / form-processing. State + status from Dataverse.' },
+
+  // --- v3 — Azure SQL family (Microsoft.Sql/servers + databases + MI + SQL Server 2025 features) ---
+  { slug: 'azure-sql-server',            displayName: 'Azure SQL server',            restType: 'AzureSqlServer',            category: 'Azure SQL Database',
+    description: 'Microsoft.Sql/servers — server-level admin, firewall, AAD admin, list of databases.' },
+  { slug: 'azure-sql-database',          displayName: 'Azure SQL database',          restType: 'AzureSqlDatabase',          category: 'Azure SQL Database',
+    description: 'Per-database T-SQL editor (TDS + AAD), Fabric mirroring config, geo-replication, vector index.' },
+  { slug: 'azure-sql-managed-instance',  displayName: 'SQL Managed Instance',        restType: 'AzureSqlManagedInstance',   category: 'Azure SQL Database',
+    description: 'Microsoft.Sql/managedInstances — listing + state. Editor execution deferred to v3.x (TDS via PE).' },
+  { slug: 'sql-server-2025-vector-index',displayName: 'SQL Server 2025 vector index',restType: 'SqlServer2025VectorIndex',  category: 'Azure SQL Database',
+    description: 'SQL Server 2025 native vector index — CREATE VECTOR INDEX, JSON_AGG, regex, similarity search.' },
+
+  // --- v3 — Geoanalytics platform (Azure Maps + lakehouse geometry + spatial T-SQL/KQL + H3/S2) ---
+  { slug: 'geo-map',                     displayName: 'Geo map',                     restType: 'GeoMap',                    category: 'Azure Geoanalytics',
+    description: 'Azure Maps account + style + tile layer config. OSM fallback when no Maps account is deployed.' },
+  { slug: 'geo-dataset',                 displayName: 'Geo dataset',                 restType: 'GeoDataset',                category: 'Azure Geoanalytics',
+    description: 'GeoJSON / Parquet+geometry dataset in ADLS Gen2. Geometry-column inspector + sample preview.' },
+  { slug: 'geo-query',                   displayName: 'Geo query',                   restType: 'GeoQuery',                  category: 'Azure Geoanalytics',
+    description: 'Spatial query against Synapse Serverless / Kusto — H3, S2, ST_DISTANCE, ST_WITHIN.' },
+  { slug: 'geo-pipeline',                displayName: 'Geo pipeline',                restType: 'GeoPipeline',               category: 'Azure Geoanalytics',
+    description: 'ADF/Synapse pipeline specialized for geo enrichment (H3 index, reverse geocode, buffer).' },
+
+  // --- v3 — Graph + knowledge stores (Cosmos Gremlin, ADX graph, Cypher, GQL, vector stores) ---
+  { slug: 'cosmos-gremlin-graph',        displayName: 'Cosmos Gremlin graph',        restType: 'CosmosGremlinGraph',        category: 'Azure Graph + Vector',
+    description: 'Cosmos DB for Apache Gremlin — graph traversal queries over property graphs.' },
+  { slug: 'cypher-graph',                displayName: 'Cypher graph',                restType: 'CypherGraph',               category: 'Azure Graph + Vector',
+    description: 'openCypher dialect over Cosmos / Neptune-compatible / ADX graph plugin.' },
+  { slug: 'gql-graph',                   displayName: 'GQL graph',                   restType: 'GqlGraph',                  category: 'Azure Graph + Vector',
+    description: 'ISO GQL standard graph query language against the graph backend of record.' },
+  { slug: 'vector-store',                displayName: 'Vector store',                restType: 'VectorStore',               category: 'Azure Graph + Vector',
+    description: 'Vector index — Cosmos vCore, AI Search, or PostgreSQL pgvector. Similarity search + RAG grounding.' },
+
+  // --- v3 — Push-button data-products library (CSA-curated templates + instances) ---
+  { slug: 'data-product-template',       displayName: 'Data product template',       restType: 'DataProductTemplate',       category: 'CSA Data Products',
+    description: 'CSA-curated push-button template: medallion lakehouse, IoT analytics, federated mesh, RAG agent, geospatial.' },
+  { slug: 'data-product-instance',       displayName: 'Data product instance',       restType: 'DataProductInstance',       category: 'CSA Data Products',
+    description: 'Instantiated data product in a workspace — composed of underlying items (pipelines, lakehouses, indexes).' },
+
+  // --- v3 — Cross-item Copilot orchestrator (AOAI via Foundry hub) ---
+  { slug: 'cross-item-copilot',          displayName: 'Cross-item Copilot',          restType: 'CrossItemCopilot',          category: 'AI & Agents',
+    description: 'Natural-language orchestrator across every wired Loom service: Synapse, Lakehouse, Databricks, APIM, ADX, ADF, Power BI, Fabric, Foundry. 25+ tools.' },
 ];
 
 export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
@@ -217,6 +316,13 @@ export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
   'Azure Data Factory',
   'Azure Data Lake Analytics',
   'Azure AI Foundry',
+  'Azure SQL Database',
+  'Azure Geoanalytics',
+  'Azure Graph + Vector',
+  'CSA Data Products',
+  'Copilot Studio',
+  'Power Platform',
+  'AI & Agents',
 ];
 
 export function itemsByCategory(category: WorkloadCategory): FabricItemType[] {

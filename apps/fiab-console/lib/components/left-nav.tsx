@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { makeStyles, tokens } from '@fluentui/react-components';
+import { PinnedSection } from './pinned-section';
 import {
   Home24Regular,
   Building24Regular,
@@ -11,7 +12,7 @@ import {
   Flash24Regular,
   Database24Regular,
   CloudArrowUp24Regular,
-  PuzzlePiece24Regular,
+  PuzzlePieceRegular,
   ShieldKeyhole24Regular,
   ShieldCheckmark24Regular,
   Settings24Regular,
@@ -34,7 +35,7 @@ const navItems = [
   { href: '/realtime-hub', icon: Flash24Regular, label: 'Real-Time hub' },
   { href: '/data-agent', icon: Bot24Regular, label: 'Data agents' },
   { href: '/copilot', icon: Sparkle24Regular, label: 'Copilot' },
-  { href: '/workload-hub', icon: PuzzlePiece24Regular, label: 'Workload hub' },
+  { href: '/workload-hub', icon: PuzzlePieceRegular, label: 'Workload hub' },
   { href: '/deployment-pipelines', icon: CloudArrowUp24Regular, label: 'Deployment' },
   { href: '/admin', icon: ShieldKeyhole24Regular, label: 'Admin portal' },
   { href: '/setup', icon: Settings24Regular, label: 'Setup wizard' },
@@ -85,6 +86,7 @@ export function LeftNav() {
           </Link>
         );
       })}
+      <PinnedSection />
     </nav>
   );
 }

@@ -10,6 +10,50 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.11.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.10.0...csa-inabox-v0.11.0) (2026-05-27)
+
+
+### Features
+
+* **csa-loom-ci:** deploy-validation loop + Dockerfile build-marker stamping ([#338](https://github.com/fgarofalo56/csa-inabox/issues/338)) ([688f1ba](https://github.com/fgarofalo56/csa-inabox/commit/688f1ba304ca43943021ae195b3bb09437c8349d))
+* **csa-loom:** apps install — full code+data starter bundles for all 10 CSA apps ([#341](https://github.com/fgarofalo56/csa-inabox/issues/341)) ([7eea07a](https://github.com/fgarofalo56/csa-inabox/commit/7eea07aa8a34431d54da1bce7d3fa0da26c20496))
+* **csa-loom:** Build Phase 1 — Monaco + PB embed + 17 BLOCKER fixes + Spark SQL hang fix ([#340](https://github.com/fgarofalo56/csa-inabox/issues/340)) ([936c567](https://github.com/fgarofalo56/csa-inabox/commit/936c567d95bdfe123cfb330af8a2c18caac4e02c))
+* **csa-loom:** catalog 85/85 + Build Phase 1 + Foundry/Purview/Notebook P3 deploy stubs + DNS bicep fix ([#336](https://github.com/fgarofalo56/csa-inabox/issues/336)) ([9afb233](https://github.com/fgarofalo56/csa-inabox/commit/9afb2336f39a3fd2d1d68c52de9ad2434738ea38))
+* **csa-loom:** compute lifecycle UI + backing-service pickers + pre-save silencing + /onelake WAF fix ([#345](https://github.com/fgarofalo56/csa-inabox/issues/345)) ([146d215](https://github.com/fgarofalo56/csa-inabox/commit/146d2158999b5e2ed851c4ebe04280370f1db48b))
+* **csa-loom:** mega-batch — tab strip + workspace tree + workspaces tile/list + /apps polish + Multi-Cloud docs + CSA Loom moved last ([#353](https://github.com/fgarofalo56/csa-inabox/issues/353)) ([5fa28e0](https://github.com/fgarofalo56/csa-inabox/commit/5fa28e0c95a74a0d4d0d8a79cc461bf6633b616d))
+
+
+### Bug Fixes
+
+* **csa-loom:** Activator workspace dropdown was Power BI groups — swap to Loom workspaces ([#343](https://github.com/fgarofalo56/csa-inabox/issues/343)) ([4a6a9b3](https://github.com/fgarofalo56/csa-inabox/commit/4a6a9b3084fc8a171e3cb834b851c51ae11ed664))
+* **csa-loom:** Monaco worker CSP — allow blob: in script-src/worker-src ([#342](https://github.com/fgarofalo56/csa-inabox/issues/342)) ([73192c2](https://github.com/fgarofalo56/csa-inabox/commit/73192c2899d7dadbbee2710e79a730b23ca8c171))
+* **csa-loom:** wire ribbon buttons across 18 editors (175 onClick + 111 honestly disabled) ([#344](https://github.com/fgarofalo56/csa-inabox/issues/344)) ([1e4cb04](https://github.com/fgarofalo56/csa-inabox/commit/1e4cb0448e7f2d07db9326c1ddaa2799a1324072))
+
+
+### Documentation
+
+* **csa-loom:** hero gradient matches live app + re-drop --strict from docs deploy ([#354](https://github.com/fgarofalo56/csa-inabox/issues/354)) ([b49c756](https://github.com/fgarofalo56/csa-inabox/commit/b49c756a7ea9ece777b247e356d7f12abcb3cd4e))
+* **csa-loom:** release 2026-05-27 notes + nav + apim-policy parser fix ([#347](https://github.com/fgarofalo56/csa-inabox/issues/347)) ([f709ce6](https://github.com/fgarofalo56/csa-inabox/commit/f709ce69debc0e7cb18583675804acf73297366e))
+* update test script with live smoke results (46/48 walkthrough) ([#346](https://github.com/fgarofalo56/csa-inabox/issues/346)) ([86d6cfd](https://github.com/fgarofalo56/csa-inabox/commit/86d6cfd98ffde76bd42019c0bd263bad7c4d3b92))
+
+
+### Continuous Integration
+
+* add csa-loom-attempt-interactive-grants workflow on main ([#334](https://github.com/fgarofalo56/csa-inabox/issues/334)) ([66b4139](https://github.com/fgarofalo56/csa-inabox/commit/66b41395638b4b9ec4468da80a06c12f2da1202f))
+* **docs:** drop --strict so docs site can deploy past tutorial cross-link warnings ([#352](https://github.com/fgarofalo56/csa-inabox/issues/352)) ([f0b5222](https://github.com/fgarofalo56/csa-inabox/commit/f0b52221eb7962ca3bbcccae4569b08415b9834c))
+
+## [0.10.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.9.0...csa-inabox-v0.10.0) (2026-05-25)
+
+
+### Features
+
+* **csa-loom:** v1.5–v1.10 — Loom Console rebuild + governance + APIM + ATLAS logo ([#331](https://github.com/fgarofalo56/csa-inabox/issues/331)) ([8b1b40d](https://github.com/fgarofalo56/csa-inabox/commit/8b1b40d04dbfeac3d27107729bdcb4c584e8a257))
+
+
+### Miscellaneous
+
+* **deps:** Bump react and @types/react in /portal/react-webapp ([#272](https://github.com/fgarofalo56/csa-inabox/issues/272)) ([6986b77](https://github.com/fgarofalo56/csa-inabox/commit/6986b776cff9929dd09a5c01266448492adea096))
+
 ## [0.9.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.8.0...csa-inabox-v0.9.0) (2026-05-24)
 
 

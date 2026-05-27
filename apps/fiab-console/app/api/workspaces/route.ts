@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { workspacesContainer } from '@/lib/azure/cosmos-client';
+import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
+import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import type { Workspace } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -10,10 +11,11 @@ function err(error: string, status: number, code?: string) {
   return NextResponse.json({ ok: false, error, code }, { status });
 }
 
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   const tenantId = session.claims.oid;
+  const withCount = req.nextUrl?.searchParams.get('count') === 'true';
   try {
     const c = await workspacesContainer();
     const { resources } = await c.items
@@ -22,7 +24,31 @@ export async function GET(_req: NextRequest) {
         parameters: [{ name: '@t', value: tenantId }],
       }, { partitionKey: tenantId })
       .fetchAll();
-    return NextResponse.json(resources);
+    if (!withCount || resources.length === 0) return NextResponse.json(resources);
+
+    // ?count=true — aggregate item counts grouped by workspaceId. Cross-
+    // partition query on the items container, filtered to workspace ids
+    // owned by this tenant. Cheap because we only project workspaceId.
+    try {
+      const ids = resources.map(w => w.id);
+      const items = await itemsContainer();
+      // Build IN clause params: @w0, @w1, ...
+      const inParams = ids.map((id, i) => ({ name: `@w${i}`, value: id }));
+      const inExpr = inParams.map(p => p.name).join(',');
+      const { resources: countRows } = await items.items
+        .query<{ workspaceId: string; n: number }>({
+          query: `SELECT c.workspaceId, COUNT(1) AS n FROM c WHERE c.workspaceId IN (${inExpr}) GROUP BY c.workspaceId`,
+          parameters: inParams,
+        })
+        .fetchAll();
+      const counts = new Map<string, number>();
+      for (const row of countRows) counts.set(row.workspaceId, row.n ?? 0);
+      const enriched = resources.map(w => ({ ...w, itemCount: counts.get(w.id) ?? 0 }));
+      return NextResponse.json(enriched);
+    } catch {
+      // If the aggregate fails (e.g., RU limit), return the unenriched list.
+      return NextResponse.json(resources);
+    }
   } catch (e: any) {
     return err(e?.message || 'Failed to list workspaces', 500, 'cosmos_error');
   }
@@ -51,6 +77,7 @@ export async function POST(req: NextRequest) {
   try {
     const c = await workspacesContainer();
     const { resource } = await c.items.create<Workspace>(ws);
+    if (resource) void upsertLoomDoc(docForWorkspace(resource));
     return NextResponse.json(resource, { status: 201 });
   } catch (e: any) {
     return err(e?.message || 'Failed to create workspace', 500, 'cosmos_error');

@@ -13,11 +13,13 @@ param boundary string
 @description('Domain name (Finance / Procurement / Mission Ops / etc.)')
 param domainName string
 
-@description('Container platform')
+@description('Container platform. Reserved for v3.x — DLZ resources do not host workloads directly; param is preserved for orchestration contract with admin-plane main.bicep.')
 @allowed(['containerApps', 'aks'])
+#disable-next-line no-unused-params
 param containerPlatform string
 
-@description('Capacity SKU')
+@description('Capacity SKU. Reserved for v3.x — Fabric capacity sizing flows through admin plane today.')
+#disable-next-line no-unused-params
 param capacitySku string
 
 @description('Admin Plane hub VNet ID for spoke peering')
@@ -26,7 +28,8 @@ param adminPlaneHubVnetId string
 @description('Admin Plane Log Analytics workspace ID — every DLZ resource ships diagnostic settings here')
 param adminPlaneLawId string
 
-@description('Admin Plane App Insights connection string — every DLZ app emits telemetry here')
+@description('Admin Plane App Insights connection string — every DLZ app emits telemetry here. Reserved for v3.x — DLZ modules read this from adminPlaneLawId today; explicit AI connection string will be passed once DLZ container workloads land.')
+#disable-next-line no-unused-params
 param adminPlaneAppInsightsConnectionString string = ''
 
 @description('Admin Plane private DNS zones object (from network module outputs)')
@@ -53,13 +56,16 @@ param adminEntraGroupId string
 @description('Activator UAMI principal ID (from Admin Plane)')
 param activatorPrincipalId string = ''
 
-@description('Catalog endpoint from Admin Plane')
+@description('Catalog endpoint from Admin Plane. Reserved for v3.x — Purview-backed DLZ scan job wiring is deferred; today scans are configured from the admin plane catalog module.')
+#disable-next-line no-unused-params
 param catalogEndpoint string
 
-@description('Databricks UC managed enabled')
+@description('Databricks UC managed enabled. Reserved for v3.x — Unity Catalog managed-vs-external mode is configured in databricks.bicep; this orchestrator-level flag is preserved for symmetry with admin plane.')
+#disable-next-line no-unused-params
 param databricksUnityCatalogEnabled bool
 
-@description('Databricks SQL Warehouse enabled')
+@description('Databricks SQL Warehouse enabled. Reserved for v3.x — DBSQL warehouse creation happens via SCIM bootstrap module today.')
+#disable-next-line no-unused-params
 param databricksSqlWarehouseEnabled bool
 
 @description('Storage requires CMK (IL5)')
@@ -71,7 +77,8 @@ param storageCmkKeyUri string = ''
 @description('Storage CMK UAMI ID (required if storageRequireCmk)')
 param storageCmkIdentityId string = ''
 
-@description('Power BI SKU')
+@description('Power BI SKU. Reserved for v3.x — Power BI capacity is provisioned in admin plane; preserved here for orchestrator contract.')
+#disable-next-line no-unused-params
 param powerBiSku string
 
 @description('Spoke VNet CIDR (must not overlap Admin Plane hub which is 10.0.0.0/16). Default is 10.100.0.0/16 for the single-sub DLZ; operator overrides for multi-DLZ deployments.')

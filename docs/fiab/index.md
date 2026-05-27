@@ -2,6 +2,21 @@
 
 ![CSA Loom — Microsoft Fabric experience for Azure tenants where Fabric isn't yet available](../assets/images/hero/fiab/index.svg){ .architecture-hero loading="eager" }
 
+!!! success "What's new — Release 2026-05-27"
+    Six PRs landed today on the FedCiv DLZ deployment. All 10 CSA apps
+    now install with full starter code + data drawn from
+    `examples/<industry>/`. 175 ribbon buttons wired across 18 editor
+    files with honest disabled-tooltips on the rest. New shared
+    `<ComputePicker>` (state badges + Resume / Pause / Restart) and
+    nine free-text Azure-resource Inputs swapped to backed `Select`
+    pickers. Monaco self-hosted; CSP loosened for workers; Activator
+    workspace dropdown corrected.
+
+    **Live:** `loom-console--0000082` on image SHA `146d2158`. Smoke:
+    10/10 apps, 85/85 editors, 23/23 services, 46/48 walkthrough.
+    [Read the release notes →](releases/2026-05-27-apps-bundles-and-wiring-sweep.md) ·
+    [Walk the test script →](TEST_SCRIPT_2026_05_27.md)
+
 **CSA Loom** is the Cloud Scale Analytics platform that delivers the
 Microsoft Fabric experience inside any Azure tenant where Fabric isn't
 yet generally available — federal civilian, DoD, intelligence

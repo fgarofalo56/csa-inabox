@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Providers } from './providers';
 import { AppShell } from '@/lib/components/app-shell';
+import { TenantThemeBridge } from '@/lib/components/tenant-theme-bridge';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -14,6 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <Providers>
+          <TenantThemeBridge />
           <AppShell>{children}</AppShell>
         </Providers>
       </body>

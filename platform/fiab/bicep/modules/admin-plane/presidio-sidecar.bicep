@@ -21,7 +21,8 @@ param acrLoginServer string
 @description('UAMI ID for the Presidio sidecar (ACR pull access)')
 param uamiId string
 
-@description('UAMI client ID')
+@description('UAMI client ID. Reserved for v3.x — Presidio currently authenticates outbound calls via uamiId; clientId will be wired for federated identity workflows.')
+#disable-next-line no-unused-params
 param uamiClientId string
 
 @description('App Insights connection string')

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { upsertLoomDoc, deleteLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -29,7 +30,15 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   try {
     const ws = await loadWorkspace(params.id, session.claims.oid);
     if (!ws) return err('Workspace not found', 404, 'not_found');
-    return NextResponse.json(ws);
+    // OneLake path: derived from LOOM_ONELAKE_BASE env + workspace name.
+    // Read-only; consumers use this to surface the abfss:// URL in the
+    // settings drawer. Workspaces without LOOM_ONELAKE_BASE configured
+    // get `oneLake = null`.
+    const base = process.env.LOOM_ONELAKE_BASE;
+    const oneLake = base
+      ? `${base.replace(/\/$/, '')}/${encodeURIComponent(ws.name)}`
+      : null;
+    return NextResponse.json({ ...ws, oneLake });
   } catch (e: any) {
     return err(e?.message || 'Failed to fetch workspace', 500, 'cosmos_error');
   }
@@ -53,6 +62,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     };
     const c = await workspacesContainer();
     const { resource } = await c.item(ws.id, ws.tenantId).replace<Workspace>(next);
+    if (resource) void upsertLoomDoc(docForWorkspace(resource));
     return NextResponse.json(resource);
   } catch (e: any) {
     return err(e?.message || 'Failed to update workspace', 500, 'cosmos_error');
@@ -75,9 +85,11 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       .fetchAll();
     for (const child of children) {
       await items.item(child.id, ws.id).delete().catch(() => {});
+      void deleteLoomDoc(`it:${child.id}`);
     }
     const wsContainer = await workspacesContainer();
     await wsContainer.item(ws.id, ws.tenantId).delete();
+    void deleteLoomDoc(`ws:${ws.id}`);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return err(e?.message || 'Failed to delete workspace', 500, 'cosmos_error');

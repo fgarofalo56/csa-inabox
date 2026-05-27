@@ -72,7 +72,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'adf-pipeline':                reg(() => import('./azure-services-editors'), 'AdfPipelineEditor'),
   'adf-dataset':                 reg(() => import('./azure-services-editors'), 'AdfDatasetEditor'),
   'adf-trigger':                 reg(() => import('./azure-services-editors'), 'AdfTriggerEditor'),
-  'usql-job':                    reg(() => import('./azure-services-editors'), 'UsqlJobEditor'),
+  'stream-analytics-job':        reg(() => import('./stream-analytics-editor'), 'StreamAnalyticsJobEditor'),
 
   // v1.9 — APIM-first surface (API-first methodology, data product marketplace)
   'apim-api':                    reg(() => import('./apim-editors'),           'ApimApiEditor'),
@@ -92,6 +92,48 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'ai-search-index':             reg(() => import('./foundry-sub-editors'),    'AiSearchIndexEditor'),
   'compute':                     reg(() => import('./foundry-sub-editors'),    'ComputeEditor'),
   'dataset':                     reg(() => import('./foundry-sub-editors'),    'DatasetEditor'),
+
+  // v3 — Copilot Studio (Power Platform / Dataverse-backed agents)
+  'copilot-studio-agent':        reg(() => import('./copilot-studio-editors'), 'CopilotStudioAgentEditor'),
+  'copilot-studio-knowledge':    reg(() => import('./copilot-studio-editors'), 'CopilotKnowledgeEditor'),
+  'copilot-studio-topic':        reg(() => import('./copilot-studio-editors'), 'CopilotTopicEditor'),
+  'copilot-studio-action':       reg(() => import('./copilot-studio-editors'), 'CopilotActionEditor'),
+  'copilot-studio-channel':      reg(() => import('./copilot-studio-editors'), 'CopilotChannelEditor'),
+  'copilot-studio-analytics':    reg(() => import('./copilot-studio-editors'), 'CopilotAnalyticsEditor'),
+  'copilot-template-library':    reg(() => import('./copilot-studio-editors'), 'CopilotTemplateLibraryEditor'),
+
+  // v3 — Power Platform (real BAP / PowerApps / Flow / Dataverse REST)
+  'powerplatform-environment':   reg(() => import('./powerplatform-editors'),  'PowerPlatformEnvironmentEditor'),
+  'dataverse-table':             reg(() => import('./powerplatform-editors'),  'DataverseTableEditor'),
+  'power-app':                   reg(() => import('./powerplatform-editors'),  'PowerAppEditor'),
+  'power-automate-flow':         reg(() => import('./powerplatform-editors'),  'PowerAutomateFlowEditor'),
+  'power-page':                  reg(() => import('./powerplatform-editors'),  'PowerPageEditor'),
+  'ai-builder-model':            reg(() => import('./powerplatform-editors'),  'AiBuilderModelEditor'),
+
+  // v3 — Cross-item Copilot orchestrator (32 tools across all wired services)
+  'cross-item-copilot':          reg(() => import('./cross-item-copilot-editor').then((m) => ({ CrossItemCopilotEditor: m.CrossItemCopilotEditor })), 'CrossItemCopilotEditor'),
+
+  // v3 — Azure SQL family (Microsoft.Sql/servers + databases + MI + SQL 2025 vector index)
+  'azure-sql-server':            reg(() => import('./azure-sql-editors'),      'AzureSqlServerEditor'),
+  'azure-sql-database':          reg(() => import('./azure-sql-editors'),      'AzureSqlDatabaseEditor'),
+  'azure-sql-managed-instance':  reg(() => import('./azure-sql-editors'),      'SqlManagedInstanceEditor'),
+  'sql-server-2025-vector-index':reg(() => import('./azure-sql-editors'),      'SqlServer2025VectorIndexEditor'),
+
+  // v3 — Geoanalytics (Azure Maps + lakehouse geometry + H3/S2 + spatial T-SQL/KQL)
+  'geo-map':                     reg(() => import('./geo-editors'),            'GeoMapEditor'),
+  'geo-dataset':                 reg(() => import('./geo-editors'),            'GeoDatasetEditor'),
+  'geo-query':                   reg(() => import('./geo-editors'),            'GeoQueryEditor'),
+  'geo-pipeline':                reg(() => import('./geo-editors'),            'GeoPipelineEditor'),
+
+  // v3 — Graph + Vector knowledge stores (Cosmos Gremlin, Cypher, GQL, vector store)
+  'cosmos-gremlin-graph':        reg(() => import('./graph-editors'),          'CosmosGremlinGraphEditor'),
+  'cypher-graph':                reg(() => import('./graph-editors'),          'CypherGraphEditor'),
+  'gql-graph':                   reg(() => import('./graph-editors'),          'GqlGraphEditor'),
+  'vector-store':                reg(() => import('./graph-editors'),          'VectorStoreEditor'),
+
+  // v3 — Push-button data-products library (CSA-curated templates + instances)
+  'data-product-template':       reg(() => import('./data-product-editors'),   'DataProductTemplateEditor'),
+  'data-product-instance':       reg(() => import('./data-product-editors'),   'DataProductInstanceEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {

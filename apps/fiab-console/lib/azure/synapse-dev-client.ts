@@ -336,3 +336,162 @@ export async function getPipelineRun(runId: string): Promise<PipelineRun> {
   const r = await callDev(`/pipelineruns/${encodeURIComponent(runId)}?api-version=${DEV_API}`);
   return jsonOrThrow<PipelineRun>(r, `getPipelineRun(${runId})`);
 }
+
+// ============================================================
+// Livy interactive sessions — used for "Run notebook" against a
+// Synapse Spark pool. Creates an interactive session, submits the
+// notebook code as a single statement, returns the session +
+// statement IDs so the caller can poll.
+//
+// Returns shape compatible with the notebook-run dispatcher.
+// ============================================================
+
+export interface LivyBatchLike {
+  id: string;
+  state: string;
+  appInfo?: { sparkUiUrl?: string };
+}
+
+export async function submitLivyBatch(args: {
+  poolName: string;
+  code: string;
+  kind?: 'pyspark' | 'spark' | 'sparkr' | 'sql';
+  jobName?: string;
+}): Promise<LivyBatchLike> {
+  const { poolName, code, kind = 'pyspark', jobName } = args;
+
+  // 1) Create interactive session
+  const sessRes = await callDev(
+    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        kind,
+        name: jobName || `loom-session-${Date.now()}`,
+        driverMemory: '4g',
+        driverCores: 4,
+        executorMemory: '4g',
+        executorCores: 4,
+        numExecutors: 2,
+      }),
+    },
+  );
+  const sess = await jsonOrThrow<{ id: number; state: string; appInfo?: any }>(sessRes, `createLivySession(${poolName})`);
+
+  // 2) Poll session until 'idle' — Synapse Livy refuses statement submission
+  //    while the session is in 'starting'/'busy'/'shutting_down' states.
+  //    First cold start of a Spark pool can take 60-90s.
+  let sessState = sess.state;
+  for (let i = 0; i < 60; i++) {
+    if (sessState === 'idle') break;
+    if (sessState === 'error' || sessState === 'dead' || sessState === 'killed') {
+      throw new Error(`Spark session ${sess.id} entered terminal state '${sessState}' before becoming ready`);
+    }
+    await new Promise(r => setTimeout(r, 3000));
+    const polled = await callDev(`/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sess.id}`);
+    const j = await jsonOrThrow<{ state: string }>(polled, `pollLivySession(${poolName}/${sess.id})`);
+    sessState = j.state;
+  }
+  if (sessState !== 'idle') {
+    throw new Error(`Spark session ${sess.id} not ready after 3 min — current state '${sessState}'. Pool may be undersized or auto-paused.`);
+  }
+
+  // 3) Submit the code as a statement
+  const stmtRes = await callDev(
+    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sess.id}/statements`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ code, kind }),
+    },
+  );
+  const stmt = await jsonOrThrow<{ id: number; state: string }>(stmtRes, `submitStatement(${poolName}/${sess.id})`);
+
+  return {
+    id: `${sess.id}.${stmt.id}`,
+    state: stmt.state || 'running',
+    appInfo: sess.appInfo,
+  };
+}
+
+export async function getLivyStatement(poolName: string, sessionId: number, stmtId: number): Promise<{ id: number; state: string; output?: any }> {
+  const r = await callDev(
+    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}/statements/${stmtId}`,
+  );
+  return jsonOrThrow(r, `getLivyStatement(${poolName}/${sessionId}/${stmtId})`);
+}
+
+// === Async-friendly helpers used by /api/items/notebook/[id]/run + /runs/[runId] ===
+
+export async function createLivySessionAsync(poolName: string, kind: 'pyspark' | 'spark' | 'sparkr' | 'sql' = 'pyspark', jobName?: string): Promise<{ id: number; state: string; appInfo?: any }> {
+  const r = await callDev(
+    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        kind,
+        name: jobName || `loom-session-${Date.now()}`,
+        driverMemory: '4g', driverCores: 4,
+        executorMemory: '4g', executorCores: 4,
+        numExecutors: 2,
+      }),
+    },
+  );
+  return jsonOrThrow(r, `createLivySession(${poolName})`);
+}
+
+export async function getLivySession(poolName: string, sessionId: number): Promise<{ id: number; state: string; appInfo?: any }> {
+  const r = await callDev(`/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}`);
+  return jsonOrThrow(r, `getLivySession(${poolName}/${sessionId})`);
+}
+
+export async function submitLivyStatement(poolName: string, sessionId: number, body: { code: string; kind?: 'pyspark' | 'spark' | 'sparkr' | 'sql' }): Promise<{ id: number; state: string }> {
+  const r = await callDev(
+    `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}/statements`,
+    { method: 'POST', body: JSON.stringify({ code: body.code, kind: body.kind || 'pyspark' }) },
+  );
+  return jsonOrThrow(r, `submitStatement(${poolName}/${sessionId})`);
+}
+
+/**
+ * List the Dedicated SQL pools attached to the Loom Synapse workspace via
+ * ARM. Returns the raw ARM shape (name + status + sku) — callers only need
+ * those fields for compute-target discovery. Returns [] if the workspace
+ * env var is missing; surfaces ARM errors verbatim.
+ */
+export async function listDedicatedSqlPools(): Promise<Array<{ name: string; status?: string; sku?: { name?: string } }>> {
+  if (!process.env.LOOM_SYNAPSE_WORKSPACE) return [];
+  const r = await callArm(`${armBase()}/sqlPools?api-version=${ARM_API}`);
+  const body = await jsonOrThrow<{ value?: Array<{ name: string; properties?: { status?: string }; sku?: { name?: string } }> }>(r, 'listDedicatedSqlPools');
+  return (body.value || []).map((p) => ({
+    name: p.name,
+    status: p.properties?.status,
+    sku: p.sku,
+  }));
+}
+
+/**
+ * Resume a specific Synapse Dedicated SQL pool by name (ARM REST POST .../resume).
+ * Used by /api/loom/compute-targets/[id]/start when the id starts with
+ * "dedicated-sql:".
+ */
+export async function resumeDedicatedPool(name: string): Promise<void> {
+  if (!name) throw new Error('resumeDedicatedPool: name is required');
+  const r = await callArm(`${armBase()}/sqlPools/${encodeURIComponent(name)}/resume?api-version=${ARM_API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 202) {
+    throw new Error(`resumeDedicatedPool(${name}) failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+/**
+ * Pause a specific Synapse Dedicated SQL pool by name (ARM REST POST .../pause).
+ * Used by /api/loom/compute-targets/[id]/stop when the id starts with
+ * "dedicated-sql:".
+ */
+export async function pauseDedicatedPool(name: string): Promise<void> {
+  if (!name) throw new Error('pauseDedicatedPool: name is required');
+  const r = await callArm(`${armBase()}/sqlPools/${encodeURIComponent(name)}/pause?api-version=${ARM_API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 202) {
+    throw new Error(`pauseDedicatedPool(${name}) failed ${r.status}: ${await r.text()}`);
+  }
+}
+

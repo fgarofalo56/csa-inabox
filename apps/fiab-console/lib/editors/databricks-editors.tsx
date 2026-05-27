@@ -29,6 +29,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -163,13 +164,6 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
     </div>
   );
 }
-
-const DBX_SQLW_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Query', actions: [{ label: 'New SQL query' }, { label: 'Run' }, { label: 'Query history' }] },
-    { label: 'Warehouse', actions: [{ label: 'Start' }, { label: 'Stop' }, { label: 'Refresh' }] },
-  ]},
-];
 
 export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -339,11 +333,36 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     [warehouses, warehouseId],
   );
 
+  const newSql = useCallback(() => {
+    setSqlText('-- New SQL.\nSELECT current_catalog() AS catalog, current_database() AS schema;');
+    setResult(null);
+  }, []);
+  const refreshAll = useCallback(() => {
+    refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
+  }, [refreshState, refreshCatalogs]);
+  const canStart = !!warehouseId && !starting && (state === 'STOPPED' || state === 'STOPPING' || state === 'UNKNOWN');
+  const canStop = !!warehouseId && isRunning;
+  const canRun = !!warehouseId && isRunning && !loading;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Query', actions: [
+        { label: 'New SQL query', onClick: newSql },
+        { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
+        { label: 'Query history', disabled: true, title: 'Databricks query-history API not yet wired in this editor (deferred)' },
+      ]},
+      { label: 'Warehouse', actions: [
+        { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart },
+        { label: 'Stop', onClick: canStop ? stop : undefined, disabled: !canStop },
+        { label: 'Refresh', onClick: warehouseId ? refreshAll : undefined, disabled: !warehouseId },
+      ]},
+    ]},
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={DBX_SQLW_RIBBON}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Tree aria-label="Unity Catalog" defaultOpenItems={['catalogs']}>
@@ -495,12 +514,13 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               Context: <strong>{activeCatalog}</strong>{activeSchema ? <> · <strong>{activeSchema}</strong></> : null}
             </Caption1>
           )}
-          <textarea
-            className={s.editor}
-            spellCheck={false}
+          <MonacoTextarea
             value={sqlText}
-            onChange={(e) => setSqlText(e.target.value)}
-            aria-label="Databricks SQL editor"
+            onChange={setSqlText}
+            language="sql"
+            height={260}
+            minHeight={200}
+            ariaLabel="Databricks SQL editor"
           />
           <ResultsPanel result={result} loading={loading} />
           {!warehousesError && warehouses.length === 0 && (
@@ -566,14 +586,6 @@ function fmtDuration(ms?: number): string {
 // Databricks Notebook editor
 // ============================================================
 
-const DBX_NB_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'File',    actions: [{ label: 'Save' }, { label: 'Reload' }] },
-    { label: 'Run',     actions: [{ label: 'Run on cluster' }, { label: 'View runs' }] },
-    { label: 'Workspace', actions: [{ label: 'Refresh tree' }] },
-  ]},
-];
-
 interface WorkspaceObject {
   object_type: string;
   path: string;
@@ -604,6 +616,11 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
   const [savingFile, setSavingFile] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileMessage, setFileMessage] = useState<string | null>(null);
+  // Track the server-side source so we can mark the buffer dirty and gate
+  // Ctrl+S. setSource happens via Monaco onChange so dirty falls out from
+  // a direct comparison.
+  const [origSource, setOrigSource] = useState<string>('');
+  const dirty = source !== origSource;
 
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [clusterId, setClusterId] = useState<string>('');
@@ -657,7 +674,9 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
       const r = await fetch(`/api/items/databricks-notebook/${id}?path=${encodeURIComponent(path)}`);
       const j = await r.json();
       if (!j.ok) { setFileError(j.error || `HTTP ${r.status}`); return; }
-      setSource(j.content || '');
+      const content = j.content || '';
+      setSource(content);
+      setOrigSource(content);
       setLanguage(((lang || j.language || 'PYTHON').toUpperCase() as any));
     } catch (e: any) {
       setFileError(e?.message || String(e));
@@ -671,21 +690,44 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     setSavingFile(true);
     setFileError(null);
     setFileMessage(null);
+    // Snapshot the source we are about to send so when the PUT succeeds
+    // we can mark exactly that text as the new "saved" baseline. If the
+    // user keeps typing during the await, origSource will land on the
+    // bytes the server actually accepted — not whatever the editor now
+    // contains. Matches the notebook editor's snapshot-then-confirm
+    // pattern landed 2026-05-27.
+    const snapshot = source;
     try {
       const r = await fetch(`/api/items/databricks-notebook/${id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: selectedPath, language, content: source }),
+        body: JSON.stringify({ path: selectedPath, language, content: snapshot }),
       });
       const j = await r.json();
       if (!j.ok) setFileError(j.error || `HTTP ${r.status}`);
-      else setFileMessage(`Saved to ${selectedPath}`);
+      else {
+        setOrigSource(snapshot);
+        setFileMessage(`Saved to ${selectedPath} at ${new Date().toLocaleTimeString()}`);
+      }
     } catch (e: any) {
       setFileError(e?.message || String(e));
     } finally {
       setSavingFile(false);
     }
   }, [id, selectedPath, language, source]);
+
+  // Ctrl/Cmd+S to save when there are unsaved changes. Matches the Fabric
+  // notebook editor's keybinding so muscle memory works across the family.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (selectedPath && dirty && !savingFile) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedPath, dirty, savingFile, save]);
 
   const runOn = useCallback(async () => {
     if (!selectedPath || !clusterId) return;
@@ -774,11 +816,33 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     });
   };
 
+  const reload = useCallback(() => {
+    if (selectedPath) openNotebook(selectedPath, language);
+  }, [selectedPath, language, openNotebook]);
+  const refreshTree = useCallback(() => { setTree({}); void loadDir(rootPath); }, [rootPath, loadDir]);
+  const canSave = !!selectedPath && dirty && !savingFile;
+  const canRunOn = !!selectedPath && !!clusterId && !running;
+  const ribbonNb: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'File', actions: [
+        { label: savingFile ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: 'Reload', onClick: selectedPath ? reload : undefined, disabled: !selectedPath },
+      ]},
+      { label: 'Run', actions: [
+        { label: running ? 'Running…' : 'Run on cluster', onClick: canRunOn ? runOn : undefined, disabled: !canRunOn },
+        { label: 'View runs', onClick: loadRuns },
+      ]},
+      { label: 'Workspace', actions: [
+        { label: 'Refresh tree', onClick: refreshTree },
+      ]},
+    ]},
+  ], [savingFile, canSave, save, selectedPath, reload, running, canRunOn, runOn, loadRuns, refreshTree]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={DBX_NB_RIBBON}
+      ribbon={ribbonNb}
       leftPanel={
         <div className={s.treePad}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
@@ -817,10 +881,10 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
             <Button
               appearance="primary"
               icon={<Save20Regular />}
-              disabled={!selectedPath || savingFile}
+              disabled={!selectedPath || savingFile || !dirty}
               onClick={save}
             >
-              {savingFile ? 'Saving…' : 'Save'}
+              {savingFile ? 'Saving…' : dirty ? 'Save *' : 'Save'}
             </Button>
             <Dropdown
               placeholder="Cluster"
@@ -857,13 +921,13 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
           {loadingFile
             ? <Spinner size="small" label="Loading notebook source…" labelPosition="after" />
             : (
-              <textarea
-                className={s.editor}
-                spellCheck={false}
+              <MonacoTextarea
                 value={source}
-                onChange={(e) => setSource(e.target.value)}
-                aria-label="Notebook source"
-                style={{ minHeight: 280 }}
+                onChange={setSource}
+                language="python"
+                height={340}
+                minHeight={280}
+                ariaLabel="Notebook source"
               />
             )
           }
@@ -931,13 +995,6 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
 // Databricks Job editor
 // ============================================================
 
-const DBX_JOB_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Job',     actions: [{ label: 'Save' }, { label: 'Delete' }] },
-    { label: 'Run',     actions: [{ label: 'Run now' }, { label: 'View runs' }] },
-  ]},
-];
-
 interface JobRow {
   job_id: number;
   settings?: {
@@ -973,6 +1030,10 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  // Phase 4.5 — dirty tracking so Save button gates correctly and Ctrl+S
+  // is a no-op when there are no edits. Any field mutation flips dirty=true;
+  // a successful save or selecting another job resets dirty=false.
+  const [dirty, setDirty] = useState(false);
 
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [running, setRunning] = useState(false);
@@ -1020,6 +1081,8 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       const rr = await fetch(`/api/items/databricks-job/${id}/runs?jobId=${jid}`);
       const rj = await rr.json();
       if (rj.ok) setRuns(rj.runs || []);
+      // Selecting a job hydrates state from the server — clean by definition.
+      setDirty(false);
     } catch (e: any) {
       setSaveError(e?.message || String(e));
     }
@@ -1048,8 +1111,12 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     setSaving(true);
     setSaveError(null);
     setSaveMessage(null);
+    // Phase 4.5 — build the spec from the freshest committed state via
+    // buildSpec() before the await; if the user keeps typing during the
+    // request, the dirty flag will stay true after a clean origSpec is
+    // captured, prompting them to save again.
+    const spec = buildSpec();
     try {
-      const spec = buildSpec();
       if (jobId === null) {
         const r = await fetch('/api/items/databricks-job', {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1058,8 +1125,9 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
         const j = await r.json();
         if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); return; }
         setJobId(j.job_id);
-        setSaveMessage(`Created job ${j.job_id}`);
+        setSaveMessage(`Created job ${j.job_id} at ${new Date().toLocaleTimeString()}`);
         await loadJobs();
+        setDirty(false);
       } else {
         const r = await fetch(`/api/items/databricks-job/${id}?jobId=${jobId}`, {
           method: 'PUT', headers: { 'content-type': 'application/json' },
@@ -1067,7 +1135,8 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
         });
         const j = await r.json();
         if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); return; }
-        setSaveMessage(`Saved job ${jobId}`);
+        setSaveMessage(`Saved job ${jobId} at ${new Date().toLocaleTimeString()}`);
+        setDirty(false);
       }
     } catch (e: any) {
       setSaveError(e?.message || String(e));
@@ -1107,11 +1176,46 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     }
   }, [id, jobId]);
 
+  // Ctrl/Cmd+S to save the job spec when there are unsaved edits OR the
+  // form is a brand-new job (jobId === null) the user is composing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (!saving && (dirty || jobId === null)) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [saving, dirty, jobId, save]);
+
+  const viewRuns = useCallback(async () => {
+    if (jobId === null) return;
+    const rr = await fetch(`/api/items/databricks-job/${id}/runs?jobId=${jobId}`);
+    const rj = await rr.json();
+    if (rj.ok) setRuns(rj.runs || []);
+  }, [id, jobId]);
+  const canSaveJob = !saving && (dirty || jobId === null);
+  const canRunNow = jobId !== null && !running;
+  const canDeleteJob = jobId !== null;
+  const ribbonJob: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Job', actions: [
+        { label: saving ? 'Saving…' : jobId === null ? 'Create' : 'Save', onClick: canSaveJob ? save : undefined, disabled: !canSaveJob },
+        { label: 'Delete', onClick: canDeleteJob ? del : undefined, disabled: !canDeleteJob },
+      ]},
+      { label: 'Run', actions: [
+        { label: running ? 'Submitting…' : 'Run now', onClick: canRunNow ? runNow : undefined, disabled: !canRunNow },
+        { label: 'View runs', onClick: jobId !== null ? viewRuns : undefined, disabled: jobId === null },
+      ]},
+    ]},
+  ], [saving, jobId, canSaveJob, save, canDeleteJob, del, running, canRunNow, runNow, viewRuns]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={DBX_JOB_RIBBON}
+      ribbon={ribbonJob}
       leftPanel={
         <div className={s.treePad}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
@@ -1120,6 +1224,9 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
               setJobId(null); setName(''); setSaveMessage(null); setSaveError(null);
               setTasks([{ task_key: 'main', notebook_path: '', cluster_id: '', depends_on: '' }]);
               setRuns([]);
+              // Fresh blank form = no edits yet (Ctrl+S still works because
+              // the keybinding accepts jobId === null as "creating").
+              setDirty(false);
             }} />
             <Button size="small" icon={<ArrowSync20Regular />} onClick={loadJobs} />
           </div>
@@ -1144,8 +1251,14 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       main={
         <div className={s.pad}>
           <div className={s.toolbar}>
-            <Button appearance="primary" icon={<Save20Regular />} disabled={saving} onClick={save}>
-              {saving ? 'Saving…' : jobId === null ? 'Create' : 'Save'}
+            {dirty && jobId !== null && <Badge appearance="outline" color="warning">unsaved</Badge>}
+            <Button
+              appearance="primary"
+              icon={<Save20Regular />}
+              disabled={saving || (jobId !== null && !dirty)}
+              onClick={save}
+            >
+              {saving ? 'Saving…' : jobId === null ? 'Create' : dirty ? 'Save *' : 'Save'}
             </Button>
             {jobId !== null && (
               <Button appearance="outline" icon={<Play20Regular />} disabled={running} onClick={runNow}>
@@ -1171,14 +1284,14 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
           )}
 
           <Field label="Display name">
-            <Input value={name} onChange={(_, d) => setName(d.value)} />
+            <Input value={name} onChange={(_, d) => { setName(d.value); setDirty(true); }} />
           </Field>
 
           <Subtitle2>Schedule</Subtitle2>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <Switch checked={scheduled} onChange={(_, d) => setScheduled(!!d.checked)} label="Scheduled" />
-            <Field label="Quartz cron"><Input value={cron} onChange={(_, d) => setCron(d.value)} disabled={!scheduled} /></Field>
-            <Field label="Timezone"><Input value={tz} onChange={(_, d) => setTz(d.value)} disabled={!scheduled} /></Field>
+            <Switch checked={scheduled} onChange={(_, d) => { setScheduled(!!d.checked); setDirty(true); }} label="Scheduled" />
+            <Field label="Quartz cron"><Input value={cron} onChange={(_, d) => { setCron(d.value); setDirty(true); }} disabled={!scheduled} /></Field>
+            <Field label="Timezone"><Input value={tz} onChange={(_, d) => { setTz(d.value); setDirty(true); }} disabled={!scheduled} /></Field>
           </div>
 
           <Subtitle2 style={{ marginTop: 8 }}>Tasks</Subtitle2>
@@ -1195,15 +1308,15 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                 {tasks.map((t, i) => (
                   <TableRow key={i}>
                     <TableCell><Input size="small" value={t.task_key}
-                      onChange={(_, d) => setTasks((arr) => arr.map((x, j) => j === i ? { ...x, task_key: d.value } : x))} /></TableCell>
+                      onChange={(_, d) => { setTasks((arr) => arr.map((x, j) => j === i ? { ...x, task_key: d.value } : x)); setDirty(true); }} /></TableCell>
                     <TableCell><Input size="small" value={t.notebook_path}
-                      onChange={(_, d) => setTasks((arr) => arr.map((x, j) => j === i ? { ...x, notebook_path: d.value } : x))} /></TableCell>
+                      onChange={(_, d) => { setTasks((arr) => arr.map((x, j) => j === i ? { ...x, notebook_path: d.value } : x)); setDirty(true); }} /></TableCell>
                     <TableCell>
                       <Dropdown size="small"
                         value={clusters.find((c) => c.cluster_id === t.cluster_id)?.cluster_name || t.cluster_id}
                         selectedOptions={t.cluster_id ? [t.cluster_id] : []}
-                        onOptionSelect={(_, d) => d.optionValue && setTasks((arr) =>
-                          arr.map((x, j) => j === i ? { ...x, cluster_id: d.optionValue! } : x))}
+                        onOptionSelect={(_, d) => { if (d.optionValue) { setTasks((arr) =>
+                          arr.map((x, j) => j === i ? { ...x, cluster_id: d.optionValue! } : x)); setDirty(true); } }}
                       >
                         {clusters.map((c) => (
                           <Option key={c.cluster_id} value={c.cluster_id} text={c.cluster_name || c.cluster_id}>
@@ -1213,10 +1326,10 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                       </Dropdown>
                     </TableCell>
                     <TableCell><Input size="small" value={t.depends_on}
-                      onChange={(_, d) => setTasks((arr) => arr.map((x, j) => j === i ? { ...x, depends_on: d.value } : x))} /></TableCell>
+                      onChange={(_, d) => { setTasks((arr) => arr.map((x, j) => j === i ? { ...x, depends_on: d.value } : x)); setDirty(true); }} /></TableCell>
                     <TableCell>
                       <Button size="small" icon={<Delete20Regular />}
-                        onClick={() => setTasks((arr) => arr.filter((_, j) => j !== i))} />
+                        onClick={() => { setTasks((arr) => arr.filter((_, j) => j !== i)); setDirty(true); }} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -1224,7 +1337,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
             </Table>
           </div>
           <Button size="small" icon={<Add20Regular />} appearance="outline"
-            onClick={() => setTasks((arr) => [...arr, { task_key: `task_${arr.length + 1}`, notebook_path: '', cluster_id: '', depends_on: '' }])}>
+            onClick={() => { setTasks((arr) => [...arr, { task_key: `task_${arr.length + 1}`, notebook_path: '', cluster_id: '', depends_on: '' }]); setDirty(true); }}>
             Add task
           </Button>
 
@@ -1271,13 +1384,6 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
 // ============================================================
 // Databricks Cluster editor
 // ============================================================
-
-const DBX_CLUSTER_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Cluster', actions: [{ label: 'Save' }, { label: 'Delete' }] },
-    { label: 'State',   actions: [{ label: 'Start' }, { label: 'Stop' }, { label: 'Restart' }] },
-  ]},
-];
 
 interface ClusterEvent {
   timestamp?: number;
@@ -1385,8 +1491,10 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     setSaving(true);
     setSaveError(null);
     setSaveMessage(null);
+    // Phase 4.5 — call buildSpec before the await so any in-flight typing
+    // during the request lands in the next save, not silently dropped.
+    const spec = buildSpec();
     try {
-      const spec = buildSpec();
       if (!clusterId) {
         const r = await fetch('/api/items/databricks-cluster', {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1394,7 +1502,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
         });
         const j = await r.json();
         if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); return; }
-        setSaveMessage(`Created cluster ${j.cluster_id}`);
+        setSaveMessage(`Created cluster ${j.cluster_id} at ${new Date().toLocaleTimeString()}`);
         await loadClusters();
         setClusterId(j.cluster_id);
         await selectCluster(j.cluster_id);
@@ -1438,13 +1546,44 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     await loadClusters();
   }, [id, clusterId, loadClusters]);
 
+  // Ctrl/Cmd+S to save when not already busy. Only meaningful for the
+  // create flow (clusterId === null); edit-after-create is gated by the
+  // Databricks REST surface, but matching the family-wide muscle memory.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (!saving && !clusterId) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [saving, clusterId, save]);
+
   const state = cluster?.state || (clusterId ? 'UNKNOWN' : 'NEW');
+
+  const canStartCluster = !!clusterId && !stateBusy && state !== 'RUNNING' && state !== 'PENDING';
+  const canStopCluster = !!clusterId && !stateBusy && state !== 'TERMINATED' && state !== 'TERMINATING';
+  const canRestartCluster = !!clusterId && !stateBusy && state === 'RUNNING';
+  const ribbonCluster: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Cluster', actions: [
+        { label: saving ? 'Saving…' : clusterId ? 'Save' : 'Create', onClick: saving ? undefined : save, disabled: saving },
+        { label: 'Delete', onClick: clusterId ? del : undefined, disabled: !clusterId },
+      ]},
+      { label: 'State', actions: [
+        { label: 'Start', onClick: canStartCluster ? () => doState('start') : undefined, disabled: !canStartCluster },
+        { label: 'Stop', onClick: canStopCluster ? () => doState('stop') : undefined, disabled: !canStopCluster },
+        { label: 'Restart', onClick: canRestartCluster ? () => doState('restart') : undefined, disabled: !canRestartCluster },
+      ]},
+    ]},
+  ], [saving, clusterId, save, del, canStartCluster, canStopCluster, canRestartCluster, doState]);
 
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={DBX_CLUSTER_RIBBON}
+      ribbon={ribbonCluster}
       leftPanel={
         <div className={s.treePad}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>

@@ -18,6 +18,22 @@ let _client: CosmosClient | null = null;
 let _db: Database | null = null;
 let _workspaces: Container | null = null;
 let _items: Container | null = null;
+let _copilotSessions: Container | null = null;
+let _appsCatalog: Container | null = null;
+let _workloadsCatalog: Container | null = null;
+let _userPrefs: Container | null = null;
+let _tabsState: Container | null = null;
+let _notifications: Container | null = null;
+let _auditLog: Container | null = null;
+let _comments: Container | null = null;
+let _shares: Container | null = null;
+let _folders: Container | null = null;
+let _downloads: Container | null = null;
+let _searchHistory: Container | null = null;
+let _wsPermissions: Container | null = null;
+let _wsGit: Container | null = null;
+let _tenantThemes: Container | null = null;
+let _tenantSettings: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -59,6 +75,30 @@ async function ensure() {
     partitionKey: { paths: ['/workspaceId'] },
   });
   _items = it;
+  const { container: cs } = await database.containers.createIfNotExists({
+    id: 'copilot-sessions',
+    partitionKey: { paths: ['/sessionId'] },
+  });
+  _copilotSessions = cs;
+
+  // Chunk 0 — UI foundation containers
+  const mk = async (id: string, pk: string) =>
+    (await database.containers.createIfNotExists({ id, partitionKey: { paths: [pk] } })).container;
+  _appsCatalog = await mk('apps-catalog', '/tenantId');
+  _workloadsCatalog = await mk('workloads-catalog', '/tenantId');
+  _userPrefs = await mk('user-prefs', '/userId');
+  _tabsState = await mk('tabs-state', '/userId');
+  _notifications = await mk('notifications', '/userId');
+  _auditLog = await mk('audit-log', '/itemId');
+  _comments = await mk('comments', '/itemId');
+  _shares = await mk('shares', '/itemId');
+  _folders = await mk('folders', '/workspaceId');
+  _downloads = await mk('downloads', '/userId');
+  _searchHistory = await mk('search-history', '/userId');
+  _wsPermissions = await mk('workspace-permissions', '/workspaceId');
+  _wsGit = await mk('workspace-git', '/workspaceId');
+  _tenantThemes = await mk('tenant-themes', '/tenantId');
+  _tenantSettings = await mk('tenant-settings', '/tenantId');
   _ensured = true;
 }
 
@@ -71,3 +111,24 @@ export async function itemsContainer(): Promise<Container> {
   await ensure();
   return _items!;
 }
+
+export async function copilotSessionsContainer(): Promise<Container> {
+  await ensure();
+  return _copilotSessions!;
+}
+
+export async function appsCatalogContainer(): Promise<Container> { await ensure(); return _appsCatalog!; }
+export async function workloadsCatalogContainer(): Promise<Container> { await ensure(); return _workloadsCatalog!; }
+export async function userPrefsContainer(): Promise<Container> { await ensure(); return _userPrefs!; }
+export async function tabsStateContainer(): Promise<Container> { await ensure(); return _tabsState!; }
+export async function notificationsContainer(): Promise<Container> { await ensure(); return _notifications!; }
+export async function auditLogContainer(): Promise<Container> { await ensure(); return _auditLog!; }
+export async function commentsContainer(): Promise<Container> { await ensure(); return _comments!; }
+export async function sharesContainer(): Promise<Container> { await ensure(); return _shares!; }
+export async function foldersContainer(): Promise<Container> { await ensure(); return _folders!; }
+export async function downloadsContainer(): Promise<Container> { await ensure(); return _downloads!; }
+export async function searchHistoryContainer(): Promise<Container> { await ensure(); return _searchHistory!; }
+export async function workspacePermissionsContainer(): Promise<Container> { await ensure(); return _wsPermissions!; }
+export async function workspaceGitContainer(): Promise<Container> { await ensure(); return _wsGit!; }
+export async function tenantThemesContainer(): Promise<Container> { await ensure(); return _tenantThemes!; }
+export async function tenantSettingsContainer(): Promise<Container> { await ensure(); return _tenantSettings!; }

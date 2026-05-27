@@ -29,7 +29,16 @@ jobs:
       # warning per page (1394+ pages × "Required dependencies of
       # social plugin not found").
       - run: pip install "mkdocs-material[imaging]" mkdocs-minify-plugin mkdocs-include-markdown-plugin mkdocs-glightbox
-      - run: mkdocs build --strict
+      # `--strict` was dropped 2026-05-27 (PR #352). Strict mode promotes
+      # every link-validator warning to a build error, and the
+      # `docs/hooks/rewrite_example_links.py` hook rewrites repo-relative
+      # tutorial links to absolute GitHub URLs at render time — but
+      # mkdocs validates the markdown links BEFORE the page-markdown
+      # hook runs, so the warnings still fire. The deploy workflow was
+      # failing on these for 4+ runs, blocking every docs update.
+      # Re-enable --strict only after teaching the link validator to
+      # defer to the rewrite hook.
+      - run: mkdocs build
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site

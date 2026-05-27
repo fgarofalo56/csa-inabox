@@ -7,7 +7,7 @@
  * defined in lib/catalog/fabric-item-types.ts.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Dialog, DialogSurface, DialogBody, DialogContent,
@@ -75,6 +75,43 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [cursor, setCursor] = useState(0);
+  const [hits, setHits] = useState<Cmd[]>([]);
+  const [searching, setSearching] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced live search against /api/search/items (tenant items + workspaces).
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const qq = q.trim();
+    if (!open || qq.length < 2) { setHits([]); return; }
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await fetch('/api/search/items', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ q: qq, top: 12 }),
+        });
+        if (res.ok) {
+          const j = await res.json();
+          const mapped: Cmd[] = (j.hits || []).map((h: any) => ({
+            id: `it-${h.kind}-${h.id}`,
+            label: h.name || h.id,
+            sub: h.kind === 'workspace'
+              ? 'Workspace'
+              : `${h.type || 'item'}${h.snippet ? ' · ' + h.snippet.slice(0, 60) : ''}`,
+            href: h.kind === 'workspace'
+              ? `/workspaces/${h.workspaceId}`
+              : `/items/${h.type}/${h.id}`,
+            group: h.kind === 'workspace' ? 'Workspaces' : 'Items',
+          }));
+          setHits(mapped);
+        }
+      } catch { /* network — swallow, fall back to local */ }
+      finally { setSearching(false); }
+    }, 180);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [q, open]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -111,13 +148,17 @@ export function CommandPalette() {
     }));
     const all = [...PAGES, ...ofTypes];
     const qq = q.trim().toLowerCase();
-    if (!qq) return all;
-    return all.filter((c) =>
-      c.label.toLowerCase().includes(qq) ||
-      c.sub.toLowerCase().includes(qq) ||
-      c.group.toLowerCase().includes(qq),
-    );
-  }, [q]);
+    const filtered = qq
+      ? all.filter((c) =>
+          c.label.toLowerCase().includes(qq) ||
+          c.sub.toLowerCase().includes(qq) ||
+          c.group.toLowerCase().includes(qq),
+        )
+      : all;
+    // Real-data hits land first so users find their own items, not catalog
+    // entries with the same name.
+    return [...hits, ...filtered];
+  }, [q, hits]);
 
   function go(c: Cmd) {
     setOpen(false);
@@ -146,7 +187,7 @@ export function CommandPalette() {
               <Input
                 className={s.input}
                 contentBefore={<Search20Regular />}
-                placeholder="Search pages, item types, settings…"
+                placeholder={searching ? 'Searching…' : 'Search items, pages, settings…'}
                 value={q}
                 autoFocus
                 onChange={(_, d) => { setQ(d.value); setCursor(0); }}

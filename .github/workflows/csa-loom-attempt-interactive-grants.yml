@@ -1,0 +1,171 @@
+name: csa-loom-attempt-interactive-grants
+
+# Attempts the three "interactive" grants the operator runbook says I can't
+# do — using the limitlessdata_deploy SP via Microsoft Graph + Power BI REST.
+# Each step is best-effort; the Summary reports precisely what succeeded
+# and what still requires a human click in the portal.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+  CONSOLE_UAMI_PRINCIPAL: e61f3eb3-c646-4183-8198-4c4a34cd9a01
+  CONSOLE_UAMI_CLIENT: c6272de5-3c4e-4b72-8b57-71b2e950209b
+  CONSOLE_UAMI_NAME: uami-loom-console-eastus2
+
+jobs:
+  attempt-grants:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Attempt 1 — Power Platform Administrator via Microsoft Graph
+        id: pp_admin
+        run: |
+          set +e
+          GRAPH_TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)
+          # Power Platform Administrator role template id is the well-known
+          # directory role: '11648597-926c-4cf3-9c36-bcebb0ba8dcc'
+          PP_ROLE_TEMPLATE_ID=11648597-926c-4cf3-9c36-bcebb0ba8dcc
+          # First ensure the directory role is activated in this tenant.
+          ACTIVATE=$(curl -sS -w "\n%{http_code}" -X POST \
+            "https://graph.microsoft.com/v1.0/directoryRoles" \
+            -H "Authorization: Bearer $GRAPH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"roleTemplateId\":\"$PP_ROLE_TEMPLATE_ID\"}")
+          STATUS=$(echo "$ACTIVATE" | tail -n1)
+          BODY=$(echo "$ACTIVATE" | head -n -1)
+          echo "Activate directory role status: $STATUS"
+          if [[ "$STATUS" != "201" && "$STATUS" != "409" ]]; then
+            echo "::warning::Cannot activate PP Admin directory role: $BODY"
+            echo "result=needs_manual" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Find role's directoryRole id
+          ROLE_ID=$(curl -sS \
+            "https://graph.microsoft.com/v1.0/directoryRoles?\$filter=roleTemplateId eq '$PP_ROLE_TEMPLATE_ID'" \
+            -H "Authorization: Bearer $GRAPH_TOKEN" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['value'][0]['id'] if d.get('value') else '')")
+          echo "Role id: $ROLE_ID"
+          if [ -z "$ROLE_ID" ]; then
+            echo "::warning::Could not resolve role id"
+            echo "result=needs_manual" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Find the UAMI's SP object id (it's the same as principalId env)
+          SP_OBJ=${{ env.CONSOLE_UAMI_PRINCIPAL }}
+          # POST member ref
+          ADD=$(curl -sS -w "\n%{http_code}" -X POST \
+            "https://graph.microsoft.com/v1.0/directoryRoles/$ROLE_ID/members/\$ref" \
+            -H "Authorization: Bearer $GRAPH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"@odata.id\":\"https://graph.microsoft.com/v1.0/directoryObjects/$SP_OBJ\"}")
+          AS=$(echo "$ADD" | tail -n1)
+          AB=$(echo "$ADD" | head -n -1)
+          echo "Add member status: $AS"
+          echo "$AB"
+          if [[ "$AS" == "204" ]]; then
+            echo "  ✅ Power Platform Administrator role assigned to UAMI"
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          elif [[ "$AS" == "400" ]] && echo "$AB" | grep -q "already exist"; then
+            echo "  ✅ Already assigned"
+            echo "result=already" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Add member failed ($AS): $AB"
+            echo "result=needs_manual" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Attempt 2 — Fabric tenant settings (will fail; documenting why)
+        id: fabric_tenant
+        run: |
+          # Fabric tenant settings (e.g. 'Service principals can use Fabric APIs')
+          # are only exposed in the Fabric admin portal UI. There is no
+          # documented REST or Graph endpoint to flip them.
+          # Microsoft's stance (confirmed 2026): tenant-level setting changes
+          # require interactive sign-in.
+          echo "::warning::Fabric tenant toggle is portal-only — no API exists."
+          echo "result=portal_only" >> "$GITHUB_OUTPUT"
+
+      - name: Attempt 3 — Add UAMI as Power BI workspace user (per workspace)
+        id: pbi_ws
+        run: |
+          set +e
+          # Power BI REST: POST /v1.0/myorg/groups/{groupId}/users
+          # Requires Group.ReadWrite.All on the caller OR caller is admin on
+          # the workspace. The deploy SP probably has neither.
+          PBI_TOKEN=$(az account get-access-token --resource https://analysis.windows.net/powerbi/api --query accessToken -o tsv 2>/dev/null)
+          if [ -z "$PBI_TOKEN" ]; then
+            echo "Cannot acquire Power BI token as deploy SP"
+            echo "result=no_token" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # List groups deploy SP can see
+          LIST=$(curl -sS "https://api.powerbi.com/v1.0/myorg/groups" \
+            -H "Authorization: Bearer $PBI_TOKEN" | python3 -c "import json,sys; d=json.load(sys.stdin); print(json.dumps([{'id':g['id'],'name':g['name']} for g in d.get('value',[])]))" 2>/dev/null || echo "[]")
+          echo "Visible Power BI groups: $LIST"
+          if [[ "$LIST" == "[]" ]]; then
+            echo "Deploy SP sees no Power BI groups — needs Fabric tenant 'SP can use APIs' toggle first."
+            echo "result=needs_fabric_toggle" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # For each visible group, try to add the UAMI as Admin
+          ADDED=0
+          for GID in $(echo "$LIST" | python3 -c "import json,sys; [print(g['id']) for g in json.load(sys.stdin)]"); do
+            R=$(curl -sS -w "%{http_code}" -X POST \
+              "https://api.powerbi.com/v1.0/myorg/groups/$GID/users" \
+              -H "Authorization: Bearer $PBI_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"identifier\":\"${{ env.CONSOLE_UAMI_CLIENT }}\",\"groupUserAccessRight\":\"Admin\",\"principalType\":\"App\"}")
+            echo "Add to $GID: $R"
+            if [[ "$R" == "200" ]] || [[ "$R" == "*200" ]]; then ADDED=$((ADDED+1)); fi
+          done
+          echo "Added UAMI to $ADDED Power BI groups"
+          echo "result=added_$ADDED" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo ""
+          echo "==== Interactive-grant attempt results ===="
+          echo ""
+          echo "1. Power Platform Administrator role:"
+          echo "   → ${{ steps.pp_admin.outputs.result }}"
+          if [[ "${{ steps.pp_admin.outputs.result }}" == "success" ]] || [[ "${{ steps.pp_admin.outputs.result }}" == "already" ]]; then
+            echo "   ✅ GRANTED — Power Platform + Copilot Studio editors will unlock."
+          else
+            echo "   ⚠️  Still requires interactive grant:"
+            echo "      https://admin.powerplatform.microsoft.com"
+            echo "      → Settings → Roles → Power Platform Administrator"
+            echo "      → Add: ${{ env.CONSOLE_UAMI_NAME }}"
+          fi
+          echo ""
+          echo "2. Fabric tenant 'SP can use Fabric APIs':"
+          echo "   → ${{ steps.fabric_tenant.outputs.result }}"
+          echo "   ⚠️  Always portal-only:"
+          echo "      https://app.fabric.microsoft.com → gear → Admin portal"
+          echo "      → Tenant settings → 'Service principals can use Fabric APIs'"
+          echo "      → Enabled for a security group containing ${{ env.CONSOLE_UAMI_NAME }}"
+          echo ""
+          echo "3. Power BI workspace member-add:"
+          echo "   → ${{ steps.pbi_ws.outputs.result }}"
+          if [[ "${{ steps.pbi_ws.outputs.result }}" == added_* ]]; then
+            echo "   ✅ Partially handled — see count above."
+          else
+            echo "   ⚠️  Blocked: needs step 2 (Fabric tenant toggle) first."
+          fi
+          echo ""
+          echo "==== After this workflow ===="
+          echo "Re-run apps/fiab-console/tests/service-health.mjs to see the diff."

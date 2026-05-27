@@ -95,6 +95,10 @@ export function SetupWizardPane() {
   const bicepPreview = useMemo(() => renderBicepParam(state), [state]);
 
   async function deploy() {
+    // v2 validator finding (page-setup gap doc): the previous client
+    // simulated a 6-stage progress animation regardless of backend state.
+    // The backend now returns 503 with remediation when the Setup
+    // Orchestrator service isn't deployed. We surface that honestly.
     setState((s) => ({ ...s, step: 'deploying', deployProgress: 0, deployStage: 'Submitting' }));
     try {
       const res = await fetch('/api/setup/deploy', {
@@ -102,20 +106,14 @@ export function SetupWizardPane() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(state),
       });
-      if (!res.ok) throw new Error(await res.text());
-      const { deploymentId } = await res.json();
-      // Subscribe to progress (SSE) — for the demo, simulate
-      const stages = ['Validating', 'Provisioning network', 'Provisioning storage', 'Provisioning Databricks', 'Wiring identity', 'Done'];
-      for (let i = 0; i < stages.length; i++) {
-        await new Promise((r) => setTimeout(r, 600));
-        setState((s) => ({
-          ...s,
-          deployProgress: (i + 1) / stages.length,
-          deployStage: stages[i],
-          deploymentId,
-        }));
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = j.remediation?.message || j.error || `HTTP ${res.status}`;
+        const commands = j.remediation?.commands ? '\n\n' + j.remediation.commands.join('\n') : '';
+        setState((s) => ({ ...s, deployError: msg + commands }));
+        return;
       }
-      setState((s) => ({ ...s, step: 'done' }));
+      setState((s) => ({ ...s, deploymentId: j.deploymentId, deployStage: 'Submitted', deployProgress: 1, step: 'done' }));
     } catch (e) {
       setState((s) => ({ ...s, deployError: e instanceof Error ? e.message : String(e) }));
     }
@@ -273,13 +271,23 @@ export function SetupWizardPane() {
 
         {state.step === 'deploying' && (
           <>
-            <Body1 weight="semibold">Deploying...</Body1>
-            <ProgressBar value={state.deployProgress ?? 0} />
+            <Body1 weight="semibold">{state.deployError ? 'Deployment failed' : 'Deploying…'}</Body1>
+            {!state.deployError && <ProgressBar value={state.deployProgress ?? 0} />}
             <Body1>{state.deployStage}</Body1>
             {state.deployError && (
-              <MessageBar intent="error">
-                <MessageBarBody>{state.deployError}</MessageBarBody>
-              </MessageBar>
+              <>
+                <MessageBar intent="error">
+                  <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{state.deployError}</MessageBarBody>
+                </MessageBar>
+                <div className={styles.buttons}>
+                  <Button onClick={() => setState((s) => ({ ...s, step: 'review', deployError: undefined }))}>
+                    Back to review
+                  </Button>
+                  <Button appearance="primary" onClick={deploy}>
+                    Retry deploy
+                  </Button>
+                </div>
+              </>
             )}
           </>
         )}

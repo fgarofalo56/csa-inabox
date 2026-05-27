@@ -1,105 +1,230 @@
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import {
-  Body1, Caption1, Subtitle2, Badge, Button,
+  Body1, Caption1, Badge, Spinner, Input, Dropdown, Option,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import { Open16Regular, Search24Regular } from '@fluentui/react-icons';
+import { SignInRequired } from '@/lib/components/sign-in-required';
+
+function portalUrl(id: string): string {
+  // Azure portal deep-link to the resource Overview blade.
+  return `https://portal.azure.com/#@/resource${id}/overview`;
+}
 
 /**
- * Capacity — CSA Loom doesn't use Fabric F-SKUs (the whole point of
- * Loom is to deliver Fabric-equivalent UX in tenants where Fabric is
- * not available, e.g. Azure Government, sovereign clouds, on-prem
- * adjacent). "Capacity" in Loom = the underlying Azure compute that
- * Loom orchestrates: Container Apps, AKS, Databricks, Synapse, ADF
- * Data Integration Units, Azure ML, Cosmos DB RU/s, etc.
+ * /admin/capacity — Live inventory of Azure resources Loom orchestrates.
  *
- * This page rolls up SKU, region, current utilization, monthly cost
- * estimate, and a 'manage' deep link per service.
+ * Reads /api/admin/azure-resources, which calls ARM with the BFF's UAMI
+ * token. No hardcoded names, costs, or "Healthy" badges — every row is
+ * an actual resource in your Loom resource groups. Cost + utilization are
+ * deliberately omitted (those need Cost Management + Azure Monitor, a
+ * separate piece of work) and the page surfaces that honestly.
  */
 
-const POOLS = [
-  { service: 'Container Apps environment', sku: 'Consumption + Dedicated D4 plan', region: 'East US 2',
-    util: '38% CPU avg / 24h',  cost: '$612 / mo (proj.)', state: 'Healthy', role: 'Loom console + worker apps' },
-  { service: 'Azure API Management', sku: 'StandardV2 · 2 units · csa-loom-apim', region: 'East US 2',
-    util: '4,820 req/min peak · 0.42% errors', cost: '$1,180 / mo', state: 'Healthy', role: 'API-first glue: every Loom-managed function, ML endpoint, GraphQL API, and data product is fronted here' },
-  { service: 'Azure Databricks workspace', sku: 'Premium · ml-jobs-cluster (i3.xlarge x4)', region: 'East US 2',
-    util: '64% DBU avg / 24h',  cost: '$2,840 / mo (proj.)', state: 'Healthy', role: 'Spark notebooks, ML training, Unity Catalog' },
-  { service: 'Azure Synapse workspace', sku: 'Dedicated SQL DW400c + Serverless + Spark Medium pool', region: 'East US 2',
-    util: '42% DWU avg / 24h',  cost: '$3,920 / mo (proj.)', state: 'Healthy', role: 'Dedicated + serverless T-SQL, Spark pools' },
-  { service: 'Azure Data Factory', sku: 'AutoResolveIR + Self-hosted IR (sap-onprem)', region: 'East US 2',
-    util: '180 DIUs · 14h / 24h', cost: '$412 / mo (proj.)', state: 'Healthy', role: 'Pipelines, mapping data flows, on-prem ingress' },
-  { service: 'Azure Data Lake Analytics', sku: 'ADLA legacy · 10 AUs reserved', region: 'East US 2',
-    util: '0% — legacy U-SQL only', cost: '$48 / mo (idle)', state: 'Idle', role: 'Legacy U-SQL workloads' },
-  { service: 'Azure Machine Learning', sku: 'Compute cluster (Standard_DS3_v2 x0-6)', region: 'East US 2',
-    util: '12% / 24h', cost: '$214 / mo (proj.)', state: 'Healthy', role: 'AML pipelines, registered models (APIM-fronted)' },
-  { service: 'Azure Cosmos DB',  sku: 'Serverless · workspace-registry', region: 'East US 2',
-    util: '4,120 RU/s peak',  cost: '$36 / mo (proj.)', state: 'Healthy', role: 'Loom metadata, workspace registry' },
-  { service: 'Azure Container Registry', sku: 'Premium · acrloomm56yejezt7bjo', region: 'East US 2',
-    util: '12.4 GB / 100 GB', cost: '$167 / mo', state: 'Healthy', role: 'Container images for Loom apps + custom workloads' },
-  { service: 'Microsoft Purview', sku: 'Standard · contoso-purview', region: 'East US 2',
-    util: '38 sources · 5.4 GB metadata', cost: '$280 / mo (proj.)', state: 'Healthy', role: 'Catalog, lineage, classifications, sensitivity labels' },
-  { service: 'Azure Event Hubs', sku: 'Standard · 4 TUs · csa-loom-ingest-eh', region: 'East US 2',
-    util: '2.1M events/min', cost: '$94 / mo', state: 'Healthy', role: 'Streaming ingest backing Loom Eventstreams' },
-];
+interface AzureRes {
+  id: string;
+  name: string;
+  type: string;
+  location: string;
+  resourceGroup: string;
+  sku?: string;
+  kind?: string;
+  provisioningState?: string;
+}
+
+interface Response {
+  ok: boolean;
+  subscription?: string;
+  resourceGroups?: string[];
+  totalResources?: number;
+  byProvider?: Record<string, number>;
+  resources?: AzureRes[];
+  errors?: string[];
+  error?: string;
+  hint?: string;
+}
 
 const useStyles = makeStyles({
-  card: { padding: 14, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8, backgroundColor: tokens.colorNeutralBackground1 },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12, marginBottom: 16 },
-  v: { fontSize: 24, fontWeight: 700, color: tokens.colorBrandForeground1, marginTop: 6 },
+  intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.55, marginBottom: '16px' },
+  stats: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+    gap: '12px',
+    marginBottom: '20px',
+  },
+  stat: {
+    paddingTop: '14px', paddingRight: '14px', paddingBottom: '14px', paddingLeft: '14px',
+    borderRadius: '8px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  statLabel: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
+    color: tokens.colorNeutralForeground3, fontWeight: 600 },
+  statValue: { fontSize: '22px', fontWeight: 700, marginTop: '4px', lineHeight: 1.1 },
 });
 
 export default function CapacityPage() {
-  const s = useStyles();
+  const styles = useStyles();
+  const [data, setData] = useState<Response | null>(null);
+  const [unauth, setUnauth] = useState(false);
+  const [q, setQ] = useState('');
+  const [provider, setProvider] = useState('');
+
+  useEffect(() => {
+    fetch('/api/admin/azure-resources').then(r => {
+      if (r.status === 401 || r.status === 403) { setUnauth(true); return null; }
+      return r.json();
+    }).then(d => { if (d) setData(d); }).catch(e => setData({ ok: false, error: String(e) }));
+  }, []);
+
+  const visibleResources = useMemo(() => {
+    const all = data?.resources || [];
+    const f = q.toLowerCase().trim();
+    return all.filter((r) => {
+      if (provider && !r.type.toLowerCase().includes(provider.toLowerCase())) return false;
+      if (!f) return true;
+      return (
+        r.name.toLowerCase().includes(f) ||
+        r.type.toLowerCase().includes(f) ||
+        r.resourceGroup.toLowerCase().includes(f) ||
+        (r.sku || '').toLowerCase().includes(f) ||
+        (r.kind || '').toLowerCase().includes(f)
+      );
+    });
+  }, [data, q, provider]);
+
   return (
     <AdminShell sectionTitle="Capacity & compute">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 16 }}>
-        CSA Loom does <b>not</b> use Microsoft Fabric F-SKUs — Loom exists precisely because Fabric
-        isn&apos;t available in your cloud. &quot;Capacity&quot; here = the underlying Azure compute
-        services Loom orchestrates: Container Apps, Databricks, Synapse, Data Factory, ADLA, Azure ML,
-        Cosmos DB, ACR. Loom rolls SKU, utilization, projected monthly cost, and health into one view.
+      <Body1 className={styles.intro}>
+        Underlying Azure services Loom orchestrates. Live inventory pulled from
+        Azure Resource Manager — no hardcoded counts. Cost + utilization
+        require Cost Management and Azure Monitor integration; flagged as
+        backlog below.
       </Body1>
-      <div className={s.grid}>
-        <div className={s.card}><Caption1>Total monthly cost</Caption1><div className={s.v}>$8,249</div><Caption1>Projected from last 24 h</Caption1></div>
-        <div className={s.card}><Caption1>Services in scope</Caption1><div className={s.v}>{POOLS.length}</div><Caption1>across 1 region</Caption1></div>
-        <div className={s.card}><Caption1>Healthy</Caption1><div className={s.v}>{POOLS.filter((p) => p.state === 'Healthy').length}/{POOLS.length}</div><Caption1>1 idle (legacy U-SQL)</Caption1></div>
-        <div className={s.card}><Caption1>Carbon (last 24 h)</Caption1><div className={s.v}>42 kg CO₂e</div><Caption1>per Azure Sustainability Manager</Caption1></div>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <Subtitle2>Compute pools</Subtitle2>
-        <Button appearance="primary">+ Attach Azure service</Button>
-      </div>
-      <Table aria-label="Compute pools" className="loom-sticky-thead">
-        <TableHeader><TableRow>
-          <TableHeaderCell>Service</TableHeaderCell><TableHeaderCell>SKU</TableHeaderCell>
-          <TableHeaderCell>Region</TableHeaderCell>
-          <TableHeaderCell className="loom-num">Utilization</TableHeaderCell>
-          <TableHeaderCell className="loom-num">Cost</TableHeaderCell>
-          <TableHeaderCell>State</TableHeaderCell>
-          <TableHeaderCell>Role in Loom</TableHeaderCell>
-        </TableRow></TableHeader>
-        <TableBody>
-          {POOLS.map((p) => (
-            <TableRow key={p.service}>
-              <TableCell style={{ fontWeight: 600 }}>{p.service}</TableCell>
-              <TableCell><Caption1>{p.sku}</Caption1></TableCell>
-              <TableCell>{p.region}</TableCell>
-              <TableCell className="loom-num">{p.util}</TableCell>
-              <TableCell className="loom-num">{p.cost}</TableCell>
-              <TableCell>
-                <Badge appearance="filled" color={p.state === 'Healthy' ? 'success' : p.state === 'Idle' ? 'subtle' : 'danger'}>{p.state}</Badge>
-              </TableCell>
-              <TableCell><Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{p.role}</Caption1></TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-      <Body1 style={{ marginTop: 16, color: tokens.colorNeutralForeground3 }}>
-        Cost roll-up uses your Azure Cost Management exports — connect them on{' '}
-        <a href="/admin/tenant-settings"><b>Tenant settings</b></a> → Billing connections. Loom never
-        sees your invoice; it reads the cost data your Azure billing scope already exposes.
-      </Body1>
+
+      {unauth && <SignInRequired subject="Azure resource inventory" />}
+
+      {!unauth && data === null && <Spinner label="Querying ARM…" />}
+
+      {data && !data.ok && (
+        <MessageBar intent="warning">
+          <MessageBarTitle>Inventory unavailable</MessageBarTitle>
+          <MessageBarBody>
+            {data.error}{data.hint ? ` — ${data.hint}` : ''}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {data && data.ok && (
+        <>
+          <div className={styles.stats}>
+            <div className={styles.stat}>
+              <div className={styles.statLabel}>Total resources</div>
+              <div className={styles.statValue}>{data.totalResources}</div>
+            </div>
+            {Object.entries(data.byProvider || {}).slice(0, 5).map(([p, n]) => (
+              <div className={styles.stat} key={p}>
+                <div className={styles.statLabel}>{p}</div>
+                <div className={styles.statValue}>{n}</div>
+              </div>
+            ))}
+          </div>
+
+          {data.errors && data.errors.length > 0 && (
+            <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+              <MessageBarBody>
+                Partial result — could not list some RGs: {data.errors.join(' · ')}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 }}>
+            <Input
+              contentBefore={<Search24Regular />}
+              placeholder="Filter by name, type, RG, SKU…"
+              value={q}
+              onChange={(_, d) => setQ(d.value)}
+              style={{ flex: 1, maxWidth: 360 }}
+            />
+            <Dropdown
+              value={provider || 'All providers'}
+              selectedOptions={[provider]}
+              onOptionSelect={(_, d) => setProvider(d.optionValue ?? '')}
+              style={{ minWidth: 200 }}
+            >
+              <Option value="">All providers</Option>
+              {Object.keys(data.byProvider || {}).map((p) => <Option key={p} value={p}>{p}</Option>)}
+            </Dropdown>
+            <Caption1 style={{ marginLeft: 'auto', color: tokens.colorNeutralForeground3 }}>
+              {visibleResources.length} of {data.totalResources}
+            </Caption1>
+          </div>
+
+          <Table size="small">
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>Name</TableHeaderCell>
+                <TableHeaderCell>Type</TableHeaderCell>
+                <TableHeaderCell>Region</TableHeaderCell>
+                <TableHeaderCell>Resource group</TableHeaderCell>
+                <TableHeaderCell>SKU / Kind</TableHeaderCell>
+                <TableHeaderCell>State</TableHeaderCell>
+                <TableHeaderCell></TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visibleResources.map(r => (
+                <TableRow key={r.id}>
+                  <TableCell><strong>{r.name}</strong></TableCell>
+                  <TableCell><Caption1>{r.type.replace('Microsoft.', '')}</Caption1></TableCell>
+                  <TableCell><Caption1>{r.location}</Caption1></TableCell>
+                  <TableCell><Caption1>{r.resourceGroup}</Caption1></TableCell>
+                  <TableCell><Caption1>{r.sku || r.kind || '—'}</Caption1></TableCell>
+                  <TableCell>
+                    {r.provisioningState
+                      ? <Badge appearance="outline"
+                          color={r.provisioningState === 'Succeeded' ? 'success' : 'warning'}>
+                          {r.provisioningState}
+                        </Badge>
+                      : <Caption1>—</Caption1>}
+                  </TableCell>
+                  <TableCell>
+                    <a
+                      href={portalUrl(r.id)}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}
+                    >
+                      Azure portal <Open16Regular />
+                    </a>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {visibleResources.length === 0 && (
+                <TableRow><TableCell colSpan={7}>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No resources match the current filters.</Caption1>
+                </TableCell></TableRow>
+              )}
+            </TableBody>
+          </Table>
+
+          <MessageBar intent="info" style={{ marginTop: 16 }}>
+            <MessageBarTitle>Cost &amp; utilization deferred</MessageBarTitle>
+            <MessageBarBody>
+              Monthly cost requires Azure Cost Management API
+              (Microsoft.CostManagement). DBU / CPU / req-rate utilization
+              requires Azure Monitor metrics per resource. Both are tracked
+              for v3.5 — not surfaced here today to avoid showing fake
+              numbers (per .claude/rules/no-vaporware.md).
+            </MessageBarBody>
+          </MessageBar>
+        </>
+      )}
     </AdminShell>
   );
 }

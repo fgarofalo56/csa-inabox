@@ -4,11 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Title2,
   Body1,
-  Card,
-  CardHeader,
-  CardPreview,
   Button,
   Input,
   Field,
@@ -29,9 +25,10 @@ import {
 import { Add24Regular } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { listWorkspaces, createWorkspace, type Workspace } from '@/lib/api/workspaces';
+import { SignInRequired } from '@/lib/components/sign-in-required';
 
 const useStyles = makeStyles({
-  header: { display: 'flex', alignItems: 'center', marginBottom: '24px', gap: '16px' },
+  header: { display: 'flex', alignItems: 'center', marginBottom: '20px', gap: '16px' },
   spacer: { flex: 1 },
   grid: {
     display: 'grid',
@@ -39,19 +36,32 @@ const useStyles = makeStyles({
     gap: '16px',
   },
   card: {
-    width: '100%',
-    minHeight: '160px',
+    paddingTop: '20px', paddingRight: '20px', paddingBottom: '20px', paddingLeft: '20px',
+    borderRadius: '12px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
+    textDecoration: 'none',
+    display: 'flex', flexDirection: 'column',
+    minHeight: '140px',
     cursor: 'pointer',
-    transition: 'transform 0.15s, box-shadow 0.15s',
-    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow8 },
+    transition: 'transform 0.15s, box-shadow 0.15s, border-color 0.15s',
+    ':hover': {
+      transform: 'translateY(-2px)',
+      boxShadow: tokens.shadow8,
+      borderColor: tokens.colorBrandStroke1,
+    },
   },
-  meta: { fontSize: '12px', color: tokens.colorNeutralForeground3 },
+  cardName: { fontSize: '15px', fontWeight: 600, lineHeight: 1.3, marginBottom: '8px' },
+  cardDesc: { fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.45, marginBottom: '10px' },
+  meta: { fontSize: '11px', color: tokens.colorNeutralForeground3, marginTop: 'auto' },
   empty: {
-    padding: '40px',
+    paddingTop: '32px', paddingRight: '32px', paddingBottom: '32px', paddingLeft: '32px',
     textAlign: 'center',
     color: tokens.colorNeutralForeground3,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    borderRadius: '8px',
+    borderRadius: '12px',
+    lineHeight: 1.6,
   },
   formCol: { display: 'flex', flexDirection: 'column', gap: '12px' },
 });
@@ -135,17 +145,20 @@ export function WorkspacesPane() {
     queryFn: listWorkspaces,
   });
 
+  const unauth = error && (error as any)?.message?.includes('401');
+
   return (
     <div>
       <div className={styles.header}>
-        <Title2>Workspaces</Title2>
         <div className={styles.spacer} />
         <CreateWorkspaceDialog />
       </div>
 
+      {unauth && <SignInRequired subject="workspaces" />}
+
       {isLoading && <Spinner label="Loading workspaces…" />}
 
-      {error && (
+      {error && !unauth && (
         <MessageBar intent="error">
           <MessageBarBody>Failed to load workspaces: {(error as Error).message}</MessageBarBody>
         </MessageBar>
@@ -153,29 +166,21 @@ export function WorkspacesPane() {
 
       {data && data.length === 0 && (
         <div className={styles.empty}>
-          <Body1>No workspaces yet. Create one to get started.</Body1>
+          No workspaces yet. Click <b>+ New workspace</b> to create your first one.<br />
+          A workspace is a Cosmos-backed container that owns items + permissions + SCM bindings.
         </div>
       )}
 
       {data && data.length > 0 && (
         <div className={styles.grid}>
           {data.map((ws) => (
-            <Link key={ws.id} href={`/workspaces/${ws.id}`} style={{ textDecoration: 'none' }}>
-              <Card className={styles.card}>
-                <CardPreview style={{ backgroundColor: tokens.colorBrandBackground2, height: '60px' }} />
-                <CardHeader
-                  header={<Body1 weight="semibold">{ws.name}</Body1>}
-                  description={
-                    <div>
-                      {ws.description && <Body1>{ws.description}</Body1>}
-                      <div className={styles.meta}>
-                        {[ws.capacity, ws.domain].filter(Boolean).join(' · ') || 'No capacity / domain'}
-                      </div>
-                      <div className={styles.meta}>Created {new Date(ws.createdAt).toLocaleDateString()}</div>
-                    </div>
-                  }
-                />
-              </Card>
+            <Link key={ws.id} href={`/workspaces/${ws.id}`} className={styles.card}>
+              <div className={styles.cardName}>{ws.name}</div>
+              {ws.description && <div className={styles.cardDesc}>{ws.description}</div>}
+              <div className={styles.meta}>
+                {[ws.capacity, ws.domain].filter(Boolean).join(' · ') || 'No capacity / domain'}
+                {' · Created '}{new Date(ws.createdAt).toLocaleDateString()}
+              </div>
             </Link>
           ))}
         </div>
