@@ -2225,6 +2225,10 @@ nav:
           - "Pages — Workspaces": fiab/parity-gap/page-workspaces.md
           - "Pages — Workspaces ID": fiab/parity-gap/page-workspaces-id.md
           - "Routes — API Routes": fiab/parity-gap/api-routes.md
+      - Help Copilot:
+          - Overview: fiab/help-copilot/index.md
+          - Architecture: fiab/help-copilot/architecture.md
+          - Suggested prompts: fiab/help-copilot/prompts.md
       - Deployment:
           - Index: fiab/deployment/index.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
