@@ -1,0 +1,61 @@
+/**
+ * StreamAnalyticsJobEditor — vitest render + interaction.
+ *
+ * Verifies that the editor mounts, lists ASA jobs from the mocked BFF,
+ * surfaces job state, and exposes Start/Stop/Refresh/Save in the toolbar.
+ */
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import { StreamAnalyticsJobEditor } from '../stream-analytics-editor';
+import { makeItem, installFetchMock } from './test-helpers';
+
+describe('StreamAnalyticsJobEditor', () => {
+  beforeEach(() => {
+    installFetchMock({
+      '/api/items/stream-analytics-job/job-fixture': () => ({
+        ok: true,
+        job: {
+          name: 'job-fixture',
+          id: 'arm-id',
+          location: 'eastus2',
+          jobState: 'Stopped',
+          state: 'Stopped',
+          sku: 'Standard',
+          streamingUnits: 3,
+          inputs: [{ name: 'input-eventhub', type: 'Stream' }],
+          outputs: [{ name: 'output-blob', type: 'Blob' }],
+          query: 'SELECT * INTO [output-blob] FROM [input-eventhub]',
+        },
+      }),
+      '/api/items/stream-analytics-job': () => ({
+        ok: true,
+        jobs: [
+          { name: 'job-fixture', id: 'arm-id', location: 'eastus2', jobState: 'Stopped' },
+        ],
+      }),
+    });
+  });
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('lists ASA jobs and shows their state', async () => {
+    render(<StreamAnalyticsJobEditor item={makeItem('stream-analytics-job', 'Stream Analytics job')} id="new" />);
+    await waitFor(() => {
+      expect(screen.getAllByText('job-fixture').length).toBeGreaterThan(0);
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText('Stopped').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('exposes Start/Stop/Refresh and the SAQL editor', async () => {
+    render(<StreamAnalyticsJobEditor item={makeItem('stream-analytics-job', 'Stream Analytics job')} id="new" />);
+    await waitFor(() => {
+      expect(screen.getAllByText('job-fixture').length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByRole('button', { name: /Refresh/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /Start/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /Stop/i }).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText('ASA query')).toBeInTheDocument();
+  });
+});

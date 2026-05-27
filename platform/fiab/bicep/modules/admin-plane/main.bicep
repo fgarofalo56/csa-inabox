@@ -127,6 +127,12 @@ param loomAdfName string = 'adf-loom-default-${location}'
 @description('Loom DLZ resource group (for ARM REST pause/resume from the Console BFF).')
 param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
 
+@description('Loom Stream Analytics resource group (backs the stream-analytics-job editor). Empty defaults to LOOM_DLZ_RG.')
+param loomAsaRg string = ''
+
+@description('Loom Stream Analytics subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
+param loomAsaSub string = ''
+
 @description('Loom Storage account name (for ADLS Gen2 lake URLs). When empty, env vars omitted and the Lakehouse editor surfaces a config message.')
 param loomStorageAccount string = ''
 
@@ -407,6 +413,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
+            // Stream Analytics — defaults to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID
+            // when blank (see lib/azure/stream-analytics-client.ts). Override
+            // when ASA lives in a different RG / sub than the DLZ.
+            { name: 'LOOM_ASA_RG', value: loomAsaRg }
+            { name: 'LOOM_ASA_SUB', value: loomAsaSub }
             { name: 'AZURE_CLOUD', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud' }
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }

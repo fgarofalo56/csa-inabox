@@ -229,6 +229,29 @@ module cosmos 'cosmos.bicep' = {
 }
 
 // =====================================================================
+// 8. Stream Analytics (optional). Backs the Loom stream-analytics-job
+//    editor (added in the Data Engineering sweep, 2026-05-27). Off by
+//    default so existing deployments aren't surprised — operators flip
+//    `enableStreamAnalytics=true` to provision a starter job + UAMI
+//    role assignment. When off, the Loom editor surfaces an honest
+//    501 MessageBar naming this module + the LOOM_ASA_RG env var.
+// =====================================================================
+
+@description('Provision an Azure Stream Analytics starter job + UAMI role assignment. Backs the Loom stream-analytics-job editor.')
+param enableStreamAnalytics bool = false
+
+module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !empty(consolePrincipalId)) {
+  name: 'dlz-stream-analytics'
+  params: {
+    location: location
+    domainName: domainName
+    consolePrincipalId: consolePrincipalId
+    workspaceId: adminPlaneLawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // Outputs
 // =====================================================================
 
