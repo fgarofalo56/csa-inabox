@@ -2253,6 +2253,10 @@ nav:
           - Loom Console: fiab/console/index.md
           - Loom Setup Wizard: fiab/console/setup-wizard.md
           - Loom Copilot (runtime chat): fiab/console/copilot-runtime.md
+          - Help Copilot (docs-grounded widget):
+              - Overview: fiab/help-copilot/index.md
+              - Architecture: fiab/help-copilot/architecture.md
+              - Prompt patterns: fiab/help-copilot/prompts.md
           - Operator — Interactive Setup Steps: fiab/operator-interactive-setup.md
           - MSAL Sign-in Handoff: fiab/MSAL-handoff.md
           - Dataverse Application User setup: fiab/dataverse-app-user.md
@@ -2303,6 +2307,10 @@ nav:
       - Marketing & Sales:
           - Pitch Deck: fiab/marketing/pitch-deck.md
           - Seller Playbook: fiab/marketing/seller-playbook.md
+          - Pitches (run-on-rails):
+              - 30-min CIO pitch: fiab/marketing/pitches/30-min-cio-pitch.md
+              - 60-min architecture deep-dive: fiab/marketing/pitches/60-min-architecture-deep-dive.md
+              - 2-hour technical evaluation: fiab/marketing/pitches/2-hour-technical-evaluation.md
           - Demo Script: fiab/marketing/demo-script.md
           - Battlecard vs Fabric Commercial: fiab/marketing/battlecard-fabric.md
           - One-Pager: fiab/marketing/one-pager.md
