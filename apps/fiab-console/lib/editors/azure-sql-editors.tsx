@@ -14,7 +14,7 @@
  *   - SQL Server 2025 feature probe
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Label,
   Tree, TreeItem, TreeItemLayout,
@@ -116,16 +116,9 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
 // ============================================================
 // Server editor
 // ============================================================
-// Firewall + AAD admin entries render as disabled (ribbon auto-disables
-// actions without an onClick handler — see lib/components/ribbon.tsx),
-// which is honest disclosure per `no-vaporware.md`. The mutation paths
-// are documented inline in the editor body.
-const SERVER_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Databases', actions: [{ label: 'Refresh list' }] },
-    { label: 'Security', actions: [{ label: 'Firewall' }, { label: 'AAD admin' }] },
-  ]},
-];
+// Refresh list is wired to the inline refresh handler; Firewall + AAD
+// admin render as disabled with reason (ARM mutation BFF deferred). See
+// no-vaporware.md for the gate-with-reason pattern.
 
 interface ServerInfo {
   id: string; name: string; location: string; fqdn: string;
@@ -165,9 +158,21 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
     } catch (e: any) { setError(e?.message || String(e)); }
   }, [id]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Databases', actions: [
+        { label: loading ? 'Refreshing…' : 'Refresh list', onClick: loading ? undefined : refresh, disabled: loading },
+      ]},
+      { label: 'Security', actions: [
+        { label: 'Firewall', disabled: true, title: 'needs ARM mutation BFF (deferred)' },
+        { label: 'AAD admin', disabled: true, title: 'needs ARM mutation BFF (deferred)' },
+      ]},
+    ]},
+  ], [loading, refresh]);
+
   return (
     <ItemEditorChrome
-      item={item} id={id} ribbon={SERVER_RIBBON}
+      item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Tree aria-label="SQL servers" defaultOpenItems={['servers']}>
@@ -254,14 +259,6 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
 // ============================================================
 // Database editor
 // ============================================================
-const DB_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Query', actions: [{ label: 'New T-SQL' }, { label: 'Run' }] },
-    { label: 'Mirroring', actions: [{ label: 'Toggle Fabric mirror' }] },
-    { label: 'Replication', actions: [{ label: 'Add geo-replica' }] },
-    { label: '2025', actions: [{ label: 'Probe engine' }] },
-  ]},
-];
 
 export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -306,6 +303,11 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
     setSql2025State(await r.json());
   }, [id, server, database]);
 
+  const newTsql = useCallback(() => {
+    setSqlText('-- New T-SQL.\nSELECT 1;');
+    setResult(null);
+  }, []);
+
   // v3.28 Phase 4.5: Ctrl+S / Cmd+S triggers Run when on the Query tab.
   // T-SQL text is ephemeral query state (not persisted item state), so
   // there is no SAVE-RELOAD round-trip — the action surfaced by Ctrl+S
@@ -321,9 +323,28 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
     return () => window.removeEventListener('keydown', onKey);
   }, [tab, server, database, loading, run]);
 
+  const canRun = !!server && !!database && !loading;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Query', actions: [
+        { label: 'New T-SQL', onClick: newTsql },
+        { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
+      ]},
+      { label: 'Mirroring', actions: [
+        { label: 'Toggle Fabric mirror', onClick: canRun ? toggleMirror : undefined, disabled: !canRun },
+      ]},
+      { label: 'Replication', actions: [
+        { label: 'Add geo-replica', disabled: true, title: 'needs ARM mutation BFF (deferred)' },
+      ]},
+      { label: '2025', actions: [
+        { label: 'Probe engine', onClick: canRun ? probe2025 : undefined, disabled: !canRun },
+      ]},
+    ]},
+  ], [canRun, loading, run, toggleMirror, probe2025, newTsql]);
+
   return (
     <ItemEditorChrome
-      item={item} id={id} ribbon={DB_RIBBON}
+      item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <div className={s.formRow}>
@@ -423,10 +444,18 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Instances', actions: [
+        { label: loading ? 'Refreshing…' : 'Refresh list', onClick: loading ? undefined : refresh, disabled: loading },
+      ]},
+    ]},
+  ], [loading, refresh]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Instances', actions: [{ label: 'Refresh list' }] }] }]}
+      ribbon={ribbon}
       leftPanel={<div className={s.treePad}><Caption1>Managed Instance editor — list-only in v3. Query execution deferred to v3.x (TDS via dedicated PE in the MI subnet).</Caption1></div>}
       main={
         <div className={s.pad}>
@@ -500,10 +529,20 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
     setLoading(false);
   }, [id, server, database, ddl]);
 
+  const canCreate = !!server && !!database && !loading;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Index', actions: [
+        { label: loading ? 'Creating…' : 'Create', onClick: canCreate ? runDdl : undefined, disabled: !canCreate },
+        { label: 'Test similarity', disabled: true, title: 'needs vector similarity probe BFF (deferred)' },
+      ]},
+    ]},
+  ], [canCreate, loading, runDdl]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Index', actions: [{ label: 'Create' }, { label: 'Test similarity' }] }] }]}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <div className={s.formRow}><Label>Server</Label><Input value={server} onChange={(_, d) => setServer(d.value)} /></div>

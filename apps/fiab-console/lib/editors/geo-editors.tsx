@@ -19,7 +19,7 @@
  * pipelines are NOT deployed in this Loom instance — the MessageBars say so.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Label, Spinner,
   TabList, Tab,
@@ -30,6 +30,7 @@ import { Map20Regular, Folder20Regular, Play20Regular, Flow20Regular, Save20Regu
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import type { RibbonTab } from '@/lib/components/ribbon';
 
 /**
  * v3.28 — Phase 4.5 fix: GeoMap / GeoDataset / GeoPipeline used to render
@@ -178,10 +179,19 @@ export function GeoMapEditor({ item, id }: { item: FabricItemType; id: string })
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoMapState>('geo-map', id, {
     account: '', style: 'main', tileLayerUrl: '',
   });
+  const canSave = dirty && !saving;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Map', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: 'Preview', disabled: true, title: 'tile preview helper not yet wired in this editor (deferred)' },
+      ]},
+    ]},
+  ], [canSave, saving, save]);
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Map', actions: [{ label: 'Save' }, { label: 'Preview' }] }] }]}
+      ribbon={ribbon}
       leftPanel={<div className={s.treePad}><Caption1>Map config — style, tile layer, and tokens.</Caption1></div>}
       main={
         <div className={s.pad}>
@@ -218,10 +228,19 @@ export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: strin
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoDatasetState>('geo-dataset', id, {
     adlsPath: '', geomColumn: 'geometry', format: 'parquet',
   });
+  const canSave = dirty && !saving;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Dataset', actions: [
+        { label: 'Inspect', disabled: true, title: 'needs OPENROWSET probe BFF (deferred)' },
+        { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+      ]},
+    ]},
+  ], [canSave, saving, save]);
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Dataset', actions: [{ label: 'Inspect' }, { label: 'Save' }] }] }]}
+      ribbon={ribbon}
       leftPanel={<div className={s.treePad}><Caption1>Browse ADLS Gen2 — geometry-column inspector deferred to v3.x.</Caption1></div>}
       main={
         <div className={s.pad}>
@@ -284,13 +303,22 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
     finally { setLoading(false); }
   }, [id, engine, text]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Engine', actions: [
+        { label: 'KQL', onClick: () => onEngineChange('kql'), disabled: engine === 'kql' },
+        { label: 'T-SQL', onClick: () => onEngineChange('tsql'), disabled: engine === 'tsql' },
+      ]},
+      { label: 'Run', actions: [
+        { label: loading ? 'Running…' : 'Execute', onClick: loading ? undefined : run, disabled: loading },
+      ]},
+    ]},
+  ], [engine, loading, run]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [
-        { label: 'Engine', actions: [{ label: 'KQL' }, { label: 'T-SQL' }] },
-        { label: 'Run', actions: [{ label: 'Execute' }] },
-      ]}]}
+      ribbon={ribbon}
       leftPanel={<div className={s.treePad}>
         <Caption1>Functions:</Caption1>
         <Body1><code>geo_distance_2points</code></Body1>
@@ -328,10 +356,35 @@ export function GeoPipelineEditor({ item, id }: { item: FabricItemType; id: stri
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoPipelineState>('geo-pipeline', id, {
     adfPipelineName: '', enrichH3: true, reverseGeocode: false, bufferMeters: 0,
   });
+  const [triggering, setTriggering] = useState(false);
+  const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
+  const triggerRun = useCallback(async () => {
+    if (!state.adfPipelineName) { setTriggerMsg('Set ADF pipeline name first.'); return; }
+    setTriggering(true); setTriggerMsg(null);
+    try {
+      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(state.adfPipelineName)}/run`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ parameters: { enrichH3: state.enrichH3, reverseGeocode: state.reverseGeocode, bufferMeters: state.bufferMeters } }),
+      });
+      const j = await r.json();
+      setTriggerMsg(j?.ok ? `Triggered run ${j.runId || ''}` : (j?.error || `HTTP ${r.status}`));
+    } catch (e: any) { setTriggerMsg(e?.message || String(e)); }
+    finally { setTriggering(false); }
+  }, [state.adfPipelineName, state.enrichH3, state.reverseGeocode, state.bufferMeters]);
+  const canSave = dirty && !saving;
+  const canTrigger = !!state.adfPipelineName && !triggering;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Pipeline', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: triggering ? 'Triggering…' : 'Trigger run', onClick: canTrigger ? triggerRun : undefined, disabled: !canTrigger },
+      ]},
+    ]},
+  ], [canSave, saving, save, canTrigger, triggering, triggerRun]);
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Pipeline', actions: [{ label: 'Save' }, { label: 'Trigger run' }] }] }]}
+      ribbon={ribbon}
       leftPanel={<div className={s.treePad}><Caption1>Underlying ADF pipeline (existing slug <code>adf-pipeline</code>) does the work; this item layers on geo enrichment flags.</Caption1></div>}
       main={
         <div className={s.pad}>
@@ -353,6 +406,7 @@ export function GeoPipelineEditor({ item, id }: { item: FabricItemType; id: stri
               Cosmos via PATCH /api/cosmos-items/geo-pipeline/{`{id}`}.
             </MessageBarBody>
           </MessageBar>
+          {triggerMsg && <Caption1>{triggerMsg}</Caption1>}
           <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
         </div>
       }

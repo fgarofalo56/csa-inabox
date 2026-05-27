@@ -15,7 +15,7 @@
  * MessageBar, and refreshes on the Reload ribbon action. No mock data.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Spinner,
   Tab, TabList,
@@ -39,13 +39,6 @@ const useStyles = makeStyles({
 
 type LoadState<T> = { loading: boolean; data: T | null; error?: string };
 
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Hub', actions: [{ label: 'Reload' }, { label: 'Open in Azure portal' }] },
-    { label: 'Author', actions: [{ label: 'New connection' }, { label: 'New deployment' }] },
-  ]},
-];
-
 function ErrorBar({ msg }: { msg: string }) {
   return (
     <MessageBar intent="error">
@@ -59,7 +52,7 @@ function EmptyText({ children }: { children: React.ReactNode }) {
   return <div className={s.empty}>{children}</div>;
 }
 
-function useLazyFetch<T>(url: string, active: boolean) {
+function useLazyFetch<T>(url: string, active: boolean, nonce: number = 0) {
   const [state, setState] = useState<LoadState<T>>({ loading: false, data: null });
   const reload = useCallback(async () => {
     setState({ loading: true, data: null });
@@ -72,6 +65,10 @@ function useLazyFetch<T>(url: string, active: boolean) {
       setState({ loading: false, data: null, error: e?.message || String(e) });
     }
   }, [url]);
+  // When the parent bumps `nonce`, force a refetch by clearing the cache.
+  useEffect(() => {
+    if (nonce > 0) setState({ loading: false, data: null });
+  }, [nonce]);
   useEffect(() => {
     if (active && state.data === null && !state.loading && !state.error) reload();
   }, [active, state.data, state.loading, state.error, reload]);
@@ -80,9 +77,10 @@ function useLazyFetch<T>(url: string, active: boolean) {
 
 // ---------- Tab panels ----------
 
-function OverviewPanel() {
+function OverviewPanel({ nonce, onWorkspace }: { nonce: number; onWorkspace?: (w: any) => void }) {
   const s = useStyles();
-  const [ws] = useLazyFetch<{ ok: boolean; workspace: any }>(`/api/foundry/workspace`, true);
+  const [ws] = useLazyFetch<{ ok: boolean; workspace: any }>(`/api/foundry/workspace`, true, nonce);
+  useEffect(() => { if (ws.data?.workspace && onWorkspace) onWorkspace(ws.data.workspace); }, [ws.data, onWorkspace]);
   if (ws.loading) return <div className={s.pad}><Spinner size="small" label="Loading hub…" labelPosition="after" /></div>;
   if (ws.error) return <div className={s.pad}><ErrorBar msg={ws.error} /></div>;
   const w = ws.data?.workspace;
@@ -117,9 +115,9 @@ function OverviewPanel() {
   );
 }
 
-function ConnectionsPanel({ active }: { active: boolean }) {
+function ConnectionsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   const s = useStyles();
-  const [st] = useLazyFetch<{ ok: boolean; connections: any[] }>(`/api/foundry/connections`, active);
+  const [st] = useLazyFetch<{ ok: boolean; connections: any[] }>(`/api/foundry/connections`, active, nonce);
   if (!active) return null;
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading connections…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><ErrorBar msg={st.error} /></div>;
@@ -154,9 +152,9 @@ function ConnectionsPanel({ active }: { active: boolean }) {
   );
 }
 
-function ModelsPanel({ active }: { active: boolean }) {
+function ModelsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   const s = useStyles();
-  const [st] = useLazyFetch<{ ok: boolean; models: any[] }>(`/api/items/ml-model`, active);
+  const [st] = useLazyFetch<{ ok: boolean; models: any[] }>(`/api/items/ml-model`, active, nonce);
   if (!active) return null;
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading models…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><ErrorBar msg={st.error} /></div>;
@@ -187,9 +185,9 @@ function ModelsPanel({ active }: { active: boolean }) {
   );
 }
 
-function DeploymentsPanel({ active }: { active: boolean }) {
+function DeploymentsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   const s = useStyles();
-  const [st] = useLazyFetch<{ ok: boolean; endpoints: any[]; deployments: any[] }>(`/api/foundry/deployments`, active);
+  const [st] = useLazyFetch<{ ok: boolean; endpoints: any[]; deployments: any[] }>(`/api/foundry/deployments`, active, nonce);
   if (!active) return null;
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading endpoints…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><ErrorBar msg={st.error} /></div>;
@@ -249,9 +247,9 @@ function DeploymentsPanel({ active }: { active: boolean }) {
   );
 }
 
-function ComputesPanel({ active }: { active: boolean }) {
+function ComputesPanel({ active, nonce }: { active: boolean; nonce: number }) {
   const s = useStyles();
-  const [st] = useLazyFetch<{ ok: boolean; computes: any[] }>(`/api/foundry/computes`, active);
+  const [st] = useLazyFetch<{ ok: boolean; computes: any[] }>(`/api/foundry/computes`, active, nonce);
   if (!active) return null;
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading computes…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><ErrorBar msg={st.error} /></div>;
@@ -286,9 +284,9 @@ function ComputesPanel({ active }: { active: boolean }) {
   );
 }
 
-function DatastoresPanel({ active }: { active: boolean }) {
+function DatastoresPanel({ active, nonce }: { active: boolean; nonce: number }) {
   const s = useStyles();
-  const [st] = useLazyFetch<{ ok: boolean; datastores: any[] }>(`/api/foundry/datastores`, active);
+  const [st] = useLazyFetch<{ ok: boolean; datastores: any[] }>(`/api/foundry/datastores`, active, nonce);
   if (!active) return null;
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading datastores…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><ErrorBar msg={st.error} /></div>;
@@ -323,9 +321,9 @@ function DatastoresPanel({ active }: { active: boolean }) {
   );
 }
 
-function JobsPanel({ active }: { active: boolean }) {
+function JobsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   const s = useStyles();
-  const [st] = useLazyFetch<{ ok: boolean; jobs: any[]; experiments: { name: string; runCount: number }[] }>(`/api/items/ml-experiment`, active);
+  const [st] = useLazyFetch<{ ok: boolean; jobs: any[]; experiments: { name: string; runCount: number }[] }>(`/api/items/ml-experiment`, active, nonce);
   if (!active) return null;
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading jobs…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><ErrorBar msg={st.error} /></div>;
@@ -384,8 +382,34 @@ function JobsPanel({ active }: { active: boolean }) {
 export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [tab, setTab] = useState<string>('overview');
+  const [nonce, setNonce] = useState(0);
+  const [workspace, setWorkspace] = useState<any>(null);
+  const onWorkspace = useCallback((w: any) => setWorkspace(w), []);
+
+  // Compute an Azure portal deep-link for this Foundry hub from the workspace
+  // ARM id when available; fall back to the generic portal landing page when
+  // the workspace fetch hasn't completed yet.
+  const portalUrl = useMemo(() => {
+    const armId = workspace?.id || workspace?.armId;
+    if (armId) return `https://portal.azure.com/#@/resource${armId}/overview`;
+    return 'https://portal.azure.com/';
+  }, [workspace]);
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Hub', actions: [
+        { label: 'Reload', onClick: () => setNonce((n) => n + 1) },
+        { label: 'Open in Azure portal', onClick: () => window.open(portalUrl, '_blank', 'noopener,noreferrer') },
+      ]},
+      { label: 'Author', actions: [
+        { label: 'New connection', disabled: true, title: 'New connection — needs new BFF route (POST /api/foundry/connections)' },
+        { label: 'New deployment', disabled: true, title: 'New deployment — needs new BFF route (POST /api/foundry/deployments)' },
+      ]},
+    ]},
+  ], [portalUrl]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <>
         <div className={s.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
@@ -398,13 +422,13 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
             <Tab value="jobs">Jobs</Tab>
           </TabList>
         </div>
-        {tab === 'overview' && <OverviewPanel />}
-        <ConnectionsPanel active={tab === 'connections'} />
-        <ModelsPanel active={tab === 'models'} />
-        <DeploymentsPanel active={tab === 'deployments'} />
-        <ComputesPanel active={tab === 'computes'} />
-        <DatastoresPanel active={tab === 'datastores'} />
-        <JobsPanel active={tab === 'jobs'} />
+        {tab === 'overview' && <OverviewPanel nonce={nonce} onWorkspace={onWorkspace} />}
+        <ConnectionsPanel active={tab === 'connections'} nonce={nonce} />
+        <ModelsPanel active={tab === 'models'} nonce={nonce} />
+        <DeploymentsPanel active={tab === 'deployments'} nonce={nonce} />
+        <ComputesPanel active={tab === 'computes'} nonce={nonce} />
+        <DatastoresPanel active={tab === 'datastores'} nonce={nonce} />
+        <JobsPanel active={tab === 'jobs'} nonce={nonce} />
       </>
     } />
   );

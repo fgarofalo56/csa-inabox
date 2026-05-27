@@ -165,13 +165,6 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
   );
 }
 
-const DBX_SQLW_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Query', actions: [{ label: 'New SQL query' }, { label: 'Run' }, { label: 'Query history' }] },
-    { label: 'Warehouse', actions: [{ label: 'Start' }, { label: 'Stop' }, { label: 'Refresh' }] },
-  ]},
-];
-
 export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
 
@@ -340,11 +333,36 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     [warehouses, warehouseId],
   );
 
+  const newSql = useCallback(() => {
+    setSqlText('-- New SQL.\nSELECT current_catalog() AS catalog, current_database() AS schema;');
+    setResult(null);
+  }, []);
+  const refreshAll = useCallback(() => {
+    refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
+  }, [refreshState, refreshCatalogs]);
+  const canStart = !!warehouseId && !starting && (state === 'STOPPED' || state === 'STOPPING' || state === 'UNKNOWN');
+  const canStop = !!warehouseId && isRunning;
+  const canRun = !!warehouseId && isRunning && !loading;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Query', actions: [
+        { label: 'New SQL query', onClick: newSql },
+        { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
+        { label: 'Query history', disabled: true, title: 'Databricks query-history API not yet wired in this editor (deferred)' },
+      ]},
+      { label: 'Warehouse', actions: [
+        { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart },
+        { label: 'Stop', onClick: canStop ? stop : undefined, disabled: !canStop },
+        { label: 'Refresh', onClick: warehouseId ? refreshAll : undefined, disabled: !warehouseId },
+      ]},
+    ]},
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={DBX_SQLW_RIBBON}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Tree aria-label="Unity Catalog" defaultOpenItems={['catalogs']}>
@@ -567,14 +585,6 @@ function fmtDuration(ms?: number): string {
 // ============================================================
 // Databricks Notebook editor
 // ============================================================
-
-const DBX_NB_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'File',    actions: [{ label: 'Save' }, { label: 'Reload' }] },
-    { label: 'Run',     actions: [{ label: 'Run on cluster' }, { label: 'View runs' }] },
-    { label: 'Workspace', actions: [{ label: 'Refresh tree' }] },
-  ]},
-];
 
 interface WorkspaceObject {
   object_type: string;
@@ -806,11 +816,33 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     });
   };
 
+  const reload = useCallback(() => {
+    if (selectedPath) openNotebook(selectedPath, language);
+  }, [selectedPath, language, openNotebook]);
+  const refreshTree = useCallback(() => { setTree({}); void loadDir(rootPath); }, [rootPath, loadDir]);
+  const canSave = !!selectedPath && dirty && !savingFile;
+  const canRunOn = !!selectedPath && !!clusterId && !running;
+  const ribbonNb: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'File', actions: [
+        { label: savingFile ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: 'Reload', onClick: selectedPath ? reload : undefined, disabled: !selectedPath },
+      ]},
+      { label: 'Run', actions: [
+        { label: running ? 'Running…' : 'Run on cluster', onClick: canRunOn ? runOn : undefined, disabled: !canRunOn },
+        { label: 'View runs', onClick: loadRuns },
+      ]},
+      { label: 'Workspace', actions: [
+        { label: 'Refresh tree', onClick: refreshTree },
+      ]},
+    ]},
+  ], [savingFile, canSave, save, selectedPath, reload, running, canRunOn, runOn, loadRuns, refreshTree]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={DBX_NB_RIBBON}
+      ribbon={ribbonNb}
       leftPanel={
         <div className={s.treePad}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
@@ -962,13 +994,6 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
 // ============================================================
 // Databricks Job editor
 // ============================================================
-
-const DBX_JOB_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Job',     actions: [{ label: 'Save' }, { label: 'Delete' }] },
-    { label: 'Run',     actions: [{ label: 'Run now' }, { label: 'View runs' }] },
-  ]},
-];
 
 interface JobRow {
   job_id: number;
@@ -1164,11 +1189,33 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     return () => window.removeEventListener('keydown', onKey);
   }, [saving, dirty, jobId, save]);
 
+  const viewRuns = useCallback(async () => {
+    if (jobId === null) return;
+    const rr = await fetch(`/api/items/databricks-job/${id}/runs?jobId=${jobId}`);
+    const rj = await rr.json();
+    if (rj.ok) setRuns(rj.runs || []);
+  }, [id, jobId]);
+  const canSaveJob = !saving && (dirty || jobId === null);
+  const canRunNow = jobId !== null && !running;
+  const canDeleteJob = jobId !== null;
+  const ribbonJob: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Job', actions: [
+        { label: saving ? 'Saving…' : jobId === null ? 'Create' : 'Save', onClick: canSaveJob ? save : undefined, disabled: !canSaveJob },
+        { label: 'Delete', onClick: canDeleteJob ? del : undefined, disabled: !canDeleteJob },
+      ]},
+      { label: 'Run', actions: [
+        { label: running ? 'Submitting…' : 'Run now', onClick: canRunNow ? runNow : undefined, disabled: !canRunNow },
+        { label: 'View runs', onClick: jobId !== null ? viewRuns : undefined, disabled: jobId === null },
+      ]},
+    ]},
+  ], [saving, jobId, canSaveJob, save, canDeleteJob, del, running, canRunNow, runNow, viewRuns]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={DBX_JOB_RIBBON}
+      ribbon={ribbonJob}
       leftPanel={
         <div className={s.treePad}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
@@ -1337,13 +1384,6 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
 // ============================================================
 // Databricks Cluster editor
 // ============================================================
-
-const DBX_CLUSTER_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Cluster', actions: [{ label: 'Save' }, { label: 'Delete' }] },
-    { label: 'State',   actions: [{ label: 'Start' }, { label: 'Stop' }, { label: 'Restart' }] },
-  ]},
-];
 
 interface ClusterEvent {
   timestamp?: number;
@@ -1522,11 +1562,28 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
 
   const state = cluster?.state || (clusterId ? 'UNKNOWN' : 'NEW');
 
+  const canStartCluster = !!clusterId && !stateBusy && state !== 'RUNNING' && state !== 'PENDING';
+  const canStopCluster = !!clusterId && !stateBusy && state !== 'TERMINATED' && state !== 'TERMINATING';
+  const canRestartCluster = !!clusterId && !stateBusy && state === 'RUNNING';
+  const ribbonCluster: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Cluster', actions: [
+        { label: saving ? 'Saving…' : clusterId ? 'Save' : 'Create', onClick: saving ? undefined : save, disabled: saving },
+        { label: 'Delete', onClick: clusterId ? del : undefined, disabled: !clusterId },
+      ]},
+      { label: 'State', actions: [
+        { label: 'Start', onClick: canStartCluster ? () => doState('start') : undefined, disabled: !canStartCluster },
+        { label: 'Stop', onClick: canStopCluster ? () => doState('stop') : undefined, disabled: !canStopCluster },
+        { label: 'Restart', onClick: canRestartCluster ? () => doState('restart') : undefined, disabled: !canRestartCluster },
+      ]},
+    ]},
+  ], [saving, clusterId, save, del, canStartCluster, canStopCluster, canRestartCluster, doState]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={DBX_CLUSTER_RIBBON}
+      ribbon={ribbonCluster}
       leftPanel={
         <div className={s.treePad}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>

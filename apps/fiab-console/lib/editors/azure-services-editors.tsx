@@ -10,7 +10,7 @@
  * Fluent UI structure.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Dropdown, Option, Textarea,
   Tab, TabList, Spinner,
@@ -116,12 +116,8 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
 // ============================================================
 // Synapse — Spark pool
 // ============================================================
-const SYN_SPARK_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Pool', actions: [{ label: 'Scale' }, { label: 'Pause' }, { label: 'Auto-pause' }] },
-    { label: 'Run', actions: [{ label: 'Open notebook' }, { label: 'Submit Spark job' }] },
-  ]},
-];
+// (Ribbon defined inside the component via useMemo so onClick handlers can
+// reference inline state. See SynapseSparkPoolEditor body.)
 interface SparkPoolDTO {
   name: string;
   properties: {
@@ -234,8 +230,24 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
 
   const state = pool?.properties.provisioningState || 'Unknown';
 
+  // Ribbon — wires Submit Spark job to inline `submit`; Scale/Pause/Auto-pause/Open notebook
+  // remain honestly disabled until their flows land.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Pool', actions: [
+        { label: 'Scale', disabled: true, title: 'Scale — needs sparkPool PATCH for nodeCount / autoScale (deferred to v2.2)' },
+        { label: 'Pause', disabled: true, title: 'Pause — use the Force pause button below (auto-pause runs via Synapse policy)' },
+        { label: 'Auto-pause', disabled: true, title: 'Auto-pause — needs sparkPool PATCH for autoPause delay (deferred)' },
+      ]},
+      { label: 'Run', actions: [
+        { label: 'Open notebook', disabled: true, title: 'Open notebook — use the Synapse Notebook editor (synapse-notebook slug)' },
+        { label: busy ? 'Submitting…' : 'Submit Spark job', onClick: !busy && selected ? () => { setTab('submit'); submit(); } : undefined, disabled: busy || !selected, title: !selected ? 'Select a pool first' : undefined },
+      ]},
+    ]},
+  ], [busy, selected, submit]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={SYN_SPARK_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
           <Tree aria-label="Spark pools" defaultOpenItems={['pools']}>
@@ -352,12 +364,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
 // ============================================================
 // Synapse — Pipeline
 // ============================================================
-const SYN_PIPE_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Activities', actions: [{ label: 'Copy data' }, { label: 'Notebook' }, { label: 'Stored procedure' }, { label: 'Mapping data flow' }] },
-    { label: 'Run', actions: [{ label: 'Run' }, { label: 'Debug' }, { label: 'Triggers' }] },
-  ]},
-];
+// (Ribbon defined inside the component via useMemo.)
 interface PipelineDTO {
   name: string;
   properties: { activities?: unknown[]; description?: string; parameters?: Record<string, { type: string; defaultValue?: unknown }> };
@@ -485,8 +492,41 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
     });
   }, []);
 
+  // Helper — name suffix scan for ribbon-palette templates. Walks the current
+  // activities[] looking for `<prefix><n>` and returns the next free n.
+  const nextActivityName = useCallback((prefix: string): string => {
+    let max = 0;
+    for (const a of activities) {
+      const name = a.name || '';
+      if (!name.startsWith(prefix)) continue;
+      const tail = name.slice(prefix.length);
+      if (!/^\d+$/.test(tail)) continue;
+      const n = parseInt(tail, 10);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+    return `${prefix}${max + 1}`;
+  }, [activities]);
+
+  // Ribbon — wires Run to inline `run`, activity palette to existing `addActivity`,
+  // Debug/Triggers honestly disabled per no-vaporware rule.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Activities', actions: [
+        { label: 'Copy data', onClick: () => addActivity({ name: nextActivityName('Copy'), type: 'Copy', typeProperties: { source: {}, sink: {} }, dependsOn: [] }) },
+        { label: 'Notebook', onClick: () => addActivity({ name: nextActivityName('Notebook'), type: 'SynapseNotebook', typeProperties: { notebook: { referenceName: '', type: 'NotebookReference' } }, dependsOn: [] }) },
+        { label: 'Stored procedure', onClick: () => addActivity({ name: nextActivityName('SP'), type: 'SqlServerStoredProcedure', typeProperties: { storedProcedureName: '' }, dependsOn: [] }) },
+        { label: 'Mapping data flow', onClick: () => addActivity({ name: nextActivityName('Dataflow'), type: 'ExecuteDataFlow', typeProperties: {}, dependsOn: [] }) },
+      ]},
+      { label: 'Run', actions: [
+        { label: busy ? 'Running…' : 'Run', onClick: !busy && selected && !dirty ? run : undefined, disabled: busy || !selected || dirty, title: dirty ? 'Save the spec first' : (!selected ? 'Select a pipeline first' : undefined) },
+        { label: 'Debug', disabled: true, title: 'Debug — needs Synapse Studio createPipelineRun?isDebugRun=true BFF route (deferred)' },
+        { label: 'Triggers', disabled: true, title: 'Triggers — use the ADF Trigger editor (adf-trigger slug); Synapse triggers BFF deferred' },
+      ]},
+    ]},
+  ], [addActivity, nextActivityName, busy, selected, dirty, run]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={SYN_PIPE_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
           <Tree aria-label="Pipelines" defaultOpenItems={['p']}>
@@ -701,12 +741,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
 // ============================================================
 // Azure Data Factory — Pipeline (real-REST against adf-loom-*)
 // ============================================================
-const ADF_PIPE_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Activities', actions: [{ label: 'Copy data' }, { label: 'Mapping data flow' }, { label: 'Notebook' }, { label: 'SP' }] },
-    { label: 'Debug & run', actions: [{ label: 'Debug' }, { label: 'Add trigger' }, { label: 'Publish all' }] },
-  ]},
-];
+// (Ribbon defined inside the component via useMemo.)
 
 interface AdfPipelineDTO {
   name: string;
@@ -852,8 +887,43 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
     });
   }, []);
 
+  // Name-suffix helper for ribbon palette templates. Scans the activities[]
+  // in the current spec for `<prefix><n>` and returns next free name.
+  const nextActivityName = useCallback((prefix: string): string => {
+    let acts: any[] = [];
+    try { acts = JSON.parse(spec)?.properties?.activities || []; } catch { /* ignore */ }
+    let max = 0;
+    for (const a of acts) {
+      const name = a?.name || '';
+      if (!name.startsWith(prefix)) continue;
+      const tail = name.slice(prefix.length);
+      if (!/^\d+$/.test(tail)) continue;
+      const n = parseInt(tail, 10);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+    return `${prefix}${max + 1}`;
+  }, [spec]);
+
+  // Ribbon — Publish all wires to inline `save`; activity palette wires to addActivity;
+  // Debug/Add trigger disabled honestly per no-vaporware.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Activities', actions: [
+        { label: 'Copy data', onClick: () => addActivity({ name: nextActivityName('Copy'), type: 'Copy', typeProperties: { source: {}, sink: {} }, dependsOn: [] }) },
+        { label: 'Mapping data flow', onClick: () => addActivity({ name: nextActivityName('Dataflow'), type: 'ExecuteDataFlow', typeProperties: {}, dependsOn: [] }) },
+        { label: 'Notebook', onClick: () => addActivity({ name: nextActivityName('Notebook'), type: 'DatabricksNotebook', typeProperties: { notebookPath: '' }, dependsOn: [] }) },
+        { label: 'SP', onClick: () => addActivity({ name: nextActivityName('SP'), type: 'SqlServerStoredProcedure', typeProperties: { storedProcedureName: '' }, dependsOn: [] }) },
+      ]},
+      { label: 'Debug & run', actions: [
+        { label: 'Debug', disabled: true, title: 'Debug — needs ADF createRun?isDebugRun=true BFF route (deferred)' },
+        { label: 'Add trigger', disabled: true, title: 'Add trigger — use the ADF Trigger editor (adf-trigger slug)' },
+        { label: busy ? 'Publishing…' : 'Publish all', onClick: !busy && dirty && selected ? save : undefined, disabled: busy || !dirty || !selected, title: !dirty ? 'No unsaved changes' : (!selected ? 'Select a pipeline first' : undefined) },
+      ]},
+    ]},
+  ], [addActivity, nextActivityName, busy, dirty, selected, save]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ADF_PIPE_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
           <Tree aria-label="ADF pipelines" defaultOpenItems={['p']}>
@@ -946,11 +1016,7 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
 // ============================================================
 // Azure Data Factory — Dataset (real-REST)
 // ============================================================
-const ADF_DS_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Schema', actions: [{ label: 'Import schema' }, { label: 'Preview data' }] },
-  ]},
-];
+// (Ribbon defined inside the component via useMemo.)
 
 interface AdfDatasetDTO {
   name: string;
@@ -1107,8 +1173,19 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
     finally { setBusy(false); }
   }, [linkedServices, loadList]);
 
+  // Ribbon — Import schema deep-links to ADF Studio (no inline schema import BFF route);
+  // Preview data honestly disabled until SELECT TOP 100 BFF lands.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Schema', actions: [
+        { label: 'Import schema', disabled: true, title: 'Import schema — needs ADF datasets PUT with schema-import op (deferred; use ADF Studio for now)' },
+        { label: 'Preview data', disabled: true, title: 'Preview data — needs SELECT TOP 100 BFF route' },
+      ]},
+    ]},
+  ], []);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ADF_DS_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
           <Tree aria-label="ADF datasets" defaultOpenItems={['d']}>
@@ -1176,12 +1253,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
 // ============================================================
 // Azure Data Factory — Trigger (real-REST)
 // ============================================================
-const ADF_TR_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'State', actions: [{ label: 'Start' }, { label: 'Stop' }] },
-    { label: 'Edit', actions: [{ label: 'Recurrence' }, { label: 'Parameters' }] },
-  ]},
-];
+// (Ribbon defined inside the component via useMemo.)
 
 interface AdfTriggerDTO {
   name: string;
@@ -1365,8 +1437,23 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
 
   const runtimeState = tr?.properties.runtimeState || 'Stopped';
 
+  // Ribbon — Start/Stop wire to inline setState; Recurrence/Parameters honestly disabled
+  // (the form fields below are the actual edit surface).
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'State', actions: [
+        { label: 'Start', onClick: !busy && selected && runtimeState !== 'Started' ? () => setState('start') : undefined, disabled: busy || !selected || runtimeState === 'Started', title: runtimeState === 'Started' ? 'Trigger already started' : (!selected ? 'Select a trigger first' : undefined) },
+        { label: 'Stop', onClick: !busy && selected && runtimeState === 'Started' ? () => setState('stop') : undefined, disabled: busy || !selected || runtimeState !== 'Started', title: runtimeState !== 'Started' ? 'Trigger is not started' : undefined },
+      ]},
+      { label: 'Edit', actions: [
+        { label: 'Recurrence', disabled: true, title: 'Recurrence — use the Frequency / Interval / Time zone fields in the form below' },
+        { label: 'Parameters', disabled: true, title: 'Parameters — needs pipeline-parameter pass-through editor (deferred)' },
+      ]},
+    ]},
+  ], [busy, selected, runtimeState, setState]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ADF_TR_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
           <Tree aria-label="ADF triggers" defaultOpenItems={['t']}>
@@ -1435,11 +1522,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
 // ============================================================
 // U-SQL job (Azure Data Lake Analytics)
 // ============================================================
-const USQL_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Migration', actions: [{ label: 'Convert to PySpark' }] },
-  ]},
-];
+// (Ribbon defined inside the component via useMemo.)
 
 const USQL_SAMPLE = `// U-SQL — Azure Data Lake Analytics (RETIRED 2024-02-29)
 @orders = EXTRACT
@@ -1510,12 +1593,21 @@ export function UsqlJobEditor({ item, id }: { item: FabricItemType; id: string }
   const [usql, setUsql] = useState<string>(USQL_SAMPLE);
   const [pyspark, setPyspark] = useState<string>('');
 
+  // Ribbon — Convert to PySpark wires to the inline heuristic translator.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Migration', actions: [
+        { label: 'Convert to PySpark', onClick: () => setPyspark(convertUsqlToPyspark(usql)) },
+      ]},
+    ]},
+  ], [usql]);
+
   // v3.27: D-fix — ADLA was retired 2024-02-29. The previous editor
   // pretended to estimate AUs and submit jobs to a service that no
   // longer exists. This is now a deprecation surface that helps users
   // migrate to Spark via a heuristic translator.
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={USQL_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         <MessageBar intent="error">
           <MessageBarBody>

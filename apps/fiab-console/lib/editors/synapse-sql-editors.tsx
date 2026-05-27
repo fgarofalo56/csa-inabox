@@ -130,12 +130,6 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
 // ============================================================
 // Serverless
 // ============================================================
-const SYN_SSQL_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Query', actions: [{ label: 'New SQL query' }, { label: 'Run' }, { label: 'External tables' }] },
-    { label: 'Cost', actions: [{ label: 'Bytes processed' }, { label: 'Cost cap' }] },
-  ]},
-];
 
 interface ServerlessSchema {
   ok: boolean;
@@ -183,11 +177,27 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     }
   }, [id, sqlText, database]);
 
+  // Ribbon — wired to inline `run` + clear-buffer. Other entries disabled with reason
+  // so the surface is honest about what's available today (per .claude/rules/no-vaporware.md).
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Query', actions: [
+        { label: 'New SQL query', onClick: () => { setSqlText(''); setResult(null); } },
+        { label: loading ? 'Running…' : 'Run', onClick: !loading ? run : undefined, disabled: loading },
+        { label: 'External tables', disabled: true, title: 'External tables — needs OPENROWSET/CREATE EXTERNAL TABLE BFF route (deferred)' },
+      ]},
+      { label: 'Cost', actions: [
+        { label: 'Bytes processed', disabled: true, title: 'Bytes processed — needs cost telemetry BFF route (deferred)' },
+        { label: 'Cost cap', disabled: true, title: 'Cost cap — needs sys.cost_cap policy BFF route (deferred)' },
+      ]},
+    ]},
+  ], [loading, run]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={SYN_SSQL_RIBBON}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Tree aria-label="Serverless objects" defaultOpenItems={['databases', 'lake', 'samples']}>
@@ -257,13 +267,6 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
 // ============================================================
 // Dedicated
 // ============================================================
-const SYN_DSQL_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Query', actions: [{ label: 'New SQL query' }, { label: 'Run' }, { label: 'Estimate cost' }] },
-    { label: 'State', actions: [{ label: 'Resume' }, { label: 'Pause' }, { label: 'Refresh' }] },
-    { label: 'Manage', actions: [{ label: 'Permissions' }, { label: 'Workload mgmt' }, { label: 'Geo backup' }] },
-  ]},
-];
 
 interface PoolState {
   ok?: boolean;
@@ -378,11 +381,33 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const isOnline = state === 'Online';
   const schemaTree = useMemo(() => Object.entries(schema?.schemas || {}), [schema]);
 
+  // Ribbon — wired to inline run / resume / pause / refreshState handlers; the rest
+  // are honestly disabled until their BFF routes land (per no-vaporware rule).
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Query', actions: [
+        { label: 'New SQL query', onClick: () => { setSqlText(''); setResult(null); } },
+        { label: loading ? 'Running…' : 'Run', onClick: !loading && isOnline ? run : undefined, disabled: loading || !isOnline, title: !isOnline ? 'Resume the pool first' : undefined },
+        { label: 'Estimate cost', disabled: true, title: 'Estimate cost — needs DMS query-cost BFF route (deferred)' },
+      ]},
+      { label: 'State', actions: [
+        { label: resuming ? 'Resuming…' : 'Resume', onClick: !resuming && state === 'Paused' ? resume : undefined, disabled: resuming || state !== 'Paused', title: state !== 'Paused' ? 'Only available when pool is Paused' : undefined },
+        { label: 'Pause', onClick: isOnline ? pause : undefined, disabled: !isOnline, title: !isOnline ? 'Only available when pool is Online' : undefined },
+        { label: 'Refresh', onClick: () => { refreshState(); if (isOnline) refreshSchema(); } },
+      ]},
+      { label: 'Manage', actions: [
+        { label: 'Permissions', disabled: true, title: 'Permissions — needs sys.database_principals BFF route (deferred)' },
+        { label: 'Workload mgmt', disabled: true, title: 'Workload mgmt — needs sys.workload_management_workload_groups BFF route (deferred)' },
+        { label: 'Geo backup', disabled: true, title: 'Geo backup — needs ARM restore-point BFF route (deferred)' },
+      ]},
+    ]},
+  ], [loading, isOnline, run, resuming, state, resume, pause, refreshState, refreshSchema]);
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={SYN_DSQL_RIBBON}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Tree aria-label="Dedicated SQL pool" defaultOpenItems={['schemas']}>
