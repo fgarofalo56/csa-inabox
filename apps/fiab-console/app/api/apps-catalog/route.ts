@@ -22,17 +22,52 @@ export async function GET() {
     .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name', parameters: [{ name: '@t', value: s.claims.oid }] })
     .fetchAll();
 
-  // First-sign-in seed copy: if this tenant has nothing, copy from GLOBAL.
-  if (resources.length === 0) {
+  // First-sign-in seed OR stale-tenant-copy auto-refresh.
+  //
+  // User-reported bug 2026-05-28: every app showed "Bundled items (0)"
+  // because per-tenant copies were created before the GLOBAL seed gained
+  // its items[] arrays. The original logic only copied from GLOBAL when
+  // the tenant had ZERO docs — so existing tenants stayed stuck on the
+  // pre-items[] copies forever.
+  //
+  // Fix: also detect tenant docs that are missing items[] (or any other
+  // GLOBAL-only field) and re-merge those specific fields from GLOBAL,
+  // keyed by id. Idempotent.
+  const needsCopy = resources.length === 0;
+  const needsMerge = resources.some(
+    (r: any) => !Array.isArray(r.items) || r.items.length === 0,
+  );
+
+  if (needsCopy || needsMerge) {
     const { resources: global } = await c.items
       .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t', parameters: [{ name: '@t', value: 'GLOBAL' }] })
       .fetchAll();
     if (global.length > 0) {
       const now = new Date().toISOString();
+      const byId = new Map(resources.map((r: any) => [r.id, r]));
       for (const src of global) {
-        const copy = { ...src, tenantId: s.claims.oid, copiedFromGlobalAt: now, _etag: undefined, _rid: undefined, _self: undefined, _ts: undefined, _attachments: undefined };
-        delete (copy as any)._etag; delete (copy as any)._rid; delete (copy as any)._self; delete (copy as any)._ts; delete (copy as any)._attachments;
-        await c.items.upsert(copy).catch(() => {});
+        const existing = byId.get(src.id);
+        const STAMP = { tenantId: s.claims.oid, copiedFromGlobalAt: now };
+        // Strip Cosmos-internal fields from the source.
+        const { _etag, _rid, _self, _ts, _attachments, ...clean } = src as any;
+        const merged = existing
+          // Preserve existing tenant-specific fields (createdAt, installedBy)
+          // and overlay GLOBAL bundle definition + items[] when missing.
+          ? {
+              ...clean,
+              ...existing,
+              ...STAMP,
+              // Always refresh items[] / category / description / icon /
+              // publisher from GLOBAL so apps stay in sync with the seed.
+              items: src.items || existing.items || [],
+              description: src.description || existing.description,
+              category: src.category || existing.category,
+              icon: src.icon || existing.icon,
+              publisher: src.publisher || existing.publisher,
+              name: src.name || existing.name,
+            }
+          : { ...clean, ...STAMP };
+        await c.items.upsert(merged).catch(() => {});
       }
       const refetched = await c.items
         .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name', parameters: [{ name: '@t', value: s.claims.oid }] })
