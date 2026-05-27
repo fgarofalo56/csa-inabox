@@ -2020,6 +2020,8 @@ nav:
           - CSA-in-a-Box Alignment + v2 Backlog: fiab/loom-csa-alignment-and-v2-backlog.md
           - Parity Progress (running log): fiab/parity-progress.md
           - Parity Rollup — Every Surface: fiab/parity-rollup.md
+      - Editor Families:
+          - "Data Engineering — Synapse · Databricks · ADF": fiab/synapse-databricks-adf-family.md
       - Parity Specs:
           - Activator: fiab/activator-parity-spec.md
           - ADF Dataset: fiab/adf-dataset-parity-spec.md
