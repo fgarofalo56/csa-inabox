@@ -452,8 +452,46 @@ export async function submitLivyStatement(poolName: string, sessionId: number, b
   return jsonOrThrow(r, `submitStatement(${poolName}/${sessionId})`);
 }
 
+/**
+ * List the Dedicated SQL pools attached to the Loom Synapse workspace via
+ * ARM. Returns the raw ARM shape (name + status + sku) — callers only need
+ * those fields for compute-target discovery. Returns [] if the workspace
+ * env var is missing; surfaces ARM errors verbatim.
+ */
 export async function listDedicatedSqlPools(): Promise<Array<{ name: string; status?: string; sku?: { name?: string } }>> {
-  // ARM call lives elsewhere; this is a stub so /api/loom/compute-targets's
-  // dynamic import doesn't fail. Real impl can replace this later.
-  return [];
+  if (!process.env.LOOM_SYNAPSE_WORKSPACE) return [];
+  const r = await callArm(`${armBase()}/sqlPools?api-version=${ARM_API}`);
+  const body = await jsonOrThrow<{ value?: Array<{ name: string; properties?: { status?: string }; sku?: { name?: string } }> }>(r, 'listDedicatedSqlPools');
+  return (body.value || []).map((p) => ({
+    name: p.name,
+    status: p.properties?.status,
+    sku: p.sku,
+  }));
 }
+
+/**
+ * Resume a specific Synapse Dedicated SQL pool by name (ARM REST POST .../resume).
+ * Used by /api/loom/compute-targets/[id]/start when the id starts with
+ * "dedicated-sql:".
+ */
+export async function resumeDedicatedPool(name: string): Promise<void> {
+  if (!name) throw new Error('resumeDedicatedPool: name is required');
+  const r = await callArm(`${armBase()}/sqlPools/${encodeURIComponent(name)}/resume?api-version=${ARM_API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 202) {
+    throw new Error(`resumeDedicatedPool(${name}) failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+/**
+ * Pause a specific Synapse Dedicated SQL pool by name (ARM REST POST .../pause).
+ * Used by /api/loom/compute-targets/[id]/stop when the id starts with
+ * "dedicated-sql:".
+ */
+export async function pauseDedicatedPool(name: string): Promise<void> {
+  if (!name) throw new Error('pauseDedicatedPool: name is required');
+  const r = await callArm(`${armBase()}/sqlPools/${encodeURIComponent(name)}/pause?api-version=${ARM_API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 202) {
+    throw new Error(`pauseDedicatedPool(${name}) failed ${r.status}: ${await r.text()}`);
+  }
+}
+

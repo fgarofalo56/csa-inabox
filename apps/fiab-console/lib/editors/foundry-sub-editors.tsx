@@ -18,7 +18,7 @@
  *   DatasetEditor          → /api/items/dataset
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Field, Dropdown, Option,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -47,11 +47,29 @@ const useStyles = makeStyles({
   formRow: { display: 'grid', gridTemplateColumns: '160px 1fr', gap: '6px 16px', alignItems: 'center' },
 });
 
-const BASE_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Item', actions: [{ label: 'Reload' }, { label: 'Open in Azure portal' }] },
-  ]},
-];
+/**
+ * Factory for the per-editor base ribbon. Each editor binds its own `reload`
+ * handler + computes a portal deep-link from its detail data. When the editor
+ * doesn't have a portal-targetable resource (e.g. nothing selected yet), pass
+ * `portalUrl: null` to mark that action disabled with a precise tooltip.
+ *
+ * Previously this was a static `BASE_RIBBON` constant whose `Reload` and
+ * `Open in Azure portal` actions had no onClick — the Ribbon auto-disabled
+ * them with a "not wired" tooltip, surfacing 2 dead buttons across 8 editors
+ * (16 total dead actions). This refactor wires them per-editor.
+ */
+function buildBaseRibbon(reload: () => void, portalUrl: string | null): RibbonTab[] {
+  return [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Item', actions: [
+        { label: 'Reload', onClick: reload },
+        portalUrl
+          ? { label: 'Open in Azure portal', onClick: () => window.open(portalUrl, '_blank', 'noopener,noreferrer') }
+          : { label: 'Open in Azure portal', disabled: true, title: 'Open in Azure portal — no resource selected (open a specific item to enable)' },
+      ]},
+    ]},
+  ];
+}
 
 function ErrorBar({ msg, hint, notDeployed }: { msg: string; hint?: string; notDeployed?: boolean }) {
   return (
@@ -88,8 +106,8 @@ function useApi<T>(url: string | null, deps: unknown[] = []) {
   return [state, reload] as const;
 }
 
-function Shell({ item, id, children }: { item: FabricItemType; id: string; children: ReactNode }) {
-  return <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={children} />;
+function Shell({ item, id, ribbon, children }: { item: FabricItemType; id: string; ribbon: RibbonTab[]; children: ReactNode }) {
+  return <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={children} />;
 }
 
 // =====================================================================
@@ -101,6 +119,15 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
   const isNew = id === 'new' || id === 'create';
   const [list, reload] = useApi<{ projects: any[] }>(isNew ? '/api/items/ai-foundry-project' : null);
   const [detail, reloadDetail] = useApi<{ project: any }>(isNew ? null : `/api/items/ai-foundry-project/${encodeURIComponent(id)}`, [id]);
+
+  // Ribbon: bind Reload to whichever fetch is active; deep-link to ai.azure.com
+  // for a known project or omit when listing.
+  const ribbon = useMemo(() => {
+    const portalUrl = !isNew && detail.data?.project?.name
+      ? `https://ai.azure.com/projects/${encodeURIComponent(detail.data.project.name)}`
+      : null;
+    return buildBaseRibbon(isNew ? reload : reloadDetail, portalUrl);
+  }, [isNew, reload, reloadDetail, detail.data]);
 
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
@@ -121,7 +148,7 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
   };
 
   if (isNew) {
-    return <Shell item={item} id={id}>
+    return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
         <Subtitle2>AI Foundry projects</Subtitle2>
         <Caption1>Child workspaces of the Foundry hub. Inherit hub-level connections; scope flows + evaluations + data assets.</Caption1>
@@ -161,7 +188,7 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
     </Shell>;
   }
 
-  return <Shell item={item} id={id}>
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.project ? (
         <>
@@ -249,7 +276,14 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
     setRunning(false);
   };
 
-  return <Shell item={item} id={id}>
+  const ribbon = useMemo(() => {
+    const portalUrl = project
+      ? `https://ai.azure.com/projects/${encodeURIComponent(project)}/prompt-flow`
+      : null;
+    return buildBaseRibbon(reload, portalUrl);
+  }, [reload, project]);
+
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       <ProjectPicker value={project} onChange={setProject} />
       {!project ? <Caption1>Pick a project to list its prompt flows.</Caption1> : list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
@@ -338,7 +372,14 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
     if (!j.ok) setMsg(j.error || `HTTP ${r.status}`); else { setMsg(`Created evaluation`); reload(); }
   };
 
-  return <Shell item={item} id={id}>
+  const ribbon = useMemo(() => {
+    const portalUrl = project
+      ? `https://ai.azure.com/projects/${encodeURIComponent(project)}/evaluations`
+      : null;
+    return buildBaseRibbon(reload, portalUrl);
+  }, [reload, project]);
+
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       <ProjectPicker value={project} onChange={setProject} />
       {project && (list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
@@ -402,11 +443,19 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
 
 export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [policies] = useApi<{ policies: any[] }>('/api/items/content-safety');
+  const [policies, reloadPolicies] = useApi<{ policies: any[] }>('/api/items/content-safety');
   const [text, setText] = useState('');
   const [result, setResult] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [imgB64, setImgB64] = useState('');
+
+  // Content Safety is a tenant-level Azure AI Content Safety resource; without
+  // an ARM id in the policies response, the most useful deep-link is the
+  // Content Safety Studio app at contentsafety.azure.com.
+  const ribbon = useMemo(
+    () => buildBaseRibbon(reloadPolicies, 'https://contentsafety.cognitive.azure.com/'),
+    [reloadPolicies],
+  );
 
   const analyze = async (kind: 'text' | 'image') => {
     setBusy(true); setResult(null);
@@ -432,7 +481,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
     reader.readAsDataURL(f);
   };
 
-  return <Shell item={item} id={id}>
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       {policies.error
         ? <ErrorBar msg={policies.error} hint={policies.hint} notDeployed={policies.notDeployed} />
@@ -470,7 +519,15 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
   const url = `/api/items/tracing?hours=${hours}${op ? `&operation=${encodeURIComponent(op)}` : ''}`;
   const [state, reload] = useApi<{ traces: any[] }>(url, [hours, op]);
 
-  return <Shell item={item} id={id}>
+  // Traces live in the backing Application Insights resource. Without an ARM
+  // id on the response, the Foundry tracing surface itself is the cleanest
+  // deep-link.
+  const ribbon = useMemo(
+    () => buildBaseRibbon(reload, 'https://ai.azure.com/tracing'),
+    [reload],
+  );
+
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       <Subtitle2>Foundry traces</Subtitle2>
       <div className={s.toolbar}>
@@ -512,11 +569,21 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
 export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const isNew = id === 'new' || id === 'create';
-  const [list] = useApi<{ indexes: any[] }>(isNew ? '/api/items/ai-search-index' : null);
-  const [detail] = useApi<{ index: any }>(isNew ? null : `/api/items/ai-search-index/${encodeURIComponent(id)}`, [id]);
+  const [list, reloadList] = useApi<{ indexes: any[] }>(isNew ? '/api/items/ai-search-index' : null);
+  const [detail, reloadDetail] = useApi<{ index: any }>(isNew ? null : `/api/items/ai-search-index/${encodeURIComponent(id)}`, [id]);
   const [query, setQuery] = useState('*');
   const [hits, setHits] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+
+  // Deep-link to the index blade when we have an ARM id on the index payload;
+  // fall back to the generic portal landing page otherwise.
+  const ribbon = useMemo(() => {
+    const armId = detail.data?.index?.id || detail.data?.index?.armId;
+    const portalUrl = armId
+      ? `https://portal.azure.com/#@/resource${armId}/overview`
+      : 'https://portal.azure.com/';
+    return buildBaseRibbon(isNew ? reloadList : reloadDetail, portalUrl);
+  }, [isNew, reloadList, reloadDetail, detail.data]);
 
   const runSearch = async () => {
     setBusy(true); setHits(null);
@@ -530,7 +597,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   };
 
   if (isNew) {
-    return <Shell item={item} id={id}>
+    return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
         <Subtitle2>Azure AI Search indexes</Subtitle2>
         {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
@@ -556,7 +623,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const fields: any[] = idx?.fields || [];
   const docs: any[] = hits?.ok ? (hits.result?.value || hits.result?.['value'] || []) : [];
 
-  return <Shell item={item} id={id}>
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       {detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : idx && (
         <>
@@ -681,8 +748,15 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
     if (!j.ok) setMsg(j.error); else { setMsg(`${action} requested`); reload(); reloadDetail(); }
   };
 
+  // Compute resources are managed inside the Foundry workspace; ai.azure.com's
+  // compute surface is the canonical deep-link.
+  const ribbon = useMemo(
+    () => buildBaseRibbon(isNew ? reload : reloadDetail, 'https://ai.azure.com/compute'),
+    [isNew, reload, reloadDetail],
+  );
+
   if (isNew) {
-    return <Shell item={item} id={id}>
+    return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
         <Subtitle2>Foundry computes</Subtitle2>
         <div className={s.card}>
@@ -735,7 +809,7 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
     </Shell>;
   }
 
-  return <Shell item={item} id={id}>
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.compute && (
         <>
@@ -768,7 +842,16 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
   const [project, setProject] = useState<string>('');
   const listUrl = `/api/items/dataset${project ? `?project=${encodeURIComponent(project)}` : ''}`;
   const [list, reload] = useApi<{ assets: any[] }>(isNew ? listUrl : null, [project]);
-  const [detail] = useApi<{ asset: any; versions: any[] }>(isNew ? null : `/api/items/dataset/${encodeURIComponent(id)}${project ? `?project=${encodeURIComponent(project)}` : ''}`, [id, project]);
+  const [detail, reloadDetail] = useApi<{ asset: any; versions: any[] }>(isNew ? null : `/api/items/dataset/${encodeURIComponent(id)}${project ? `?project=${encodeURIComponent(project)}` : ''}`, [id, project]);
+
+  // Datasets live under the Foundry project; deep-link to the project's data
+  // surface when scoped, otherwise to the hub-level data tab.
+  const ribbon = useMemo(() => {
+    const portalUrl = project
+      ? `https://ai.azure.com/projects/${encodeURIComponent(project)}/data`
+      : 'https://ai.azure.com/data';
+    return buildBaseRibbon(isNew ? reload : reloadDetail, portalUrl);
+  }, [isNew, reload, reloadDetail, project]);
 
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [form, setForm] = useState({ name: '', dataType: 'uri_folder', dataUri: '', version: '1', description: '' });
@@ -787,7 +870,7 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
   const filtered = (list.data?.assets || []).filter((a: any) => !typeFilter || a.dataType === typeFilter);
 
   if (isNew) {
-    return <Shell item={item} id={id}>
+    return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
         <Subtitle2>Foundry datasets</Subtitle2>
         <div className={s.toolbar}>
@@ -851,7 +934,7 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
     </Shell>;
   }
 
-  return <Shell item={item} id={id}>
+  return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.asset && (
         <>

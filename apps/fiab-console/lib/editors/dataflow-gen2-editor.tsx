@@ -11,7 +11,7 @@
  * Backed by /api/loom/workspaces + /api/items/dataflow/**.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
   Tree, TreeItem, TreeItemLayout, Select,
@@ -26,13 +26,6 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
-
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Refresh', actions: [{ label: 'Refresh now' }] },
-    { label: 'Item', actions: [{ label: 'New dataflow' }, { label: 'Save' }, { label: 'Delete' }] },
-  ]},
-];
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
@@ -212,8 +205,25 @@ export function DataflowGen2Editor({ item, id }: Props) {
     await loadList(workspaceId);
   }, [workspaceId, dataflowId, loadList]);
 
+  const canRefresh = !refreshing && !!dataflowId;
+  const canSave = !saving && !!dataflowId && dirty;
+  const canDelete = !!dataflowId;
+  const canCreate = !!workspaceId;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Refresh', actions: [
+        { label: refreshing ? 'Refreshing…' : 'Refresh now', onClick: canRefresh ? refresh : undefined, disabled: !canRefresh },
+      ]},
+      { label: 'Item', actions: [
+        { label: 'New dataflow', onClick: canCreate ? () => setCreateOpen(true) : undefined, disabled: !canCreate },
+        { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
+        { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
+      ]},
+    ]},
+  ], [refreshing, canRefresh, refresh, canCreate, saving, canSave, save, canDelete, del]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Dataflows Gen2</Subtitle2>

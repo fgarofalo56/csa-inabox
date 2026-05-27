@@ -10,7 +10,7 @@
  * No mock data; errors surface in MessageBar.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner,
   Tab, TabList,
@@ -23,6 +23,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { ComputePicker } from '@/lib/components/compute-picker';
 
 const useStyles = makeStyles({
   pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
@@ -42,12 +43,6 @@ const useStyles = makeStyles({
 });
 
 // ----- ML Model -----
-const ML_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Versions', actions: [{ label: 'Reload' }, { label: 'Compare versions' }] },
-    { label: 'Apply', actions: [{ label: 'Apply (PREDICT)' }, { label: 'Real-time endpoint' }] },
-  ]},
-];
 
 interface ModelSummary {
   id: string; name: string; description?: string; latestVersion?: string;
@@ -67,6 +62,10 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
   const [model, setModel] = useState<ModelSummary | null>(null);
   const [versions, setVersions] = useState<ModelVersion[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  // Compute target for Apply (PREDICT) — wired even though the Apply BFF
+  // route is deferred to v2.x; at least the user can select compute now and
+  // see lifecycle state instead of staring at a dead button with no context.
+  const [computeId, setComputeId] = useState('');
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -86,13 +85,26 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
   }, [id, isNew]);
   useEffect(() => { load(); }, [load]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Versions', actions: [
+        { label: 'Reload', onClick: isNew ? undefined : load, disabled: isNew, title: isNew ? 'Read-only registry — open an existing model' : undefined },
+        { label: 'Compare versions', disabled: true, title: 'needs compute target + BFF route (deferred)' },
+      ]},
+      { label: 'Apply', actions: [
+        { label: 'Apply (PREDICT)', disabled: true, title: 'needs compute target + BFF route (deferred)' },
+        { label: 'Real-time endpoint', disabled: true, title: 'needs compute target + BFF route (deferred)' },
+      ]},
+    ]},
+  ], [isNew, load]);
+
   // v2 validator finding: /items/ml-model/new used to crash because the
   // editor immediately fetched the registry with id='new' and got 404.
   // ML Model is a read-only registry view — there's no "new" entity to
   // create. Show an honest gate redirecting to Azure ML.
   if (isNew) {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={ML_RIBBON}
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon}
         main={
           <div className={s.pad}>
             <MessageBar intent="info">
@@ -118,7 +130,7 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ML_RIBBON}
+      ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
           <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>
@@ -162,6 +174,18 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
                 <Badge appearance="tint">Latest: v{model.latestVersion || '—'}</Badge>
                 <Badge appearance="tint">{versions.length} version(s)</Badge>
               </div>
+              {/*
+               * Compute target for Apply (PREDICT). The Apply BFF is deferred
+               * but exposing the picker now lets users pre-select compute and
+               * see its state (Resume a paused Databricks cluster, etc.) so
+               * v2.x's Apply wiring is one click away from working.
+               */}
+              <ComputePicker
+                label="Predict compute"
+                filter={['synapse-spark', 'databricks-cluster']}
+                value={computeId}
+                onChange={setComputeId}
+              />
               <Subtitle2 style={{ marginTop: 8 }}>Versions</Subtitle2>
               <Table aria-label="Model versions" size="small">
                 <TableHeader><TableRow>
@@ -206,12 +230,6 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
 }
 
 // ----- ML Experiment -----
-const MLE_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Runs', actions: [{ label: 'Reload' }, { label: 'Register model' }] },
-    { label: 'Charts', actions: [{ label: 'Parallel coordinates' }, { label: 'Scatter' }] },
-  ]},
-];
 
 interface FoundryJob {
   id: string; name: string; displayName?: string; jobType?: string;
@@ -230,6 +248,10 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
   const [runs, setRuns] = useState<FoundryJob[]>([]);
   const [expName, setExpName] = useState<string>('');
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
+  // Compute target for hypothetical "submit new run" / Register-model flow;
+  // wired even though the submit BFF is deferred so the lifecycle UI is
+  // surfaced now (resume paused Databricks before submitting from a notebook).
+  const [computeId, setComputeId] = useState('');
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -255,9 +277,22 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
 
   const current = runs.find((r) => r.name === selectedRun) || runs[0] || job;
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Runs', actions: [
+        { label: 'Reload', onClick: isNew ? undefined : load, disabled: isNew, title: isNew ? 'Read-only — open an existing experiment' : undefined },
+        { label: 'Register model', disabled: true, title: 'needs MLflow registry write + BFF route (deferred)' },
+      ]},
+      { label: 'Charts', actions: [
+        { label: 'Parallel coordinates', disabled: true, title: 'chart renderer deferred to v2.x' },
+        { label: 'Scatter', disabled: true, title: 'chart renderer deferred to v2.x' },
+      ]},
+    ]},
+  ], [isNew, load]);
+
   if (isNew) {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={MLE_RIBBON}
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon}
         main={
           <div className={s.pad}>
             <MessageBar intent="info">
@@ -282,7 +317,7 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={MLE_RIBBON}
+      ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
           <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>
@@ -332,6 +367,16 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
               <Subtitle2>{job.displayName || job.name}</Subtitle2>
               {job.experimentName && <Caption1>Experiment: {job.experimentName}</Caption1>}
             </>
+          )}
+          {!loading && !error && (kind === 'experiment' || kind === 'job') && (
+            // Picker for future "submit new run" — exposes Spark / Databricks
+            // lifecycle so users can resume a paused cluster ahead of time.
+            <ComputePicker
+              label="Submission compute"
+              filter={['synapse-spark', 'databricks-cluster']}
+              value={computeId}
+              onChange={setComputeId}
+            />
           )}
           {!loading && !error && runs.length > 0 && (
             <>
@@ -420,6 +465,13 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
   }, []);
 
   const load = useCallback(async () => {
+    // Pre-save gate: /items/<type>/new fires useItemState before any Cosmos
+    // record exists. Skip the fetch so the editor renders its `fallback`
+    // initial state until the user saves and we have a real id.
+    if (!id || id === 'new') {
+      setLoading(false);
+      return;
+    }
     setLoading(true); setError(null);
     try {
       const r = await fetch(`/api/items/${slug}/${encodeURIComponent(id)}`);
@@ -501,16 +553,10 @@ function SaveBar({ saving, savedAt, error, onSave, extraRight, dirty }: {
 
 // ----- GraphQL API (Cosmos state + real APIM publish) -----
 const GQL_SAMPLE = `type Query {\n  customers(region: String, first: Int = 10): [Customer!]!\n}\ntype Customer { id: ID! name: String! orders: [Order!]! }\ntype Order { id: ID! total: Float! }`;
-const GQL_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Schema', actions: [{ label: 'Reload' }, { label: 'Publish to APIM' }] },
-    { label: 'Auth', actions: [{ label: 'Subscription required' }] },
-  ]},
-];
 interface GqlState { displayName: string; path: string; serviceUrl: string; sdl: string; description: string; subscriptionRequired: boolean; lastPublishedAt?: string; lastPublishedTo?: string; [k: string]: unknown }
 export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<GqlState>('graphql-api', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<GqlState>('graphql-api', id, {
     displayName: '', path: '', serviceUrl: '', sdl: GQL_SAMPLE, description: '', subscriptionRequired: true,
   });
   const [publishing, setPublishing] = useState(false);
@@ -548,8 +594,20 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
     finally { setPublishing(false); }
   }, [id, item.displayName, state, save, setState]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Schema', actions: [
+        { label: 'Reload', onClick: reload },
+        { label: publishing ? 'Publishing…' : 'Publish to APIM', onClick: publish, disabled: publishing || saving },
+      ]},
+      { label: 'Auth', actions: [
+        { label: 'Subscription required', disabled: true, title: 'authoring of subscription requirements via UI deferred — toggle persists from form below' },
+      ]},
+    ]},
+  ], [reload, publish, publishing, saving]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={GQL_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <Subtitle2>API configuration</Subtitle2>
@@ -586,20 +644,53 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
 
 // ----- User Data Function (Cosmos code+config; deploy is config-only in v2.1) -----
 const UDF_SAMPLE = `import fabric.functions as fn\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    return {"user": user_id, "score": weight * 42}`;
-const UDF_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Function', actions: [{ label: 'Reload' }, { label: 'Save' }] },
-    { label: 'Deploy', actions: [{ label: 'Deploy to Function App' }] },
-  ]},
-];
 interface UdfState { runtime: 'python' | 'node' | 'dotnet'; entrypoint: string; source: string; functionAppName: string; connections: string; [k: string]: unknown }
+
+interface FunctionAppDTO {
+  id: string; name: string; location?: string; kind?: string;
+  state?: string; defaultHostName?: string; resourceGroup?: string;
+}
+
+function useFunctionApps() {
+  const [functionApps, setFunctionApps] = useState<FunctionAppDTO[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/azure/function-apps');
+        const j = await r.json();
+        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setHint(j.hint || null); setFunctionApps([]); }
+        else { setFunctionApps(j.functionApps || []); }
+      } catch (e: any) {
+        setError(e?.message || String(e));
+        setFunctionApps([]);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+  return { functionApps, error, hint, loading };
+}
+
 export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<UdfState>('user-data-function', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<UdfState>('user-data-function', id, {
     runtime: 'python', entrypoint: 'compute_score', source: UDF_SAMPLE, functionAppName: '', connections: '',
   });
+  const fnApps = useFunctionApps();
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Function', actions: [
+        { label: 'Reload', onClick: reload },
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+      ]},
+      { label: 'Deploy', actions: [
+        { label: 'Deploy to Function App', disabled: true, title: 'v2.x — requires Function App ARM mutation' },
+      ]},
+    ]},
+  ], [reload, save, saving, dirty]);
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={UDF_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info">
@@ -625,9 +716,37 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
           </div>
           <div>
             <Caption1>Target Function App (deploy)</Caption1>
-            <Input value={state.functionAppName} onChange={(_, d) => setState((p) => ({ ...p, functionAppName: d.value }))} placeholder="not-yet-provisioned" />
+            <select
+              value={state.functionAppName}
+              onChange={(e) => setState((p) => ({ ...p, functionAppName: e.target.value }))}
+              disabled={fnApps.loading || (fnApps.functionApps?.length ?? 0) === 0}
+              title={fnApps.error ? `Function App discovery failed: ${fnApps.error}` : undefined}
+              style={{ width: '100%', padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+            >
+              {fnApps.loading && <option value="">Loading Function Apps…</option>}
+              {!fnApps.loading && (fnApps.functionApps?.length ?? 0) === 0 && (
+                <option value="">{fnApps.error ? 'Discovery failed — see hint below' : 'No Function Apps found'}</option>
+              )}
+              {!fnApps.loading && (fnApps.functionApps?.length ?? 0) > 0 && !state.functionAppName && (
+                <option value="">Select a Function App</option>
+              )}
+              {(fnApps.functionApps || []).map((fa) => (
+                <option key={fa.id} value={fa.name}>
+                  {fa.name}{fa.location ? ` · ${fa.location}` : ''}{fa.state ? ` · ${fa.state}` : ''}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
+        {fnApps.error && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Function App discovery failed</MessageBarTitle>
+              {fnApps.error}
+              {fnApps.hint && <><br /><Caption1>{fnApps.hint}</Caption1></>}
+            </MessageBarBody>
+          </MessageBar>
+        )}
         <Subtitle2 style={{ marginTop: 8 }}>function_app source</Subtitle2>
         <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="python" height={320} minHeight={240} ariaLabel="Function source" />
         <Caption1>Connections (comma-separated workspace items)</Caption1>
@@ -639,12 +758,6 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
 }
 
 // ----- Variable Library (Cosmos, typed key/value with value sets) -----
-const VL_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Variables', actions: [{ label: 'New variable' }, { label: 'Save' }] },
-    { label: 'Value sets', actions: [{ label: 'dev' }, { label: 'test' }, { label: 'prod' }] },
-  ]},
-];
 // v3.27: extended to Fabric's 7 variable types — String/Integer/Number/
 // Boolean/DateTime/Guid/ItemReference/ConnectionReference. Plus the
 // Loom-native `secret-ref` for KV / env-var lookups.
@@ -726,8 +839,23 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
   }));
   const valueKey = tab === 'default' ? 'default' : tab;
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Variables', actions: [
+        { label: 'New variable', onClick: addRow },
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+      ]},
+      { label: 'Value sets', actions: [
+        { label: 'dev', onClick: () => setTab('dev'), appearance: tab === 'dev' ? 'primary' : 'subtle' },
+        { label: 'test', onClick: () => setTab('test'), appearance: tab === 'test' ? 'primary' : 'subtle' },
+        { label: 'prod', onClick: () => setTab('prod'), appearance: tab === 'prod' ? 'primary' : 'subtle' },
+      ]},
+    ]},
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [save, saving, dirty, tab, addRow]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={VL_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <>
         <div className={s.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
@@ -853,8 +981,21 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
     } finally { setMaterializing(false); }
   }, [classes, id, item.label]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Author', actions: [
+        { label: 'Add entity', disabled: true, title: 'use the Source editor below to add classes (e.g. `MyEntity : Parent -- description`)' },
+        { label: 'Add relationship', disabled: true, title: 'parent : child syntax in Source editor; richer relationship authoring deferred' },
+      ]},
+      { label: 'Bind', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: materializing ? 'Materializing…' : 'Materialize', onClick: materializeToGraphModel, disabled: materializing || classes.length === 0 },
+      ]},
+    ]},
+  ], [save, saving, dirty, materializeToGraphModel, materializing, classes.length]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={IQ_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info">
@@ -899,10 +1040,6 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
 }
 
 // ----- Graph Model (Cosmos config + real ADX materialize) -----
-const IQ_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Author', actions: [{ label: 'Add entity' }, { label: 'Add relationship' }] },
-  { label: 'Bind', actions: [{ label: 'Save' }, { label: 'Materialize' }] },
-]}];
 interface GraphDecl { name: string; properties: { name: string; type: string }[] }
 interface GraphState { nodes: GraphDecl[]; edges: GraphDecl[]; database: string; lastMaterializedAt?: string; [k: string]: unknown }
 
@@ -952,8 +1089,21 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
     } catch { /* leave previous */ }
   };
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Author', actions: [
+        { label: 'Add entity', disabled: true, title: 'edit the Node types JSON below to add node types' },
+        { label: 'Add relationship', disabled: true, title: 'edit the Edge types JSON below to add edge types' },
+      ]},
+      { label: 'Bind', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: materializing ? 'Materializing…' : 'Materialize', onClick: materialize, disabled: materializing || saving },
+      ]},
+    ]},
+  ], [save, saving, dirty, materialize, materializing]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={IQ_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <Caption1>Target ADX database</Caption1>
@@ -1000,9 +1150,6 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
 // ----- Plan (Cosmos task list) -----
 interface PlanTask { title: string; owner: string; due: string; status: 'todo' | 'doing' | 'done'; dependsOn?: string }
 interface PlanState { tasks: PlanTask[]; [k: string]: unknown }
-const PLAN_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Tasks', actions: [{ label: 'New task' }, { label: 'Save' }] },
-]}];
 
 export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -1040,8 +1187,18 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const today = new Date().toISOString().slice(0, 10);
   const overdue = state.tasks.filter(t => t.status !== 'done' && t.due && t.due < today).length;
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Tasks', actions: [
+        { label: 'New task', onClick: add },
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+      ]},
+    ]},
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [save, saving, dirty, add]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={PLAN_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info">
@@ -1098,13 +1255,11 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
 // ----- Map (Cosmos GeoJSON + JSON preview) -----
 const GEO_SAMPLE = `{\n  "type": "FeatureCollection",\n  "features": [\n    { "type": "Feature", "properties": { "name": "Seattle" }, "geometry": { "type": "Point", "coordinates": [-122.33, 47.61] } }\n  ]\n}`;
 interface MapState { geojson: string; [k: string]: unknown }
-const MAP_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Layer', actions: [{ label: 'Save' }, { label: 'Validate' }] },
-]}];
 
 export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<MapState>('map', id, { geojson: GEO_SAMPLE });
+  const [validateMsg, setValidateMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   let parseErr: string | null = null;
   let featureCount = 0;
   let bbox: { minLon: number; maxLon: number; minLat: number; maxLat: number } | null = null;
@@ -1143,8 +1298,27 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
     ? `https://atlas.microsoft.com/map/static?api-version=2024-04-01&style=main&zoom=${zoom}&center=${centerLon},${centerLat}&width=640&height=320&subscription-key=${mapsKey}`
     : null;
 
+  const runValidate = useCallback(() => {
+    try {
+      const j = JSON.parse(state.geojson);
+      const fc = Array.isArray(j?.features) ? j.features.length : 0;
+      setValidateMsg({ intent: 'success', text: `Valid GeoJSON — ${fc} feature(s) parsed.` });
+    } catch (e: any) {
+      setValidateMsg({ intent: 'error', text: `Invalid JSON: ${e?.message || String(e)}` });
+    }
+  }, [state.geojson]);
+
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Layer', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: 'Validate', onClick: runValidate },
+      ]},
+    ]},
+  ], [save, saving, dirty, runValidate]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={MAP_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         {!mapsKey && (
@@ -1158,6 +1332,7 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
         <Subtitle2>GeoJSON ({featureCount} feature{featureCount === 1 ? '' : 's'})</Subtitle2>
         <MonacoTextarea value={state.geojson} onChange={(v) => setState((p) => ({ ...p, geojson: v }))} language="json" height={320} minHeight={240} ariaLabel="GeoJSON" />
         {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid JSON: {parseErr}</MessageBarBody></MessageBar>}
+        {validateMsg && <MessageBar intent={validateMsg.intent}><MessageBarBody>{validateMsg.text}</MessageBarBody></MessageBar>}
         {tileUrl && (
           <>
             <Subtitle2>Azure Maps preview (zoom {zoom}, center {centerLat.toFixed(3)}, {centerLon.toFixed(3)})</Subtitle2>
@@ -1173,9 +1348,6 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
 }
 
 // ----- Operations Agent (Cosmos config + Phase 1 Foundry deploy stub) -----
-const OPS_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Agent', actions: [{ label: 'Save' }, { label: 'Deploy to Foundry' }] },
-]}];
 interface AgentState {
   systemPrompt: string; model: string; tools: string;
   eventhouse: string; ontology: string;
@@ -1225,8 +1397,17 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
   const deployedAgentId = state.foundryAgentId;
   const deployedAt = state.lastDeployedAt;
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Agent', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: deploying ? 'Deploying…' : 'Deploy to Foundry', onClick: onDeploy, disabled: deploying || saving },
+      ]},
+    ]},
+  ], [save, saving, dirty, onDeploy, deploying]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={OPS_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="warning">
@@ -1282,10 +1463,6 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
 }
 
 // ----- Data Agent (Cosmos config + Phase 1 Foundry deploy stub) -----
-const DA_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Sources', actions: [{ label: 'Save' }, { label: 'Deploy to Foundry' }] },
-  { label: 'Test', actions: [{ label: 'Chat preview' }] },
-]}];
 interface DataAgentState {
   systemPrompt: string; model: string; sources: string;
   sqlEndpoints: string; kqlDatabases: string; lakehousePaths: string; examples: string;
@@ -1326,8 +1503,20 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const deployedAgentId = state.foundryAgentId;
   const deployedAt = state.lastDeployedAt;
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Sources', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: deploying ? 'Deploying…' : 'Deploy to Foundry', onClick: onDeploy, disabled: deploying || saving },
+      ]},
+      { label: 'Test', actions: [
+        { label: 'Chat preview', disabled: true, title: 'test chat pane deferred — see docs/fiab/data-agent-parity-spec.md' },
+      ]},
+    ]},
+  ], [save, saving, dirty, onDeploy, deploying]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={DA_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="warning">

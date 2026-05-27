@@ -11,7 +11,7 @@
  *   at child items' updatedAt).
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Card, CardHeader, Input, Label,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -21,6 +21,7 @@ import {
 import { Add20Regular, BoxToolbox20Regular, Rocket20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -41,6 +42,28 @@ interface Template {
   components: Array<{ slug: string; label: string; description: string }>;
 }
 
+interface WorkspaceLite { id: string; name: string }
+
+function useWorkspaces() {
+  const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/loom/workspaces');
+        const j = await r.json();
+        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setWorkspaces([]); }
+        else { setWorkspaces(j.workspaces || []); }
+      } catch (e: any) {
+        setError(e?.message || String(e));
+        setWorkspaces([]);
+      } finally { setLoading(false); }
+    })();
+  }, []);
+  return { workspaces, error, loading };
+}
+
 export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -49,12 +72,19 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
   const [displayName, setDisplayName] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const ws = useWorkspaces();
 
-  useEffect(() => {
-    fetch(`/api/items/data-product-template`)
-      .then((r) => r.json())
-      .then((j) => { if (j.ok) setTemplates(j.curated || []); });
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const r = await fetch(`/api/items/data-product-template`);
+      const j = await r.json();
+      if (j.ok) setTemplates(j.curated || []);
+    } finally { setRefreshing(false); }
   }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
 
   const instantiate = useCallback(async () => {
     if (!selected || !workspaceId || !displayName) return;
@@ -68,13 +98,23 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
     } finally { setBusy(false); }
   }, [selected, workspaceId, displayName]);
 
+  const canSpawn = !!selected && !!workspaceId && !!displayName && !busy;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Library', actions: [
+        { label: 'Browse', disabled: true, title: 'cross-catalog template browser deferred (only curated templates surfaced today)' },
+        { label: refreshing ? 'Refreshing…' : 'Refresh', onClick: refreshing ? undefined : refresh, disabled: refreshing },
+      ]},
+      { label: 'Instantiate', actions: [
+        { label: busy ? 'Spawning…' : 'Spawn into workspace', onClick: canSpawn ? instantiate : undefined, disabled: !canSpawn },
+      ]},
+    ]},
+  ], [refreshing, refresh, busy, canSpawn, instantiate]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [
-        { label: 'Library', actions: [{ label: 'Browse' }, { label: 'Refresh' }] },
-        { label: 'Instantiate', actions: [{ label: 'Spawn into workspace' }] },
-      ]}]}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2>Templates ({templates.length})</Subtitle2>
@@ -127,8 +167,32 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
                 + one <code>data-product-instance</code> parent that links them.
               </MessageBarBody></MessageBar>
 
-              <div className={s.field}><Label>Target workspace id</Label>
-                <Input value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} />
+              <div className={s.field}><Label>Target workspace</Label>
+                <select
+                  value={workspaceId}
+                  onChange={(e) => setWorkspaceId(e.target.value)}
+                  disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}
+                  style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+                >
+                  {ws.loading && <option value="">Loading workspaces…</option>}
+                  {!ws.loading && (ws.workspaces?.length ?? 0) === 0 && (
+                    <option value="">{ws.error ? 'Workspace discovery failed' : 'No workspaces — create one first'}</option>
+                  )}
+                  {!ws.loading && (ws.workspaces?.length ?? 0) > 0 && !workspaceId && (
+                    <option value="">Select a workspace</option>
+                  )}
+                  {(ws.workspaces || []).map((w) => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
+                {ws.error && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Workspaces not reachable</MessageBarTitle>
+                      {ws.error}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
               </div>
               <div className={s.field}><Label>Instance display name</Label>
                 <Input value={displayName} onChange={(_, d) => setDisplayName(d.value)} placeholder={`${selected.displayName} (prod)`} />
@@ -177,6 +241,10 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
   const [health, setHealth] = useState<Record<string, ComponentHealth>>({});
 
   const loadInstance = useCallback(async () => {
+    // Pre-save gate: /items/data-product-instance/new fires this before any
+    // Cosmos record exists. Skip the fetch — the editor's empty-state UI
+    // will guide the user to instantiate from a template.
+    if (!id || id === 'new') return;
     try {
       const r = await fetch(`/api/items/data-product-instance/${id}`);
       const j = await r.json();

@@ -18,9 +18,17 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const types = new URL(req.url).searchParams.getAll('type').filter(Boolean);
+  const sp = new URL(req.url).searchParams;
+  // Accept either repeated `?type=A&type=B` (legacy callers) OR a single
+  // comma-separated `?types=A,B`. The comma-separated form is preferred
+  // because Azure Front Door Premium WAF (DRS 2.1 rule 921180, HTTP
+  // Parameter Pollution) blocks the repeated form when there are 4+
+  // identical keys, returning 403 at the edge.
+  const fromRepeated = sp.getAll('type');
+  const fromCsv = (sp.get('types') || '').split(',');
+  const types = [...fromRepeated, ...fromCsv].map(t => t.trim()).filter(Boolean);
   if (types.length === 0) {
-    return NextResponse.json({ ok: false, error: 'at least one ?type= required' }, { status: 400 });
+    return NextResponse.json({ ok: false, error: 'at least one ?type= or ?types= required' }, { status: 400 });
   }
   const items = await itemsContainer();
   // Cross-partition query; types is small, expanded to OR.

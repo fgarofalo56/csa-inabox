@@ -15,7 +15,7 @@
  *    persist the index spec into item state.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Caption1, Badge, Button, Input, Label,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -25,6 +25,7 @@ import { Play20Regular, Add20Regular, Search20Regular } from '@fluentui/react-ic
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -130,10 +131,20 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
   const showVertices = useCallback(() => { setQuery(QUICK_VERTICES); runGremlin(QUICK_VERTICES); }, [runGremlin]);
   const showEdges = useCallback(() => { setQuery(QUICK_EDGES); runGremlin(QUICK_EDGES); }, [runGremlin]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Query', actions: [
+        { label: loading ? 'Running…' : 'Run', onClick: loading ? undefined : run, disabled: loading },
+        { label: 'Edges', onClick: loading ? undefined : showEdges, disabled: loading },
+        { label: 'Vertices', onClick: loading ? undefined : showVertices, disabled: loading },
+      ]},
+    ]},
+  ], [loading, run, showEdges, showVertices]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Query', actions: [{ label: 'Run' }, { label: 'Edges' }, { label: 'Vertices' }] }] }]}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <div className={s.field}><Label>Gremlin endpoint (server-bound)</Label>
@@ -189,10 +200,17 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
     } catch (e: any) { setResult({ ok: false, error: e?.message || String(e) }); }
     finally { setLoading(false); }
   }, [id, query]);
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Query', actions: [
+        { label: loading ? 'Running…' : 'Run', onClick: loading ? undefined : run, disabled: loading },
+      ]},
+    ]},
+  ], [loading, run]);
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Query', actions: [{ label: 'Run' }] }] }]}
+      ribbon={ribbon}
       leftPanel={<div className={s.treePad}>
         <Caption1>Cypher → KQL bridge. Backed by ADX <code>make-graph</code> + <code>graph-match</code>.</Caption1>
       </div>}
@@ -260,10 +278,18 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
     finally { setLoading(false); }
   }, [backend, id, query]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Query', actions: [
+        { label: loading ? 'Running…' : backend === 'persist-only' ? 'Save query' : 'Run', onClick: loading ? undefined : run, disabled: loading },
+      ]},
+    ]},
+  ], [loading, run, backend]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Query', actions: [{ label: 'Run' }] }] }]}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Caption1>ISO GQL standard. Pick a backend below.</Caption1>
@@ -403,10 +429,19 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
     return () => window.removeEventListener('keydown', onKey);
   }, [saving, createIndex]);
 
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Index', actions: [
+        { label: saving ? 'Saving…' : 'Create', onClick: saving ? undefined : createIndex, disabled: saving },
+        { label: 'Test similarity', disabled: true, title: 'similarity probe BFF deferred to v3.x' },
+      ]},
+    ]},
+  ], [saving, createIndex]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Index', actions: [{ label: 'Create' }, { label: 'Test similarity' }] }] }]}
+      ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <div className={s.field}>

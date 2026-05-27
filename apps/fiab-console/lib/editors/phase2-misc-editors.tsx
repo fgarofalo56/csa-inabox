@@ -26,11 +26,12 @@ import {
   Tab, TabList,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { ComputePicker } from '@/lib/components/compute-picker';
 
 const useStyles = makeStyles({
   form: { padding: '20px', display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 820 },
@@ -87,6 +88,42 @@ function usePoolList() {
   return pools;
 }
 
+// ADF Linked Service picker — populates Source/Sink dropdowns on Copy Job
+// from the ADF factory's actual linked services. If the BFF call fails
+// (factory not provisioned / SP missing Contributor on the factory) we
+// surface `hint` so the user can fix it without leaving the editor.
+interface LinkedServiceDTO {
+  name: string;
+  type?: string;
+  properties?: { type?: string; description?: string };
+}
+
+function useLinkedServices() {
+  const [linkedServices, setLinkedServices] = useState<LinkedServiceDTO[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const reload = useCallback(async () => {
+    setLoading(true); setError(null); setHint(null);
+    try {
+      const r = await fetch('/api/adf/linked-services');
+      const j = await r.json();
+      if (!j.ok) {
+        setError(j.error || `HTTP ${r.status}`);
+        setHint(j.hint || 'Provision an ADF Linked Service in the Data Factory portal first, then refresh.');
+        setLinkedServices([]);
+      } else {
+        setLinkedServices(j.linkedServices || []);
+      }
+    } catch (e: any) {
+      setError(e?.message || String(e));
+      setLinkedServices([]);
+    } finally { setLoading(false); }
+  }, []);
+  useEffect(() => { reload(); }, [reload]);
+  return { linkedServices, error, hint, loading, reload };
+}
+
 interface ItemDTO {
   id: string;
   workspaceId: string;
@@ -127,13 +164,6 @@ async function saveItem(itemType: string, id: string, state: Record<string, any>
 // ============================================================================
 // Spark Job Definition
 // ============================================================================
-
-const SPARK_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Run', actions: [{ label: 'Submit' }, { label: 'Refresh runs' }] },
-    { label: 'Edit', actions: [{ label: 'Save' }] },
-  ]},
-];
 
 interface SparkBatchRun {
   id: number;
@@ -245,9 +275,24 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, dirty, busy]);
 
+  const canSubmit = !busy && !!file && !!pool;
+  const canSave = !busy && dirty;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Run', actions: [
+        { label: busy ? 'Submitting…' : 'Submit', onClick: canSubmit ? submit : undefined, disabled: !canSubmit },
+        { label: 'Refresh runs', onClick: busy ? undefined : loadRuns, disabled: busy },
+      ]},
+      { label: 'Edit', actions: [
+        { label: dirty ? 'Save' : 'Saved', onClick: canSave ? save : undefined, disabled: !canSave },
+      ]},
+    ]},
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [busy, canSubmit, canSave, dirty, loadRuns]);
+
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={SPARK_RIBBON} main={
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
         <div className={styles.form}>
           <MessageBar intent="info">
             <MessageBarBody>Create this Spark Job Definition from the workspace catalog,
@@ -259,7 +304,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={SPARK_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={styles.form}>
         <ErrBar error={err || loadError} />
         {loading && <Spinner size="small" label="Loading spec…" labelPosition="after" />}
@@ -363,13 +408,6 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
 // Environment
 // ============================================================================
 
-const ENV_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Edit', actions: [{ label: 'Save' }] },
-    { label: 'Apply', actions: [{ label: 'Apply to pool' }] },
-  ]},
-];
-
 export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const styles = useStyles();
   const pools = usePoolList();
@@ -463,9 +501,23 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
     finally { setBusy(false); }
   };
 
+  const canSaveEnv = !busy && dirty;
+  const canApply = !busy && !!targetPool;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Edit', actions: [
+        { label: dirty ? 'Save' : 'Saved', onClick: canSaveEnv ? save : undefined, disabled: !canSaveEnv },
+      ]},
+      { label: 'Apply', actions: [
+        { label: 'Apply to pool', onClick: canApply ? applyToPool : undefined, disabled: !canApply },
+      ]},
+    ]},
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [busy, dirty, canSaveEnv, canApply]);
+
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={ENV_RIBBON} main={
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
         <div className={styles.form}>
           <MessageBar intent="info">
             <MessageBarBody>Create this Environment from the workspace catalog,
@@ -477,7 +529,7 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ENV_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <>
         <div className={styles.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
@@ -551,13 +603,6 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
 // Copy Job
 // ============================================================================
 
-const COPY_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Edit', actions: [{ label: 'Save' }] },
-    { label: 'Run', actions: [{ label: 'Run now' }, { label: 'Refresh' }] },
-  ]},
-];
-
 interface PipelineRunDTO {
   runId: string;
   status?: string;
@@ -573,6 +618,7 @@ const COPY_SINK_TYPES   = ['AzureSqlSink',   'AzureBlobSink',   'DelimitedTextSi
 export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }) {
   const styles = useStyles();
   const { item: cosmosItem, error: loadError, loading, reload } = useItem('copy-job', id);
+  const ls = useLinkedServices();
 
   const [srcLs, setSrcLs] = useState('');
   const [srcType, setSrcType] = useState('AzureSqlSource');
@@ -665,9 +711,24 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, dirty, busy]);
 
+  const canSaveCopy = !busy && dirty;
+  const canRunCopy = !busy && !!srcLs && !!snkLs;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Edit', actions: [
+        { label: dirty ? 'Save' : 'Saved', onClick: canSaveCopy ? save : undefined, disabled: !canSaveCopy },
+      ]},
+      { label: 'Run', actions: [
+        { label: busy ? 'Running…' : 'Run now', onClick: canRunCopy ? run : undefined, disabled: !canRunCopy },
+        { label: 'Refresh', onClick: busy ? undefined : loadRuns, disabled: busy },
+      ]},
+    ]},
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [busy, dirty, canSaveCopy, canRunCopy, loadRuns]);
+
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={COPY_RIBBON} main={
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
         <div className={styles.form}>
           <MessageBar intent="info">
             <MessageBarBody>Create this Copy Job from the workspace catalog,
@@ -679,16 +740,47 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={COPY_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={styles.form}>
         <ErrBar error={err || loadError} />
         {loading && <Spinner size="small" label="Loading copy-job…" labelPosition="after" />}
 
+        {ls.error && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>ADF Linked Services unavailable</MessageBarTitle>
+              {ls.error}
+              {ls.hint && <><br /><Caption1>{ls.hint}</Caption1></>}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {ls.linkedServices && ls.linkedServices.length === 0 && !ls.error && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>No ADF Linked Services found</MessageBarTitle>
+              The configured ADF factory has no Linked Services yet. Create one in the Data Factory portal
+              (Manage &rarr; Linked services &rarr; New) and click Refresh.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
         <Subtitle2>Source</Subtitle2>
         <div className={styles.row}>
           <div className={styles.field}>
-            <Caption1>Linked service name</Caption1>
-            <Input value={srcLs} onChange={(_, d) => { setSrcLs(d.value); setDirty(true); }} placeholder="MyAzureSqlLinkedService" />
+            <Caption1>Linked service</Caption1>
+            <Dropdown
+              value={srcLs}
+              selectedOptions={srcLs ? [srcLs] : []}
+              disabled={ls.loading || (ls.linkedServices?.length ?? 0) === 0}
+              placeholder={ls.loading ? 'Loading…' : (ls.linkedServices?.length ?? 0) === 0 ? 'No Linked Services available' : 'Select a Linked Service'}
+              onOptionSelect={(_, d) => { setSrcLs(d.optionValue || ''); setDirty(true); }}
+            >
+              {(ls.linkedServices || []).map((l) => (
+                <Option key={l.name} value={l.name}>
+                  {l.properties?.type ? `${l.name} (${l.properties.type})` : l.name}
+                </Option>
+              ))}
+            </Dropdown>
           </div>
           <div className={styles.field}>
             <Caption1>Source type</Caption1>
@@ -707,8 +799,20 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
         <Subtitle2 style={{ marginTop: 8 }}>Sink</Subtitle2>
         <div className={styles.row}>
           <div className={styles.field}>
-            <Caption1>Linked service name</Caption1>
-            <Input value={snkLs} onChange={(_, d) => { setSnkLs(d.value); setDirty(true); }} placeholder="MyLakehouseLinkedService" />
+            <Caption1>Linked service</Caption1>
+            <Dropdown
+              value={snkLs}
+              selectedOptions={snkLs ? [snkLs] : []}
+              disabled={ls.loading || (ls.linkedServices?.length ?? 0) === 0}
+              placeholder={ls.loading ? 'Loading…' : (ls.linkedServices?.length ?? 0) === 0 ? 'No Linked Services available' : 'Select a Linked Service'}
+              onOptionSelect={(_, d) => { setSnkLs(d.optionValue || ''); setDirty(true); }}
+            >
+              {(ls.linkedServices || []).map((l) => (
+                <Option key={l.name} value={l.name}>
+                  {l.properties?.type ? `${l.name} (${l.properties.type})` : l.name}
+                </Option>
+              ))}
+            </Dropdown>
           </div>
           <div className={styles.field}>
             <Caption1>Sink type</Caption1>
@@ -790,13 +894,6 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
 // dbt Job
 // ============================================================================
 
-const DBT_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Edit', actions: [{ label: 'Save' }] },
-    { label: 'Run', actions: [{ label: 'Run dbt' }, { label: 'Refresh' }] },
-  ]},
-];
-
 interface JobRunDTO {
   run_id: number;
   state?: { life_cycle_state?: string; result_state?: string; state_message?: string };
@@ -804,9 +901,32 @@ interface JobRunDTO {
   end_time?: number;
 }
 
+interface DatabricksWorkspaceDTO { hostname: string; url: string }
+
+function useDatabricksWorkspace() {
+  const [workspace, setWorkspace] = useState<DatabricksWorkspaceDTO | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/databricks/workspace');
+        const j = await r.json();
+        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setHint(j.hint || null); }
+        else { setWorkspace(j.workspace || null); }
+      } catch (e: any) {
+        setError(e?.message || String(e));
+      } finally { setLoading(false); }
+    })();
+  }, []);
+  return { workspace, error, hint, loading };
+}
+
 export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string }) {
   const styles = useStyles();
   const { item: cosmosItem, error: loadError, loading, reload } = useItem('dbt-job', id);
+  const dbxWs = useDatabricksWorkspace();
 
   const [repoUrl, setRepoUrl] = useState('');
   const [branch, setBranch] = useState('main');
@@ -902,9 +1022,24 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, dirty, busy]);
 
+  const canSaveDbt = !busy && dirty;
+  const canRunDbt = !busy && !!repoUrl && !!clusterId;
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Edit', actions: [
+        { label: dirty ? 'Save' : 'Saved', onClick: canSaveDbt ? save : undefined, disabled: !canSaveDbt },
+      ]},
+      { label: 'Run', actions: [
+        { label: busy ? 'Running…' : 'Run dbt', onClick: canRunDbt ? run : undefined, disabled: !canRunDbt },
+        { label: 'Refresh', onClick: busy ? undefined : loadRuns, disabled: busy },
+      ]},
+    ]},
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [busy, dirty, canSaveDbt, canRunDbt, loadRuns]);
+
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={DBT_RIBBON} main={
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
         <div className={styles.form}>
           <MessageBar intent="info">
             <MessageBarBody>Create this dbt Job from the workspace catalog,
@@ -916,10 +1051,32 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={DBT_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={styles.form}>
         <ErrBar error={err || loadError} />
         {loading && <Spinner size="small" label="Loading dbt-job…" labelPosition="after" />}
+
+        <Subtitle2>Databricks workspace</Subtitle2>
+        {dbxWs.loading && <Spinner size="tiny" label="Loading workspace…" labelPosition="after" />}
+        {dbxWs.workspace && (
+          <div className={styles.field}>
+            <Caption1>Workspace (configured via <code>LOOM_DATABRICKS_HOSTNAME</code>)</Caption1>
+            <Input value={dbxWs.workspace.hostname} readOnly aria-readonly="true" />
+            <Caption1>
+              All dbt runs execute on a cluster in this workspace.
+              <a href={dbxWs.workspace.url} target="_blank" rel="noreferrer" style={{ marginLeft: 6 }}>Open in Databricks</a>
+            </Caption1>
+          </div>
+        )}
+        {dbxWs.error && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Databricks workspace not configured</MessageBarTitle>
+              {dbxWs.error}
+              {dbxWs.hint && <><br /><Caption1>{dbxWs.hint}</Caption1></>}
+            </MessageBarBody>
+          </MessageBar>
+        )}
 
         <Subtitle2>Project</Subtitle2>
         <div className={styles.row}>
@@ -938,9 +1095,24 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
             <Input value={target} onChange={(_, d) => { setTarget(d.value); setDirty(true); }} placeholder="prod" />
           </div>
           <div className={styles.field}>
-            <Caption1>Databricks cluster ID</Caption1>
-            <Input value={clusterId} onChange={(_, d) => { setClusterId(d.value); setDirty(true); }}
-              placeholder="0303-184849-xyz123 (existing all-purpose cluster)" />
+            {/*
+             * Replaced the free-text "paste cluster ID by hand" Input with the
+             * shared ComputePicker so users can (a) see live cluster state,
+             * (b) Start/Restart from inline, and (c) avoid typos. The picker
+             * emits ids like "databricks:<clusterId>"; we strip the prefix
+             * before persisting so the run BFF (which expects a bare cluster
+             * id) keeps working.
+             */}
+            <ComputePicker
+              label="Databricks cluster"
+              filter={['databricks-cluster']}
+              value={clusterId ? `databricks:${clusterId}` : ''}
+              onChange={(picked) => {
+                const bare = picked.startsWith('databricks:') ? picked.slice('databricks:'.length) : picked;
+                setClusterId(bare);
+                setDirty(true);
+              }}
+            />
           </div>
         </div>
         <div className={styles.field}>
