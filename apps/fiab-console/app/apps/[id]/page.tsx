@@ -149,7 +149,17 @@ export default function AppDetailPage() {
       ) : (
         <div className={styles.items}>
           {app.items.map((it, i) => (
-            <Link key={`${it.type}-${i}`} href={`/items/${it.type}/new`} className={styles.itemCard}>
+            // v2 validator finding: prefetch={false} kills the RSC payload
+            // bursts that the validator caught as "URL auto-rotator" —
+            // Next 14 Link prefetches every visible item card on mount,
+            // which against /items/<type>/new flooded the network panel
+            // and made the page look like it was navigating itself.
+            <Link
+              key={`${it.type}-${i}`}
+              href={`/items/${it.type}/new`}
+              className={styles.itemCard}
+              prefetch={false}
+            >
               <div className={styles.itemType}>{it.type.replace(/-/g, ' ')}</div>
               {it.template && <div className={styles.itemTpl}>template: {it.template}</div>}
             </Link>

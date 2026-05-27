@@ -33,6 +33,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   treePad: { padding: 8 },
@@ -120,6 +121,10 @@ export function LakehouseEditor({ item, id }: Props) {
   const [sqlLoading, setSqlLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Phase 4.5 — positive feedback for upload / mkdir / delete so the user
+  // can tell the operation actually hit ADLS. Mirrors the "Saved at HH:MM:SS"
+  // pattern used by the document editors (notebook, pipeline, dataflow, etc.).
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ---- container load -------------------------------------------------
@@ -262,6 +267,7 @@ export function LakehouseEditor({ item, id }: Props) {
     const targetPath = prefix ? `${prefix.replace(/\/+$/, '')}/${file.name}` : file.name;
     setUploading(true);
     setActionError(null);
+    setActionStatus(null);
     try {
       const fd = new FormData();
       fd.set('container', activeContainer);
@@ -271,6 +277,8 @@ export function LakehouseEditor({ item, id }: Props) {
       const j = await r.json();
       if (!r.ok || j.ok === false) {
         setActionError(j.error || `Upload failed (HTTP ${r.status})`);
+      } else {
+        setActionStatus(`Uploaded ${file.name} at ${new Date().toLocaleTimeString()}`);
       }
     } catch (e: any) {
       setActionError(e?.message || String(e));
@@ -288,11 +296,13 @@ export function LakehouseEditor({ item, id }: Props) {
     const prefix = activePath?.isDirectory ? activePath.name : '';
     const targetPath = prefix ? `${prefix.replace(/\/+$/, '')}/${name}` : name;
     setActionError(null);
+    setActionStatus(null);
     try {
       const qs = new URLSearchParams({ container: activeContainer, path: targetPath });
       const r = await fetch(`/api/lakehouse/path?${qs.toString()}`, { method: 'POST' });
       const j = await r.json();
       if (!r.ok || j.ok === false) setActionError(j.error || `Mkdir failed (HTTP ${r.status})`);
+      else setActionStatus(`Folder ${targetPath} created at ${new Date().toLocaleTimeString()}`);
     } catch (e: any) {
       setActionError(e?.message || String(e));
     } finally {
@@ -308,6 +318,7 @@ export function LakehouseEditor({ item, id }: Props) {
       : false;
     if (!ok) return;
     setActionError(null);
+    setActionStatus(null);
     try {
       const qs = new URLSearchParams({
         container: activeContainer,
@@ -317,6 +328,7 @@ export function LakehouseEditor({ item, id }: Props) {
       const r = await fetch(`/api/lakehouse/path?${qs.toString()}`, { method: 'DELETE' });
       const j = await r.json();
       if (!r.ok || j.ok === false) setActionError(j.error || `Delete failed (HTTP ${r.status})`);
+      else setActionStatus(`Deleted ${entry.name} at ${new Date().toLocaleTimeString()}`);
       if (activePath?.name === entry.name) setActivePath(null);
     } catch (e: any) {
       setActionError(e?.message || String(e));
@@ -456,8 +468,10 @@ export function LakehouseEditor({ item, id }: Props) {
           <div className={s.tabs}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
               <Tab value="files">Files</Tab>
+              <Tab value="tables">Tables</Tab>
               <Tab value="preview">Preview</Tab>
               <Tab value="sql">SQL</Tab>
+              <Tab value="shortcuts">Shortcuts</Tab>
             </TabList>
           </div>
           <div className={s.pad}>
@@ -480,6 +494,11 @@ export function LakehouseEditor({ item, id }: Props) {
                 {actionError && (
                   <MessageBar intent="error">
                     <MessageBarBody>{actionError}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {actionStatus && !actionError && (
+                  <MessageBar intent="success">
+                    <MessageBarBody>{actionStatus}</MessageBarBody>
                   </MessageBar>
                 )}
                 {currentListing === 'loading' && <Spinner size="small" label="Listing paths…" labelPosition="after" />}
@@ -572,6 +591,106 @@ export function LakehouseEditor({ item, id }: Props) {
               </>
             )}
 
+            {tab === 'tables' && (
+              <>
+                <div className={s.toolbar}>
+                  <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
+                  <Caption1>Delta tables under <code>/Tables/</code></Caption1>
+                  <Button appearance="outline" icon={<ArrowSync20Regular />}
+                    disabled={!activeContainer}
+                    onClick={() => activeContainer && loadPaths(activeContainer, 'Tables')}>
+                    Refresh
+                  </Button>
+                </div>
+                {(() => {
+                  if (!activeContainer) return <Caption1>Select a container.</Caption1>;
+                  const tableListing = openPrefixes[cacheKey(activeContainer, 'Tables')];
+                  if (tableListing === 'loading') return <Spinner size="small" label="Listing tables…" labelPosition="after" />;
+                  if (!tableListing) {
+                    return (
+                      <Button onClick={() => loadPaths(activeContainer, 'Tables')}>Load tables</Button>
+                    );
+                  }
+                  if ('error' in tableListing) {
+                    return (
+                      <MessageBar intent="error">
+                        <MessageBarBody>
+                          <MessageBarTitle>Could not list tables</MessageBarTitle>
+                          {tableListing.error}
+                        </MessageBarBody>
+                      </MessageBar>
+                    );
+                  }
+                  const tables = (tableListing as PathEntry[]).filter(e => e.isDirectory);
+                  if (tables.length === 0) {
+                    return (
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          No Delta tables yet. From the Files tab, right-click a Parquet / CSV / JSON
+                          file and choose <strong>Load to Tables (Delta)</strong> to create one.
+                        </MessageBarBody>
+                      </MessageBar>
+                    );
+                  }
+                  return (
+                    <Table aria-label="Tables">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHeaderCell>Table</TableHeaderCell>
+                          <TableHeaderCell>Path</TableHeaderCell>
+                          <TableHeaderCell>Last modified</TableHeaderCell>
+                          <TableHeaderCell></TableHeaderCell>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {tables.map((t) => {
+                          const tableName = leafName(t.name);
+                          return (
+                            <TableRow key={t.name}>
+                              <TableCell><strong>{tableName}</strong></TableCell>
+                              <TableCell><code style={{ fontSize: 11 }}>/{t.name}</code></TableCell>
+                              <TableCell>{t.lastModified ? new Date(t.lastModified).toLocaleString() : '—'}</TableCell>
+                              <TableCell>
+                                <Button size="small" appearance="primary"
+                                  onClick={() => {
+                                    setSqlText(`-- Read Delta table\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
+                                    setTab('sql');
+                                  }}>
+                                  Query
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  );
+                })()}
+              </>
+            )}
+
+            {tab === 'shortcuts' && (
+              <>
+                <div className={s.toolbar}>
+                  <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
+                  <Caption1>OneLake shortcuts — point at external storage without copying data</Caption1>
+                </div>
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Create Shortcut not wired in this deployment</MessageBarTitle>
+                    OneLake shortcuts (ADLS Gen2 / S3 / GCS / Dataverse / external Fabric workspace)
+                    require the Fabric REST shortcuts endpoint and Console UAMI workspace membership:
+                    <ul style={{ marginTop: 6, marginBottom: 6, paddingLeft: 18 }}>
+                      <li>Backend route <code>/api/items/lakehouse/[id]/shortcuts</code> (not yet implemented)</li>
+                      <li>Calls Fabric REST <code>POST /v1/workspaces/{'{ws}'}/items/{'{lakehouse}'}/shortcuts</code></li>
+                      <li>Requires Console UAMI as Member/Admin on the target workspace</li>
+                    </ul>
+                    For now create shortcuts directly in the Fabric portal: <a href="https://app.fabric.microsoft.com/" target="_blank" rel="noreferrer">app.fabric.microsoft.com</a> → Lakehouse → New shortcut.
+                  </MessageBarBody>
+                </MessageBar>
+              </>
+            )}
+
             {tab === 'preview' && (
               <>
                 {!activePath && <Caption1>Select a file in the Files tab.</Caption1>}
@@ -639,12 +758,13 @@ export function LakehouseEditor({ item, id }: Props) {
                     Run
                   </Button>
                 </div>
-                <textarea
-                  className={s.editor}
-                  spellCheck={false}
+                <MonacoTextarea
                   value={sqlText}
-                  onChange={(e) => setSqlText(e.target.value)}
-                  aria-label="OPENROWSET T-SQL editor"
+                  onChange={setSqlText}
+                  language="tsql"
+                  height={240}
+                  minHeight={180}
+                  ariaLabel="OPENROWSET T-SQL editor"
                 />
                 {sqlLoading && <Spinner size="small" label="Executing…" labelPosition="after" />}
                 {!sqlLoading && sqlResult && !sqlResult.ok && (

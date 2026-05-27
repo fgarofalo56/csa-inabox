@@ -39,6 +39,8 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 
 const useStyles = makeStyles({
   monaco: {
@@ -391,13 +393,13 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               </MessageBarBody>
             </MessageBar>
           )}
-          <textarea
-            className={s.monaco}
-            spellCheck={false}
+          <MonacoTextarea
             value={kql}
-            onChange={(e) => setKql(e.target.value)}
-            onKeyDown={(e) => { if (e.shiftKey && e.key === 'Enter') { e.preventDefault(); run(); } }}
-            aria-label="KQL query editor"
+            onChange={setKql}
+            language="kql"
+            height={240}
+            minHeight={180}
+            ariaLabel="KQL query editor"
           />
           <KqlResultsPanel result={result} loading={loading} />
         </div>
@@ -434,6 +436,8 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -450,45 +454,108 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
 
   useEffect(() => { load(); }, [load]);
 
+  // Phase 4.5: refuse to silently clobber unsaved edits. If the user
+  // selects a different saved query while the current draft is dirty,
+  // ask before overwriting. This was the implicit data-loss bug
+  // (run-then-edit-then-select-another clobber).
   const select = useCallback((idx: number) => {
+    if (dirty && idx !== selectedIdx) {
+      const proceed = typeof window !== 'undefined'
+        ? window.confirm('Discard unsaved changes to the current query?')
+        : true;
+      if (!proceed) return;
+    }
     setSelectedIdx(idx); setDraft(queries[idx] || SAMPLE_QS); setDirty(false); setResult(null);
-  }, [queries]);
+    setSaveErr(null); setSaveMsg(null);
+  }, [queries, dirty, selectedIdx]);
 
   const addQuery = useCallback(() => {
-    const next = [...queries, { title: `Query ${queries.length + 1}`, kql: '' }];
-    setQueries(next); setSelectedIdx(next.length - 1); setDraft(next[next.length - 1]); setDirty(true);
-  }, [queries]);
+    // Phase 4.5 — functional setQueries so back-to-back clicks before
+    // re-render cannot drop entries. Carry the dirty draft of the
+    // currently-selected query into the queries[] array before appending
+    // — otherwise the new entry replaces the user's unsaved edit.
+    setQueries((prev) => {
+      const carried = prev.map((q, i) => i === selectedIdx ? draft : q);
+      const next = [...carried, { title: `Query ${carried.length + 1}`, kql: '' }];
+      setSelectedIdx(next.length - 1);
+      setDraft(next[next.length - 1]);
+      return next;
+    });
+    setDirty(true); setSaveMsg(null);
+  }, [selectedIdx, draft]);
 
   const deleteQuery = useCallback((idx: number) => {
-    const next = queries.filter((_, i) => i !== idx);
-    setQueries(next);
-    const newIdx = Math.max(0, idx - 1);
-    setSelectedIdx(newIdx); setDraft(next[newIdx] || SAMPLE_QS); setDirty(true);
-  }, [queries]);
+    // Phase 4.5 — functional setter so multiple deletes in flight don't
+    // operate on a stale array.
+    setQueries((prev) => {
+      const next = prev.filter((_, i) => i !== idx);
+      const newIdx = Math.max(0, Math.min(idx - 1, next.length - 1));
+      setSelectedIdx(newIdx);
+      setDraft(next[newIdx] || SAMPLE_QS);
+      return next;
+    });
+    setDirty(true); setSaveMsg(null);
+  }, []);
 
   const saveAll = useCallback(async () => {
-    setSaving(true);
+    setSaving(true); setSaveErr(null); setSaveMsg('Saving…');
+    // Capture the queries snapshot WITH the current draft folded in at
+    // click time. If a Run is in flight when save fires, runs only read
+    // draft.kql — they never write back to queries[] — so the merge here
+    // is the authoritative source.
+    const updated = queries.map((q, i) => i === selectedIdx ? draft : q);
     try {
-      const updated = queries.map((q, i) => i === selectedIdx ? draft : q);
       const r = await fetch(`/api/items/kql-queryset/${id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ queries: updated }),
       });
       const j = await r.json();
-      if (j.ok) { setQueries(j.queries); setDirty(false); }
+      if (!j.ok) {
+        setSaveErr(j.error || 'save failed');
+        setSaveMsg(`Save failed: ${j.error || 'unknown'}`);
+        return;
+      }
+      // Server-confirmed queries. Adopt them, but preserve the user's
+      // selected index — server may reorder/normalize but in practice the
+      // PUT echoes back the same array we sent.
+      const serverQueries: SavedQuery[] = j.queries || updated;
+      setQueries(serverQueries);
+      // Re-sync draft from the saved row so dirty=false is honest.
+      const savedRow = serverQueries[selectedIdx] || serverQueries[0] || SAMPLE_QS;
+      setDraft(savedRow);
+      setDirty(false);
+      setSaveMsg(`Saved at ${new Date().toLocaleTimeString()}`);
+    } catch (e: any) {
+      setSaveErr(e?.message || String(e));
+      setSaveMsg(`Save failed: ${e?.message || e}`);
     } finally {
       setSaving(false);
     }
   }, [id, queries, selectedIdx, draft]);
 
+  // Ctrl+S / Cmd+S to save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (dirty && !saving && queries.length) saveAll();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dirty, saving, queries.length, saveAll]);
+
   const run = useCallback(async () => {
     setLoading(true); setResult(null);
+    // Pin the kql/database we're sending at click-time so any subsequent
+    // edits the user makes mid-run cannot influence what was executed.
+    const payload = { kql: draft.kql, database: draft.database };
     try {
       const r = await fetch(`/api/items/kql-queryset/${id}/run`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ kql: draft.kql, database: draft.database }),
+        body: JSON.stringify(payload),
       });
       setResult((await r.json()) as KqlResult);
     } catch (e: any) {
@@ -529,21 +596,23 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
             <Input value={draft.title} onChange={(_, d) => { setDraft({ ...draft, title: d.value }); setDirty(true); }} placeholder="Query title" style={{ minWidth: 220 }} />
             <Caption1>db: <strong>{draft.database || qs?.database || qs?.defaultDatabase || 'loomdb-default'}</strong></Caption1>
             {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
-            <Button appearance="outline" icon={<Save20Regular />} disabled={saving || queries.length === 0} onClick={saveAll}>
-              {saving ? 'Saving…' : 'Save'}
+            <Button appearance="outline" icon={<Save20Regular />} disabled={saving || queries.length === 0 || !dirty} onClick={saveAll}>
+              {saving ? 'Saving…' : 'Save (Ctrl+S)'}
             </Button>
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading || !draft.kql.trim()} onClick={run} style={{ marginLeft: 'auto' }}>
               {loading ? 'Running…' : 'Run'}
             </Button>
           </div>
+          {saveMsg && !saveErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
+          {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
           {qs && !qs.ok && <MessageBar intent="error"><MessageBarBody>{qs.error}</MessageBarBody></MessageBar>}
-          <textarea
-            className={s.monaco}
-            spellCheck={false}
+          <MonacoTextarea
             value={draft.kql}
-            onChange={(e) => { setDraft({ ...draft, kql: e.target.value }); setDirty(true); }}
-            onKeyDown={(e) => { if (e.shiftKey && e.key === 'Enter') { e.preventDefault(); run(); } }}
-            aria-label="KQL query"
+            onChange={(v) => { setDraft({ ...draft, kql: v }); setDirty(true); }}
+            language="kql"
+            height={240}
+            minHeight={180}
+            ariaLabel="KQL query"
           />
           <KqlResultsPanel result={result} loading={loading} />
         </div>
@@ -583,9 +652,12 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const [tiles, setTiles] = useState<Tile[]>([]);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonText, setJsonText] = useState('');
+  const [jsonErr, setJsonErr] = useState<string | null>(null);
 
   const load = useCallback(async (runTiles = false) => {
     try {
@@ -600,44 +672,83 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   useEffect(() => { load(true); }, [load]);
 
   const addTile = useCallback(() => {
-    const next: Tile[] = [...tiles, { title: `Tile ${tiles.length + 1}`, kql: 'print value = 1', viz: 'table' }];
-    setTiles(next); setExpandedIdx(next.length - 1); setDirty(true);
-  }, [tiles]);
+    // Phase 4.5 — functional setter so rapid clicks each create a new tile.
+    setTiles((prev) => {
+      const next: Tile[] = [...prev, { title: `Tile ${prev.length + 1}`, kql: 'print value = 1', viz: 'table' }];
+      setExpandedIdx(next.length - 1);
+      return next;
+    });
+    setDirty(true);
+  }, []);
 
   const deleteTile = useCallback((idx: number) => {
-    setTiles(tiles.filter((_, i) => i !== idx)); setDirty(true);
-    if (expandedIdx === idx) setExpandedIdx(null);
-  }, [tiles, expandedIdx]);
+    setTiles((prev) => prev.filter((_, i) => i !== idx));
+    setDirty(true);
+    setExpandedIdx((cur) => (cur === idx ? null : cur));
+  }, []);
 
   const updateTile = useCallback((idx: number, patch: Partial<Tile>) => {
-    setTiles(tiles.map((t, i) => i === idx ? { ...t, ...patch } : t)); setDirty(true);
-  }, [tiles]);
+    // Phase 4.5 — functional setter prevents one keystroke from clobbering
+    // another when the user types fast in the inline editor.
+    setTiles((prev) => prev.map((t, i) => i === idx ? { ...t, ...patch } : t));
+    setDirty(true);
+  }, []);
 
   const save = useCallback(async () => {
-    setSaving(true);
+    setSaving(true); setSaveErr(null); setSaveMsg('Saving…');
+    // Pin tiles snapshot at click time. Strip runtime-only fields.
+    const payload = tiles.map(({ result, error, ...t }) => t);
     try {
       const r = await fetch(`/api/items/kql-dashboard/${id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ tiles: tiles.map(({ result, error, ...t }) => t) }),
+        body: JSON.stringify({ tiles: payload }),
       });
       const j = await r.json();
-      if (j.ok) setDirty(false);
+      if (j.ok) {
+        setDirty(false);
+        setSaveMsg(`Saved at ${new Date().toLocaleTimeString()}`);
+      } else {
+        setSaveErr(j.error || 'save failed');
+        setSaveMsg(`Save failed: ${j.error || 'unknown'}`);
+      }
+    } catch (e: any) {
+      setSaveErr(e?.message || String(e));
+      setSaveMsg(`Save failed: ${e?.message || e}`);
     } finally {
       setSaving(false);
     }
   }, [id, tiles]);
 
+  // Ctrl+S
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (dirty && !saving) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dirty, saving, save]);
+
   const openJson = useCallback(() => {
     setJsonText(JSON.stringify(tiles.map(({ result, error, ...t }) => t), null, 2));
+    setJsonErr(null);
     setJsonOpen(true);
   }, [tiles]);
 
   const applyJson = useCallback(() => {
     try {
       const parsed = JSON.parse(jsonText);
-      if (Array.isArray(parsed)) { setTiles(parsed); setDirty(true); setJsonOpen(false); }
-    } catch { /* keep dialog open */ }
+      if (!Array.isArray(parsed)) {
+        setJsonErr('JSON root must be an array of tiles');
+        return;
+      }
+      setTiles(parsed); setDirty(true); setJsonOpen(false); setJsonErr(null);
+    } catch (e: any) {
+      setJsonErr(e?.message || 'invalid JSON');
+    }
   }, [jsonText]);
 
   return (
@@ -651,10 +762,12 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
           <Button appearance="outline" onClick={openJson}>Edit JSON</Button>
           <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => load(true)}>Re-run all</Button>
           <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty} style={{ marginLeft: 'auto' }}>
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? 'Saving…' : 'Save (Ctrl+S)'}
           </Button>
         </div>
 
+        {saveMsg && !saveErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
+        {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
         {state && !state.ok && <MessageBar intent="error"><MessageBarBody>{state.error}</MessageBarBody></MessageBar>}
 
         <div className={s.cardGrid}>
@@ -706,10 +819,11 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
               <DialogContent>
                 <Textarea
                   value={jsonText}
-                  onChange={(_, d) => setJsonText(d.value)}
+                  onChange={(_, d) => { setJsonText(d.value); setJsonErr(null); }}
                   rows={20}
                   style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }}
                 />
+                {jsonErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody><MessageBarTitle>JSON parse error</MessageBarTitle>{jsonErr}</MessageBarBody></MessageBar>}
               </DialogContent>
               <DialogActions>
                 <Button appearance="secondary" onClick={() => setJsonOpen(false)}>Cancel</Button>
@@ -760,6 +874,8 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [parseErr, setParseErr] = useState<string | null>(null);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -771,6 +887,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         : DEFAULT_ES_CFG;
       setCfgText(JSON.stringify(cfg, null, 2));
       setDirty(false);
+      setParseErr(null); setSaveErr(null); setSaveMsg(null);
     } catch (e: any) {
       setState({ ok: false, error: e?.message || String(e) });
     }
@@ -779,11 +896,16 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   useEffect(() => { load(); }, [load]);
 
   const save = useCallback(async () => {
-    setParseErr(null);
+    setParseErr(null); setSaveErr(null);
     let parsed: StreamCfg;
     try { parsed = JSON.parse(cfgText); }
-    catch (e: any) { setParseErr(e?.message || 'invalid JSON'); return; }
-    setSaving(true);
+    catch (e: any) {
+      const m = e?.message || 'invalid JSON';
+      setParseErr(m);
+      setSaveMsg(`Cannot save: JSON parse error — ${m}`);
+      return;
+    }
+    setSaving(true); setSaveMsg('Saving…');
     try {
       const r = await fetch(`/api/items/eventstream/${id}`, {
         method: 'PUT',
@@ -791,11 +913,32 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         body: JSON.stringify({ config: parsed }),
       });
       const j = await r.json();
-      if (j.ok) setDirty(false);
+      if (j.ok) {
+        setDirty(false);
+        setSaveMsg(`Saved at ${new Date().toLocaleTimeString()}`);
+      } else {
+        setSaveErr(j.error || 'save failed');
+        setSaveMsg(`Save failed: ${j.error || 'unknown'}`);
+      }
+    } catch (e: any) {
+      setSaveErr(e?.message || String(e));
+      setSaveMsg(`Save failed: ${e?.message || e}`);
     } finally {
       setSaving(false);
     }
   }, [id, cfgText]);
+
+  // Ctrl+S
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (dirty && !saving) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [dirty, saving, save]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ES_RIBBON} main={
@@ -812,22 +955,31 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
           {state?.runtimeStatus && <Badge appearance="outline">{state.runtimeStatus}</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
           <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Reload</Button>
-          <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving} style={{ marginLeft: 'auto' }}>
-            {saving ? 'Saving…' : 'Save'}
+          <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty} style={{ marginLeft: 'auto' }}>
+            {saving ? 'Saving…' : 'Save (Ctrl+S)'}
           </Button>
         </div>
 
+        {saveMsg && !saveErr && !parseErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
         {state && !state.ok && <MessageBar intent="error"><MessageBarBody>{state.error}</MessageBarBody></MessageBar>}
-        {parseErr && <MessageBar intent="error"><MessageBarBody>JSON parse error: {parseErr}</MessageBarBody></MessageBar>}
+        {parseErr && (
+          <MessageBar intent="error">
+            <MessageBarBody>
+              <MessageBarTitle>JSON parse error</MessageBarTitle>
+              {parseErr}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {saveErr && !parseErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
 
         <Caption1>Edit the pipeline definition as JSON. Schema: <code>{`{ source, transforms[], sink }`}</code>.</Caption1>
-        <textarea
-          className={s.monaco}
-          style={{ minHeight: 360 }}
-          spellCheck={false}
+        <MonacoTextarea
           value={cfgText}
-          onChange={(e) => { setCfgText(e.target.value); setDirty(true); }}
-          aria-label="Eventstream JSON config"
+          onChange={(v) => { setCfgText(v); setDirty(true); setParseErr(null); setSaveErr(null); }}
+          language="json"
+          height={360}
+          minHeight={300}
+          ariaLabel="Eventstream JSON config"
         />
       </div>
     } />
@@ -955,11 +1107,14 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       const j = await r.json();
       if (!j.ok) { setActivators([]); setListErr(j.error); return; }
       setActivators(j.activators || []);
-      if (!selectedId && (j.activators || []).length) setSelectedId(j.activators[0].id);
+      // Use functional setSelectedId so we don't have to depend on
+      // selectedId in this callback — keeps the workspace-change effect
+      // from re-firing every time the user clicks a row.
+      setSelectedId((prev) => prev || (j.activators?.[0]?.id ?? ''));
     } catch (e: any) {
       setActivators([]); setListErr(e?.message || String(e));
     } finally { setLoading(false); }
-  }, [selectedId]);
+  }, []);
 
   const loadRules = useCallback(async (wsId: string, actId: string) => {
     setRulesErr(null);
@@ -1270,12 +1425,13 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               </MessageBarBody>
             </MessageBar>
           )}
-          <textarea
-            className={s.monaco}
-            spellCheck={false}
+          <MonacoTextarea
             value={sqlText}
-            onChange={(e) => setSqlText(e.target.value)}
-            aria-label="Warehouse T-SQL editor"
+            onChange={setSqlText}
+            language="tsql"
+            height={260}
+            minHeight={200}
+            ariaLabel="Warehouse T-SQL editor"
           />
           {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}
           {result && !result.ok && (
@@ -1364,11 +1520,11 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
       const j = await r.json();
       if (!j.ok) { setDatasets([]); setListErr(j.error); return; }
       setDatasets(j.datasets || []);
-      if ((j.datasets || []).length && !datasetId) setDatasetId(j.datasets[0].id);
+      setDatasetId((prev) => prev || (j.datasets?.[0]?.id ?? ''));
     } catch (e: any) {
       setDatasets([]); setListErr(e?.message || String(e));
     }
-  }, [datasetId]);
+  }, []);
 
   const loadDetail = useCallback(async (wsId: string, dsId: string) => {
     setDetailErr(null); setDetail(null);
@@ -1429,7 +1585,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
               <Badge appearance="filled" color="brand">Semantic model</Badge>
               <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
               <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
-              <Button appearance="primary" icon={<Play20Regular />} disabled={!datasetId || refreshing} onClick={refreshNow} style={{ marginLeft: 'auto' }}>
+              <Button
+                appearance="primary"
+                icon={<Play20Regular />}
+                disabled={!datasetId || refreshing || detail?.dataset?.isRefreshable === false}
+                onClick={refreshNow}
+                title={detail?.dataset?.isRefreshable === false ? 'Dataset is not refreshable (e.g. push dataset or DirectQuery without gateway).' : undefined}
+                style={{ marginLeft: 'auto' }}
+              >
                 {refreshing ? 'Queuing…' : 'Refresh dataset'}
               </Button>
             </div>
@@ -1564,6 +1727,8 @@ function ReportLikeEditor({
   const [reportId, setReportId] = useState('');
   const [report, setReport] = useState<ReportLite | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [embed, setEmbed] = useState<{ token: string; embedUrl: string; reportId: string } | null>(null);
+  const [embedErr, setEmbedErr] = useState<string | null>(null);
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -1572,9 +1737,9 @@ function ReportLikeEditor({
       const j = await r.json();
       if (!j.ok) { setReports([]); setErr(j.error); return; }
       setReports(j.reports || []);
-      if ((j.reports || []).length && !reportId) setReportId(j.reports[0].id);
+      setReportId((prev) => prev || (j.reports?.[0]?.id ?? ''));
     } catch (e: any) { setReports([]); setErr(e?.message || String(e)); }
-  }, [listPath, reportId]);
+  }, [listPath]);
 
   const loadDetail = useCallback(async (wsId: string, rId: string) => {
     try {
@@ -1587,6 +1752,31 @@ function ReportLikeEditor({
 
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && reportId) loadDetail(workspaceId, reportId); }, [workspaceId, reportId, loadDetail]);
+
+  // Mint a per-report embed token whenever the selected report changes.
+  // Paginated reports use a different SDK (`pbi-paginated`) that we don't
+  // support yet, so skip token issuance for them.
+  useEffect(() => {
+    if (!workspaceId || !reportId || kind === 'paginated') { setEmbed(null); return; }
+    let cancelled = false;
+    (async () => {
+      setEmbedErr(null);
+      try {
+        const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/embed-token`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspaceId, accessLevel: 'View' }),
+        });
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok && j.token && j.embedUrl) setEmbed({ token: j.token, embedUrl: j.embedUrl, reportId: j.reportId });
+        else { setEmbedErr(j.error || `HTTP ${r.status}`); setEmbed(null); }
+      } catch (e: any) {
+        if (!cancelled) setEmbedErr(e?.message || String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceId, reportId, kind]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1620,11 +1810,33 @@ function ReportLikeEditor({
                 <Caption1>modified: {report.modifiedDateTime || '—'} by {report.modifiedBy || '—'}</Caption1>
                 {report.webUrl && <Caption1><a href={report.webUrl} target="_blank" rel="noreferrer">Open in Power BI</a></Caption1>}
               </div>
-              <div className={s.card} style={{ minHeight: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 6, color: tokens.colorNeutralForeground3 }}>
-                <Subtitle2>Embed preview</Subtitle2>
-                <Caption1>v2.1: showing metadata only — full embed via Power BI Embed SDK lands in v2.2.</Caption1>
-                <Caption1>embedUrl: <code style={{ fontSize: 11 }}>{report.embedUrl || '—'}</code></Caption1>
-              </div>
+              {kind === 'paginated' ? (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Paginated report embed not yet wired</MessageBarTitle>
+                    Power BI Paginated Reports use the <code>pbi-paginated</code> SDK which is separate from the
+                    standard powerbi-client. Use "Open in Power BI" above; an in-place embed lands in a follow-up PR.
+                  </MessageBarBody>
+                </MessageBar>
+              ) : embedErr ? (
+                <MessageBar intent="error">
+                  <MessageBarBody>
+                    <MessageBarTitle>Could not mint embed token</MessageBarTitle>
+                    {embedErr}. Confirm the Console UAMI is added to this workspace (Member or above) and that the tenant setting
+                    <strong> "Service principals can use Fabric APIs"</strong> is enabled with the UAMI's security group.
+                  </MessageBarBody>
+                </MessageBar>
+              ) : embed ? (
+                <PowerBIEmbedFrame
+                  embedType="report"
+                  id={embed.reportId}
+                  embedUrl={embed.embedUrl}
+                  accessToken={embed.token}
+                  height={620}
+                />
+              ) : (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loading embed token…</Caption1>
+              )}
             </>
           )}
         </div>
@@ -1655,6 +1867,8 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   const [tiles, setTiles] = useState<TileLite[]>([]);
   const [selectedTile, setSelectedTile] = useState<TileLite | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [embed, setEmbed] = useState<{ token: string; embedUrl: string; dashboardId: string } | null>(null);
+  const [embedErr, setEmbedErr] = useState<string | null>(null);
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -1663,9 +1877,9 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
       const j = await r.json();
       if (!j.ok) { setDashboards([]); setErr(j.error); return; }
       setDashboards(j.dashboards || []);
-      if ((j.dashboards || []).length && !dashId) setDashId(j.dashboards[0].id);
+      setDashId((prev) => prev || (j.dashboards?.[0]?.id ?? ''));
     } catch (e: any) { setDashboards([]); setErr(e?.message || String(e)); }
-  }, [dashId]);
+  }, []);
 
   const loadDetail = useCallback(async (wsId: string, dId: string) => {
     setSelectedTile(null);
@@ -1678,6 +1892,28 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
 
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && dashId) loadDetail(workspaceId, dashId); }, [workspaceId, dashId, loadDetail]);
+
+  useEffect(() => {
+    if (!workspaceId || !dashId) { setEmbed(null); return; }
+    let cancelled = false;
+    (async () => {
+      setEmbedErr(null);
+      try {
+        const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashId)}/embed-token`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspaceId }),
+        });
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok && j.token && j.embedUrl) setEmbed({ token: j.token, embedUrl: j.embedUrl, dashboardId: j.dashboardId });
+        else { setEmbedErr(j.error || `HTTP ${r.status}`); setEmbed(null); }
+      } catch (e: any) {
+        if (!cancelled) setEmbedErr(e?.message || String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceId, dashId]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={REPORT_RIBBON}
@@ -1703,6 +1939,24 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          {embedErr ? (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                <MessageBarTitle>Could not mint embed token</MessageBarTitle>
+                {embedErr}. Confirm the Console UAMI is added to this workspace and that "Service principals can use Fabric APIs" is enabled.
+              </MessageBarBody>
+            </MessageBar>
+          ) : embed ? (
+            <PowerBIEmbedFrame
+              embedType="dashboard"
+              id={embed.dashboardId}
+              embedUrl={embed.embedUrl}
+              accessToken={embed.token}
+              height={620}
+            />
+          ) : (
+            dashId && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loading embed token…</Caption1>
+          )}
           <Subtitle2>Tiles ({tiles.length})</Subtitle2>
           <div className={s.cardGrid}>
             {tiles.map((t) => (
@@ -1757,9 +2011,9 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
       const j = await r.json();
       if (!j.ok) { setScorecards([]); setErr(j.error); return; }
       setScorecards(j.scorecards || []);
-      if ((j.scorecards || []).length && !scorecardId) setScorecardId(j.scorecards[0].id);
+      setScorecardId((prev) => prev || (j.scorecards?.[0]?.id ?? ''));
     } catch (e: any) { setScorecards([]); setErr(e?.message || String(e)); }
-  }, [scorecardId]);
+  }, []);
 
   const loadGoals = useCallback(async (wsId: string, scId: string) => {
     try {

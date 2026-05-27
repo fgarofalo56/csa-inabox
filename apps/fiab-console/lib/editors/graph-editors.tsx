@@ -15,16 +15,16 @@
  *    persist the index spec into item state.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Label, Textarea,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Caption1, Badge, Button, Input, Label,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Play20Regular, Add20Regular, Search20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -104,7 +104,10 @@ g.V().limit(25).project('label', 'name', 'id')
 
 export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [endpoint, setEndpoint] = useState<string>(process.env.NEXT_PUBLIC_LOOM_COSMOS_GREMLIN_ENDPOINT || '');
+  // v3.28 Phase 4.5: endpoint is read-only — it reflects the server-side
+  // env binding. Letting users type a fake endpoint into a textbox that
+  // does nothing is vaporware per `no-vaporware.md`.
+  const endpoint = process.env.NEXT_PUBLIC_LOOM_COSMOS_GREMLIN_ENDPOINT || '';
   const [query, setQuery] = useState<string>(SAMPLE_GREMLIN);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -133,10 +136,11 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
       ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Query', actions: [{ label: 'Run' }, { label: 'Edges' }, { label: 'Vertices' }] }] }]}
       leftPanel={
         <div className={s.treePad}>
-          <div className={s.field}><Label>Gremlin endpoint</Label>
-            <Input value={endpoint} onChange={(_, d) => setEndpoint(d.value)} placeholder="wss://<acct>.gremlin.cosmos.azure.com:443/" />
+          <div className={s.field}><Label>Gremlin endpoint (server-bound)</Label>
+            <Input value={endpoint || '— not configured —'} readOnly placeholder="wss://<acct>.gremlin.cosmos.azure.com:443/" />
+            <Caption1>Configured via <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code>. Editing here is not honored by the BFF.</Caption1>
           </div>
-          <Caption1>Use the buttons below to quick-load <code>g.V()</code> / <code>g.E()</code> previews.</Caption1>
+          <Caption1 style={{ marginTop: 8 }}>Use the buttons below to quick-load <code>g.V()</code> / <code>g.E()</code> previews.</Caption1>
           <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
             <Button size="small" onClick={showVertices} disabled={loading}>Vertices</Button>
             <Button size="small" onClick={showEdges} disabled={loading}>Edges</Button>
@@ -153,7 +157,7 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
               Graph visualization (force-directed layout) deferred to v3.x — rows render as JSON for now.
             </MessageBarBody>
           </MessageBar>
-          <textarea className={s.editor} value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="Gremlin query" />
+          <MonacoTextarea value={query} onChange={setQuery} language="javascript" height={200} minHeight={160} ariaLabel="Gremlin query" />
           <div style={{ display: 'flex', gap: 8 }}>
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
             <Button appearance="secondary" disabled={loading} onClick={showVertices}>Quick: Vertices</Button>
@@ -201,7 +205,7 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
               Cypher-to-KQL translation deferred to v3.x — write KQL directly for now.
             </MessageBarBody>
           </MessageBar>
-          <textarea className={s.editor} value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="Cypher / KQL editor" />
+          <MonacoTextarea value={query} onChange={setQuery} language="kql" height={200} minHeight={160} ariaLabel="Cypher / KQL editor" />
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
           <ResultsPreview result={result} />
         </div>
@@ -293,7 +297,7 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
               )}
             </MessageBarBody>
           </MessageBar>
-          <textarea className={s.editor} value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="GQL editor" />
+          <MonacoTextarea value={query} onChange={setQuery} language="sql" height={200} minHeight={160} ariaLabel="GQL editor" />
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>
             {loading ? 'Running…' : backend === 'persist-only' ? 'Save query' : 'Run'}
           </Button>
@@ -327,20 +331,77 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   const [metric, setMetric] = useState<'cosine' | 'euclidean' | 'dotProduct'>('cosine');
   const [testQuery, setTestQuery] = useState<string>('');
   const [result, setResult] = useState<any>(null);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
 
-  const createIndex = async () => {
-    // Backend-specific provisioning is deferred. Persist the spec only.
-    const r = await fetch(`/api/items/vector-store`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        workspaceId: 'default',
-        displayName: indexName,
-        state: { backend, indexName, dim, metric },
-      }),
-    });
-    setResult(await r.json());
-  };
+  // v3.28 Phase 4.5: load existing item state from Cosmos on mount so the
+  // form reflects what's persisted. New items render the defaults above.
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`);
+        if (cancelled || r.status === 404) return;
+        const j = await r.json();
+        if (j?.ok && j.item?.state) {
+          const st = j.item.state;
+          if (st.backend) setBackend(st.backend);
+          if (st.indexName) setIndexName(st.indexName);
+          if (typeof st.dim === 'number') setDim(st.dim);
+          if (st.metric) setMetric(st.metric);
+          setSavedAt(j.item.updatedAt || null);
+        }
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
+
+  const createIndex = useCallback(async () => {
+    setSaving(true); setResult(null);
+    try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
+    try {
+      // For existing items, PATCH state into Cosmos. For id === 'new', POST creates the item.
+      const isNew = !id || id === 'new';
+      const r = isNew
+        ? await fetch(`/api/items/vector-store`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              workspaceId: 'default',
+              displayName: indexName,
+              state: { backend, indexName, dim, metric },
+            }),
+          })
+        : await fetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ state: { backend, indexName, dim, metric } }),
+          });
+      const j = await r.json();
+      setResult(j);
+      if (j?.ok) {
+        setDirty(false);
+        setSavedAt(j.item?.updatedAt || new Date().toISOString());
+        try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: indexName } })); } catch {}
+      }
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    } finally { setSaving(false); }
+  }, [id, backend, indexName, dim, metric]);
+
+  // Ctrl+S to persist.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (!saving) createIndex();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [saving, createIndex]);
 
   return (
     <ItemEditorChrome
@@ -350,17 +411,17 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
         <div className={s.treePad}>
           <div className={s.field}>
             <Label>Backend</Label>
-            <select value={backend} onChange={(e) => setBackend(e.target.value as VectorBackend)} style={{ padding: 6 }}>
+            <select value={backend} onChange={(e) => { setBackend(e.target.value as VectorBackend); setDirty(true); }} style={{ padding: 6 }}>
               {(['cosmos-nosql', 'ai-search', 'cosmos-vcore', 'pgvector'] as VectorBackend[]).map(b => (
                 <option key={b} value={b}>{VECTOR_BACKEND_DESCRIPTIONS[b]}</option>
               ))}
             </select>
           </div>
-          <div className={s.field}><Label>Index name</Label><Input value={indexName} onChange={(_, d) => setIndexName(d.value)} /></div>
-          <div className={s.field}><Label>Dimensions</Label><Input type="number" value={String(dim)} onChange={(_, d) => setDim(Number(d.value || '0'))} /></div>
+          <div className={s.field}><Label>Index name</Label><Input value={indexName} onChange={(_, d) => { setIndexName(d.value); setDirty(true); }} /></div>
+          <div className={s.field}><Label>Dimensions</Label><Input type="number" value={String(dim)} onChange={(_, d) => { setDim(Number(d.value || '0')); setDirty(true); }} /></div>
           <div className={s.field}>
             <Label>Metric</Label>
-            <select value={metric} onChange={(e) => setMetric(e.target.value as any)} style={{ padding: 6 }}>
+            <select value={metric} onChange={(e) => { setMetric(e.target.value as any); setDirty(true); }} style={{ padding: 6 }}>
               <option value="cosine">cosine</option>
               <option value="euclidean">euclidean</option>
               <option value="dotProduct">dotProduct</option>
@@ -382,9 +443,17 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
               </ul>
             </MessageBarBody>
           </MessageBar>
-          <Button appearance="primary" icon={<Add20Regular />} onClick={createIndex}>Persist index spec</Button>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button appearance="primary" icon={<Add20Regular />} onClick={createIndex} disabled={saving}>
+              {saving ? 'Saving…' : dirty ? 'Save index spec' : 'Saved'}
+            </Button>
+            {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+            {savedAt && !saving && !dirty && (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Saved {new Date(savedAt).toLocaleTimeString()}</Caption1>
+            )}
+          </div>
           <div className={s.field}><Label>Test query embedding (paste JSON array)</Label>
-            <textarea className={s.editor} value={testQuery} onChange={(e) => setTestQuery(e.target.value)} spellCheck={false} aria-label="Test query" />
+            <MonacoTextarea value={testQuery} onChange={setTestQuery} language="json" height={140} minHeight={100} ariaLabel="Test query" />
           </div>
           <Button icon={<Search20Regular />} disabled>Similarity test (v3.x)</Button>
           {result && <ResultsPreview result={result} />}

@@ -34,6 +34,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -260,10 +261,21 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
   const [form, setForm] = useState<{ name: string; description: string; instructions: string; modelDeployment: string }>({
     name: '', description: '', instructions: '', modelDeployment: 'gpt-4o',
   });
+  // Phase 4.5 — dirty flag protects in-flight edits from being clobbered by
+  // the agents-list reload that runs after save/refresh/publish.
+  const [dirty, setDirty] = useState(false);
   const [tab, setTab] = useState<'edit' | 'knowledge' | 'topics' | 'actions' | 'channels'>('edit');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
+
+  const setFormField = useCallback(
+    <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
+      setForm((f) => ({ ...f, [key]: value }));
+      setDirty(true);
+    },
+    [],
+  );
 
   const refreshAgents = useCallback(async () => {
     if (!envId) return;
@@ -276,9 +288,16 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
     } catch (e: any) { setError(e?.message || String(e)); }
   }, [envId]);
 
-  useEffect(() => { setAgents(null); setSelectedId(''); refreshAgents(); }, [envId, refreshAgents]);
+  useEffect(() => { setAgents(null); setSelectedId(''); setDirty(false); refreshAgents(); }, [envId, refreshAgents]);
+
+  // When the selectedId changes (user clicked a different agent in the
+  // sidebar), reset dirty so the form sync effect adopts the new agent.
+  useEffect(() => { setDirty(false); }, [selectedId]);
 
   useEffect(() => {
+    // Phase 4.5 — never clobber unsaved edits when the list reloads. The
+    // form only adopts server values when the user has no in-flight edits.
+    if (dirty) return;
     const a = agents?.find((x) => x.id === selectedId);
     if (a) {
       setForm({
@@ -288,6 +307,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
         modelDeployment: a.modelDeployment || 'gpt-4o',
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, agents]);
 
   const save = useCallback(async () => {
@@ -305,12 +325,25 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
       });
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'save failed'); return; }
-      setSuccess(isNew ? 'Agent created' : 'Agent updated');
+      setSuccess(isNew ? `Saved at ${new Date().toLocaleTimeString()}` : `Saved at ${new Date().toLocaleTimeString()}`);
+      setDirty(false);
       await refreshAgents();
       if (isNew && j.agent?.id) setSelectedId(j.agent.id);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [envId, selectedId, form, refreshAgents]);
+
+  // Phase 4.5 — Ctrl+S / Cmd+S shortcut.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (envId && form.name && !busy && dirty) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [envId, form.name, busy, dirty, save]);
 
   const publish = useCallback(async () => {
     if (!envId || !selectedId) return;
@@ -340,6 +373,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
       setSuccess('Deleted');
       setSelectedId('');
       setForm({ name: '', description: '', instructions: '', modelDeployment: 'gpt-4o' });
+      setDirty(false);
       await refreshAgents();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
@@ -361,12 +395,22 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
                 <TreeItem
                   itemType="leaf"
                   value="new"
-                  onClick={() => { setSelectedId(''); setForm({ name: '', description: '', instructions: '', modelDeployment: 'gpt-4o' }); }}
+                  onClick={() => {
+                    // Phase 4.5 — confirm before discarding unsaved edits.
+                    if (dirty && !window.confirm('Discard unsaved changes to the current agent?')) return;
+                    setSelectedId('');
+                    setForm({ name: '', description: '', instructions: '', modelDeployment: 'gpt-4o' });
+                    setDirty(false);
+                  }}
                 >
                   <TreeItemLayout iconBefore={<Add20Regular />}>+ New agent</TreeItemLayout>
                 </TreeItem>
                 {(agents || []).map((a) => (
-                  <TreeItem key={a.id} itemType="leaf" value={a.id} onClick={() => setSelectedId(a.id)}>
+                  <TreeItem key={a.id} itemType="leaf" value={a.id} onClick={() => {
+                    if (a.id === selectedId) return;
+                    if (dirty && !window.confirm('Discard unsaved changes to the current agent?')) return;
+                    setSelectedId(a.id);
+                  }}>
                     <TreeItemLayout iconBefore={<Bot20Regular />}>
                       {a.name} {a.state === 'Published' && <Badge size="small" color="success" appearance="outline">Published</Badge>}
                     </TreeItemLayout>
@@ -382,8 +426,9 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Copilot Studio</Badge>
             <Caption1>Env: <strong>{envId || 'select an environment'}</strong></Caption1>
-            <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !envId || !form.name} onClick={save}>
-              {selectedId ? 'Save' : 'Create'}
+            {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+            <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !envId || !form.name || (!!selectedId && !dirty)} onClick={save}>
+              {selectedId ? (dirty ? 'Save (Ctrl+S)' : 'Saved') : 'Create'}
             </Button>
             <Button appearance="outline" icon={<CloudArrowUp20Regular />} disabled={busy || !selectedId} onClick={publish}>
               Publish
@@ -409,18 +454,18 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
             <div className={s.form}>
               <div className={s.formCol}>
                 <Field label="Name" required>
-                  <Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
+                  <Input value={form.name} onChange={(_, d) => setFormField('name', d.value)} />
                 </Field>
                 <Field label="Description">
-                  <Textarea rows={3} value={form.description} onChange={(_, d) => setForm((f) => ({ ...f, description: d.value }))} />
+                  <Textarea rows={3} value={form.description} onChange={(_, d) => setFormField('description', d.value)} />
                 </Field>
                 <Field label="Model deployment" hint="Azure OpenAI deployment name bound to this agent.">
-                  <Input value={form.modelDeployment} onChange={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.value }))} />
+                  <Input value={form.modelDeployment} onChange={(_, d) => setFormField('modelDeployment', d.value)} />
                 </Field>
               </div>
               <div className={s.formCol}>
                 <Field label="Instructions (system prompt)">
-                  <Textarea rows={12} value={form.instructions} onChange={(_, d) => setForm((f) => ({ ...f, instructions: d.value }))} />
+                  <Textarea rows={12} value={form.instructions} onChange={(_, d) => setFormField('instructions', d.value)} />
                 </Field>
               </div>
             </div>
@@ -595,6 +640,18 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   const [form, setForm] = useState<{ name: string; triggerText: string; flowYaml: string }>({
     name: '', triggerText: '', flowYaml: 'kind: AdaptiveDialog\nbeginDialog:\n  - kind: SendActivity\n    activity: "Hello"',
   });
+  // Phase 4.5 — dirty flag prevents the topics-reload effect from
+  // clobbering in-flight edits after save/refresh.
+  const [dirty, setDirty] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  const setFormField = useCallback(
+    <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
+      setForm((f) => ({ ...f, [key]: value }));
+      setDirty(true);
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
     if (!envId || !agentId) { setTopics(null); return; }
@@ -608,7 +665,11 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   }, [envId, agentId]);
   useEffect(() => { refresh(); }, [refresh]);
 
+  useEffect(() => { setDirty(false); }, [selectedId]);
+
   useEffect(() => {
+    // Phase 4.5 — don't clobber unsaved edits when topics list reloads.
+    if (dirty) return;
     const t = topics?.find((x) => x.id === selectedId);
     if (t) {
       setForm({
@@ -617,11 +678,12 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
         flowYaml: t.flowYaml || '',
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId, topics]);
 
   const save = useCallback(async () => {
     if (!envId || !agentId) return;
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setSaveMsg('Saving…');
     const triggerPhrases = form.triggerText.split('\n').map((s) => s.trim()).filter(Boolean);
     try {
       const isNew = !selectedId;
@@ -634,12 +696,26 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
         body: JSON.stringify({ envId, agentId, name: form.name, triggerPhrases, flowYaml: form.flowYaml }),
       });
       const j = await r.json();
-      if (!j.ok) { setError(j.error || 'save failed'); return; }
+      if (!j.ok) { setError(j.error || 'save failed'); setSaveMsg(null); return; }
+      setDirty(false);
+      setSaveMsg(`Saved at ${new Date().toLocaleTimeString()}`);
       await refresh();
       if (isNew && j.topic?.id) setSelectedId(j.topic.id);
-    } catch (e: any) { setError(e?.message || String(e)); }
+    } catch (e: any) { setError(e?.message || String(e)); setSaveMsg(null); }
     finally { setBusy(false); }
   }, [envId, agentId, selectedId, form, refresh]);
+
+  // Phase 4.5 — Ctrl+S / Cmd+S shortcut.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (envId && agentId && form.name && !busy && dirty) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [envId, agentId, form.name, busy, dirty, save]);
 
   const remove = useCallback(async (tid: string) => {
     if (!envId) return;
@@ -657,26 +733,34 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
       <ErrorBar error={error} hint={TENANT_HINT} />
       <div className={s.toolbar}>
         <Button icon={<Add20Regular />} appearance="outline" onClick={() => {
+          if (dirty && !window.confirm('Discard unsaved changes to the current topic?')) return;
           setSelectedId('');
           setForm({ name: '', triggerText: '', flowYaml: 'kind: AdaptiveDialog\nbeginDialog:\n  - kind: SendActivity\n    activity: "Hello"' });
+          setDirty(false);
         }}>New topic</Button>
-        <Button icon={<Save20Regular />} appearance="primary" disabled={busy || !form.name} onClick={save}>
-          {selectedId ? 'Save topic' : 'Create topic'}
+        <Button icon={<Save20Regular />} appearance="primary" disabled={busy || !form.name || (!!selectedId && !dirty)} onClick={save}>
+          {selectedId ? (dirty ? 'Save topic (Ctrl+S)' : 'Saved') : 'Create topic'}
         </Button>
+        {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
         <Button icon={<ArrowSync20Regular />} appearance="subtle" disabled={busy} onClick={refresh}>Refresh</Button>
+        {saveMsg && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
       </div>
       <div className={s.form}>
         <div className={s.formCol}>
           <Field label="Topic name" required>
-            <Input value={form.name} onChange={(_, d) => setForm((f) => ({ ...f, name: d.value }))} />
+            <Input value={form.name} onChange={(_, d) => setFormField('name', d.value)} />
           </Field>
           <Field label="Trigger phrases (one per line)">
-            <Textarea rows={8} value={form.triggerText} onChange={(_, d) => setForm((f) => ({ ...f, triggerText: d.value }))} />
+            <Textarea rows={8} value={form.triggerText} onChange={(_, d) => setFormField('triggerText', d.value)} />
           </Field>
           <Subtitle2>Existing topics ({topics?.length ?? 0})</Subtitle2>
           {(topics || []).map((t) => (
             <div key={t.id} className={s.card} style={{ cursor: 'pointer', borderColor: t.id === selectedId ? tokens.colorBrandStroke1 : undefined }}
-                 onClick={() => setSelectedId(t.id)}>
+                 onClick={() => {
+                   if (t.id === selectedId) return;
+                   if (dirty && !window.confirm('Discard unsaved changes to the current topic?')) return;
+                   setSelectedId(t.id);
+                 }}>
               <Body1><strong>{t.name}</strong></Body1>
               <div className={s.tagRow}>
                 {(t.triggerPhrases || []).slice(0, 6).map((p, i) => <Badge key={i} appearance="outline" size="small">{p}</Badge>)}
@@ -689,12 +773,13 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
         </div>
         <div className={s.formCol}>
           <Field label="Flow YAML">
-            <textarea
-              className={s.yaml}
-              spellCheck={false}
+            <MonacoTextarea
               value={form.flowYaml}
-              onChange={(e) => setForm((f) => ({ ...f, flowYaml: e.target.value }))}
-              aria-label="Topic flow YAML"
+              onChange={(v) => setFormField('flowYaml', v)}
+              language="plaintext"
+              height={320}
+              minHeight={240}
+              ariaLabel="Topic flow YAML"
             />
           </Field>
         </div>

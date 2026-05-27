@@ -101,6 +101,18 @@ export function NotificationsButton() {
     setUnread(0);
   };
 
+  const markOneRead = async (id: string) => {
+    const target = items.find(i => i.id === id);
+    if (!target || target.read) return;
+    await fetch('/api/notifications', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: [id] }),
+    }).catch(() => {});
+    setItems(prev => prev.map(i => (i.id === id ? { ...i, read: true } : i)));
+    setUnread(u => Math.max(0, u - 1));
+  };
+
   return (
     <Popover open={open} onOpenChange={(_, d) => { setOpen(d.open); if (d.open) load(); }}>
       <PopoverTrigger disableButtonEnhancement>
@@ -119,17 +131,57 @@ export function NotificationsButton() {
           </Button>
         </div>
         <div className={styles.list}>
-          {items.length === 0 && <div className={styles.empty}>You're all caught up.</div>}
-          {items.map(n => (
-            <a key={n.id}
-               className={`${styles.item} ${!n.read ? styles.unread : ''}`}
-               href={n.link || '#'}
-               onClick={() => setOpen(false)}>
-              <span className={styles.itemTitle}>{n.title}</span>
-              {n.body && <span className={styles.itemBody}>{n.body}</span>}
-              <span className={styles.itemMeta}>{new Date(n.createdAt).toLocaleString()}</span>
-            </a>
-          ))}
+          {items.length === 0 && (
+            <div className={styles.empty}>
+              You're all caught up. New mentions, share invites, and job alerts will appear here.
+            </div>
+          )}
+          {items.map(n => {
+            // Don't render a dead `<a href="#">` — page-jumps to top and
+            // looks like a broken link. Notifications without a link are
+            // informational only; clicking just marks read and closes.
+            const common = {
+              className: `${styles.item} ${!n.read ? styles.unread : ''}`,
+              key: n.id,
+            };
+            const body = (
+              <>
+                <span className={styles.itemTitle}>{n.title}</span>
+                {n.body && <span className={styles.itemBody}>{n.body}</span>}
+                <span className={styles.itemMeta}>{new Date(n.createdAt).toLocaleString()}</span>
+              </>
+            );
+            if (n.link) {
+              return (
+                <a
+                  {...common}
+                  href={n.link}
+                  onClick={() => {
+                    markOneRead(n.id);
+                    setOpen(false);
+                  }}
+                >
+                  {body}
+                </a>
+              );
+            }
+            return (
+              <div
+                {...common}
+                role="button"
+                tabIndex={0}
+                onClick={() => markOneRead(n.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    markOneRead(n.id);
+                  }
+                }}
+              >
+                {body}
+              </div>
+            );
+          })}
         </div>
       </PopoverSurface>
     </Popover>

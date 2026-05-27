@@ -26,6 +26,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { PipelineDagView, extractActivities, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
+import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -56,41 +57,28 @@ const SYN_DSQL_RIBBON: RibbonTab[] = [
     { label: 'Manage', actions: [{ label: 'Permissions' }, { label: 'Workload mgmt' }, { label: 'Geo backup' }] },
   ]},
 ];
+// v3.28: replaced the previous stand-in (fake "DW400c · Online · 100 rows · 2.3 s"
+// badges + dead Run button + hard-coded T-SQL in a defaultValue textarea) with
+// an honest stub per `no-vaporware.md`. The slug `synapse-dedicated-sql-pool`
+// is actually routed by `registry.ts` to the real wired editor in
+// `synapse-sql-editors.tsx`, so this duplicate is never loaded — but keeping
+// the export here as an honest placeholder so anyone reaching it via direct
+// import sees the redirect.
 export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   return (
     <ItemEditorChrome item={item} id={id} ribbon={SYN_DSQL_RIBBON}
-      leftPanel={
-        <Tree aria-label="Synapse dedicated SQL pool" defaultOpenItems={['schemas']}>
-          <TreeItem itemType="branch" value="schemas">
-            <TreeItemLayout iconBefore={<Database20Regular />}>Schemas (3)</TreeItemLayout>
-            <Tree>{['dbo.FactSales', 'dbo.DimCustomer', 'edw.StageOrders', 'staging.Raw'].map((t) =>
-              <TreeItem key={t} itemType="leaf"><TreeItemLayout iconBefore={<DocumentTable20Regular />}>{t}</TreeItemLayout></TreeItem>)}
-            </Tree>
-          </TreeItem>
-          <TreeItem itemType="branch" value="dists"><TreeItemLayout>Distributions</TreeItemLayout></TreeItem>
-          <TreeItem itemType="branch" value="extern"><TreeItemLayout>External tables (8)</TreeItemLayout></TreeItem>
-          <TreeItem itemType="branch" value="users"><TreeItemLayout>Users & roles</TreeItemLayout></TreeItem>
-        </Tree>
-      }
       main={
         <div className={s.pad}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <Badge appearance="filled" color="brand">DW400c</Badge>
-            <Badge appearance="outline" color="success">Online</Badge>
-            <Caption1>Region: East US 2 · Geo backup: enabled</Caption1>
-            <Button appearance="primary" icon={<Play20Regular />} style={{ marginLeft: 'auto' }}>Run</Button>
-          </div>
-          <textarea className={s.monaco} spellCheck={false} aria-label="T-SQL editor" defaultValue={`-- Synapse Dedicated SQL pool — MPP T-SQL
-SELECT TOP 100 c.CustomerName, SUM(f.Amount) AS Revenue
-FROM dbo.FactSales f
-JOIN dbo.DimCustomer c ON c.CustomerKey = f.CustomerKey
-WHERE f.OrderDateKey >= 20260101
-GROUP BY c.CustomerName
-ORDER BY Revenue DESC
-OPTION (LABEL = 'loom-csa-dashboard');`} />
-          <Subtitle2>Results</Subtitle2>
-          <Caption1>100 rows · 2.3 s · DWU consumed: 2.1</Caption1>
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
+              The real Synapse Dedicated SQL pool editor is in <code>synapse-sql-editors.tsx</code> and is
+              the one the catalog actually loads. It runs T-SQL through the BFF, lists databases via ARM,
+              and renders real rows. This stub was a pre-wiring sketch and exposed fake badges + a dead Run
+              button, which violates the no-vaporware rule.
+            </MessageBarBody>
+          </MessageBar>
         </div>
       }
     />
@@ -106,23 +94,20 @@ const SYN_SSQL_RIBBON: RibbonTab[] = [
     { label: 'Cost', actions: [{ label: 'Bytes processed' }, { label: 'Cost cap' }] },
   ]},
 ];
+// v3.28: see comment on SynapseDedicatedSqlPoolEditor above. Same rule.
 export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   return (
     <ItemEditorChrome item={item} id={id} ribbon={SYN_SSQL_RIBBON} main={
       <div className={s.pad}>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <Badge appearance="filled" color="brand">Serverless</Badge>
-          <Badge appearance="outline">Pay per TB processed</Badge>
-        </div>
-        <textarea className={s.monaco} spellCheck={false} defaultValue={`-- Synapse Serverless SQL — OPENROWSET over ADLS
-SELECT TOP 1000 *
-FROM OPENROWSET(
-  BULK 'https://contoso.dfs.core.windows.net/raw/orders/year=2026/month=05/*.parquet',
-  FORMAT = 'PARQUET'
-) AS o
-WHERE o.amount > 100;`} aria-label="Serverless SQL editor" />
-        <Caption1>Estimated cost: ~$0.012 (2.4 GB scanned)</Caption1>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
+            The real Synapse Serverless SQL pool editor is in <code>synapse-sql-editors.tsx</code> and runs
+            OPENROWSET via the BFF. The previous body showed a hard-coded query in a defaultValue textarea
+            with a fake "Estimated cost: ~$0.012" caption — both violate no-vaporware.
+          </MessageBarBody>
+        </MessageBar>
       </div>
     } />
   );
@@ -438,6 +423,7 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
   const save = useCallback(async () => {
     if (!selected) return;
     setBusy(true); setError(null);
+    try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
     try {
       const parsed = JSON.parse(spec);
       const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(selected)}`, {
@@ -447,6 +433,7 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'save failed');
       setOrigSpec(spec);
+      try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: selected } })); } catch {}
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [selected, spec]);
@@ -471,6 +458,18 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
   const dirty = spec !== origSpec;
   const activities = extractActivities(spec);
   const activityCount = activities.length;
+
+  // v3.28 Phase 4.5: Ctrl+S triggers Save when dirty. Mirrors Synapse Studio + ADF.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (selected && dirty && !busy) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, dirty, busy, save]);
 
   // Phase-2 palette: append a freshly-templated activity to
   // properties.activities[] and re-serialize the spec JSON.
@@ -532,13 +531,13 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
             />
           )}
           {tab === 'json' && (
-            <textarea
-              className={s.monaco}
-              spellCheck={false}
+            <MonacoTextarea
               value={spec}
-              onChange={(e) => setSpec(e.target.value)}
-              aria-label="Pipeline spec editor"
-              style={{ minHeight: 360 }}
+              onChange={setSpec}
+              language="json"
+              height={400}
+              minHeight={320}
+              ariaLabel="Pipeline spec editor"
             />
           )}
           {tab === 'runs' && (
@@ -586,24 +585,24 @@ const DBX_NB_RIBBON: RibbonTab[] = [
     { label: 'Workspace', actions: [{ label: 'Schedule' }, { label: 'Permissions' }, { label: 'Revision history' }] },
   ]},
 ];
+// v3.28: legacy stub. Real Databricks Notebook editor is in
+// `databricks-editors.tsx` (wired to /api/items/databricks-notebook/* via
+// the Databricks Workspace + Jobs REST API). The previous body faked "Attached:
+// ml-jobs-cluster (i3.xlarge, 4 workers)" badges + dead Run button + textareas
+// with hard-coded code — no-vaporware violation.
 export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   return (
     <ItemEditorChrome item={item} id={id} ribbon={DBX_NB_RIBBON} main={
       <div className={s.pad}>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <Badge appearance="filled" color="brand">PySpark</Badge>
-          <Badge appearance="outline" color="success">Attached: ml-jobs-cluster (i3.xlarge, 4 workers)</Badge>
-          <Button appearance="primary" icon={<Play20Regular />}>Run all</Button>
-        </div>
-        <textarea className={s.monaco} spellCheck={false} defaultValue={`# Databricks notebook — Cmd 1
-%sql
-SHOW TABLES IN prod_catalog.silver;`} />
-        <textarea className={s.monaco} spellCheck={false} defaultValue={`# Cmd 2
-from pyspark.sql import functions as F
-df = spark.table("prod_catalog.silver.orders")
-display(df.groupBy("region").agg(F.sum("amount").alias("revenue")).orderBy(F.desc("revenue")))`} />
-        <Caption1>Notebook stored at /Workspace/CSA/loom-projects/{id}. Version: 14 · Last edit: 8 min ago</Caption1>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
+            The catalog routes the <code>databricks-notebook</code> slug to the real implementation in
+            <code> databricks-editors.tsx</code>. That editor lists notebooks via the Databricks Workspace API,
+            opens cells in Monaco, and runs jobs through the Jobs REST API.
+          </MessageBarBody>
+        </MessageBar>
       </div>
     } />
   );
@@ -618,28 +617,22 @@ const DBX_JOB_RIBBON: RibbonTab[] = [
     { label: 'Run', actions: [{ label: 'Run now' }, { label: 'Schedule' }, { label: 'Retries' }] },
   ]},
 ];
+// v3.28: legacy stub — see DatabricksNotebookEditor comment. The previous body
+// rendered five fake job rows (ingest_raw / silver_enrich / etc.) and a fake
+// schedule/status line. The wired Databricks Job editor in
+// `databricks-editors.tsx` lists real jobs and run history.
 export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   return (
     <ItemEditorChrome item={item} id={id} ribbon={DBX_JOB_RIBBON} main={
       <div className={s.pad}>
-        <Subtitle2>Tasks (5)</Subtitle2>
-        <Table aria-label="Job tasks">
-          <TableHeader><TableRow>
-            <TableHeaderCell>Task</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
-            <TableHeaderCell>Cluster</TableHeaderCell><TableHeaderCell>Depends on</TableHeaderCell>
-          </TableRow></TableHeader>
-          <TableBody>
-            {[
-              ['ingest_raw',      'Notebook',      'job-cluster-small',  '—'],
-              ['standardize',     'Notebook',      'job-cluster-small',  'ingest_raw'],
-              ['silver_enrich',   'Python wheel',  'job-cluster-medium', 'standardize'],
-              ['gold_aggregate',  'dbt',           'sql-warehouse',      'silver_enrich'],
-              ['publish_metrics', 'JAR',           'job-cluster-small',  'gold_aggregate'],
-            ].map((r) => <TableRow key={r[0]}>{r.map((c, i) => <TableCell key={i}>{c}</TableCell>)}</TableRow>)}
-          </TableBody>
-        </Table>
-        <Caption1>Schedule: 0 2 * * * UTC · Last run: 6 h ago · Status: Succeeded</Caption1>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
+            The <code>databricks-job</code> slug is routed by the catalog to the real editor in
+            <code> databricks-editors.tsx</code> which queries the Databricks Jobs REST API.
+          </MessageBarBody>
+        </MessageBar>
       </div>
     } />
   );
@@ -654,27 +647,23 @@ const DBX_CLUSTER_RIBBON: RibbonTab[] = [
     { label: 'Configure', actions: [{ label: 'Init scripts' }, { label: 'Libraries' }, { label: 'Spark config' }] },
   ]},
 ];
+// v3.28: legacy stub — see DatabricksNotebookEditor comment. The previous body
+// pretended a cluster was Running on "14.3 LTS (Photon)" with hard-coded
+// defaultValue Inputs (Standard_DS3_v2, 2-8 autoscale, etc.). No backend was
+// wired. The wired editor is in `databricks-editors.tsx`.
 export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   return (
     <ItemEditorChrome item={item} id={id} ribbon={DBX_CLUSTER_RIBBON} main={
-      <div className={s.form}>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <Badge appearance="filled" color="success">Running</Badge>
-          <Badge appearance="outline">14.3 LTS (Photon)</Badge>
-          <Badge appearance="outline">Unity Catalog enabled</Badge>
-        </div>
-        <Subtitle2>Compute</Subtitle2>
-        <div className={s.row}>
-          <div className={s.field}><Caption1>Node type</Caption1><Dropdown defaultValue="Standard_DS3_v2" defaultSelectedOptions={['Standard_DS3_v2']}><Option>Standard_DS3_v2</Option><Option>Standard_E8s_v3</Option></Dropdown></div>
-          <div className={s.field}><Caption1>Workers</Caption1><Input defaultValue="2 — 8 (autoscale)" /></div>
-        </div>
-        <div className={s.row}>
-          <div className={s.field}><Caption1>Auto-terminate</Caption1><Input defaultValue="30 minutes" /></div>
-          <div className={s.field}><Caption1>Spark version</Caption1><Input defaultValue="14.3.x-scala2.12" /></div>
-        </div>
-        <Subtitle2 style={{ marginTop: 8 }}>Spark config</Subtitle2>
-        <Textarea rows={4} defaultValue={`spark.databricks.delta.preview.enabled true\nspark.sql.shuffle.partitions 200\nspark.databricks.io.cache.enabled true`} />
+      <div className={s.pad}>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
+            The <code>databricks-cluster</code> slug routes to the real editor in
+            <code> databricks-editors.tsx</code> which queries the Databricks Clusters REST API and supports
+            Start / Restart / Terminate against real cluster IDs.
+          </MessageBarBody>
+        </MessageBar>
       </div>
     } />
   );
@@ -689,23 +678,21 @@ const DBX_SQLW_RIBBON: RibbonTab[] = [
     { label: 'Warehouse', actions: [{ label: 'Start' }, { label: 'Stop' }, { label: 'Scale' }] },
   ]},
 ];
+// v3.28: legacy stub — see DatabricksNotebookEditor comment. Previous body had
+// hard-coded "Serverless · Medium", fake Running badge, and a defaultValue
+// textarea — all dead. Real editor in `databricks-editors.tsx`.
 export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   return (
     <ItemEditorChrome item={item} id={id} ribbon={DBX_SQLW_RIBBON} main={
       <div className={s.pad}>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <Badge appearance="filled" color="brand">Serverless · Medium</Badge>
-          <Badge appearance="outline" color="success">Running</Badge>
-          <Badge appearance="outline">Photon · Predictive I/O</Badge>
-        </div>
-        <textarea className={s.monaco} spellCheck={false} defaultValue={`-- Databricks SQL Warehouse (Unity Catalog)
-SELECT region, SUM(amount) AS revenue
-FROM prod_catalog.gold.fact_sales
-WHERE order_date >= current_date() - INTERVAL 30 DAYS
-GROUP BY region
-ORDER BY revenue DESC;`} aria-label="Databricks SQL editor" />
-        <Caption1>Query history: 1,204 queries last 24 h · avg 1.4 s</Caption1>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
+            The <code>databricks-sql-warehouse</code> slug routes to the real editor in
+            <code> databricks-editors.tsx</code> which submits real SQL through the Databricks SQL Statements API.
+          </MessageBarBody>
+        </MessageBar>
       </div>
     } />
   );
@@ -786,6 +773,7 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
   const save = useCallback(async () => {
     if (!selected) return;
     setBusy(true); setError(null);
+    try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
     try {
       const parsed = JSON.parse(spec);
       const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(selected)}`, {
@@ -795,6 +783,7 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'save failed');
       setOrigSpec(spec);
+      try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: selected } })); } catch {}
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [selected, spec]);
@@ -836,6 +825,18 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
   const activityCount = (() => {
     try { return (JSON.parse(spec)?.properties?.activities || []).length; } catch { return 0; }
   })();
+
+  // v3.28 Phase 4.5: Ctrl+S to save when dirty. Matches ADF Studio.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (selected && dirty && !busy) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, dirty, busy, save]);
 
   // Phase-2 palette: append a freshly-templated activity to
   // properties.activities[] and re-serialize the spec JSON.
@@ -898,13 +899,13 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
             />
           )}
           {tab === 'json' && (
-            <textarea
-              className={s.monaco}
-              spellCheck={false}
+            <MonacoTextarea
               value={spec}
-              onChange={(e) => setSpec(e.target.value)}
-              aria-label="ADF pipeline spec editor"
-              style={{ minHeight: 360 }}
+              onChange={setSpec}
+              language="json"
+              height={400}
+              minHeight={320}
+              ariaLabel="ADF pipeline spec editor"
             />
           )}
           {tab === 'runs' && (
@@ -1053,16 +1054,30 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
           typeProperties,
         },
       };
+      try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
       const r = await fetch(`/api/items/adf-dataset/${encodeURIComponent(selected)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'save failed');
+      try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: selected } })); } catch {}
       await loadDataset(selected);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [selected, linkedService, type, path, ds, loadDataset]);
+
+  // v3.28 Phase 4.5: Ctrl+S triggers Save. Mirrors ADF Studio behavior.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (selected && !busy) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, busy, save]);
 
   const createNew = useCallback(async () => {
     const name = window.prompt('New dataset name');
@@ -1280,16 +1295,30 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
           typeProperties,
         },
       };
+      try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
       const r = await fetch(`/api/items/adf-trigger/${encodeURIComponent(selected)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'save failed');
+      try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: selected } })); } catch {}
       await loadTrigger(selected);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [selected, targetPipeline, type, frequency, interval, timeZone, loadTrigger]);
+
+  // v3.28 Phase 4.5: Ctrl+S triggers Save.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (selected && !busy && targetPipeline) save();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, busy, targetPipeline, save]);
 
   const setState = useCallback(async (action: 'start' | 'stop') => {
     if (!selected) return;

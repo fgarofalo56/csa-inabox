@@ -94,9 +94,25 @@ export function Ribbon({ tabs, defaultTabId }: Props) {
             <div className={styles.group}>
               <div className={styles.groupRow}>
                 {g.actions.map((a, ai) => {
-                  const { label, ...rest } = a;
+                  const { label, onClick, disabled, ...rest } = a;
+                  // v2 validator finding: editors declared 74+ ribbon
+                  // actions with only { label } and no onClick — they
+                  // rendered as enabled buttons but did nothing
+                  // ("BROKEN" in click-every-button Phase 4 reports).
+                  // Per no-vaporware.md any action without a wired
+                  // handler should disable + tooltip "not wired" so the
+                  // surface is honest about what's available today.
+                  const dead = !onClick && !disabled;
                   return (
-                    <Button key={ai} appearance="subtle" size="small" {...rest}>
+                    <Button
+                      key={ai}
+                      appearance="subtle"
+                      size="small"
+                      onClick={onClick}
+                      disabled={dead || disabled}
+                      title={dead ? `${label} — not wired in this editor` : undefined}
+                      {...rest}
+                    >
                       {label}
                     </Button>
                   );
