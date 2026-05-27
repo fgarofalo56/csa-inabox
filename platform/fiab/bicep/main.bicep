@@ -117,8 +117,8 @@ param apimEnabled bool = false
 @description('Deploy AI Search. Default off — capacity in eastus2 is intermittent.')
 param aiSearchEnabled bool = false
 
-@description('Deploy ADX database in DLZ. Requires admin-plane ADX cluster to already exist (provisioned out-of-band today). Default off.')
-param adxEnabled bool = false
+@description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
+param adxEnabled bool = true
 
 // ---------- User access patterns ----------
 
