@@ -1,14 +1,16 @@
 import { AdminShell } from '@/lib/components/admin-shell';
-import { EmptyState } from '@/lib/components/empty-state';
+import { AdminGate } from '@/lib/components/admin-gate';
 
 export default function AdminWorkspacesPage() {
   return (
     <AdminShell sectionTitle="Workspaces (tenant-wide)">
-      <EmptyState
-        icon="◒"
-        title="Tenant workspace inventory"
-        body="Every workspace, regardless of who owns it. Includes orphaned workspaces, deleted-but-retained workspaces, and capacity assignments. Admin-only listing."
-        primaryAction={{ label: 'My workspaces', href: '/workspaces' }}
+      <AdminGate
+        surface="Workspaces (tenant-wide)"
+        backendRoute="/api/admin/workspaces"
+        cosmosContainer="loom-workspaces"
+        extra="Tenant-wide workspace inventory regardless of ownership: orphaned workspaces, deleted-but-retained workspaces, capacity assignments. Backed by the existing /api/fabric/workspaces enumeration + admin-only DLZ resource inventory."
+        deepLink="https://app.fabric.microsoft.com/admin-portal/workspaces"
+        deepLinkLabel="Fabric Admin · Workspaces"
       />
     </AdminShell>
   );

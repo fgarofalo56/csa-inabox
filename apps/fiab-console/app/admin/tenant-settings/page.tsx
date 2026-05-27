@@ -1,13 +1,17 @@
 import { AdminShell } from '@/lib/components/admin-shell';
-import { EmptyState } from '@/lib/components/empty-state';
+import { AdminGate } from '@/lib/components/admin-gate';
 
 export default function TenantSettingsPage() {
   return (
     <AdminShell sectionTitle="Tenant settings">
-      <EmptyState
-        icon="⚙"
-        title="Loom tenant switches"
-        body="Per-area toggles that control what Loom surfaces across the tenant: OneLake, Real-Time Intelligence, AI & Copilot, Mirroring, Synapse passthrough, Databricks passthrough, ADF passthrough, U-SQL legacy enablement, Git integration, Domain management, Information protection, Export & sharing, Help & support, Billing connections (Azure Cost Management hookup for the Capacity page), Purview account binding (for the Governance portal embed)."
+      <AdminGate
+        surface="Tenant settings"
+        backendRoute="/api/admin/tenant-settings"
+        cosmosContainer="loom-tenant-settings"
+        bicepModule="platform/fiab/bicep/modules/admin/tenant-settings.bicep"
+        extra="15 Loom-specific category groups: OneLake, RTI, AI & Copilot, Mirroring, Synapse, Databricks, ADF, Git, Domains, Info protection, Export & sharing, Help & support, Billing, Purview, U-SQL legacy. Fabric tenant settings parity (160 toggles) is a separate follow-up."
+        deepLink="https://app.fabric.microsoft.com/admin-portal/tenantSettings"
+        deepLinkLabel="Fabric Admin · Tenant settings"
       />
     </AdminShell>
   );

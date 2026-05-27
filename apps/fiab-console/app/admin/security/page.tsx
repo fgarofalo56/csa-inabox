@@ -1,13 +1,17 @@
 import { AdminShell } from '@/lib/components/admin-shell';
-import { EmptyState } from '@/lib/components/empty-state';
+import { AdminGate } from '@/lib/components/admin-gate';
 
 export default function SecurityPage() {
   return (
     <AdminShell sectionTitle="Security & governance">
-      <EmptyState
-        icon="◊"
-        title="Govern your data estate"
-        body="Sensitivity label coverage, DLP scan results, workspace identity audit, and a deep link to the Microsoft Purview hub for unified data governance across Fabric, M365, and Azure."
+      <AdminGate
+        surface="Security & governance"
+        backendRoute="/api/admin/security"
+        envVar="LOOM_PURVIEW_ACCOUNT"
+        bicepModule="platform/fiab/bicep/modules/governance/purview.bicep"
+        extra="Sensitivity label coverage, DLP scan results, workspace identity audit, plus the Purview hub deep-link for unified governance across Fabric / M365 / Azure."
+        deepLink="https://web.purview.azure.com/"
+        deepLinkLabel="Microsoft Purview portal"
       />
     </AdminShell>
   );

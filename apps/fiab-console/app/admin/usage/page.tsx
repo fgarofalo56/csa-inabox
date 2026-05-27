@@ -1,13 +1,16 @@
 import { AdminShell } from '@/lib/components/admin-shell';
-import { EmptyState } from '@/lib/components/empty-state';
+import { AdminGate } from '@/lib/components/admin-gate';
 
 export default function UsagePage() {
   return (
     <AdminShell sectionTitle="Usage metrics">
-      <EmptyState
-        icon="◑"
-        title="Feature usage & adoption (preview)"
-        body="30-day rolling activity, inventory snapshot, per-item details. Drill into capacity, workspace, user, item type, and operation. Identify inactive items for cleanup."
+      <AdminGate
+        surface="Usage metrics"
+        backendRoute="/api/admin/usage"
+        envVar="LOOM_AI_SEARCH_SERVICE"
+        extra="30-day rolling activity, inventory snapshot, drill into capacity / workspace / user / item type / operation. Inactive-item finder for cleanup. Backed by the loom-items AI Search index + loom-audit-logs aggregator."
+        deepLink="https://app.fabric.microsoft.com/admin-portal/usage"
+        deepLinkLabel="Fabric Admin · Usage metrics"
       />
     </AdminShell>
   );
