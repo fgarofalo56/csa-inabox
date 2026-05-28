@@ -10,6 +10,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.14.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.14.0...csa-inabox-v0.14.1) (2026-05-28)
+
+
+### Bug Fixes
+
+* **docs:** shrink search index ~20x and fix broken site search (Closes [#399](https://github.com/fgarofalo56/csa-inabox/issues/399)) ([#415](https://github.com/fgarofalo56/csa-inabox/issues/415)) ([f775380](https://github.com/fgarofalo56/csa-inabox/commit/f775380e444540cb6f156e9f9bbbfd7e44fc4710))
+
+
+### Documentation
+
+* **csa-loom:** reorganize nav into 13 coherent categories (Closes [#408](https://github.com/fgarofalo56/csa-inabox/issues/408)) ([#416](https://github.com/fgarofalo56/csa-inabox/issues/416)) ([fa4b85d](https://github.com/fgarofalo56/csa-inabox/commit/fa4b85dd627af82932bb76781b92c37dc15328b9))
+
 ## [0.14.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.13.0...csa-inabox-v0.14.0) (2026-05-28)
 
 
