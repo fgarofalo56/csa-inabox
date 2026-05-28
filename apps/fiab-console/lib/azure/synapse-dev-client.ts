@@ -313,6 +313,64 @@ export interface PipelineRunQuery {
   continuationToken?: string;
 }
 
+// ============================================================
+// Synapse triggers (dev REST — same surface as ADF, distinct host)
+// ============================================================
+
+export interface SynapseTrigger {
+  id?: string;
+  name: string;
+  type?: string;
+  etag?: string;
+  properties: {
+    type: 'ScheduleTrigger' | 'TumblingWindowTrigger' | 'BlobEventsTrigger' | 'CustomEventsTrigger' | string;
+    description?: string;
+    runtimeState?: 'Started' | 'Stopped' | 'Disabled';
+    pipelines?: Array<{
+      pipelineReference: { referenceName: string; type: 'PipelineReference' };
+      parameters?: Record<string, unknown>;
+    }>;
+    annotations?: unknown[];
+    typeProperties?: Record<string, unknown>;
+  };
+}
+
+export async function listTriggers(): Promise<SynapseTrigger[]> {
+  const r = await callDev(`/triggers?api-version=${DEV_API}`);
+  const body = await jsonOrThrow<{ value: SynapseTrigger[] }>(r, 'listTriggers');
+  return body.value || [];
+}
+
+export async function upsertTrigger(name: string, spec: SynapseTrigger): Promise<SynapseTrigger> {
+  const body = { name: spec.name || name, properties: spec.properties };
+  const r = await callDev(`/triggers/${encodeURIComponent(name)}?api-version=${DEV_API}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<SynapseTrigger>(r, `upsertTrigger(${name})`);
+}
+
+export async function deleteTrigger(name: string): Promise<void> {
+  const r = await callDev(`/triggers/${encodeURIComponent(name)}?api-version=${DEV_API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 200 && r.status !== 204) {
+    throw new Error(`deleteTrigger failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function startTrigger(name: string): Promise<void> {
+  const r = await callDev(`/triggers/${encodeURIComponent(name)}/start?api-version=${DEV_API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`startTrigger failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function stopTrigger(name: string): Promise<void> {
+  const r = await callDev(`/triggers/${encodeURIComponent(name)}/stop?api-version=${DEV_API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`stopTrigger failed ${r.status}: ${await r.text()}`);
+  }
+}
+
 export async function queryPipelineRuns(
   query?: Partial<PipelineRunQuery>,
 ): Promise<{ value: PipelineRun[]; continuationToken?: string }> {
@@ -493,5 +551,43 @@ export async function pauseDedicatedPool(name: string): Promise<void> {
   if (!r.ok && r.status !== 202) {
     throw new Error(`pauseDedicatedPool(${name}) failed ${r.status}: ${await r.text()}`);
   }
+}
+
+/**
+ * Update the SKU (DWU service objective) for a Synapse Dedicated SQL pool.
+ * Valid SKU names are DW100c, DW200c, DW300c, DW400c, DW500c, DW1000c,
+ * DW1500c, DW2000c, DW2500c, DW3000c, DW5000c, DW6000c, DW7500c, DW10000c,
+ * DW15000c, DW30000c.
+ *
+ * ARM call: PATCH /.../sqlPools/{name} with body
+ *   { sku: { name: '<DWxxxxc>' } }
+ *
+ * Scale operation is asynchronous; the pool state moves to "Scaling" for
+ * a few minutes then back to "Online". Returns the immediate ARM response;
+ * polling for completion is the caller's responsibility.
+ */
+export async function updateDedicatedPoolSku(
+  name: string,
+  newSku: string,
+): Promise<{ name: string; sku?: { name?: string; tier?: string }; properties?: any }> {
+  if (!name) throw new Error('updateDedicatedPoolSku: name is required');
+  if (!newSku || !/^DW\d+c$/i.test(newSku)) {
+    throw new Error(`updateDedicatedPoolSku: invalid sku ${newSku}; expected DWxxxxc`);
+  }
+  const r = await callArm(
+    `${armBase()}/sqlPools/${encodeURIComponent(name)}?api-version=${ARM_API}`,
+    { method: 'PATCH', body: JSON.stringify({ sku: { name: newSku } }) },
+  );
+  return jsonOrThrow(r, `updateDedicatedPoolSku(${name},${newSku})`);
+}
+
+/**
+ * Get a single dedicated SQL pool's current state + SKU (for the scaling
+ * card's "current" indicator).
+ */
+export async function getDedicatedPool(name: string): Promise<{ name: string; sku?: { name?: string; tier?: string }; properties?: any }> {
+  if (!name) throw new Error('getDedicatedPool: name is required');
+  const r = await callArm(`${armBase()}/sqlPools/${encodeURIComponent(name)}?api-version=${ARM_API}`);
+  return jsonOrThrow(r, `getDedicatedPool(${name})`);
 }
 
