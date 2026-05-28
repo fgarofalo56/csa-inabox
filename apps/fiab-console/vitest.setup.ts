@@ -89,6 +89,13 @@ class RO { observe() {} unobserve() {} disconnect() {} }
 // FluentUI internals call new ResizeObserver(); jsdom doesn't ship one.
 (globalThis as any).ResizeObserver = (globalThis as any).ResizeObserver || RO;
 
+// jsdom doesn't implement Element.scrollIntoView, which several editors
+// (CrossItemCopilot, chat surfaces, etc.) call from effects to keep the
+// latest message in view. Stub it to a no-op so those editors mount.
+if (typeof Element !== 'undefined' && !(Element.prototype as any).scrollIntoView) {
+  (Element.prototype as any).scrollIntoView = function () {};
+}
+
 if (typeof window !== 'undefined' && !window.matchMedia) {
   (window as any).matchMedia = (query: string) => ({
     matches: false,
