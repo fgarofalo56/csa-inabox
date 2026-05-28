@@ -70,6 +70,63 @@ one-for-one when Fabric reaches your audit boundary.
 > one-for-one when Fabric reaches Gov GA — with no rewrites to Delta
 > tables, dbt models, semantic models, or runbooks.*
 
+## Why "CSA Loom"
+
+The name is two halves working together.
+
+**CSA — Cloud Scale Analytics.** This is the broader Microsoft pattern
+family this product ships under. Loom is one *pillar* of Cloud Scale
+Analytics in a Box, alongside the data landing zones, the data
+management zone, and the platform-as-a-product reference architectures.
+Calling it `CSA <something>` keeps the lineage explicit: this is the
+same platform philosophy customers already trust at scale, just shaped
+for a different audit boundary.
+
+**Loom — a weaving machine.** A loom is the device that takes many
+parallel threads and produces a single integrated fabric. That is
+exactly what this product does:
+
+- **The threads** are your existing Azure-native services —
+  Synapse Spark + Synapse Serverless SQL, Azure Databricks, Azure
+  Data Explorer, Microsoft Fabric Foundry, Power BI Premium, ADF,
+  APIM, Purview, AI Search, Azure OpenAI, Dataverse, Copilot Studio.
+  Each one is a powerful primitive on its own.
+- **The fabric** is a single Fluent UI workspace that *looks and feels
+  like Microsoft Fabric* — Lakehouse, Notebook, Warehouse, Semantic
+  Model, Real-Time Intelligence, Data Agents, Activator — sitting on
+  top of those threads.
+- **The loom itself** is the orchestration layer: the Cosmos-backed
+  catalog, the BFF, the per-editor wiring, the OneLake-equivalent path
+  conventions, the forward-migration manifests.
+
+Three layers of meaning sit on top of that metaphor, all intentional:
+
+1. **It rhymes with "Fabric" without colliding with it.** Fabric is a
+   Microsoft product brand. Loom is what *makes* fabric. The name
+   communicates "you get the Fabric experience" without overloading
+   Microsoft's trademark — a requirement of the Microsoft brand-review
+   process this product is going through ([LD-1](#locked-architecture-15-decisions)).
+2. **It signals integration over invention.** A loom doesn't manufacture
+   the thread, it weaves what's already there. Loom does not replace
+   your Synapse or your Databricks; it weaves them into a single
+   experience. This matters for customers who have spent years
+   standardizing on those services and don't want a re-platforming
+   project.
+3. **It points at the forward-migration story.** A loom produces
+   fabric. When Microsoft Fabric reaches your audit boundary, the
+   thing your team has been weaving on Loom *is already a fabric* —
+   your Delta tables, your dbt models, your TMDL semantic models,
+   your KQL queries port forward 1:1.
+
+The repo-internal nickname is `fiab` ("Fabric-in-a-Box") because that
+was the working title during research wave 0 — you'll still see it in
+folder paths, bicep modules, and image tags. **The public brand is
+CSA Loom**; `fiab` is purely an implementation artifact.
+
+So when you see "CSA Loom" on a slide, hear it on a call, or type
+`azd up` against the bicep: read it as *the Cloud Scale Analytics
+weave that produces the Fabric experience inside any Azure tenant*.
+
 ## Where to start
 
 <div class="grid cards" markdown>
