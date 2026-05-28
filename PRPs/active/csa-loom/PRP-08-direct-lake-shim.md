@@ -92,3 +92,26 @@ docs/fiab/workloads/direct-lake-parity.md                    created (by PRP-15)
 - `temp/fiab-prd/AMENDMENTS.md` §A6
 - `temp/fiab-research/03-fabric-only-internals.md` §1
 - SQLBI Direct Lake deep-dives (linked from research file)
+
+## Validation receipt
+
+**Validated 2026-05-27 — 9/9 xUnit GREEN.**
+
+Test harness: `apps/fiab-direct-lake-shim/tests/LoomDirectLakeShim.Tests/`.
+`dotnet test` against `LoomDirectLakeShim.Tests.csproj` (net8.0) — all 9
+`DeltaLogPathParsingTests` pass in 37ms:
+
+```
+Passed!  - Failed: 0, Passed: 9, Skipped: 0, Total: 9
+```
+
+Tests exercise the Delta log path parser the EventGrid handler uses to
+detect which lakehouse + table mutated, drive the TOM refresh policy
+lookup, and decide whether to enqueue a Premium import refresh. Real
+Azure auth/ARM is mocked; the parse logic is what the live handler
+runs unchanged.
+
+**Operator action remaining:** End-to-end EventGrid subscribe → TOM
+refresh against a live Power BI Premium workspace + Delta log mutation.
+Tracked in audit page; blocked by ACR image build + Power BI Premium
+capacity provision.

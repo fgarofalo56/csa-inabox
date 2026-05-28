@@ -154,6 +154,21 @@ jobs:
             --scope "/subscriptions/$SUB/resourceGroups/$ADMIN_RG" \
             -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
 
+      - name: Grant Console UAMI Microsoft Graph roles (Directory.Read.All + User.Read.All)
+        # Unblocks /admin/users displayName + department + license
+        # enrichment so the page shows real Entra identity data instead of
+        # falling back to UPN-only Cosmos activity. Idempotent — only POSTs
+        # the assignment when it isn't already present.
+        run: |
+          export LOOM_UAMI_OBJECT_ID=$CONSOLE_UAMI_PRINCIPAL
+          export AZURE_TENANT_ID=$(az account show --query tenantId -o tsv)
+          # Pull optional extra roles from repo variable so adminstrators
+          # can extend the set without re-coding the workflow.
+          if [ -n "${{ vars.LOOM_GRAPH_EXTRA_ROLES }}" ]; then
+            export LOOM_GRAPH_EXTRA_ROLES="${{ vars.LOOM_GRAPH_EXTRA_ROLES }}"
+          fi
+          bash scripts/csa-loom/grant-uami-graph-roles.sh
+
       - name: Grant Console UAMI AzureML Data Scientist on Foundry workspace (unblocks Foundry editors)
         run: |
           FOUNDRY_WS=$(az resource list -g $ADMIN_RG --resource-type Microsoft.MachineLearningServices/workspaces --query "[0].id" -o tsv)
@@ -233,6 +248,59 @@ jobs:
               bash scripts/csa-loom/dataverse-add-appuser.sh || true
           fi
 
+      - name: Grant MIP+DLP Graph AppRoles (Information Protection + DLP for /admin/security)
+        run: |
+          # Grant the Console UAMI four Microsoft Graph application
+          # permissions required by /admin/security:
+          #   - InformationProtectionPolicy.Read.All  (MIP labels + policies)
+          #   - SensitivityLabel.Evaluate              (apply-label action)
+          #   - Policy.Read.All                        (DLP policies + rules)
+          #   - SecurityAlert.Read.All                 (DLP alerts)
+          #
+          # Each grant is idempotent — the script re-runs cleanly. After
+          # this job completes, a Tenant Administrator MUST click "Grant
+          # admin consent" in Entra → Enterprise applications → Console
+          # UAMI → Permissions for the AppRoles to take effect. Until
+          # consent is issued, every Graph call returns 403 and the
+          # /admin/security panels render an explicit remediation
+          # MessageBar.
+          set -e
+          GRAPH_SP_ID=$(az ad sp list --filter "appId eq '00000003-0000-0000-c000-000000000000'" --query "[0].id" -o tsv)
+          if [ -z "$GRAPH_SP_ID" ]; then
+            echo "  Could not resolve Microsoft Graph SP — skipping AppRole grants"
+          else
+            echo "Microsoft Graph SP object id: $GRAPH_SP_ID"
+            for ROLE in \
+              "InformationProtectionPolicy.Read.All:19da66cb-0fb0-4390-b071-ebc76a349482" \
+              "SensitivityLabel.Evaluate:57f0b71b-a759-45a0-9a0f-cc099fbd9a44" \
+              "Policy.Read.All:572fea84-0151-49b2-9301-11cb16974376" \
+              "SecurityAlert.Read.All:bf394140-e372-4bf9-a898-299cfc7564e5" \
+            ; do
+              NAME="${ROLE%%:*}"
+              APPROLE_ID="${ROLE##*:}"
+              echo "Granting Graph AppRole $NAME ($APPROLE_ID) to Console UAMI..."
+              PAYLOAD=$(printf '{"principalId":"%s","resourceId":"%s","appRoleId":"%s"}' \
+                "$CONSOLE_UAMI_PRINCIPAL" "$GRAPH_SP_ID" "$APPROLE_ID")
+              R=$(curl -sS -w "%{http_code}" -o /tmp/approle.json -X POST \
+                "https://graph.microsoft.com/v1.0/servicePrincipals/$CONSOLE_UAMI_PRINCIPAL/appRoleAssignments" \
+                -H "Authorization: Bearer $(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)" \
+                -H "Content-Type: application/json" \
+                -d "$PAYLOAD")
+              if [[ "$R" == "201" ]]; then
+                echo "  $NAME granted"
+              elif grep -q "Permission being assigned already exists" /tmp/approle.json 2>/dev/null; then
+                echo "  $NAME already granted (idempotent)"
+              else
+                echo "  $NAME grant returned $R: $(cat /tmp/approle.json)"
+              fi
+            done
+            echo ""
+            echo "  Tenant Administrator action required:"
+            echo "    Open Entra ID → Enterprise applications → Console UAMI → Permissions"
+            echo "    Click 'Grant admin consent for <tenant>'"
+            echo "    Without consent, /admin/security MIP+DLP tabs render the NotConfigured MessageBar."
+          fi
+
       - name: Summary
         if: always()
         run: |
@@ -246,8 +314,12 @@ jobs:
           echo "Content Safety: Cognitive Services User granted"
           echo "Power Platform: UAMI registered as Management App (unblocks PP + Copilot Studio)"
           echo "Dataverse: MSAL SP registered as Application User w/ SA role on every env with Dataverse (idempotent)"
+          echo "MIP+DLP Graph: InformationProtectionPolicy.Read.All + SensitivityLabel.Evaluate + Policy.Read.All + SecurityAlert.Read.All granted to Console UAMI"
           echo ""
           echo "Still needs manual steps (not grantable via SP):"
+          echo "  • Microsoft Graph admin consent — Tenant Administrator must click 'Grant admin consent'"
+          echo "    in Entra ID → Enterprise applications → Console UAMI → Permissions. Required for"
+          echo "    /admin/security MIP+DLP tabs to return real data instead of 403."
           echo "  • Power Platform Admin — grant at https://admin.powerplatform.microsoft.com"
           echo "    Add SP id $CONSOLE_UAMI_PRINCIPAL as Power Platform Administrator."
           echo "  • Power BI tenant SP enablement — Fabric admin portal"

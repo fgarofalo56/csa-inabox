@@ -79,3 +79,25 @@ apps/fiab-catalog-sync/                                  created (Function App: 
 
 - `temp/fiab-prd/04-reference-architecture.md` §4.4
 - `temp/fiab-research/04-catalog-strategy.md`
+
+## Validation receipt
+
+**Validated 2026-05-27 — 5/5 pytest GREEN (bicep ARM emit).**
+
+Test harness: `platform/fiab/bicep/tests/test_bicep_modules.py`. Tests invoke
+`az bicep build` against the module + parse the emitted ARM JSON:
+
+- `catalog.bicep` builds to valid ARM (`$schema`/`resources`/`parameters`
+  present)
+- ARM outputs include per-boundary endpoints: `catalogKind`, `purviewAccountId`,
+  `purviewAccountName`, `purviewEndpoint`, `atlasEndpoint`
+- `catalogPrimary` allowedValues = `{unity-catalog-managed, purview, atlas-aks}`
+  (per LD-8 + AMENDMENTS A2)
+- Microsoft.Purview/accounts resource emitted (conditional on `purviewEnabled`)
+- AKS namespace resource for Atlas emitted (conditional on `atlasOnAksEnabled`
+  + IL5 boundary)
+
+**Operator action remaining:** Live E2E in Commercial (Databricks UC scan via
+Purview + verify tag alignment) and live E2E in GCC-H (Purview scan over
+ADLS Gen2 + Synapse Serverless). Console "Catalog" pane adapter swap. Tracked
+in audit page; blocked by ACR image build + per-boundary deploy.
