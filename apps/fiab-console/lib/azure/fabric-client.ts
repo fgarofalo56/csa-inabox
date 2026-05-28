@@ -537,6 +537,90 @@ export async function listJobInstances(workspaceId: string, itemId: string): Pro
 }
 
 // ============================================================
+// Lakehouse + OneLake shortcuts (cross-source promotion)
+// ============================================================
+
+export interface OneLakeShortcutTarget {
+  adlsGen2?: {
+    location: string;        // e.g. https://account.dfs.core.windows.net
+    subpath: string;         // /container/folder
+    connectionId?: string;   // optional managed connection id
+  };
+  amazonS3?: { location: string; subpath: string; connectionId?: string };
+  googleCloudStorage?: { location: string; subpath: string; connectionId?: string };
+  oneLake?: {
+    workspaceId: string;
+    itemId: string;
+    path: string;
+  };
+}
+
+export interface OneLakeShortcutRequest {
+  /** Lakehouse / Warehouse / KQL DB hosting the shortcut. */
+  itemId: string;
+  /** Logical path inside the item (e.g. `Files/bronze` or `Tables/customers`). */
+  path: string;
+  /** Shortcut name. */
+  name: string;
+  /** Where the shortcut points to. Exactly one target sub-field must be set. */
+  target: OneLakeShortcutTarget;
+}
+
+export interface OneLakeShortcut {
+  name: string;
+  path: string;
+  target?: OneLakeShortcutTarget;
+}
+
+/**
+ * Create an ADLS-backed (or S3 / GCS / cross-OneLake) shortcut inside a
+ * Fabric Lakehouse. Backend: POST /workspaces/{ws}/items/{itemId}/shortcuts.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/fabric/core/onelake-shortcuts/create-shortcut
+ *
+ * Used by the Unified Catalog `/api/catalog/shortcut` BFF route to promote
+ * an arbitrary ADLS Gen2 path into a OneLake-visible asset without copying
+ * bytes.
+ */
+export async function createOneLakeShortcut(
+  workspaceId: string,
+  req: OneLakeShortcutRequest,
+): Promise<OneLakeShortcut> {
+  if (!workspaceId) throw new FabricError('workspaceId is required', 400);
+  if (!req?.itemId) throw new FabricError('itemId is required', 400);
+  if (!req?.name) throw new FabricError('shortcut name is required', 400);
+  if (!req?.target || Object.keys(req.target).length === 0) {
+    throw new FabricError('target is required (adlsGen2 | amazonS3 | googleCloudStorage | oneLake)', 400);
+  }
+  return call<OneLakeShortcut>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/items/${encodeURIComponent(req.itemId)}/shortcuts`,
+    {
+      method: 'POST',
+      body: { name: req.name, path: req.path, target: req.target },
+    },
+  );
+}
+
+export async function listOneLakeShortcuts(workspaceId: string, itemId: string): Promise<OneLakeShortcut[]> {
+  const j = await call<{ value?: OneLakeShortcut[] }>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/items/${encodeURIComponent(itemId)}/shortcuts`,
+  );
+  return j.value || [];
+}
+
+export async function deleteOneLakeShortcut(workspaceId: string, itemId: string, shortcutPath: string, shortcutName: string): Promise<void> {
+  await call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/items/${encodeURIComponent(itemId)}/shortcuts/${encodeURIComponent(shortcutPath)}/${encodeURIComponent(shortcutName)}`,
+    { method: 'DELETE' },
+  );
+}
+
+/** Fabric item details — used by /api/catalog/asset for OneLake assets. */
+export async function getFabricItem(workspaceId: string, itemId: string): Promise<FabricItem> {
+  return call<FabricItem>(`/workspaces/${encodeURIComponent(workspaceId)}/items/${encodeURIComponent(itemId)}`);
+}
+
+// ============================================================
 // Fabric SQL databases — the Fabric-managed SQL database type
 // (Microsoft.Fabric SQLDatabase REST type), distinct from Azure SQL.
 // Backs the SqlDatabaseEditor.

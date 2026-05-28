@@ -192,6 +192,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     defenderForAIEnabled: defenderForAIEnabled
     purviewEnabled: purviewEnabled
     atlasOnAksEnabled: atlasOnAksEnabled
+    databricksUnityCatalogEnabled: databricksUnityCatalogEnabled
     openaiLocation: openaiLocation
     openaiEmbeddingsLocation: openaiEmbeddingsLocation
     openaiChatModel: openaiChatModel

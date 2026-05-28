@@ -29,6 +29,7 @@ const navItems = [
   { href: '/workspaces', icon: Building24Regular, label: 'Workspaces' },
   { href: '/browse', icon: Apps24Regular, label: 'Browse' },
   { href: '/onelake', icon: Database24Regular, label: 'OneLake catalog' },
+  { href: '/catalog', icon: Database24Regular, label: 'Unified catalog' },
   { href: '/api-marketplace', icon: Connector24Regular, label: 'API marketplace' },
   { href: '/governance', icon: ShieldCheckmark24Regular, label: 'Governance' },
   { href: '/monitor', icon: ChartMultiple24Regular, label: 'Monitor' },

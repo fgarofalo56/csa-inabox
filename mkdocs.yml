@@ -2423,6 +2423,19 @@ nav:
               - Information Protection tab: fiab/admin/security/information-protection.md
               - DLP tab: fiab/admin/security/dlp.md
               - Audit tab: fiab/admin/security/audit.md
+          - Unified Catalog:
+              - Overview: fiab/catalog/index.md
+              - Architecture: fiab/catalog/architecture.md
+              - Search: fiab/catalog/search.md
+              - Browse: fiab/catalog/browse.md
+              - Domains: fiab/catalog/domains.md
+              - Permissions: fiab/catalog/permissions.md
+              - Metastores: fiab/catalog/metastores.md
+              - Lineage: fiab/catalog/lineage.md
+              - Asset detail: fiab/catalog/asset-detail.md
+              - "How to: Register in Purview": fiab/catalog/how-to-register.md
+              - "How to: Grant permissions": fiab/catalog/how-to-grant.md
+              - "How to: Create OneLake shortcut": fiab/catalog/how-to-shortcut.md
           - Feature Permissions (Fabric-style RBAC): fiab/admin/feature-rbac.md
           - Scale by SKU: fiab/admin/scaling.md
 
