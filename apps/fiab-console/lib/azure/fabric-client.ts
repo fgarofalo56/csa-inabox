@@ -176,6 +176,55 @@ export async function listFabricWorkspaces(): Promise<FabricWorkspace[]> {
 }
 
 // ============================================================
+// Capacities — F-SKU + P-SKU surfaced by Fabric REST
+// ============================================================
+
+export interface FabricCapacity {
+  id: string;
+  displayName: string;
+  sku: string;           // F2 / F4 / F8 / F16 / F32 / F64 / F128 / F256 / F512 / F1024 / F2048; P1 / P2 / P3 / EM1 / EM2 / EM3
+  region?: string;
+  state?: string;        // Active / Suspended / Provisioning
+  capacityType?: string; // 'Fabric' | 'PowerBI'
+}
+
+/**
+ * List the Fabric / Power BI Premium capacities the Console UAMI can
+ * see. Drives the workspace-create Capacity dropdown so the user picks
+ * a real, addressable capacity instead of typing free text.
+ *
+ * Requires the Power BI tenant SP toggle ("Service principals can use
+ * Fabric APIs") + the UAMI added as a Capacity Admin or Contributor on
+ * each capacity the customer wants surfaced.
+ */
+export async function listFabricCapacities(): Promise<FabricCapacity[]> {
+  const j = await call<{ value: FabricCapacity[] }>('/capacities');
+  return j.value || [];
+}
+
+/**
+ * Assign an existing Fabric/Power BI workspace to a capacity. Fabric
+ * REST: POST /v1/workspaces/{id}/assignToCapacity { capacityId }.
+ * Returns 202 — assignment is async; capacity binding takes 30-90s to
+ * propagate before notebook/lakehouse create calls accept the workspace.
+ *
+ * Loom workspaces aren't 1:1 Fabric workspaces — this is intended for
+ * the underlying Fabric/Power BI workspace that Loom creates lazily on
+ * first PBI-backed artifact (Report, Semantic Model, etc.). When called
+ * with a Loom workspace id, the route MUST first resolve the bound
+ * Fabric/Power BI workspaceId via the workspace's metadata.
+ */
+export async function assignWorkspaceToCapacity(
+  fabricWorkspaceId: string,
+  capacityId: string,
+): Promise<void> {
+  await call<void>(
+    `/workspaces/${encodeURIComponent(fabricWorkspaceId)}/assignToCapacity`,
+    { method: 'POST', body: { capacityId } },
+  );
+}
+
+// ============================================================
 // Notebook (Fabric)
 // ============================================================
 

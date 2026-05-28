@@ -10,6 +10,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.11.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.11.1...csa-inabox-v0.11.2) (2026-05-27)
+
+
+### Bug Fixes
+
+* **csa-loom-databricks:** cluster create 403 — add allow-cluster-create + allow-instance-pool-create entitlements ([#366](https://github.com/fgarofalo56/csa-inabox/issues/366)) ([8279537](https://github.com/fgarofalo56/csa-inabox/commit/827953796277b2d1717739aef6c50bf4c222ead0))
+
+
+### Documentation
+
+* **csa-loom:** add 'Why CSA Loom' name explanation to index page ([#356](https://github.com/fgarofalo56/csa-inabox/issues/356)) ([ebd8991](https://github.com/fgarofalo56/csa-inabox/commit/ebd89915a969cdbc84d069fb5d1f7925a30adfb1))
+
 ## [0.11.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.11.0...csa-inabox-v0.11.1) (2026-05-27)
 
 
