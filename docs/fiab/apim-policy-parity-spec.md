@@ -10,7 +10,7 @@ Every API call routed through APIM executes a policy document at four ordered sc
 
 ### Scope navigation
 - Policy editing is reached from four entry points, all rendering the same editor with different `scope` and target ids:
-  - **Global**: APIM service → APIs → All APIs → Policies tab → "</> Policy code editor"
+  - **Global**: APIM service → APIs → All APIs → Policies tab → "`</>` Policy code editor"
   - **Product**: Products → {product} → Policies tab
   - **API**: APIs → {api} → Design → Inbound/Backend/Outbound/On-error `&lt;/&gt;` buttons
   - **Operation**: APIs → {api} → Design → {operation} → Inbound/Backend/Outbound/On-error `&lt;/&gt;` buttons
@@ -62,9 +62,10 @@ Every API call routed through APIM executes a policy document at four ordered sc
 - Form fields: scope dropdown (service / api / product), conditional apiId or productId Input, value (XML)
 - Default `&lt;policies&gt;` template seeded with commented-out validate-jwt + active rate-limit calls=120/60s
 - Client-side `DOMParser` well-formed-XML validation before Save (`isWellFormedXml` guard)
-- Plain `&lt;textarea&gt;` with monospace font (Consolas) — no Monaco, no intellisense, no snippet picker
-- Ribbon: Save · Reload · Validate XML (no separate handler — runs on Save) · Global / API / Product scope buttons (no handlers — Dropdown does the work)
-- **Grade: C** — real ARM CRUD for the three current scopes + client-side XML well-formedness + sensible default template. Missing: Operation scope entirely, no intellisense, no snippet picker, no form view, no effective-policy calculator, no test runner. This is the lowest-grade editor of the APIM trio.
+- Monaco XML editor (`MonacoTextarea` with `language="xml"`, self-hosted Monaco assets per `scripts/copy-monaco-assets.mjs`) — bracket matching, syntax highlighting, Ctrl+S save, dirty-flag tracking
+- Ribbon: Save · Reload · Validate XML (`isWellFormedXml` invoked client-side; SSR-safe fallback unit-tested at `__tests__/apim-xml-validation.test.ts`) · Global / API / Product / Operation scope buttons all wired with real handlers
+- Operation scope (`apis/{aid}/operations/{oid}/policies/policy`) wired for read+upsert via `apim-client.ts` (v3.27)
+- **Grade: B** — real ARM CRUD across all four scopes (Global / API / Product / Operation), Monaco XML editor, client-side well-formed-XML guard before Save, sensible default policy template, accurate ribbon wiring, dirty-flag prevents stale-keystroke clobber on async PUT (Phase 4.5). Lifted from C by v3.27 (Operation scope) + v3.28 (Monaco). Remaining gaps (snippet picker, expression IntelliSense, effective-policy calculator, test runner) are tracked below and don't block production use.
 
 ## Gaps for parity
 
