@@ -1,40 +1,127 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 380" preserveAspectRatio="xMidYMid slice" role="img" aria-label="CSA Loom — Microsoft Fabric experience for Azure tenants where Fabric isn't yet available">
-  <!--
-    Mirrors the live CSA Loom app home-page hero treatment from
-    `apps/fiab-console/app/globals.css`:
-      loom-hero-bg = linear-gradient(135deg,
-                          #3d2e80 0%,    indigo-700 (primary brand)
-                          #1f6feb 55%,   azure-600  (secondary)
-                          #d89f3d 130%)  amber-500  (accent)
-    Plus the two radial highlights from `heroPattern` in
-    `apps/fiab-console/app/page.tsx`:
-      - top-right    : white  18% glow, fades by 45%
-      - bottom-left  : amber  30% glow, fades by 50%
-    Same brand tokens, same composition — keeps the docs landing
-    visually consistent with the live console.
-  -->
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="t d" preserveAspectRatio="xMidYMid slice">
+  <title id="t">CSA Loom</title>
+  <desc id="d">The Microsoft Fabric experience for Azure tenants where Fabric isn't yet available.</desc>
   <defs>
-    <linearGradient id="loom-hero-bg" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
       <stop offset="0%" stop-color="#3d2e80"/>
       <stop offset="55%" stop-color="#1f6feb"/>
       <stop offset="100%" stop-color="#d89f3d"/>
     </linearGradient>
-    <radialGradient id="loom-hero-tr" cx="0.9" cy="0.1" r="0.45" gradientUnits="objectBoundingBox">
+    <linearGradient id="accent-bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#aea0ff"/>
+      <stop offset="100%" stop-color="#e6b566"/>
+    </linearGradient>
+    <radialGradient id="glow-tr" cx="0.9" cy="0.1" r="0.45" gradientUnits="objectBoundingBox">
       <stop offset="0%" stop-color="#ffffff" stop-opacity="0.18"/>
       <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
-    <radialGradient id="loom-hero-bl" cx="0.1" cy="1.1" r="0.5" gradientUnits="objectBoundingBox">
+    <radialGradient id="glow-bl" cx="0.1" cy="1.1" r="0.5" gradientUnits="objectBoundingBox">
       <stop offset="0%" stop-color="#d89f3d" stop-opacity="0.30"/>
       <stop offset="100%" stop-color="#d89f3d" stop-opacity="0"/>
     </radialGradient>
-    <pattern id="loom-weave" x="0" y="0" width="64" height="64" patternUnits="userSpaceOnUse" patternTransform="rotate(35)">
-      <line x1="0" y1="0" x2="0" y2="64" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
-      <line x1="32" y1="0" x2="32" y2="64" stroke="rgba(255,255,255,0.03)" stroke-width="1"/>
-      <line x1="0" y1="32" x2="64" y2="32" stroke="rgba(255,255,255,0.03)" stroke-width="1"/>
-    </pattern>
+    <style>
+      .h-title { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:600; font-size:64px; fill:#FFFFFF; letter-spacing:-1.2px; }
+      .h-sub   { font-family:'IBM Plex Sans','Helvetica Neue','Segoe UI',sans-serif; font-weight:400; font-size:22px; fill:#FFFFFF; fill-opacity:0.92; letter-spacing:-0.2px; }
+      .h-chip  { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:13px; letter-spacing:2.5px; fill:#FFFFFF; }
+      .g-label { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:12px; fill:#FFFFFF; letter-spacing:0.4px; }
+      .g-num   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:700; font-size:14px; fill:#FFFFFF; letter-spacing:0.5px; }
+      .g-cap   { font-family:'JetBrains Mono','SF Mono','Consolas',monospace; font-weight:500; font-size:10px; fill:#FFFFFF; fill-opacity:0.65; letter-spacing:1.5px; }
+    </style>
   </defs>
-  <rect width="1600" height="380" fill="url(#loom-hero-bg)"/>
-  <rect width="1600" height="380" fill="url(#loom-weave)"/>
-  <rect width="1600" height="380" fill="url(#loom-hero-tr)"/>
-  <rect width="1600" height="380" fill="url(#loom-hero-bl)"/>
+
+  <rect width="1600" height="420" fill="url(#bg)"/>
+  <rect width="1600" height="420" fill="url(#glow-tr)"/>
+  <rect width="1600" height="420" fill="url(#glow-bl)"/>
+
+  <rect x="0" y="0" width="6" height="420" fill="#e6b566"/>
+  <rect x="0" y="0" width="6" height="120" fill="#aea0ff"/>
+  <rect x="0" y="418" width="1600" height="2" fill="#aea0ff" fill-opacity="0.30"/>
+
+  <g transform="translate(80, 60)">
+    <rect x="0" y="0" width="170" height="32" rx="0" fill="#aea0ff" fill-opacity="0.10" stroke="#aea0ff" stroke-opacity="0.55" stroke-width="1"/>
+    <rect x="0" y="0" width="6" height="32" fill="#aea0ff"/>
+    <text class="h-chip" x="96" y="21" text-anchor="middle" fill="#aea0ff">CSA LOOM v1</text>
+  </g>
+
+  <text class="h-title" x="80" y="200">CSA Loom</text>
+  <text class="h-sub" x="80" y="248">The Microsoft Fabric experience for Azure tenants</text>
+  <text class="h-sub" x="80" y="278" fill-opacity="0.72">where Fabric isn't yet available.</text>
+
+  <g transform="translate(80, 320)">
+    <rect x="0" y="0" width="62" height="20" fill="#e6b566" fill-opacity="0.14" stroke="#e6b566" stroke-opacity="0.45" stroke-width="1"/>
+    <text class="g-cap" x="31" y="14" text-anchor="middle" fill="#e6b566">AZURE-NATIVE</text>
+  </g>
+  <text class="g-cap" x="156" y="334" fill="#ffffff" fill-opacity="0.7">v1 · gov + commercial · fabric-aligned</text>
+
+  <g transform="translate(880, 78)">
+    <text class="g-cap" x="0" y="0" fill="#aea0ff">AZURE-NATIVE SERVICES</text>
+    <text class="g-cap" x="560" y="0" text-anchor="end" fill="#e6b566">FABRIC-PARITY WORKSPACE</text>
+  </g>
+
+  <g transform="translate(880, 100)">
+    <rect x="0" y="0" width="86" height="60" fill="#aea0ff" fill-opacity="0.12" stroke="#aea0ff" stroke-opacity="0.55" stroke-width="1"/>
+    <rect x="0" y="0" width="86" height="4" fill="#aea0ff"/>
+    <text class="g-label" x="43" y="26" text-anchor="middle">SYNAPSE</text>
+    <text class="g-cap" x="43" y="44" text-anchor="middle">spark · sql</text>
+
+    <rect x="0" y="70" width="86" height="60" fill="#aea0ff" fill-opacity="0.12" stroke="#aea0ff" stroke-opacity="0.55" stroke-width="1"/>
+    <rect x="0" y="70" width="86" height="4" fill="#aea0ff"/>
+    <text class="g-label" x="43" y="96" text-anchor="middle">DATABRICKS</text>
+    <text class="g-cap" x="43" y="114" text-anchor="middle">notebooks · ml</text>
+
+    <rect x="0" y="140" width="86" height="60" fill="#aea0ff" fill-opacity="0.12" stroke="#aea0ff" stroke-opacity="0.55" stroke-width="1"/>
+    <rect x="0" y="140" width="86" height="4" fill="#aea0ff"/>
+    <text class="g-label" x="43" y="166" text-anchor="middle">ADX / KQL</text>
+    <text class="g-cap" x="43" y="184" text-anchor="middle">real-time</text>
+
+    <rect x="0" y="210" width="86" height="60" fill="#aea0ff" fill-opacity="0.12" stroke="#aea0ff" stroke-opacity="0.55" stroke-width="1"/>
+    <rect x="0" y="210" width="86" height="4" fill="#aea0ff"/>
+    <text class="g-label" x="43" y="236" text-anchor="middle">FOUNDRY</text>
+    <text class="g-cap" x="43" y="254" text-anchor="middle">ai · agents</text>
+  </g>
+
+  <g transform="translate(1006, 100)" fill="none" stroke="#ffffff" stroke-opacity="0.45" stroke-width="1.4">
+    <path d="M 0 30   C 80 30   80 170  160 170"/>
+    <path d="M 0 100  C 80 100  80 170  160 170"/>
+    <path d="M 0 170  L 160 170"/>
+    <path d="M 0 240  C 80 240  80 170  160 170"/>
+  </g>
+  <g transform="translate(1006, 100)" fill="none" stroke="#e6b566" stroke-opacity="0.55" stroke-width="1.4">
+    <path d="M 160 170 C 240 170  240 30   320 30"/>
+    <path d="M 160 170 C 240 170  240 100  320 100"/>
+    <path d="M 160 170 L 320 170"/>
+    <path d="M 160 170 C 240 170  240 240  320 240"/>
+  </g>
+  <g transform="translate(1166, 256)" fill="#FFFFFF">
+    <circle r="9" fill="#1f6feb"/>
+    <circle r="9" fill="none" stroke="#FFFFFF" stroke-opacity="0.9" stroke-width="1.4"/>
+    <path d="M -4 -2 Q 0 -6 4 -2 M -4 2 Q 0 6 4 2" stroke="#FFFFFF" stroke-width="1" fill="none"/>
+  </g>
+  <text class="g-cap" x="1166" y="298" text-anchor="middle" fill="#FFFFFF" fill-opacity="0.8">LOOM CONSOLE</text>
+
+  <g transform="translate(1326, 100)">
+    <rect x="0" y="0" width="86" height="60" fill="#e6b566" fill-opacity="0.16" stroke="#e6b566" stroke-opacity="0.65" stroke-width="1"/>
+    <rect x="0" y="0" width="86" height="4" fill="#e6b566"/>
+    <text class="g-label" x="43" y="26" text-anchor="middle">LAKEHOUSE</text>
+    <text class="g-cap" x="43" y="44" text-anchor="middle">delta · onelake</text>
+
+    <rect x="0" y="70" width="86" height="60" fill="#e6b566" fill-opacity="0.16" stroke="#e6b566" stroke-opacity="0.65" stroke-width="1"/>
+    <rect x="0" y="70" width="86" height="4" fill="#e6b566"/>
+    <text class="g-label" x="43" y="96" text-anchor="middle">NOTEBOOK</text>
+    <text class="g-cap" x="43" y="114" text-anchor="middle">pyspark · sql</text>
+
+    <rect x="0" y="140" width="86" height="60" fill="#e6b566" fill-opacity="0.16" stroke="#e6b566" stroke-opacity="0.65" stroke-width="1"/>
+    <rect x="0" y="140" width="86" height="4" fill="#e6b566"/>
+    <text class="g-label" x="43" y="166" text-anchor="middle">SEMANTIC</text>
+    <text class="g-cap" x="43" y="184" text-anchor="middle">power bi</text>
+
+    <rect x="0" y="210" width="86" height="60" fill="#e6b566" fill-opacity="0.16" stroke="#e6b566" stroke-opacity="0.65" stroke-width="1"/>
+    <rect x="0" y="210" width="86" height="4" fill="#e6b566"/>
+    <text class="g-label" x="43" y="236" text-anchor="middle">ACTIVATOR</text>
+    <text class="g-cap" x="43" y="254" text-anchor="middle">reflex · rules</text>
+  </g>
+
+  <text class="g-cap" x="880" y="396" fill="#FFFFFF" fill-opacity="0.7">DATA STAYS IN YOUR TENANT · NO REWRITES · FORWARD-MIGRATES TO FABRIC ONE-FOR-ONE</text>
+
 </svg>
