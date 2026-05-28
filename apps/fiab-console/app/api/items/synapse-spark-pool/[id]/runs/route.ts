@@ -10,14 +10,14 @@ import { listSparkBatchJobs } from '@/lib/azure/synapse-dev-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   const url = new URL(req.url);
   const size = Number(url.searchParams.get('size') || '20');
   const from = Number(url.searchParams.get('from') || '0');
   try {
-    const res = await listSparkBatchJobs(ctx.params.id, from, size);
+    const res = await listSparkBatchJobs((await ctx.params).id, from, size);
     return NextResponse.json({ ok: true, ...res });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });

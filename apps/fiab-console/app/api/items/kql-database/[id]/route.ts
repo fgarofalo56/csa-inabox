@@ -13,12 +13,12 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: Request, ctx: { params: { id: string } }) {
+export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   try {
-    const item = await loadKustoItem(ctx.params.id, 'kql-database', session.claims.oid);
+    const item = await loadKustoItem((await ctx.params).id, 'kql-database', session.claims.oid);
     const database = resolveDatabase(item);
     const [details, tables] = await Promise.all([
       getDatabaseDetails(database).catch(() => null),

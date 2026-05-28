@@ -150,6 +150,12 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
   const [schema, setSchema] = useState<ServerlessSchema | null>(null);
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  // v3.29: surface the shared ComputePicker so the Serverless surface shows
+  // the same family-wide compute-target dropdown its sibling Dedicated +
+  // Spark editors use. Serverless is always-on so we hide lifecycle controls
+  // (start/stop) — the picker is read-only for the serverless kind today,
+  // matching the existing ComputePicker semantics.
+  const [computeId, setComputeId] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -250,6 +256,17 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
               Run
             </Button>
           </div>
+          {/*
+           * v3.29: shared ComputePicker for family consistency. Serverless is
+           * always-on (no lifecycle), so we hide start/stop.
+           */}
+          <ComputePicker
+            label="Serverless SQL endpoint"
+            filter={['synapse-serverless-sql']}
+            value={computeId}
+            onChange={setComputeId}
+            showLifecycle={false}
+          />
           <MonacoTextarea
             value={sqlText}
             onChange={setSqlText}

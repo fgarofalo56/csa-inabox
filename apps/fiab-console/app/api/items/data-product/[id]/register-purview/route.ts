@@ -43,12 +43,12 @@ function err(error: string, status: number, extra: Record<string, unknown> = {})
   return NextResponse.json({ ok: false, error, ...extra }, { status });
 }
 
-export async function POST(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return err('unauthenticated', 401);
 
   // 1. Load the Cosmos item (tenant-scoped).
-  const item = await loadOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid);
+  const item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
   if (!item) return err('data-product item not found', 404);
 
   const state = (item.state || {}) as Record<string, unknown>;

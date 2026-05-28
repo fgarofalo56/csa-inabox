@@ -22,7 +22,8 @@ import {
 import Link from 'next/link';
 import { LeftNav } from './left-nav';
 import { CommandPalette } from './command-palette';
-import { CopilotPane, openCopilot } from './copilot-pane';
+import { CopilotPane } from './copilot-pane';
+import { HelpCopilotWidget, openHelpCopilot } from './help-copilot/widget';
 import { LoomLogo } from './loom-logo';
 import { ThemeToggle } from './theme-toggle';
 import { TopbarSearch } from './topbar-search';
@@ -131,9 +132,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         <SavedStatus />
         <TopbarSearch />
         <div className={styles.actions} role="toolbar" aria-label="Global actions">
-          <Tooltip content="Copilot (Ctrl+/)" relationship="label">
+          <Tooltip content="Help Copilot — ask anything about CSA Loom (Ctrl+/)" relationship="label">
             <Button appearance="transparent" className={styles.iconBtn} icon={<Sparkle24Regular />}
-              onClick={openCopilot} aria-label="Open Copilot" />
+              onClick={openHelpCopilot} aria-label="Open Help Copilot" />
           </Tooltip>
           <NotificationsButton />
           <Tooltip content="Send feedback" relationship="label">
@@ -185,6 +186,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </main>
       <CommandPalette />
       <CopilotPane />
+      <HelpCopilotWidget />
       <FeedbackWidget />
       <GlobalErrorListeners />
     </div>
