@@ -9,13 +9,13 @@ import { publishAgent, CopilotStudioError } from '@/lib/azure/copilot-studio-cli
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
   if (!body?.envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
-    const r = await publishAgent(String(body.envId), ctx.params.id);
+    const r = await publishAgent(String(body.envId), (await ctx.params).id);
     return NextResponse.json(r);
   } catch (e: any) {
     const status = e instanceof CopilotStudioError ? e.status : 502;

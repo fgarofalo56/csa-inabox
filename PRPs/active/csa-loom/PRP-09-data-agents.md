@@ -101,3 +101,33 @@ docs/fiab/workloads/data-agents-parity.md                created (by PRP-15)
 - `temp/fiab-prd/06-custom-apps.md` §6.6
 - `temp/fiab-research/03-fabric-only-internals.md` §4
 - Memory: [[copilot-chat-two-backends]]
+
+## Validation receipt
+
+**Validated 2026-05-27 — 5/5 pytest GREEN.**
+
+Test harness: `apps/copilot/tests/test_loom_data_agents.py`. All 5 tests
+pass exercising the same tool dispatch the live agent runs:
+
+```
+collected 5 items
+tests\test_loom_data_agents.py .....                                     [100%]
+============================== 5 passed in 0.68s ==============================
+```
+
+Tools shipped in `apps/copilot/tools/`:
+- `loom_data_agents.py` — top-level NL2SQL / NL2DAX / NL2KQL / Graph / Search
+  tool definitions with sensitivity-policy enforcement
+- `loom_executors.py` — Databricks-or-Synapse SQL dispatcher (per-workspace
+  config in Cosmos), Power BI REST XMLA executor, Kusto ADX executor,
+  Gremlin graph executor, AI Search executor
+- `loom_synapse_executor.py` — pyodbc Synapse Serverless executor
+
+The financial-fraud example (PRP-14) ships a real Data Agent config that
+combines `databricks-sql` + `kusto` executors against named tables, exercised
+by the `test_fraud_data_agent_valid_schema` test in
+`docs/fiab/tests/test_examples_port.py`.
+
+**Operator action remaining:** Live NL → executor round-trip against a
+provisioned Databricks SQL warehouse / Power BI XMLA / ADX cluster. Tracked
+in audit page.

@@ -17,11 +17,11 @@ export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'dbt-job';
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
   try {
-    const item = await loadOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid);
+    const item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
     if (!item) return jerr('not found', 404);
     return NextResponse.json({ ok: true, item });
   } catch (e: any) {
@@ -29,12 +29,12 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
   const body = await req.json().catch(() => ({}));
   try {
-    const updated = await updateOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid, body);
+    const updated = await updateOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid, body);
     if (!updated) return jerr('not found', 404);
     return NextResponse.json({ ok: true, item: updated });
   } catch (e: any) {
@@ -42,14 +42,14 @@ export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function DELETE(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
   try {
-    const current = await loadOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid);
+    const current = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
     if (!current) return jerr('not found', 404);
     const jobId = (current.state as any)?.databricksJobId;
-    const ok = await deleteOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid);
+    const ok = await deleteOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
     if (!ok) return jerr('not found', 404);
     if (typeof jobId === 'number') {
       try { await deleteJob(jobId); } catch { /* ignore — job may already be gone */ }

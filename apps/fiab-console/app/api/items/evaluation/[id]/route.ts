@@ -9,18 +9,18 @@ import { getEvaluation, getEvaluationResults, FoundryError, NotDeployedError } f
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const project = req.nextUrl.searchParams.get('project');
   const wantResults = req.nextUrl.searchParams.get('results') === '1';
   if (!project) return NextResponse.json({ ok: false, error: 'project query param required' }, { status: 400 });
   try {
-    const evaluation = await getEvaluation(project, ctx.params.id);
+    const evaluation = await getEvaluation(project, (await ctx.params).id);
     if (!evaluation) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     let results: any = null;
     if (wantResults) {
-      try { results = await getEvaluationResults(project, ctx.params.id); } catch { results = null; }
+      try { results = await getEvaluationResults(project, (await ctx.params).id); } catch { results = null; }
     }
     return NextResponse.json({ ok: true, evaluation, results });
   } catch (e: any) {

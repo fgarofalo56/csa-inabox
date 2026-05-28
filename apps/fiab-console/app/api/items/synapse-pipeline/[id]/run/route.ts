@@ -10,12 +10,12 @@ import { runPipeline } from '@/lib/azure/synapse-dev-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
   try {
-    const res = await runPipeline(ctx.params.id, body?.params || {});
+    const res = await runPipeline((await ctx.params).id, body?.params || {});
     return NextResponse.json({ ok: true, ...res });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });

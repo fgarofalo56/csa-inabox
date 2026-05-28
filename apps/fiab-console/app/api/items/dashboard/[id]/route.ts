@@ -10,15 +10,15 @@ import { getDashboard, listDashboardTiles, PowerBiError } from '@/lib/azure/powe
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   try {
     const [dashboard, tiles] = await Promise.all([
-      getDashboard(workspaceId, ctx.params.id),
-      listDashboardTiles(workspaceId, ctx.params.id).catch(() => []),
+      getDashboard(workspaceId, (await ctx.params).id),
+      listDashboardTiles(workspaceId, (await ctx.params).id).catch(() => []),
     ]);
     return NextResponse.json({ ok: true, workspaceId, dashboard, tiles });
   } catch (e: any) {

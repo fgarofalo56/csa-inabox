@@ -20,6 +20,7 @@ import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Switch, Dropdown, Option, Field,
   Tree, TreeItem, TreeItemLayout,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -122,6 +123,14 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const [serviceUrl, setServiceUrl] = useState('');
   const [dirty, setDirty] = useState(false);
 
+  // Edit-OpenAPI dialog state — Monaco editor over the OpenAPI document
+  // exported by /api/items/apim-api/[id]/spec; PUT writes back via the
+  // same upsertApi() backed by ARM /apis/{id}?contentFormat=openapi+json.
+  const [specEditorOpen, setSpecEditorOpen] = useState(false);
+  const [specDraft, setSpecDraft] = useState('');
+  const [specSaving, setSpecSaving] = useState(false);
+  const [specError, setSpecError] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     if (isNew) return;
     setApi({ loading: true, data: null });
@@ -218,6 +227,45 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     if (spec.data?.value) navigator.clipboard?.writeText(spec.data.value).catch(() => {});
   };
 
+  const openSpecEditor = useCallback(() => {
+    // Seed the draft from the live spec (if any) so users edit-in-place;
+    // empty starter only when APIM returned no spec.
+    setSpecDraft(spec.data?.value || '{\n  "openapi": "3.0.1",\n  "info": { "title": "", "version": "1.0" },\n  "paths": {}\n}');
+    setSpecError(null);
+    setSpecEditorOpen(true);
+  }, [spec.data?.value]);
+
+  const saveSpec = useCallback(async () => {
+    setSpecSaving(true); setSpecError(null);
+    try {
+      // Validate JSON client-side before round-tripping to APIM.
+      try { JSON.parse(specDraft); }
+      catch (e: any) { throw new Error(`OpenAPI document is not valid JSON: ${e?.message || String(e)}`); }
+      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          displayName, path,
+          protocols: [...protocols],
+          subscriptionRequired,
+          serviceUrl: serviceUrl || undefined,
+          format: 'openapi+json',
+          value: specDraft,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setSpecEditorOpen(false);
+      setApi({ loading: false, data: j.api });
+      setStatus({ kind: 'ok', msg: `OpenAPI spec saved at ${new Date().toLocaleTimeString()}` });
+      // Re-export from APIM so the read-only viewer reflects the canonical bytes
+      loadSpec();
+      loadOps();
+    } catch (e: any) {
+      setSpecError(e?.message || String(e));
+    } finally { setSpecSaving(false); }
+  }, [id, specDraft, displayName, path, protocols, subscriptionRequired, serviceUrl, loadSpec, loadOps]);
+
   // Ribbon — Save / Reload / Copy spec wired inline; Edit OpenAPI is honestly
   // disabled (no inline editor for the OpenAPI document — APIM Studio is the
   // path of record). Open policy editor deep-links to the apim-policy item.
@@ -228,14 +276,14 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
         { label: 'Reload', onClick: !isNew ? () => { load(); loadOps(); loadSpec(); } : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
       { label: 'Definition', actions: [
-        { label: 'Edit OpenAPI', disabled: true, title: 'Edit OpenAPI — needs in-browser spec editor (deferred; use APIM Studio for now)' },
+        { label: 'Edit OpenAPI', onClick: !isNew ? openSpecEditor : undefined, disabled: isNew, title: isNew ? 'Save the API first, then edit the spec' : undefined },
         { label: 'Copy spec', onClick: spec.data?.value ? copySpec : undefined, disabled: !spec.data?.value, title: !spec.data?.value ? 'No spec attached to this API' : undefined },
       ]},
       { label: 'Policy', actions: [
         { label: 'Open policy editor', onClick: !isNew ? () => router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=api&apiId=${encodeURIComponent(id)}`) : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
     ]},
-  ], [status.kind, isNew, dirty, displayName, path, save, load, loadOps, loadSpec, spec.data, router, id]);
+  ], [status.kind, isNew, dirty, displayName, path, save, load, loadOps, loadSpec, spec.data, openSpecEditor, router, id]);
 
   return (
     <ItemEditorChrome

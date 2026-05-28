@@ -28,12 +28,12 @@ interface SparkSpec {
   numExecutors?: number;
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
   const override = (await req.json().catch(() => ({}))) as Partial<SparkSpec> & { name?: string };
   try {
-    const item = await loadOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid);
+    const item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
     if (!item) return jerr('not found', 404);
     const spec: SparkSpec = { ...((item.state as any)?.spec || {}), ...override };
     if (!spec.pool) return jerr('spec.pool is required', 400);

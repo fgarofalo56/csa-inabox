@@ -15,7 +15,8 @@ const nextConfig = {
   serverExternalPackages: ['mssql', 'tedious', '@azure/storage-file-datalake'],
   experimental: {
     serverActions: { allowedOrigins: ['localhost:3000', 'loom-console.*'] },
-    instrumentationHook: true,
+    // Next.js 15: instrumentation.ts is enabled by default; instrumentationHook
+    // flag is no longer supported and was removed here.
   },
   async headers() {
     return [
