@@ -28,6 +28,7 @@ import {
 } from '@fluentui/react-components';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -517,14 +518,8 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
 
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
-        <div className={styles.form}>
-          <MessageBar intent="info">
-            <MessageBarBody>Create this Environment from the workspace catalog,
-              then return here to configure libraries and Spark conf.</MessageBarBody>
-          </MessageBar>
-        </div>
-      } />
+      <NewItemCreateGate item={item} createLabel="Create environment"
+        intro="A Spark environment bundles PyPI requirements, Spark configuration, and custom JARs that you can apply to a Synapse Spark pool. Create it, then configure and apply." />
     );
   }
 
@@ -728,14 +723,8 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
 
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
-        <div className={styles.form}>
-          <MessageBar intent="info">
-            <MessageBarBody>Create this Copy Job from the workspace catalog,
-              then return here to configure source, sink, and mappings.</MessageBarBody>
-          </MessageBar>
-        </div>
-      } />
+      <NewItemCreateGate item={item} createLabel="Create copy job"
+        intro="A Copy Job moves data source→sink by materialising and triggering a Synapse pipeline. Create it, then configure source, sink, and column mappings and Run." />
     );
   }
 
@@ -1039,14 +1028,8 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
 
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
-        <div className={styles.form}>
-          <MessageBar intent="info">
-            <MessageBarBody>Create this dbt Job from the workspace catalog,
-              then return here to configure the repo + Databricks cluster.</MessageBarBody>
-          </MessageBar>
-        </div>
-      } />
+      <NewItemCreateGate item={item} createLabel="Create dbt job"
+        intro="A dbt Job runs your dbt project on a Databricks cluster (materialised as a Databricks Job + dbt_task). Create it, then configure the repo + cluster and Run dbt." />
     );
   }
 

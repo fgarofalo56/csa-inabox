@@ -28,6 +28,7 @@ import {
 } from '@fluentui/react-components';
 import { Map20Regular, Folder20Regular, Play20Regular, Flow20Regular, Save20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -176,6 +177,16 @@ ORDER BY hits DESC;
 interface GeoMapState { account: string; style: string; tileLayerUrl: string; [k: string]: unknown }
 
 export function GeoMapEditor({ item, id }: { item: FabricItemType; id: string }) {
+  if (id === 'new') {
+    return (
+      <NewItemCreateGate item={item} createLabel="Create geo map"
+        intro="A geo map renders spatial layers over Azure Maps (or OSM tiles when Maps is not provisioned). Create it, then configure the account, style, and tile layer and Save." />
+    );
+  }
+  return <GeoMapEditorBody item={item} id={id} />;
+}
+
+function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoMapState>('geo-map', id, {
     account: '', style: 'main', tileLayerUrl: '',
@@ -251,6 +262,16 @@ function useLakehouseContainers() {
 // round-trip coverage.
 
 export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: string }) {
+  if (id === 'new') {
+    return (
+      <NewItemCreateGate item={item} createLabel="Create geo dataset"
+        intro="A geo dataset points at an ADLS path holding spatial data (Parquet/GeoJSON/CSV). Create it, then select a container, geometry column, and format and Save." />
+    );
+  }
+  return <GeoDatasetEditorBody item={item} id={id} />;
+}
+
+function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoDatasetState>('geo-dataset', id, {
     adlsPath: '', geomColumn: 'geometry', format: 'parquet',
@@ -489,6 +510,16 @@ function useAdfPipelines() {
 }
 
 export function GeoPipelineEditor({ item, id }: { item: FabricItemType; id: string }) {
+  if (id === 'new') {
+    return (
+      <NewItemCreateGate item={item} createLabel="Create geo pipeline"
+        intro="A geo pipeline layers geo-enrichment flags (H3, reverse-geocode, buffer) onto an existing ADF pipeline. Create it, then pick the target pipeline and Trigger run." />
+    );
+  }
+  return <GeoPipelineEditorBody item={item} id={id} />;
+}
+
+function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoPipelineState>('geo-pipeline', id, {
     adfPipelineName: '', enrichH3: true, reverseGeocode: false, bufferMeters: 0,
