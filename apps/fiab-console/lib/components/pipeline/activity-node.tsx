@@ -39,6 +39,29 @@ const useStyles = makeStyles({
   swatch: { width: 6, alignSelf: 'stretch', borderRadius: 2 },
   body: { display: 'flex', gap: 8, alignItems: 'flex-start' },
   textCol: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 },
+  // Connection handles — the small circular ports on a node's left (input)
+  // and right (output) edges. Dragging from an output port to another
+  // node's input port creates a success dependency (Fabric "green arrow").
+  handle: {
+    position: 'absolute',
+    top: '50%',
+    width: 14,
+    height: 14,
+    marginTop: -7,
+    borderRadius: '50%',
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `2px solid ${tokens.colorBrandStroke1}`,
+    cursor: 'crosshair',
+    zIndex: 2,
+    transitionProperty: 'transform, background-color',
+    transitionDuration: '100ms',
+    ':hover': {
+      transform: 'scale(1.3)',
+      backgroundColor: tokens.colorBrandBackground,
+    },
+  },
+  handleOut: { right: -8 },
+  handleIn: { left: -8 },
 });
 
 export interface ActivityNodeProps {
@@ -48,9 +71,17 @@ export interface ActivityNodeProps {
   selected?: boolean;
   onSelect?: () => void;
   onMouseDown?: (e: React.MouseEvent) => void;
+  /** Begin dragging a connector out of this node's output port. */
+  onConnectStart?: (e: React.MouseEvent) => void;
+  /** Pointer entered this node's input port while a connector drag is live. */
+  onConnectEnter?: () => void;
+  onConnectLeave?: () => void;
 }
 
-export function ActivityNode({ activity, x, y, selected, onSelect, onMouseDown }: ActivityNodeProps) {
+export function ActivityNode({
+  activity, x, y, selected, onSelect, onMouseDown,
+  onConnectStart, onConnectEnter, onConnectLeave,
+}: ActivityNodeProps) {
   const s = useStyles();
   const def = findByType(activity.type);
   const swatch = def?.color || tokens.colorBrandBackground;
@@ -72,6 +103,21 @@ export function ActivityNode({ activity, x, y, selected, onSelect, onMouseDown }
       }}
       onMouseDown={onMouseDown}
     >
+      {/* Input port (left edge) */}
+      <div
+        className={`${s.handle} ${s.handleIn}`}
+        data-handle="in"
+        title="Input — drop a connector here"
+        onMouseEnter={onConnectEnter}
+        onMouseLeave={onConnectLeave}
+      />
+      {/* Output port (right edge) — drag from here to wire a dependency */}
+      <div
+        className={`${s.handle} ${s.handleOut}`}
+        data-handle="out"
+        title="Drag to connect this activity's success output"
+        onMouseDown={(e) => { e.stopPropagation(); onConnectStart?.(e); }}
+      />
       <div className={s.body}>
         <div className={s.swatch} style={{ backgroundColor: swatch }} />
         <div className={s.textCol}>

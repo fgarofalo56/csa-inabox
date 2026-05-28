@@ -291,6 +291,38 @@ export function DataPipelineEditor({ item, id }: Props) {
     setSelectedActivity(null);
   }, []);
 
+  // Wire a success dependency from→to (drag a node's output port to another
+  // node's input port). Cycle-guarded so the DAG stays acyclic.
+  const connect = useCallback((from: string, to: string) => {
+    if (from === to) return;
+    patchSpec((prev) => {
+      const acts = prev.properties.activities;
+      // ancestry walk from `from`; refuse if `to` already an ancestor
+      const ancestors = new Set<string>();
+      const stack = [from];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        const node = acts.find((a) => a.name === cur);
+        for (const d of node?.dependsOn || []) {
+          if (!ancestors.has(d.activity)) { ancestors.add(d.activity); stack.push(d.activity); }
+        }
+      }
+      if (ancestors.has(to)) return prev;
+      return {
+        ...prev,
+        properties: {
+          ...prev.properties,
+          activities: acts.map((a) => {
+            if (a.name !== to) return a;
+            const deps = a.dependsOn || [];
+            if (deps.some((d) => d.activity === from)) return a;
+            return { ...a, dependsOn: [...deps, { activity: from, dependencyConditions: ['Succeeded'] }] };
+          }),
+        },
+      };
+    });
+  }, []);
+
   // ============ Backend actions ============
   const save = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
@@ -590,12 +622,17 @@ export function DataPipelineEditor({ item, id }: Props) {
           {!pipelineId && (
             <MessageBar intent="info">
               <MessageBarBody>
-                Pick a pipeline from the left rail or click <strong>New pipeline</strong> in the ribbon.
+                Design your pipeline below — drag activities from the palette onto the canvas and wire them
+                up. To <strong>Save / Validate / Run</strong> against the live Fabric backing, pick a workspace
+                and pipeline from the left rail (or click <strong>New pipeline</strong> in the ribbon).
               </MessageBarBody>
             </MessageBar>
           )}
 
-          {pipelineId && (
+          {/* Visual designer always renders so the canvas + palette are
+              available even before a backend pipeline is selected. Only the
+              ribbon's Save/Validate/Run wire to the live Fabric backing. */}
+          {(
             <TopTabs active={topTab} onChange={setTopTab}
               counts={{
                 parameters: parameters.length,
@@ -619,6 +656,7 @@ export function DataPipelineEditor({ item, id }: Props) {
                         const def = findByKey(key);
                         if (def) insertActivity(def);
                       }}
+                      onConnect={connect}
                     />
                   </div>
                   <PropertiesPanel

@@ -39,8 +39,11 @@ const MAX_ROWS = 5_000;
 function endpoint(): string {
   const v = process.env.LOOM_COSMOS_GREMLIN_ENDPOINT;
   if (!v) throw new GremlinError(
-    'LOOM_COSMOS_GREMLIN_ENDPOINT not configured — Cosmos Gremlin runtime deferred to v3.x.',
-    501,
+    'Cosmos Gremlin runtime is not provisioned in this deployment. Set LOOM_COSMOS_GREMLIN_ENDPOINT '
+    + '(e.g. wss://<account>.gremlin.cosmos.azure.com:443/) on the Console Container App, optionally '
+    + 'LOOM_COSMOS_GREMLIN_DATABASE / LOOM_COSMOS_GREMLIN_GRAPH, and grant the Console UAMI the '
+    + 'Cosmos DB Built-in Data Contributor role (or set LOOM_COSMOS_GREMLIN_KEY).',
+    503,
   );
   return v;
 }
@@ -72,8 +75,8 @@ export async function executeGremlin(query: string): Promise<GremlinResult> {
     gremlin = require('gremlin');
   } catch {
     throw new GremlinError(
-      'gremlin npm package not installed in this build — install `gremlin` and redeploy to enable Cosmos Gremlin runtime.',
-      501,
+      'gremlin npm package not installed in this build — add `gremlin` to apps/fiab-console/package.json and redeploy to enable Cosmos Gremlin runtime.',
+      503,
     );
   }
 

@@ -108,6 +108,11 @@ export interface PipelineCanvasProps {
   onSelect: (name: string | null) => void;
   /** Fired when the user drops a palette tile on the canvas. */
   onDropPaletteKey: (key: string, atX: number, atY: number) => void;
+  /**
+   * Fired when the user drags a connector from one node's output port to
+   * another node's input port. Parent should add a `dependsOn` edge.
+   */
+  onConnect?: (fromName: string, toName: string) => void;
   /** Whether the snap-to-grid toggle is on. */
   snapToGrid?: boolean;
   /** Whether the dot grid is visible. */
@@ -161,7 +166,7 @@ function autoLayout(activities: PipelineActivity[], existing: Map<string, Pos>):
 }
 
 export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvas(
-  { activities, selectedName, onSelect, onDropPaletteKey, snapToGrid = true, showGrid = true },
+  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, snapToGrid = true, showGrid = true },
   ref,
 ) {
   const s = useStyles();
@@ -174,6 +179,12 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dropping, setDropping] = useState(false);
+
+  // Live connector-drag state. While the user drags from a node's output
+  // port we draw a rubber-band line to the cursor; on mouse-up over a
+  // target node's input port we fire onConnect.
+  const [connectDrag, setConnectDrag] = useState<{ from: string; x: number; y: number } | null>(null);
+  const hoverTargetRef = useRef<string | null>(null);
 
   // Sync layout whenever activities change. Existing positions kept; new
   // nodes get autoLayout slots.
@@ -302,6 +313,45 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   }, [pan.x, pan.y, zoom, snapToGrid]);
 
+  // Connector drag — start from a node's output port, track the cursor in
+  // local (canvas) coordinates, finish when released over a target node's
+  // input port (tracked via hoverTargetRef set by node onConnectEnter).
+  const toLocal = useCallback((clientX: number, clientY: number): Pos => {
+    const shell = shellRef.current;
+    if (!shell) return { x: 0, y: 0 };
+    const rect = shell.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left - pan.x) / zoom,
+      y: (clientY - rect.top - pan.y) / zoom,
+    };
+  }, [pan.x, pan.y, zoom]);
+
+  const onConnectStart = useCallback((name: string) => (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const local = toLocal(e.clientX, e.clientY);
+    hoverTargetRef.current = null;
+    setConnectDrag({ from: name, x: local.x, y: local.y });
+  }, [toLocal]);
+
+  useEffect(() => {
+    if (!connectDrag) return;
+    const onMove = (e: MouseEvent) => {
+      const local = toLocal(e.clientX, e.clientY);
+      setConnectDrag((prev) => (prev ? { ...prev, x: local.x, y: local.y } : prev));
+    };
+    const onUp = () => {
+      const from = connectDrag.from;
+      const to = hoverTargetRef.current;
+      if (to && to !== from && onConnect) onConnect(from, to);
+      hoverTargetRef.current = null;
+      setConnectDrag(null);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [connectDrag, toLocal, onConnect]);
+
   // Build edges from dependsOn — one path per (from, cond) pair.
   const edges = useMemo(() => {
     const list: Array<{ from: string; to: string; cond?: ConnectorCondition; key: string }> = [];
@@ -341,6 +391,8 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
       onWheel={onWheel}
       onMouseDown={onMouseDown}
       data-testid="pipeline-canvas"
+      data-canvas="pipeline"
+      aria-label="Pipeline design canvas"
     >
       <div className={s.viewport}>
         <div
@@ -361,6 +413,23 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
               const ey = tp.y + NODE_H / 2;
               return <Connector key={e.key} id={e.key} sx={sx} sy={sy} ex={ex} ey={ey} condition={e.cond} />;
             })}
+            {/* Live rubber-band connector while dragging from an output port */}
+            {connectDrag && (() => {
+              const fp = positionsRef.current.get(connectDrag.from);
+              if (!fp) return null;
+              const sx = fp.x + NODE_W;
+              const sy = fp.y + NODE_H / 2;
+              return (
+                <Connector
+                  key="__live__"
+                  id="__live__"
+                  sx={sx} sy={sy}
+                  ex={connectDrag.x} ey={connectDrag.y}
+                  condition="Succeeded"
+                  selected
+                />
+              );
+            })()}
           </svg>
           {activities.map((a) => {
             const p = positionsRef.current.get(a.name);
@@ -374,6 +443,9 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
                 selected={selectedName === a.name}
                 onSelect={() => onSelect(a.name)}
                 onMouseDown={onNodeMouseDown(a.name)}
+                onConnectStart={onConnectStart(a.name)}
+                onConnectEnter={() => { if (connectDrag) hoverTargetRef.current = a.name; }}
+                onConnectLeave={() => { if (hoverTargetRef.current === a.name) hoverTargetRef.current = null; }}
               />
             );
           })}
@@ -404,7 +476,7 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
       )}
       <div style={{ position: 'absolute', left: 12, bottom: 12 }}>
         <Caption1 style={{ color: tokens.colorNeutralForeground3, backgroundColor: tokens.colorNeutralBackground1, padding: '2px 6px', borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
-          {Math.round(zoom * 100)}% · shift+drag to pan · ctrl+wheel to zoom
+          {Math.round(zoom * 100)}% · shift+drag to pan · ctrl+wheel to zoom · drag a node's right port to connect
         </Caption1>
       </div>
     </div>

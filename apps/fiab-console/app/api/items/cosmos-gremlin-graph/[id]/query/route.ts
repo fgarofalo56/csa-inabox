@@ -1,8 +1,9 @@
 /**
  * POST /api/items/cosmos-gremlin-graph/[id]/query
  *   body { query } — runs a Gremlin traversal against the configured graph.
- *   Returns 501 with a deferred-reason message if Cosmos Gremlin runtime
- *   isn't wired (no LOOM_COSMOS_GREMLIN_ENDPOINT, or `gremlin` not installed).
+ *   Returns 503 (Service Unavailable) with a deferred-reason message + the
+ *   exact env vars / role to set if the Cosmos Gremlin runtime isn't wired
+ *   (no LOOM_COSMOS_GREMLIN_ENDPOINT, or `gremlin` npm package not installed).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -23,6 +24,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, ...result });
   } catch (e: any) {
     const status = e instanceof GremlinError ? e.status : 502;
-    return NextResponse.json({ ok: false, error: e?.message || String(e), deferred: status === 501 }, { status });
+    return NextResponse.json({ ok: false, error: e?.message || String(e), deferred: status === 503 }, { status });
   }
 }

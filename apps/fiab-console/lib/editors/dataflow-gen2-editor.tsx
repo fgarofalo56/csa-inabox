@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
-  Tree, TreeItem, TreeItemLayout, Select,
+  Tree, TreeItem, TreeItemLayout, Select, Tab, TabList,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
@@ -23,6 +23,7 @@ import {
   Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { DataflowDiagram } from '@/lib/components/pipeline/dataflow-diagram';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -91,6 +92,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
   const [defText, setDefText] = useState(STARTER_M);
   const [partPath, setPartPath] = useState('mashup.pq');
   const [dirty, setDirty] = useState(false);
+  const [tab, setTab] = useState<'diagram' | 'script'>('diagram');
   const [listErr, setListErr] = useState<string | null>(null);
   const [listHint, setListHint] = useState<string | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
@@ -290,22 +292,53 @@ export function DataflowGen2Editor({ item, id }: Props) {
           {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
           {refreshMsg && <MessageBar intent="info"><MessageBarBody>{refreshMsg}</MessageBarBody></MessageBar>}
 
-          {dataflowId && (
-            <>
-              {dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
-              <Caption1>Definition part: <code>{partPath}</code></Caption1>
-              <MonacoTextarea
-                value={defText}
+          {!dataflowId && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                Design your dataflow below — drag a source or transform from the palette to scaffold a query.
+                To <strong>Save / Refresh</strong> against the live Fabric backing, pick a dataflow from the
+                left rail (or click <strong>New</strong>).
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {dataflowId && dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
+          {dataflowId && <Caption1>Definition part: <code>{partPath}</code></Caption1>}
+
+          <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'diagram' | 'script')}>
+              <Tab value="diagram">Diagram</Tab>
+              <Tab value="script">Script ({/\.(pq|m)$/i.test(partPath) ? 'M' : 'JSON'})</Tab>
+            </TabList>
+          </div>
+
+          {tab === 'diagram' && (
+            /\.(pq|m)$/i.test(partPath) ? (
+              <DataflowDiagram
+                mScript={defText}
                 onChange={(v) => { setDefText(v); setDirty(true); }}
-                /* Pick a sensible Monaco language based on the active part: .pq/.m
-                   is Power Query M (no first-class Monaco mode — fall back to
-                   plaintext); queryMetadata.json + the rest are JSON. */
-                language={/\.(pq|m)$/i.test(partPath) ? 'plaintext' : 'json'}
-                height={360}
-                minHeight={280}
-                ariaLabel="Dataflow definition"
               />
-            </>
+            ) : (
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  The visual diagram projects Power Query (M). This dataflow part is
+                  <code> {partPath}</code> — edit it on the Script tab.
+                </MessageBarBody>
+              </MessageBar>
+            )
+          )}
+
+          {tab === 'script' && (
+            <MonacoTextarea
+              value={defText}
+              onChange={(v) => { setDefText(v); setDirty(true); }}
+              /* Pick a sensible Monaco language based on the active part: .pq/.m
+                 is Power Query M (no first-class Monaco mode — fall back to
+                 plaintext); queryMetadata.json + the rest are JSON. */
+              language={/\.(pq|m)$/i.test(partPath) ? 'plaintext' : 'json'}
+              height={360}
+              minHeight={280}
+              ariaLabel="Dataflow definition"
+            />
           )}
         </div>
       }

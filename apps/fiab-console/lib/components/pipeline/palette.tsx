@@ -120,7 +120,7 @@ export function ActivityPalette({ onInsert }: PaletteProps) {
   );
 
   return (
-    <div className={s.root} role="navigation" aria-label="Pipeline activity palette">
+    <div className={s.root} role="navigation" aria-label="Pipeline activity palette" data-palette="activities">
       {renderGroup('Move & transform', openMT, () => setOpenMT((v) => !v), byCategory('move-transform'))}
       {renderGroup('Activities', openAct, () => setOpenAct((v) => !v), byCategory('activities'))}
       <Caption1 style={{ marginTop: 'auto', color: tokens.colorNeutralForeground3 }}>
