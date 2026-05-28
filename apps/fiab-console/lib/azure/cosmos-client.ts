@@ -139,3 +139,107 @@ export async function workspacePermissionsContainer(): Promise<Container> { awai
 export async function workspaceGitContainer(): Promise<Container> { await ensure(); return _wsGit!; }
 export async function tenantThemesContainer(): Promise<Container> { await ensure(); return _tenantThemes!; }
 export async function tenantSettingsContainer(): Promise<Container> { await ensure(); return _tenantSettings!; }
+
+// ============================================================
+// Throughput administration — RU/s scale-by-SKU
+// ============================================================
+
+export interface ContainerThroughputInfo {
+  id: string;
+  partitionKey?: string;
+  mode: 'manual' | 'autoscale' | 'serverless' | 'unknown';
+  ru?: number;          // manual RU/s
+  maxRu?: number;       // autoscale max RU/s
+  minRu?: number;       // ARM-reported minimum (cannot go below)
+}
+
+const KNOWN_CONTAINER_IDS = [
+  'workspaces', 'items', 'copilot-sessions',
+  'apps-catalog', 'workloads-catalog', 'user-prefs',
+  'tabs-state', 'notifications', 'audit-log', 'comments',
+  'shares', 'folders', 'downloads', 'search-history',
+  'workspace-permissions', 'workspace-git',
+  'tenant-themes', 'tenant-settings', 'marketplace-listings',
+];
+
+/** List all Loom containers with their current throughput shape. */
+export async function listContainerThroughput(): Promise<ContainerThroughputInfo[]> {
+  await ensure();
+  const out: ContainerThroughputInfo[] = [];
+  for (const id of KNOWN_CONTAINER_IDS) {
+    try {
+      const c = _db!.container(id);
+      const def = await c.read();
+      const partitionKey = (def?.resource?.partitionKey?.paths || [])[0];
+      let info: ContainerThroughputInfo = { id, partitionKey, mode: 'unknown' };
+      try {
+        const off = await c.readOffer();
+        if (off?.resource) {
+          const r: any = off.resource;
+          const autoMax = r?.content?.offerAutopilotSettings?.maxThroughput;
+          if (autoMax) {
+            info = { ...info, mode: 'autoscale', maxRu: autoMax, minRu: r?.content?.offerMinimumThroughputParameters?.maxThroughputEverProvisioned };
+          } else if (r?.content?.offerThroughput) {
+            info = { ...info, mode: 'manual', ru: r.content.offerThroughput };
+          }
+        } else {
+          info.mode = 'serverless';
+        }
+      } catch {
+        // Serverless accounts return 404 on readOffer.
+        info.mode = 'serverless';
+      }
+      out.push(info);
+    } catch {
+      // skip containers that don't exist in this account
+    }
+  }
+  return out;
+}
+
+/**
+ * Update RU/s for one Loom container. Pass either { ru: <manual> } or
+ * { maxRu: <autoscale-max> }. Throws on serverless accounts (those have
+ * no throughput dial).
+ */
+export async function updateContainerThroughput(
+  containerId: string,
+  opts: { ru?: number; maxRu?: number },
+): Promise<ContainerThroughputInfo> {
+  if (!KNOWN_CONTAINER_IDS.includes(containerId)) {
+    throw new Error(`updateContainerThroughput: unknown container ${containerId}`);
+  }
+  if (!opts.ru && !opts.maxRu) {
+    throw new Error('updateContainerThroughput: pass ru (manual) or maxRu (autoscale)');
+  }
+  await ensure();
+  const c = _db!.container(containerId);
+  let off;
+  try {
+    off = await c.readOffer();
+  } catch (e: any) {
+    throw new Error(`Cannot read offer for ${containerId} — likely a serverless account (${e?.message || e})`);
+  }
+  if (!off?.resource) throw new Error(`No throughput offer on ${containerId} (serverless?)`);
+  const r: any = off.resource;
+  if (opts.maxRu) {
+    // Switch to / update autoscale
+    r.content = r.content || {};
+    r.content.offerAutopilotSettings = { maxThroughput: opts.maxRu };
+    delete r.content.offerThroughput;
+  } else if (opts.ru) {
+    r.content = r.content || {};
+    r.content.offerThroughput = opts.ru;
+    delete r.content.offerAutopilotSettings;
+  }
+  await c.database.client.offer(r.id!).replace(r);
+  const updated = await c.readOffer();
+  const ur: any = updated?.resource;
+  const autoMax = ur?.content?.offerAutopilotSettings?.maxThroughput;
+  return {
+    id: containerId,
+    mode: autoMax ? 'autoscale' : 'manual',
+    ru: ur?.content?.offerThroughput,
+    maxRu: autoMax,
+  };
+}

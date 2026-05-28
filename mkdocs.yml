@@ -1992,6 +1992,8 @@ nav:
       - Releases:
           - "2026-05-27: App bundles + console wiring sweep": fiab/releases/2026-05-27-apps-bundles-and-wiring-sweep.md
       - Test Script (2026-05-27): fiab/TEST_SCRIPT_2026_05_27.md
+      - Admin:
+          - Scale by SKU: fiab/admin/scaling.md
       - Handoffs & Version State:
           - "v1.18 GREEN handoff": fiab/v118-handoff.md
           - "v2.0 handoff (Synapse pools live)": fiab/v2.0-handoff.md
