@@ -33,6 +33,15 @@ param defenderForAIEnabled = true
 // Reuse existing tenant-level Enterprise Purview (dmlz-dev-purview-eastus).
 // Provisioning a 2nd would fail with 'EnterpriseTenantAlreadyExists'.
 param purviewEnabled = false
+// Wire the existing tenant Purview into Loom so /admin/security Purview
+// tab calls REAL endpoints instead of rendering the NotConfigured gate.
+// Override via env: LOOM_PURVIEW_ACCOUNT=<short-account-name>
+param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', 'dmlz-dev-purview-eastus')
+// Information Protection + DLP — opt in after the post-deploy bootstrap
+// workflow grants the Graph AppRoles AND admin consent is issued.
+// Set LOOM_MIP_ENABLED / LOOM_DLP_ENABLED env vars to flip these on.
+param loomMipEnabled = bool(readEnvironmentVariable('LOOM_MIP_ENABLED', 'false'))
+param loomDlpEnabled = bool(readEnvironmentVariable('LOOM_DLP_ENABLED', 'false'))
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false
 param atlasOnAksEnabled = false

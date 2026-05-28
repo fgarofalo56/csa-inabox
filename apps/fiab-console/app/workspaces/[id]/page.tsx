@@ -15,7 +15,7 @@
  *  - Tree expand/collapse state is persisted to localStorage per-workspace
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, use } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Title2, Body1, Button, Caption1, Spinner, Badge,
@@ -151,7 +151,8 @@ function writeExpanded(wsId: string, ids: Set<string>) {
 
 // =========================================================================
 
-export default function WorkspaceDetailPage({ params }: { params: { id: string } }) {
+export default function WorkspaceDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = use(props.params);
   const s = useStyles();
   const router = useRouter();
   const qc = useQueryClient();

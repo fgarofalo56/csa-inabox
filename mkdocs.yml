@@ -362,6 +362,7 @@ nav:
               - Self-Hosted IR: SELF_HOSTED_IR.md
               - Event Hubs: guides/event-hubs.md
               - Microsoft Purview: guides/purview.md
+              - Build an internal Data Marketplace: guides/data-marketplace.md
               - APIM Data-Mesh Gateway: guides/apim-data-mesh-gateway.md
               - APIM as the Universal API Gateway: guides/apim-universal-gateway.md
               - APIM + MCP Layered Orchestration: guides/apim-mcp-layered-orchestration.md
@@ -1988,10 +1989,22 @@ nav:
       - Live Deploy Status (2026-05-23): fiab/live-deploy-status.md
       - UAT Report (Iteration 1): fiab/uat-report.md
       - Console Access Patterns: fiab/access-patterns.md
+      - Admin — Security & Governance:
+          - Overview: fiab/admin/security/index.md
+          - Purview tab: fiab/admin/security/purview.md
+          - Information Protection tab: fiab/admin/security/information-protection.md
+          - DLP tab: fiab/admin/security/dlp.md
+          - Audit tab: fiab/admin/security/audit.md
       - v1 Final Status + v2 Plan: fiab/v1-final-status-and-v2-plan.md
       - Releases:
           - "2026-05-27: App bundles + console wiring sweep": fiab/releases/2026-05-27-apps-bundles-and-wiring-sweep.md
+      - Operations:
+          - "App Install — Phase 2 live-service provisioning": fiab/operations/app-install-provisioning.md
+      - Admin:
+          - "Feature Permissions (Fabric-style RBAC)": fiab/admin/feature-rbac.md
       - Test Script (2026-05-27): fiab/TEST_SCRIPT_2026_05_27.md
+      - Admin:
+          - Scale by SKU: fiab/admin/scaling.md
       - Handoffs & Version State:
           - "v1.18 GREEN handoff": fiab/v118-handoff.md
           - "v2.0 handoff (Synapse pools live)": fiab/v2.0-handoff.md
@@ -2020,6 +2033,8 @@ nav:
           - CSA-in-a-Box Alignment + v2 Backlog: fiab/loom-csa-alignment-and-v2-backlog.md
           - Parity Progress (running log): fiab/parity-progress.md
           - Parity Rollup — Every Surface: fiab/parity-rollup.md
+      - Editor Families:
+          - "Data Engineering — Synapse · Databricks · ADF": fiab/synapse-databricks-adf-family.md
       - Parity Specs:
           - Activator: fiab/activator-parity-spec.md
           - ADF Dataset: fiab/adf-dataset-parity-spec.md
@@ -2225,11 +2240,20 @@ nav:
           - "Pages — Workspaces": fiab/parity-gap/page-workspaces.md
           - "Pages — Workspaces ID": fiab/parity-gap/page-workspaces-id.md
           - "Routes — API Routes": fiab/parity-gap/api-routes.md
+      - Help Copilot:
+          - Overview: fiab/help-copilot/index.md
+          - Architecture: fiab/help-copilot/architecture.md
+          - Suggested prompts: fiab/help-copilot/prompts.md
       - Deployment:
           - Index: fiab/deployment/index.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
           - From azd CLI: fiab/deployment/azd-cli.md
           - From Deploy-to-Azure button: fiab/deployment/deploy-button.md
+          - Continuous-deployment pipelines:
+              - GitHub Actions: fiab/deployment/pipelines/github-actions.md
+              - Azure DevOps Pipelines: fiab/deployment/pipelines/azure-devops.md
+              - Bicep CLI direct: fiab/deployment/pipelines/bicep-cli.md
+              - Terraform wrapper: fiab/deployment/pipelines/terraform.md
           - For Azure Commercial: fiab/deployment/commercial.md
           - For Azure Government (GCC): fiab/deployment/gcc.md
           - For Azure Government (GCC-High / IL4): fiab/deployment/gcc-high.md
@@ -2240,6 +2264,17 @@ nav:
           - Index: fiab/workloads/index.md
           - OneLake parity: fiab/workloads/onelake-parity.md
           - Data Engineering parity: fiab/workloads/data-engineering.md
+          - Data Engineering editors:
+              - Lakehouse: fiab/workloads/lakehouse.md
+              - Notebook: fiab/workloads/notebook.md
+              - Data pipeline: fiab/workloads/data-pipeline.md
+              - Dataflow Gen2: fiab/workloads/dataflow.md
+              - Mirrored Database: fiab/workloads/mirrored-database.md
+              - Spark Job Definition: fiab/workloads/spark-job-definition.md
+              - Environment: fiab/workloads/environment.md
+              - Copy Job: fiab/workloads/copy-job.md
+              - dbt Job: fiab/workloads/dbt-job.md
+              - Stream Analytics Job: fiab/workloads/stream-analytics-job.md
           - Data Warehouse parity: fiab/workloads/data-warehouse.md
           - Data Science parity: fiab/workloads/data-science.md
           - Real-Time Intelligence parity: fiab/workloads/real-time-intelligence.md
@@ -2259,6 +2294,10 @@ nav:
           - Loom Console: fiab/console/index.md
           - Loom Setup Wizard: fiab/console/setup-wizard.md
           - Loom Copilot (runtime chat): fiab/console/copilot-runtime.md
+          - Help Copilot (docs-grounded widget):
+              - Overview: fiab/help-copilot/index.md
+              - Architecture: fiab/help-copilot/architecture.md
+              - Prompt patterns: fiab/help-copilot/prompts.md
           - Operator — Interactive Setup Steps: fiab/operator-interactive-setup.md
           - MSAL Sign-in Handoff: fiab/MSAL-handoff.md
           - Dataverse Application User setup: fiab/dataverse-app-user.md
@@ -2310,6 +2349,10 @@ nav:
       - Marketing & Sales:
           - Pitch Deck: fiab/marketing/pitch-deck.md
           - Seller Playbook: fiab/marketing/seller-playbook.md
+          - Pitches (run-on-rails):
+              - 30-min CIO pitch: fiab/marketing/pitches/30-min-cio-pitch.md
+              - 60-min architecture deep-dive: fiab/marketing/pitches/60-min-architecture-deep-dive.md
+              - 2-hour technical evaluation: fiab/marketing/pitches/2-hour-technical-evaluation.md
           - Demo Script: fiab/marketing/demo-script.md
           - Battlecard vs Fabric Commercial: fiab/marketing/battlecard-fabric.md
           - One-Pager: fiab/marketing/one-pager.md

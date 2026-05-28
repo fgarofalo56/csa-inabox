@@ -36,7 +36,11 @@ async function loadItem(itemId: string, type: string, tenantId: string): Promise
   return item;
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { type: string; id: string } }) {
+export async function GET(
+  _req: NextRequest,
+  props: { params: Promise<{ type: string; id: string }> }
+) {
+  const params = await props.params;
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {
@@ -48,7 +52,8 @@ export async function GET(_req: NextRequest, { params }: { params: { type: strin
   }
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { type: string; id: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
+  const params = await props.params;
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   let body: any;
@@ -71,7 +76,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { type: stri
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { type: string; id: string } }) {
+export async function DELETE(
+  _req: NextRequest,
+  props: { params: Promise<{ type: string; id: string }> }
+) {
+  const params = await props.params;
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {

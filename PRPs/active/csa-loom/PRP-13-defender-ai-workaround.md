@@ -72,3 +72,26 @@ docs/fiab/compliance/defender-ai-workaround.md                     created (by P
 - `temp/fiab-prd/08-observability-security.md` §8.5
 - `temp/fiab-research/02-gov-boundary-availability.md` §1
 - Memory: [[copilot-chat-two-backends]]
+
+## Validation receipt
+
+**Validated 2026-05-27 — 5/5 pytest GREEN (bicep ARM emit).**
+
+Test harness: `platform/fiab/bicep/tests/test_bicep_modules.py`. Tests invoke
+`az bicep build` against `ai-defense.bicep` + `monitoring.bicep` and parse
+the emitted ARM JSON:
+
+- `ai-defense.bicep` builds to valid ARM
+- Logic App playbook emitted (`Microsoft.Logic/workflows`) — fires on Sentinel
+  incident, posts adaptive card to Teams via KV-stored webhook
+- Sentinel automation rule emitted
+  (`Microsoft.OperationalInsights/.../providers/Microsoft.SecurityInsights/automationRules`)
+- `monitoring.bicep` builds to valid ARM and declares ≥2 Sentinel scheduled
+  alert rules (`SecurityInsights/alertRules`) — covers "excessive PII
+  redactions" + "off-topic refusals spike" + "unusually long outputs" +
+  "high-rate repetition" + "cross-workspace exfiltration"
+
+**Operator action remaining:** Inject synthetic high-PII / prompt-injection
+prompts → assert Sentinel incident fires within 15 min in a live Gov
+deployment. Workbook rendering against real Copilot telemetry. Presidio
+sidecar (IL5 only — deferred per AMENDMENTS to v1.1). Tracked in audit page.

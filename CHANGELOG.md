@@ -10,6 +10,61 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.12.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.11.2...csa-inabox-v0.12.0) (2026-05-28)
+
+
+### Features
+
+* **csa-loom-admin:** full Purview + MIP + DLP management inside CSA Loom (no portal hand-offs) ([#373](https://github.com/fgarofalo56/csa-inabox/issues/373)) ([4efb227](https://github.com/fgarofalo56/csa-inabox/commit/4efb227ec7fd82db3329a56d6924a3efea439439))
+* **csa-loom-admin:** scale-by-SKU dropdowns for every scalable service (Fabric capacity, Synapse, ADX, Databricks, AI Search, APIM, Cosmos, Container Apps, Foundry) ([#387](https://github.com/fgarofalo56/csa-inabox/issues/387)) ([2e064cc](https://github.com/fgarofalo56/csa-inabox/commit/2e064ccd2d75fd1507294ba701162e4002fb07cc))
+* **csa-loom-copilot:** orchestrator status banner + per-tool direct invoke endpoint ([#384](https://github.com/fgarofalo56/csa-inabox/issues/384)) ([0a869d2](https://github.com/fgarofalo56/csa-inabox/commit/0a869d2c6aa0b0c76899ad4953263355eb653240))
+* **csa-loom-tabs:** group-by-workspace default ON + workspace names + nested overflow ([#363](https://github.com/fgarofalo56/csa-inabox/issues/363)) ([d78ce68](https://github.com/fgarofalo56/csa-inabox/commit/d78ce684accc9a41739464a744dcb8332094e3fc))
+* **csa-loom-workload-hub:** visual polish — alignment + spacing + rounded corners + per-family icon colors ([#367](https://github.com/fgarofalo56/csa-inabox/issues/367)) ([7808b83](https://github.com/fgarofalo56/csa-inabox/commit/7808b832f32fbc269c0407dc688a10b38aaac618))
+* **csa-loom:** Data Engineering family — production-grade across 10 editors ([#371](https://github.com/fgarofalo56/csa-inabox/issues/371)) ([d555b60](https://github.com/fgarofalo56/csa-inabox/commit/d555b6091567f94f9f84e2efa132ec3edeaefdb7))
+* **csa-loom:** Data Pipeline editor — full Fabric parity (palette + canvas + properties + ribbon + tabs) ([#388](https://github.com/fgarofalo56/csa-inabox/issues/388)) ([13f3c7e](https://github.com/fgarofalo56/csa-inabox/commit/13f3c7e537d7a78e074c125db3ab8fd3c4cfd987))
+* **csa-loom:** docs-grounded Help Copilot floating widget (recovered from crash + wired) ([#375](https://github.com/fgarofalo56/csa-inabox/issues/375)) ([d8b1e28](https://github.com/fgarofalo56/csa-inabox/commit/d8b1e2828cfae095fee7be3f8ec90f6b81cd8e92))
+* **csa-loom:** Eventhouse full toolset + SQL Database editor (no longer generic shell) ([#362](https://github.com/fgarofalo56/csa-inabox/issues/362)) ([cab9009](https://github.com/fgarofalo56/csa-inabox/commit/cab9009a35774fe5bcaf8e7fa98387cb146dc478))
+* **csa-loom:** LOOM_GRAPH_USERS_ENABLED default-on + UAMI Graph role grant + screenshot popup fix ([#372](https://github.com/fgarofalo56/csa-inabox/issues/372)) ([e6d7a5f](https://github.com/fgarofalo56/csa-inabox/commit/e6d7a5f1b98e0a770ecb70dd888504669818f72d))
+* **csa-loom:** Next.js 14 -&gt; 15 migration (closes [#158](https://github.com/fgarofalo56/csa-inabox/issues/158), picks up GHSA-8h8q-6873-q5fj DoS fix) ([#391](https://github.com/fgarofalo56/csa-inabox/issues/391)) ([bdae7f5](https://github.com/fgarofalo56/csa-inabox/commit/bdae7f5f00954e1815264e0197cee90c814bba30))
+* **csa-loom:** no-cuts v3 ribbon salvage — wire 10 remaining disabled buttons (+2.4k LOC) ([#382](https://github.com/fgarofalo56/csa-inabox/issues/382)) ([58791fd](https://github.com/fgarofalo56/csa-inabox/commit/58791fd10e0bb52217dab0170fe100a9827aae28))
+* **csa-loom:** Phase 2 — real artifact provisioning on app install + Fabric-style RBAC for admins ([#390](https://github.com/fgarofalo56/csa-inabox/issues/390)) ([afcab1e](https://github.com/fgarofalo56/csa-inabox/commit/afcab1e8900ba3c4797c95ea3d56c2078428869b))
+* **csa-loom:** PRP validation receipts — move 9 PRPs from 🟡 to ✅ + close 4 outstanding parity items ([#386](https://github.com/fgarofalo56/csa-inabox/issues/386)) ([42f7019](https://github.com/fgarofalo56/csa-inabox/commit/42f70196ba808e4552cfaca06592ade38a5afb3f))
+* **csa-loom:** Synapse / Databricks / ADF family — production-grade across 12 editors ([#364](https://github.com/fgarofalo56/csa-inabox/issues/364)) ([8640550](https://github.com/fgarofalo56/csa-inabox/commit/86405502def63a46c9ef42f9ceef25af8c4b5145))
+* **csa-loom:** wire workspace create Capacity + Domain to real Fabric + Purview + Marketplace ([#379](https://github.com/fgarofalo56/csa-inabox/issues/379)) ([7f8c02a](https://github.com/fgarofalo56/csa-inabox/commit/7f8c02ab0ae07feb011d019a560a140473452a3f))
+
+
+### Bug Fixes
+
+* **csa-loom-aisearch:** strip 'description' from ScoringProfile in upsertIndex ([#396](https://github.com/fgarofalo56/csa-inabox/issues/396)) ([b9b182a](https://github.com/fgarofalo56/csa-inabox/commit/b9b182a614f917020624b2e91a86628714424f94))
+* **csa-loom-bicep:** expose LOOM_ADMIN_RG + LOOM_AI_SEARCH_RG + LOOM_ACA_RG env vars ([#398](https://github.com/fgarofalo56/csa-inabox/issues/398)) ([de82346](https://github.com/fgarofalo56/csa-inabox/commit/de82346624664c02160df631add80fff2cd175fa))
+* **csa-loom-bootstrap:** SCIM grants all 4 Databricks entitlements + PATCH existing SP ([#392](https://github.com/fgarofalo56/csa-inabox/issues/392)) ([bc62e7a](https://github.com/fgarofalo56/csa-inabox/commit/bc62e7a3ee4bb2001d5efe4369d0f910201af77b))
+* **csa-loom-build:** unstuck image builds — toggle ACR publicNetworkAccess in build workflow ([#394](https://github.com/fgarofalo56/csa-inabox/issues/394)) ([bfb7914](https://github.com/fgarofalo56/csa-inabox/commit/bfb7914d9af69e6c62802a2b1714273c68628727))
+* **csa-loom-lakehouse:** harden upload — accept ALL Spark file types + handle non-JSON error responses ([#360](https://github.com/fgarofalo56/csa-inabox/issues/360)) ([86e4cd7](https://github.com/fgarofalo56/csa-inabox/commit/86e4cd779ff2be3509540f65c47aa1ea1c84fb97))
+* **csa-loom-pbi:** use Power BI groupIds (not Loom UUIDs) in Report/Dashboard/Semantic/Scorecard editors ([#361](https://github.com/fgarofalo56/csa-inabox/issues/361)) ([8b3e1bf](https://github.com/fgarofalo56/csa-inabox/commit/8b3e1bf850a249d9f5de17392070239911bd688b))
+* **csa-loom-synapse:** remove duplicate trigger functions from PR [#371](https://github.com/fgarofalo56/csa-inabox/issues/371) merge ([#397](https://github.com/fgarofalo56/csa-inabox/issues/397)) ([59c293a](https://github.com/fgarofalo56/csa-inabox/commit/59c293a6590158d08fb00ad11575aa5772c26a4f))
+* **portal-deps:** align react-dom/@types/react-dom/@testing-library/react with react 19 ([#389](https://github.com/fgarofalo56/csa-inabox/issues/389)) ([664aa79](https://github.com/fgarofalo56/csa-inabox/commit/664aa7945d4437741193b0772790cb119ff271ba))
+
+
+### Documentation
+
+* **csa-loom-deployment:** add 4 CI/CD pipeline guides + nav + icon refresh ([#370](https://github.com/fgarofalo56/csa-inabox/issues/370)) ([67b1ed7](https://github.com/fgarofalo56/csa-inabox/commit/67b1ed70e6084f4c084538966d8c89eac4cdb670))
+* **csa-loom-marketing:** build out 30-min/60-min/2-hour pitch scripts to back up seller-playbook claims ([#374](https://github.com/fgarofalo56/csa-inabox/issues/374)) ([158eb13](https://github.com/fgarofalo56/csa-inabox/commit/158eb13dec73c7a5e468fbefc8216dabb2f1a0ea))
+* **csa-loom-ops:** persistence + chargeback + multi-DLZ audit doc ([#383](https://github.com/fgarofalo56/csa-inabox/issues/383)) ([b7290ee](https://github.com/fgarofalo56/csa-inabox/commit/b7290eeb7fda7dd7c7f192fd9ac8d7b6cb83b1b6))
+* **csa-loom:** clarify Azure Commercial / GCC = GA (GCC runs on Commercial regions) ([#377](https://github.com/fgarofalo56/csa-inabox/issues/377)) ([d0aa174](https://github.com/fgarofalo56/csa-inabox/commit/d0aa1744d4340f4f990186f08b11b8d658a16c7d))
+* **csa-loom:** per-page Loom hero SVGs for architecture / parity-matrix / deployment / workloads / workshops ([#381](https://github.com/fgarofalo56/csa-inabox/issues/381)) ([872e5d2](https://github.com/fgarofalo56/csa-inabox/commit/872e5d2af1c85b71d8a0841cbc91840c2d0fb74e))
+* **guides:** add 'Build an internal data marketplace' tutorial (closes [#298](https://github.com/fgarofalo56/csa-inabox/issues/298)) ([#359](https://github.com/fgarofalo56/csa-inabox/issues/359)) ([b77f16e](https://github.com/fgarofalo56/csa-inabox/commit/b77f16ed584a65d4de9e3a6de05b0bb6a4c07090))
+* **learn:** add DQS glossary entry (closes [#246](https://github.com/fgarofalo56/csa-inabox/issues/246)) ([#357](https://github.com/fgarofalo56/csa-inabox/issues/357)) ([f5e667f](https://github.com/fgarofalo56/csa-inabox/commit/f5e667f5a570679e0685d6c44adf5019deeb6977))
+
+
+### Tests
+
+* **csa-loom:** no-cuts v3 ribbon Playwright UAT (complements PR [#382](https://github.com/fgarofalo56/csa-inabox/issues/382)) ([#385](https://github.com/fgarofalo56/csa-inabox/issues/385)) ([9223d1b](https://github.com/fgarofalo56/csa-inabox/commit/9223d1b51c3ff84822553d46adc856721c3e9020))
+
+
+### Miscellaneous
+
+* **deps:** Bump @azure/msal-react from 5.4.1 to 5.4.2 in /portal/react-webapp ([#276](https://github.com/fgarofalo56/csa-inabox/issues/276)) ([fde3146](https://github.com/fgarofalo56/csa-inabox/commit/fde3146299c953864e7d64aac1b1b10f2440d59c))
+
 ## [0.11.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.11.1...csa-inabox-v0.11.2) (2026-05-27)
 
 

@@ -24,17 +24,17 @@ function err(error: string, status: number) {
   return NextResponse.json({ ok: false, error }, { status });
 }
 
-export async function GET(req: NextRequest, ctx: { params: { id: string; runId: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string; runId: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
 
-  const runId = decodeURIComponent(ctx.params.runId);
+  const runId = decodeURIComponent((await ctx.params).runId);
   try {
     // Load notebook for code/lang context
     const items = await itemsContainer();
-    const { resource: nb } = await items.item(ctx.params.id, workspaceId).read<WorkspaceItem>();
+    const { resource: nb } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!nb || nb.itemType !== 'notebook') return err('notebook not found', 404);
     const state = (nb.state as any) || {};
     // Per-cell run uses pendingRuns[runId] cached at dispatch; fall back to whole-notebook code.

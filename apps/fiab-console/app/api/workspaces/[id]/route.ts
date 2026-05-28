@@ -24,7 +24,8 @@ async function loadWorkspace(id: string, tenantId: string): Promise<Workspace | 
   }
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {
@@ -44,7 +45,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   let body: any;
@@ -69,7 +71,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {

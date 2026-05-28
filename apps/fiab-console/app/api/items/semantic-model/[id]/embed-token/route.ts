@@ -15,7 +15,7 @@ import { generateDatasetEmbedToken, getDataset, PowerBiError } from '@/lib/azure
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
@@ -23,8 +23,8 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   try {
     const [tokenResp, dataset] = await Promise.all([
-      generateDatasetEmbedToken(workspaceId, ctx.params.id, 'View'),
-      getDataset(workspaceId, ctx.params.id),
+      generateDatasetEmbedToken(workspaceId, (await ctx.params).id, 'View'),
+      getDataset(workspaceId, (await ctx.params).id),
     ]);
     return NextResponse.json({
       ok: true,

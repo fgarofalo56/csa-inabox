@@ -49,8 +49,9 @@ async function loadOwned(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string; itemId: string } },
+  props: { params: Promise<{ id: string; itemId: string }> }
 ) {
+  const params = await props.params;
   const s = getSession();
   if (!s) return err('Unauthorized', 401, 'unauthorized');
   let body: any;
@@ -100,8 +101,9 @@ export async function PATCH(
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { id: string; itemId: string } },
+  props: { params: Promise<{ id: string; itemId: string }> }
 ) {
+  const params = await props.params;
   const s = getSession();
   if (!s) return err('Unauthorized', 401, 'unauthorized');
   try {

@@ -29,7 +29,7 @@ async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
   } catch (e: any) { if (e?.code === 404) return null; throw e; }
 }
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     const ws = await loadWs(workspaceId, s.claims.oid);
     if (!ws) return err('workspace not found', 404);
     const items = await itemsContainer();
-    const { resource } = await items.item(ctx.params.id, workspaceId).read<WorkspaceItem>();
+    const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'notebook') return err('notebook not found', 404);
     const state = (resource.state as any) || {};
     const migrated = migrateLegacyState(state);
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
@@ -71,7 +71,7 @@ export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
     const ws = await loadWs(workspaceId, s.claims.oid);
     if (!ws) return err('workspace not found', 404);
     const items = await itemsContainer();
-    const { resource: existing } = await items.item(ctx.params.id, workspaceId).read<WorkspaceItem>();
+    const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!existing || existing.itemType !== 'notebook') return err('notebook not found', 404);
     const def = body?.definition;
     const stateNext: Record<string, unknown> = { ...(existing.state || {}) };
@@ -117,14 +117,14 @@ export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
   } catch (e: any) { return err(e?.message || String(e), 500); }
 }
 
-export async function DELETE(req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
   try {
     const items = await itemsContainer();
-    await items.item(ctx.params.id, workspaceId).delete();
+    await items.item((await ctx.params).id, workspaceId).delete();
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     if (e?.code === 404) return NextResponse.json({ ok: true });
