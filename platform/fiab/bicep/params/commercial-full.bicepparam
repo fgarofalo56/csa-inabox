@@ -30,9 +30,13 @@ param databricksSqlWarehouseEnabled = true
 
 // Security
 param defenderForAIEnabled = true
-// Reuse existing tenant-level Enterprise Purview (dmlz-dev-purview-eastus).
-// Provisioning a 2nd would fail with 'EnterpriseTenantAlreadyExists'.
-param purviewEnabled = false
+// Unified Catalog defaults to ON: the /catalog surface federates Purview +
+// UC + OneLake and wires `LOOM_PURVIEW_ACCOUNT` into the console env.
+// NOTE: if the tenant already has an Enterprise Purview (e.g. dmlz-dev-
+// purview-eastus), set this back to `false` and instead point
+// LOOM_PURVIEW_ACCOUNT at that account in admin-plane/main.bicep — a 2nd
+// Enterprise account fails with `EnterpriseTenantAlreadyExists`.
+param purviewEnabled = true
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false
 param atlasOnAksEnabled = false

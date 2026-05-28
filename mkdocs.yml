@@ -1988,6 +1988,19 @@ nav:
       - Live Deploy Status (2026-05-23): fiab/live-deploy-status.md
       - UAT Report (Iteration 1): fiab/uat-report.md
       - Console Access Patterns: fiab/access-patterns.md
+      - Unified Catalog:
+          - Overview: fiab/catalog/index.md
+          - Architecture: fiab/catalog/architecture.md
+          - Search: fiab/catalog/search.md
+          - Browse: fiab/catalog/browse.md
+          - Domains: fiab/catalog/domains.md
+          - Permissions: fiab/catalog/permissions.md
+          - Metastores: fiab/catalog/metastores.md
+          - Lineage: fiab/catalog/lineage.md
+          - Asset detail: fiab/catalog/asset-detail.md
+          - "How to: Register in Purview": fiab/catalog/how-to-register.md
+          - "How to: Grant permissions": fiab/catalog/how-to-grant.md
+          - "How to: Create OneLake shortcut": fiab/catalog/how-to-shortcut.md
       - v1 Final Status + v2 Plan: fiab/v1-final-status-and-v2-plan.md
       - Releases:
           - "2026-05-27: App bundles + console wiring sweep": fiab/releases/2026-05-27-apps-bundles-and-wiring-sweep.md

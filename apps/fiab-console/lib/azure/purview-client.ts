@@ -296,3 +296,265 @@ export async function listDataProducts(domain?: string): Promise<PurviewDataProd
   const j = await readJson<{ value?: any[] }>(res);
   return (j?.value || []).map(shape);
 }
+
+// ============================================================
+// Federated catalog surface — Phase 2 additions for /catalog
+// ============================================================
+
+export interface PurviewBusinessDomain {
+  id: string;
+  name: string;
+  description?: string;
+  type?: string;
+  parentId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface PurviewAssetHit {
+  source: 'purview';
+  id: string;
+  name: string;
+  qualifiedName?: string;
+  entityType?: string;
+  classification?: string[];
+  description?: string;
+  owner?: string;
+  domain?: string;
+  updatedAt?: string;
+}
+
+export interface PurviewLineageNode {
+  guid: string;
+  displayText?: string;
+  typeName?: string;
+}
+
+export interface PurviewLineageEdge {
+  fromEntityId: string;
+  toEntityId: string;
+  relationshipType?: string;
+}
+
+export interface PurviewLineageGraph {
+  baseEntityGuid: string;
+  guidEntityMap: Record<string, PurviewLineageNode>;
+  relations: PurviewLineageEdge[];
+}
+
+/** GET /datagovernance/businessdomains — domain CRUD surface for /catalog/domains. */
+export async function listBusinessDomains(): Promise<PurviewBusinessDomain[]> {
+  purviewAccount();
+  const res = await purviewFetch('/datagovernance/businessdomains');
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((d: any) => ({
+    id: d.id, name: d.name || d.displayName, description: d.description,
+    type: d.type, parentId: d.parentId,
+    createdAt: d.createdAt || d.systemData?.createdAt,
+    updatedAt: d.updatedAt || d.systemData?.lastModifiedAt,
+  }));
+}
+
+export async function createBusinessDomain(body: { name: string; description?: string; type?: string; parentId?: string }): Promise<PurviewBusinessDomain> {
+  purviewAccount();
+  if (!body.name) throw new PurviewError(400, null, 'name is required');
+  const res = await purviewFetch('/datagovernance/businessdomains', {
+    method: 'POST',
+    body: JSON.stringify({ name: body.name, description: body.description || '', type: body.type || 'BusinessDomain', parentId: body.parentId }),
+  });
+  const j = await readJson<any>(res);
+  if (!j) throw new PurviewError(500, null, 'Empty response creating domain');
+  return { id: j.id, name: j.name || j.displayName, description: j.description, type: j.type, parentId: j.parentId };
+}
+
+export async function deleteBusinessDomain(id: string): Promise<void> {
+  purviewAccount();
+  if (!id) throw new PurviewError(400, null, 'id is required');
+  const res = await purviewFetch(`/datagovernance/businessdomains/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 204 && res.status !== 404) {
+    const t = await res.text();
+    throw new PurviewError(res.status, t, `delete domain failed: ${t || res.statusText}`);
+  }
+}
+
+/**
+ * Atlas catalog search — POST /datamap/api/search/query (a.k.a. v2 Atlas).
+ *
+ * Body shape per the Purview docs: { keywords, limit, filter? }. We trim
+ * the response to the fields the federated search row needs.
+ */
+export async function searchPurview(q: string, limit = 50): Promise<PurviewAssetHit[]> {
+  purviewAccount();
+  const res = await purviewFetch('/datamap/api/search/query', {
+    method: 'POST',
+    body: JSON.stringify({ keywords: q || '*', limit, offset: 0 }),
+  });
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((v: any) => ({
+    source: 'purview' as const,
+    id: v.id || v.guid,
+    name: v.name || v.qualifiedName || v.id,
+    qualifiedName: v.qualifiedName,
+    entityType: v.entityType || v.typeName,
+    classification: v.classification || v.classifications,
+    description: v.description,
+    owner: v.owner || (Array.isArray(v.contact) ? v.contact[0]?.id : undefined),
+    domain: v.domain || v.businessDomainId,
+    updatedAt: v.updateTime || v.modifiedTime,
+  }));
+}
+
+/**
+ * Lineage subgraph — Atlas API. GET /datamap/api/atlas/v2/lineage/{guid}?direction=BOTH&depth=3
+ */
+export async function getLineageSubgraph(guid: string, depth = 3): Promise<PurviewLineageGraph> {
+  purviewAccount();
+  if (!guid) throw new PurviewError(400, null, 'guid is required');
+  const res = await purviewFetch(`/datamap/api/atlas/v2/lineage/${encodeURIComponent(guid)}`, {
+    query: { direction: 'BOTH', depth: String(depth) },
+  });
+  const j = await readJson<any>(res);
+  if (!j) return { baseEntityGuid: guid, guidEntityMap: {}, relations: [] };
+  const guidEntityMap: Record<string, PurviewLineageNode> = {};
+  for (const [k, v] of Object.entries(j.guidEntityMap || {})) {
+    const e: any = v;
+    guidEntityMap[k] = {
+      guid: k,
+      displayText: e.displayText || e.attributes?.qualifiedName || e.attributes?.name,
+      typeName: e.typeName,
+    };
+  }
+  const relations: PurviewLineageEdge[] = (j.relations || []).map((r: any) => ({
+    fromEntityId: r.fromEntityId,
+    toEntityId: r.toEntityId,
+    relationshipType: r.relationshipId,
+  }));
+  return { baseEntityGuid: j.baseEntityGuid || guid, guidEntityMap, relations };
+}
+
+/** Asset detail — GET /datamap/api/atlas/v2/entity/guid/{guid} */
+export async function getAssetDetail(guid: string): Promise<any | null> {
+  purviewAccount();
+  const res = await purviewFetch(`/datamap/api/atlas/v2/entity/guid/${encodeURIComponent(guid)}`);
+  return readJson<any>(res);
+}
+
+// ============================================================
+// Cross-source registration — Atlas entity upsert
+// ============================================================
+
+/**
+ * Payload to register a Unity Catalog table (or OneLake item) as a Purview
+ * Atlas entity. Loom maps:
+ *
+ *   UC table   →  typeName = "databricks_table"
+ *   OneLake LH →  typeName = "fabric_lakehouse"
+ *
+ * The qualified name uniquely identifies the underlying physical asset and
+ * Atlas dedupes on it (subsequent upserts merge). We always set:
+ *
+ *   attributes.qualifiedName = qualifiedName
+ *   attributes.name          = displayName
+ *   attributes.comment       = comment (when provided)
+ *   contacts                 = [{ id: owner, info: 'Owner' }]
+ */
+export interface RegisterAtlasEntityPayload {
+  typeName: string;
+  qualifiedName: string;
+  displayName: string;
+  comment?: string;
+  owner?: string;
+  classifications?: string[];
+  /** Optional Purview businessDomainId guid to attach the asset to. */
+  domain?: string;
+  /** Optional extra attributes (Atlas-typed). */
+  attributes?: Record<string, unknown>;
+}
+
+export interface AtlasUpsertResponse {
+  guidAssignments?: Record<string, string>;
+  mutatedEntities?: unknown;
+  partialUpdatedEntities?: unknown;
+  /** First created/updated entity guid for convenient round-trip. */
+  primaryGuid?: string;
+}
+
+/**
+ * POST /datamap/api/atlas/v2/entity — upserts a single entity. Returns the
+ * GUID Atlas assigned (or matched against an existing qualifiedName).
+ */
+export async function registerAtlasEntity(p: RegisterAtlasEntityPayload): Promise<AtlasUpsertResponse> {
+  purviewAccount();
+  if (!p?.typeName) throw new PurviewError(400, null, 'typeName is required');
+  if (!p?.qualifiedName) throw new PurviewError(400, null, 'qualifiedName is required');
+  if (!p?.displayName) throw new PurviewError(400, null, 'displayName is required');
+
+  const attributes: Record<string, unknown> = {
+    qualifiedName: p.qualifiedName,
+    name: p.displayName,
+    ...(p.comment ? { comment: p.comment, description: p.comment } : {}),
+    ...(p.attributes || {}),
+  };
+  const body: Record<string, unknown> = {
+    entity: {
+      typeName: p.typeName,
+      attributes,
+      ...(p.classifications && p.classifications.length
+        ? { classifications: p.classifications.map((c) => ({ typeName: c })) }
+        : {}),
+      ...(p.owner ? { contacts: { Expert: [{ id: p.owner, info: 'Owner' }] } } : {}),
+      ...(p.domain ? { businessDomainId: p.domain } : {}),
+    },
+  };
+  const res = await purviewFetch('/datamap/api/atlas/v2/entity', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const j = await readJson<any>(res);
+  const guidAssignments = j?.guidAssignments || {};
+  const primaryGuid = Object.values(guidAssignments)[0] as string | undefined;
+  return { ...j, primaryGuid };
+}
+
+/**
+ * POST /datamap/api/atlas/v2/glossary — create a glossary term and apply it.
+ * Returns the term GUID. The term name must be unique in the glossary.
+ */
+export interface PurviewGlossaryTerm {
+  name: string;
+  longDescription?: string;
+  glossaryGuid?: string;
+}
+
+export async function createGlossaryTerm(term: PurviewGlossaryTerm): Promise<{ guid: string; name: string }> {
+  purviewAccount();
+  if (!term?.name) throw new PurviewError(400, null, 'term name is required');
+  const res = await purviewFetch('/datamap/api/atlas/v2/glossary/term', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: term.name,
+      longDescription: term.longDescription || '',
+      ...(term.glossaryGuid ? { anchor: { glossaryGuid: term.glossaryGuid } } : {}),
+    }),
+  });
+  const j = await readJson<any>(res);
+  return { guid: j?.guid || j?.id, name: j?.name || term.name };
+}
+
+/**
+ * Assign a glossary term to an entity. PUT /datamap/api/atlas/v2/glossary/terms/{termGuid}/assignedEntities
+ */
+export async function applyGlossaryTerm(termGuid: string, entityGuid: string): Promise<void> {
+  purviewAccount();
+  if (!termGuid) throw new PurviewError(400, null, 'termGuid is required');
+  if (!entityGuid) throw new PurviewError(400, null, 'entityGuid is required');
+  const res = await purviewFetch(`/datamap/api/atlas/v2/glossary/terms/${encodeURIComponent(termGuid)}/assignedEntities`, {
+    method: 'POST',
+    body: JSON.stringify([{ guid: entityGuid }]),
+  });
+  // Atlas returns 204 No Content on success.
+  if (!res.ok && res.status !== 204) {
+    const t = await res.text();
+    throw new PurviewError(res.status, t, `applyGlossaryTerm failed: ${t || res.statusText}`);
+  }
+}

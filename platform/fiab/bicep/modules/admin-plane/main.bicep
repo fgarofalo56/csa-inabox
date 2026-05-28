@@ -43,6 +43,9 @@ param purviewEnabled bool
 @description('Atlas on AKS enabled (IL5 only)')
 param atlasOnAksEnabled bool
 
+@description('Wire LOOM_DATABRICKS_HOSTNAMES into the console for Unity Catalog federation')
+param databricksUnityCatalogEnabled bool = false
+
 @description('OpenAI region for chat. Reserved for v3.x — multi-region OpenAI deployment wiring (per-model regional pinning) is deferred.')
 #disable-next-line no-unused-params
 param openaiLocation string
@@ -418,6 +421,24 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_GOLD_URL',    value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/gold' }
             { name: 'LOOM_LANDING_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/landing' }
           ] : [],
+          // ----------------------------------------------------------------
+          // Unified Catalog federation env vars — wired into the console so
+          // the /catalog surface can hit Purview + Unity Catalog + Fabric
+          // OneLake. Each is gated by a feature flag; missing env vars cause
+          // the BFF to throw a structured NotConfigured error with the
+          // remediation steps surfaced in the UI MessageBar.
+          // ----------------------------------------------------------------
+          purviewEnabled ? [
+            { name: 'LOOM_PURVIEW_ACCOUNT', value: 'purview-csa-loom-${location}' }
+          ] : [],
+          catalogPrimary == 'unity-catalog-managed' || databricksUnityCatalogEnabled ? [
+            { name: 'LOOM_DATABRICKS_HOSTNAMES', value: 'adb-csa-loom-${location}.azuredatabricks.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'net'}' }
+          ] : [],
+          // Fabric API base is always set — the runtime gates on UAMI authz.
+          [
+            { name: 'LOOM_FABRIC_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1' : 'https://api.fabric.microsoft.com/v1' }
+            { name: 'LOOM_FABRIC_ADMIN_BASE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.fabric.microsoft.us/v1.0/myorg/admin' : 'https://api.fabric.microsoft.com/v1.0/myorg/admin' }
+          ],
           !empty(loomMsalClientId) ? [
             { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }
             { name: 'LOOM_MSAL_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
