@@ -31,12 +31,14 @@ param databricksSqlWarehouseEnabled = true
 // Security
 param defenderForAIEnabled = true
 // Unified Catalog + Enterprise Purview reuse:
-//   The /catalog surface federates Purview + UC + OneLake. Because this
+//   The /catalog surface federates Purview + UC + OneLake and the
+//   /admin/security Purview tab calls REAL endpoints. Because this
 //   tenant already has an Enterprise Purview (dmlz-dev-purview-eastus),
 //   we DO NOT deploy a second one (would fail with
 //   'EnterpriseTenantAlreadyExists'). Instead we wire the existing
-//   account into the console via LOOM_PURVIEW_ACCOUNT so /catalog and
-//   /admin/security hit real endpoints rather than the NotConfigured gate.
+//   account into the console via LOOM_PURVIEW_ACCOUNT.
+//   If your tenant does NOT already have an Enterprise Purview, set
+//   purviewEnabled = true and clear loomPurviewAccount.
 param purviewEnabled = false
 // Override via env: LOOM_PURVIEW_ACCOUNT=<short-account-name>
 param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', 'dmlz-dev-purview-eastus')
