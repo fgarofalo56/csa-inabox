@@ -142,6 +142,27 @@ param loomStorageAccount string = ''
 @description('Loom Cosmos account name. When empty, Cosmos env vars omitted.')
 param loomCosmosAccount string = ''
 
+// CSA Loom family sweep (Power Platform / ML / Geo / Graph): the DLZ
+// orchestrator emits Cosmos Gremlin + NoSQL Vector endpoints when
+// `cosmosGraphVectorEnabled = true`. Pass them through here so the
+// Console BFF picks them up at runtime.
+@description('Cosmos Gremlin endpoint (e.g. wss://<acct>.gremlin.cosmos.azure.com:443/). When empty, the cosmos-gremlin-graph editor surfaces its honest-gate MessageBar.')
+param loomCosmosGremlinEndpoint string = ''
+@description('Cosmos Gremlin database (default: loom-graph)')
+param loomCosmosGremlinDatabase string = ''
+@description('Cosmos Gremlin graph (default: default)')
+param loomCosmosGremlinGraph string = ''
+@description('Cosmos NoSQL vector endpoint for the vector-store editor. When empty, the editor only persists the spec without dispatch.')
+param loomCosmosVectorEndpoint string = ''
+@description('Cosmos NoSQL vector database (default: loom-vectors)')
+param loomCosmosVectorDatabase string = ''
+@description('Cosmos NoSQL vector container (default: docs-vec)')
+param loomCosmosVectorContainer string = ''
+@description('Azure Maps account name (e.g. maps-csa-loom-xyz). When empty, the geo-map / map editors fall back to OSM and surface the honest-gate MessageBar.')
+param loomAzureMapsAccount string = ''
+@description('Azure Maps primary key secret name in Key Vault (default: loom-azure-maps-primary-key). The Console reads this via secretRef.')
+param loomAzureMapsKeySecretName string = 'loom-azure-maps-primary-key'
+
 @description('Purview account name (short, NOT full URL) — e.g. "purview-csa-loom-eastus2". When empty, /admin/security Purview tab + /api/items/data-product/*/register-purview return HTTP 503 with a structured remediation hint.')
 param loomPurviewAccount string = ''
 
@@ -387,6 +408,29 @@ module catalog 'catalog.bicep' = {
 }
 
 // =====================================================================
+// 10b. Azure Maps account (geoanalytics backing)
+//
+// Backs the geo-map / geo-pipeline / map editors. Only deploys in
+// Commercial / GCC — Azure Maps is not yet GA in GCC-High / IL5.
+// When skipped, the editors render the documented honest-gate
+// MessageBars (per no-vaporware.md).
+// =====================================================================
+
+@description('Provision an Azure Maps account to back the geo-map / geo-pipeline / map editors. Only honored in Commercial / GCC; skipped in GCC-High / IL5.')
+param azureMapsEnabled bool = true
+
+module azureMaps 'azure-maps.bicep' = if (azureMapsEnabled && (boundary == 'Commercial' || boundary == 'GCC')) {
+  name: 'azure-maps'
+  params: {
+    location: location
+    boundary: boundary
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    keyVaultId: keyvault.outputs.keyVaultId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // 11. AI defense (Defender for AI workaround in Gov)
 // =====================================================================
 
@@ -454,12 +498,31 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
+            // CSA Loom family sweep (Power Platform / ML / Geo / Graph) —
+            // see scripts/csa-loom/powerplatform-tenant-bootstrap.sh for
+            // the one-time tenant config required to use them.
+            { name: 'LOOM_COSMOS_GREMLIN_ENDPOINT',  value: loomCosmosGremlinEndpoint }
+            { name: 'LOOM_COSMOS_GREMLIN_DATABASE',  value: loomCosmosGremlinDatabase }
+            { name: 'LOOM_COSMOS_GREMLIN_GRAPH',     value: loomCosmosGremlinGraph }
+            { name: 'NEXT_PUBLIC_LOOM_COSMOS_GREMLIN_ENDPOINT', value: loomCosmosGremlinEndpoint }
+            { name: 'LOOM_COSMOS_VECTOR_ENDPOINT',   value: loomCosmosVectorEndpoint }
+            { name: 'LOOM_COSMOS_VECTOR_DATABASE',   value: loomCosmosVectorDatabase }
+            { name: 'LOOM_COSMOS_VECTOR_CONTAINER',  value: loomCosmosVectorContainer }
+            { name: 'LOOM_AZURE_MAPS_ACCOUNT',       value: loomAzureMapsAccount }
+            { name: 'LOOM_KUSTO_CLUSTER',            value: adxEnabled ? adxCluster!.outputs.clusterName : '' }
+            { name: 'NEXT_PUBLIC_LOOM_KUSTO_CLUSTER', value: adxEnabled ? adxCluster!.outputs.clusterName : '' }
             // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
             { name: 'LOOM_TENANT_ADMIN_GROUP_ID', value: loomTenantAdminGroupId }
             { name: 'LOOM_TENANT_ADMIN_OID', value: loomTenantAdminOid }
             { name: 'LOOM_DEFAULT_FABRIC_WORKSPACE', value: loomDefaultFabricWorkspace }
             { name: 'LOOM_WAREHOUSE_BACKEND', value: loomWarehouseBackend }
           ],
+          // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
+          // so the MapEditor can use the static-map URL. AAD-auth path
+          // doesn't need this. Only set when the maps account is wired.
+          !empty(loomAzureMapsAccount) ? [
+            { name: 'NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY', secretRef: 'loom-azure-maps-key' }
+          ] : [],
           !empty(loomStorageAccount) ? [
             { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }
             { name: 'LOOM_SILVER_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/silver' }
@@ -528,10 +591,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
           ]
         )
-        secrets: !empty(loomMsalClientId) ? [
-          { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
-          { name: 'session-secret', value: loomSessionSecret }
-        ] : []
+        secrets: concat(
+          !empty(loomMsalClientId) ? [
+            { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
+            { name: 'session-secret', value: loomSessionSecret }
+          ] : [],
+          !empty(loomAzureMapsAccount) ? [
+            // Read from KV at deploy time. The azure-maps module wrote the
+            // primary key here as 'loom-azure-maps-primary-key' on the
+            // Loom Key Vault.
+            { name: 'loom-azure-maps-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomAzureMapsKeySecretName}', identity: identity.outputs.uamiConsoleId }
+          ] : []
+        )
       }
       {
         name: 'loom-mcp'

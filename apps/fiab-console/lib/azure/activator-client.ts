@@ -171,3 +171,53 @@ export async function triggerRule(
   );
   return { ok: true };
 }
+
+/**
+ * Start a reflex — sets every trigger on the reflex to Active. The Fabric
+ * REST surface for "start the whole reflex" is in preview, so we iterate
+ * over the triggers and PATCH each with state=Active. Returns the count
+ * of updated triggers.
+ */
+export async function startReflex(
+  workspaceId: string,
+  activatorId: string,
+): Promise<{ ok: true; updated: number }> {
+  const rules = await listRules(workspaceId, activatorId);
+  let updated = 0;
+  for (const r of rules) {
+    try {
+      await call(
+        `/workspaces/${encodeURIComponent(workspaceId)}/reflexes/${encodeURIComponent(activatorId)}/triggers/${encodeURIComponent(r.id)}`,
+        { method: 'PATCH', body: { state: 'Active' } },
+      );
+      updated++;
+    } catch (e) {
+      if (!(e instanceof ActivatorError && (e.status === 404 || e.status === 400))) throw e;
+    }
+  }
+  return { ok: true, updated };
+}
+
+/**
+ * Stop a reflex — sets every trigger to Stopped. Same approach as
+ * startReflex (no single "disable reflex" endpoint in preview today).
+ */
+export async function stopReflex(
+  workspaceId: string,
+  activatorId: string,
+): Promise<{ ok: true; updated: number }> {
+  const rules = await listRules(workspaceId, activatorId);
+  let updated = 0;
+  for (const r of rules) {
+    try {
+      await call(
+        `/workspaces/${encodeURIComponent(workspaceId)}/reflexes/${encodeURIComponent(activatorId)}/triggers/${encodeURIComponent(r.id)}`,
+        { method: 'PATCH', body: { state: 'Stopped' } },
+      );
+      updated++;
+    } catch (e) {
+      if (!(e instanceof ActivatorError && (e.status === 404 || e.status === 400))) throw e;
+    }
+  }
+  return { ok: true, updated };
+}

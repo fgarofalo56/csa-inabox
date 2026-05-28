@@ -44,6 +44,9 @@ param consoleUamiName string = ''
 @description('Admin Plane spoke private DNS zone ID for privatelink.sql.azuresynapse.net. Required for the Synapse SQL PE to register DNS.')
 param synapseSqlPrivateDnsZoneId string = ''
 
+@description('Admin Plane spoke private DNS zone ID for privatelink.adf.azure.com (Commercial). Required for the ADF PE to register DNS.')
+param adfPrivateDnsZoneId string = ''
+
 @description('Admin Plane ADX cluster name (for ADX database creation)')
 param adminPlaneAdxClusterName string = 'adx-csa-loom-shared'
 
@@ -229,16 +232,18 @@ module cosmos 'cosmos.bicep' = {
 }
 
 // =====================================================================
-// 8. Stream Analytics (optional). Backs the Loom stream-analytics-job
-//    editor (added in the Data Engineering sweep, 2026-05-27). Off by
-//    default so existing deployments aren't surprised — operators flip
-//    `enableStreamAnalytics=true` to provision a starter job + UAMI
+// 8. Stream Analytics. Backs the Loom stream-analytics-job editor
+//    (added in the Data Engineering sweep, 2026-05-27).
+//
+//    Per the 2026-05-27 no-cuts-sweep policy override, this is now
+//    ENABLED by default. Operators on cost-sensitive deployments can
+//    set `enableStreamAnalytics=false` to skip the starter job + UAMI
 //    role assignment. When off, the Loom editor surfaces an honest
 //    501 MessageBar naming this module + the LOOM_ASA_RG env var.
 // =====================================================================
 
 @description('Provision an Azure Stream Analytics starter job + UAMI role assignment. Backs the Loom stream-analytics-job editor.')
-param enableStreamAnalytics bool = false
+param enableStreamAnalytics bool = true
 
 module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !empty(consolePrincipalId)) {
   name: 'dlz-stream-analytics'
@@ -247,6 +252,60 @@ module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !
     domainName: domainName
     consolePrincipalId: consolePrincipalId
     workspaceId: adminPlaneLawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// 9. Azure Data Factory — backs the data-pipeline / dataset / trigger editors
+//
+//    Per the 2026-05-27 no-cuts-sweep policy override, ADF is now wired
+//    into the DLZ orchestrator by default. Operators that don't run ADF
+//    workflows can set `adfEnabled=false`.
+// =====================================================================
+
+@description('Provision an Azure Data Factory (v2) in the DLZ. Backs the Loom data-pipeline / dataset / trigger editors.')
+param adfEnabled bool = true
+
+module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) {
+  name: 'dlz-adf'
+  params: {
+    location: location
+    domainName: domainName
+    consolePrincipalId: consolePrincipalId
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    adfPrivateDnsZoneId: adfPrivateDnsZoneId
+    workspaceId: adminPlaneLawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// 10. Cosmos Gremlin + NoSQL vector containers
+//
+// Backs the `cosmos-gremlin-graph` and `vector-store` editors. Opt-in via
+// the `cosmosGraphVectorEnabled` flag so deployments that don't need graph
+// + vector workloads avoid the extra cost.
+// =====================================================================
+
+@description('Provision Cosmos Gremlin + NoSQL vector accounts to back the cosmos-gremlin-graph and vector-store editors.')
+param cosmosGraphVectorEnabled bool = true
+
+module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnabled) {
+  name: 'dlz-cosmos-graph-vector'
+  params: {
+    location: location
+    domainName: domainName
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    privateDnsZoneCosmosId: adminPlanePrivateDnsZoneIds.cosmos
+    // Caller is expected to add a privatelink.gremlin.cosmos.azure.com zone
+    // to `adminPlanePrivateDnsZoneIds`. Older admin-planes that haven't
+    // shipped that zone yet fall back to the SQL Cosmos zone (the Gremlin
+    // PE then registers but DNS won't resolve — documented honest-gate
+    // until the network module is bumped).
+    privateDnsZoneCosmosGremlinId: contains(adminPlanePrivateDnsZoneIds, 'cosmosGremlin') ? adminPlanePrivateDnsZoneIds.cosmosGremlin : adminPlanePrivateDnsZoneIds.cosmos
+    workspaceId: adminPlaneLawId
+    consolePrincipalId: consolePrincipalId
     complianceTags: complianceTags
   }
 }
@@ -273,3 +332,15 @@ output landingZoneContainerUrl string = storage.outputs.landingZoneContainerUrl
 output eventHubsNamespaceFqdn string = eventhubs.outputs.namespaceFqdn
 output cosmosEndpoint string = cosmos.outputs.endpoint
 output storageEventGridTopicId string = storage.outputs.eventGridTopicId
+
+// CSA Loom family — Power Platform / ML / Geo / Graph sweep outputs
+output cosmosGremlinEndpoint string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.gremlinEndpoint : ''
+output cosmosGremlinDatabase string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.gremlinDatabase : ''
+output cosmosGremlinGraph string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.gremlinGraph : ''
+output cosmosVectorEndpoint string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorEndpoint : ''
+output cosmosVectorDatabase string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorDatabase : ''
+output cosmosVectorContainer string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorDefaultContainer : ''
+
+// CSA Loom no-cuts-sweep — ADF wiring outputs
+output adfFactoryId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryId : ''
+output adfFactoryName string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryName : ''

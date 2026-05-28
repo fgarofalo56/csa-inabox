@@ -24,6 +24,15 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
+// Pure-logic helpers extracted for vitest coverage. See
+// `lib/editors/__tests__/family-utils.test.ts`.
+import {
+  validateVarValue,
+  parseOntologyHierarchy,
+  computeGeoBbox,
+  bboxToZoom,
+  type VarType,
+} from './_family-utils';
 
 const useStyles = makeStyles({
   pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
@@ -761,16 +770,8 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
 // v3.27: extended to Fabric's 7 variable types — String/Integer/Number/
 // Boolean/DateTime/Guid/ItemReference/ConnectionReference. Plus the
 // Loom-native `secret-ref` for KV / env-var lookups.
-type VarType =
-  | 'string'
-  | 'integer'
-  | 'number'
-  | 'bool'
-  | 'datetime'
-  | 'guid'
-  | 'item-ref'
-  | 'connection-ref'
-  | 'secret-ref';
+// `VarType` is imported from `_family-utils` (see the top-of-file
+// import block — it matches the vitest contract).
 interface VarDef { name: string; type: VarType; default: string; dev?: string; test?: string; prod?: string; description?: string; }
 interface VlState { variables: VarDef[]; [k: string]: unknown }
 const VL_VALUE_SETS: Array<'default' | 'dev' | 'test' | 'prod'> = ['default', 'dev', 'test', 'prod'];
@@ -798,17 +799,8 @@ const VAR_TYPE_PLACEHOLDERS: Record<VarType, string> = {
   'secret-ref': 'kv-uri or env var name',
 };
 
-function validateVarValue(type: VarType, value: string): string | null {
-  if (!value) return null;
-  switch (type) {
-    case 'integer': return /^-?\d+$/.test(value) ? null : 'must be an integer';
-    case 'number': return /^-?\d+(\.\d+)?$/.test(value) ? null : 'must be a number';
-    case 'bool': return /^(true|false)$/i.test(value) ? null : 'must be true or false';
-    case 'datetime': return /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:?\d{2})?)?$/.test(value) ? null : 'ISO 8601 expected';
-    case 'guid': return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? null : 'GUID expected';
-    default: return null;
-  }
-}
+// `validateVarValue` is imported from `_family-utils` (see top-of-file
+// imports — vitest coverage at `lib/editors/__tests__/family-utils.test.ts`).
 
 export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -918,16 +910,8 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
 const ONTO_SAMPLE = `# Turtle-ish — define entity types and a parent hierarchy.\n# Each line: "ClassName : ParentClass  -- description"\nThing :  -- root\nParty : Thing -- person or org\nCustomer : Party -- buying party\nVendor : Party -- selling party\nOrder : Thing -- transaction record\nFlight : Thing -- aviation event\n`;
 interface OntoState { source: string; [k: string]: unknown }
 
-function parseOntologyHierarchy(src: string): { name: string; parent?: string; description?: string }[] {
-  const out: { name: string; parent?: string; description?: string }[] = [];
-  for (const raw of src.split(/\r?\n/)) {
-    const line = raw.replace(/#.*$/, '').trim();
-    if (!line) continue;
-    const m = line.match(/^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)?\s*(?:--\s*(.*))?$/);
-    if (m) out.push({ name: m[1], parent: m[2] || undefined, description: m[3] });
-  }
-  return out;
-}
+// `parseOntologyHierarchy` is imported from `_family-utils` (vitest coverage
+// at `lib/editors/__tests__/family-utils.test.ts`).
 
 export function OntologyEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -1262,27 +1246,12 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   const [validateMsg, setValidateMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   let parseErr: string | null = null;
   let featureCount = 0;
+  // bbox + zoom computed via `_family-utils` (vitest-covered).
   let bbox: { minLon: number; maxLon: number; minLat: number; maxLat: number } | null = null;
   try {
     const j = JSON.parse(state.geojson);
     featureCount = Array.isArray(j?.features) ? j.features.length : 0;
-    // v3.27: compute bbox to drive the Azure Maps tile preview centerpoint.
-    if (Array.isArray(j?.features)) {
-      let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
-      for (const f of j.features) {
-        const coords = f?.geometry?.coordinates;
-        const walk = (c: any) => {
-          if (!Array.isArray(c)) return;
-          if (typeof c[0] === 'number' && typeof c[1] === 'number') {
-            const [lon, lat] = c;
-            if (lon < minLon) minLon = lon; if (lon > maxLon) maxLon = lon;
-            if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
-          } else { c.forEach(walk); }
-        };
-        walk(coords);
-      }
-      if (Number.isFinite(minLon)) bbox = { minLon, maxLon, minLat, maxLat };
-    }
+    bbox = computeGeoBbox(j);
   } catch (e: any) { parseErr = e?.message || String(e); }
 
   // v3.27: D-upgrade — Azure Maps tile preview. Static-map REST API is the
@@ -1291,9 +1260,8 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY;
   const centerLon = bbox ? (bbox.minLon + bbox.maxLon) / 2 : -122.33;
   const centerLat = bbox ? (bbox.minLat + bbox.maxLat) / 2 : 47.61;
-  // Naive zoom heuristic: smaller bbox → larger zoom.
-  const span = bbox ? Math.max(bbox.maxLon - bbox.minLon, bbox.maxLat - bbox.minLat) : 0.1;
-  const zoom = Math.max(1, Math.min(18, Math.round(11 - Math.log2(Math.max(span, 0.0001)))));
+  // Naive zoom heuristic in `_family-utils.bboxToZoom` (vitest-covered).
+  const zoom = bboxToZoom(bbox);
   const tileUrl = mapsKey
     ? `https://atlas.microsoft.com/map/static?api-version=2024-04-01&style=main&zoom=${zoom}&center=${centerLon},${centerLat}&width=640&height=320&subscription-key=${mapsKey}`
     : null;

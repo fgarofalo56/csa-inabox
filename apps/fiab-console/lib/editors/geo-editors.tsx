@@ -31,6 +31,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { splitAdlsPath, joinAdlsPath } from './_family-utils';
 
 /**
  * v3.28 — Phase 4.5 fix: GeoMap / GeoDataset / GeoPipeline used to render
@@ -205,13 +206,13 @@ export function GeoMapEditor({ item, id }: { item: FabricItemType; id: string })
             </MessageBarBody>
           </MessageBar>
           <div className={s.field}><Label>Azure Maps account name</Label>
-            <Input value={state.account} onChange={(_, d) => setState((p) => ({ ...p, account: d.value }))} placeholder="maps-csa-loom" />
+            <Input value={state.account} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, account: d.value }))} placeholder="maps-csa-loom" />
           </div>
           <div className={s.field}><Label>Style</Label>
-            <Input value={state.style} onChange={(_, d) => setState((p) => ({ ...p, style: d.value }))} placeholder="main" />
+            <Input value={state.style} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, style: d.value }))} placeholder="main" />
           </div>
           <div className={s.field}><Label>Tile layer URL (GeoJSON / TMS)</Label>
-            <Input value={state.tileLayerUrl} onChange={(_, d) => setState((p) => ({ ...p, tileLayerUrl: d.value }))} placeholder="https://…/tiles/{z}/{x}/{y}.pbf" />
+            <Input value={state.tileLayerUrl} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, tileLayerUrl: d.value }))} placeholder="https://…/tiles/{z}/{x}/{y}.pbf" />
           </div>
           <Caption1>Persisted into Cosmos item state via PATCH /api/cosmos-items/geo-map/{`{id}`}. Hooks into the GeoQuery editor for layered visualization (v3.x).</Caption1>
           <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
@@ -245,24 +246,9 @@ function useLakehouseContainers() {
   return { containers, error, loading };
 }
 
-// Parse "abfss://container@account.dfs.core.windows.net/path/segments" into
-// { container, suffix } so the existing free-text adlsPath can decompose
-// into the new Select + path-suffix Input without losing data.
-function splitAdlsPath(p: string): { container: string; suffix: string } {
-  const m = p.match(/^abfss:\/\/([^@]+)@[^/]+\/?(.*)$/i);
-  if (m) return { container: m[1], suffix: m[2] || '' };
-  return { container: '', suffix: p };
-}
-
-function joinAdlsPath(container: string, suffix: string, accountUrl?: string): string {
-  if (!container) return suffix;
-  // Reconstruct from the container's discovered URL if available, else
-  // emit a host placeholder so the user sees the shape they need.
-  const host = accountUrl
-    ? accountUrl.replace(/^https:\/\/([^.]+)\.dfs\.core\.windows\.net.*$/i, '$1.dfs.core.windows.net')
-    : '<account>.dfs.core.windows.net';
-  return `abfss://${container}@${host}/${suffix.replace(/^\//, '')}`;
-}
+// `splitAdlsPath` / `joinAdlsPath` live in `_family-utils.ts` so vitest
+// can exercise them. See `lib/editors/__tests__/family-utils.test.ts` for
+// round-trip coverage.
 
 export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -329,7 +315,7 @@ export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: strin
           <div className={s.field}><Label>Path suffix (under selected container)</Label>
             <Input
               value={split.suffix}
-              onChange={(_, d) => setState((p) => ({ ...p, adlsPath: joinAdlsPath(split.container, d.value, containerAccountUrl) }))}
+              onChange={(_: unknown, d: any) => setState((p) => ({ ...p, adlsPath: joinAdlsPath(split.container, d.value, containerAccountUrl) }))}
               placeholder="geo/events/"
               disabled={!split.container}
             />
@@ -338,7 +324,7 @@ export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: strin
             Effective path: <code>{state.adlsPath || '(select a container)'}</code>
           </Caption1>
           <div className={s.field}><Label>Geometry column</Label>
-            <Input value={state.geomColumn} onChange={(_, d) => setState((p) => ({ ...p, geomColumn: d.value }))} placeholder="geometry" />
+            <Input value={state.geomColumn} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, geomColumn: d.value }))} placeholder="geometry" />
           </div>
           <div className={s.field}><Label>Format</Label>
             <select value={state.format} onChange={(e) => setState((p) => ({ ...p, format: e.target.value as GeoDatasetState['format'] }))} style={{ padding: 6 }}>
@@ -361,12 +347,41 @@ export function GeoDatasetEditor({ item, id }: { item: FabricItemType; id: strin
   );
 }
 
+// H3 ADX install bundle — defines h3_* convenience functions wrapping the
+// built-in `geo_point_to_h3cell` family so users can drop straight into the
+// h3_ namespace they get from Spark / DuckDB / Synapse. All are pure KQL,
+// no external assembly; the .create function commands are idempotent
+// (`.create-or-alter`).
+const H3_ADX_INSTALL = `.create-or-alter function with (folder="loom/h3", docstring="H3 cell from lat/lon at resolution r") h3_latlon_to_cell(lat:real, lon:real, r:int=7) { geo_point_to_h3cell(lon, lat, r) }
+.create-or-alter function with (folder="loom/h3", docstring="Parent H3 cell at resolution r") h3_cell_to_parent(cell:string, r:int) { geo_h3cell_parent(cell, r) }
+.create-or-alter function with (folder="loom/h3", docstring="H3 cell neighbors (k-ring)") h3_cell_kring(cell:string, k:int=1) { geo_h3cell_neighbors(cell) }
+.create-or-alter function with (folder="loom/h3", docstring="Center lat/lon of an H3 cell as {lat,lon}") h3_cell_to_latlon(cell:string) { geo_h3cell_to_central_point(cell) }
+.create-or-alter function with (folder="loom/h3", docstring="Hex polygon (GeoJSON) of an H3 cell") h3_cell_to_polygon(cell:string) { geo_h3cell_to_polygon(cell) }`;
+
 export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [engine, setEngine] = useState<'kql' | 'tsql'>('kql');
   const [text, setText] = useState<string>(SAMPLE_GEO_KQL);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  // H3 install state — runs the .create-or-alter bundle against the
+  // resolved KQL database. Idempotent.
+  const [installing, setInstalling] = useState(false);
+  const [installMsg, setInstallMsg] = useState<string | null>(null);
+  const installH3 = useCallback(async () => {
+    setInstalling(true); setInstallMsg('Installing H3 functions…');
+    try {
+      const r = await fetch(`/api/items/kql-database/${id}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kql: H3_ADX_INSTALL }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setInstallMsg(`Install failed: ${j.error || 'unknown'}`); return; }
+      setInstallMsg(`Installed h3_* functions (${j.rowCount ?? 5} commands executed).`);
+    } catch (e: any) {
+      setInstallMsg(`Install failed: ${e?.message || String(e)}`);
+    } finally { setInstalling(false); }
+  }, [id]);
 
   const onEngineChange = (e: 'kql' | 'tsql') => {
     setEngine(e);
@@ -400,8 +415,11 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
       { label: 'Run', actions: [
         { label: loading ? 'Running…' : 'Execute', onClick: loading ? undefined : run, disabled: loading },
       ]},
+      { label: 'H3 UDFs', actions: [
+        { label: installing ? 'Installing…' : 'Install H3 to KQL DB', onClick: installing ? undefined : installH3, disabled: installing || engine !== 'kql', title: engine !== 'kql' ? 'Switch to KQL engine first — H3 ADX install is KQL-only.' : 'Idempotent .create-or-alter for h3_* functions on the resolved KQL database.' },
+      ]},
     ]},
-  ], [engine, loading, run]);
+  ], [engine, loading, run, installing, installH3]);
 
   return (
     <ItemEditorChrome
@@ -416,7 +434,7 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
       </div>}
       main={
         <div className={s.pad}>
-          <TabList selectedValue={engine} onTabSelect={(_, d) => onEngineChange(d.value as any)}>
+          <TabList selectedValue={engine} onTabSelect={(_: unknown, d: any) => onEngineChange(d.value as any)}>
             <Tab value="kql">KQL (Kusto)</Tab>
             <Tab value="tsql">T-SQL (Synapse Serverless)</Tab>
           </TabList>
@@ -427,9 +445,18 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
               {JSON.stringify(result, null, 2)}
             </pre>
           )}
+          {installMsg && (
+            <MessageBar intent={installMsg.includes('failed') ? 'error' : 'success'}>
+              <MessageBarBody>{installMsg}</MessageBarBody>
+            </MessageBar>
+          )}
           <MessageBar intent="info"><MessageBarBody>
-            H3 UDFs in Synapse Serverless require installing the H3 .NET assembly (out-of-band). KQL geo
-            functions are built into ADX cluster <code>{process.env.NEXT_PUBLIC_LOOM_KUSTO_CLUSTER || 'adx-csa-loom-shared'}</code>.
+            <MessageBarTitle>H3 UDFs</MessageBarTitle>
+            Click <strong>Install H3 to KQL DB</strong> in the ribbon to provision <code>h3_latlon_to_cell</code>,{' '}
+            <code>h3_cell_to_parent</code>, <code>h3_cell_kring</code>, <code>h3_cell_to_latlon</code>, and{' '}
+            <code>h3_cell_to_polygon</code> in the resolved KQL database (idempotent <code>.create-or-alter</code>).{' '}
+            For Synapse Serverless, the H3 .NET assembly must be uploaded out-of-band — run{' '}
+            <code>scripts/csa-loom/install-synapse-h3.sh</code> against your workspace.
           </MessageBarBody></MessageBar>
         </div>
       }
@@ -536,7 +563,7 @@ export function GeoPipelineEditor({ item, id }: { item: FabricItemType; id: stri
             <label><input type="checkbox" checked={state.reverseGeocode} onChange={(e) => setState((p) => ({ ...p, reverseGeocode: e.target.checked }))} /> Reverse-geocode (requires Azure Maps account)</label>
           </div>
           <div className={s.field}><Label>Buffer (meters; 0 = no buffer)</Label>
-            <Input type="number" value={String(state.bufferMeters)} onChange={(_, d) => setState((p) => ({ ...p, bufferMeters: Number(d.value || '0') }))} />
+            <Input type="number" value={String(state.bufferMeters)} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, bufferMeters: Number(d.value || '0') }))} />
           </div>
           <MessageBar intent="info">
             <MessageBarBody>

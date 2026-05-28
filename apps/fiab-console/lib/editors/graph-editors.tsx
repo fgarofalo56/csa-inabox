@@ -26,6 +26,8 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { ForceDirectedGraph, extractGraph } from '@/lib/components/graph/force-directed-graph';
+import { cypherToKql, TranslationError } from '@/lib/azure/cypher-kql-translator';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
@@ -165,7 +167,7 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
               <MessageBarTitle>Cosmos Gremlin runtime</MessageBarTitle>
               Real traversal execution gated on <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code> + <code>gremlin</code> npm
               package. When not configured the BFF returns 501 with a deferred-reason payload (rendered here).
-              Graph visualization (force-directed layout) deferred to v3.x — rows render as JSON for now.
+              When the response contains vertices + edges the force-directed view renders below the raw JSON.
             </MessageBarBody>
           </MessageBar>
           <MonacoTextarea value={query} onChange={setQuery} language="javascript" height={200} minHeight={160} ariaLabel="Gremlin query" />
@@ -174,10 +176,32 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
             <Button appearance="secondary" disabled={loading} onClick={showVertices}>Quick: Vertices</Button>
             <Button appearance="secondary" disabled={loading} onClick={showEdges}>Quick: Edges</Button>
           </div>
+          <GremlinViz result={result} />
           <ResultsPreview result={result} />
         </div>
       }
     />
+  );
+}
+
+// ============================================================
+// GremlinViz — renders the force-directed graph when the result has
+// recognizable vertices/edges; quietly hides when there's nothing useful
+// to visualize.
+// ============================================================
+function GremlinViz({ result }: { result: any }) {
+  const graph = useMemo(() => {
+    if (!result || !result.ok) return null;
+    const g = extractGraph(result);
+    if (g.nodes.length === 0) return null;
+    return g;
+  }, [result]);
+  if (!graph) return null;
+  return (
+    <div>
+      <Caption1 style={{ marginBottom: 4 }}>Force-directed graph view ({graph.nodes.length} nodes, {graph.edges.length} edges)</Caption1>
+      <ForceDirectedGraph nodes={graph.nodes} edges={graph.edges} />
+    </div>
   );
 }
 
@@ -187,44 +211,96 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
 export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [query, setQuery] = useState<string>(SAMPLE_CYPHER);
+  const [mode, setMode] = useState<'cypher' | 'kql'>('cypher');
+  const [translated, setTranslated] = useState<string>('');
+  const [translateErr, setTranslateErr] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [sourceTable, setSourceTable] = useState('GraphSnapshot');
+
   const run = useCallback(async () => {
-    setLoading(true); setResult(null);
+    setLoading(true); setResult(null); setTranslateErr(null); setTranslated('');
     try {
+      let kqlBody = query;
+      if (mode === 'cypher') {
+        try {
+          kqlBody = cypherToKql(query, sourceTable);
+          setTranslated(kqlBody);
+        } catch (e) {
+          const tErr = e instanceof TranslationError ? e : new TranslationError(String(e));
+          setTranslateErr(`${tErr.message}${tErr.hint ? ` — ${tErr.hint}` : ''}`);
+          setLoading(false);
+          return;
+        }
+      }
       const r = await fetch(`/api/items/kql-database/${id}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ kql: query }),
+        body: JSON.stringify({ kql: kqlBody }),
       });
       setResult(await r.json());
     } catch (e: any) { setResult({ ok: false, error: e?.message || String(e) }); }
     finally { setLoading(false); }
-  }, [id, query]);
+  }, [id, query, mode, sourceTable]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: loading ? 'Running…' : 'Run', onClick: loading ? undefined : run, disabled: loading },
+        { label: `Mode: ${mode === 'cypher' ? 'Cypher' : 'KQL'}`, onClick: () => setMode(mode === 'cypher' ? 'kql' : 'cypher') },
       ]},
     ]},
-  ], [loading, run]);
+  ], [loading, run, mode]);
+
+  const cypherGraph = useMemo(() => {
+    if (!result || !result.ok) return null;
+    const g = extractGraph(result);
+    if (g.nodes.length === 0) return null;
+    return g;
+  }, [result]);
+
   return (
     <ItemEditorChrome
       item={item} id={id}
       ribbon={ribbon}
       leftPanel={<div className={s.treePad}>
         <Caption1>Cypher → KQL bridge. Backed by ADX <code>make-graph</code> + <code>graph-match</code>.</Caption1>
+        <div className={s.field} style={{ marginTop: 8 }}>
+          <Label>Source table</Label>
+          <Input value={sourceTable} onChange={(_: unknown, d: any) => setSourceTable(d.value)} placeholder="GraphSnapshot" />
+          <Caption1>The ADX table that holds the graph snapshot (output of <code>make-graph</code>).</Caption1>
+        </div>
       </div>}
       main={
         <div className={s.pad}>
           <MessageBar intent="info">
             <MessageBarBody>
               <MessageBarTitle>openCypher on ADX</MessageBarTitle>
-              The editor sends KQL; the panel above shows the equivalent in <em>graph-match</em> syntax. Real
-              Cypher-to-KQL translation deferred to v3.x — write KQL directly for now.
+              Type Cypher; the translator emits KQL <code>graph-match</code> and runs it against{' '}
+              <code>{sourceTable}</code>. Switch <em>Mode</em> in the ribbon to write raw KQL.
             </MessageBarBody>
           </MessageBar>
-          <MonacoTextarea value={query} onChange={setQuery} language="kql" height={200} minHeight={160} ariaLabel="Cypher / KQL editor" />
+          <MonacoTextarea value={query} onChange={setQuery} language={mode === 'cypher' ? 'sql' : 'kql'} height={180} minHeight={140} ariaLabel="Cypher / KQL editor" />
+          {translateErr && (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                <MessageBarTitle>Cypher → KQL translation failed</MessageBarTitle>
+                {translateErr} — switch to Mode: KQL and write the query by hand, or simplify the pattern.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {translated && (
+            <div>
+              <Caption1>Translated KQL:</Caption1>
+              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: 12, backgroundColor: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>{translated}</pre>
+            </div>
+          )}
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
+          {cypherGraph && (
+            <div>
+              <Caption1 style={{ marginBottom: 4 }}>Force-directed graph view ({cypherGraph.nodes.length} nodes, {cypherGraph.edges.length} edges)</Caption1>
+              <ForceDirectedGraph nodes={cypherGraph.nodes} edges={cypherGraph.edges} />
+            </div>
+          )}
           <ResultsPreview result={result} />
         </div>
       }
@@ -452,8 +528,8 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
               ))}
             </select>
           </div>
-          <div className={s.field}><Label>Index name</Label><Input value={indexName} onChange={(_, d) => { setIndexName(d.value); setDirty(true); }} /></div>
-          <div className={s.field}><Label>Dimensions</Label><Input type="number" value={String(dim)} onChange={(_, d) => { setDim(Number(d.value || '0')); setDirty(true); }} /></div>
+          <div className={s.field}><Label>Index name</Label><Input value={indexName} onChange={(_: unknown, d: any) => { setIndexName(d.value); setDirty(true); }} /></div>
+          <div className={s.field}><Label>Dimensions</Label><Input type="number" value={String(dim)} onChange={(_: unknown, d: any) => { setDim(Number(d.value || '0')); setDirty(true); }} /></div>
           <div className={s.field}>
             <Label>Metric</Label>
             <select value={metric} onChange={(e) => { setMetric(e.target.value as any); setDirty(true); }} style={{ padding: 6 }}>

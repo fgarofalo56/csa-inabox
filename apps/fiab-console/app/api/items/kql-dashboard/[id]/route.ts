@@ -46,11 +46,41 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const tiles: Tile[] = Array.isArray(item.state?.tiles) ? item.state!.tiles : [];
 
     // Optional ?run=1 — execute every tile and inline its results.
+    // Optional ?time=last-1h|last-24h|last-7d|last-30d|all|ago(NNN)
+    // Optional ?param.<name>=<value> — substituted into each tile's KQL
+    //   anywhere it sees `_loomParam_<name>` (literal token, no escaping).
     const run = req.nextUrl.searchParams.get('run') === '1';
+    const timeKey = req.nextUrl.searchParams.get('time') || 'last-24h';
+    const TIME_MAP: Record<string, string> = {
+      'last-15m': 'ago(15m)',
+      'last-1h': 'ago(1h)',
+      'last-24h': 'ago(24h)',
+      'last-7d': 'ago(7d)',
+      'last-30d': 'ago(30d)',
+      'all': 'datetime(1970-01-01)',
+    };
+    const timeFrom = TIME_MAP[timeKey] || timeKey; // allow operators to pass raw ago(...) too
+
+    // Build the param-substitution map from query params named `param.<k>`.
+    const paramSubs: Record<string, string> = {};
+    req.nextUrl.searchParams.forEach((v, k) => {
+      if (k.startsWith('param.')) paramSubs[k.slice(6)] = v;
+    });
+
+    const substitute = (kql: string): string => {
+      let out = kql.replace(/_loomTimeFrom\b/g, timeFrom);
+      for (const [k, v] of Object.entries(paramSubs)) {
+        // Best-effort literal substitution. KQL injection is the operator's
+        // responsibility (they wrote the dashboard); we don't quote.
+        out = out.replace(new RegExp(`_loomParam_${k.replace(/[^a-zA-Z0-9_]/g, '_')}\\b`, 'g'), v);
+      }
+      return out;
+    };
+
     const rendered = run
       ? await Promise.all(tiles.map(async (t) => {
           try {
-            const result = await executeQuery(t.database || resolveDatabase(item), t.kql);
+            const result = await executeQuery(t.database || resolveDatabase(item), substitute(t.kql));
             return { ...t, result };
           } catch (e: any) {
             return { ...t, error: e?.message || String(e) };
