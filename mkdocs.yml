@@ -1994,273 +1994,50 @@ nav:
   # ============================================================
   # 999. CSA LOOM (moved to end of nav per user request 2026-05-27) — Microsoft Fabric parity layer (Gov tenants)
   # Public brand: CSA Loom. Repo-internal directory: docs/fiab/.
+  # ------------------------------------------------------------
+  # Nav reorganized 2026-05-28 (issue #408) into a small set of
+  # coherent categories. Every page reference from the previous
+  # flat layout is preserved — only the grouping and ordering
+  # changed. Duplicate top-level `Admin` and `Deployment` keys
+  # (which YAML silently collapsed) were merged into single
+  # canonical groups.
   # ============================================================
   - CSA Loom:
-      - Overview: fiab/index.md
-      - What is CSA Loom: fiab/what-is-csa-loom.md
-      - Whitepaper: fiab/whitepaper.md
-      - Parity Matrix: fiab/parity-matrix.md
-      - Reference Architecture: fiab/architecture.md
-      - PRP Delivery Audit: fiab/prp-audit.md
-      - Portal Architecture (where admins + users go): fiab/portal-architecture.md
-      - V2 Scope Expansion (2026-05-23 walkthrough): fiab/v2-scope-expansion.md
-      - Live Deploy Status (2026-05-23): fiab/live-deploy-status.md
-      - UAT Report (Iteration 1): fiab/uat-report.md
-      - Console Access Patterns: fiab/access-patterns.md
-      - Admin — Security & Governance:
-          - Overview: fiab/admin/security/index.md
-          - Purview tab: fiab/admin/security/purview.md
-          - Information Protection tab: fiab/admin/security/information-protection.md
-          - DLP tab: fiab/admin/security/dlp.md
-          - Audit tab: fiab/admin/security/audit.md
-      - v1 Final Status + v2 Plan: fiab/v1-final-status-and-v2-plan.md
-      - Releases:
-          - "2026-05-27: App bundles + console wiring sweep": fiab/releases/2026-05-27-apps-bundles-and-wiring-sweep.md
-      - Operations:
-          - "App Install — Phase 2 live-service provisioning": fiab/operations/app-install-provisioning.md
-      - Admin:
-          - "Feature Permissions (Fabric-style RBAC)": fiab/admin/feature-rbac.md
-      - Test Script (2026-05-27): fiab/TEST_SCRIPT_2026_05_27.md
-      - Admin:
-          - Scale by SKU: fiab/admin/scaling.md
-      - Handoffs & Version State:
-          - "v1.18 GREEN handoff": fiab/v118-handoff.md
-          - "v2.0 handoff (Synapse pools live)": fiab/v2.0-handoff.md
-          - "v2.0 push-button deploy gap audit": fiab/v2.0-pushbutton-gap-audit.md
-          - "v2.1 LIVE state": fiab/v2.1-live-state.md
-          - "v2.1 E2E results": fiab/v2.1-e2e-results.md
-          - "v2.1 handoff": fiab/v2.1-handoff.md
-          - "v2.1 FINAL session state": fiab/v2.1-FINAL.md
-          - "v2.1 absolute final": fiab/v2.1-absolute-final.md
-          - "v2.2 LIVE — ready for v2 work": fiab/v2.2-done.md
-          - "v2.3 — v2 launch complete": fiab/v2.3-launch.md
-          - "v2.4 — final v2 launch": fiab/v2.4-launch.md
-          - "v2.5.1 — zero vaporware": fiab/v2.5.1-zero-vaporware.md
-          - "v3 Security Hardening": fiab/v3-security-hardening.md
-          - "v3 UI Parity — Chunked Execution Plan": fiab/v3-ui-parity-chunked-plan.md
-          - "v3.0 → v3.1 Handoff": fiab/v30-v31-handoff.md
-          - "v3.1 UAT Receipt": fiab/v31-uat-receipt.md
-          - "Next-session kickoff": fiab/next-session-kickoff.md
-      - Audits & Inventories:
-          - Fabric Feature Inventory: fiab/fabric-feature-inventory.md
-          - Fabric UI Parity Action Plan: fiab/fabric-ui-parity-action-plan.md
-          - Editor Capability Audit: fiab/editor-capability-audit.md
-          - Editor Wiring Audit: fiab/wiring-audit.md
-          - UI Audit v1.10: fiab/ui-audit-v1.10.md
-          - UAT Coverage Matrix: fiab/uat-coverage.md
-          - CSA-in-a-Box Alignment + v2 Backlog: fiab/loom-csa-alignment-and-v2-backlog.md
-          - Parity Progress (running log): fiab/parity-progress.md
-          - Parity Rollup — Every Surface: fiab/parity-rollup.md
-      - Editor Families:
-          - "Data Engineering — Synapse · Databricks · ADF": fiab/synapse-databricks-adf-family.md
-      - Parity Specs:
-          - Activator: fiab/activator-parity-spec.md
-          - ADF Dataset: fiab/adf-dataset-parity-spec.md
-          - ADF Pipeline: fiab/adf-pipeline-parity-spec.md
-          - ADF Trigger: fiab/adf-trigger-parity-spec.md
-          - AI Builder Model: fiab/ai-builder-model-parity-spec.md
-          - AI Foundry Hub: fiab/ai-foundry-hub-parity-spec.md
-          - AI Foundry Project: fiab/ai-foundry-project-parity-spec.md
-          - AI Search Index: fiab/ai-search-index-parity-spec.md
-          - AI Search Skillset: fiab/ai-search-skillset-parity-spec.md
-          - AI / APIM / Copilot Studio family sweep: fiab/ai-apim-copilot-family-sweep.md
-          - APIM API: fiab/apim-api-parity-spec.md
-          - APIM Policy: fiab/apim-policy-parity-spec.md
-          - APIM Product: fiab/apim-product-parity-spec.md
-          - Azure SQL Database: fiab/azure-sql-database-parity-spec.md
-          - Azure SQL Managed Instance: fiab/azure-sql-managed-instance-parity-spec.md
-          - Azure SQL Server: fiab/azure-sql-server-parity-spec.md
-          - Compute: fiab/compute-parity-spec.md
-          - Content Safety: fiab/content-safety-parity-spec.md
-          - Copilot Studio Action: fiab/copilot-studio-action-parity-spec.md
-          - Copilot Studio Agent: fiab/copilot-studio-agent-parity-spec.md
-          - Copilot Studio Analytics: fiab/copilot-studio-analytics-parity-spec.md
-          - Copilot Studio Channel: fiab/copilot-studio-channel-parity-spec.md
-          - Copilot Studio Knowledge: fiab/copilot-studio-knowledge-parity-spec.md
-          - Copilot Studio Topic: fiab/copilot-studio-topic-parity-spec.md
-          - Copilot Template Library: fiab/copilot-template-library-parity-spec.md
-          - Copy Job: fiab/copy-job-parity-spec.md
-          - Cosmos Gremlin Graph: fiab/cosmos-gremlin-graph-parity-spec.md
-          - Cross-Item Copilot: fiab/cross-item-copilot-parity-spec.md
-          - Cypher Graph: fiab/cypher-graph-parity-spec.md
-          - Dashboard: fiab/dashboard-parity-spec.md
-          - Data Agent: fiab/data-agent-parity-spec.md
-          - Data Pipeline: fiab/data-pipeline-parity-spec.md
-          - Data Product: fiab/data-product-parity-spec.md
-          - Data Product Instance: fiab/data-product-instance-parity-spec.md
-          - Data Product Template: fiab/data-product-template-parity-spec.md
-          - Databricks Cluster: fiab/databricks-cluster-parity-spec.md
-          - Databricks Job: fiab/databricks-job-parity-spec.md
-          - Databricks Notebook: fiab/databricks-notebook-parity-spec.md
-          - Databricks SQL Warehouse: fiab/databricks-sql-warehouse-parity-spec.md
-          - Dataflow: fiab/dataflow-parity-spec.md
-          - Dataset: fiab/dataset-parity-spec.md
-          - Dataverse Table: fiab/dataverse-table-parity-spec.md
-          - dbt Job: fiab/dbt-job-parity-spec.md
-          - Environment: fiab/environment-parity-spec.md
-          - Evaluation: fiab/evaluation-parity-spec.md
-          - Eventhouse: fiab/eventhouse-parity-spec.md
-          - Eventstream: fiab/eventstream-parity-spec.md
-          - Geo Dataset: fiab/geo-dataset-parity-spec.md
-          - Geo Map: fiab/geo-map-parity-spec.md
-          - Geo Pipeline: fiab/geo-pipeline-parity-spec.md
-          - Geo Query: fiab/geo-query-parity-spec.md
-          - GQL Graph: fiab/gql-graph-parity-spec.md
-          - Graph Model: fiab/graph-model-parity-spec.md
-          - GraphQL API: fiab/graphql-api-parity-spec.md
-          - KQL Dashboard: fiab/kql-dashboard-parity-spec.md
-          - KQL Database: fiab/kql-database-parity-spec.md
-          - KQL Queryset: fiab/kql-queryset-parity-spec.md
-          - Lakehouse: fiab/lakehouse-parity-spec.md
-          - Map: fiab/map-parity-spec.md
-          - Mirrored Database: fiab/mirrored-database-parity-spec.md
-          - ML Experiment: fiab/ml-experiment-parity-spec.md
-          - ML Model: fiab/ml-model-parity-spec.md
-          - Notebook: fiab/notebook-parity-spec.md
-          - Ontology: fiab/ontology-parity-spec.md
-          - Operations Agent: fiab/operations-agent-parity-spec.md
-          - Paginated Report: fiab/paginated-report-parity-spec.md
-          - Plan: fiab/plan-parity-spec.md
-          - Power App: fiab/power-app-parity-spec.md
-          - Power Automate Flow: fiab/power-automate-flow-parity-spec.md
-          - Power Page: fiab/power-page-parity-spec.md
-          - Power Platform Environment: fiab/powerplatform-environment-parity-spec.md
-          - Prompt Flow: fiab/prompt-flow-parity-spec.md
-          - Report: fiab/report-parity-spec.md
-          - Scorecard: fiab/scorecard-parity-spec.md
-          - Semantic Model: fiab/semantic-model-parity-spec.md
-          - Spark Job Definition: fiab/spark-job-definition-parity-spec.md
-          - SQL Server 2025 Vector Index: fiab/sql-server-2025-vector-index-parity-spec.md
-          - Synapse Dedicated SQL Pool: fiab/synapse-dedicated-sql-pool-parity-spec.md
-          - Synapse Pipeline: fiab/synapse-pipeline-parity-spec.md
-          - Synapse Serverless SQL Pool: fiab/synapse-serverless-sql-pool-parity-spec.md
-          - Synapse Spark Pool: fiab/synapse-spark-pool-parity-spec.md
-          - Tracing: fiab/tracing-parity-spec.md
-          - User Data Function: fiab/user-data-function-parity-spec.md
-          - "U-SQL Job": fiab/usql-job-parity-spec.md
-          - Variable Library: fiab/variable-library-parity-spec.md
-          - Vector Store: fiab/vector-store-parity-spec.md
-          - Warehouse: fiab/warehouse-parity-spec.md
-      - Parity Gap Reports:
-          - "Summary — AI/ML editors (2026-05-26)": fiab/parity-gap/_ai-ml-summary.md
-          - "Summary — Global non-editor chrome (2026-05-26)": fiab/parity-gap/_global-summary-2026-05-26.md
-          - "Summary — Compute + integration editors (2026-05-26)": fiab/parity-gap/_summary-2026-05-26.md
-          - "Summary — Top-level nav validation (2026-05-26)": fiab/parity-gap/_top-level-nav-validation-2026-05-26.md
-          - "Summary — v2 validator batch (2026-05-26)": fiab/parity-gap/_validation-summary-2026-05-26.md
-          - "Rollup — Apps catalog": fiab/parity-gap/apps-catalog-rollup.md
-          - "Editors — ADF Dataset": fiab/parity-gap/adf-dataset.md
-          - "Editors — ADF Pipeline": fiab/parity-gap/adf-pipeline.md
-          - "Editors — ADF Trigger": fiab/parity-gap/adf-trigger.md
-          - "Editors — AI Foundry Hub": fiab/parity-gap/ai-foundry-hub.md
-          - "Editors — AI Foundry Project": fiab/parity-gap/ai-foundry-project.md
-          - "Editors — AI Search Index": fiab/parity-gap/ai-search-index.md
-          - "Editors — AI Search Skillset": fiab/parity-gap/ai-search-skillset.md
-          - "Editors — APIM API": fiab/parity-gap/apim-api.md
-          - "Editors — APIM Policy": fiab/parity-gap/apim-policy.md
-          - "Editors — APIM Product": fiab/parity-gap/apim-product.md
-          - "Editors — Azure SQL (group)": fiab/parity-gap/azure-sql-editors.md
-          - "Editors — BI + RTI (group)": fiab/parity-gap/bi-rti-editors.md
-          - "Editors — Compute": fiab/parity-gap/compute.md
-          - "Editors — Content Safety": fiab/parity-gap/content-safety.md
-          - "Editors — Copilot Studio Action": fiab/parity-gap/copilot-studio-action.md
-          - "Editors — Copilot Studio Agent": fiab/parity-gap/copilot-studio-agent.md
-          - "Editors — Copilot Studio Analytics": fiab/parity-gap/copilot-studio-analytics.md
-          - "Editors — Copilot Studio Channel": fiab/parity-gap/copilot-studio-channel.md
-          - "Editors — Copilot Studio Knowledge": fiab/parity-gap/copilot-studio-knowledge.md
-          - "Editors — Copilot Studio Topic": fiab/parity-gap/copilot-studio-topic.md
-          - "Editors — Copilot Template Library": fiab/parity-gap/copilot-template-library.md
-          - "Editors — Cross-Item Copilot": fiab/parity-gap/cross-item-copilot.md
-          - "Editors — Dashboard": fiab/parity-gap/dashboard.md
-          - "Editors — Data Agent": fiab/parity-gap/data-agent.md
-          - "Editors — Data Engineering (misc)": fiab/parity-gap/data-engineering-misc-editors.md
-          - "Editors — Data Pipeline": fiab/parity-gap/data-pipeline.md
-          - "Editors — Data Product (API)": fiab/parity-gap/api-data-product-editors.md
-          - "Editors — Databricks Cluster": fiab/parity-gap/databricks-cluster.md
-          - "Editors — Databricks Job": fiab/parity-gap/databricks-job.md
-          - "Editors — Databricks Notebook": fiab/parity-gap/databricks-notebook.md
-          - "Editors — Databricks SQL Warehouse": fiab/parity-gap/databricks-sql-warehouse.md
-          - "Editors — Dataset": fiab/parity-gap/dataset.md
-          - "Editors — Evaluation": fiab/parity-gap/evaluation.md
-          - "Editors — Eventhouse": fiab/parity-gap/eventhouse.md
-          - "Editors — Eventstream": fiab/parity-gap/eventstream.md
-          - "Editors — Fabric IQ (group)": fiab/parity-gap/fabric-iq-editors.md
-          - "Editors — Geo (group)": fiab/parity-gap/geo-editors.md
-          - "Editors — Graph + Vector (group)": fiab/parity-gap/graph-vector-editors.md
-          - "Editors — KQL Database": fiab/parity-gap/kql-database.md
-          - "Editors — KQL Queryset": fiab/parity-gap/kql-queryset.md
-          - "Editors — Lakehouse": fiab/parity-gap/lakehouse.md
-          - "Editors — ML Experiment": fiab/parity-gap/ml-experiment.md
-          - "Editors — ML Model": fiab/parity-gap/ml-model.md
-          - "Editors — Notebook": fiab/parity-gap/notebook.md
-          - "Editors — Operations Agent": fiab/parity-gap/operations-agent.md
-          - "Editors — Power Platform (group)": fiab/parity-gap/powerplatform-editors.md
-          - "Editors — Prompt Flow": fiab/parity-gap/prompt-flow.md
-          - "Editors — Report": fiab/parity-gap/report.md
-          - "Editors — Semantic Model": fiab/parity-gap/semantic-model.md
-          - "Editors — Setup Wizard": fiab/parity-gap/setup-wizard.md
-          - "Editors — Stream Analytics Job": fiab/parity-gap/stream-analytics-job.md
-          - "Editors — Synapse Dedicated SQL Pool": fiab/parity-gap/synapse-dedicated-sql-pool.md
-          - "Editors — Synapse Pipeline": fiab/parity-gap/synapse-pipeline.md
-          - "Editors — Synapse Serverless SQL Pool": fiab/parity-gap/synapse-serverless-sql-pool.md
-          - "Editors — Synapse Spark Pool": fiab/parity-gap/synapse-spark-pool.md
-          - "Editors — Tracing": fiab/parity-gap/tracing.md
-          - "Editors — Warehouse": fiab/parity-gap/warehouse.md
-          - "Apps — Casino Analytics": fiab/parity-gap/app-casino-analytics.md
-          - "Apps — Data Steward": fiab/parity-gap/app-data-steward.md
-          - "Apps — Fabric Mirror Onboard": fiab/parity-gap/app-fabric-mirror-onboard.md
-          - "Apps — FedRAMP Tracker": fiab/parity-gap/app-fedramp-tracker.md
-          - "Apps — FinOps Cost": fiab/parity-gap/app-finops-cost.md
-          - "Apps — Healthcare PopMgt": fiab/parity-gap/app-healthcare-popmgt.md
-          - "Apps — IoT Realtime": fiab/parity-gap/app-iot-realtime.md
-          - "Apps — Lakehouse Inspector": fiab/parity-gap/app-lakehouse-inspector.md
-          - "Apps — Pipeline Designer": fiab/parity-gap/app-pipeline-designer.md
-          - "Apps — RAG Builder": fiab/parity-gap/app-rag-builder.md
-          - "Admin — Audit Logs": fiab/parity-gap/admin-audit-logs.md
-          - "Admin — Capacity": fiab/parity-gap/admin-capacity.md
-          - "Admin — Domains": fiab/parity-gap/admin-domains.md
-          - "Admin — Overview": fiab/parity-gap/admin-overview.md
-          - "Admin — Portal Summary": fiab/parity-gap/admin-portal-summary.md
-          - "Admin — Security": fiab/parity-gap/admin-security.md
-          - "Admin — Tenant Settings": fiab/parity-gap/admin-tenant-settings.md
-          - "Admin — Updates": fiab/parity-gap/admin-updates.md
-          - "Admin — Usage": fiab/parity-gap/admin-usage.md
-          - "Admin — Users": fiab/parity-gap/admin-users.md
-          - "Admin — Workspaces": fiab/parity-gap/admin-workspaces.md
-          - "Global — Activity Feed Pane": fiab/parity-gap/global-activity-feed-pane.md
-          - "Global — Admin Link": fiab/parity-gap/global-admin-link.md
-          - "Global — App Launcher": fiab/parity-gap/global-app-launcher.md
-          - "Global — Copilot Pane": fiab/parity-gap/global-copilot-pane.md
-          - "Global — Item Side Panel": fiab/parity-gap/global-item-side-panel.md
-          - "Global — Learn Link": fiab/parity-gap/global-learn-link.md
-          - "Global — New Item Dialog": fiab/parity-gap/global-new-item-dialog.md
-          - "Global — Notifications": fiab/parity-gap/global-notifications.md
-          - "Global — Send Feedback": fiab/parity-gap/global-send-feedback.md
-          - "Global — Sign-in Flow": fiab/parity-gap/global-signin-flow.md
-          - "Global — Tab Strip": fiab/parity-gap/global-tab-strip.md
-          - "Global — Theme Toggle": fiab/parity-gap/global-theme-toggle.md
-          - "Global — Topbar Branding": fiab/parity-gap/global-topbar-branding.md
-          - "Global — Topbar Search": fiab/parity-gap/global-topbar-search.md
-          - "Global — Workspace Settings Drawer": fiab/parity-gap/global-workspace-settings-drawer.md
-          - "Pages — API Marketplace": fiab/parity-gap/page-api-marketplace.md
-          - "Pages — Browse": fiab/parity-gap/page-browse.md
-          - "Pages — Copilot": fiab/parity-gap/page-copilot.md
-          - "Pages — Data Agent": fiab/parity-gap/page-data-agent.md
-          - "Pages — Deployment Pipelines": fiab/parity-gap/page-deployment-pipelines.md
-          - "Pages — Governance": fiab/parity-gap/page-governance.md
-          - "Pages — Home": fiab/parity-gap/page-home.md
-          - "Pages — Learn": fiab/parity-gap/page-learn.md
-          - "Pages — Monitor": fiab/parity-gap/page-monitor.md
-          - "Pages — OneLake": fiab/parity-gap/page-onelake.md
-          - "Pages — Realtime Hub": fiab/parity-gap/page-realtime-hub.md
-          - "Pages — Setup": fiab/parity-gap/page-setup.md
-          - "Pages — Workload Hub": fiab/parity-gap/page-workload-hub.md
-          - "Pages — Workspaces": fiab/parity-gap/page-workspaces.md
-          - "Pages — Workspaces ID": fiab/parity-gap/page-workspaces-id.md
-          - "Routes — API Routes": fiab/parity-gap/api-routes.md
-      - Help Copilot:
-          - Overview: fiab/help-copilot/index.md
-          - Architecture: fiab/help-copilot/architecture.md
-          - Suggested prompts: fiab/help-copilot/prompts.md
+
+      # ------------------------------------------------------------
+      # 1. Overview — start here
+      # ------------------------------------------------------------
+      - Overview:
+          - Index: fiab/index.md
+          - What is CSA Loom: fiab/what-is-csa-loom.md
+          - Whitepaper: fiab/whitepaper.md
+          - Parity Matrix: fiab/parity-matrix.md
+
+      # ------------------------------------------------------------
+      # 2. Architecture & Decisions
+      # ------------------------------------------------------------
+      - Architecture & Decisions:
+          - Reference Architecture: fiab/architecture.md
+          - Portal Architecture (where admins + users go): fiab/portal-architecture.md
+          - Console Access Patterns: fiab/access-patterns.md
+          - ADRs:
+              - Overview: fiab/adr/README.md
+              - "fiab-0001 — Fabric feature scope": fiab/adr/0001-fabric-feature-scope.md
+              - "fiab-0002 — Hybrid compute": fiab/adr/0002-compute-hybrid.md
+              - "fiab-0003 — Catalog layering": fiab/adr/0003-catalog-layering.md
+              - "fiab-0004 — Direct Lake parity": fiab/adr/0004-direct-lake-parity.md
+              - "fiab-0005 — Activator engine": fiab/adr/0005-activator-engine.md
+              - "fiab-0006 — Mirroring engine": fiab/adr/0006-mirroring-engine.md
+              - "fiab-0007 — Console framework": fiab/adr/0007-console-framework.md
+              - "fiab-0008 — Deployment shape": fiab/adr/0008-deployment-shape.md
+              - "fiab-0009 — Copilot orchestration": fiab/adr/0009-copilot-orchestration.md
+              - "fiab-0010 — Container host": fiab/adr/0010-container-host.md
+              - "fiab-0011 — Tenancy model": fiab/adr/0011-tenancy-model.md
+              - "fiab-0012 — Forward migration": fiab/adr/0012-forward-migration.md
+
+      # ------------------------------------------------------------
+      # 3. Deployment
+      # ------------------------------------------------------------
       - Deployment:
           - Index: fiab/deployment/index.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
@@ -2277,121 +2054,136 @@ nav:
           - Multi-Subscription Multi-Tenant: fiab/deployment/multi-sub-multi-tenant.md
           - Upgrade Lifecycle: fiab/deployment/upgrade.md
           - Marketplace (deferred to backlog): fiab/deployment/marketplace.md
+
+      # ------------------------------------------------------------
+      # 4. Workloads (Fabric workload parity)
+      # ------------------------------------------------------------
       - Workloads:
           - Index: fiab/workloads/index.md
           - OneLake parity: fiab/workloads/onelake-parity.md
-          - Data Engineering parity: fiab/workloads/data-engineering.md
-          - Data Engineering editors:
-              - Lakehouse: fiab/workloads/lakehouse.md
-              - Notebook: fiab/workloads/notebook.md
-              - Data pipeline: fiab/workloads/data-pipeline.md
-              - Dataflow Gen2: fiab/workloads/dataflow.md
-              - Mirrored Database: fiab/workloads/mirrored-database.md
-              - Spark Job Definition: fiab/workloads/spark-job-definition.md
-              - Environment: fiab/workloads/environment.md
-              - Copy Job: fiab/workloads/copy-job.md
-              - dbt Job: fiab/workloads/dbt-job.md
-              - Stream Analytics Job: fiab/workloads/stream-analytics-job.md
+          - Data Engineering:
+              - Parity: fiab/workloads/data-engineering.md
+              - "Editor — Lakehouse": fiab/workloads/lakehouse.md
+              - "Editor — Notebook": fiab/workloads/notebook.md
+              - "Editor — Data pipeline": fiab/workloads/data-pipeline.md
+              - "Editor — Dataflow Gen2": fiab/workloads/dataflow.md
+              - "Editor — Mirrored Database": fiab/workloads/mirrored-database.md
+              - "Editor — Spark Job Definition": fiab/workloads/spark-job-definition.md
+              - "Editor — Environment": fiab/workloads/environment.md
+              - "Editor — Copy Job": fiab/workloads/copy-job.md
+              - "Editor — dbt Job": fiab/workloads/dbt-job.md
+              - "Editor — Stream Analytics Job": fiab/workloads/stream-analytics-job.md
+              - "Family — Synapse · Databricks · ADF": fiab/synapse-databricks-adf-family.md
           - Data Warehouse parity: fiab/workloads/data-warehouse.md
           - Data Science parity: fiab/workloads/data-science.md
-          - Real-Time Intelligence parity: fiab/workloads/real-time-intelligence.md
-          - "Editor — Eventhouse": fiab/workloads/eventhouse.md
-          - "Editor — KQL Database": fiab/workloads/kql-database.md
-          - "Editor — KQL Queryset": fiab/workloads/kql-queryset.md
-          - "Editor — KQL Dashboard": fiab/workloads/kql-dashboard.md
-          - "Editor — Eventstream": fiab/workloads/eventstream.md
-          - "Editor — Activator (Reflex)": fiab/workloads/activator.md
+          - Real-Time Intelligence:
+              - Parity: fiab/workloads/real-time-intelligence.md
+              - "Editor — Eventhouse": fiab/workloads/eventhouse.md
+              - "Editor — KQL Database": fiab/workloads/kql-database.md
+              - "Editor — KQL Queryset": fiab/workloads/kql-queryset.md
+              - "Editor — KQL Dashboard": fiab/workloads/kql-dashboard.md
+              - "Editor — Eventstream": fiab/workloads/eventstream.md
+              - "Editor — Activator (Reflex)": fiab/workloads/activator.md
           - Data Activator parity (Reflex): fiab/workloads/data-activator-parity.md
           - Data Agents parity: fiab/workloads/data-agents-parity.md
           - Mirroring parity: fiab/workloads/mirroring-parity.md
           - Direct Lake parity: fiab/workloads/direct-lake-parity.md
           - Copilot in CSA Loom: fiab/workloads/copilot-parity.md
           - Fabric IQ family (v2 preview): fiab/workloads/fabric-iq-family.md
-      - Custom Applications:
-          - Loom Console: fiab/console/index.md
-          - Loom Setup Wizard: fiab/console/setup-wizard.md
-          - Loom Copilot (runtime chat): fiab/console/copilot-runtime.md
-          - Help Copilot (docs-grounded widget):
-              - Overview: fiab/help-copilot/index.md
-              - Architecture: fiab/help-copilot/architecture.md
-              - Prompt patterns: fiab/help-copilot/prompts.md
-          - Operator — Interactive Setup Steps: fiab/operator-interactive-setup.md
-          - MSAL Sign-in Handoff: fiab/MSAL-handoff.md
-          - Dataverse Application User setup: fiab/dataverse-app-user.md
-          - Console v2 UI Handoff Brief: fiab/console-v2-ui-handoff.md
-          - Activator Engine service: fiab/services/activator-engine.md
-          - Mirroring Engine service: fiab/services/mirroring-engine.md
-          - Direct-Lake Shim service: fiab/services/direct-lake-shim.md
-      - Governance:
-          - Catalog: fiab/governance/catalog.md
-          - Tagging & Classification: fiab/governance/tagging-classification.md
-          - Workspace RBAC: fiab/governance/workspace-rbac.md
-          - Lineage: fiab/governance/lineage.md
-          - Data Residency: fiab/governance/data-residency.md
-          - Multi-Cloud Data Virtualization: fiab/governance/multi-cloud-virtualization.md
-      - Operations:
-          - Index: fiab/operations/index.md
-          - Capacity Management: fiab/operations/capacity-management.md
-          - Monitoring & Observability: fiab/operations/monitoring.md
-          - Cost Management: fiab/operations/cost.md
-          - Persistence, Chargeback, and Multi-DLZ: fiab/operations/persistence-chargeback-multidlz.md
-          - Disaster Recovery: fiab/operations/disaster-recovery.md
-          - Upgrade & Migration: fiab/operations/upgrade-migration.md
-          - Forward Migration to Microsoft Fabric: fiab/operations/forward-to-fabric.md
-      - Runbooks:
-          - Deploy Failure: fiab/runbooks/deploy-failure.md
-          - Direct-Lake-Shim Stuck: fiab/runbooks/direct-lake-shim-stuck.md
-          - Activator Rules Not Firing: fiab/runbooks/activator-rules-not-firing.md
-          - Mirroring CDC Lag: fiab/runbooks/mirroring-cdc-lag.md
-          - Loom Copilot Throttling: fiab/runbooks/loom-copilot-throttling.md
-          - Capacity Overrun: fiab/runbooks/capacity-overrun.md
-          - DLZ Onboard New Domain: fiab/runbooks/dlz-onboard-new-domain.md
-          - Forward Migrate to Fabric: fiab/runbooks/forward-migrate-to-fabric.md
-          - Boundary Promotion: fiab/runbooks/boundary-promotion.md
-          - Defender AI Equivalent SOC: fiab/runbooks/defender-ai-equivalent-soc.md
-          - MCP Troubleshooting: fiab/runbooks/mcp-troubleshooting.md
-          - Purview Scan Stuck: fiab/runbooks/purview-scan-stuck.md
-          - Synapse Audit Query Pack: fiab/runbooks/synapse-audit-query-pack.md
-          - Loom LAW Monitoring + Alert Pack: fiab/runbooks/loom-law-monitoring.md
-          - Secrets Bootstrap (per boundary): fiab/runbooks/secrets-bootstrap.md
-          - Purview Tenant-Existing Reuse: fiab/runbooks/purview-tenant-reuse.md
-          - First Deploy (operator playbook): fiab/runbooks/first-deploy.md
-          - Deploy Iteration Log (live): fiab/runbooks/deploy-iteration-log.md
-      - Workshops:
-          - Index: fiab/workshops/index.md
-          - 5-Day Federal CoE Workshop: fiab/workshops/5-day-federal-coe/index.md
-          - 5-Day Commercial CoE Workshop: fiab/workshops/5-day-commercial-coe/index.md
-      - Brand:
-          - Legal Review Package: fiab/brand/legal-review-package.md
-      - Marketing & Sales:
-          - Pitch Deck: fiab/marketing/pitch-deck.md
-          - Seller Playbook: fiab/marketing/seller-playbook.md
-          - Pitches (run-on-rails):
-              - 30-min CIO pitch: fiab/marketing/pitches/30-min-cio-pitch.md
-              - 60-min architecture deep-dive: fiab/marketing/pitches/60-min-architecture-deep-dive.md
-              - 2-hour technical evaluation: fiab/marketing/pitches/2-hour-technical-evaluation.md
-          - Demo Script: fiab/marketing/demo-script.md
-          - Battlecard vs Fabric Commercial: fiab/marketing/battlecard-fabric.md
-          - One-Pager: fiab/marketing/one-pager.md
-          - Video Walkthrough Plan: fiab/marketing/video-plan.md
-          - Federal Account Pitch Track: fiab/marketing/federal-pitch.md
-      - Use Cases:
-          - Federal Data Mesh: fiab/use-cases/federal-data-mesh.md
-          - Multi-Agency Onboarding: fiab/use-cases/multi-agency-onboarding.md
-          - Direct Lake-Replacement Pattern: fiab/use-cases/direct-lake-replacement.md
-          - Sovereign AI Agents: fiab/use-cases/sovereign-ai-agents.md
-          - Hybrid Fabric Commercial + CSA Loom Gov: fiab/use-cases/hybrid-topology.md
-      - Tutorials:
-          - Overview: fiab/tutorials/README.md
-          - "01 — First Workspace": fiab/tutorials/01-first-workspace.md
-          - "02 — First Lakehouse + Delta tables": fiab/tutorials/02-first-lakehouse.md
-          - "03 — Direct Lake parity (warm-cache materializer)": fiab/tutorials/03-direct-lake-parity.md
-          - "04 — Activator rules over IoT stream": fiab/tutorials/04-activator-rules.md
-          - "05 — Data Agent over Lakehouse": fiab/tutorials/05-data-agent.md
-          - "06 — Mirroring from Cosmos DB to Lakehouse": fiab/tutorials/06-mirroring-cosmos.md
-          - "07 — Marketplace data product publishing": fiab/tutorials/07-marketplace-data-product.md
-          - "08 — Forward-migrate a Lakehouse to Fabric": fiab/tutorials/08-forward-migrate-to-fabric.md
-          - "Editor Tutorials (per-item)":
+
+      # ------------------------------------------------------------
+      # 5. Editors — Fabric-item parity per editor type
+      # ------------------------------------------------------------
+      - Editors:
+          - Parity Specs (per editor):
+              - Activator: fiab/activator-parity-spec.md
+              - ADF Dataset: fiab/adf-dataset-parity-spec.md
+              - ADF Pipeline: fiab/adf-pipeline-parity-spec.md
+              - ADF Trigger: fiab/adf-trigger-parity-spec.md
+              - AI Builder Model: fiab/ai-builder-model-parity-spec.md
+              - AI Foundry Hub: fiab/ai-foundry-hub-parity-spec.md
+              - AI Foundry Project: fiab/ai-foundry-project-parity-spec.md
+              - AI Search Index: fiab/ai-search-index-parity-spec.md
+              - AI Search Skillset: fiab/ai-search-skillset-parity-spec.md
+              - AI / APIM / Copilot Studio family sweep: fiab/ai-apim-copilot-family-sweep.md
+              - APIM API: fiab/apim-api-parity-spec.md
+              - APIM Policy: fiab/apim-policy-parity-spec.md
+              - APIM Product: fiab/apim-product-parity-spec.md
+              - Azure SQL Database: fiab/azure-sql-database-parity-spec.md
+              - Azure SQL Managed Instance: fiab/azure-sql-managed-instance-parity-spec.md
+              - Azure SQL Server: fiab/azure-sql-server-parity-spec.md
+              - Compute: fiab/compute-parity-spec.md
+              - Content Safety: fiab/content-safety-parity-spec.md
+              - Copilot Studio Action: fiab/copilot-studio-action-parity-spec.md
+              - Copilot Studio Agent: fiab/copilot-studio-agent-parity-spec.md
+              - Copilot Studio Analytics: fiab/copilot-studio-analytics-parity-spec.md
+              - Copilot Studio Channel: fiab/copilot-studio-channel-parity-spec.md
+              - Copilot Studio Knowledge: fiab/copilot-studio-knowledge-parity-spec.md
+              - Copilot Studio Topic: fiab/copilot-studio-topic-parity-spec.md
+              - Copilot Template Library: fiab/copilot-template-library-parity-spec.md
+              - Copy Job: fiab/copy-job-parity-spec.md
+              - Cosmos Gremlin Graph: fiab/cosmos-gremlin-graph-parity-spec.md
+              - Cross-Item Copilot: fiab/cross-item-copilot-parity-spec.md
+              - Cypher Graph: fiab/cypher-graph-parity-spec.md
+              - Dashboard: fiab/dashboard-parity-spec.md
+              - Data Agent: fiab/data-agent-parity-spec.md
+              - Data Pipeline: fiab/data-pipeline-parity-spec.md
+              - Data Product: fiab/data-product-parity-spec.md
+              - Data Product Instance: fiab/data-product-instance-parity-spec.md
+              - Data Product Template: fiab/data-product-template-parity-spec.md
+              - Databricks Cluster: fiab/databricks-cluster-parity-spec.md
+              - Databricks Job: fiab/databricks-job-parity-spec.md
+              - Databricks Notebook: fiab/databricks-notebook-parity-spec.md
+              - Databricks SQL Warehouse: fiab/databricks-sql-warehouse-parity-spec.md
+              - Dataflow: fiab/dataflow-parity-spec.md
+              - Dataset: fiab/dataset-parity-spec.md
+              - Dataverse Table: fiab/dataverse-table-parity-spec.md
+              - dbt Job: fiab/dbt-job-parity-spec.md
+              - Environment: fiab/environment-parity-spec.md
+              - Evaluation: fiab/evaluation-parity-spec.md
+              - Eventhouse: fiab/eventhouse-parity-spec.md
+              - Eventstream: fiab/eventstream-parity-spec.md
+              - Geo Dataset: fiab/geo-dataset-parity-spec.md
+              - Geo Map: fiab/geo-map-parity-spec.md
+              - Geo Pipeline: fiab/geo-pipeline-parity-spec.md
+              - Geo Query: fiab/geo-query-parity-spec.md
+              - GQL Graph: fiab/gql-graph-parity-spec.md
+              - Graph Model: fiab/graph-model-parity-spec.md
+              - GraphQL API: fiab/graphql-api-parity-spec.md
+              - KQL Dashboard: fiab/kql-dashboard-parity-spec.md
+              - KQL Database: fiab/kql-database-parity-spec.md
+              - KQL Queryset: fiab/kql-queryset-parity-spec.md
+              - Lakehouse: fiab/lakehouse-parity-spec.md
+              - Map: fiab/map-parity-spec.md
+              - Mirrored Database: fiab/mirrored-database-parity-spec.md
+              - ML Experiment: fiab/ml-experiment-parity-spec.md
+              - ML Model: fiab/ml-model-parity-spec.md
+              - Notebook: fiab/notebook-parity-spec.md
+              - Ontology: fiab/ontology-parity-spec.md
+              - Operations Agent: fiab/operations-agent-parity-spec.md
+              - Paginated Report: fiab/paginated-report-parity-spec.md
+              - Plan: fiab/plan-parity-spec.md
+              - Power App: fiab/power-app-parity-spec.md
+              - Power Automate Flow: fiab/power-automate-flow-parity-spec.md
+              - Power Page: fiab/power-page-parity-spec.md
+              - Power Platform Environment: fiab/powerplatform-environment-parity-spec.md
+              - Prompt Flow: fiab/prompt-flow-parity-spec.md
+              - Report: fiab/report-parity-spec.md
+              - Scorecard: fiab/scorecard-parity-spec.md
+              - Semantic Model: fiab/semantic-model-parity-spec.md
+              - Spark Job Definition: fiab/spark-job-definition-parity-spec.md
+              - SQL Server 2025 Vector Index: fiab/sql-server-2025-vector-index-parity-spec.md
+              - Synapse Dedicated SQL Pool: fiab/synapse-dedicated-sql-pool-parity-spec.md
+              - Synapse Pipeline: fiab/synapse-pipeline-parity-spec.md
+              - Synapse Serverless SQL Pool: fiab/synapse-serverless-sql-pool-parity-spec.md
+              - Synapse Spark Pool: fiab/synapse-spark-pool-parity-spec.md
+              - Tracing: fiab/tracing-parity-spec.md
+              - User Data Function: fiab/user-data-function-parity-spec.md
+              - "U-SQL Job": fiab/usql-job-parity-spec.md
+              - Variable Library: fiab/variable-library-parity-spec.md
+              - Vector Store: fiab/vector-store-parity-spec.md
+              - Warehouse: fiab/warehouse-parity-spec.md
+          - Editor Tutorials (per-item):
               - Activator: fiab/tutorials/editor-activator.md
               - ADF Dataset: fiab/tutorials/editor-adf-dataset.md
               - ADF Pipeline: fiab/tutorials/editor-adf-pipeline.md
@@ -2477,42 +2269,319 @@ nav:
               - Variable Library: fiab/tutorials/editor-variable-library.md
               - Vector Store: fiab/tutorials/editor-vector-store.md
               - Warehouse: fiab/tutorials/editor-warehouse.md
-      - Industry Examples:
-          - Index: fiab/examples/index.md
-          - Retail E2E: fiab/examples/retail-e2e.md
-          - Fabric Data Agent: fiab/examples/fabric-data-agent.md
-          - Financial Fraud Detection: fiab/examples/financial-fraud-detection.md
-          - Healthcare Clinical: fiab/examples/healthcare-clinical.md
-          - IoT Streaming: fiab/examples/iot-streaming.md
-          - Cybersecurity (MITRE ATT&CK): fiab/examples/cybersecurity.md
-          - Manufacturing IoT: fiab/examples/manufacturing-iot.md
-          - GeoAnalytics: fiab/examples/geoanalytics.md
-      - ADRs:
-          - Overview: fiab/adr/README.md
-          - "fiab-0001 — Fabric feature scope": fiab/adr/0001-fabric-feature-scope.md
-          - "fiab-0002 — Hybrid compute": fiab/adr/0002-compute-hybrid.md
-          - "fiab-0003 — Catalog layering": fiab/adr/0003-catalog-layering.md
-          - "fiab-0004 — Direct Lake parity": fiab/adr/0004-direct-lake-parity.md
-          - "fiab-0005 — Activator engine": fiab/adr/0005-activator-engine.md
-          - "fiab-0006 — Mirroring engine": fiab/adr/0006-mirroring-engine.md
-          - "fiab-0007 — Console framework": fiab/adr/0007-console-framework.md
-          - "fiab-0008 — Deployment shape": fiab/adr/0008-deployment-shape.md
-          - "fiab-0009 — Copilot orchestration": fiab/adr/0009-copilot-orchestration.md
-          - "fiab-0010 — Container host": fiab/adr/0010-container-host.md
-          - "fiab-0011 — Tenancy model": fiab/adr/0011-tenancy-model.md
-          - "fiab-0012 — Forward migration": fiab/adr/0012-forward-migration.md
-      - Compliance:
-          - Index: fiab/compliance/index.md
-          - Commercial baseline: fiab/compliance/commercial.md
-          - GCC: fiab/compliance/gcc.md
-          - GCC-High / IL4: fiab/compliance/gcc-high.md
-          - DoD IL5 (v1.1): fiab/compliance/dod-il5.md
-          - Feature × Boundary Matrix: fiab/compliance/feature-boundary-matrix.md
-          - Defender AI Workaround: fiab/compliance/defender-ai-workaround.md
-          - NIST 800-53 r5 (extension): fiab/compliance/nist-800-53-rev5-fiab.md
-          - CMMC 2.0 L2 (extension): fiab/compliance/cmmc-2.0-l2-fiab.md
-          - HIPAA Security Rule (extension): fiab/compliance/hipaa-security-rule-fiab.md
-          - ITAR (extension): fiab/compliance/itar-fiab.md
+          - Parity Gap Reports:
+              - Summaries:
+                  - "AI/ML editors (2026-05-26)": fiab/parity-gap/_ai-ml-summary.md
+                  - "Global non-editor chrome (2026-05-26)": fiab/parity-gap/_global-summary-2026-05-26.md
+                  - "Compute + integration editors (2026-05-26)": fiab/parity-gap/_summary-2026-05-26.md
+                  - "Top-level nav validation (2026-05-26)": fiab/parity-gap/_top-level-nav-validation-2026-05-26.md
+                  - "v2 validator batch (2026-05-26)": fiab/parity-gap/_validation-summary-2026-05-26.md
+                  - "Apps catalog rollup": fiab/parity-gap/apps-catalog-rollup.md
+              - Editor gaps:
+                  - "ADF Dataset": fiab/parity-gap/adf-dataset.md
+                  - "ADF Pipeline": fiab/parity-gap/adf-pipeline.md
+                  - "ADF Trigger": fiab/parity-gap/adf-trigger.md
+                  - "AI Foundry Hub": fiab/parity-gap/ai-foundry-hub.md
+                  - "AI Foundry Project": fiab/parity-gap/ai-foundry-project.md
+                  - "AI Search Index": fiab/parity-gap/ai-search-index.md
+                  - "AI Search Skillset": fiab/parity-gap/ai-search-skillset.md
+                  - "APIM API": fiab/parity-gap/apim-api.md
+                  - "APIM Policy": fiab/parity-gap/apim-policy.md
+                  - "APIM Product": fiab/parity-gap/apim-product.md
+                  - "Azure SQL (group)": fiab/parity-gap/azure-sql-editors.md
+                  - "BI + RTI (group)": fiab/parity-gap/bi-rti-editors.md
+                  - "Compute": fiab/parity-gap/compute.md
+                  - "Content Safety": fiab/parity-gap/content-safety.md
+                  - "Copilot Studio Action": fiab/parity-gap/copilot-studio-action.md
+                  - "Copilot Studio Agent": fiab/parity-gap/copilot-studio-agent.md
+                  - "Copilot Studio Analytics": fiab/parity-gap/copilot-studio-analytics.md
+                  - "Copilot Studio Channel": fiab/parity-gap/copilot-studio-channel.md
+                  - "Copilot Studio Knowledge": fiab/parity-gap/copilot-studio-knowledge.md
+                  - "Copilot Studio Topic": fiab/parity-gap/copilot-studio-topic.md
+                  - "Copilot Template Library": fiab/parity-gap/copilot-template-library.md
+                  - "Cross-Item Copilot": fiab/parity-gap/cross-item-copilot.md
+                  - "Dashboard": fiab/parity-gap/dashboard.md
+                  - "Data Agent": fiab/parity-gap/data-agent.md
+                  - "Data Engineering (misc)": fiab/parity-gap/data-engineering-misc-editors.md
+                  - "Data Pipeline": fiab/parity-gap/data-pipeline.md
+                  - "Data Product (API)": fiab/parity-gap/api-data-product-editors.md
+                  - "Databricks Cluster": fiab/parity-gap/databricks-cluster.md
+                  - "Databricks Job": fiab/parity-gap/databricks-job.md
+                  - "Databricks Notebook": fiab/parity-gap/databricks-notebook.md
+                  - "Databricks SQL Warehouse": fiab/parity-gap/databricks-sql-warehouse.md
+                  - "Dataset": fiab/parity-gap/dataset.md
+                  - "Evaluation": fiab/parity-gap/evaluation.md
+                  - "Eventhouse": fiab/parity-gap/eventhouse.md
+                  - "Eventstream": fiab/parity-gap/eventstream.md
+                  - "Fabric IQ (group)": fiab/parity-gap/fabric-iq-editors.md
+                  - "Geo (group)": fiab/parity-gap/geo-editors.md
+                  - "Graph + Vector (group)": fiab/parity-gap/graph-vector-editors.md
+                  - "KQL Database": fiab/parity-gap/kql-database.md
+                  - "KQL Queryset": fiab/parity-gap/kql-queryset.md
+                  - "Lakehouse": fiab/parity-gap/lakehouse.md
+                  - "ML Experiment": fiab/parity-gap/ml-experiment.md
+                  - "ML Model": fiab/parity-gap/ml-model.md
+                  - "Notebook": fiab/parity-gap/notebook.md
+                  - "Operations Agent": fiab/parity-gap/operations-agent.md
+                  - "Power Platform (group)": fiab/parity-gap/powerplatform-editors.md
+                  - "Prompt Flow": fiab/parity-gap/prompt-flow.md
+                  - "Report": fiab/parity-gap/report.md
+                  - "Semantic Model": fiab/parity-gap/semantic-model.md
+                  - "Setup Wizard": fiab/parity-gap/setup-wizard.md
+                  - "Stream Analytics Job": fiab/parity-gap/stream-analytics-job.md
+                  - "Synapse Dedicated SQL Pool": fiab/parity-gap/synapse-dedicated-sql-pool.md
+                  - "Synapse Pipeline": fiab/parity-gap/synapse-pipeline.md
+                  - "Synapse Serverless SQL Pool": fiab/parity-gap/synapse-serverless-sql-pool.md
+                  - "Synapse Spark Pool": fiab/parity-gap/synapse-spark-pool.md
+                  - "Tracing": fiab/parity-gap/tracing.md
+                  - "Warehouse": fiab/parity-gap/warehouse.md
+              - App gaps:
+                  - "Casino Analytics": fiab/parity-gap/app-casino-analytics.md
+                  - "Data Steward": fiab/parity-gap/app-data-steward.md
+                  - "Fabric Mirror Onboard": fiab/parity-gap/app-fabric-mirror-onboard.md
+                  - "FedRAMP Tracker": fiab/parity-gap/app-fedramp-tracker.md
+                  - "FinOps Cost": fiab/parity-gap/app-finops-cost.md
+                  - "Healthcare PopMgt": fiab/parity-gap/app-healthcare-popmgt.md
+                  - "IoT Realtime": fiab/parity-gap/app-iot-realtime.md
+                  - "Lakehouse Inspector": fiab/parity-gap/app-lakehouse-inspector.md
+                  - "Pipeline Designer": fiab/parity-gap/app-pipeline-designer.md
+                  - "RAG Builder": fiab/parity-gap/app-rag-builder.md
+              - Admin gaps:
+                  - "Audit Logs": fiab/parity-gap/admin-audit-logs.md
+                  - "Capacity": fiab/parity-gap/admin-capacity.md
+                  - "Domains": fiab/parity-gap/admin-domains.md
+                  - "Overview": fiab/parity-gap/admin-overview.md
+                  - "Portal Summary": fiab/parity-gap/admin-portal-summary.md
+                  - "Security": fiab/parity-gap/admin-security.md
+                  - "Tenant Settings": fiab/parity-gap/admin-tenant-settings.md
+                  - "Updates": fiab/parity-gap/admin-updates.md
+                  - "Usage": fiab/parity-gap/admin-usage.md
+                  - "Users": fiab/parity-gap/admin-users.md
+                  - "Workspaces": fiab/parity-gap/admin-workspaces.md
+              - Global chrome gaps:
+                  - "Activity Feed Pane": fiab/parity-gap/global-activity-feed-pane.md
+                  - "Admin Link": fiab/parity-gap/global-admin-link.md
+                  - "App Launcher": fiab/parity-gap/global-app-launcher.md
+                  - "Copilot Pane": fiab/parity-gap/global-copilot-pane.md
+                  - "Item Side Panel": fiab/parity-gap/global-item-side-panel.md
+                  - "Learn Link": fiab/parity-gap/global-learn-link.md
+                  - "New Item Dialog": fiab/parity-gap/global-new-item-dialog.md
+                  - "Notifications": fiab/parity-gap/global-notifications.md
+                  - "Send Feedback": fiab/parity-gap/global-send-feedback.md
+                  - "Sign-in Flow": fiab/parity-gap/global-signin-flow.md
+                  - "Tab Strip": fiab/parity-gap/global-tab-strip.md
+                  - "Theme Toggle": fiab/parity-gap/global-theme-toggle.md
+                  - "Topbar Branding": fiab/parity-gap/global-topbar-branding.md
+                  - "Topbar Search": fiab/parity-gap/global-topbar-search.md
+                  - "Workspace Settings Drawer": fiab/parity-gap/global-workspace-settings-drawer.md
+              - Page gaps:
+                  - "API Marketplace": fiab/parity-gap/page-api-marketplace.md
+                  - "Browse": fiab/parity-gap/page-browse.md
+                  - "Copilot": fiab/parity-gap/page-copilot.md
+                  - "Data Agent": fiab/parity-gap/page-data-agent.md
+                  - "Deployment Pipelines": fiab/parity-gap/page-deployment-pipelines.md
+                  - "Governance": fiab/parity-gap/page-governance.md
+                  - "Home": fiab/parity-gap/page-home.md
+                  - "Learn": fiab/parity-gap/page-learn.md
+                  - "Monitor": fiab/parity-gap/page-monitor.md
+                  - "OneLake": fiab/parity-gap/page-onelake.md
+                  - "Realtime Hub": fiab/parity-gap/page-realtime-hub.md
+                  - "Setup": fiab/parity-gap/page-setup.md
+                  - "Workload Hub": fiab/parity-gap/page-workload-hub.md
+                  - "Workspaces": fiab/parity-gap/page-workspaces.md
+                  - "Workspaces ID": fiab/parity-gap/page-workspaces-id.md
+              - Route gaps:
+                  - "API Routes": fiab/parity-gap/api-routes.md
+
+      # ------------------------------------------------------------
+      # 6. Custom Applications & Services
+      # ------------------------------------------------------------
+      - Custom Applications & Services:
+          - Loom Console: fiab/console/index.md
+          - Loom Setup Wizard: fiab/console/setup-wizard.md
+          - Loom Copilot (runtime chat): fiab/console/copilot-runtime.md
+          - Help Copilot (docs-grounded widget):
+              - Overview: fiab/help-copilot/index.md
+              - Architecture: fiab/help-copilot/architecture.md
+              - Prompt patterns: fiab/help-copilot/prompts.md
+          - Operator — Interactive Setup Steps: fiab/operator-interactive-setup.md
+          - MSAL Sign-in Handoff: fiab/MSAL-handoff.md
+          - Dataverse Application User setup: fiab/dataverse-app-user.md
+          - Console v2 UI Handoff Brief: fiab/console-v2-ui-handoff.md
+          - Engine services:
+              - Activator Engine: fiab/services/activator-engine.md
+              - Mirroring Engine: fiab/services/mirroring-engine.md
+              - Direct-Lake Shim: fiab/services/direct-lake-shim.md
+
+      # ------------------------------------------------------------
+      # 7. Administration
+      # ------------------------------------------------------------
+      - Administration:
+          - Security & Governance:
+              - Overview: fiab/admin/security/index.md
+              - Purview tab: fiab/admin/security/purview.md
+              - Information Protection tab: fiab/admin/security/information-protection.md
+              - DLP tab: fiab/admin/security/dlp.md
+              - Audit tab: fiab/admin/security/audit.md
+          - Feature Permissions (Fabric-style RBAC): fiab/admin/feature-rbac.md
+          - Scale by SKU: fiab/admin/scaling.md
+
+      # ------------------------------------------------------------
+      # 8. Operations & Runbooks
+      # ------------------------------------------------------------
+      - Operations & Runbooks:
+          - Operations:
+              - Index: fiab/operations/index.md
+              - Capacity Management: fiab/operations/capacity-management.md
+              - Monitoring & Observability: fiab/operations/monitoring.md
+              - Cost Management: fiab/operations/cost.md
+              - Persistence, Chargeback, and Multi-DLZ: fiab/operations/persistence-chargeback-multidlz.md
+              - Disaster Recovery: fiab/operations/disaster-recovery.md
+              - Upgrade & Migration: fiab/operations/upgrade-migration.md
+              - Forward Migration to Microsoft Fabric: fiab/operations/forward-to-fabric.md
+              - App Install — Phase 2 live-service provisioning: fiab/operations/app-install-provisioning.md
+          - Runbooks:
+              - Deploy Failure: fiab/runbooks/deploy-failure.md
+              - First Deploy (operator playbook): fiab/runbooks/first-deploy.md
+              - Deploy Iteration Log (live): fiab/runbooks/deploy-iteration-log.md
+              - Direct-Lake-Shim Stuck: fiab/runbooks/direct-lake-shim-stuck.md
+              - Activator Rules Not Firing: fiab/runbooks/activator-rules-not-firing.md
+              - Mirroring CDC Lag: fiab/runbooks/mirroring-cdc-lag.md
+              - Loom Copilot Throttling: fiab/runbooks/loom-copilot-throttling.md
+              - Capacity Overrun: fiab/runbooks/capacity-overrun.md
+              - DLZ Onboard New Domain: fiab/runbooks/dlz-onboard-new-domain.md
+              - Forward Migrate to Fabric: fiab/runbooks/forward-migrate-to-fabric.md
+              - Boundary Promotion: fiab/runbooks/boundary-promotion.md
+              - Defender AI Equivalent SOC: fiab/runbooks/defender-ai-equivalent-soc.md
+              - MCP Troubleshooting: fiab/runbooks/mcp-troubleshooting.md
+              - Purview Scan Stuck: fiab/runbooks/purview-scan-stuck.md
+              - Purview Tenant-Existing Reuse: fiab/runbooks/purview-tenant-reuse.md
+              - Synapse Audit Query Pack: fiab/runbooks/synapse-audit-query-pack.md
+              - Loom LAW Monitoring + Alert Pack: fiab/runbooks/loom-law-monitoring.md
+              - Secrets Bootstrap (per boundary): fiab/runbooks/secrets-bootstrap.md
+
+      # ------------------------------------------------------------
+      # 9. Governance & Compliance
+      # ------------------------------------------------------------
+      - Governance & Compliance:
+          - Governance:
+              - Catalog: fiab/governance/catalog.md
+              - Tagging & Classification: fiab/governance/tagging-classification.md
+              - Workspace RBAC: fiab/governance/workspace-rbac.md
+              - Lineage: fiab/governance/lineage.md
+              - Data Residency: fiab/governance/data-residency.md
+              - Multi-Cloud Data Virtualization: fiab/governance/multi-cloud-virtualization.md
+          - Compliance:
+              - Index: fiab/compliance/index.md
+              - Commercial baseline: fiab/compliance/commercial.md
+              - GCC: fiab/compliance/gcc.md
+              - GCC-High / IL4: fiab/compliance/gcc-high.md
+              - DoD IL5 (v1.1): fiab/compliance/dod-il5.md
+              - Feature × Boundary Matrix: fiab/compliance/feature-boundary-matrix.md
+              - Defender AI Workaround: fiab/compliance/defender-ai-workaround.md
+              - NIST 800-53 r5 (extension): fiab/compliance/nist-800-53-rev5-fiab.md
+              - CMMC 2.0 L2 (extension): fiab/compliance/cmmc-2.0-l2-fiab.md
+              - HIPAA Security Rule (extension): fiab/compliance/hipaa-security-rule-fiab.md
+              - ITAR (extension): fiab/compliance/itar-fiab.md
+
+      # ------------------------------------------------------------
+      # 10. Tutorials & Examples
+      # ------------------------------------------------------------
+      - Tutorials & Examples:
+          - Tutorials:
+              - Overview: fiab/tutorials/README.md
+              - "01 — First Workspace": fiab/tutorials/01-first-workspace.md
+              - "02 — First Lakehouse + Delta tables": fiab/tutorials/02-first-lakehouse.md
+              - "03 — Direct Lake parity (warm-cache materializer)": fiab/tutorials/03-direct-lake-parity.md
+              - "04 — Activator rules over IoT stream": fiab/tutorials/04-activator-rules.md
+              - "05 — Data Agent over Lakehouse": fiab/tutorials/05-data-agent.md
+              - "06 — Mirroring from Cosmos DB to Lakehouse": fiab/tutorials/06-mirroring-cosmos.md
+              - "07 — Marketplace data product publishing": fiab/tutorials/07-marketplace-data-product.md
+              - "08 — Forward-migrate a Lakehouse to Fabric": fiab/tutorials/08-forward-migrate-to-fabric.md
+          - Industry Examples:
+              - Index: fiab/examples/index.md
+              - Retail E2E: fiab/examples/retail-e2e.md
+              - Fabric Data Agent: fiab/examples/fabric-data-agent.md
+              - Financial Fraud Detection: fiab/examples/financial-fraud-detection.md
+              - Healthcare Clinical: fiab/examples/healthcare-clinical.md
+              - IoT Streaming: fiab/examples/iot-streaming.md
+              - Cybersecurity (MITRE ATT&CK): fiab/examples/cybersecurity.md
+              - Manufacturing IoT: fiab/examples/manufacturing-iot.md
+              - GeoAnalytics: fiab/examples/geoanalytics.md
+          - Workshops:
+              - Index: fiab/workshops/index.md
+              - 5-Day Federal CoE Workshop: fiab/workshops/5-day-federal-coe/index.md
+              - 5-Day Commercial CoE Workshop: fiab/workshops/5-day-commercial-coe/index.md
+
+      # ------------------------------------------------------------
+      # 11. Marketing & Sales
+      # ------------------------------------------------------------
+      - Marketing & Sales:
+          - Pitch Deck: fiab/marketing/pitch-deck.md
+          - Seller Playbook: fiab/marketing/seller-playbook.md
+          - Pitches (run-on-rails):
+              - 30-min CIO pitch: fiab/marketing/pitches/30-min-cio-pitch.md
+              - 60-min architecture deep-dive: fiab/marketing/pitches/60-min-architecture-deep-dive.md
+              - 2-hour technical evaluation: fiab/marketing/pitches/2-hour-technical-evaluation.md
+          - Demo Script: fiab/marketing/demo-script.md
+          - Battlecard vs Fabric Commercial: fiab/marketing/battlecard-fabric.md
+          - One-Pager: fiab/marketing/one-pager.md
+          - Video Walkthrough Plan: fiab/marketing/video-plan.md
+          - Federal Account Pitch Track: fiab/marketing/federal-pitch.md
+          - Brand:
+              - Legal Review Package: fiab/brand/legal-review-package.md
+
+      # ------------------------------------------------------------
+      # 12. Use Cases
+      # ------------------------------------------------------------
+      - Use Cases:
+          - Federal Data Mesh: fiab/use-cases/federal-data-mesh.md
+          - Multi-Agency Onboarding: fiab/use-cases/multi-agency-onboarding.md
+          - Direct Lake-Replacement Pattern: fiab/use-cases/direct-lake-replacement.md
+          - Sovereign AI Agents: fiab/use-cases/sovereign-ai-agents.md
+          - Hybrid Fabric Commercial + CSA Loom Gov: fiab/use-cases/hybrid-topology.md
+
+      # ------------------------------------------------------------
+      # 13. Audits, Inventories & Version History
+      # ------------------------------------------------------------
+      - Audits, Inventories & Version History:
+          - Audits & Inventories:
+              - Fabric Feature Inventory: fiab/fabric-feature-inventory.md
+              - Fabric UI Parity Action Plan: fiab/fabric-ui-parity-action-plan.md
+              - Editor Capability Audit: fiab/editor-capability-audit.md
+              - Editor Wiring Audit: fiab/wiring-audit.md
+              - UI Audit v1.10: fiab/ui-audit-v1.10.md
+              - UAT Coverage Matrix: fiab/uat-coverage.md
+              - CSA-in-a-Box Alignment + v2 Backlog: fiab/loom-csa-alignment-and-v2-backlog.md
+              - Parity Progress (running log): fiab/parity-progress.md
+              - Parity Rollup — Every Surface: fiab/parity-rollup.md
+              - PRP Delivery Audit: fiab/prp-audit.md
+              - UAT Report (Iteration 1): fiab/uat-report.md
+              - Test Script (2026-05-27): fiab/TEST_SCRIPT_2026_05_27.md
+          - Status Snapshots:
+              - V2 Scope Expansion (2026-05-23 walkthrough): fiab/v2-scope-expansion.md
+              - Live Deploy Status (2026-05-23): fiab/live-deploy-status.md
+              - v1 Final Status + v2 Plan: fiab/v1-final-status-and-v2-plan.md
+          - Releases:
+              - "2026-05-27: App bundles + console wiring sweep": fiab/releases/2026-05-27-apps-bundles-and-wiring-sweep.md
+          - Handoffs & Version State:
+              - "v1.18 GREEN handoff": fiab/v118-handoff.md
+              - "v2.0 handoff (Synapse pools live)": fiab/v2.0-handoff.md
+              - "v2.0 push-button deploy gap audit": fiab/v2.0-pushbutton-gap-audit.md
+              - "v2.1 LIVE state": fiab/v2.1-live-state.md
+              - "v2.1 E2E results": fiab/v2.1-e2e-results.md
+              - "v2.1 handoff": fiab/v2.1-handoff.md
+              - "v2.1 FINAL session state": fiab/v2.1-FINAL.md
+              - "v2.1 absolute final": fiab/v2.1-absolute-final.md
+              - "v2.2 LIVE — ready for v2 work": fiab/v2.2-done.md
+              - "v2.3 — v2 launch complete": fiab/v2.3-launch.md
+              - "v2.4 — final v2 launch": fiab/v2.4-launch.md
+              - "v2.5.1 — zero vaporware": fiab/v2.5.1-zero-vaporware.md
+              - "v3 Security Hardening": fiab/v3-security-hardening.md
+              - "v3 UI Parity — Chunked Execution Plan": fiab/v3-ui-parity-chunked-plan.md
+              - "v3.0 → v3.1 Handoff": fiab/v30-v31-handoff.md
+              - "v3.1 UAT Receipt": fiab/v31-uat-receipt.md
+              - "Next-session kickoff": fiab/next-session-kickoff.md
 
   # ============================================================
   # 6. OPERATE — Day-2 ops, runbooks, compliance, migrations
