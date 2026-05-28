@@ -38,7 +38,23 @@ if (typeof window !== 'undefined') {
   // Lazy import so loader.config doesn't trip on SSR.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { loader } = require('@monaco-editor/react');
-  loader.config({ paths: { vs: '/monaco/vs' } });
+  // ABSOLUTE origin (not root-relative). Monaco's language workers run in a
+  // blob: worker context whose base origin is `null`, so a root-relative
+  // path like `/monaco/vs/...` fails inside importScripts() with
+  // "The URL '/monaco/vs/language/json/jsonWorker.js' is invalid".
+  // Anchoring to window.location.origin makes the importScripts URL
+  // absolute so the worker bootstrap resolves correctly.
+  const vsBase = `${window.location.origin}/monaco/vs`;
+  loader.config({ paths: { vs: vsBase } });
+  // Belt-and-suspenders: some Monaco builds read MonacoEnvironment.getWorkerUrl
+  // instead of the AMD path. Return a same-origin loader-shim worker that
+  // importScripts the absolute workerMain, avoiding the blob-origin issue.
+  (window as any).MonacoEnvironment = {
+    getWorkerUrl() {
+      const shim = `self.MonacoEnvironment={baseUrl:'${window.location.origin}/monaco/'};importScripts('${vsBase}/base/worker/workerMain.js');`;
+      return `data:text/javascript;charset=utf-8,${encodeURIComponent(shim)}`;
+    },
+  };
 }
 
 const MonacoEditor = dynamic(
