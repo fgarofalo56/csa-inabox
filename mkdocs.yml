@@ -2231,6 +2231,11 @@ nav:
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
           - From azd CLI: fiab/deployment/azd-cli.md
           - From Deploy-to-Azure button: fiab/deployment/deploy-button.md
+          - Continuous-deployment pipelines:
+              - GitHub Actions: fiab/deployment/pipelines/github-actions.md
+              - Azure DevOps Pipelines: fiab/deployment/pipelines/azure-devops.md
+              - Bicep CLI direct: fiab/deployment/pipelines/bicep-cli.md
+              - Terraform wrapper: fiab/deployment/pipelines/terraform.md
           - For Azure Commercial: fiab/deployment/commercial.md
           - For Azure Government (GCC): fiab/deployment/gcc.md
           - For Azure Government (GCC-High / IL4): fiab/deployment/gcc-high.md
