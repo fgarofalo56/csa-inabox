@@ -99,3 +99,32 @@ platform/fiab/bicep/modules/landing-zone/mirroring-engine.bicep created
 - `temp/fiab-prd/06-custom-apps.md` §6.4
 - `temp/fiab-research/03-fabric-only-internals.md` §5
 - learn.microsoft.com/fabric/mirroring/open-mirroring-landing-zone-format
+
+## Validation receipt
+
+**Validated 2026-05-27 — 7/7 pytest GREEN.**
+
+Test harness: `apps/fiab-mirroring-engine/tests/test_publisher_sdk.py`. Tests
+mock the Azure SDK clients (DataLake / storage) and exercise the same
+code path the published wheel will hit at runtime:
+
+- `LandingZoneTarget.base_path()` round-trips `schema/table` correctly
+- `ensure_metadata` writes `_metadata.json` with correct `keyColumns` +
+  `protocolVersion=1.0` when absent
+- `ensure_metadata` is a no-op when existing metadata matches
+- `ensure_metadata` raises `ValueError` on `keyColumns` mismatch (prevents
+  silent schema corruption)
+- `next_sequence` returns 1 on empty target
+- `next_sequence` parses existing 20-digit zero-padded files and increments
+  past the max
+- `write_batch` writes Parquet with correct `__rowMarker__` for INSERT(1) /
+  UPDATE(2) / DELETE(3)
+
+Debezium connector templates render for Azure SQL, Postgres, MySQL, Oracle
+(`apps/fiab-mirroring-engine/debezium/connectors/*.json` — 4 templates valid
+JSON). Cosmos change-feed + Snowflake STREAM/TASK pollers shipped at
+`apps/fiab-mirroring-engine/sources/`.
+
+**Operator action remaining:** Live source → Delta MERGE latency check (sub-
+minute steady-state) against a deployed Container App / Spark cluster.
+Tracked in audit page; blocked by ACR image build.

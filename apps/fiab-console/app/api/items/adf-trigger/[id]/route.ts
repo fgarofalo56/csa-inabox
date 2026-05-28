@@ -11,18 +11,18 @@ import { getTrigger, upsertTrigger, deleteTrigger, type AdfTrigger } from '@/lib
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   try {
-    const trigger = await getTrigger(ctx.params.id);
+    const trigger = await getTrigger((await ctx.params).id);
     return NextResponse.json({ ok: true, trigger });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }
 
-export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   const body = (await req.json().catch(() => null)) as AdfTrigger | null;
@@ -30,18 +30,18 @@ export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
     return NextResponse.json({ error: 'body must be { name?, properties: {...} }' }, { status: 400 });
   }
   try {
-    const trigger = await upsertTrigger(ctx.params.id, { ...body, name: ctx.params.id });
+    const trigger = await upsertTrigger((await ctx.params).id, { ...body, name: (await ctx.params).id });
     return NextResponse.json({ ok: true, trigger });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }
 
-export async function DELETE(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   try {
-    await deleteTrigger(ctx.params.id);
+    await deleteTrigger((await ctx.params).id);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });

@@ -1,36 +1,46 @@
 /**
- * Vitest config for the FiaB Console BFF + editor logic unit tests.
+ * Vitest config for fiab-console.
  *
- * Scope: pure-TypeScript helpers and route-shape contracts. Editor JSX
- * rendering is covered by the Playwright E2E suite — this Vitest run is
- * the fast inner loop for the deterministic logic that backs them.
+ * Unified config — merges the Data Engineering sweep's jsdom + plugin-react
+ * needs with main's broader include globs. React plugin loads via require
+ * so vitest finds it via pnpm-resolved node_modules without ESM-only paths.
  *
- * Discovery: any `*.test.ts` or `*.test.tsx` file outside the e2e/ and
- * tests/ directories (those hold the Playwright + walkthrough scripts).
+ * Per .claude/rules/no-vaporware.md: do not add tests that pretend to cover
+ * backend behavior they do not exercise.
  */
-
 import { defineConfig } from 'vitest/config';
 import path from 'node:path';
 
+let react: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  react = require('@vitejs/plugin-react');
+  react = react?.default || react;
+} catch {
+  react = null;
+}
+
 export default defineConfig({
+  plugins: react ? [react()] : [],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname),
-      '@/lib': path.resolve(__dirname, 'lib'),
-      '@/app': path.resolve(__dirname, 'app'),
+      '@': path.resolve(__dirname, '.'),
+      '@/lib': path.resolve(__dirname, './lib'),
+      '@/app': path.resolve(__dirname, './app'),
     },
   },
   test: {
-    environment: 'node',
-    include: ['**/*.test.ts', '**/*.test.tsx'],
-    exclude: [
-      '**/node_modules/**',
-      '**/.next/**',
-      'e2e/**',
-      'tests/**',
-    ],
+    environment: 'jsdom',
     globals: true,
-    pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
+    setupFiles: ['./vitest.setup.ts'],
+    css: false,
+    passWithNoTests: true,
+    testTimeout: 10_000,
+    include: [
+      'lib/**/__tests__/**/*.test.{ts,tsx}',
+      'lib/**/*.test.{ts,tsx}',
+      '__tests__/**/*.test.{ts,tsx}',
+    ],
+    exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'],
   },
 });

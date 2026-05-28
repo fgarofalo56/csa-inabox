@@ -18,6 +18,7 @@ import {
   Input, Field, Switch,
   Tree, TreeItem, TreeItemLayout,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -337,6 +338,44 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setSqlText('-- New SQL.\nSELECT current_catalog() AS catalog, current_database() AS schema;');
     setResult(null);
   }, []);
+
+  // Query history dialog state — paginates /api/2.0/sql/history/queries
+  interface QHEntry {
+    query_id: string;
+    status: string;
+    query_text?: string;
+    query_start_time_ms?: number;
+    duration?: number;
+    user_name?: string;
+    rows_produced?: number;
+    error_message?: string;
+  }
+  const [qhOpen, setQhOpen] = useState(false);
+  const [qhEntries, setQhEntries] = useState<QHEntry[]>([]);
+  const [qhBusy, setQhBusy] = useState(false);
+  const [qhError, setQhError] = useState<string | null>(null);
+  const [qhNext, setQhNext] = useState<string | null>(null);
+
+  const loadQueryHistory = useCallback(async (append = false, pageToken?: string) => {
+    setQhBusy(true); setQhError(null);
+    try {
+      const params = new URLSearchParams();
+      if (warehouseId) params.set('warehouseId', warehouseId);
+      params.set('maxResults', '50');
+      if (pageToken) params.set('pageToken', pageToken);
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/query-history?${params.toString()}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setQhEntries((prev) => append ? [...prev, ...(j.entries || [])] : (j.entries || []));
+      setQhNext(j.nextPageToken || null);
+    } catch (e: any) { setQhError(e?.message || String(e)); }
+    finally { setQhBusy(false); }
+  }, [id, warehouseId]);
+
+  const openQueryHistory = useCallback(() => {
+    setQhOpen(true);
+    loadQueryHistory(false);
+  }, [loadQueryHistory]);
   const refreshAll = useCallback(() => {
     refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
   }, [refreshState, refreshCatalogs]);
@@ -348,7 +387,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: newSql },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
-        { label: 'Query history', disabled: true, title: 'Databricks query-history API not yet wired in this editor (deferred)' },
+        { label: 'Query history', onClick: warehouseId ? openQueryHistory : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : undefined },
       ]},
       { label: 'Warehouse', actions: [
         { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart },
@@ -356,7 +395,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Refresh', onClick: warehouseId ? refreshAll : undefined, disabled: !warehouseId },
       ]},
     ]},
-  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId]);
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory]);
 
   return (
     <ItemEditorChrome
@@ -532,6 +571,60 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               </Body1>
             </div>
           )}
+
+          <Dialog open={qhOpen} onOpenChange={(_, d) => setQhOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '1080px', width: '95vw' }}>
+              <DialogBody>
+                <DialogTitle>Query history — {selectedWarehouse?.name || warehouseId}</DialogTitle>
+                <DialogContent>
+                  {qhBusy && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
+                  {qhError && (
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Failed</MessageBarTitle>{qhError}</MessageBarBody></MessageBar>
+                  )}
+                  <div style={{ overflow: 'auto', maxHeight: '60vh' }}>
+                    <Table aria-label="Query history" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Status</TableHeaderCell>
+                        <TableHeaderCell>Start</TableHeaderCell>
+                        <TableHeaderCell>Duration</TableHeaderCell>
+                        <TableHeaderCell>User</TableHeaderCell>
+                        <TableHeaderCell>Rows</TableHeaderCell>
+                        <TableHeaderCell>Query</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {qhEntries.length === 0 && !qhBusy && (
+                          <TableRow><TableCell colSpan={6}><Caption1>No queries yet.</Caption1></TableCell></TableRow>
+                        )}
+                        {qhEntries.map((q) => (
+                          <TableRow key={q.query_id}>
+                            <TableCell>
+                              <Badge appearance="filled" color={q.status === 'FINISHED' ? 'success' : q.status === 'FAILED' ? 'danger' : 'informative'}>
+                                {q.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>{q.query_start_time_ms ? new Date(q.query_start_time_ms).toLocaleString() : '—'}</TableCell>
+                            <TableCell>{q.duration != null ? `${(q.duration / 1000).toFixed(1)}s` : '—'}</TableCell>
+                            <TableCell>{q.user_name || '—'}</TableCell>
+                            <TableCell>{q.rows_produced ?? '—'}</TableCell>
+                            <TableCell style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              <code style={{ fontSize: 11 }}>{q.query_text?.slice(0, 200) || (q.error_message ? `ERR: ${q.error_message}` : '—')}</code>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setQhOpen(false)} disabled={qhBusy}>Close</Button>
+                  <Button appearance="subtle" onClick={() => loadQueryHistory(false)} disabled={qhBusy}>Refresh</Button>
+                  <Button appearance="primary" onClick={() => loadQueryHistory(true, qhNext || undefined)} disabled={qhBusy || !qhNext}>
+                    {qhNext ? 'Load more' : 'No more pages'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />

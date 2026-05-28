@@ -17,7 +17,7 @@ import {
   Spinner, makeStyles, tokens, Button, Badge,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Dropdown, Option, Field,
+  Dropdown, Option, Field, Switch, RadioGroup, Radio, Caption1,
 } from '@fluentui/react-components';
 import { ArrowLeft24Regular, Add24Regular, AppGeneric24Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
@@ -30,6 +30,24 @@ interface AppDoc {
 }
 interface WorkspaceLite { id: string; name: string; }
 interface InstallResult { itemType: string; id?: string; displayName: string; status: string; error?: string; }
+interface ProvisionStep {
+  itemType: string;
+  displayName: string;
+  cosmosItemId: string;
+  result: {
+    status: 'created' | 'exists' | 'skipped' | 'remediation' | 'failed';
+    resourceId?: string;
+    secondaryIds?: Record<string, string>;
+    error?: string;
+    gate?: { reason: string; remediation: string; link?: string };
+    steps?: string[];
+  };
+}
+interface ProvisionReport {
+  outcome: 'all-created' | 'partial' | 'all-remediation' | 'skipped';
+  mode: 'shared' | 'dedicated';
+  steps: ProvisionStep[];
+}
 
 const useStyles = makeStyles({
   meta: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px' },
@@ -67,6 +85,12 @@ export default function AppDetailPage() {
   const [installing, setInstalling] = useState(false);
   const [installResult, setInstallResult] = useState<InstallResult[] | null>(null);
   const [installErr, setInstallErr] = useState<string | null>(null);
+  // Phase-2 wizard state.
+  const [deploy, setDeploy] = useState(true);
+  const [mode, setMode] = useState<'shared' | 'dedicated'>('shared');
+  const [provisionReport, setProvisionReport] = useState<ProvisionReport | null>(null);
+  // Per-step retry state.
+  const [retrying, setRetrying] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/apps-catalog').then(r => r.json()).then(d => {
@@ -87,23 +111,43 @@ export default function AppDetailPage() {
 
   const install = async () => {
     if (!pickedWs) return;
-    setInstalling(true); setInstallErr(null); setInstallResult(null);
+    setInstalling(true); setInstallErr(null); setInstallResult(null); setProvisionReport(null);
     try {
       const r = await fetch(`/api/apps/${params.id}/install`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: pickedWs }),
+        body: JSON.stringify({ workspaceId: pickedWs, deploy, mode }),
       });
       const j = await r.json();
       if (!r.ok || !j.ok) {
         setInstallErr(j?.error || `HTTP ${r.status}`);
       } else {
         setInstallResult(j.installed || []);
+        setProvisionReport(j.provision || null);
         setInstallOpen(false);
       }
     } catch (e: any) {
       setInstallErr(e?.message || String(e));
     } finally { setInstalling(false); }
+  };
+
+  // Retry a single provisioning step (re-runs the install on JUST that
+  // item, then merges the result into the report).
+  const retryStep = async (step: ProvisionStep) => {
+    setRetrying(step.cosmosItemId);
+    try {
+      const r = await fetch(`/api/apps/${params.id}/install`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: pickedWs, deploy: true, mode }),
+      });
+      const j = await r.json();
+      if (r.ok && j.ok && j.provision) {
+        setProvisionReport(j.provision);
+      }
+    } finally {
+      setRetrying(null);
+    }
   };
 
   if (app === null) return <Spinner label="Loading…" />;
@@ -192,6 +236,73 @@ export default function AppDetailPage() {
         </div>
       )}
 
+      {provisionReport && (
+        <div className={styles.installResult} data-testid="provision-report">
+          <MessageBar
+            intent={provisionReport.outcome === 'all-created' ? 'success'
+              : provisionReport.outcome === 'all-remediation' ? 'warning'
+              : provisionReport.outcome === 'skipped' ? 'info'
+              : 'warning'}
+          >
+            <MessageBarTitle>
+              Provisioning report — {provisionReport.outcome} ({provisionReport.mode} mode)
+            </MessageBarTitle>
+            <MessageBarBody>
+              {provisionReport.steps.map((s, i) => (
+                <div key={i} style={{ fontSize: 13, marginTop: 8, paddingTop: 8, borderTop: i > 0 ? `1px solid ${tokens.colorNeutralStroke3}` : 'none' }}>
+                  <Badge appearance="filled" color={
+                    s.result.status === 'created' || s.result.status === 'exists' ? 'success'
+                    : s.result.status === 'remediation' ? 'warning'
+                    : s.result.status === 'skipped' ? 'subtle'
+                    : 'danger'
+                  }>
+                    {s.result.status}
+                  </Badge>
+                  {' '}
+                  <strong>{s.itemType}</strong> — {s.displayName}
+                  {s.result.resourceId && (
+                    <Caption1 style={{ display: 'block', fontFamily: 'monospace', color: tokens.colorNeutralForeground3 }}>
+                      Azure id: {s.result.resourceId}
+                    </Caption1>
+                  )}
+                  {s.result.gate && (
+                    <div style={{ marginTop: 4, padding: 8, backgroundColor: tokens.colorNeutralBackground3, borderRadius: 4 }}>
+                      <div style={{ fontWeight: 600 }}>Remediation required: {s.result.gate.reason}</div>
+                      <div style={{ marginTop: 4 }}>{s.result.gate.remediation}</div>
+                      {s.result.gate.link && (
+                        <a href={s.result.gate.link} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 4 }}>
+                          Open admin step →
+                        </a>
+                      )}
+                      <div style={{ marginTop: 8 }}>
+                        <Button size="small" onClick={() => retryStep(s)} disabled={retrying === s.cosmosItemId}>
+                          {retrying === s.cosmosItemId ? 'Retrying…' : 'Retry'}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  {s.result.error && !s.result.gate && (
+                    <div style={{ marginTop: 4, color: tokens.colorPaletteRedForeground1, fontSize: 12 }}>
+                      {s.result.error}
+                    </div>
+                  )}
+                  {(s.result.steps?.length || 0) > 0 && (
+                    <details style={{ marginTop: 4 }}>
+                      <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground3 }}>
+                        Step log ({s.result.steps?.length})
+                      </summary>
+                      <ul style={{ marginTop: 4, marginLeft: 16, fontSize: 12, color: tokens.colorNeutralForeground2 }}>
+                        {s.result.steps?.map((line, ix) => <li key={ix}>{line}</li>)}
+                      </ul>
+                    </details>
+                  )}
+                </div>
+              ))}
+            </MessageBarBody>
+          </MessageBar>
+        </div>
+      )}
+
       <Dialog open={installOpen} onOpenChange={(_, d) => setInstallOpen(d.open)}>
         <DialogSurface>
           <DialogBody>
@@ -216,6 +327,24 @@ export default function AppDetailPage() {
                   <MessageBar intent="warning">
                     <MessageBarBody>
                       You don't have any workspaces yet. Create one at <Link href="/workspaces">/workspaces</Link> first.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                <Field label="Deploy artifacts to live Azure services" hint="When ON, every Notebook / Lakehouse / KQL DB / Warehouse / AI Search Index / Activator rule / Pipeline / Eventstream / Semantic Model in the bundle is provisioned via real Fabric / ADX / Synapse / AI Search REST. Turn OFF to keep the install Cosmos-only (templates without backend resources).">
+                  <Switch checked={deploy} onChange={(_e, d) => setDeploy(!!d.checked)} label={deploy ? 'On (recommended)' : 'Off (Cosmos-only)'} />
+                </Field>
+                {deploy && (
+                  <Field label="Compute" hint="Shared uses your existing tenant resources; Dedicated provisions an isolated set (requires admin-pre-provisioned bicep deltas).">
+                    <RadioGroup value={mode} onChange={(_e, d) => setMode(d.value as 'shared' | 'dedicated')}>
+                      <Radio value="shared" label="Shared (use existing tenant Fabric / ADX / Synapse / AI Search)" />
+                      <Radio value="dedicated" label="Dedicated (provision a new isolated cluster + storage)" />
+                    </RadioGroup>
+                  </Field>
+                )}
+                {deploy && mode === 'dedicated' && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      Dedicated mode requires bicep modules to have been pre-deployed for this app. See <Link href="/docs/fiab/operations/app-install-provisioning">app-install-provisioning</Link> for the param-file shape.
                     </MessageBarBody>
                   </MessageBar>
                 )}

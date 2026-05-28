@@ -14,7 +14,7 @@ import { generateDashboardEmbedToken, getDashboard, PowerBiError } from '@/lib/a
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
@@ -22,8 +22,8 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   try {
     const [tokenResp, dashboard] = await Promise.all([
-      generateDashboardEmbedToken(workspaceId, ctx.params.id, 'View'),
-      getDashboard(workspaceId, ctx.params.id),
+      generateDashboardEmbedToken(workspaceId, (await ctx.params).id, 'View'),
+      getDashboard(workspaceId, (await ctx.params).id),
     ]);
     return NextResponse.json({
       ok: true,

@@ -28,11 +28,14 @@ function isWellFormedXmlSSR(xml: string): { ok: true } | { ok: false; error: str
 
 describe('APIM policy XML well-formedness (SSR fallback)', () => {
   it('returns ok:true when DOMParser is undefined (server-side render)', () => {
-    // Vitest runs in node env where DOMParser is undefined by default,
-    // so this directly exercises the SSR fallback branch.
-    expect(typeof DOMParser).toBe('undefined');
-    const r = isWellFormedXmlSSR('<policies><inbound><base/></inbound></policies>');
-    expect(r.ok).toBe(true);
+    const originalDomParser = globalThis.DOMParser;
+    Object.defineProperty(globalThis, 'DOMParser', { value: undefined, configurable: true });
+    try {
+      const r = isWellFormedXmlSSR('<policies><inbound><base/></inbound></policies>');
+      expect(r.ok).toBe(true);
+    } finally {
+      Object.defineProperty(globalThis, 'DOMParser', { value: originalDomParser, configurable: true });
+    }
   });
 
   it('tolerates garbage on the server (Save still triggers — APIM is authoritative)', () => {
@@ -40,7 +43,13 @@ describe('APIM policy XML well-formedness (SSR fallback)', () => {
     // request to APIM then becomes the authoritative validation step.
     // This is by design — we don't want the SSR render to flag valid
     // edits the user has not yet finished typing.
-    const r = isWellFormedXmlSSR('not <valid xml');
-    expect(r.ok).toBe(true);
+    const originalDomParser = globalThis.DOMParser;
+    Object.defineProperty(globalThis, 'DOMParser', { value: undefined, configurable: true });
+    try {
+      const r = isWellFormedXmlSSR('not <valid xml');
+      expect(r.ok).toBe(true);
+    } finally {
+      Object.defineProperty(globalThis, 'DOMParser', { value: originalDomParser, configurable: true });
+    }
   });
 });

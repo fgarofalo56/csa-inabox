@@ -933,10 +933,21 @@ export async function getIndex(name: string): Promise<any | null> {
 export async function upsertIndex(name: string, definition: any): Promise<any> {
   const svc = searchService();
   const tok = await searchToken();
+  // Sanitize: API 2024-07-01 rejects 'description' on ScoringProfile (it's
+  // valid only on the top-level Index, not on scoring profiles). App bundles
+  // keep description in their source for documentation, so we strip it here
+  // at the API boundary instead of mutating the bundle definition.
+  const cleaned = { ...definition, name };
+  if (Array.isArray(cleaned.scoringProfiles)) {
+    cleaned.scoringProfiles = cleaned.scoringProfiles.map((p: any) => {
+      const { description: _description, ...rest } = p || {};
+      return rest;
+    });
+  }
   const res = await fetch(`https://${svc}.search.windows.net/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ ...definition, name }),
+    body: JSON.stringify(cleaned),
   });
   if (!res.ok) {
     const t = await res.text();
@@ -1001,6 +1012,50 @@ export async function createCompute(name: string, body: {
   const res = await foundryFetch(`/computes/${encodeURIComponent(name)}`, {
     method: 'PUT', body: JSON.stringify(armBody),
   });
+  const j = await readJson<any>(res);
+  return shapeCompute(j);
+}
+
+/**
+ * Update an AmlCompute compute target's vmSize + scaleSettings. ARM only
+ * permits scaleSettings (min/max nodes + idle time) and vmSize via PATCH;
+ * ComputeInstance does not support PATCH (must be deleted + recreated).
+ */
+export async function updateAmlComputeScale(name: string, body: {
+  vmSize?: string;
+  minNodeCount?: number;
+  maxNodeCount?: number;
+  nodeIdleTimeBeforeScaleDown?: string; // ISO 8601, e.g. "PT15M"
+}): Promise<FoundryCompute> {
+  const existing = await getCompute(name);
+  if (!existing) throw new FoundryError(404, null, `Compute ${name} not found`);
+  const props: any = {
+    computeType: 'AmlCompute',
+    properties: {
+      vmSize: body.vmSize ?? (existing as any).vmSize,
+      vmPriority: 'Dedicated',
+      scaleSettings: {
+        minNodeCount: body.minNodeCount ?? 0,
+        maxNodeCount: body.maxNodeCount ?? 1,
+        nodeIdleTimeBeforeScaleDown: body.nodeIdleTimeBeforeScaleDown ?? 'PT15M',
+      },
+    },
+  };
+  const ws = await getWorkspaceInfo();
+  const armBody = {
+    location: ws?.location || 'eastus2',
+    properties: props,
+  };
+  const res = await foundryFetch(`/computes/${encodeURIComponent(name)}`, {
+    method: 'PATCH', body: JSON.stringify(armBody),
+  });
+  if (!res.ok && res.status !== 202) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `updateAmlComputeScale failed: ${t.slice(0, 240)}`);
+  }
+  if (res.status === 202) {
+    return { ...(existing as any), provisioningState: 'Updating' };
+  }
   const j = await readJson<any>(res);
   return shapeCompute(j);
 }

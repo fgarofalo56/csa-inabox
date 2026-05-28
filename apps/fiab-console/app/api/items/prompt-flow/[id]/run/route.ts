@@ -9,13 +9,13 @@ import { submitFlowRun, FoundryError, NotDeployedError } from '@/lib/azure/found
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
     const body = await req.json();
     if (!body?.project) return NextResponse.json({ ok: false, error: 'project required' }, { status: 400 });
-    const result = await submitFlowRun(body.project, ctx.params.id, body.inputs || {});
+    const result = await submitFlowRun(body.project, (await ctx.params).id, body.inputs || {});
     return NextResponse.json({ ok: true, result });
   } catch (e: any) {
     if (e instanceof NotDeployedError) return NextResponse.json({ ok: false, error: e.message, hint: e.hint, notDeployed: true }, { status: 503 });

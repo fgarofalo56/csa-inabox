@@ -96,3 +96,34 @@ examples/fiab-geoanalytics/                              created
 - `temp/fiab-prd/11-examples-port.md`
 - `temp/fiab-research/07-existing-repo-scope.md`
 - Memory: [[writing-voice-no-customer-framing]]
+
+## Validation receipt
+
+**Validated 2026-05-27 — 39/39 pytest GREEN.**
+
+Test harness: `docs/fiab/tests/test_examples_port.py`. Tests assert each
+of the 8 v1 examples ships a real doc page + the financial-fraud-detection
+bundle is runnable:
+
+- All 8 docs pages exist + are non-stub (>500 chars):
+  `retail-e2e`, `fabric-data-agent`, `financial-fraud-detection`,
+  `healthcare-clinical`, `iot-streaming`, `cybersecurity`,
+  `manufacturing-iot`, `geoanalytics`
+- `docs/fiab/examples/index.md` references every example
+- Each page has `components` + per-boundary notes (PRD §11.4.1 template)
+- Each page mentions the CSA Loom brand (AMENDMENTS §A1)
+- No customer-framing language (per writing-voice memory)
+- `examples/fiab/financial-fraud-detection/` ships:
+  - `activator/rules.json` — 3 rules, all valid against PRP-06's primitive
+    enum (`IncreasesAbove`, `NoPresenceOfData`, `ChangesTo`)
+  - `agent/finance-fraud-agent.json` — valid Loom Data Agent shape, lakehouse
+    + ADX dataSources, 3 example queries, sensitivity policy
+  - `notebooks/score_transactions.py` — real PySpark Structured Streaming
+    job (imports `SparkSession`, `pyspark.sql.functions`, Pandas UDF for
+    scoring)
+  - `README.md`
+
+**Operator action remaining:** Deploy each example bundle into a live test
+Loom workspace + verify notebook executes + activator rule fires + Data Agent
+answers benchmark questions. Tracked in audit page; blocked by ACR image
+build + Loom workspace provision.

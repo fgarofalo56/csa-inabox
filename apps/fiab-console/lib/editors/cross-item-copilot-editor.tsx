@@ -17,6 +17,8 @@ import {
   Button, Textarea, Divider,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Accordion, AccordionHeader, AccordionItem, AccordionPanel,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
+  Field,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -166,6 +168,119 @@ function StepCard({ step }: { step: Step }) {
   );
 }
 
+/**
+ * ToolRow — single registered tool in the right rail with a "Run"
+ * button that opens a small JSON-args dialog and POSTs to
+ * /api/copilot/tools/[name]/invoke. Lets the user execute a tool
+ * directly without coaxing the LLM into picking it (or when AOAI
+ * isn't deployed at all — the underlying tool handler still works
+ * if its own backing service is reachable).
+ */
+function ToolRow({ tool }: { tool: Tool }) {
+  const [open, setOpen] = useState(false);
+  const [args, setArgs] = useState('{}');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const invoke = useCallback(async () => {
+    let parsed: any = {};
+    try {
+      parsed = args.trim() ? JSON.parse(args) : {};
+    } catch (e: any) {
+      setError(`Invalid JSON args: ${e?.message || e}`);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const r = await fetch(`/api/copilot/tools/${encodeURIComponent(tool.name)}/invoke`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ args: parsed }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      if (j.ok) setResult(j);
+      else setError(j.remediation ? `${j.error}\n\nRemediation: ${j.remediation}` : (j.error || `HTTP ${r.status}`));
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [tool.name, args]);
+
+  return (
+    <>
+      <div
+        style={{
+          display: 'flex', gap: 6, alignItems: 'flex-start',
+          padding: '6px 8px', borderRadius: 4,
+          backgroundColor: tokens.colorNeutralBackground2,
+          marginBottom: 4,
+        }}
+        title={tool.description}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 12 }}>{tool.name}</div>
+          <div style={{ color: tokens.colorNeutralForeground3, fontSize: 11, lineHeight: 1.35 }}>
+            {tool.description}
+          </div>
+        </div>
+        <Button size="small" appearance="subtle" onClick={() => setOpen(true)}>Run</Button>
+      </div>
+      <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 640 }}>
+          <DialogBody>
+            <DialogTitle>{tool.name}</DialogTitle>
+            <DialogContent>
+              <Caption1 style={{ display: 'block', marginBottom: 8 }}>{tool.description}</Caption1>
+              <Field label="Args (JSON)" hint='e.g. {"sql":"SELECT 1","database":"master"}'>
+                <Textarea
+                  value={args}
+                  onChange={(_, d) => setArgs(d.value)}
+                  rows={6}
+                  style={{ fontFamily: 'JetBrains Mono, Consolas, monospace', fontSize: 12 }}
+                />
+              </Field>
+              {error && (
+                <MessageBar intent="error" style={{ marginTop: 12 }}>
+                  <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{error}</MessageBarBody>
+                </MessageBar>
+              )}
+              {result && (
+                <MessageBar intent="success" style={{ marginTop: 12 }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>OK — {result.durationMs}ms</MessageBarTitle>
+                    <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto', fontSize: 11, margin: 0 }}>
+                      {JSON.stringify(result.result, null, 2)}
+                    </pre>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setOpen(false)}>Close</Button>
+              <Button appearance="primary" onClick={invoke} disabled={busy}>
+                {busy ? 'Running…' : 'Invoke'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </>
+  );
+}
+
+interface OrchestratorStatus {
+  ok: boolean;
+  ready?: boolean;
+  aoai?: { ok: boolean; endpoint?: string; deployment?: string; error?: string; remediation?: string };
+  tools?: { count: number; byService: Record<string, number> };
+  sessions?: { recent: number };
+}
+
 export function CopilotConsoleView({ embedded = false }: { embedded?: boolean }) {
   const s = useStyles();
   const [prompt, setPrompt] = useState('');
@@ -177,6 +292,16 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [tools, setTools] = useState<Record<string, Tool[]>>({});
   const [toolCount, setToolCount] = useState(0);
+  const [status, setStatus] = useState<OrchestratorStatus | null>(null);
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const r = await fetch('/api/copilot/status');
+      const j = await r.json();
+      setStatus(j);
+    } catch {/* ignore */}
+  }, []);
+  useEffect(() => { loadStatus(); }, [loadStatus]);
 
   const stepsEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -315,6 +440,32 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
       {/* Main */}
       <section className={s.main}>
         <div className={s.promptBar}>
+          {/* Orchestrator status banner — shows AOAI + tool + session state
+              on every load so users see immediately whether the orchestrator
+              can actually run. Even when AOAI is missing, the per-tool
+              "Run" buttons in the right rail still work for tools whose
+              backing service is reachable. */}
+          {status && !status.ready && (
+            <MessageBar intent={status.aoai?.ok ? 'warning' : 'info'}>
+              <MessageBarBody>
+                <MessageBarTitle>Orchestrator status</MessageBarTitle>
+                {status.aoai?.ok
+                  ? `AOAI reachable (${status.aoai.deployment}) · ${status.tools?.count ?? 0} tools registered. Ready.`
+                  : `AOAI not reachable — ${status.aoai?.error || 'unknown'}. ${status.tools?.count ?? 0} tools still callable directly via the right rail Run buttons.`}
+                {status.aoai?.remediation && (
+                  <div style={{ marginTop: 6, fontSize: 12 }}>{status.aoai.remediation}</div>
+                )}
+              </MessageBarBody>
+              <MessageBarActions>
+                <Button appearance="subtle" onClick={loadStatus}>Recheck</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {status?.ready && (
+            <Badge appearance="filled" color="success" style={{ alignSelf: 'flex-start' }}>
+              Ready · {status.tools?.count} tools · AOAI {status.aoai?.deployment}
+            </Badge>
+          )}
           {aoaiUnavailable && (
             <MessageBar intent="warning">
               <MessageBarBody>
@@ -367,10 +518,7 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
               <AccordionHeader>{svc} ({tools[svc].length})</AccordionHeader>
               <AccordionPanel>
                 {tools[svc].map((t) => (
-                  <div key={t.name} className={s.toolPill} title={t.description}>
-                    <strong>{t.name}</strong>
-                    <div style={{ color: tokens.colorNeutralForeground3 }}>{t.description}</div>
-                  </div>
+                  <ToolRow key={t.name} tool={t} />
                 ))}
               </AccordionPanel>
             </AccordionItem>
