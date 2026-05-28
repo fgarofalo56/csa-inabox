@@ -47,12 +47,12 @@ async function getContainer(): Promise<Container> {
   return container;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
     const container = await getContainer();
-    const { resource } = await container.item(ctx.params.id, TENANT_PK).read<any>();
+    const { resource } = await container.item((await ctx.params).id, TENANT_PK).read<any>();
     if (!resource) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     return NextResponse.json({ ok: true, template: resource });
   } catch (e: any) {
@@ -60,14 +60,14 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
   if (!body?.envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
     const container = await getContainer();
-    const { resource: tmpl } = await container.item(ctx.params.id, TENANT_PK).read<any>();
+    const { resource: tmpl } = await container.item((await ctx.params).id, TENANT_PK).read<any>();
     if (!tmpl) return NextResponse.json({ ok: false, error: 'template not found' }, { status: 404 });
     const agent = await createAgent(String(body.envId), {
       name: tmpl.name,
@@ -109,15 +109,15 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function DELETE(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
     const container = await getContainer();
-    const { resource } = await container.item(ctx.params.id, TENANT_PK).read<any>();
+    const { resource } = await container.item((await ctx.params).id, TENANT_PK).read<any>();
     if (!resource) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     if (resource.builtin) return NextResponse.json({ ok: false, error: 'built-in templates cannot be deleted' }, { status: 403 });
-    await container.item(ctx.params.id, TENANT_PK).delete();
+    await container.item((await ctx.params).id, TENANT_PK).delete();
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });

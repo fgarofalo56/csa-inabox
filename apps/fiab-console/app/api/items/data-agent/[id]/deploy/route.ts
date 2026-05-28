@@ -59,7 +59,7 @@ function legacyToolsFromState(state: Record<string, unknown>): Array<Record<stri
   return tools;
 }
 
-export async function POST(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -67,7 +67,7 @@ export async function POST(_req: NextRequest, ctx: { params: { id: string } }) {
 
   let item: WorkspaceItem | null;
   try {
-    item = await loadOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid);
+    item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || 'cosmos error' }, { status: 500 });
   }

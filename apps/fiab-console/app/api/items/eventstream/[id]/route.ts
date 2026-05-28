@@ -34,11 +34,11 @@ function sanitizeConfig(input: any): StreamConfig {
   return out;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const item = await loadKustoItem(ctx.params.id, 'eventstream', session.claims.oid);
+    const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     const config: StreamConfig = {
       source: item.state?.source as Record<string, any> | undefined,
@@ -58,13 +58,13 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
   const config = sanitizeConfig(body?.config ?? body);
   try {
-    const item = await loadKustoItem(ctx.params.id, 'eventstream', session.claims.oid);
+    const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     const saved = await saveItemState(item, {
       source: config.source ?? null,

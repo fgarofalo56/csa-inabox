@@ -14,7 +14,7 @@ import { generateReportEmbedToken, getReport, PowerBiError } from '@/lib/azure/p
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
@@ -23,8 +23,8 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   const accessLevel = body?.accessLevel === 'Edit' ? 'Edit' : 'View';
   try {
     const [tokenResp, report] = await Promise.all([
-      generateReportEmbedToken(workspaceId, ctx.params.id, accessLevel),
-      getReport(workspaceId, ctx.params.id),
+      generateReportEmbedToken(workspaceId, (await ctx.params).id, accessLevel),
+      getReport(workspaceId, (await ctx.params).id),
     ]);
     return NextResponse.json({
       ok: true,

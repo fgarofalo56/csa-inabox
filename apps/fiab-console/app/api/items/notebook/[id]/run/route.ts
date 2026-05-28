@@ -29,7 +29,7 @@ async function loadNotebook(id: string, workspaceId: string): Promise<WorkspaceI
   } catch (e: any) { if (e?.code === 404) return null; throw e; }
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
@@ -39,7 +39,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   if (!compute) return err('compute required', 400);
 
   try {
-    const nb = await loadNotebook(ctx.params.id, workspaceId);
+    const nb = await loadNotebook((await ctx.params).id, workspaceId);
     if (!nb) return err('notebook not found', 404);
     // Per-cell run path: caller passes { source, lang, cellId } — we run
     // only that cell's source. Fallback to notebook-level `code` blob.

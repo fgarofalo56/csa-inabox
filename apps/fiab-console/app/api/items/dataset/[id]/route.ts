@@ -6,12 +6,12 @@ import { getDataAsset, FoundryError, NotDeployedError } from '@/lib/azure/foundr
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const project = req.nextUrl.searchParams.get('project') || undefined;
   try {
-    const { container, versions } = await getDataAsset(ctx.params.id, project);
+    const { container, versions } = await getDataAsset((await ctx.params).id, project);
     if (!container) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     return NextResponse.json({ ok: true, asset: container, versions });
   } catch (e: any) {

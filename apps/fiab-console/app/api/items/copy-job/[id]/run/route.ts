@@ -76,12 +76,12 @@ function buildPipeline(itemId: string, spec: CopySpec): SynapsePipeline {
   };
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
   const override = await req.json().catch(() => ({}));
   try {
-    const item = await loadOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid);
+    const item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
     if (!item) return jerr('not found', 404);
     const spec = (item.state as any) as CopySpec | undefined;
     if (!spec?.source?.linkedService || !spec?.sink?.linkedService) {
@@ -91,8 +91,8 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
       return jerr('source.type and sink.type are required', 400);
     }
     const merged: CopySpec = { ...spec, ...override };
-    const pipelineName = `loom-copy-${ctx.params.id}`;
-    await upsertPipeline(pipelineName, buildPipeline(ctx.params.id, merged));
+    const pipelineName = `loom-copy-${(await ctx.params).id}`;
+    await upsertPipeline(pipelineName, buildPipeline((await ctx.params).id, merged));
     const run = await runPipeline(pipelineName);
     return NextResponse.json({ ok: true, pipelineName, ...run });
   } catch (e: any) {

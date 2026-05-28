@@ -37,11 +37,11 @@ function sanitizeTiles(input: any): Tile[] {
     .slice(0, 100);
 }
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const item = await loadKustoItem(ctx.params.id, 'kql-dashboard', session.claims.oid);
+    const item = await loadKustoItem((await ctx.params).id, 'kql-dashboard', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     const tiles: Tile[] = Array.isArray(item.state?.tiles) ? item.state!.tiles : [];
 
@@ -71,13 +71,13 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
   const tiles = sanitizeTiles(body?.tiles);
   try {
-    const item = await loadKustoItem(ctx.params.id, 'kql-dashboard', session.claims.oid);
+    const item = await loadKustoItem((await ctx.params).id, 'kql-dashboard', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     const patch: Record<string, any> = { tiles };
     if (typeof body?.databaseName === 'string' && body.databaseName.trim()) {

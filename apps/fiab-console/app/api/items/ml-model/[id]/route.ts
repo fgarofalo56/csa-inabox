@@ -9,13 +9,13 @@ import { getModel, listModelVersions, FoundryError } from '@/lib/azure/foundry-c
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const model = await getModel(ctx.params.id);
+    const model = await getModel((await ctx.params).id);
     if (!model) return NextResponse.json({ ok: false, error: 'not found', status: 404 }, { status: 404 });
-    const versions = await listModelVersions(ctx.params.id).catch(() => []);
+    const versions = await listModelVersions((await ctx.params).id).catch(() => []);
     return NextResponse.json({ ok: true, model, versions });
   } catch (e: any) {
     const status = e instanceof FoundryError ? e.status : 502;
