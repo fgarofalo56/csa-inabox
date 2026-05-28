@@ -2003,6 +2003,8 @@ nav:
       - Admin:
           - "Feature Permissions (Fabric-style RBAC)": fiab/admin/feature-rbac.md
       - Test Script (2026-05-27): fiab/TEST_SCRIPT_2026_05_27.md
+      - Admin:
+          - Scale by SKU: fiab/admin/scaling.md
       - Handoffs & Version State:
           - "v1.18 GREEN handoff": fiab/v118-handoff.md
           - "v2.0 handoff (Synapse pools live)": fiab/v2.0-handoff.md

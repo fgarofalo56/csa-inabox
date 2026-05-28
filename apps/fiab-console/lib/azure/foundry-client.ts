@@ -1005,6 +1005,50 @@ export async function createCompute(name: string, body: {
   return shapeCompute(j);
 }
 
+/**
+ * Update an AmlCompute compute target's vmSize + scaleSettings. ARM only
+ * permits scaleSettings (min/max nodes + idle time) and vmSize via PATCH;
+ * ComputeInstance does not support PATCH (must be deleted + recreated).
+ */
+export async function updateAmlComputeScale(name: string, body: {
+  vmSize?: string;
+  minNodeCount?: number;
+  maxNodeCount?: number;
+  nodeIdleTimeBeforeScaleDown?: string; // ISO 8601, e.g. "PT15M"
+}): Promise<FoundryCompute> {
+  const existing = await getCompute(name);
+  if (!existing) throw new FoundryError(404, null, `Compute ${name} not found`);
+  const props: any = {
+    computeType: 'AmlCompute',
+    properties: {
+      vmSize: body.vmSize ?? (existing as any).vmSize,
+      vmPriority: 'Dedicated',
+      scaleSettings: {
+        minNodeCount: body.minNodeCount ?? 0,
+        maxNodeCount: body.maxNodeCount ?? 1,
+        nodeIdleTimeBeforeScaleDown: body.nodeIdleTimeBeforeScaleDown ?? 'PT15M',
+      },
+    },
+  };
+  const ws = await getWorkspaceInfo();
+  const armBody = {
+    location: ws?.location || 'eastus2',
+    properties: props,
+  };
+  const res = await foundryFetch(`/computes/${encodeURIComponent(name)}`, {
+    method: 'PATCH', body: JSON.stringify(armBody),
+  });
+  if (!res.ok && res.status !== 202) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `updateAmlComputeScale failed: ${t.slice(0, 240)}`);
+  }
+  if (res.status === 202) {
+    return { ...(existing as any), provisioningState: 'Updating' };
+  }
+  const j = await readJson<any>(res);
+  return shapeCompute(j);
+}
+
 export async function startCompute(name: string): Promise<void> {
   const res = await foundryFetch(`/computes/${encodeURIComponent(name)}/start`, { method: 'POST' });
   if (!res.ok && res.status !== 202 && res.status !== 204) {

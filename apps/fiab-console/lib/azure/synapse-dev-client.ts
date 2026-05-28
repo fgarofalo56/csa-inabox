@@ -656,3 +656,41 @@ export async function pauseDedicatedPool(name: string): Promise<void> {
   }
 }
 
+/**
+ * Update the SKU (DWU service objective) for a Synapse Dedicated SQL pool.
+ * Valid SKU names are DW100c, DW200c, DW300c, DW400c, DW500c, DW1000c,
+ * DW1500c, DW2000c, DW2500c, DW3000c, DW5000c, DW6000c, DW7500c, DW10000c,
+ * DW15000c, DW30000c.
+ *
+ * ARM call: PATCH /.../sqlPools/{name} with body
+ *   { sku: { name: '<DWxxxxc>' } }
+ *
+ * Scale operation is asynchronous; the pool state moves to "Scaling" for
+ * a few minutes then back to "Online". Returns the immediate ARM response;
+ * polling for completion is the caller's responsibility.
+ */
+export async function updateDedicatedPoolSku(
+  name: string,
+  newSku: string,
+): Promise<{ name: string; sku?: { name?: string; tier?: string }; properties?: any }> {
+  if (!name) throw new Error('updateDedicatedPoolSku: name is required');
+  if (!newSku || !/^DW\d+c$/i.test(newSku)) {
+    throw new Error(`updateDedicatedPoolSku: invalid sku ${newSku}; expected DWxxxxc`);
+  }
+  const r = await callArm(
+    `${armBase()}/sqlPools/${encodeURIComponent(name)}?api-version=${ARM_API}`,
+    { method: 'PATCH', body: JSON.stringify({ sku: { name: newSku } }) },
+  );
+  return jsonOrThrow(r, `updateDedicatedPoolSku(${name},${newSku})`);
+}
+
+/**
+ * Get a single dedicated SQL pool's current state + SKU (for the scaling
+ * card's "current" indicator).
+ */
+export async function getDedicatedPool(name: string): Promise<{ name: string; sku?: { name?: string; tier?: string }; properties?: any }> {
+  if (!name) throw new Error('getDedicatedPool: name is required');
+  const r = await callArm(`${armBase()}/sqlPools/${encodeURIComponent(name)}?api-version=${ARM_API}`);
+  return jsonOrThrow(r, `getDedicatedPool(${name})`);
+}
+

@@ -105,6 +105,44 @@ export async function stopWarehouse(id: string): Promise<void> {
   }
 }
 
+export interface WarehouseScaleSpec {
+  cluster_size?: string;          // '2X-Small' | 'X-Small' | 'Small' | 'Medium' | 'Large' | ... | '4X-Large'
+  min_num_clusters?: number;      // 1-30
+  max_num_clusters?: number;      // 1-30
+  auto_stop_mins?: number;
+  warehouse_type?: 'CLASSIC' | 'PRO';
+  enable_serverless_compute?: boolean;
+}
+
+/**
+ * Edit a SQL Warehouse via Databricks REST API. POST /api/2.0/sql/warehouses/{id}/edit
+ * with the new cluster_size + scaling fields. Databricks requires the
+ * warehouse to already exist (no upsert semantics) and will return 400
+ * if cluster_size is outside the allowed enum.
+ */
+export async function editWarehouse(id: string, spec: WarehouseScaleSpec): Promise<void> {
+  // Read existing to preserve required fields (name + warehouse_type) the
+  // edit endpoint requires even when not changing them.
+  const existing = await getWarehouse(id);
+  const payload: Record<string, unknown> = {
+    name: existing.name,
+    warehouse_type: spec.warehouse_type ?? existing.warehouse_type ?? 'PRO',
+    cluster_size: spec.cluster_size ?? existing.cluster_size,
+  };
+  if (typeof spec.min_num_clusters === 'number') payload.min_num_clusters = spec.min_num_clusters;
+  if (typeof spec.max_num_clusters === 'number') payload.max_num_clusters = spec.max_num_clusters;
+  if (typeof spec.auto_stop_mins === 'number') payload.auto_stop_mins = spec.auto_stop_mins;
+  if (typeof spec.enable_serverless_compute === 'boolean') payload.enable_serverless_compute = spec.enable_serverless_compute;
+
+  const res = await dbxFetch(`/api/2.0/sql/warehouses/${encodeURIComponent(id)}/edit`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`editWarehouse failed ${res.status}: ${await res.text()}`);
+  }
+}
+
 // ------------------------------------------------------------
 // Query history (SQL warehouse statement history)
 // ------------------------------------------------------------

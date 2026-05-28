@@ -9,6 +9,7 @@ import { makeStyles, tokens, Subtitle2, Title3 } from '@fluentui/react-component
 const SECTIONS: { href: string; label: string; description: string }[] = [
   { href: '/admin/tenant-settings', label: 'Tenant settings', description: 'Per-area switches (Power BI, Fabric, OneLake, Real-Time, AI, Mirroring, Git).' },
   { href: '/admin/capacity', label: 'Capacity & compute', description: 'Underlying Azure services Loom orchestrates: ACA, Databricks, Synapse, ADF, ADLA, AML, Cosmos, ACR.' },
+  { href: '/admin/scaling', label: 'Scale by SKU', description: 'Scale Fabric, Synapse, ADX, Databricks, AI Search, APIM, Cosmos, Container Apps, Foundry — real ARM PATCH from inside Loom.' },
   { href: '/admin/domains', label: 'Domains', description: 'Organize workspaces into business domains and subdomains.' },
   { href: '/admin/security', label: 'Security & governance', description: 'Sensitivity labels, DLP policies, Purview hub link, workspace identity.' },
   { href: '/admin/permissions', label: 'Feature permissions', description: 'Fabric-style RBAC — grant Reader/Contributor/Admin on every editor type, admin page, and workload to Entra users and groups.' },
