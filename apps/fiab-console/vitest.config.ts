@@ -1,36 +1,46 @@
-import { defineConfig } from 'vitest/config';
-import path from 'node:path';
-
 /**
  * Vitest config for fiab-console.
  *
- * Real-only — there is no mocked-data fixture suite. Tests verify that
- * editor modules parse, export the expected component names, and that
- * provisioners + feature-gate logic behave as documented. Anything that
- * actually hits Azure REST is covered by the Playwright UAT suite in
- * `e2e/` (which mints a session and walks the live deployment).
+ * Unified config — merges the Data Engineering sweep's jsdom + plugin-react
+ * needs with main's broader include globs. React plugin loads via require
+ * so vitest finds it via pnpm-resolved node_modules without ESM-only paths.
  *
  * Per .claude/rules/no-vaporware.md: do not add tests that pretend to cover
  * backend behavior they do not exercise.
  */
+import { defineConfig } from 'vitest/config';
+import path from 'node:path';
+
+let react: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  react = require('@vitejs/plugin-react');
+  react = react?.default || react;
+} catch {
+  react = null;
+}
+
 export default defineConfig({
+  plugins: react ? [react()] : [],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, '.'),
+      '@/lib': path.resolve(__dirname, './lib'),
+      '@/app': path.resolve(__dirname, './app'),
+    },
+  },
   test: {
-    environment: 'node',
-    globals: false,
-    passWithNoTests: false,
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./vitest.setup.ts'],
+    css: false,
+    passWithNoTests: true,
     testTimeout: 10_000,
     include: [
       'lib/**/__tests__/**/*.test.{ts,tsx}',
       'lib/**/*.test.{ts,tsx}',
       '__tests__/**/*.test.{ts,tsx}',
     ],
-    exclude: ['node_modules', '.next', 'e2e', 'test-results'],
-  },
-  resolve: {
-    alias: {
-      '@/lib': path.resolve(__dirname, './lib'),
-      '@/app': path.resolve(__dirname, './app'),
-      '@': path.resolve(__dirname, '.'),
-    },
+    exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'],
   },
 });

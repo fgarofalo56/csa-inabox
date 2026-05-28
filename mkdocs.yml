@@ -2264,6 +2264,17 @@ nav:
           - Index: fiab/workloads/index.md
           - OneLake parity: fiab/workloads/onelake-parity.md
           - Data Engineering parity: fiab/workloads/data-engineering.md
+          - Data Engineering editors:
+              - Lakehouse: fiab/workloads/lakehouse.md
+              - Notebook: fiab/workloads/notebook.md
+              - Data pipeline: fiab/workloads/data-pipeline.md
+              - Dataflow Gen2: fiab/workloads/dataflow.md
+              - Mirrored Database: fiab/workloads/mirrored-database.md
+              - Spark Job Definition: fiab/workloads/spark-job-definition.md
+              - Environment: fiab/workloads/environment.md
+              - Copy Job: fiab/workloads/copy-job.md
+              - dbt Job: fiab/workloads/dbt-job.md
+              - Stream Analytics Job: fiab/workloads/stream-analytics-job.md
           - Data Warehouse parity: fiab/workloads/data-warehouse.md
           - Data Science parity: fiab/workloads/data-science.md
           - Real-Time Intelligence parity: fiab/workloads/real-time-intelligence.md
