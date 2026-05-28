@@ -98,3 +98,27 @@ platform/fiab/bicep/modules/admin-plane/setup-orchestrator.bicep created
 - `temp/fiab-prd/06-custom-apps.md` §6.2
 - `temp/fiab-research/06-copilot-driven-deploy.md`
 - `temp/fiab-prd/AMENDMENTS.md` §A8
+
+## Validation receipt
+
+**Validated 2026-05-27 — 16/16 pytest GREEN.**
+
+Test harness: `apps/fiab-setup-orchestrator/tests/test_orchestrator.py`. Tests
+exercise the same code path the live Container App hits:
+
+- `_render_bicep_parameters` produces correct cloud env (`AzureCloud` vs
+  `AzureUSGovernment`) and container platform (`containerApps` vs `aks`) per
+  boundary (Commercial / GCC / GCC-High / IL5)
+- `DeploymentStateStore` CRUD: in-memory create / update / get; missing-key
+  semantics (silent skip on unknown id)
+- `run_bicep_deploy` state machine: walks every stage and completes
+  `status=succeeded`; on stage exception flips to `status=failed` with the
+  error preserved
+- `FoundryOrchestrator` (Commercial / GCC tier) + `MafOrchestrator` (Gov-H / IL5
+  tier) both dispatch to the shared deploy driver
+- `DeployRequest` pydantic schema rejects invalid boundary, malformed
+  domain_name (must match `[a-z0-9-]+`), unknown capacity SKU; accepts all
+  4 valid boundaries
+
+**Operator action remaining:** Live deploy through the wizard pane against a
+provisioned Container App (no remaining code gates). Tracked in audit page.

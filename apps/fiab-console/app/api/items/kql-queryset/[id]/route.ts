@@ -33,11 +33,11 @@ function sanitizeQueries(input: any): SavedQuery[] {
     .slice(0, 200);
 }
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const item = await loadKustoItem(ctx.params.id, 'kql-queryset', session.claims.oid);
+    const item = await loadKustoItem((await ctx.params).id, 'kql-queryset', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     const queries: SavedQuery[] = Array.isArray(item.state?.queries) ? item.state!.queries : [];
     return NextResponse.json({

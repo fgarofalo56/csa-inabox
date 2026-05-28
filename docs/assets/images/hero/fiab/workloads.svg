@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="t d" preserveAspectRatio="xMidYMid slice">
+  <title id="t">CSA Loom — Workloads</title>
+  <desc id="d">One page per Fabric workload: parity grade, honest gaps, forward-migration path.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#3d2e80"/>
+      <stop offset="55%" stop-color="#1f6feb"/>
+      <stop offset="100%" stop-color="#d89f3d"/>
+    </linearGradient>
+    <radialGradient id="glow-tr" cx="0.9" cy="0.1" r="0.45" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-bl" cx="0.1" cy="1.1" r="0.5" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#d89f3d" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#d89f3d" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      .h-title { font-family:'IBM Plex Sans','Segoe UI',sans-serif; font-weight:600; font-size:60px; fill:#FFFFFF; letter-spacing:-1.2px; }
+      .h-sub   { font-family:'IBM Plex Sans','Segoe UI',sans-serif; font-weight:400; font-size:22px; fill:#FFFFFF; fill-opacity:0.92; }
+      .h-chip  { font-family:'JetBrains Mono','Consolas',monospace; font-weight:700; font-size:13px; letter-spacing:2.5px; fill:#FFFFFF; }
+      .g-label { font-family:'JetBrains Mono','Consolas',monospace; font-weight:600; font-size:11px; fill:#FFFFFF; letter-spacing:0.3px; }
+      .g-cap   { font-family:'JetBrains Mono','Consolas',monospace; font-weight:500; font-size:10px; fill:#FFFFFF; fill-opacity:0.7; letter-spacing:1.2px; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="420" fill="url(#bg)"/>
+  <rect width="1600" height="420" fill="url(#glow-tr)"/>
+  <rect width="1600" height="420" fill="url(#glow-bl)"/>
+  <rect x="0" y="0" width="6" height="420" fill="#e6b566"/>
+  <rect x="0" y="0" width="6" height="120" fill="#aea0ff"/>
+  <rect x="0" y="418" width="1600" height="2" fill="#aea0ff" fill-opacity="0.30"/>
+
+  <g transform="translate(80, 60)">
+    <rect x="0" y="0" width="160" height="32" fill="#aea0ff" fill-opacity="0.10" stroke="#aea0ff" stroke-opacity="0.55" stroke-width="1"/>
+    <rect x="0" y="0" width="6" height="32" fill="#aea0ff"/>
+    <text class="h-chip" x="88" y="21" text-anchor="middle" fill="#aea0ff">WORKLOADS</text>
+  </g>
+
+  <text class="h-title" x="80" y="200">Workloads</text>
+  <text class="h-sub" x="80" y="248">One page per Fabric workload — parity grade, honest gaps,</text>
+  <text class="h-sub" x="80" y="278" fill-opacity="0.72">forward-migration path.</text>
+
+  <g transform="translate(80, 320)">
+    <rect x="0" y="0" width="62" height="20" fill="#e6b566" fill-opacity="0.14" stroke="#e6b566" stroke-opacity="0.45" stroke-width="1"/>
+    <text class="g-cap" x="31" y="14" text-anchor="middle" fill="#e6b566">11 SURFACES</text>
+  </g>
+  <text class="g-cap" x="156" y="334" fill="#ffffff" fill-opacity="0.7">data eng · warehouse · RTI · BI · data sci · governance · APIs</text>
+
+  <!-- Workload grid on the right - 4x3 layout -->
+  <g transform="translate(870, 60)" font-family="JetBrains Mono, Consolas, monospace">
+    <text class="g-cap" x="350" y="0" text-anchor="middle" fill="#aea0ff">11 WORKLOAD SURFACES</text>
+    <!-- Row 1 -->
+    <g transform="translate(0,18)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#aea0ff" fill-opacity="0.13" stroke="#aea0ff" stroke-opacity="0.5"/>
+      <rect x="0" y="0" width="170" height="4" fill="#aea0ff"/>
+      <text class="g-label" x="14" y="26">Lakehouse</text>
+      <text class="g-cap" x="14" y="44">delta · onelake-equiv</text>
+    </g>
+    <g transform="translate(180,18)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#aea0ff" fill-opacity="0.13" stroke="#aea0ff" stroke-opacity="0.5"/>
+      <rect x="0" y="0" width="170" height="4" fill="#aea0ff"/>
+      <text class="g-label" x="14" y="26">Notebook</text>
+      <text class="g-cap" x="14" y="44">pyspark · scala · sql · r</text>
+    </g>
+    <g transform="translate(360,18)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#aea0ff" fill-opacity="0.13" stroke="#aea0ff" stroke-opacity="0.5"/>
+      <rect x="0" y="0" width="170" height="4" fill="#aea0ff"/>
+      <text class="g-label" x="14" y="26">Warehouse</text>
+      <text class="g-cap" x="14" y="44">t-sql · synapse dedicated</text>
+    </g>
+    <g transform="translate(540,18)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#aea0ff" fill-opacity="0.13" stroke="#aea0ff" stroke-opacity="0.5"/>
+      <rect x="0" y="0" width="170" height="4" fill="#aea0ff"/>
+      <text class="g-label" x="14" y="26">Semantic Model</text>
+      <text class="g-cap" x="14" y="44">tmdl · power bi premium</text>
+    </g>
+
+    <!-- Row 2 -->
+    <g transform="translate(0,90)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#e6b566" fill-opacity="0.16" stroke="#e6b566" stroke-opacity="0.6"/>
+      <rect x="0" y="0" width="170" height="4" fill="#e6b566"/>
+      <text class="g-label" x="14" y="26">Eventhouse</text>
+      <text class="g-cap" x="14" y="44">adx · kusto · real-time</text>
+    </g>
+    <g transform="translate(180,90)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#e6b566" fill-opacity="0.16" stroke="#e6b566" stroke-opacity="0.6"/>
+      <rect x="0" y="0" width="170" height="4" fill="#e6b566"/>
+      <text class="g-label" x="14" y="26">Activator</text>
+      <text class="g-cap" x="14" y="44">8 primitives · 4 sinks</text>
+    </g>
+    <g transform="translate(360,90)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#e6b566" fill-opacity="0.16" stroke="#e6b566" stroke-opacity="0.6"/>
+      <rect x="0" y="0" width="170" height="4" fill="#e6b566"/>
+      <text class="g-label" x="14" y="26">Eventstream</text>
+      <text class="g-cap" x="14" y="44">stream-analytics · v2</text>
+    </g>
+    <g transform="translate(540,90)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#e6b566" fill-opacity="0.16" stroke="#e6b566" stroke-opacity="0.6"/>
+      <rect x="0" y="0" width="170" height="4" fill="#e6b566"/>
+      <text class="g-label" x="14" y="26">Data Agents</text>
+      <text class="g-cap" x="14" y="44">nl2sql · nl2dax · nl2kql</text>
+    </g>
+
+    <!-- Row 3 -->
+    <g transform="translate(0,162)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#1f6feb" fill-opacity="0.22" stroke="#1f6feb" stroke-opacity="0.6"/>
+      <rect x="0" y="0" width="170" height="4" fill="#1f6feb"/>
+      <text class="g-label" x="14" y="26">Data Pipeline</text>
+      <text class="g-cap" x="14" y="44">adf · synapse pipeline</text>
+    </g>
+    <g transform="translate(180,162)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#1f6feb" fill-opacity="0.22" stroke="#1f6feb" stroke-opacity="0.6"/>
+      <rect x="0" y="0" width="170" height="4" fill="#1f6feb"/>
+      <text class="g-label" x="14" y="26">Dataflow Gen2</text>
+      <text class="g-cap" x="14" y="44">adf mapping data flows</text>
+    </g>
+    <g transform="translate(360,162)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#1f6feb" fill-opacity="0.22" stroke="#1f6feb" stroke-opacity="0.6"/>
+      <rect x="0" y="0" width="170" height="4" fill="#1f6feb"/>
+      <text class="g-label" x="14" y="26">Mirroring</text>
+      <text class="g-cap" x="14" y="44">debezium + spark merge</text>
+    </g>
+    <g transform="translate(540,162)">
+      <rect x="0" y="0" width="170" height="56" rx="6" fill="#1f6feb" fill-opacity="0.22" stroke="#1f6feb" stroke-opacity="0.6"/>
+      <rect x="0" y="0" width="170" height="4" fill="#1f6feb"/>
+      <text class="g-label" x="14" y="26">Data Marketplace</text>
+      <text class="g-cap" x="14" y="44">purview + apim + portal</text>
+    </g>
+  </g>
+
+  <text class="g-cap" x="880" y="396" fill="#FFFFFF" fill-opacity="0.7">EVERY EDITOR PRODUCTION-GRADE · REAL REST · NO VAPORWARE</text>
+</svg>

@@ -13,17 +13,17 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   try {
     const [dataset, tables, sources, schedule] = await Promise.all([
-      getDataset(workspaceId, ctx.params.id),
-      listDatasetTables(workspaceId, ctx.params.id).catch(() => []),
-      listDatasetRelationships(workspaceId, ctx.params.id).catch(() => []),
-      getRefreshSchedule(workspaceId, ctx.params.id).catch(() => null),
+      getDataset(workspaceId, (await ctx.params).id),
+      listDatasetTables(workspaceId, (await ctx.params).id).catch(() => []),
+      listDatasetRelationships(workspaceId, (await ctx.params).id).catch(() => []),
+      getRefreshSchedule(workspaceId, (await ctx.params).id).catch(() => null),
     ]);
     return NextResponse.json({ ok: true, workspaceId, dataset, tables, datasources: sources, refreshSchedule: schedule });
   } catch (e: any) {

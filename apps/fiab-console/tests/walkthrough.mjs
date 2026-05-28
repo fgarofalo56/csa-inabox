@@ -153,12 +153,28 @@ const report = { startedAt: new Date().toISOString(), base: BASE, pages: [] };
       if (!url.startsWith(BASE)) return;
       badResponses.push(`${status} ${url.slice(BASE.length, 200)}`);
     });
-    const url = `${BASE}${p}?cb=walk`;
+    // `screenshot=1` suppresses the auto-opening "Learn about this item"
+    // drawer (see item-side-panel.tsx) so the captured editor surface
+    // matches what the user sees AFTER first-visit dismissal. Tutorial
+    // screenshots on the docs site should never bake the Learn drawer
+    // into the image — apply consistently across the walkthrough.
+    const url = `${BASE}${p}?cb=walk&screenshot=1`;
     process.stdout.write(`  ${p.padEnd(45)} `);
     try {
       const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
       const status = resp?.status() ?? 0;
       await page.waitForTimeout(1500); // settle
+      // Defensive: if a drawer (Learn or otherwise) IS open for any
+      // reason — e.g. the user landed on this URL with a stale tab —
+      // click its Close button before the screenshot. The Close button
+      // is the Drawer header dismiss with aria-label="Close".
+      try {
+        const closeBtn = page.locator('[role="dialog"] button[aria-label="Close"]').first();
+        if (await closeBtn.isVisible({ timeout: 500 })) {
+          await closeBtn.click({ timeout: 1000 });
+          await page.waitForTimeout(300);
+        }
+      } catch { /* no drawer open; proceed */ }
       const file = path.join(OUT, `${name}.png`);
       await page.screenshot({ path: file, fullPage: true });
 

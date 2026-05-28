@@ -10,7 +10,7 @@ import { submitSparkBatchJob, type SparkBatchRequest } from '@/lib/azure/synapse
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   const body = (await req.json().catch(() => ({}))) as Partial<SparkBatchRequest>;
@@ -18,7 +18,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
     return NextResponse.json({ error: 'name and file are required' }, { status: 400 });
   }
   try {
-    const job = await submitSparkBatchJob(ctx.params.id, body as SparkBatchRequest);
+    const job = await submitSparkBatchJob((await ctx.params).id, body as SparkBatchRequest);
     return NextResponse.json({ ok: true, job });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });

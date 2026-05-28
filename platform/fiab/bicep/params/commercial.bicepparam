@@ -36,6 +36,18 @@ param defenderForAIEnabled = true
 // tenant). Operator opts in once they've decided whether to reuse the
 // existing account (preferred) or scope a new one.
 param purviewEnabled = false
+// /admin/security Purview tab — point at an EXISTING Purview account
+// to enable inline source/scan/glossary/domain management. Leave empty
+// to gate the tab behind a structured NotConfigured MessageBar (the
+// no-vaporware-compliant fallback). Pull the short account name from
+// `az purview account list`.
+param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', '')
+// /admin/security Information Protection + DLP tabs — both default OFF
+// until the post-deploy bootstrap workflow grants the Graph AppRoles
+// AND a Tenant Administrator clicks Grant admin consent. After that,
+// flip these to true and redeploy admin-plane.
+param loomMipEnabled = false
+param loomDlpEnabled = false
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false
 

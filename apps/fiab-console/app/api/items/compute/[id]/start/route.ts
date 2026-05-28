@@ -6,11 +6,11 @@ import { startCompute, FoundryError } from '@/lib/azure/foundry-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    await startCompute(ctx.params.id);
+    await startCompute((await ctx.params).id);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     const status = e instanceof FoundryError ? e.status : 502;
