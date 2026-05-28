@@ -12,7 +12,8 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "test:a11y": "playwright test --grep @a11y"
+    "test:a11y": "playwright test --grep @a11y",
+    "uat": "node scripts/uat-launch.mjs"
   },
   "dependencies": {
     "next": "15.5.18",

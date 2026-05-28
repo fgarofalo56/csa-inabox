@@ -27,6 +27,9 @@ export default defineConfig({
     actionTimeout: 15_000,
     navigationTimeout: 30_000,
     extraHTTPHeaders: {},
+    // Auth: prefer storageState from `pnpm uat` launcher; falls back to
+    // SESSION_SECRET cookie-mint trick if running headless in CI.
+    storageState: process.env.LOOM_STORAGE_STATE || undefined,
   },
   projects: [
     {
