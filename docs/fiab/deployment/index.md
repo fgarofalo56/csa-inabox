@@ -1,5 +1,7 @@
 # CSA Loom — Deployment
 
+![Push-button deploy — azd up or Deploy-to-Azure button, 60-100 minutes from empty sub to working Console](../../assets/images/hero/fiab/deployment.svg){ .architecture-hero loading="eager" }
+
 Deploying CSA Loom takes about 60-100 minutes from start to a working
 Loom Console URL in your tenant. The platform is shipped as
 infrastructure-as-code; you deploy it into your own Azure
