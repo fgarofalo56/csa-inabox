@@ -686,6 +686,34 @@ export async function listClusterEvents(
   return body.events || [];
 }
 
+// v3.4 — Libraries tab. Databricks /api/2.0/libraries/cluster-status returns
+// install state for every library attached to the cluster (pypi, maven, jar,
+// whl, etc.) plus per-status messages. The editor renders this read-only;
+// install/uninstall lives in the Databricks UI for now since it touches
+// per-library credentials (Azure DevOps PATs, private PyPI tokens, etc.).
+export interface LibraryStatus {
+  status?: string;
+  is_library_for_all_clusters?: boolean;
+  messages?: string[];
+  library?: {
+    pypi?: { package?: string; repo?: string };
+    maven?: { coordinates?: string; repo?: string };
+    cran?: { package?: string };
+    jar?: string;
+    egg?: string;
+    whl?: string;
+    requirements?: string;
+  };
+}
+
+export async function listClusterLibraries(clusterId: string): Promise<LibraryStatus[]> {
+  const res = await dbxFetch(
+    `/api/2.0/libraries/cluster-status?cluster_id=${encodeURIComponent(clusterId)}`,
+  );
+  const body = await asJsonOrThrow<{ library_statuses?: LibraryStatus[] }>(res, 'listClusterLibraries');
+  return body.library_statuses || [];
+}
+
 // ============================================================
 // One-time notebook run — imports inline code as a notebook in
 // /Shared/loom-runs/<ts>, then submits as a one-time job. Used

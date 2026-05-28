@@ -580,14 +580,23 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
     } catch (e: any) { setError(e?.message || String(e)); }
   }, []);
 
+  // Run-history date range + status filter — POST'd as query params to the
+  // BFF, which passes them through to Synapse `queryPipelineRuns`. Default
+  // window: last 7 days (the BFF computes that when `after` is unset).
+  const [runsAfterDays, setRunsAfterDays] = useState<number>(7);
+  const [runsStatus, setRunsStatus] = useState<string>('');
+
   const loadRuns = useCallback(async (name: string) => {
     try {
-      const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(name)}/runs`);
+      const after = new Date(Date.now() - runsAfterDays * 24 * 60 * 60 * 1000).toISOString();
+      const qs = new URLSearchParams({ after });
+      if (runsStatus) qs.set('status', runsStatus);
+      const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(name)}/runs?${qs.toString()}`);
       const j = await r.json();
       if (!j.ok) { setRuns([]); return; }
       setRuns(j.runs || []);
     } catch { setRuns([]); }
-  }, []);
+  }, [runsAfterDays, runsStatus]);
 
   useEffect(() => { loadList(); }, [loadList]);
   useEffect(() => { if (selected) { loadPipeline(selected); loadRuns(selected); } }, [selected, loadPipeline, loadRuns]);
@@ -834,6 +843,44 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
           )}
           {tab === 'runs' && (
             <div style={{ overflow: 'auto' }}>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                <Field label="Window">
+                  <Dropdown
+                    value={
+                      runsAfterDays === 1 ? 'Last 24 hours' :
+                      runsAfterDays === 14 ? 'Last 14 days' :
+                      runsAfterDays === 30 ? 'Last 30 days' :
+                      runsAfterDays === 45 ? 'Last 45 days (max retention)' :
+                      'Last 7 days'
+                    }
+                    selectedOptions={[String(runsAfterDays)]}
+                    onOptionSelect={(_, d) => d.optionValue && setRunsAfterDays(Number(d.optionValue) || 7)}
+                  >
+                    <Option value="1" text="Last 24 hours">Last 24 hours</Option>
+                    <Option value="7" text="Last 7 days">Last 7 days</Option>
+                    <Option value="14" text="Last 14 days">Last 14 days</Option>
+                    <Option value="30" text="Last 30 days">Last 30 days</Option>
+                    <Option value="45" text="Last 45 days (max retention)">Last 45 days (max retention)</Option>
+                  </Dropdown>
+                </Field>
+                <Field label="Status">
+                  <Dropdown
+                    value={runsStatus || 'Any'}
+                    selectedOptions={[runsStatus]}
+                    onOptionSelect={(_, d) => setRunsStatus(d.optionValue || '')}
+                  >
+                    <Option value="" text="Any">Any</Option>
+                    <Option value="Succeeded" text="Succeeded">Succeeded</Option>
+                    <Option value="Failed" text="Failed">Failed</Option>
+                    <Option value="InProgress" text="In progress">In progress</Option>
+                    <Option value="Cancelled" text="Cancelled">Cancelled</Option>
+                    <Option value="Queued" text="Queued">Queued</Option>
+                  </Dropdown>
+                </Field>
+                <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => { if (selected) loadRuns(selected); }} disabled={!selected}>
+                  Apply filter
+                </Button>
+              </div>
               <Table aria-label="Pipeline runs" size="small">
                 <TableHeader><TableRow>
                   <TableHeaderCell>Run ID</TableHeaderCell>

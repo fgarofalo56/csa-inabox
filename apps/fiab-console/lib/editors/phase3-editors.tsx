@@ -2085,6 +2085,15 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'refresh' | 'config'>('tables');
 
+  // DAX measure validator — name + table dropdown + Monaco DAX editor + Test
+  // button. Persistence is XMLA-only (Premium / Fabric capacity feature) so
+  // we honestly surface that via MessageBar instead of pretending to Save.
+  const [measureName, setMeasureName] = useState('');
+  const [measureTable, setMeasureTable] = useState('');
+  const [daxExpr, setDaxExpr] = useState('SUM(\'Sales\'[Amount])');
+  const [daxBusy, setDaxBusy] = useState(false);
+  const [daxResult, setDaxResult] = useState<{ ok: boolean; value?: unknown; error?: string } | null>(null);
+
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
     try {
@@ -2132,21 +2141,48 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     } finally { setRefreshing(false); }
   }, [workspaceId, datasetId, loadRefreshes]);
 
+  // Validate a candidate DAX measure expression server-side via the Power
+  // BI executeQueries REST endpoint. The route compiles via DEFINE MEASURE
+  // and evaluates a probe row — invalid DAX returns the engine's real
+  // error message (not a mocked "looks good"). Persistence requires XMLA.
+  const validateDax = useCallback(async () => {
+    if (!workspaceId || !datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()) return;
+    setDaxBusy(true); setDaxResult(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/measures?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ measureName: measureName.trim(), tableName: measureTable.trim(), daxExpression: daxExpr }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setDaxResult({ ok: false, error: j.error || `HTTP ${r.status}` }); return; }
+      const row = j?.probe?.rows?.[0] || {};
+      const v = Object.values(row)[0];
+      setDaxResult({ ok: true, value: v });
+    } catch (e: any) { setDaxResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setDaxBusy(false); }
+  }, [workspaceId, datasetId, measureName, measureTable, daxExpr]);
+
+  const focusNewMeasure = useCallback(() => {
+    setTab('measures');
+    if (!measureTable && detail?.tables?.[0]?.name) setMeasureTable(detail.tables[0].name);
+    if (!measureName) setMeasureName('MyMeasure');
+  }, [measureTable, measureName, detail?.tables]);
+
   const canRefresh = !!datasetId && !refreshing && detail?.dataset?.isRefreshable !== false;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Model', actions: [
-        { label: 'New measure', disabled: true, title: 'DAX measure editor not yet wired' },
-        { label: 'New role', disabled: true, title: 'RLS role editor not yet wired' },
-        { label: 'New perspective', disabled: true, title: 'perspective editor not yet wired' },
+        { label: 'New measure', onClick: datasetId ? focusNewMeasure : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Measures tab to author + validate DAX' },
+        { label: 'New role', disabled: true, title: 'RLS role editor requires XMLA endpoint write (Premium/Fabric capacity) — out of scope for v3' },
+        { label: 'New perspective', disabled: true, title: 'perspective editor requires XMLA write — out of scope for v3' },
       ]},
       { label: 'Source', actions: [
         { label: refreshing ? 'Queuing…' : 'Refresh', onClick: canRefresh ? refreshNow : undefined, disabled: !canRefresh, title: detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined) },
-        { label: 'Direct Lake', disabled: true, title: 'Direct Lake storage-mode toggle not yet wired' },
-        { label: 'Import', disabled: true, title: 'PBIX/TMSL import not yet wired' },
+        { label: 'Direct Lake', disabled: true, title: 'PREVIEW: Direct Lake storage-mode toggle requires Fabric REST /datasets PATCH with mode=DirectLake — lands in v3.4' },
+        { label: 'Import', disabled: true, title: 'PREVIEW: PBIX/TMSL import requires the XMLA endpoint — lands in v3.4' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -2232,6 +2268,58 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 )}
                 {tab === 'measures' && (
                   <>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>DAX measure validator (no persistence)</MessageBarTitle>
+                        Author + validate a candidate DAX expression server-side via Power BI <code>executeQueries</code>.
+                        Persistence into the model requires the <strong>XMLA endpoint</strong> (Premium / Fabric capacity)
+                        or Power BI Desktop / Tabular Editor. The validator surfaces the engine's real syntax + semantic
+                        errors so you can iterate before opening the model in Desktop.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
+                      <Field label="Table" style={{ minWidth: 200 }}>
+                        <Select value={measureTable} onChange={(_, d) => setMeasureTable(d.value)}>
+                          <option value="">(select a table)</option>
+                          {(detail?.tables || []).map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                        </Select>
+                      </Field>
+                      <Field label="Measure name" style={{ minWidth: 200 }}>
+                        <Input value={measureName} onChange={(_, d) => setMeasureName(d.value)} placeholder="TotalSales" />
+                      </Field>
+                    </div>
+                    <Caption1 style={{ marginTop: 8 }}>DAX expression</Caption1>
+                    <MonacoTextarea
+                      value={daxExpr}
+                      onChange={setDaxExpr}
+                      language="sql"
+                      height={140}
+                      minHeight={100}
+                      ariaLabel="DAX expression editor"
+                    />
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                      <Button
+                        appearance="primary"
+                        icon={<Play20Regular />}
+                        disabled={daxBusy || !workspaceId || !datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()}
+                        onClick={validateDax}
+                      >
+                        {daxBusy ? 'Validating…' : 'Validate DAX'}
+                      </Button>
+                      {daxResult?.ok && (
+                        <Badge appearance="filled" color="success">valid · probe value: <code style={{ marginLeft: 4 }}>{daxResult.value === null || daxResult.value === undefined ? 'NULL' : String(daxResult.value)}</code></Badge>
+                      )}
+                    </div>
+                    {daxResult && !daxResult.ok && (
+                      <MessageBar intent="error" style={{ marginTop: 8 }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>DAX validation failed</MessageBarTitle>
+                          {daxResult.error}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+
+                    <Subtitle2 style={{ marginTop: 16 }}>Existing measures</Subtitle2>
                     {(detail?.tables || []).flatMap((t) => (t.measures || []).map((m) => (
                       <div key={`${t.name}-${m.name}`} className={s.card} style={{ marginTop: 8 }}>
                         <Caption1>{t.name}</Caption1>
@@ -2291,25 +2379,11 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 // ============================================================
 // Report (Power BI)
 // ============================================================
-// Shared disabled-only ribbon for DashboardEditor + ScorecardEditor —
-// none of these actions have inline handlers yet. ReportEditor +
-// PaginatedReportEditor each get their own ribbon built inside
-// ReportLikeEditor (see useMemo there).
-const REPORT_DASHBOARD_RIBBON: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [
-  { label: 'Pages', actions: [
-    { label: 'New page', disabled: true, title: 'visual page editor not yet wired' },
-    { label: 'Duplicate', disabled: true, title: 'page duplicate not yet wired' },
-  ]},
-  { label: 'Visuals', actions: [
-    { label: 'New visual', disabled: true, title: 'visual designer not yet wired' },
-    { label: 'Format', disabled: true, title: 'visual format pane not yet wired' },
-    { label: 'Bookmark', disabled: true, title: 'bookmarks not yet wired' },
-  ]},
-  { label: 'Data', actions: [
-    { label: 'Refresh', disabled: true, title: 'inline refresh not yet wired — open in Power BI to refresh' },
-    { label: 'Filters', disabled: true, title: 'filter pane toggle not yet wired' },
-  ]},
-]}];
+// Power BI authoring (visuals, bookmarks, page editor) is out-of-scope for
+// the Loom Console — Power BI Desktop / Power BI Web are the supported
+// authoring surfaces. The Loom editor is a metadata + embed-viewer + open-
+// in-Desktop launcher. Each editor (Report, Dashboard, Scorecard) builds
+// an honest inline ribbon (no decorative disabled buttons) below.
 
 interface ReportLite {
   id: string; name: string; embedUrl?: string; webUrl?: string; datasetId?: string;
@@ -2357,32 +2431,34 @@ function ReportLikeEditor({
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && reportId) loadDetail(workspaceId, reportId); }, [workspaceId, reportId, loadDetail]);
 
-  // Per-editor ribbon — Refresh re-loads the list + selected report
-  // detail (closest honest binding given the PBI embed iframe doesn't
-  // expose a reload hook through PowerBIEmbedFrame yet). Filters and
-  // visual-design actions stay disabled with a "not yet wired" tooltip.
+  // Per-editor ribbon. Authoring (new page / new visual / bookmarks /
+  // format / filters) is out-of-scope: Power BI Desktop is the authoring
+  // surface, the Loom editor is metadata + embed + launcher. Every action
+  // in this ribbon wires to a real handler. See no-vaporware.md.
   const canRefresh = !!workspaceId;
   const refreshSelected = useCallback(() => {
     if (workspaceId) loadList(workspaceId);
     if (workspaceId && reportId) loadDetail(workspaceId, reportId);
   }, [workspaceId, reportId, loadList, loadDetail]);
+  const openInDesktop = useCallback(() => {
+    if (!report?.webUrl) return;
+    try { window.open(report.webUrl, '_blank', 'noreferrer'); } catch { /* popup blocked */ }
+  }, [report?.webUrl]);
+  const copyReportLink = useCallback(async () => {
+    if (!report?.webUrl) return;
+    try { await navigator.clipboard.writeText(report.webUrl); } catch { /* ignore */ }
+  }, [report?.webUrl]);
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
-      { label: 'Pages', actions: [
-        { label: 'New page', disabled: true, title: `${kind === 'paginated' ? 'paginated ' : ''}report page editor not yet wired` },
-        { label: 'Duplicate', disabled: true, title: 'page duplicate not yet wired' },
+      { label: 'Open', actions: [
+        { label: kind === 'paginated' ? 'Open paginated report' : 'Open in Power BI', onClick: report?.webUrl ? openInDesktop : undefined, disabled: !report?.webUrl, title: !report?.webUrl ? 'select a report first' : 'opens Power BI Web — use Edit there to author' },
+        { label: 'Copy link', onClick: report?.webUrl ? copyReportLink : undefined, disabled: !report?.webUrl, title: !report?.webUrl ? 'select a report first' : 'copy the workspace URL to clipboard' },
       ]},
-      { label: 'Visuals', actions: [
-        { label: 'New visual', disabled: true, title: 'visual designer not yet wired' },
-        { label: 'Format', disabled: true, title: 'visual format pane not yet wired' },
-        { label: 'Bookmark', disabled: true, title: 'bookmarks not yet wired' },
-      ]},
-      { label: 'Data', actions: [
-        { label: 'Refresh', onClick: canRefresh ? refreshSelected : undefined, disabled: !canRefresh, title: !canRefresh ? 'select a workspace first' : undefined },
-        { label: 'Filters', disabled: true, title: 'filter pane toggle not yet wired (use the embed iframe filters pane)' },
+      { label: 'Metadata', actions: [
+        { label: 'Refresh', onClick: canRefresh ? refreshSelected : undefined, disabled: !canRefresh, title: !canRefresh ? 'select a workspace first' : 'reload list + selected report metadata' },
       ]},
     ]},
-  ], [kind, canRefresh, refreshSelected]);
+  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl]);
 
   // Mint a per-report embed token whenever the selected report changes.
   // Paginated reports use a different SDK (`pbi-paginated`) that we don't
@@ -2433,6 +2509,15 @@ function ReportLikeEditor({
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          <MessageBar intent="info">
+            <MessageBarBody>
+              <MessageBarTitle>Loom is a metadata + viewer surface for Power BI {kind === 'paginated' ? 'paginated ' : ''}reports</MessageBarTitle>
+              Authoring (pages, visuals, bookmarks, filter pane) lives in <strong>Power BI Desktop</strong> and the
+              Power BI Web editor. The Loom editor lists reports, shows metadata + last-modified, refreshes the
+              metadata cache, and embeds the report read-only for preview. Use <strong>Open in Power BI</strong>
+              above to author.
+            </MessageBarBody>
+          </MessageBar>
           {report && (
             <>
               <div className={s.card}>
@@ -2503,6 +2588,8 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   const [embed, setEmbed] = useState<{ token: string; embedUrl: string; dashboardId: string } | null>(null);
   const [embedErr, setEmbedErr] = useState<string | null>(null);
 
+  const selectedDash = (dashboards || []).find((d) => d.id === dashId);
+
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
     try {
@@ -2548,8 +2635,30 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
     return () => { cancelled = true; };
   }, [workspaceId, dashId]);
 
+  const refreshDash = useCallback(() => {
+    if (workspaceId) loadList(workspaceId);
+    if (workspaceId && dashId) loadDetail(workspaceId, dashId);
+  }, [workspaceId, dashId, loadList, loadDetail]);
+  const openDashInPbi = useCallback(() => {
+    if (selectedDash?.webUrl) window.open(selectedDash.webUrl, '_blank', 'noreferrer');
+  }, [selectedDash?.webUrl]);
+  const copyDashLink = useCallback(async () => {
+    if (selectedDash?.webUrl) { try { await navigator.clipboard.writeText(selectedDash.webUrl); } catch { /* ignore */ } }
+  }, [selectedDash?.webUrl]);
+  const dashRibbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Open', actions: [
+        { label: 'Open in Power BI', onClick: selectedDash?.webUrl ? openDashInPbi : undefined, disabled: !selectedDash?.webUrl, title: !selectedDash?.webUrl ? 'select a dashboard first' : 'opens Power BI Web — use Edit there to author' },
+        { label: 'Copy link', onClick: selectedDash?.webUrl ? copyDashLink : undefined, disabled: !selectedDash?.webUrl, title: !selectedDash?.webUrl ? 'select a dashboard first' : 'copy the dashboard URL to clipboard' },
+      ]},
+      { label: 'Metadata', actions: [
+        { label: 'Refresh', onClick: workspaceId ? refreshDash : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'reload list + selected dashboard tiles' },
+      ]},
+    ]},
+  ], [selectedDash?.webUrl, workspaceId, openDashInPbi, copyDashLink, refreshDash]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={REPORT_DASHBOARD_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={dashRibbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Dashboards</Subtitle2>
@@ -2570,8 +2679,17 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
             <Badge appearance="filled" color="brand">Power BI dashboard</Badge>
             <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            {selectedDash?.webUrl && <Button appearance="primary" onClick={openDashInPbi} style={{ marginLeft: 'auto' }}>Open in Power BI</Button>}
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          <MessageBar intent="info">
+            <MessageBarBody>
+              <MessageBarTitle>Loom is a metadata + viewer surface for Power BI dashboards</MessageBarTitle>
+              Authoring (pin visual, new tile, dashboard theme) lives in <strong>Power BI Web</strong>. The Loom
+              editor lists dashboards, shows tile metadata, refreshes the cache, and embeds the dashboard read-only
+              for preview. Use <strong>Open in Power BI</strong> to author or pin new tiles.
+            </MessageBarBody>
+          </MessageBar>
           {embedErr ? (
             <MessageBar intent="error">
               <MessageBarBody>
@@ -2679,8 +2797,29 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     } finally { setEntryBusy(false); }
   }, [entryOpen, entryValue, entryTarget, entryNote, workspaceId, scorecardId, loadGoals]);
 
+  const refreshScorecard = useCallback(() => {
+    if (workspaceId) loadList(workspaceId);
+    if (workspaceId && scorecardId) loadGoals(workspaceId, scorecardId);
+  }, [workspaceId, scorecardId, loadList, loadGoals]);
+  const openScorecardInPbi = useCallback(() => {
+    if (workspaceId && scorecardId) {
+      const url = `https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/scorecards/${encodeURIComponent(scorecardId)}`;
+      window.open(url, '_blank', 'noreferrer');
+    }
+  }, [workspaceId, scorecardId]);
+  const scRibbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Open', actions: [
+        { label: 'Open in Power BI', onClick: scorecardId ? openScorecardInPbi : undefined, disabled: !scorecardId, title: !scorecardId ? 'select a scorecard first' : 'opens Power BI Web — Fabric scorecard authoring lives there' },
+      ]},
+      { label: 'Metadata', actions: [
+        { label: 'Refresh', onClick: workspaceId ? refreshScorecard : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'reload list + selected scorecard goals' },
+      ]},
+    ]},
+  ], [scorecardId, workspaceId, openScorecardInPbi, refreshScorecard]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={REPORT_DASHBOARD_RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={scRibbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Scorecards</Subtitle2>
@@ -2701,8 +2840,18 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
             <Badge appearance="filled" color="brand">Scorecard</Badge>
             <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            {scorecardId && <Button appearance="primary" onClick={openScorecardInPbi} style={{ marginLeft: 'auto' }}>Open in Power BI</Button>}
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          <MessageBar intent="info">
+            <MessageBarBody>
+              <MessageBarTitle>Fabric Scorecard preview surface</MessageBarTitle>
+              Scorecard authoring (goals, connections, hierarchy, status rules) lives in <strong>Power BI Web</strong>.
+              The Loom editor lists scorecards in the workspace, surfaces goals + current/target values, and lets
+              you record a goal value via the inline <em>Add value</em> dialog (Fabric scorecards REST is preview).
+              Use <strong>Open in Power BI</strong> to author.
+            </MessageBarBody>
+          </MessageBar>
           {scorecardId && (
             <>
               <Subtitle2>Goals ({goals.length})</Subtitle2>

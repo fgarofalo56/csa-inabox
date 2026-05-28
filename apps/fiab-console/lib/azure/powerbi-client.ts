@@ -449,6 +449,33 @@ export async function generateDatasetEmbedToken(
 }
 
 /**
+ * ExecuteQueries — POST /v1.0/myorg/groups/{ws}/datasets/{id}/executeQueries
+ *
+ * Runs a DAX query against the dataset and returns the result tables. We use
+ * this to validate a candidate DAX measure expression server-side (compiles
+ * it via `DEFINE MEASURE` and evaluates a single-row probe). Persistence of
+ * new measures requires the XMLA endpoint (a paid Premium / Fabric capacity
+ * feature) or Power BI Desktop — the editor surfaces this honestly via
+ * MessageBar rather than pretending Save persists.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/datasets/execute-queries
+ */
+export async function executeDatasetQueries(
+  workspaceId: string,
+  datasetId: string,
+  daxQuery: string,
+): Promise<{
+  results: Array<{
+    tables: Array<{ rows: Array<Record<string, unknown>> }>;
+  }>;
+}> {
+  return call(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/executeQueries`,
+    { method: 'POST', body: { queries: [{ query: daxQuery }], serializerSettings: { includeNulls: true } } },
+  );
+}
+
+/**
  * CloneTile — POST /v1.0/myorg/groups/{ws}/dashboards/{id}/tiles/{tile}/Clone
  * Validator's recommended Dashboard editor uplift.
  */
