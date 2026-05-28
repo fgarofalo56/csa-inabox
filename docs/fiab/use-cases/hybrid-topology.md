@@ -5,35 +5,34 @@ Commercial + CSA Loom in Gov, running side-by-side with bridging.
 
 ## Pattern
 
-```
-┌────────────────────────────┐        ┌────────────────────────────┐
-│ Customer Azure Commercial   │        │ Customer Azure Government   │
-│ tenant                      │        │ tenant (GCC-H / IL4 / IL5) │
-│                              │        │                             │
-│ Microsoft Fabric (full SaaS)│        │ CSA Loom (parity layer)     │
-│                              │        │                             │
-│  Capacities + Workspaces    │        │  Loom Admin Plane           │
-│   OneLake                   │        │   Console + Setup Wizard    │
-│   Lakehouses                │        │   Catalog overlay           │
-│   Warehouses                │        │  Loom Data Landing Zones    │
-│   Notebooks                 │        │   Databricks workspaces     │
-│   Semantic Models (Direct Lake) │     │   Synapse Serverless        │
-│   KQL DBs / Eventhouses     │        │   ADX databases             │
-│   Data Agents               │        │   ADLS Gen2 lakehouses      │
-│   Power BI                  │        │   Power BI Premium          │
-│   Reflex                    │        │   Parity services           │
-│                              │        │                             │
-│  Use for:                   │        │  Use for:                   │
-│  - Public datasets          │        │  - CUI / classified data    │
-│  - Cross-agency analytics   │        │  - Mission-internal         │
-│  - Exec Power BI dashboards │        │  - ITAR-eligible (GCC-H)    │
-│  - Non-classified federal   │        │                             │
-└──────────┬──────────────────┘        └──────────────────┬──────────┘
-           │                                                │
-           │ Cross-cloud B2B (Entra ID Cross-Cloud)         │
-           │ Cross-cloud APIM (controlled API brokering)    │
-           │ Customer-initiated data movement (azcopy)      │
-           └────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    classDef commercial fill:#0078D4,stroke:#fff,color:#fff,stroke-width:2px
+    classDef gov fill:#107C10,stroke:#fff,color:#fff,stroke-width:2px
+    classDef bridge fill:#8764B8,stroke:#fff,color:#fff,stroke-width:2px
+    classDef usecase fill:#5D5A58,stroke:#fff,color:#fff,stroke-width:1px
+
+    subgraph CommercialTenant["Customer Azure Commercial tenant"]
+        direction TB
+        FabricSaaS["Microsoft Fabric (full SaaS)"]:::commercial
+        FabricStack["Capacities + Workspaces<br/>OneLake<br/>Lakehouses<br/>Warehouses<br/>Notebooks<br/>Semantic Models (Direct Lake)<br/>KQL DBs / Eventhouses<br/>Data Agents<br/>Power BI<br/>Reflex"]:::commercial
+        FabricUse["Use for:<br/>- Public datasets<br/>- Cross-agency analytics<br/>- Exec Power BI dashboards<br/>- Non-classified federal"]:::usecase
+        FabricSaaS --- FabricStack --- FabricUse
+    end
+
+    subgraph GovTenant["Customer Azure Government tenant (GCC-H / IL4 / IL5)"]
+        direction TB
+        LoomParity["CSA Loom (parity layer)"]:::gov
+        LoomAdmin["Loom Admin Plane<br/>Console + Setup Wizard<br/>Catalog overlay"]:::gov
+        LoomDLZ["Loom Data Landing Zones<br/>Databricks workspaces<br/>Synapse Serverless<br/>ADX databases<br/>ADLS Gen2 lakehouses<br/>Power BI Premium<br/>Parity services"]:::gov
+        LoomUse["Use for:<br/>- CUI / classified data<br/>- Mission-internal<br/>- ITAR-eligible (GCC-H)"]:::usecase
+        LoomParity --- LoomAdmin --- LoomDLZ --- LoomUse
+    end
+
+    Bridge["Cross-cloud B2B (Entra ID Cross-Cloud)<br/>Cross-cloud APIM (controlled API brokering)<br/>Customer-initiated data movement (azcopy)"]:::bridge
+
+    CommercialTenant <--> Bridge
+    GovTenant <--> Bridge
 ```
 
 ## When this fits
