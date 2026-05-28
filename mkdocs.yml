@@ -59,7 +59,27 @@ exclude_docs: |
   # (re-included 2026-05-27 after escaping the inline "</>" sequence)
 
 plugins:
-  - search
+  # The search index for this site previously ballooned to ~27 MB because
+  # mkdocs's default `indexing: full` mode emits one entry per page PLUS
+  # one per heading PLUS the full body text — 42k+ entries / ~20 MB of
+  # raw text across the CSA-in-a-Box corpus. The browser has to download
+  # and decompress the entire index before the search box returns any
+  # results, which on slower links times out and the UI silently shows
+  # zero matches (issue #399).
+  #
+  # Switching `indexing` to `sections` drops the per-page body text and
+  # keeps only the title + heading entries — ~10-20x smaller index, still
+  # covers every section a user might search for. `prebuild_index: true`
+  # ships a pre-compressed lunr index alongside the JSON one for faster
+  # initial load. The separator regex matches mkdocs-material's
+  # recommended split so camelCase / kebab-case / punctuation-separated
+  # tokens all become searchable.
+  - search:
+      lang: en
+      indexing: sections
+      prebuild_index: true
+      separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)'
+      min_search_length: 2
   - minify:
       minify_html: true
   # mkdocs-material's social card plugin auto-generates per-page OG /
