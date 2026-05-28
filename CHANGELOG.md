@@ -10,6 +10,62 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.11.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.11.1...csa-inabox-v0.11.2) (2026-05-27)
+
+
+### Bug Fixes
+
+* **csa-loom-databricks:** cluster create 403 — add allow-cluster-create + allow-instance-pool-create entitlements ([#366](https://github.com/fgarofalo56/csa-inabox/issues/366)) ([8279537](https://github.com/fgarofalo56/csa-inabox/commit/827953796277b2d1717739aef6c50bf4c222ead0))
+
+
+### Documentation
+
+* **csa-loom:** add 'Why CSA Loom' name explanation to index page ([#356](https://github.com/fgarofalo56/csa-inabox/issues/356)) ([ebd8991](https://github.com/fgarofalo56/csa-inabox/commit/ebd89915a969cdbc84d069fb5d1f7925a30adfb1))
+
+## [0.11.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.11.0...csa-inabox-v0.11.1) (2026-05-27)
+
+
+### Bug Fixes
+
+* **csa-loom-ci:** copilot-tools probe accepts 401 for unauthed CI ([#339](https://github.com/fgarofalo56/csa-inabox/issues/339)) ([7dbfc96](https://github.com/fgarofalo56/csa-inabox/commit/7dbfc96f7e3a578e8745ac448618c8ef84b375ff))
+
+
+### Documentation
+
+* **csa-loom:** rebuild hero SVG with full content (chip + title + schematic) ([#355](https://github.com/fgarofalo56/csa-inabox/issues/355)) ([79b7701](https://github.com/fgarofalo56/csa-inabox/commit/79b770101832b61889b28c7a1dc1b451bd50c673))
+
+## [0.11.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.10.0...csa-inabox-v0.11.0) (2026-05-27)
+
+
+### Features
+
+* **csa-loom-ci:** deploy-validation loop + Dockerfile build-marker stamping ([#338](https://github.com/fgarofalo56/csa-inabox/issues/338)) ([688f1ba](https://github.com/fgarofalo56/csa-inabox/commit/688f1ba304ca43943021ae195b3bb09437c8349d))
+* **csa-loom:** apps install — full code+data starter bundles for all 10 CSA apps ([#341](https://github.com/fgarofalo56/csa-inabox/issues/341)) ([7eea07a](https://github.com/fgarofalo56/csa-inabox/commit/7eea07aa8a34431d54da1bce7d3fa0da26c20496))
+* **csa-loom:** Build Phase 1 — Monaco + PB embed + 17 BLOCKER fixes + Spark SQL hang fix ([#340](https://github.com/fgarofalo56/csa-inabox/issues/340)) ([936c567](https://github.com/fgarofalo56/csa-inabox/commit/936c567d95bdfe123cfb330af8a2c18caac4e02c))
+* **csa-loom:** catalog 85/85 + Build Phase 1 + Foundry/Purview/Notebook P3 deploy stubs + DNS bicep fix ([#336](https://github.com/fgarofalo56/csa-inabox/issues/336)) ([9afb233](https://github.com/fgarofalo56/csa-inabox/commit/9afb2336f39a3fd2d1d68c52de9ad2434738ea38))
+* **csa-loom:** compute lifecycle UI + backing-service pickers + pre-save silencing + /onelake WAF fix ([#345](https://github.com/fgarofalo56/csa-inabox/issues/345)) ([146d215](https://github.com/fgarofalo56/csa-inabox/commit/146d2158999b5e2ed851c4ebe04280370f1db48b))
+* **csa-loom:** mega-batch — tab strip + workspace tree + workspaces tile/list + /apps polish + Multi-Cloud docs + CSA Loom moved last ([#353](https://github.com/fgarofalo56/csa-inabox/issues/353)) ([5fa28e0](https://github.com/fgarofalo56/csa-inabox/commit/5fa28e0c95a74a0d4d0d8a79cc461bf6633b616d))
+
+
+### Bug Fixes
+
+* **csa-loom:** Activator workspace dropdown was Power BI groups — swap to Loom workspaces ([#343](https://github.com/fgarofalo56/csa-inabox/issues/343)) ([4a6a9b3](https://github.com/fgarofalo56/csa-inabox/commit/4a6a9b3084fc8a171e3cb834b851c51ae11ed664))
+* **csa-loom:** Monaco worker CSP — allow blob: in script-src/worker-src ([#342](https://github.com/fgarofalo56/csa-inabox/issues/342)) ([73192c2](https://github.com/fgarofalo56/csa-inabox/commit/73192c2899d7dadbbee2710e79a730b23ca8c171))
+* **csa-loom:** wire ribbon buttons across 18 editors (175 onClick + 111 honestly disabled) ([#344](https://github.com/fgarofalo56/csa-inabox/issues/344)) ([1e4cb04](https://github.com/fgarofalo56/csa-inabox/commit/1e4cb0448e7f2d07db9326c1ddaa2799a1324072))
+
+
+### Documentation
+
+* **csa-loom:** hero gradient matches live app + re-drop --strict from docs deploy ([#354](https://github.com/fgarofalo56/csa-inabox/issues/354)) ([b49c756](https://github.com/fgarofalo56/csa-inabox/commit/b49c756a7ea9ece777b247e356d7f12abcb3cd4e))
+* **csa-loom:** release 2026-05-27 notes + nav + apim-policy parser fix ([#347](https://github.com/fgarofalo56/csa-inabox/issues/347)) ([f709ce6](https://github.com/fgarofalo56/csa-inabox/commit/f709ce69debc0e7cb18583675804acf73297366e))
+* update test script with live smoke results (46/48 walkthrough) ([#346](https://github.com/fgarofalo56/csa-inabox/issues/346)) ([86d6cfd](https://github.com/fgarofalo56/csa-inabox/commit/86d6cfd98ffde76bd42019c0bd263bad7c4d3b92))
+
+
+### Continuous Integration
+
+* add csa-loom-attempt-interactive-grants workflow on main ([#334](https://github.com/fgarofalo56/csa-inabox/issues/334)) ([66b4139](https://github.com/fgarofalo56/csa-inabox/commit/66b41395638b4b9ec4468da80a06c12f2da1202f))
+* **docs:** drop --strict so docs site can deploy past tutorial cross-link warnings ([#352](https://github.com/fgarofalo56/csa-inabox/issues/352)) ([f0b5222](https://github.com/fgarofalo56/csa-inabox/commit/f0b52221eb7962ca3bbcccae4569b08415b9834c))
+
 ## [0.10.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.9.0...csa-inabox-v0.10.0) (2026-05-25)
 
 
