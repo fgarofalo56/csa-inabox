@@ -32,6 +32,16 @@ on:
 permissions:
   contents: read
 
+
+# Serialize all runs of this workflow. Two parallel runs would race on
+# the ACR publicNetworkAccess + networkRuleSet toggle — one would
+# disable while the other's matrix builds were still mid-push, denying
+# late finishers with "client with IP ... not allowed access". With
+# cancel-in-progress=false we queue subsequent runs instead of dropping
+# them, so every commit still gets its image build.
+concurrency:
+  group: build-fiab-images-acr-tasks
+  cancel-in-progress: false
 env:
   AZURE_LOCATION: eastus2
 
