@@ -933,10 +933,21 @@ export async function getIndex(name: string): Promise<any | null> {
 export async function upsertIndex(name: string, definition: any): Promise<any> {
   const svc = searchService();
   const tok = await searchToken();
+  // Sanitize: API 2024-07-01 rejects 'description' on ScoringProfile (it's
+  // valid only on the top-level Index, not on scoring profiles). App bundles
+  // keep description in their source for documentation, so we strip it here
+  // at the API boundary instead of mutating the bundle definition.
+  const cleaned = { ...definition, name };
+  if (Array.isArray(cleaned.scoringProfiles)) {
+    cleaned.scoringProfiles = cleaned.scoringProfiles.map((p: any) => {
+      const { description: _description, ...rest } = p || {};
+      return rest;
+    });
+  }
   const res = await fetch(`https://${svc}.search.windows.net/indexes/${encodeURIComponent(name)}?api-version=${SEARCH_API}`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ ...definition, name }),
+    body: JSON.stringify(cleaned),
   });
   if (!res.ok) {
     const t = await res.text();
