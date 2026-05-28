@@ -266,11 +266,26 @@ export function LakehouseEditor({ item, id }: Props) {
       fd.set('path', targetPath);
       fd.set('file', file);
       const r = await fetch('/api/lakehouse/upload', { method: 'POST', body: fd });
-      const j = await r.json();
-      if (!r.ok || j.ok === false) {
-        setActionError(j.error || `Upload failed (HTTP ${r.status})`);
+      // Defensive content-type sniff: when the upload exceeds Front Door's
+      // body limit or hits an ACA timeout the gateway returns an HTML error
+      // page rather than JSON. Calling r.json() on that throws
+      // "Unexpected token '<'" and hides the real cause from the user.
+      const ct = r.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        const text = await r.text();
+        const hint = r.status === 413
+          ? 'File too large — try a smaller file or split it into parts.'
+          : r.status === 502 || r.status === 504
+            ? 'Gateway returned an HTML error. The file may have exceeded the gateway timeout — try a smaller file or upload directly via the Azure portal.'
+            : `Upload failed (HTTP ${r.status}). Response was not JSON: ${text.slice(0, 200)}`;
+        setActionError(hint);
       } else {
-        setActionStatus(`Uploaded ${file.name} at ${new Date().toLocaleTimeString()}`);
+        const j = await r.json();
+        if (!r.ok || j.ok === false) {
+          setActionError(j.error || `Upload failed (HTTP ${r.status})`);
+        } else {
+          setActionStatus(`Uploaded ${file.name} at ${new Date().toLocaleTimeString()}`);
+        }
       }
     } catch (e: any) {
       setActionError(e?.message || String(e));
