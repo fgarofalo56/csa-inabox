@@ -104,19 +104,39 @@ function printSummary() {
   console.log(`  Screenshots: temp/uat-2026-05-28/screenshots/`);
 }
 
+/**
+ * Validate the saved storage state by actually hitting /api/me with it.
+ * Age is not enough — the live image can re-mint session secrets on a
+ * deploy, invalidating an hours-old cookie. Returns true only if the
+ * saved state still authenticates.
+ */
+async function savedStateIsLive() {
+  if (!fs.existsSync(AUTH_FILE)) return false;
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    const context = await browser.newContext({ storageState: AUTH_FILE });
+    const r = await context.request.get(`${BASE_URL}/api/me`);
+    const j = await r.json().catch(() => null);
+    await browser.close();
+    return !!j?.authenticated;
+  } catch {
+    if (browser) await browser.close().catch(() => {});
+    return false;
+  }
+}
+
 async function main() {
   try {
-    if (!fs.existsSync(AUTH_FILE)) {
-      await ensureSession();
+    const live = await savedStateIsLive();
+    if (live) {
+      console.log(`  Re-using saved session from ${path.relative(ROOT, AUTH_FILE)} (validated against /api/me)`);
     } else {
-      const stat = fs.statSync(AUTH_FILE);
-      const ageHr = (Date.now() - stat.mtimeMs) / 3600_000;
-      if (ageHr > 8) {
-        console.log(`  Cookie is ${ageHr.toFixed(1)}h old; refreshing.`);
-        await ensureSession();
-      } else {
-        console.log(`  Re-using saved session from ${path.relative(ROOT, AUTH_FILE)} (${ageHr.toFixed(1)}h old)`);
+      if (fs.existsSync(AUTH_FILE)) {
+        console.log('  Saved session expired/invalid (live env re-minted, or cookie aged out) — opening Chrome for a fresh sign-in.');
+        try { fs.rmSync(AUTH_FILE); } catch { /* ignore */ }
       }
+      await ensureSession();
     }
     await runDeepUat();
     printSummary();
