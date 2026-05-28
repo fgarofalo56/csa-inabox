@@ -1,5 +1,7 @@
 # CSA Loom — Parity Matrix
 
+![Parity matrix — what Loom delivers vs Fabric, grade, and honest gaps](../assets/images/hero/fiab/parity-matrix.svg){ .architecture-hero loading="eager" }
+
 The keystone artifact: for every Microsoft Fabric capability, what
 CSA Loom delivers, the parity grade, and where to read the detail.
 
@@ -217,8 +219,7 @@ detailed mechanics and the honest discussion of the freshness gap.
 
 | Boundary | Microsoft Fabric | CSA Loom |
 |---|---|---|
-| Azure Commercial | **GA** | **Available** |
-| GCC (Azure Commercial under M365 GCC) | `Forecasted` | **Available v1** |
+| **Azure Commercial / GCC** ([note](#gcc-runs-on-azure-commercial)) | **GA** (Commercial only) | **GA** |
 | GCC-High / IL4 | `Forecasted` | **Available v1** |
 | DoD IL5 | `Forecasted` | **v1.1** |
 | Azure Government Secret / IL6 | `Forecasted` | Not authorized (out of scope) |
@@ -226,6 +227,21 @@ detailed mechanics and the honest discussion of the freshness gap.
 | CMMC L2 / L3 | Commercial only | **GCC-High via FedRAMP High inheritance** |
 | StateRAMP | Pending | **Available** via FedRAMP High inheritance |
 | ITAR (in GCC-High) | Not yet in Gov | **Available in GCC-High** |
+
+#### GCC runs on Azure Commercial
+
+GCC ("Government Community Cloud") customers run their workloads on
+**Azure Commercial** regions under an M365 GCC identity boundary —
+they do *not* sit on Azure Government. That means a GCC customer's
+audit boundary covers Azure Commercial resources, and the
+Microsoft Fabric Commercial GA covers them. **However**, the M365 GCC
+tenant identity rules block direct use of Fabric's tenant-level SP
+flows that customers in pure Commercial enjoy. Loom is the bridge:
+the same Bicep that deploys against Azure Commercial deploys against
+the same regions under GCC identity, and the post-deploy bootstrap
+issues the AAD app-roles that the GCC identity boundary requires.
+Bottom line: **Azure Commercial and GCC are both GA for CSA Loom,**
+because both audit boundaries are FedRAMP-High-on-Commercial.
 
 ## Summary by parity grade
 

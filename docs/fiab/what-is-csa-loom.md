@@ -6,13 +6,23 @@ Microsoft Fabric is the strategic unified analytics SaaS platform.
 As of 2026-05-22, **Fabric is not generally available in any US
 Government cloud:**
 
-| Cloud / boundary | Microsoft Fabric (F-SKU platform) | Power BI (component) |
-|---|---|---|
-| Azure Commercial | **GA** | GA |
-| Azure Government — FedRAMP High (GCC pair) | `Forecasted` (no public quarter) | GA — P-SKU only (no F-SKU in GCC) |
-| Azure Government — DoD IL4 (GCC-High pair) | `Forecasted` (no public quarter) | GA — F-SKU supported |
-| Azure Government — DoD IL5 | `Forecasted` (no public quarter) | GA — F-SKU supported |
-| Azure Government Secret — DoD IL6 | `Forecasted` | GA in specific boundaries |
+| Cloud / boundary | Microsoft Fabric (F-SKU platform) | Power BI (component) | CSA Loom |
+|---|---|---|---|
+| **Azure Commercial** | **GA** | GA | **GA** |
+| **GCC** (Azure Commercial under M365 GCC identity — most GCC customers run here) | **GA** *via Commercial regions; identity flows need Loom bridge* | GA — P-SKU only (no F-SKU in GCC) | **GA** |
+| Azure Government — FedRAMP High (GCC-pair Azure Gov regions) | `Forecasted` (no public quarter) | GA — P-SKU only | **Available v1** |
+| Azure Government — DoD IL4 (GCC-High) | `Forecasted` (no public quarter) | GA — F-SKU supported | **Available v1** |
+| Azure Government — DoD IL5 | `Forecasted` (no public quarter) | GA — F-SKU supported | **v1.1** |
+| Azure Government Secret — DoD IL6 | `Forecasted` | GA in specific boundaries | Not authorized (out of scope) |
+
+!!! tip "Why GCC = GA for Loom"
+    GCC ("Government Community Cloud") customers run on **Azure
+    Commercial** regions under an M365 GCC identity. Fabric is
+    Commercial-GA, but the tenant SP flows Fabric needs are gated
+    by GCC identity rules. Loom is the bridge — the post-deploy
+    bootstrap issues the AAD app-roles the GCC tenant requires,
+    and the same Bicep deploys against the same regions. **Both
+    Azure Commercial and GCC are GA for CSA Loom.**
 
 Federal civilian, DoD, intelligence-community, ITAR-bound, and many
 state and local-government customers — every customer that needs
