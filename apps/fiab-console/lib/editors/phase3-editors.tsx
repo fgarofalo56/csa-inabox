@@ -21,7 +21,7 @@
  * a remediation hint — no mock data is shown.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Spinner,
   Tab, TabList,
@@ -42,6 +42,13 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import {
+  VisualDesigner as EventstreamVisualDesigner,
+  type PipelineConfig as VisualPipelineConfig,
+  type SourceNode as VisualSourceNode,
+  type TransformNode as VisualTransformNode,
+  type SinkNode as VisualSinkNode,
+} from '@/lib/components/eventstream/visual-designer';
 
 const useStyles = makeStyles({
   monaco: {
@@ -224,7 +231,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
           <Badge appearance="filled" color="brand">Eventhouse · shared cluster</Badge>
           <Caption1>{state?.cluster || 'loading…'}</Caption1>
           <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>
-          <Dialog open={dialogOpen} onOpenChange={(_, d) => setDialogOpen(d.open)}>
+          <Dialog open={dialogOpen} onOpenChange={(_: unknown, d: any) => setDialogOpen(d.open)}>
             <DialogTrigger disableButtonEnhancement>
               <Button appearance="primary" icon={<Add20Regular />} style={{ marginLeft: 'auto' }}>New KQL database</Button>
             </DialogTrigger>
@@ -236,7 +243,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                   <Input
                     placeholder="database-name"
                     value={newName}
-                    onChange={(_, d) => setNewName(d.value)}
+                    onChange={(_: unknown, d: any) => setNewName(d.value)}
                     style={{ marginTop: 12, width: '100%' }}
                   />
                   {createErr && (
@@ -307,12 +314,26 @@ interface KqlDbInfo {
 const SAMPLE_KQL_DB = `// Welcome to KQL. Try a sample:
 print smoke = "ok", server_time = now(), current_user = current_principal()`;
 
+type KqlWizardKind = 'table' | 'mv' | 'function' | 'update-policy' | 'ingest';
+
 export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [info, setInfo] = useState<KqlDbInfo | null>(null);
   const [kql, setKql] = useState(SAMPLE_KQL_DB);
   const [result, setResult] = useState<KqlResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Wizard dialog state — Fabric-parity create flows for table/MV/function/update-policy
+  const [wizardKind, setWizardKind] = useState<KqlWizardKind | null>(null);
+  const [wizName, setWizName] = useState('');
+  const [wizSchema, setWizSchema] = useState('ts:datetime, tenant:string, value:long');
+  const [wizSource, setWizSource] = useState(''); // table name (mv source / update policy source)
+  const [wizQuery, setWizQuery] = useState(''); // MV query / function body / update policy query
+  const [wizArgs, setWizArgs] = useState(''); // function arg list, e.g. "x:long"
+  const [wizError, setWizError] = useState<string | null>(null);
+  const [wizSubmitting, setWizSubmitting] = useState(false);
+  const [wizSuccess, setWizSuccess] = useState<string | null>(null);
+  // Ingest wizard
+  const [wizIngestFile, setWizIngestFile] = useState<File | null>(null);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/kql-database/new fires this before any record exists.
@@ -350,28 +371,105 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     return typeof v === 'number' ? (v / (1024 * 1024)).toFixed(1) : null;
   }, [info]);
 
+  const openWizard = useCallback((k: KqlWizardKind) => {
+    setWizardKind(k); setWizError(null); setWizSuccess(null);
+    setWizName(''); setWizSchema('ts:datetime, tenant:string, value:long');
+    setWizSource(''); setWizQuery(''); setWizArgs(''); setWizIngestFile(null);
+  }, []);
+
+  // Issue a `.create` mgmt command via the existing query route (POST is the
+  // same; mgmt commands starting with `.` are auto-routed to /v1/rest/mgmt).
+  const submitWizard = useCallback(async () => {
+    if (!wizardKind) return;
+    setWizError(null); setWizSuccess(null);
+    if (wizardKind !== 'ingest' && !wizName.trim()) {
+      setWizError('Name is required');
+      return;
+    }
+    let mgmtCmd = '';
+    switch (wizardKind) {
+      case 'table':
+        // Fabric parity: .create table TableName (col:type, col:type, …)
+        mgmtCmd = `.create table ${wizName} (${wizSchema})`;
+        break;
+      case 'mv':
+        if (!wizSource || !wizQuery) { setWizError('Source table + query required'); return; }
+        // .create materialized-view NAME on table SRC { QUERY }
+        mgmtCmd = `.create materialized-view ${wizName} on table ${wizSource} { ${wizQuery} }`;
+        break;
+      case 'function':
+        // .create function NAME(args) { body }
+        mgmtCmd = `.create-or-alter function with (folder = "Loom", docstring = "Created via CSA Loom") ${wizName}(${wizArgs}) { ${wizQuery} }`;
+        break;
+      case 'update-policy':
+        if (!wizSource || !wizQuery) { setWizError('Source + transform query required'); return; }
+        // .alter table TGT policy update @'[{"IsEnabled":true,"Source":"SRC","Query":"<KQL>","IsTransactional":false,"PropagateIngestionProperties":false}]'
+        {
+          const policyArr = [{ IsEnabled: true, Source: wizSource, Query: wizQuery, IsTransactional: false, PropagateIngestionProperties: false }];
+          mgmtCmd = `.alter table ${wizName} policy update @'${JSON.stringify(policyArr)}'`;
+        }
+        break;
+      case 'ingest': {
+        if (!wizIngestFile) { setWizError('Choose a file to ingest'); return; }
+        // Real ingest: POST multipart to /api/items/eventhouse/[id]/ingest is per-eventhouse;
+        // for kql-database we accept a one-shot KQL `.ingest inline into table` for very small files.
+        if (wizIngestFile.size > 5 * 1024 * 1024) { setWizError('File too large for inline ingest (5 MB max). Use a Get-data pipeline.'); return; }
+        if (!wizSource) { setWizError('Target table required'); return; }
+        const text = await wizIngestFile.text();
+        // .ingest inline only supports CSV without header. Strip first line if user pasted CSV.
+        const lines = text.split(/\r?\n/).filter(Boolean);
+        if (lines.length > 0 && /[a-zA-Z]/.test(lines[0])) lines.shift(); // strip header
+        const body = lines.join('\n');
+        mgmtCmd = `.ingest inline into table ${wizSource} <|\n${body}`;
+        break;
+      }
+    }
+    setWizSubmitting(true);
+    try {
+      const r = await fetch(`/api/items/kql-database/${id}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kql: mgmtCmd }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setWizError(j.error || 'Command failed');
+      } else {
+        setWizSuccess(`Done. ${j.rowCount ?? 0} rows. Refreshing…`);
+        await load();
+        setTimeout(() => { setWizardKind(null); }, 600);
+      }
+    } catch (e: any) {
+      setWizError(e?.message || String(e));
+    } finally {
+      setWizSubmitting(false);
+    }
+  }, [wizardKind, wizName, wizSchema, wizSource, wizQuery, wizArgs, wizIngestFile, id, load]);
+
   const ribbon: RibbonTab[] = useMemo(() => {
-    const notWired = (label: string, reason: string) => ({ label, disabled: true, title: reason });
     return [
       { id: 'home', label: 'Home', groups: [
         { label: 'New', actions: [
-          notWired('Table', '.create table wizard not yet wired'),
-          notWired('Materialized view', '.create materialized-view wizard not yet wired'),
-          notWired('Function', '.create function wizard not yet wired'),
-          notWired('Update policy', '.alter update policy wizard not yet wired'),
-          notWired('Shortcut', 'OneLake shortcut wizard not yet wired'),
+          { label: 'Table', onClick: () => openWizard('table') },
+          { label: 'Materialized view', onClick: () => openWizard('mv') },
+          { label: 'Function', onClick: () => openWizard('function') },
+          { label: 'Update policy', onClick: () => openWizard('update-policy') },
+          { label: 'Shortcut', disabled: true, title: 'OneLake shortcut wizard requires Fabric onelake API consent — pending tenant bootstrap' },
         ]},
         { label: 'Data', actions: [
-          notWired('Get data', 'data ingestion wizard not yet wired'),
-          notWired('Query with code', 'Monaco editor is already open — Query with code link not yet wired'),
+          { label: 'Get data', onClick: () => openWizard('ingest') },
+          { label: 'Query with code', onClick: () => {
+            // Already in code editor — focus the textarea.
+            const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
+            el?.focus();
+          } },
         ]},
         { label: 'Manage', actions: [
-          notWired('Data policies', 'database-level policy editor not yet wired'),
-          notWired('OneLake availability', 'OneLake mirroring toggle not yet wired'),
+          { label: 'Data policies', onClick: () => { setKql('.show database policy caching\n.show database policy retention'); } },
+          { label: 'OneLake availability', disabled: true, title: 'OneLake mirroring requires Fabric-managed cluster (LOOM_KUSTO_FABRIC_MANAGED=true)' },
         ]},
       ]},
     ];
-  }, []);
+  }, [openWizard]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -441,6 +539,81 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
             ariaLabel="KQL query editor"
           />
           <KqlResultsPanel result={result} loading={loading} />
+
+          <Dialog open={!!wizardKind} onOpenChange={(_: unknown, d: any) => { if (!d.open) setWizardKind(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>
+                  {wizardKind === 'table' && 'New table (.create table)'}
+                  {wizardKind === 'mv' && 'New materialized view (.create materialized-view)'}
+                  {wizardKind === 'function' && 'New function (.create-or-alter function)'}
+                  {wizardKind === 'update-policy' && 'New update policy (.alter table policy update)'}
+                  {wizardKind === 'ingest' && 'Get data — inline ingest (.ingest inline into table)'}
+                </DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {wizardKind === 'table' && (
+                      <>
+                        <Caption1>Table name</Caption1>
+                        <Input value={wizName} onChange={(_: unknown, d: any) => setWizName(d.value)} placeholder="events" />
+                        <Caption1>Schema (col:type, col:type, …)</Caption1>
+                        <Textarea value={wizSchema} onChange={(_: unknown, d: any) => setWizSchema(d.value)} rows={3} style={{ fontFamily: 'Consolas, monospace' }} />
+                      </>
+                    )}
+                    {wizardKind === 'mv' && (
+                      <>
+                        <Caption1>View name</Caption1>
+                        <Input value={wizName} onChange={(_: unknown, d: any) => setWizName(d.value)} placeholder="events_daily" />
+                        <Caption1>Source table</Caption1>
+                        <Input value={wizSource} onChange={(_: unknown, d: any) => setWizSource(d.value)} placeholder="events" />
+                        <Caption1>Query (one row per group key)</Caption1>
+                        <Textarea value={wizQuery} onChange={(_: unknown, d: any) => setWizQuery(d.value)} rows={5} style={{ fontFamily: 'Consolas, monospace' }} placeholder="events | summarize cnt = count() by bin(ts, 1d)" />
+                      </>
+                    )}
+                    {wizardKind === 'function' && (
+                      <>
+                        <Caption1>Function name</Caption1>
+                        <Input value={wizName} onChange={(_: unknown, d: any) => setWizName(d.value)} placeholder="fn_recent_events" />
+                        <Caption1>Argument list (e.g. <code>days:int</code>)</Caption1>
+                        <Input value={wizArgs} onChange={(_: unknown, d: any) => setWizArgs(d.value)} placeholder="days:int" />
+                        <Caption1>Body</Caption1>
+                        <Textarea value={wizQuery} onChange={(_: unknown, d: any) => setWizQuery(d.value)} rows={5} style={{ fontFamily: 'Consolas, monospace' }} placeholder="events | where ts > ago(days*1d)" />
+                      </>
+                    )}
+                    {wizardKind === 'update-policy' && (
+                      <>
+                        <Caption1>Target table (receives the transformed rows)</Caption1>
+                        <Input value={wizName} onChange={(_: unknown, d: any) => setWizName(d.value)} placeholder="events_silver" />
+                        <Caption1>Source table (incoming raw rows)</Caption1>
+                        <Input value={wizSource} onChange={(_: unknown, d: any) => setWizSource(d.value)} placeholder="events_raw" />
+                        <Caption1>Transform query</Caption1>
+                        <Textarea value={wizQuery} onChange={(_: unknown, d: any) => setWizQuery(d.value)} rows={5} style={{ fontFamily: 'Consolas, monospace' }} placeholder="events_raw | extend ts = todatetime(timestamp)" />
+                      </>
+                    )}
+                    {wizardKind === 'ingest' && (
+                      <>
+                        <Caption1>Target table</Caption1>
+                        <Input value={wizSource} onChange={(_: unknown, d: any) => setWizSource(d.value)} placeholder="events" />
+                        <Caption1>CSV file (≤5 MB)</Caption1>
+                        <input
+                          type="file"
+                          accept=".csv,text/csv"
+                          onChange={(e) => setWizIngestFile(e.target.files?.[0] || null)}
+                        />
+                        <Caption1>For larger files, use Eventhouse → Get data (configures Event Hub data-connection).</Caption1>
+                      </>
+                    )}
+                    {wizError && <MessageBar intent="error"><MessageBarBody>{wizError}</MessageBarBody></MessageBar>}
+                    {wizSuccess && <MessageBar intent="success"><MessageBarBody>{wizSuccess}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setWizardKind(null)} disabled={wizSubmitting}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitWizard} disabled={wizSubmitting}>{wizSubmitting ? 'Submitting…' : 'Create'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
@@ -473,6 +646,26 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
   const [dirty, setDirty] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // Cancel-running-query support — abort the in-flight fetch so the UI
+  // doesn't block on a slow KQL. The Kusto cluster keeps running the
+  // query server-side until completion, but we drop the response per
+  // KQL Queryset Fabric-parity behavior. Real per-request cancellation
+  // via X-Cancel-Request-Id is logged as TODO; this is the same level
+  // Fabric ships in 2026-Q1.
+  const abortRef = useRef<AbortController | null>(null);
+  // Save-to-dashboard + Set-alert dialog state
+  const [pinDlgOpen, setPinDlgOpen] = useState(false);
+  const [pinTitle, setPinTitle] = useState('');
+  const [pinDashboardId, setPinDashboardId] = useState('');
+  const [pinDashboards, setPinDashboards] = useState<Array<{ id: string; name: string }>>([]);
+  const [pinErr, setPinErr] = useState<string | null>(null);
+  const [pinBusy, setPinBusy] = useState(false);
+  const [alertDlgOpen, setAlertDlgOpen] = useState(false);
+  const [alertActivatorId, setAlertActivatorId] = useState('');
+  const [alertName, setAlertName] = useState('');
+  const [alertActivators, setAlertActivators] = useState<Array<{ id: string; name: string }>>([]);
+  const [alertErr, setAlertErr] = useState<string | null>(null);
+  const [alertBusy, setAlertBusy] = useState(false);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/kql-queryset/new fires this before any record exists.
@@ -588,35 +781,128 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     // Pin the kql/database we're sending at click-time so any subsequent
     // edits the user makes mid-run cannot influence what was executed.
     const payload = { kql: draft.kql, database: draft.database };
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     try {
       const r = await fetch(`/api/items/kql-queryset/${id}/run`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: ctrl.signal,
       });
       setResult((await r.json()) as KqlResult);
     } catch (e: any) {
-      setResult({ ok: false, error: e?.message || String(e) });
+      if (e?.name === 'AbortError') {
+        setResult({ ok: false, error: 'Cancelled by user' });
+      } else {
+        setResult({ ok: false, error: e?.message || String(e) });
+      }
     } finally {
       setLoading(false);
+      abortRef.current = null;
     }
   }, [id, draft]);
 
+  const cancel = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
+
+  // Pin to dashboard — list dashboards, then PUT the dashboard with a new tile.
+  const openPinDialog = useCallback(async () => {
+    setPinDlgOpen(true);
+    setPinErr(null);
+    setPinTitle(draft.title || 'Pinned from queryset');
+    try {
+      const r = await fetch('/api/items?type=kql-dashboard');
+      const j = await r.json();
+      const arr: Array<{ id: string; displayName?: string; name?: string }> = j?.items || j?.value || [];
+      const dashboards = arr.map((d) => ({ id: d.id, name: d.displayName || d.name || d.id }));
+      setPinDashboards(dashboards);
+      if (dashboards[0]) setPinDashboardId(dashboards[0].id);
+    } catch (e: any) {
+      setPinErr(e?.message || String(e));
+    }
+  }, [draft.title]);
+
+  const submitPin = useCallback(async () => {
+    if (!pinDashboardId) { setPinErr('Choose a dashboard'); return; }
+    if (!draft.kql.trim()) { setPinErr('Query is empty'); return; }
+    setPinBusy(true); setPinErr(null);
+    try {
+      // Read current tiles + append; PUT the new array.
+      const cur = await fetch(`/api/items/kql-dashboard/${pinDashboardId}`).then((r) => r.json());
+      const tiles = Array.isArray(cur?.tiles) ? cur.tiles : [];
+      tiles.push({ title: pinTitle || draft.title || 'Pinned tile', kql: draft.kql, viz: 'table', database: draft.database });
+      const r = await fetch(`/api/items/kql-dashboard/${pinDashboardId}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tiles }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setPinErr(j.error || 'pin failed'); return; }
+      setPinDlgOpen(false);
+    } catch (e: any) {
+      setPinErr(e?.message || String(e));
+    } finally {
+      setPinBusy(false);
+    }
+  }, [pinDashboardId, pinTitle, draft]);
+
+  // Set alert (Activator rule from query). List activators, post rule.
+  const openAlertDialog = useCallback(async () => {
+    setAlertDlgOpen(true);
+    setAlertErr(null);
+    setAlertName(`alert-${(draft.title || 'queryset').toLowerCase().replace(/[^a-z0-9-]/g, '-')}`);
+    try {
+      const r = await fetch('/api/items?type=activator');
+      const j = await r.json();
+      const arr: Array<{ id: string; displayName?: string; name?: string }> = j?.items || j?.value || [];
+      const acts = arr.map((d) => ({ id: d.id, name: d.displayName || d.name || d.id }));
+      setAlertActivators(acts);
+      if (acts[0]) setAlertActivatorId(acts[0].id);
+    } catch (e: any) {
+      setAlertErr(e?.message || String(e));
+    }
+  }, [draft.title]);
+
+  const submitAlert = useCallback(async () => {
+    if (!alertActivatorId) { setAlertErr('Choose an Activator'); return; }
+    if (!draft.kql.trim()) { setAlertErr('Query is empty'); return; }
+    setAlertBusy(true); setAlertErr(null);
+    try {
+      const r = await fetch(`/api/items/activator/${alertActivatorId}/rules`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: alertName,
+          trigger: { kind: 'kql', kql: draft.kql, database: draft.database },
+          action: { kind: 'noop', note: 'Pinned from KQL Queryset — choose an action template in Activator' },
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setAlertErr(j.error || 'create-rule failed'); return; }
+      setAlertDlgOpen(false);
+    } catch (e: any) {
+      setAlertErr(e?.message || String(e));
+    } finally {
+      setAlertBusy(false);
+    }
+  }, [alertActivatorId, alertName, draft]);
+
   const canRun = !loading && !!draft.kql.trim();
   const canSave = !saving && queries.length > 0 && dirty;
+  const canPinAlert = !!draft.kql.trim();
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Run', actions: [
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun },
-        { label: 'Cancel', disabled: true, title: 'KQL query cancellation not yet wired' },
+        { label: 'Cancel', onClick: loading ? cancel : undefined, disabled: !loading },
       ]},
       { label: 'Save', actions: [
         { label: saving ? 'Saving…' : 'Save query', onClick: canSave ? saveAll : undefined, disabled: !canSave },
-        { label: 'Save to dashboard', disabled: true, title: 'pin to KQL Dashboard not yet wired' },
-        { label: 'Set alert', disabled: true, title: 'Activator rule from query not yet wired' },
+        { label: 'Save to dashboard', onClick: canPinAlert ? openPinDialog : undefined, disabled: !canPinAlert },
+        { label: 'Set alert', onClick: canPinAlert ? openAlertDialog : undefined, disabled: !canPinAlert },
       ]},
     ]},
-  ], [loading, canRun, run, saving, canSave, saveAll]);
+  ], [loading, canRun, run, cancel, saving, canSave, saveAll, canPinAlert, openPinDialog, openAlertDialog]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -633,7 +919,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
                 <TreeItemLayout
                   iconBefore={<DocumentTable20Regular />}
                   aside={
-                    <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={(e) => { e.stopPropagation(); deleteQuery(i); }} aria-label="Delete query" />
+                    <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={(e: any) => { e.stopPropagation(); deleteQuery(i); }} aria-label="Delete query" />
                   }
                 >
                   {i === selectedIdx ? <strong>{q.title}</strong> : q.title}
@@ -646,7 +932,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
       main={
         <div className={s.pad}>
           <div className={s.toolbar}>
-            <Input value={draft.title} onChange={(_, d) => { setDraft({ ...draft, title: d.value }); setDirty(true); }} placeholder="Query title" style={{ minWidth: 220 }} />
+            <Input value={draft.title} onChange={(_: unknown, d: any) => { setDraft({ ...draft, title: d.value }); setDirty(true); }} placeholder="Query title" style={{ minWidth: 220 }} />
             <Caption1>db: <strong>{draft.database || qs?.database || qs?.defaultDatabase || 'loomdb-default'}</strong></Caption1>
             {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
             <Button appearance="outline" icon={<Save20Regular />} disabled={saving || queries.length === 0 || !dirty} onClick={saveAll}>
@@ -668,6 +954,54 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
             ariaLabel="KQL query"
           />
           <KqlResultsPanel result={result} loading={loading} />
+
+          <Dialog open={pinDlgOpen} onOpenChange={(_: unknown, d: any) => setPinDlgOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Save query to KQL Dashboard</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <Caption1>Tile title</Caption1>
+                    <Input value={pinTitle} onChange={(_: unknown, d: any) => setPinTitle(d.value)} />
+                    <Caption1>Dashboard</Caption1>
+                    <Select value={pinDashboardId} onChange={(_: unknown, d: any) => setPinDashboardId(d.value)}>
+                      <option value="">(select…)</option>
+                      {pinDashboards.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </Select>
+                    {pinErr && <MessageBar intent="error"><MessageBarBody>{pinErr}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setPinDlgOpen(false)} disabled={pinBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitPin} disabled={pinBusy}>{pinBusy ? 'Saving…' : 'Pin'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          <Dialog open={alertDlgOpen} onOpenChange={(_: unknown, d: any) => setAlertDlgOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Create Activator rule from query</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <Caption1>Rule name</Caption1>
+                    <Input value={alertName} onChange={(_: unknown, d: any) => setAlertName(d.value)} />
+                    <Caption1>Activator</Caption1>
+                    <Select value={alertActivatorId} onChange={(_: unknown, d: any) => setAlertActivatorId(d.value)}>
+                      <option value="">(select…)</option>
+                      {alertActivators.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </Select>
+                    {alertErr && <MessageBar intent="error"><MessageBarBody>{alertErr}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setAlertDlgOpen(false)} disabled={alertBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitAlert} disabled={alertBusy}>{alertBusy ? 'Creating…' : 'Create rule'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
@@ -695,6 +1029,17 @@ interface DashboardState {
   error?: string;
 }
 
+type TimeRangeKey = 'last-15m' | 'last-1h' | 'last-24h' | 'last-7d' | 'last-30d' | 'all';
+
+const TIME_RANGE_TO_KQL: Record<TimeRangeKey, string> = {
+  'last-15m': 'ago(15m)',
+  'last-1h':  'ago(1h)',
+  'last-24h': 'ago(24h)',
+  'last-7d':  'ago(7d)',
+  'last-30d': 'ago(30d)',
+  'all':      'datetime(1970-01-01)',
+};
+
 export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [state, setState] = useState<DashboardState | null>(null);
@@ -707,18 +1052,36 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonText, setJsonText] = useState('');
   const [jsonErr, setJsonErr] = useState<string | null>(null);
+  // Auto-refresh — interval in ms; 0 = off. Persisted to state via PUT.
+  const [autoRefreshMs, setAutoRefreshMs] = useState(0);
+  // Time range — passed to /run as a query param so the BFF can substitute
+  // `_loomTimeFrom` placeholder in tile KQL when present.
+  const [timeRange, setTimeRange] = useState<TimeRangeKey>('last-24h');
+  // Dashboard params — k/v list of operator-supplied dashboard parameters,
+  // surfaced in tile KQL as `_loomParam_<name>`.
+  const [paramsOpen, setParamsOpen] = useState(false);
+  const [paramRows, setParamRows] = useState<Array<{ key: string; value: string }>>([]);
+  // Share dialog — copies the canonical URL + reminds the operator about RBAC.
+  const [shareOpen, setShareOpen] = useState(false);
 
   const load = useCallback(async (runTiles = false) => {
     // Pre-save gate: /items/kql-dashboard/new fires this before any record exists.
     if (!id || id === 'new') return;
+    const params = new URLSearchParams();
+    if (runTiles) params.set('run', '1');
+    if (runTiles) params.set('time', timeRange);
+    for (const r of paramRows) {
+      if (r.key.trim()) params.set(`param.${r.key.trim()}`, r.value);
+    }
+    const qs = params.toString();
     try {
-      const r = await fetch(`/api/items/kql-dashboard/${id}${runTiles ? '?run=1' : ''}`);
+      const r = await fetch(`/api/items/kql-dashboard/${id}${qs ? '?' + qs : ''}`);
       const j = (await r.json()) as DashboardState;
       setState(j); setTiles(j.tiles || []); setDirty(false);
     } catch (e: any) {
       setState({ ok: false, error: e?.message || String(e) });
     }
-  }, [id]);
+  }, [id, timeRange, paramRows]);
 
   useEffect(() => { load(true); }, [load]);
 
@@ -802,20 +1165,38 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     }
   }, [jsonText]);
 
+  // Auto-refresh — when enabled, re-runs every tile every N ms.
+  useEffect(() => {
+    if (!autoRefreshMs || autoRefreshMs <= 0) return;
+    const t = setInterval(() => { load(true); }, autoRefreshMs);
+    return () => clearInterval(t);
+  }, [autoRefreshMs, load]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Edit', actions: [
         { label: 'Add tile', onClick: addTile },
-        { label: 'Add data source', disabled: true, title: 'multi-cluster data source picker not yet wired' },
-        { label: 'Parameters', disabled: true, title: 'dashboard parameter editor not yet wired' },
+        { label: 'Add data source', disabled: true, title: 'multi-cluster data source picker pending — single Loom shared cluster only today' },
+        { label: 'Parameters', onClick: () => setParamsOpen(true) },
       ]},
       { label: 'View', actions: [
-        { label: 'Auto-refresh', disabled: true, title: 'auto-refresh schedule not yet wired' },
-        { label: 'Time range', disabled: true, title: 'global time-range picker not yet wired' },
-        { label: 'Share', disabled: true, title: 'dashboard share/permissions not yet wired' },
+        { label: autoRefreshMs ? `Auto-refresh: ${autoRefreshMs/1000}s (click to cycle)` : 'Auto-refresh: off', onClick: () => {
+          // cycle: off → 15s → 30s → 60s → 300s → off
+          const cycle = [0, 15000, 30000, 60000, 300000];
+          const idx = cycle.indexOf(autoRefreshMs);
+          setAutoRefreshMs(cycle[(idx + 1) % cycle.length]);
+        } },
+        { label: `Time: ${timeRange}`, onClick: () => {
+          const order: TimeRangeKey[] = ['last-15m', 'last-1h', 'last-24h', 'last-7d', 'last-30d', 'all'];
+          const i = order.indexOf(timeRange);
+          setTimeRange(order[(i + 1) % order.length]);
+          // After cycling, re-run with new time range.
+          load(true);
+        } },
+        { label: 'Share', onClick: () => setShareOpen(true) },
       ]},
     ]},
-  ], [addTile]);
+  ], [addTile, autoRefreshMs, timeRange, load]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -858,15 +1239,15 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
               </Button>
               {expandedIdx === i && (
                 <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <Input value={t.title} onChange={(_, d) => updateTile(i, { title: d.value })} placeholder="Title" />
-                  <Select value={t.viz} onChange={(_, d) => updateTile(i, { viz: d.value as Tile['viz'] })}>
+                  <Input value={t.title} onChange={(_: unknown, d: any) => updateTile(i, { title: d.value })} placeholder="Title" />
+                  <Select value={t.viz} onChange={(_: unknown, d: any) => updateTile(i, { viz: d.value as Tile['viz'] })}>
                     <option value="table">table</option>
                     <option value="line">line</option>
                     <option value="bar">bar</option>
                   </Select>
                   <Textarea
                     value={t.kql}
-                    onChange={(_, d) => updateTile(i, { kql: d.value })}
+                    onChange={(_: unknown, d: any) => updateTile(i, { kql: d.value })}
                     placeholder="KQL"
                     style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
                     rows={4}
@@ -878,14 +1259,14 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
           {tiles.length === 0 && <Caption1>No tiles yet. Click <strong>Add tile</strong>.</Caption1>}
         </div>
 
-        <Dialog open={jsonOpen} onOpenChange={(_, d) => setJsonOpen(d.open)}>
+        <Dialog open={jsonOpen} onOpenChange={(_: unknown, d: any) => setJsonOpen(d.open)}>
           <DialogSurface>
             <DialogBody>
               <DialogTitle>Edit tiles JSON</DialogTitle>
               <DialogContent>
                 <Textarea
                   value={jsonText}
-                  onChange={(_, d) => { setJsonText(d.value); setJsonErr(null); }}
+                  onChange={(_: unknown, d: any) => { setJsonText(d.value); setJsonErr(null); }}
                   rows={20}
                   style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }}
                 />
@@ -894,6 +1275,76 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
               <DialogActions>
                 <Button appearance="secondary" onClick={() => setJsonOpen(false)}>Cancel</Button>
                 <Button appearance="primary" onClick={applyJson}>Apply</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
+
+        <Dialog open={paramsOpen} onOpenChange={(_: unknown, d: any) => setParamsOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Dashboard parameters</DialogTitle>
+              <DialogContent>
+                <Caption1>
+                  Define parameters that the dashboard substitutes into tile KQL. Use{' '}
+                  <code>_loomParam_&lt;name&gt;</code> in your KQL where you want the value.
+                </Caption1>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                  {paramRows.map((row, idx) => (
+                    <div key={idx} style={{ display: 'flex', gap: 8 }}>
+                      <Input
+                        value={row.key}
+                        placeholder="name (alphanumeric)"
+                        onChange={(_: unknown, d: any) => setParamRows((rows) => rows.map((r, i) => i === idx ? { ...r, key: d.value } : r))}
+                      />
+                      <Input
+                        value={row.value}
+                        placeholder="value"
+                        onChange={(_: unknown, d: any) => setParamRows((rows) => rows.map((r, i) => i === idx ? { ...r, value: d.value } : r))}
+                      />
+                      <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => setParamRows((rows) => rows.filter((_, i) => i !== idx))} aria-label="Remove parameter" />
+                    </div>
+                  ))}
+                  <Button appearance="outline" icon={<Add20Regular />} onClick={() => setParamRows((rows) => [...rows, { key: '', value: '' }])}>
+                    Add parameter
+                  </Button>
+                </div>
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setParamsOpen(false)}>Close</Button>
+                <Button appearance="primary" onClick={() => { setParamsOpen(false); load(true); }}>Apply &amp; re-run</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
+
+        <Dialog open={shareOpen} onOpenChange={(_: unknown, d: any) => setShareOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Share dashboard</DialogTitle>
+              <DialogContent>
+                <Caption1>Anyone with access to this Loom item can view it. Permissions are managed via the workspace item ACL.</Caption1>
+                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <Caption1>Canonical URL</Caption1>
+                  <Input value={typeof window !== 'undefined' ? window.location.href : ''} readOnly />
+                  <Button
+                    appearance="outline"
+                    onClick={() => {
+                      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                        navigator.clipboard.writeText(window.location.href).catch(() => {});
+                      }
+                    }}
+                  >
+                    Copy URL
+                  </Button>
+                  <Caption1>
+                    To grant another user access, add them to this item via the workspace permissions
+                    page (Loom RBAC). Tenant-wide sharing is not enabled in this deployment.
+                  </Caption1>
+                </div>
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="primary" onClick={() => setShareOpen(false)}>Close</Button>
               </DialogActions>
             </DialogBody>
           </DialogSurface>
@@ -938,6 +1389,30 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [parseErr, setParseErr] = useState<string | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'designer' | 'json'>('designer');
+
+  // Visual designer ↔ JSON sync. Best-effort: when JSON parses we mirror
+  // it into the designer; when the designer changes we re-serialize JSON.
+  let parsedVisual: VisualPipelineConfig = {};
+  try { parsedVisual = JSON.parse(cfgText) as VisualPipelineConfig; } catch { parsedVisual = {}; }
+
+  const onDesignerChange = useCallback((next: VisualPipelineConfig) => {
+    // Project back to the on-wire shape { source, transforms[], sink } that the BFF persists.
+    const sources = Array.isArray(next.sources) ? next.sources : (next.source ? [next.source] : []);
+    const sinks = Array.isArray(next.sinks) ? next.sinks : (next.sink ? [next.sink] : []);
+    const projected: any = {
+      source: sources[0] as VisualSourceNode | undefined,
+      transforms: (next.transforms || []) as VisualTransformNode[],
+      sink: sinks[0] as VisualSinkNode | undefined,
+    };
+    // Preserve multi-source/multi-sink if present so we don't lose data.
+    if (sources.length > 1) projected.sources = sources;
+    if (sinks.length > 1) projected.sinks = sinks;
+    setCfgText(JSON.stringify(projected, null, 2));
+    setDirty(true);
+    setParseErr(null);
+    setSaveErr(null);
+  }, []);
 
   // Auto-pick the first workspace once loaded so the editor isn't blocked
   // on a manual click for the common single-workspace deployments. Users
@@ -1016,26 +1491,56 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   }, [dirty, saving, save]);
 
   const canSave = !saving && dirty;
+
+  // Ribbon-driven add/transform helpers. They mutate cfgText (the on-wire
+  // shape) directly so the visual designer + Monaco JSON view stay in sync.
+  const ribbonAdd = useCallback(
+    (kind: 'source' | 'sink' | 'transform', preset?: Partial<VisualTransformNode>) => {
+      let cur: VisualPipelineConfig = {};
+      try { cur = JSON.parse(cfgText) as VisualPipelineConfig; } catch { cur = {}; }
+      const sources = Array.isArray(cur.sources) ? cur.sources : (cur.source ? [cur.source] : []);
+      const sinks = Array.isArray(cur.sinks) ? cur.sinks : (cur.sink ? [cur.sink] : []);
+      const transforms = cur.transforms || [];
+      if (kind === 'source') {
+        sources.push({ kind: 'eventhub', name: `source-${sources.length + 1}`, namespace: '', consumerGroup: '$Default' });
+      } else if (kind === 'sink') {
+        sinks.push({ kind: 'kusto', name: `sink-${sinks.length + 1}`, database: 'loomdb-default', table: '' });
+      } else {
+        transforms.push({ kind: (preset?.kind as any) || 'filter', name: `transform-${transforms.length + 1}`, expression: preset?.expression || '' });
+      }
+      onDesignerChange({ sources, sinks, transforms });
+      setActiveTab('designer');
+    },
+    [cfgText, onDesignerChange],
+  );
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Source', actions: [
-        { label: 'Add source', disabled: true, title: 'visual source picker not yet wired — edit JSON below' },
-        { label: 'Sample data', disabled: true, title: 'sample-data generator not yet wired' },
+        { label: 'Add source', onClick: () => ribbonAdd('source') },
+        { label: 'Sample data', onClick: () => {
+            let cur: VisualPipelineConfig = {};
+            try { cur = JSON.parse(cfgText) as VisualPipelineConfig; } catch { cur = {}; }
+            const sources = Array.isArray(cur.sources) ? cur.sources : (cur.source ? [cur.source] : []);
+            sources.push({ kind: 'sample', name: `sample-${sources.length + 1}` });
+            onDesignerChange({ sources, sinks: cur.sinks || (cur.sink ? [cur.sink] : []), transforms: cur.transforms || [] });
+            setActiveTab('designer');
+          } },
       ]},
       { label: 'Transform', actions: [
-        { label: 'Filter', disabled: true, title: 'visual transform editor not yet wired — edit JSON below' },
-        { label: 'Aggregate', disabled: true, title: 'visual transform editor not yet wired — edit JSON below' },
-        { label: 'Group by', disabled: true, title: 'visual transform editor not yet wired — edit JSON below' },
+        { label: 'Filter', onClick: () => ribbonAdd('transform', { kind: 'filter' }) },
+        { label: 'Aggregate', onClick: () => ribbonAdd('transform', { kind: 'aggregate' }) },
+        { label: 'Group by', onClick: () => ribbonAdd('transform', { kind: 'group-by' }) },
       ]},
       { label: 'Destination', actions: [
-        { label: 'Add destination', disabled: true, title: 'visual destination picker not yet wired — edit JSON below' },
+        { label: 'Add destination', onClick: () => ribbonAdd('sink') },
       ]},
       { label: 'Publish', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
-        { label: 'Publish', disabled: true, title: 'runtime publish/start not yet wired — v3 ingestion runtime' },
+        { label: 'Publish', disabled: true, title: 'runtime publish/start gated by v3 Event Hubs → Kusto ingestion executor' },
       ]},
     ]},
-  ], [saving, canSave, save]);
+  ], [saving, canSave, save, ribbonAdd, cfgText, onDesignerChange]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -1070,15 +1575,28 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         )}
         {saveErr && !parseErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
 
-        <Caption1>Edit the pipeline definition as JSON. Schema: <code>{`{ source, transforms[], sink }`}</code>.</Caption1>
-        <MonacoTextarea
-          value={cfgText}
-          onChange={(v) => { setCfgText(v); setDirty(true); setParseErr(null); setSaveErr(null); }}
-          language="json"
-          height={360}
-          minHeight={300}
-          ariaLabel="Eventstream JSON config"
-        />
+        <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab((d.value as 'designer' | 'json') || 'designer')}>
+          <Tab value="designer">Visual designer</Tab>
+          <Tab value="json">JSON</Tab>
+        </TabList>
+
+        {activeTab === 'designer' && (
+          <EventstreamVisualDesigner config={parsedVisual} onChange={onDesignerChange} />
+        )}
+
+        {activeTab === 'json' && (
+          <>
+            <Caption1>Edit the pipeline definition as JSON. Schema: <code>{`{ source, transforms[], sink }`}</code>.</Caption1>
+            <MonacoTextarea
+              value={cfgText}
+              onChange={(v) => { setCfgText(v); setDirty(true); setParseErr(null); setSaveErr(null); }}
+              language="json"
+              height={360}
+              minHeight={300}
+              ariaLabel="Eventstream JSON config"
+            />
+          </>
+        )}
       </div>
     } />
   );
@@ -1127,7 +1645,7 @@ function WorkspacePicker({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 280 }}>
       <Caption1>Workspace</Caption1>
-      <Select value={value} onChange={(_, d) => onChange(d.value)} disabled={loading || (workspaces?.length ?? 0) === 0}>
+      <Select value={value} onChange={(_: unknown, d: any) => onChange(d.value)} disabled={loading || (workspaces?.length ?? 0) === 0}>
         {!value && <option value="">{loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
         {(workspaces || []).map((w) => (
           <option key={w.id} value={w.id}>{w.name}</option>
@@ -1272,22 +1790,57 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   }, [workspaceId, selectedId, loadRules]);
 
   const canNewRule = !!selectedId && !!workspaceId;
+
+  // Start/Stop reflex — calls the new /start /stop routes which PATCH every
+  // trigger on the reflex to Active/Stopped via Fabric REST.
+  const [reflexBusy, setReflexBusy] = useState<'start' | 'stop' | null>(null);
+  const [reflexMsg, setReflexMsg] = useState<string | null>(null);
+  const startStop = useCallback(async (kind: 'start' | 'stop') => {
+    if (!workspaceId || !selectedId) return;
+    setReflexBusy(kind); setReflexMsg(null);
+    try {
+      const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/${kind}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) setReflexMsg(`${kind} failed: ${j.error || 'unknown'}`);
+      else setReflexMsg(`${kind === 'start' ? 'Started' : 'Stopped'} — ${j.updated} trigger(s) updated.`);
+      await loadRules(workspaceId, selectedId);
+    } catch (e: any) {
+      setReflexMsg(`${kind} failed: ${e?.message || String(e)}`);
+    } finally {
+      setReflexBusy(null);
+    }
+  }, [workspaceId, selectedId, loadRules]);
+
+  // Action template — pre-fill the New Rule dialog with the common shape.
+  const openTemplate = useCallback((kind: 'Email' | 'Teams' | 'Pipeline' | 'Notebook' | 'PowerAutomate') => {
+    const templates: Record<typeof kind, string> = {
+      Email: JSON.stringify({ kind: 'Email', config: { to: 'alerts@example.com', subject: 'Loom alert', body: '{{eventValue}}' } }, null, 2),
+      Teams: JSON.stringify({ kind: 'TeamsMessage', config: { webhookUrl: 'https://outlook.office.com/webhook/...', message: 'Loom alert: {{eventValue}}' } }, null, 2),
+      Pipeline: JSON.stringify({ kind: 'AdfPipelineRun', config: { factory: 'adf-loom-default-eastus2', pipeline: 'pl_alert_handler', parameters: {} } }, null, 2),
+      Notebook: JSON.stringify({ kind: 'NotebookRun', config: { workspaceId: workspaceId, notebookId: '<notebook-guid>', parameters: {} } }, null, 2),
+      PowerAutomate: JSON.stringify({ kind: 'PowerAutomateFlow', config: { triggerUrl: 'https://prod-xx.westus.logic.azure.com/workflows/.../triggers/...' } }, null, 2),
+    } as const;
+    setRuleName(`alert-${kind.toLowerCase()}-${Date.now().toString(36)}`);
+    setRuleAction(templates[kind]);
+    setRuleOpen(true);
+  }, [workspaceId]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Rules', actions: [
         { label: 'New rule', onClick: canNewRule ? () => setRuleOpen(true) : undefined, disabled: !canNewRule, title: !canNewRule ? 'select a workspace and reflex first' : undefined },
-        { label: 'Start', disabled: true, title: 'reflex start/enable not yet wired' },
-        { label: 'Stop', disabled: true, title: 'reflex stop/disable not yet wired' },
+        { label: reflexBusy === 'start' ? 'Starting…' : 'Start', onClick: canNewRule && !reflexBusy ? () => startStop('start') : undefined, disabled: !canNewRule || !!reflexBusy },
+        { label: reflexBusy === 'stop' ? 'Stopping…' : 'Stop', onClick: canNewRule && !reflexBusy ? () => startStop('stop') : undefined, disabled: !canNewRule || !!reflexBusy },
       ]},
       { label: 'Actions', actions: [
-        { label: 'Email', disabled: true, title: 'email action template not yet wired' },
-        { label: 'Teams', disabled: true, title: 'Teams action template not yet wired' },
-        { label: 'Run pipeline', disabled: true, title: 'Data Factory pipeline trigger not yet wired' },
-        { label: 'Run notebook', disabled: true, title: 'notebook trigger action not yet wired' },
-        { label: 'Power Automate', disabled: true, title: 'Power Automate flow trigger not yet wired' },
+        { label: 'Email', onClick: canNewRule ? () => openTemplate('Email') : undefined, disabled: !canNewRule },
+        { label: 'Teams', onClick: canNewRule ? () => openTemplate('Teams') : undefined, disabled: !canNewRule },
+        { label: 'Run pipeline', onClick: canNewRule ? () => openTemplate('Pipeline') : undefined, disabled: !canNewRule },
+        { label: 'Run notebook', onClick: canNewRule ? () => openTemplate('Notebook') : undefined, disabled: !canNewRule },
+        { label: 'Power Automate', onClick: canNewRule ? () => openTemplate('PowerAutomate') : undefined, disabled: !canNewRule },
       ]},
     ]},
-  ], [canNewRule]);
+  ], [canNewRule, reflexBusy, startStop, openTemplate]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1312,7 +1865,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
             <Badge appearance="filled" color="brand">Activator (Reflex)</Badge>
             <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
-            <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
+            <Dialog open={createOpen} onOpenChange={(_: unknown, d: any) => setCreateOpen(d.open)}>
               <DialogTrigger disableButtonEnhancement>
                 <Button appearance="primary" icon={<Add20Regular />} disabled={!workspaceId} style={{ marginLeft: 'auto' }}>New reflex</Button>
               </DialogTrigger>
@@ -1320,8 +1873,8 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                 <DialogBody>
                   <DialogTitle>Create Activator (reflex)</DialogTitle>
                   <DialogContent>
-                    <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
-                    <Input placeholder="description (optional)" value={createDesc} onChange={(_, d) => setCreateDesc(d.value)} style={{ width: '100%', marginTop: 8 }} />
+                    <Input placeholder="displayName" value={createName} onChange={(_: unknown, d: any) => setCreateName(d.value)} style={{ width: '100%' }} />
+                    <Input placeholder="description (optional)" value={createDesc} onChange={(_: unknown, d: any) => setCreateDesc(d.value)} style={{ width: '100%', marginTop: 8 }} />
                     {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
                   </DialogContent>
                   <DialogActions>
@@ -1333,12 +1886,13 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
             </Dialog>
           </div>
           {listErr && <MessageBar intent="error"><MessageBarBody>{listErr}</MessageBarBody></MessageBar>}
+          {reflexMsg && <MessageBar intent={reflexMsg.includes('failed') ? 'error' : 'success'}><MessageBarBody>{reflexMsg}</MessageBarBody></MessageBar>}
 
           {selectedId && (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Subtitle2>Rules</Subtitle2>
-                <Dialog open={ruleOpen} onOpenChange={(_, d) => setRuleOpen(d.open)}>
+                <Dialog open={ruleOpen} onOpenChange={(_: unknown, d: any) => setRuleOpen(d.open)}>
                   <DialogTrigger disableButtonEnhancement>
                     <Button size="small" appearance="outline" icon={<Add20Regular />}>New rule</Button>
                   </DialogTrigger>
@@ -1346,11 +1900,11 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                     <DialogBody>
                       <DialogTitle>Add rule</DialogTitle>
                       <DialogContent>
-                        <Input placeholder="rule name" value={ruleName} onChange={(_, d) => setRuleName(d.value)} style={{ width: '100%' }} />
+                        <Input placeholder="rule name" value={ruleName} onChange={(_: unknown, d: any) => setRuleName(d.value)} style={{ width: '100%' }} />
                         <Caption1 style={{ marginTop: 8 }}>condition JSON</Caption1>
-                        <Textarea value={ruleCondition} onChange={(_, d) => setRuleCondition(d.value)} rows={3} style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }} />
+                        <Textarea value={ruleCondition} onChange={(_: unknown, d: any) => setRuleCondition(d.value)} rows={3} style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }} />
                         <Caption1 style={{ marginTop: 8 }}>action JSON</Caption1>
-                        <Textarea value={ruleAction} onChange={(_, d) => setRuleAction(d.value)} rows={3} style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }} />
+                        <Textarea value={ruleAction} onChange={(_: unknown, d: any) => setRuleAction(d.value)} rows={3} style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }} />
                         {ruleErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{ruleErr}</MessageBarBody></MessageBar>}
                       </DialogContent>
                       <DialogActions>
@@ -1771,7 +2325,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
           {datasetId && (
             <>
               <div className={s.tabBar}>
-                <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
+                <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value as any)}>
                   <Tab value="tables">Tables ({detail?.tables?.length ?? 0})</Tab>
                   <Tab value="relationships">Relationships</Tab>
                   <Tab value="measures">Measures (DAX)</Tab>
@@ -2302,17 +2856,17 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
             </>
           )}
 
-          <Dialog open={!!entryOpen} onOpenChange={(_, d) => { if (!d.open) setEntryOpen(null); }}>
+          <Dialog open={!!entryOpen} onOpenChange={(_: unknown, d: any) => { if (!d.open) setEntryOpen(null); }}>
             <DialogSurface>
               <DialogBody>
                 <DialogTitle>Add goal value</DialogTitle>
                 <DialogContent>
                   <Caption1>value</Caption1>
-                  <Input value={entryValue} onChange={(_, d) => setEntryValue(d.value)} type="number" style={{ width: '100%' }} />
+                  <Input value={entryValue} onChange={(_: unknown, d: any) => setEntryValue(d.value)} type="number" style={{ width: '100%' }} />
                   <Caption1 style={{ marginTop: 8 }}>target (optional)</Caption1>
-                  <Input value={entryTarget} onChange={(_, d) => setEntryTarget(d.value)} type="number" style={{ width: '100%' }} />
+                  <Input value={entryTarget} onChange={(_: unknown, d: any) => setEntryTarget(d.value)} type="number" style={{ width: '100%' }} />
                   <Caption1 style={{ marginTop: 8 }}>note (optional)</Caption1>
-                  <Input value={entryNote} onChange={(_, d) => setEntryNote(d.value)} style={{ width: '100%' }} />
+                  <Input value={entryNote} onChange={(_: unknown, d: any) => setEntryNote(d.value)} style={{ width: '100%' }} />
                   {entryErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{entryErr}</MessageBarBody></MessageBar>}
                 </DialogContent>
                 <DialogActions>

@@ -186,3 +186,278 @@ export async function stopJob(name: string): Promise<void> {
     throw new Error(`ASA stop failed ${r.status}: ${text.slice(0, 600)}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Inputs (Microsoft.StreamAnalytics/streamingjobs/{job}/inputs/{name})
+// ---------------------------------------------------------------------------
+
+export type AsaInputType = 'Stream' | 'Reference';
+export type AsaSerializationFormat = 'Json' | 'Csv' | 'Avro';
+
+export interface AsaInputCreateSpec {
+  name: string;
+  inputType: AsaInputType;
+  datasourceType:
+    | 'Microsoft.EventHub/EventHub'
+    | 'Microsoft.ServiceBus/EventHub'
+    | 'Microsoft.Devices/IotHubs'
+    | 'Microsoft.Storage/Blob';
+  // datasource-specific
+  eventHubName?: string;
+  serviceBusNamespace?: string;
+  sharedAccessPolicyName?: string;
+  sharedAccessPolicyKey?: string;
+  consumerGroupName?: string;
+  iotHubNamespace?: string;
+  endpoint?: string;
+  storageAccount?: string;
+  storageAccountKey?: string;
+  container?: string;
+  pathPattern?: string;
+  dateFormat?: string;
+  timeFormat?: string;
+  // serialization
+  serialization: AsaSerializationFormat;
+  fieldDelimiter?: string;
+  encoding?: 'UTF8';
+}
+
+function buildInputProperties(spec: AsaInputCreateSpec): any {
+  const datasource: any = { type: spec.datasourceType, properties: {} };
+  switch (spec.datasourceType) {
+    case 'Microsoft.EventHub/EventHub':
+    case 'Microsoft.ServiceBus/EventHub':
+      datasource.properties = {
+        eventHubName: spec.eventHubName,
+        serviceBusNamespace: spec.serviceBusNamespace,
+        sharedAccessPolicyName: spec.sharedAccessPolicyName,
+        sharedAccessPolicyKey: spec.sharedAccessPolicyKey,
+        consumerGroupName: spec.consumerGroupName,
+      };
+      break;
+    case 'Microsoft.Devices/IotHubs':
+      datasource.properties = {
+        iotHubNamespace: spec.iotHubNamespace,
+        sharedAccessPolicyName: spec.sharedAccessPolicyName,
+        sharedAccessPolicyKey: spec.sharedAccessPolicyKey,
+        consumerGroupName: spec.consumerGroupName,
+        endpoint: spec.endpoint || 'messages/events',
+      };
+      break;
+    case 'Microsoft.Storage/Blob':
+      datasource.properties = {
+        storageAccounts: [
+          { accountName: spec.storageAccount, accountKey: spec.storageAccountKey },
+        ],
+        container: spec.container,
+        pathPattern: spec.pathPattern || '',
+        dateFormat: spec.dateFormat || 'yyyy/MM/dd',
+        timeFormat: spec.timeFormat || 'HH',
+      };
+      break;
+  }
+
+  const serialization: any = { type: spec.serialization, properties: {} };
+  if (spec.serialization === 'Csv') {
+    serialization.properties = {
+      fieldDelimiter: spec.fieldDelimiter || ',',
+      encoding: spec.encoding || 'UTF8',
+    };
+  } else if (spec.serialization === 'Json') {
+    serialization.properties = { encoding: spec.encoding || 'UTF8' };
+  }
+
+  return {
+    type: spec.inputType,
+    datasource,
+    serialization,
+  };
+}
+
+export async function createOrUpdateInput(
+  jobName: string,
+  spec: AsaInputCreateSpec,
+): Promise<{ id: string; name: string }> {
+  const cfg = readAsaConfig();
+  const url = `${rgBase(cfg)}/${encodeURIComponent(jobName)}/inputs/${encodeURIComponent(spec.name)}?api-version=${API}`;
+  const body = { properties: buildInputProperties(spec) };
+  const r = await call(url, { method: 'PUT', body: JSON.stringify(body) });
+  if (!r.ok && r.status !== 201) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`ASA create-input failed ${r.status}: ${text.slice(0, 600)}`);
+  }
+  const j = (await r.json().catch(() => ({}))) as any;
+  return { id: j?.id ?? '', name: j?.name ?? spec.name };
+}
+
+export async function deleteInput(jobName: string, inputName: string): Promise<void> {
+  const cfg = readAsaConfig();
+  const url = `${rgBase(cfg)}/${encodeURIComponent(jobName)}/inputs/${encodeURIComponent(inputName)}?api-version=${API}`;
+  const r = await call(url, { method: 'DELETE' });
+  if (!r.ok && r.status !== 204 && r.status !== 200) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`ASA delete-input failed ${r.status}: ${text.slice(0, 600)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Outputs (Microsoft.StreamAnalytics/streamingjobs/{job}/outputs/{name})
+// ---------------------------------------------------------------------------
+
+export interface AsaOutputCreateSpec {
+  name: string;
+  datasourceType:
+    | 'Microsoft.Sql/Server/Database'
+    | 'Microsoft.Storage/Blob'
+    | 'Microsoft.Storage/Table'
+    | 'Microsoft.ServiceBus/Queue'
+    | 'Microsoft.ServiceBus/Topic'
+    | 'Microsoft.EventHub/EventHub'
+    | 'Microsoft.DBForPostgreSQL/servers/databases'
+    | 'PowerBI'
+    | 'Microsoft.DataLake/Accounts'
+    | 'Microsoft.Kusto/clusters/databases';
+  // sql
+  server?: string;
+  database?: string;
+  user?: string;
+  password?: string;
+  table?: string;
+  // blob/adls
+  storageAccount?: string;
+  storageAccountKey?: string;
+  container?: string;
+  pathPattern?: string;
+  dateFormat?: string;
+  timeFormat?: string;
+  // service bus
+  namespace?: string;
+  queueName?: string;
+  topicName?: string;
+  sharedAccessPolicyName?: string;
+  sharedAccessPolicyKey?: string;
+  // event hub
+  eventHubName?: string;
+  // power bi
+  dataset?: string;
+  refreshToken?: string;
+  groupId?: string;
+  groupName?: string;
+  // kusto / adx
+  kustoClusterUrl?: string;
+  kustoDatabase?: string;
+  kustoTable?: string;
+  // serialization
+  serialization?: AsaSerializationFormat;
+}
+
+function buildOutputProperties(spec: AsaOutputCreateSpec): any {
+  const ds: any = { type: spec.datasourceType, properties: {} };
+  switch (spec.datasourceType) {
+    case 'Microsoft.Sql/Server/Database':
+      ds.properties = {
+        server: spec.server,
+        database: spec.database,
+        user: spec.user,
+        password: spec.password,
+        table: spec.table,
+      };
+      break;
+    case 'Microsoft.Storage/Blob':
+      ds.properties = {
+        storageAccounts: [{ accountName: spec.storageAccount, accountKey: spec.storageAccountKey }],
+        container: spec.container,
+        pathPattern: spec.pathPattern || '',
+        dateFormat: spec.dateFormat || 'yyyy/MM/dd',
+        timeFormat: spec.timeFormat || 'HH',
+      };
+      break;
+    case 'Microsoft.Storage/Table':
+      ds.properties = {
+        accountName: spec.storageAccount,
+        accountKey: spec.storageAccountKey,
+        table: spec.table,
+        partitionKey: 'partition',
+        rowKey: 'rowKey',
+      };
+      break;
+    case 'Microsoft.ServiceBus/Queue':
+      ds.properties = {
+        queueName: spec.queueName,
+        serviceBusNamespace: spec.namespace,
+        sharedAccessPolicyName: spec.sharedAccessPolicyName,
+        sharedAccessPolicyKey: spec.sharedAccessPolicyKey,
+      };
+      break;
+    case 'Microsoft.ServiceBus/Topic':
+      ds.properties = {
+        topicName: spec.topicName,
+        serviceBusNamespace: spec.namespace,
+        sharedAccessPolicyName: spec.sharedAccessPolicyName,
+        sharedAccessPolicyKey: spec.sharedAccessPolicyKey,
+      };
+      break;
+    case 'Microsoft.EventHub/EventHub':
+      ds.properties = {
+        eventHubName: spec.eventHubName,
+        serviceBusNamespace: spec.namespace,
+        sharedAccessPolicyName: spec.sharedAccessPolicyName,
+        sharedAccessPolicyKey: spec.sharedAccessPolicyKey,
+      };
+      break;
+    case 'PowerBI':
+      ds.properties = {
+        dataset: spec.dataset,
+        table: spec.table,
+        refreshToken: spec.refreshToken,
+        groupId: spec.groupId,
+        groupName: spec.groupName,
+      };
+      break;
+    case 'Microsoft.Kusto/clusters/databases':
+      ds.properties = {
+        cluster: spec.kustoClusterUrl,
+        database: spec.kustoDatabase,
+        table: spec.kustoTable,
+      };
+      break;
+  }
+
+  const out: any = { datasource: ds };
+  if (spec.serialization) {
+    out.serialization = {
+      type: spec.serialization,
+      properties:
+        spec.serialization === 'Csv'
+          ? { fieldDelimiter: ',', encoding: 'UTF8' }
+          : { encoding: 'UTF8' },
+    };
+  }
+  return out;
+}
+
+export async function createOrUpdateOutput(
+  jobName: string,
+  spec: AsaOutputCreateSpec,
+): Promise<{ id: string; name: string }> {
+  const cfg = readAsaConfig();
+  const url = `${rgBase(cfg)}/${encodeURIComponent(jobName)}/outputs/${encodeURIComponent(spec.name)}?api-version=${API}`;
+  const body = { properties: buildOutputProperties(spec) };
+  const r = await call(url, { method: 'PUT', body: JSON.stringify(body) });
+  if (!r.ok && r.status !== 201) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`ASA create-output failed ${r.status}: ${text.slice(0, 600)}`);
+  }
+  const j = (await r.json().catch(() => ({}))) as any;
+  return { id: j?.id ?? '', name: j?.name ?? spec.name };
+}
+
+export async function deleteOutput(jobName: string, outputName: string): Promise<void> {
+  const cfg = readAsaConfig();
+  const url = `${rgBase(cfg)}/${encodeURIComponent(jobName)}/outputs/${encodeURIComponent(outputName)}?api-version=${API}`;
+  const r = await call(url, { method: 'DELETE' });
+  if (!r.ok && r.status !== 204 && r.status !== 200) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`ASA delete-output failed ${r.status}: ${text.slice(0, 600)}`);
+  }
+}

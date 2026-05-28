@@ -44,6 +44,9 @@ param consoleUamiName string = ''
 @description('Admin Plane spoke private DNS zone ID for privatelink.sql.azuresynapse.net. Required for the Synapse SQL PE to register DNS.')
 param synapseSqlPrivateDnsZoneId string = ''
 
+@description('Admin Plane spoke private DNS zone ID for privatelink.adf.azure.com (Commercial). Required for the ADF PE to register DNS.')
+param adfPrivateDnsZoneId string = ''
+
 @description('Admin Plane ADX cluster name (for ADX database creation)')
 param adminPlaneAdxClusterName string = 'adx-csa-loom-shared'
 
@@ -254,7 +257,31 @@ module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !
 }
 
 // =====================================================================
-// 9. Cosmos Gremlin + NoSQL vector containers
+// 9. Azure Data Factory — backs the data-pipeline / dataset / trigger editors
+//
+//    Per the 2026-05-27 no-cuts-sweep policy override, ADF is now wired
+//    into the DLZ orchestrator by default. Operators that don't run ADF
+//    workflows can set `adfEnabled=false`.
+// =====================================================================
+
+@description('Provision an Azure Data Factory (v2) in the DLZ. Backs the Loom data-pipeline / dataset / trigger editors.')
+param adfEnabled bool = true
+
+module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) {
+  name: 'dlz-adf'
+  params: {
+    location: location
+    domainName: domainName
+    consolePrincipalId: consolePrincipalId
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    adfPrivateDnsZoneId: adfPrivateDnsZoneId
+    workspaceId: adminPlaneLawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// 10. Cosmos Gremlin + NoSQL vector containers
 //
 // Backs the `cosmos-gremlin-graph` and `vector-store` editors. Opt-in via
 // the `cosmosGraphVectorEnabled` flag so deployments that don't need graph
@@ -313,3 +340,7 @@ output cosmosGremlinGraph string = cosmosGraphVectorEnabled ? cosmosGraphVector!
 output cosmosVectorEndpoint string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorEndpoint : ''
 output cosmosVectorDatabase string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorDatabase : ''
 output cosmosVectorContainer string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.vectorDefaultContainer : ''
+
+// CSA Loom no-cuts-sweep — ADF wiring outputs
+output adfFactoryId string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryId : ''
+output adfFactoryName string = (adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId)) ? adf!.outputs.factoryName : ''
