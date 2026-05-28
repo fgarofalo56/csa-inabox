@@ -18,23 +18,49 @@ freshness (5-30 s) — without waiting for Fabric Gov GA.
 
 ## Architecture
 
-```
-   Operational sources                Loom lakehouse                  BI surface
-   (DB / files / streams)             (ADLS Gen2)                     (Power BI Premium)
-                                                                       ┌──────────────────┐
-   ┌─────────┐                       ┌──────────────────┐              │ Semantic Model   │
-   │ DB      │                       │ Bronze table     │              │ (Premium Import) │
-   │ Files   │ ──Loom Mirroring──►   │ Silver table     │ ──refresh──► │ Authored in TMDL │
-   │ Streams │                       │ Gold table       │              │ Deployed via TOM │
-   └─────────┘                       └────────┬─────────┘              └────────┬─────────┘
-                                              │ commit event                    │
-                                              ▼                                  ▼
-                              ┌──────────────────────────────┐         ┌──────────────────┐
-                              │ Storage Event Grid           │         │ Power BI Reports │
-                              │ → Loom Direct-Lake-Shim      │         │ (refresh on      │
-                              │ → TOM partition refresh      │         │  every model     │
-                              │   on Power BI Premium model  │         │  refresh)        │
-                              └──────────────────────────────┘         └──────────────────┘
+```mermaid
+flowchart LR
+    classDef source fill:#5C2D91,stroke:#fff,color:#fff,stroke-width:2px
+    classDef bronze fill:#cd7f32,stroke:#fff,color:#fff,stroke-width:2px
+    classDef silver fill:#A8A9AD,stroke:#fff,color:#fff,stroke-width:2px
+    classDef gold fill:#D4AF37,stroke:#fff,color:#fff,stroke-width:2px
+    classDef shim fill:#D83B01,stroke:#fff,color:#fff,stroke-width:2px
+    classDef bi fill:#0078D4,stroke:#fff,color:#fff,stroke-width:2px
+
+    subgraph Sources["Operational sources (DB / files / streams)"]
+        direction TB
+        DB["DB"]:::source
+        Files["Files"]:::source
+        Streams["Streams"]:::source
+    end
+
+    subgraph Lake["Loom lakehouse (ADLS Gen2)"]
+        direction TB
+        Bronze["Bronze table"]:::bronze
+        Silver["Silver table"]:::silver
+        Gold["Gold table"]:::gold
+        Bronze --> Silver --> Gold
+    end
+
+    subgraph Shim["Direct-Lake-Shim refresh pipeline"]
+        direction TB
+        EventGrid["Storage Event Grid"]:::shim
+        ShimSvc["Loom Direct-Lake-Shim"]:::shim
+        TOM["TOM partition refresh<br/>on Power BI Premium model"]:::shim
+        EventGrid --> ShimSvc --> TOM
+    end
+
+    subgraph BI["BI surface (Power BI Premium)"]
+        direction TB
+        Model["Semantic Model<br/>(Premium Import)<br/>Authored in TMDL<br/>Deployed via TOM"]:::bi
+        Reports["Power BI Reports<br/>(refresh on every<br/>model refresh)"]:::bi
+        Model --> Reports
+    end
+
+    Sources -- "Loom Mirroring" --> Bronze
+    Gold -- "commit event" --> EventGrid
+    Gold -- "refresh" --> Model
+    TOM --> Model
 ```
 
 ## Migration playbook

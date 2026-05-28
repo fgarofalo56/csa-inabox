@@ -10,6 +10,43 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.14.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.14.0...csa-inabox-v0.14.1) (2026-05-28)
+
+
+### Bug Fixes
+
+* **docs:** shrink search index ~20x and fix broken site search (Closes [#399](https://github.com/fgarofalo56/csa-inabox/issues/399)) ([#415](https://github.com/fgarofalo56/csa-inabox/issues/415)) ([f775380](https://github.com/fgarofalo56/csa-inabox/commit/f775380e444540cb6f156e9f9bbbfd7e44fc4710))
+
+
+### Documentation
+
+* **csa-loom:** reorganize nav into 13 coherent categories (Closes [#408](https://github.com/fgarofalo56/csa-inabox/issues/408)) ([#416](https://github.com/fgarofalo56/csa-inabox/issues/416)) ([fa4b85d](https://github.com/fgarofalo56/csa-inabox/commit/fa4b85dd627af82932bb76781b92c37dc15328b9))
+
+## [0.14.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.13.0...csa-inabox-v0.14.0) (2026-05-28)
+
+
+### Features
+
+* **csa-loom:** AI Foundry / APIM / Copilot Studio family — production-grade across 19 editors ([#365](https://github.com/fgarofalo56/csa-inabox/issues/365)) ([81c0463](https://github.com/fgarofalo56/csa-inabox/commit/81c0463d91ccdc130db1f144e08aeed20b76b20d))
+
+
+### Bug Fixes
+
+* **docs:** render direct-lake-replacement architecture as mermaid ([#411](https://github.com/fgarofalo56/csa-inabox/issues/411)) ([570f3fd](https://github.com/fgarofalo56/csa-inabox/commit/570f3fd7ed07970f4c8678c8487df18d4a415656)), closes [#405](https://github.com/fgarofalo56/csa-inabox/issues/405)
+* **docs:** render federal-data-mesh pattern as mermaid diagram ([#413](https://github.com/fgarofalo56/csa-inabox/issues/413)) ([1bdebc4](https://github.com/fgarofalo56/csa-inabox/commit/1bdebc458dafe266a7b8cefa88b3d8e139ab131b)), closes [#404](https://github.com/fgarofalo56/csa-inabox/issues/404)
+* **docs:** render hybrid-topology pattern as mermaid diagram ([#409](https://github.com/fgarofalo56/csa-inabox/issues/409)) ([91f85ae](https://github.com/fgarofalo56/csa-inabox/commit/91f85ae3db29cf325b65013c0060f3ddfcb9881a)), closes [#407](https://github.com/fgarofalo56/csa-inabox/issues/407)
+* **docs:** render sovereign-agents architecture as mermaid diagram ([#410](https://github.com/fgarofalo56/csa-inabox/issues/410)) ([e7b6f64](https://github.com/fgarofalo56/csa-inabox/commit/e7b6f64132498c975a09f82f0aecc19129cbaade)), closes [#406](https://github.com/fgarofalo56/csa-inabox/issues/406)
+* **docs:** stop .gitignore from excluding docs/build/ (Closes [#403](https://github.com/fgarofalo56/csa-inabox/issues/403)) ([#412](https://github.com/fgarofalo56/csa-inabox/issues/412)) ([5df11d8](https://github.com/fgarofalo56/csa-inabox/commit/5df11d8c46e0d04147d9b566cc9fc29dd56b668b))
+
+## [0.13.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.12.0...csa-inabox-v0.13.0) (2026-05-28)
+
+
+### Features
+
+* **csa-loom-monitor:** add Refresh button + time-range filter to ActivityFeedPane ([#400](https://github.com/fgarofalo56/csa-inabox/issues/400)) ([3a63eaa](https://github.com/fgarofalo56/csa-inabox/commit/3a63eaad26c6c4aea625a469268be469d0c3d56c))
+* **csa-loom:** RTI family — production-grade across 6 editors (Eventhouse/KQL/Eventstream/Activator) ([#368](https://github.com/fgarofalo56/csa-inabox/issues/368)) ([5d83f34](https://github.com/fgarofalo56/csa-inabox/commit/5d83f343a8b25ec3a7969fbd537caa847ad69caa))
+* **csa-loom:** wire 5 F-grade editors (mirrored-databricks, mounted-adf, event-schema-set, sql-database, airflow-job) ([#401](https://github.com/fgarofalo56/csa-inabox/issues/401)) ([74dc5ac](https://github.com/fgarofalo56/csa-inabox/commit/74dc5ac605025bae89c119644a05a61ec778d988))
+
 ## [0.12.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.11.2...csa-inabox-v0.12.0) (2026-05-28)
 
 
