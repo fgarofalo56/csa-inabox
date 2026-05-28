@@ -362,6 +362,7 @@ nav:
               - Self-Hosted IR: SELF_HOSTED_IR.md
               - Event Hubs: guides/event-hubs.md
               - Microsoft Purview: guides/purview.md
+              - Build an internal Data Marketplace: guides/data-marketplace.md
               - APIM Data-Mesh Gateway: guides/apim-data-mesh-gateway.md
               - APIM as the Universal API Gateway: guides/apim-universal-gateway.md
               - APIM + MCP Layered Orchestration: guides/apim-mcp-layered-orchestration.md
@@ -2276,6 +2277,7 @@ nav:
           - Capacity Management: fiab/operations/capacity-management.md
           - Monitoring & Observability: fiab/operations/monitoring.md
           - Cost Management: fiab/operations/cost.md
+          - Persistence, Chargeback, and Multi-DLZ: fiab/operations/persistence-chargeback-multidlz.md
           - Disaster Recovery: fiab/operations/disaster-recovery.md
           - Upgrade & Migration: fiab/operations/upgrade-migration.md
           - Forward Migration to Microsoft Fabric: fiab/operations/forward-to-fabric.md
