@@ -34,6 +34,7 @@ let _wsPermissions: Container | null = null;
 let _wsGit: Container | null = null;
 let _tenantThemes: Container | null = null;
 let _tenantSettings: Container | null = null;
+let _marketplaceListings: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -99,7 +100,13 @@ async function ensure() {
   _wsGit = await mk('workspace-git', '/workspaceId');
   _tenantThemes = await mk('tenant-themes', '/tenantId');
   _tenantSettings = await mk('tenant-settings', '/tenantId');
+  _marketplaceListings = await mk('marketplace-listings', '/tenantId');
   _ensured = true;
+}
+
+export async function marketplaceListingsContainer(): Promise<Container> {
+  await ensure();
+  return _marketplaceListings!;
 }
 
 export async function workspacesContainer(): Promise<Container> {
