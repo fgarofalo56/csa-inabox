@@ -22,14 +22,15 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Spinner,
+  Subtitle2, Body1, Caption1, Badge, Button, Input, Spinner, Field,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Select, Textarea,
+  Label, Select, Textarea, Switch,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -159,11 +160,28 @@ interface EventhouseState {
 
 export function EventhouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const router = useRouter();
   const [state, setState] = useState<EventhouseState | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedDb, setSelectedDb] = useState<string>('');
+  const [getDataOpen, setGetDataOpen] = useState(false);
+  const [getDataMode, setGetDataMode] = useState<'file' | 'eventhub' | 'onelake'>('file');
+  const [getDataBusy, setGetDataBusy] = useState(false);
+  const [getDataResult, setGetDataResult] = useState<{ ok?: boolean; error?: string; tableName?: string; rows?: number } | null>(null);
+  const [getDataTable, setGetDataTable] = useState('');
+  const [getDataFile, setGetDataFile] = useState<File | null>(null);
+  const [getDataHubName, setGetDataHubName] = useState('');
+  const [getDataConsumer, setGetDataConsumer] = useState('$Default');
+  const [getDataOneLakePath, setGetDataOneLakePath] = useState('');
+  const [policiesOpen, setPoliciesOpen] = useState(false);
+  const [hotCacheDays, setHotCacheDays] = useState<number>(7);
+  const [softDeleteDays, setSoftDeleteDays] = useState<number>(30);
+  const [oneLakeEnabled, setOneLakeEnabled] = useState<boolean>(false);
+  const [policiesBusy, setPoliciesBusy] = useState(false);
+  const [policiesErr, setPoliciesErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     // Pre-save gate: /items/eventhouse/new fires this before any record exists.
@@ -173,10 +191,13 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
       const r = await fetch(`/api/items/eventhouse/${id}`);
       const j = (await r.json()) as EventhouseState;
       setState(j);
+      if (j.ok && (j.databases?.length ?? 0) > 0 && !selectedDb) {
+        setSelectedDb(j.defaultDatabase || j.databases![0].name);
+      }
     } catch (e: any) {
       setState({ ok: false, error: e?.message || String(e) });
     }
-  }, [id]);
+  }, [id, selectedDb]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -200,6 +221,98 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     }
   }, [id, newName, load]);
 
+  // Open the KQL Database editor for a specific database in this eventhouse.
+  // Mirrors Fabric's behavior: clicking a DB card or "Query with code" jumps
+  // into the focused KQL editor for that database.
+  const openKqlEditor = useCallback((dbName: string) => {
+    if (!dbName) return;
+    const qs = new URLSearchParams({ eventhouseId: id, database: dbName });
+    router.push(`/items/kql-database/new?${qs.toString()}`);
+  }, [id, router]);
+
+  // Ingest a file (CSV / JSON / parquet) into a KQL table. Calls the
+  // existing /api/items/eventhouse/{id}/ingest BFF route; honest error if
+  // not yet provisioned.
+  const onIngest = useCallback(async () => {
+    if (!selectedDb || !getDataTable.trim()) {
+      setGetDataResult({ ok: false, error: 'Database + table name required' }); return;
+    }
+    setGetDataBusy(true);
+    setGetDataResult(null);
+    try {
+      if (getDataMode === 'file') {
+        if (!getDataFile) { setGetDataResult({ ok: false, error: 'Pick a file first' }); return; }
+        const fd = new FormData();
+        fd.set('database', selectedDb);
+        fd.set('table', getDataTable.trim());
+        fd.set('file', getDataFile);
+        const r = await fetch(`/api/items/eventhouse/${id}/ingest`, { method: 'POST', body: fd });
+        const ct = r.headers.get('content-type') || '';
+        const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+        setGetDataResult(j);
+      } else if (getDataMode === 'eventhub') {
+        const r = await fetch(`/api/items/eventhouse/${id}/ingest`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            kind: 'eventhub', database: selectedDb, table: getDataTable.trim(),
+            eventHubName: getDataHubName.trim(), consumerGroup: getDataConsumer.trim() || '$Default',
+          }),
+        });
+        const ct = r.headers.get('content-type') || '';
+        const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+        setGetDataResult(j);
+      } else {
+        const r = await fetch(`/api/items/eventhouse/${id}/ingest`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            kind: 'onelake', database: selectedDb, table: getDataTable.trim(),
+            oneLakePath: getDataOneLakePath.trim(),
+          }),
+        });
+        const ct = r.headers.get('content-type') || '';
+        const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+        setGetDataResult(j);
+      }
+    } catch (e: any) {
+      setGetDataResult({ ok: false, error: e?.message || String(e) });
+    } finally {
+      setGetDataBusy(false);
+    }
+  }, [id, selectedDb, getDataMode, getDataTable, getDataFile, getDataHubName, getDataConsumer, getDataOneLakePath]);
+
+  // Apply per-database caching + retention policies via the .alter database
+  // policy KQL management commands. Also flips the OneLake availability
+  // mirroring toggle (Fabric-only feature — falls through to a structured
+  // error MessageBar if the cluster isn't Fabric-managed).
+  const applyPolicies = useCallback(async () => {
+    if (!selectedDb) return;
+    setPoliciesBusy(true);
+    setPoliciesErr(null);
+    try {
+      const r = await fetch(`/api/items/eventhouse/${id}/policies`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          database: selectedDb,
+          hotCacheDays, softDeleteDays, oneLakeAvailability: oneLakeEnabled,
+        }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      if (!j.ok) setPoliciesErr(j.error || 'policy apply failed');
+      else { setPoliciesOpen(false); load(); }
+    } catch (e: any) {
+      setPoliciesErr(e?.message || String(e));
+    } finally {
+      setPoliciesBusy(false);
+    }
+  }, [id, selectedDb, hotCacheDays, softDeleteDays, oneLakeEnabled, load]);
+
+  const hasDbs = (state?.databases?.length ?? 0) > 0;
+  const dbCount = state?.databases?.length ?? 0;
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'New', actions: [
@@ -207,15 +320,25 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'New dashboard', disabled: true, title: 'KQL dashboard creation not yet wired — use the KQL Dashboard editor' },
       ]},
       { label: 'Query', actions: [
-        { label: 'Query with code', disabled: true, title: 'opens KQL Database editor — not yet wired' },
-        { label: 'Get data', disabled: true, title: 'data ingestion wizard not yet wired' },
+        { label: 'Query with code', onClick: hasDbs && selectedDb ? () => openKqlEditor(selectedDb) : undefined,
+          disabled: !hasDbs || !selectedDb,
+          title: !hasDbs ? 'create a KQL database first' : !selectedDb ? 'select a database below' : undefined },
+        { label: 'Get data', onClick: hasDbs ? () => setGetDataOpen(true) : undefined,
+          disabled: !hasDbs, title: !hasDbs ? 'create a KQL database first' : undefined },
       ]},
       { label: 'Manage', actions: [
-        { label: 'Data policies', disabled: true, title: 'cluster-level policy editor not yet wired' },
-        { label: 'OneLake availability', disabled: true, title: 'OneLake mirroring toggle not yet wired' },
+        { label: 'Data policies', onClick: hasDbs && selectedDb ? () => setPoliciesOpen(true) : undefined,
+          disabled: !hasDbs || !selectedDb,
+          title: !hasDbs ? 'create a KQL database first' : !selectedDb ? 'select a database below' : undefined },
+        { label: 'OneLake availability', onClick: hasDbs && selectedDb ? () => { setOneLakeEnabled(true); setPoliciesOpen(true); } : undefined,
+          disabled: !hasDbs || !selectedDb,
+          title: !hasDbs || !selectedDb ? 'pick a database first' : undefined },
+      ]},
+      { label: 'Refresh', actions: [
+        { label: 'Refresh', onClick: load },
       ]},
     ]},
-  ], []);
+  ], [hasDbs, selectedDb, openKqlEditor, load]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -267,20 +390,166 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         )}
         {state?.ok && (
           <>
-            <Subtitle2>Databases ({state.databases?.length ?? 0})</Subtitle2>
+            <Subtitle2>Databases ({dbCount})</Subtitle2>
             <div className={s.cardGrid}>
-              {(state.databases || []).map((d) => (
-                <div key={d.name} className={s.card}>
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>KQL database</Caption1>
-                  <div style={{ fontSize: 18, fontWeight: 600 }}>{d.name}</div>
-                  {d.prettyName && d.prettyName !== d.name && <Caption1>{d.prettyName}</Caption1>}
-                  {d.name === state.defaultDatabase && <Badge appearance="filled" color="brand" style={{ marginTop: 6 }}>default</Badge>}
-                </div>
-              ))}
+              {(state.databases || []).map((d) => {
+                const isSelected = selectedDb === d.name;
+                return (
+                  <div
+                    key={d.name}
+                    className={s.card}
+                    onClick={() => setSelectedDb(d.name)}
+                    onDoubleClick={() => openKqlEditor(d.name)}
+                    role="button"
+                    tabIndex={0}
+                    style={{
+                      cursor: 'pointer',
+                      borderColor: isSelected ? tokens.colorBrandStroke1 : undefined,
+                      borderWidth: isSelected ? 2 : undefined,
+                      backgroundColor: isSelected ? tokens.colorNeutralBackground1Selected : undefined,
+                    }}
+                  >
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>KQL database</Caption1>
+                    <div style={{ fontSize: 18, fontWeight: 600 }}>{d.name}</div>
+                    {d.prettyName && d.prettyName !== d.name && <Caption1>{d.prettyName}</Caption1>}
+                    <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                      {d.name === state.defaultDatabase && <Badge appearance="filled" color="brand">default</Badge>}
+                      {isSelected && <Badge appearance="outline" color="informative">selected</Badge>}
+                    </div>
+                    <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
+                      <Button size="small" appearance="primary" onClick={(e) => { e.stopPropagation(); openKqlEditor(d.name); }}>
+                        Query
+                      </Button>
+                      <Button size="small" appearance="outline" onClick={(e) => { e.stopPropagation(); setSelectedDb(d.name); setGetDataOpen(true); }}>
+                        Get data
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
               {(!state.databases || state.databases.length === 0) && (
                 <Caption1>No databases yet. Click <strong>New KQL database</strong> to create one.</Caption1>
               )}
             </div>
+
+            {/* Get data dialog — file / event hub / OneLake */}
+            <Dialog open={getDataOpen} onOpenChange={(_, d) => setGetDataOpen(d.open)}>
+              <DialogSurface style={{ maxWidth: 520 }}>
+                <DialogBody>
+                  <DialogTitle>Get data into KQL</DialogTitle>
+                  <DialogContent>
+                    <Caption1>Target database: <strong>{selectedDb || '(none)'}</strong></Caption1>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+                      <div>
+                        <Label>Source</Label>
+                        <Select value={getDataMode} onChange={(_, d) => setGetDataMode(d.value as any)}>
+                          <option value="file">Upload file (CSV / JSON / Parquet)</option>
+                          <option value="eventhub">Event Hub (streaming)</option>
+                          <option value="onelake">OneLake / ADLS Gen2 path</option>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label>Target table name</Label>
+                        <Input value={getDataTable} onChange={(_, d) => setGetDataTable(d.value)} placeholder="raw_events" />
+                      </div>
+                      {getDataMode === 'file' && (
+                        <div>
+                          <Label>File</Label>
+                          <input type="file" onChange={(e) => setGetDataFile(e.target.files?.[0] || null)} />
+                          {getDataFile && (
+                            <Caption1>{getDataFile.name} ({(getDataFile.size / 1024).toFixed(1)} KB)</Caption1>
+                          )}
+                        </div>
+                      )}
+                      {getDataMode === 'eventhub' && (
+                        <>
+                          <div>
+                            <Label>Event Hub name</Label>
+                            <Input value={getDataHubName} onChange={(_, d) => setGetDataHubName(d.value)} placeholder="orders-hub" />
+                          </div>
+                          <div>
+                            <Label>Consumer group</Label>
+                            <Input value={getDataConsumer} onChange={(_, d) => setGetDataConsumer(d.value)} placeholder="$Default" />
+                          </div>
+                        </>
+                      )}
+                      {getDataMode === 'onelake' && (
+                        <div>
+                          <Label>OneLake path</Label>
+                          <Input value={getDataOneLakePath} onChange={(_, d) => setGetDataOneLakePath(d.value)} placeholder="abfss://bronze@account.dfs.core.windows.net/folder/" />
+                        </div>
+                      )}
+                    </div>
+                    {getDataResult && (
+                      <MessageBar intent={getDataResult.ok ? 'success' : 'error'} style={{ marginTop: 12 }}>
+                        <MessageBarBody>
+                          {getDataResult.ok
+                            ? `Ingested ${getDataResult.rows ?? '?'} rows into ${getDataResult.tableName || getDataTable}`
+                            : getDataResult.error}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setGetDataOpen(false)}>Close</Button>
+                    <Button appearance="primary" onClick={onIngest} disabled={getDataBusy || !selectedDb || !getDataTable.trim()}>
+                      {getDataBusy ? 'Ingesting…' : 'Ingest'}
+                    </Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+
+            {/* Data policies dialog — hot cache / soft delete / OneLake availability */}
+            <Dialog open={policiesOpen} onOpenChange={(_, d) => setPoliciesOpen(d.open)}>
+              <DialogSurface style={{ maxWidth: 500 }}>
+                <DialogBody>
+                  <DialogTitle>Data policies — {selectedDb}</DialogTitle>
+                  <DialogContent>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div>
+                        <Label>Hot cache (days)</Label>
+                        <Input
+                          type="number"
+                          value={String(hotCacheDays)}
+                          onChange={(_, d) => setHotCacheDays(Math.max(0, parseInt(d.value, 10) || 0))}
+                        />
+                        <Caption1>How many days of data live in SSD cache for sub-second queries.</Caption1>
+                      </div>
+                      <div>
+                        <Label>Soft delete (days)</Label>
+                        <Input
+                          type="number"
+                          value={String(softDeleteDays)}
+                          onChange={(_, d) => setSoftDeleteDays(Math.max(1, parseInt(d.value, 10) || 1))}
+                        />
+                        <Caption1>How many days data is retained before automatic delete.</Caption1>
+                      </div>
+                      <div>
+                        <Label>OneLake availability</Label>
+                        <Switch
+                          checked={oneLakeEnabled}
+                          onChange={(_, d) => setOneLakeEnabled(!!d.checked)}
+                          label={oneLakeEnabled ? 'Mirrored to OneLake' : 'Not mirrored'}
+                        />
+                        <Caption1>Fabric-managed eventhouses only. Mirrors KQL tables into OneLake as Delta for Spark/Power BI.</Caption1>
+                      </div>
+                    </div>
+                    {policiesErr && (
+                      <MessageBar intent="error" style={{ marginTop: 12 }}>
+                        <MessageBarBody>{policiesErr}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setPoliciesOpen(false)}>Cancel</Button>
+                    <Button appearance="primary" onClick={applyPolicies} disabled={policiesBusy}>
+                      {policiesBusy ? 'Applying…' : 'Apply'}
+                    </Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
           </>
         )}
       </div>
@@ -1085,9 +1354,19 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
 }
 
 // ============================================================
-// Shared Loom workspace picker (formerly used /api/powerbi/workspaces which
-// confusingly suffixed every workspace name with the capacity SKU label;
-// Activator + other Fabric RTI editors weren't Power BI workspaces at all).
+// Workspace pickers — two flavors, intentionally NOT interchangeable.
+//
+// 1. useWorkspaces() → Loom workspaces (Cosmos-backed catalog used by
+//    Activator, Eventstream, KQL, Lakehouse, etc.). IDs are Loom UUIDs.
+//
+// 2. usePowerBiWorkspaces() → Power BI / Fabric groups (returned by the
+//    Power BI REST API via the Console UAMI). IDs are Power BI groupIds.
+//
+// Power BI editors (Report, Paginated Report, Dashboard, Semantic Model,
+// Scorecard, Dataflow) MUST use (2) because the embed-token / list / detail
+// REST calls expect a Power BI groupId. Passing a Loom UUID returns 404
+// PowerBIEntityNotFound. Keeping the two hooks separate makes the
+// intentional distinction obvious at call sites.
 // ============================================================
 interface PbiWorkspaceLite { id: string; name: string; description?: string; }
 
@@ -1104,6 +1383,55 @@ function useWorkspaces() {
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed to list workspaces'); setHint(j.hint || null); setWorkspaces([]); }
       else { setWorkspaces(j.workspaces || []); }
+    } catch (e: any) {
+      setError(e?.message || String(e));
+      setWorkspaces([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  return { workspaces, error, hint, loading, reload: load };
+}
+
+/**
+ * usePowerBiWorkspaces — list real Power BI groups (NOT Loom workspaces).
+ *
+ * Power BI's list/detail/embed-token REST APIs key on a `workspaceId` that
+ * is a Power BI groupId. Passing a Loom Cosmos UUID to those endpoints
+ * returns 404 PowerBIEntityNotFound. This hook is the dedicated source for
+ * the Report / Paginated Report / Dashboard / Semantic Model / Scorecard /
+ * Dataflow editors.
+ */
+function usePowerBiWorkspaces() {
+  const [workspaces, setWorkspaces] = useState<PbiWorkspaceLite[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null); setHint(null);
+    try {
+      const r = await fetch('/api/powerbi/workspaces');
+      const j = await r.json();
+      if (!j.ok) {
+        setError(j.error || 'failed to list Power BI workspaces');
+        setHint(j.hint || null);
+        setWorkspaces([]);
+      } else {
+        // Power BI returns name + capacity SKU; surface the capacity in a
+        // separate description field so the picker can show it as a hint
+        // without polluting the displayed name.
+        setWorkspaces(
+          (j.workspaces || []).map((w: any) => ({
+            id: w.id,
+            name: w.name || w.displayName || w.id,
+            description: w.capacityType ? `${w.capacityType}${w.isOnDedicatedCapacity ? ' · dedicated' : ''}` : undefined,
+          })),
+        );
+      }
     } catch (e: any) {
       setError(e?.message || String(e));
       setWorkspaces([]);
@@ -1483,13 +1811,81 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const ready = schema?.ok === true;
 
   const canRun = ready && !loading;
+
+  // Save-as-table dialog state — CTAS helper.
+  const [ctasOpen, setCtasOpen] = useState(false);
+  const [ctasSchema, setCtasSchema] = useState('dbo');
+  const [ctasTable, setCtasTable] = useState('');
+  const [ctasBusy, setCtasBusy] = useState(false);
+  const [ctasError, setCtasError] = useState<string | null>(null);
+
+  const newSql = useCallback(() => {
+    // Multi-tab is a future v3.x — for now "New SQL query" resets the
+    // current tab to a fresh template, matching Fabric Warehouse's
+    // single-tab UX inside the embedded editor.
+    setSqlText(SAMPLE_SQL.replace(/SELECT 1 AS smoke[^;]*;/, 'SELECT TOP 100 * FROM INFORMATION_SCHEMA.TABLES;'));
+    setResult(null);
+  }, []);
+
+  const openCtas = useCallback(() => {
+    setCtasError(null);
+    setCtasTable('');
+    setCtasOpen(true);
+  }, []);
+
+  const submitCtas = useCallback(async () => {
+    if (!ctasTable.trim()) { setCtasError('table name required'); return; }
+    setCtasBusy(true); setCtasError(null);
+    try {
+      // Strip a trailing semicolon if present so we can wrap in CTAS.
+      const cleaned = sqlText.trim().replace(/;+\s*$/, '');
+      if (!/^select\b/i.test(cleaned)) {
+        throw new Error('CTAS requires the current query to start with SELECT.');
+      }
+      const ddl = `CREATE TABLE [${ctasSchema.replace(/]/g, '')}].[${ctasTable.replace(/]/g, '')}] AS\n${cleaned};`;
+      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sql: ddl }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setCtasOpen(false);
+      loadSchema();
+    } catch (e: any) { setCtasError(e?.message || String(e)); }
+    finally { setCtasBusy(false); }
+  }, [id, sqlText, ctasSchema, ctasTable, loadSchema]);
+
+  const openInExcel = useCallback(async () => {
+    if (!sqlText.trim()) return;
+    try {
+      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/iqy`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sql: sqlText }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `loom-warehouse-${id}.iqy`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    }
+  }, [id, sqlText]);
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
-        { label: 'New SQL query', disabled: true, title: 'multi-tab T-SQL editor not yet wired' },
+        { label: 'New SQL query', onClick: newSql },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
-        { label: 'Save as table', disabled: true, title: 'CTAS helper not yet wired' },
-        { label: 'Open in Excel', disabled: true, title: 'Excel ODBC link not yet wired' },
+        { label: 'Save as table', onClick: canRun && sqlText.trim() ? openCtas : undefined, disabled: !canRun || !sqlText.trim(), title: !canRun ? 'warehouse compute is not ready' : (!sqlText.trim() ? 'enter a SELECT first' : undefined) },
+        { label: 'Open in Excel', onClick: sqlText.trim() ? openInExcel : undefined, disabled: !sqlText.trim(), title: !sqlText.trim() ? 'enter a query first' : undefined },
       ]},
       { label: 'Modeling', actions: [
         { label: 'New measure', disabled: true, title: 'warehouse DAX measure editor not yet wired' },
@@ -1500,7 +1896,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Source control', disabled: true, title: 'git integration not yet wired' },
       ]},
     ]},
-  ], [loading, canRun, ready, run]);
+  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1620,6 +2016,35 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               )}
             </>
           )}
+
+          <Dialog open={ctasOpen} onOpenChange={(_, d) => setCtasOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Save as table (CTAS)</DialogTitle>
+                <DialogContent>
+                  <Caption1>
+                    Wraps the current query as <code>CREATE TABLE … AS SELECT …</code> and runs it
+                    against the warehouse. Schema + table must not already exist.
+                  </Caption1>
+                  <Field label="Schema">
+                    <Input value={ctasSchema} onChange={(_, d) => setCtasSchema(d.value)} placeholder="dbo" />
+                  </Field>
+                  <Field label="Table name" required>
+                    <Input value={ctasTable} onChange={(_, d) => setCtasTable(d.value)} placeholder="orders_top100" />
+                  </Field>
+                  {ctasError && (
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>CTAS failed</MessageBarTitle>{ctasError}</MessageBarBody></MessageBar>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setCtasOpen(false)} disabled={ctasBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitCtas} disabled={ctasBusy || !ctasTable.trim()}>
+                    {ctasBusy ? 'Creating…' : 'Create table'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
@@ -1646,7 +2071,9 @@ interface RefreshLite {
 
 export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const ws = useWorkspaces();
+  // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
+  // or the embed-token / list calls return 404 PowerBIEntityNotFound.
+  const ws = usePowerBiWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [datasets, setDatasets] = useState<DatasetLite[] | null>(null);
   const [datasetId, setDatasetId] = useState('');
@@ -1896,7 +2323,9 @@ function ReportLikeEditor({
   listPath: string; detailPathBase: string;
 }) {
   const s = useStyles();
-  const ws = useWorkspaces();
+  // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
+  // or the embed-token / list calls return 404 PowerBIEntityNotFound.
+  const ws = usePowerBiWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [reports, setReports] = useState<ReportLite[] | null>(null);
   const [reportId, setReportId] = useState('');
@@ -2062,7 +2491,9 @@ interface TileLite { id: string; title?: string; subTitle?: string; reportId?: s
 
 export function DashboardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const ws = useWorkspaces();
+  // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
+  // or the embed-token / list calls return 404 PowerBIEntityNotFound.
+  const ws = usePowerBiWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [dashboards, setDashboards] = useState<DashboardLite[] | null>(null);
   const [dashId, setDashId] = useState('');
@@ -2193,7 +2624,9 @@ interface GoalLite { id?: string; name?: string; description?: string; currentVa
 
 export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const ws = useWorkspaces();
+  // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
+  // or the embed-token / list calls return 404 PowerBIEntityNotFound.
+  const ws = usePowerBiWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [scorecards, setScorecards] = useState<ScorecardLite[] | null>(null);
   const [scorecardId, setScorecardId] = useState('');
