@@ -475,6 +475,77 @@ export async function executeDatasetQueries(
   );
 }
 
+// ============================================================
+// Export to file (async ExportTo job)
+// ============================================================
+//
+// Power BI report export is a 3-step async job:
+//   1. POST /reports/{id}/ExportTo            -> { id, status: 'Running' }
+//   2. GET  /reports/{id}/exports/{exportId}  -> poll until 'Succeeded'
+//   3. GET  /reports/{id}/exports/{exportId}/file -> binary (PDF/PPTX/PNG)
+//
+// Docs: https://learn.microsoft.com/rest/api/power-bi/reports/export-to-file-in-group
+//
+// All three steps are groupId-scoped (per the PowerBIEntityNotFound fix).
+
+export type ExportFormat = 'PDF' | 'PPTX' | 'PNG';
+
+export interface ExportJob {
+  id: string;
+  status: 'NotStarted' | 'Running' | 'Succeeded' | 'Failed' | 'Undefined';
+  percentComplete?: number;
+  reportId?: string;
+  error?: { message?: string };
+  resourceFileExtension?: string;
+}
+
+/** Step 1 — queue an export job. Returns the export job id + initial status. */
+export async function startReportExport(
+  workspaceId: string,
+  reportId: string,
+  format: ExportFormat,
+): Promise<ExportJob> {
+  return call<ExportJob>(
+    `/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/ExportTo`,
+    { method: 'POST', body: { format } },
+  );
+}
+
+/** Step 2 — poll a queued export job. */
+export async function getReportExportStatus(
+  workspaceId: string,
+  reportId: string,
+  exportId: string,
+): Promise<ExportJob> {
+  return call<ExportJob>(
+    `/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/exports/${encodeURIComponent(exportId)}`,
+  );
+}
+
+/**
+ * Step 3 — download the finished file as raw bytes. Uses a direct fetch
+ * (not the JSON `call` helper) because the response body is binary.
+ */
+export async function getReportExportFile(
+  workspaceId: string,
+  reportId: string,
+  exportId: string,
+): Promise<{ bytes: ArrayBuffer; contentType: string }> {
+  const token = await getToken(POWERBI_SCOPE);
+  const url = `${POWERBI_BASE}/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/exports/${encodeURIComponent(exportId)}/file`;
+  const res = await fetch(url, {
+    headers: { authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new PowerBiError(text || `export file download failed (${res.status})`, res.status, text, url);
+  }
+  const contentType = res.headers.get('content-type') || 'application/octet-stream';
+  const bytes = await res.arrayBuffer();
+  return { bytes, contentType };
+}
+
 /**
  * CloneTile — POST /v1.0/myorg/groups/{ws}/dashboards/{id}/tiles/{tile}/Clone
  * Validator's recommended Dashboard editor uplift.
