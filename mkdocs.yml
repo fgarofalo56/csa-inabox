@@ -2275,6 +2275,12 @@ nav:
           - Data Warehouse parity: fiab/workloads/data-warehouse.md
           - Data Science parity: fiab/workloads/data-science.md
           - Real-Time Intelligence parity: fiab/workloads/real-time-intelligence.md
+          - "Editor — Eventhouse": fiab/workloads/eventhouse.md
+          - "Editor — KQL Database": fiab/workloads/kql-database.md
+          - "Editor — KQL Queryset": fiab/workloads/kql-queryset.md
+          - "Editor — KQL Dashboard": fiab/workloads/kql-dashboard.md
+          - "Editor — Eventstream": fiab/workloads/eventstream.md
+          - "Editor — Activator (Reflex)": fiab/workloads/activator.md
           - Data Activator parity (Reflex): fiab/workloads/data-activator-parity.md
           - Data Agents parity: fiab/workloads/data-agents-parity.md
           - Mirroring parity: fiab/workloads/mirroring-parity.md
