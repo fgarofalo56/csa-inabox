@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Dropdown, Option,
   Input, Field, Switch,
+  Tab, TabList,
   Tree, TreeItem, TreeItemLayout,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -645,6 +646,39 @@ interface Cluster {
   autoscale?: { min_workers?: number; max_workers?: number };
   autotermination_minutes?: number;
   state_message?: string;
+  // v3.4 — Libraries + Init Scripts tabs surface these from the GET response.
+  // Databricks GET /api/2.0/clusters/get returns init_scripts + spark_conf
+  // inline on the cluster object; libraries are a separate REST call
+  // (/api/2.0/libraries/cluster-status?cluster_id=...).
+  spark_conf?: Record<string, string>;
+  init_scripts?: Array<{
+    workspace?: { destination?: string };
+    volumes?: { destination?: string };
+    dbfs?: { destination?: string };
+    s3?: { destination?: string };
+    abfss?: { destination?: string };
+    gcs?: { destination?: string };
+    file?: { destination?: string };
+  }>;
+  custom_tags?: Record<string, string>;
+  data_security_mode?: string;
+}
+
+// Library object returned by /api/2.0/libraries/cluster-status — slim shape,
+// just the fields the tab renders. Real response includes per-library
+// install status (INSTALLED / PENDING / FAILED) and messages.
+interface ClusterLibrary {
+  status?: string;
+  messages?: string[];
+  library?: {
+    pypi?: { package?: string; repo?: string };
+    maven?: { coordinates?: string; repo?: string };
+    cran?: { package?: string };
+    jar?: string;
+    egg?: string;
+    whl?: string;
+    requirements?: string;
+  };
 }
 
 function clusterStateColor(s?: string): 'success' | 'warning' | 'severe' | 'informative' {
@@ -1511,6 +1545,9 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
   const [stateError, setStateError] = useState<string | null>(null);
 
   const [events, setEvents] = useState<ClusterEvent[]>([]);
+  const [libraries, setLibraries] = useState<ClusterLibrary[]>([]);
+  const [librariesErr, setLibrariesErr] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState<'config' | 'libraries' | 'init' | 'events'>('config');
 
   const loadClusters = useCallback(async () => {
     try {
@@ -1563,6 +1600,14 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
       const er = await fetch(`/api/items/databricks-cluster/${id}/events?clusterId=${encodeURIComponent(cid)}&limit=50`);
       const ej = await er.json();
       if (ej.ok) setEvents(ej.events || []);
+      // v3.4 — libraries (read-only). Renders in the Libraries tab.
+      setLibrariesErr(null);
+      try {
+        const lr = await fetch(`/api/items/databricks-cluster/${id}/libraries?clusterId=${encodeURIComponent(cid)}`);
+        const lj = await lr.json();
+        if (lj.ok) setLibraries(lj.libraries || []);
+        else { setLibraries([]); setLibrariesErr(lj.error || `HTTP ${lr.status}`); }
+      } catch (le: any) { setLibrariesErr(le?.message || String(le)); }
     } catch (e: any) {
       setSaveError(e?.message || String(e));
     }
@@ -1829,30 +1874,146 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
 
           {clusterId && (
             <>
-              <Subtitle2 style={{ marginTop: 12 }}>Event log (last 50)</Subtitle2>
-              <div className={s.tableWrap}>
-                <Table size="small" aria-label="Cluster events">
-                  <TableHeader><TableRow>
-                    <TableHeaderCell>Time</TableHeaderCell>
-                    <TableHeaderCell>Type</TableHeaderCell>
-                    <TableHeaderCell>Reason / cause</TableHeaderCell>
-                    <TableHeaderCell>Workers</TableHeaderCell>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {events.length === 0 && (
-                      <TableRow><TableCell colSpan={4}><Caption1>No events.</Caption1></TableCell></TableRow>
-                    )}
-                    {events.map((e, i) => (
-                      <TableRow key={i}>
-                        <TableCell>{fmtTime(e.timestamp)}</TableCell>
-                        <TableCell><Badge appearance="outline">{e.type || '—'}</Badge></TableCell>
-                        <TableCell>{e.details?.reason?.code || e.details?.cause || '—'}</TableCell>
-                        <TableCell>{e.details?.current_num_workers ?? '—'}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginTop: 12 }}>
+                <TabList selectedValue={detailTab} onTabSelect={(_, d) => setDetailTab(d.value as 'config' | 'libraries' | 'init' | 'events')}>
+                  <Tab value="config">Spark config ({Object.keys(cluster?.spark_conf || {}).length})</Tab>
+                  <Tab value="libraries">Libraries ({libraries.length})</Tab>
+                  <Tab value="init">Init scripts ({(cluster?.init_scripts || []).length})</Tab>
+                  <Tab value="events">Events ({events.length})</Tab>
+                </TabList>
               </div>
+
+              {detailTab === 'config' && (
+                <>
+                  {!cluster?.spark_conf || Object.keys(cluster.spark_conf).length === 0 ? (
+                    <MessageBar intent="info"><MessageBarBody>No custom <code>spark_conf</code> keys on this cluster. Spark uses Databricks defaults.</MessageBarBody></MessageBar>
+                  ) : (
+                    <div className={s.tableWrap}>
+                      <Table size="small" aria-label="Spark config">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Key</TableHeaderCell>
+                          <TableHeaderCell>Value</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {Object.entries(cluster.spark_conf).map(([k, v]) => (
+                            <TableRow key={k}>
+                              <TableCell><code style={{ fontSize: 12 }}>{k}</code></TableCell>
+                              <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{v}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {detailTab === 'libraries' && (
+                <>
+                  {librariesErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Library list failed</MessageBarTitle>{librariesErr}</MessageBarBody></MessageBar>}
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      <MessageBarTitle>Read-only library status</MessageBarTitle>
+                      Install + uninstall is performed in the Databricks workspace UI — each non-public source
+                      (private PyPI, ADO artifact feeds, JARs in protected blob containers) needs its own
+                      credential dance. The Loom editor surfaces the per-library install state via
+                      <code> /api/2.0/libraries/cluster-status</code>.
+                    </MessageBarBody>
+                  </MessageBar>
+                  {libraries.length === 0 ? (
+                    <Caption1>No libraries attached.</Caption1>
+                  ) : (
+                    <div className={s.tableWrap}>
+                      <Table size="small" aria-label="Cluster libraries">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Type</TableHeaderCell>
+                          <TableHeaderCell>Coordinates / package</TableHeaderCell>
+                          <TableHeaderCell>Status</TableHeaderCell>
+                          <TableHeaderCell>Messages</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {libraries.map((lib, i) => {
+                            const l = lib.library || {};
+                            const t = l.pypi ? 'pypi' : l.maven ? 'maven' : l.cran ? 'cran' : l.jar ? 'jar' : l.whl ? 'whl' : l.egg ? 'egg' : l.requirements ? 'requirements' : '?';
+                            const coords = l.pypi?.package || l.maven?.coordinates || l.cran?.package || l.jar || l.whl || l.egg || l.requirements || '—';
+                            return (
+                              <TableRow key={i}>
+                                <TableCell><Badge appearance="outline">{t}</Badge></TableCell>
+                                <TableCell><code style={{ fontSize: 12 }}>{coords}</code></TableCell>
+                                <TableCell><Badge appearance="filled" color={lib.status === 'INSTALLED' ? 'success' : lib.status === 'FAILED' ? 'danger' : 'warning'}>{lib.status || '—'}</Badge></TableCell>
+                                <TableCell style={{ fontSize: 11 }}>{(lib.messages || []).join('; ') || '—'}</TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {detailTab === 'init' && (
+                <>
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      <MessageBarTitle>Read-only init script list</MessageBarTitle>
+                      Init scripts run on every node when the cluster starts. Edit + reorder in the Databricks
+                      workspace UI (Compute → cluster → Advanced options → Init scripts) — Loom surfaces the
+                      configured list from <code>/api/2.0/clusters/get</code>.
+                    </MessageBarBody>
+                  </MessageBar>
+                  {(cluster?.init_scripts || []).length === 0 ? (
+                    <Caption1>No init scripts configured.</Caption1>
+                  ) : (
+                    <div className={s.tableWrap}>
+                      <Table size="small" aria-label="Init scripts">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Source</TableHeaderCell>
+                          <TableHeaderCell>Destination</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {(cluster?.init_scripts || []).map((script, i) => {
+                            const src = script.workspace ? 'workspace' : script.volumes ? 'volumes' : script.dbfs ? 'dbfs' : script.abfss ? 'abfss' : script.s3 ? 's3' : script.gcs ? 'gcs' : script.file ? 'file' : '?';
+                            const dest = script.workspace?.destination || script.volumes?.destination || script.dbfs?.destination || script.abfss?.destination || script.s3?.destination || script.gcs?.destination || script.file?.destination || '—';
+                            return (
+                              <TableRow key={i}>
+                                <TableCell><Badge appearance="outline">{src}</Badge></TableCell>
+                                <TableCell><code style={{ fontSize: 12 }}>{dest}</code></TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {detailTab === 'events' && (
+                <div className={s.tableWrap}>
+                  <Table size="small" aria-label="Cluster events">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Time</TableHeaderCell>
+                      <TableHeaderCell>Type</TableHeaderCell>
+                      <TableHeaderCell>Reason / cause</TableHeaderCell>
+                      <TableHeaderCell>Workers</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {events.length === 0 && (
+                        <TableRow><TableCell colSpan={4}><Caption1>No events.</Caption1></TableCell></TableRow>
+                      )}
+                      {events.map((e, i) => (
+                        <TableRow key={i}>
+                          <TableCell>{fmtTime(e.timestamp)}</TableCell>
+                          <TableCell><Badge appearance="outline">{e.type || '—'}</Badge></TableCell>
+                          <TableCell>{(e.details as any)?.reason?.code || (e.details as any)?.cause || '—'}</TableCell>
+                          <TableCell>{(e.details as any)?.current_num_workers ?? '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </>
           )}
         </div>
