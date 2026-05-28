@@ -722,3 +722,65 @@ export async function runOneTimeNotebook(args: {
   });
   return asJsonOrThrow<{ run_id: number; run_page_url?: string }>(submitRes, 'runOneTimeNotebook');
 }
+
+// ============================================================
+// Unity Catalog — catalogs, schemas, tables
+// Backs the MirroredDatabricksEditor (Fabric MirroredAzureDatabricksCatalog).
+// Auth path is the same Bearer flow; UC API lives under /api/2.1/unity-catalog.
+// ============================================================
+
+export interface UcCatalog {
+  name: string;
+  comment?: string;
+  owner?: string;
+  metastore_id?: string;
+  catalog_type?: string;
+  created_at?: number;
+  updated_at?: number;
+}
+
+export interface UcSchema {
+  name: string;
+  catalog_name: string;
+  full_name?: string;
+  comment?: string;
+  owner?: string;
+  created_at?: number;
+  updated_at?: number;
+}
+
+export interface UcTable {
+  name: string;
+  catalog_name: string;
+  schema_name: string;
+  full_name?: string;
+  table_type?: 'MANAGED' | 'EXTERNAL' | 'VIEW' | 'MATERIALIZED_VIEW' | string;
+  data_source_format?: string;
+  comment?: string;
+  owner?: string;
+  storage_location?: string;
+  columns?: Array<{ name: string; type_name?: string; type_text?: string; nullable?: boolean; comment?: string }>;
+  created_at?: number;
+  updated_at?: number;
+}
+
+export async function listUcCatalogs(): Promise<UcCatalog[]> {
+  const res = await dbxFetch('/api/2.1/unity-catalog/catalogs');
+  const body = await asJsonOrThrow<{ catalogs?: UcCatalog[] }>(res, 'listUcCatalogs');
+  return body.catalogs || [];
+}
+
+export async function listUcSchemas(catalogName: string): Promise<UcSchema[]> {
+  const params = new URLSearchParams({ catalog_name: catalogName });
+  const res = await dbxFetch(`/api/2.1/unity-catalog/schemas?${params.toString()}`);
+  const body = await asJsonOrThrow<{ schemas?: UcSchema[] }>(res, `listUcSchemas(${catalogName})`);
+  return body.schemas || [];
+}
+
+export async function listUcTables(catalogName: string, schemaName: string): Promise<UcTable[]> {
+  const params = new URLSearchParams({ catalog_name: catalogName, schema_name: schemaName });
+  const res = await dbxFetch(`/api/2.1/unity-catalog/tables?${params.toString()}`);
+  const body = await asJsonOrThrow<{ tables?: UcTable[] }>(res, `listUcTables(${catalogName}.${schemaName})`);
+  return body.tables || [];
+}
+
