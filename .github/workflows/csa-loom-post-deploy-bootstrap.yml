@@ -106,29 +106,89 @@ jobs:
             --api-version 2021-06-01 --set properties.publicNetworkAccess=Disabled \
             --query "properties.publicNetworkAccess" -o tsv
 
+      - name: Enable Databricks public access (temp, so GHA can reach SCIM)
+        run: |
+          set -e
+          # The Databricks workspace lives behind a private endpoint. The
+          # GHA runner can't reach `/api/2.0/preview/scim/v2/...` without
+          # publicNetworkAccess=Enabled. We flip it on, do the SCIM PATCH,
+          # and restore disabled in the always-run cleanup step below.
+          DBX_RID=$(az resource list -g $DLZ_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
+          if [ -z "$DBX_RID" ]; then
+            DBX_RID=$(az resource list -g $ADMIN_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
+          fi
+          echo "DBX_RID=$DBX_RID"
+          if [ -n "$DBX_RID" ]; then
+            az resource update --ids "$DBX_RID" --api-version 2024-05-01 \
+              --set properties.publicNetworkAccess=Enabled \
+              --query "properties.publicNetworkAccess" -o tsv || true
+            sleep 30
+          fi
+
       - name: Bootstrap Databricks SCIM (Console UAMI as SP)
         run: |
           set -e
           TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
+          # All four entitlements needed for full editor parity:
+          # workspace-access + databricks-sql-access = browse, run notebooks, SQL warehouses
+          # allow-cluster-create = POST /api/2.1/clusters/create (fixes the 403 in
+          #   the Cluster editor reported 2026-05-27; PR #366)
+          # allow-instance-pool-create = POST /api/2.0/instance-pools/create
           PAYLOAD=$(cat <<EOF
           {
             "schemas":["urn:ietf:params:scim:schemas:core:2.0:ServicePrincipal"],
             "applicationId":"$CONSOLE_UAMI_CLIENT",
             "displayName":"uami-loom-console-eastus2",
             "groups":[],
-            "entitlements":[{"value":"workspace-access"},{"value":"databricks-sql-access"}]
+            "entitlements":[
+              {"value":"workspace-access"},
+              {"value":"databricks-sql-access"},
+              {"value":"allow-cluster-create"},
+              {"value":"allow-instance-pool-create"}
+            ]
           }
           EOF
           )
-          # Try POST; if 409 (exists), patch entitlements
-          RESP=$(curl -sS -w "%{http_code}" -o /tmp/scim.json -X POST \
+          # Try POST; on 409 (SP already exists from a prior bootstrap that
+          # only granted 2 entitlements), look up the SP id and PATCH the
+          # entitlements list to all four. Idempotent on re-run.
+          STATUS=$(curl -sS -w "%{http_code}" -o /tmp/scim.json -X POST \
             "https://$DBX_HOST/api/2.0/preview/scim/v2/ServicePrincipals" \
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/scim+json" \
             -d "$PAYLOAD")
-          echo "SCIM POST status: $RESP"
+          echo "SCIM POST status: $STATUS"
           cat /tmp/scim.json
           echo
+          if [[ "$STATUS" == "409" ]] || grep -q "already exists\|exists" /tmp/scim.json 2>/dev/null; then
+            echo "SP already exists — looking up id + PATCHing entitlements"
+            SP_LOOKUP=$(curl -sS \
+              "https://$DBX_HOST/api/2.0/preview/scim/v2/ServicePrincipals?filter=applicationId%20eq%20%22$CONSOLE_UAMI_CLIENT%22" \
+              -H "Authorization: Bearer $TOKEN")
+            SP_ID=$(echo "$SP_LOOKUP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['Resources'][0]['id'])")
+            echo "Existing SP id: $SP_ID"
+            PATCH_RESP=$(curl -sS -w "%{http_code}" -o /tmp/scim_patch.json -X PATCH \
+              "https://$DBX_HOST/api/2.0/preview/scim/v2/ServicePrincipals/$SP_ID" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/scim+json" \
+              -d '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"replace","path":"entitlements","value":[{"value":"workspace-access"},{"value":"databricks-sql-access"},{"value":"allow-cluster-create"},{"value":"allow-instance-pool-create"}]}]}')
+            echo "SCIM PATCH status: $PATCH_RESP"
+            cat /tmp/scim_patch.json
+            echo
+          fi
+
+      - name: Restore Databricks public access disabled
+        if: always()
+        run: |
+          DBX_RID=$(az resource list -g $DLZ_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
+          if [ -z "$DBX_RID" ]; then
+            DBX_RID=$(az resource list -g $ADMIN_RG --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv)
+          fi
+          if [ -n "$DBX_RID" ]; then
+            az resource update --ids "$DBX_RID" --api-version 2024-05-01 \
+              --set properties.publicNetworkAccess=Disabled \
+              --query "properties.publicNetworkAccess" -o tsv || true
+          fi
 
       - name: Grant Console UAMI APIM Service Contributor (if APIM exists)
         run: |
@@ -306,7 +366,7 @@ jobs:
         run: |
           echo "==== Bootstrap complete ===="
           echo "Synapse: UAMI granted Synapse Administrator + SQL Administrator + SQL-level sysadmin"
-          echo "Databricks: UAMI registered as SP via SCIM (workspace-access + databricks-sql-access)"
+          echo "Databricks: UAMI registered as SP via SCIM (workspace-access + databricks-sql-access + allow-cluster-create + allow-instance-pool-create)"
           echo "APIM: Service Contributor granted (if APIM provisioned)"
           echo "Admin RG: Reader granted (for /admin/capacity full inventory)"
           echo "Foundry workspace: AzureML Data Scientist granted (unblocks /api/foundry/workspace + datastores)"
