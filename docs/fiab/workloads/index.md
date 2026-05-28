@@ -1,5 +1,7 @@
 # CSA Loom — Workloads
 
+![Workloads — one page per Fabric workload with parity grade and honest gaps](../../assets/images/hero/fiab/workloads.svg){ .architecture-hero loading="eager" }
+
 For every Microsoft Fabric workload (and Fabric-only capability), one
 documentation page explains how CSA Loom delivers parity, where the
 honest gaps are, and how the workload migrates forward when Fabric
