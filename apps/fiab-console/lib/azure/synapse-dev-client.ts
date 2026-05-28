@@ -142,6 +142,67 @@ export async function deleteSparkPool(name: string): Promise<void> {
   }
 }
 
+/**
+ * Scale a Spark Big Data pool. Either set a fixed `nodeCount` (and disable
+ * autoScale) OR provide an `autoScale: { enabled, minNodeCount, maxNodeCount }`
+ * block to use autoscale. Mirrors the Synapse Studio "Scale" dialog.
+ *
+ * Implemented as a PATCH against the ARM bigDataPools resource. The Synapse
+ * RP supports targeted property updates without re-PUTing the full body, so
+ * we send only the scale-related properties + the location (required).
+ */
+export async function scaleSparkPool(
+  name: string,
+  spec: {
+    nodeCount?: number;
+    autoScale?: { enabled: boolean; minNodeCount: number; maxNodeCount: number };
+    location?: string;
+  },
+): Promise<SparkPool> {
+  const properties: Record<string, unknown> = {};
+  if (typeof spec.nodeCount === 'number') properties.nodeCount = spec.nodeCount;
+  if (spec.autoScale) properties.autoScale = spec.autoScale;
+  if (!Object.keys(properties).length) {
+    throw new Error('scaleSparkPool: provide nodeCount or autoScale');
+  }
+  const body: Record<string, unknown> = { properties };
+  if (spec.location) body.location = spec.location;
+  const r = await callArm(`${armBase()}/bigDataPools/${name}?api-version=${ARM_API}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<SparkPool>(r, `scaleSparkPool(${name})`);
+}
+
+/**
+ * Update auto-pause behaviour on a Spark Big Data pool. delayInMinutes is
+ * the idle threshold before the pool auto-pauses. Setting `enabled: false`
+ * disables auto-pause entirely (Spark idles forever).
+ *
+ * Synapse RP rejects PATCH on a pool that's in a transient provisioning
+ * state — surface the 4xx verbatim so the BFF can show the message bar.
+ */
+export async function setSparkPoolAutoPause(
+  name: string,
+  spec: { enabled: boolean; delayInMinutes?: number; location?: string },
+): Promise<SparkPool> {
+  if (spec.enabled && (spec.delayInMinutes == null || spec.delayInMinutes < 5)) {
+    throw new Error('setSparkPoolAutoPause: delayInMinutes must be ≥ 5 when enabled');
+  }
+  const properties: Record<string, unknown> = {
+    autoPause: spec.enabled
+      ? { enabled: true, delayInMinutes: spec.delayInMinutes }
+      : { enabled: false },
+  };
+  const body: Record<string, unknown> = { properties };
+  if (spec.location) body.location = spec.location;
+  const r = await callArm(`${armBase()}/bigDataPools/${name}?api-version=${ARM_API}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<SparkPool>(r, `setSparkPoolAutoPause(${name})`);
+}
+
 // ============================================================
 // Spark Livy batch jobs (dev endpoint)
 // ============================================================
@@ -335,6 +396,106 @@ export async function queryPipelineRuns(
 export async function getPipelineRun(runId: string): Promise<PipelineRun> {
   const r = await callDev(`/pipelineruns/${encodeURIComponent(runId)}?api-version=${DEV_API}`);
   return jsonOrThrow<PipelineRun>(r, `getPipelineRun(${runId})`);
+}
+
+/**
+ * Debug a Synapse Pipeline — creates a run with `isRecovery=false`
+ * and `?isDebugRun=true`, which Synapse Studio uses to evaluate
+ * activities against the in-memory edited spec rather than the saved
+ * spec. Returns the runId so the editor can poll status.
+ *
+ * Note: Synapse Studio also supports passing override activity specs
+ * via a separate POST body (`debugInfo`); we omit that for now since
+ * the editor only debugs the persisted spec.
+ */
+export async function debugPipeline(
+  name: string,
+  params?: Record<string, unknown>,
+): Promise<PipelineRunResponse> {
+  const r = await callDev(
+    `/pipelines/${encodeURIComponent(name)}/createRun?api-version=${DEV_API}&isRecovery=false&isDebugRun=true`,
+    { method: 'POST', body: JSON.stringify(params || {}) },
+  );
+  return jsonOrThrow<PipelineRunResponse>(r, `debugPipeline(${name})`);
+}
+
+// ============================================================
+// Triggers (dev endpoint — Synapse Integrate)
+// ============================================================
+
+export interface SynapseTrigger {
+  id?: string;
+  name: string;
+  type?: string;
+  etag?: string;
+  properties: {
+    description?: string;
+    runtimeState?: 'Started' | 'Stopped' | 'Disabled' | string;
+    pipelines?: Array<{
+      pipelineReference: { referenceName: string; type: 'PipelineReference' };
+      parameters?: Record<string, unknown>;
+    }>;
+    type?: string; // discriminator: ScheduleTrigger / TumblingWindowTrigger / BlobEventsTrigger
+    typeProperties?: Record<string, unknown>;
+    annotations?: unknown[];
+  };
+}
+
+export async function listTriggers(): Promise<SynapseTrigger[]> {
+  const r = await callDev(`/triggers?api-version=${DEV_API}`);
+  const body = await jsonOrThrow<{ value: SynapseTrigger[] }>(r, 'listTriggers');
+  return body.value || [];
+}
+
+export async function getTrigger(name: string): Promise<SynapseTrigger> {
+  const r = await callDev(`/triggers/${encodeURIComponent(name)}?api-version=${DEV_API}`);
+  return jsonOrThrow<SynapseTrigger>(r, `getTrigger(${name})`);
+}
+
+export async function upsertTrigger(name: string, spec: SynapseTrigger): Promise<SynapseTrigger> {
+  const body = { name: spec.name || name, properties: spec.properties };
+  const r = await callDev(
+    `/triggers/${encodeURIComponent(name)}?api-version=${DEV_API}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+  );
+  return jsonOrThrow<SynapseTrigger>(r, `upsertTrigger(${name})`);
+}
+
+export async function deleteTrigger(name: string): Promise<void> {
+  const r = await callDev(`/triggers/${encodeURIComponent(name)}?api-version=${DEV_API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 200 && r.status !== 204) {
+    throw new Error(`deleteTrigger failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function startTrigger(name: string): Promise<void> {
+  const r = await callDev(
+    `/triggers/${encodeURIComponent(name)}/start?api-version=${DEV_API}`,
+    { method: 'POST' },
+  );
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`startTrigger failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function stopTrigger(name: string): Promise<void> {
+  const r = await callDev(
+    `/triggers/${encodeURIComponent(name)}/stop?api-version=${DEV_API}`,
+    { method: 'POST' },
+  );
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`stopTrigger failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+/** Helper: filter listTriggers() to those that reference a given pipeline name. */
+export async function listTriggersForPipeline(pipelineName: string): Promise<SynapseTrigger[]> {
+  const all = await listTriggers();
+  return all.filter((t) =>
+    (t.properties.pipelines || []).some(
+      (p) => p.pipelineReference?.referenceName === pipelineName,
+    ),
+  );
 }
 
 // ============================================================
