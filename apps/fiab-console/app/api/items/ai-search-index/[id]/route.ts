@@ -6,11 +6,11 @@ import { getIndex, FoundryError, NotDeployedError } from '@/lib/azure/foundry-cl
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const index = await getIndex(ctx.params.id);
+    const index = await getIndex((await ctx.params).id);
     if (!index) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     return NextResponse.json({ ok: true, index });
   } catch (e: any) {

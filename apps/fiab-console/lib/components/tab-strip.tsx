@@ -269,7 +269,11 @@ export function TabStrip() {
   const router = useRouter();
   const [tabs, setTabs] = useState<Tab[]>([STATIC_HOME]);
   const [loaded, setLoaded] = useState(false);
-  const [groupBy, setGroupBy] = useState(false);
+  // Default ON — user expects Fabric-like grouping; can still toggle off.
+  const [groupBy, setGroupBy] = useState(true);
+  // Per-workspace name lookup so headers + overflow show "Production"
+  // instead of "a3f9c0d2…". Populated on mount + when workspaces change.
+  const [wsNames, setWsNames] = useState<Record<string, string>>({});
   const toasterId = useId('tab-strip-toaster');
   const { dispatchToast } = useToastController(toasterId);
 
@@ -330,8 +334,30 @@ export function TabStrip() {
 
     try {
       const groupPref = localStorage.getItem(GROUP_PREF_KEY);
-      if (groupPref === '1') setGroupBy(true);
+      // Honor a stored '0' to opt OUT of grouping; default is ON.
+      if (groupPref === '0') setGroupBy(false);
+      else if (groupPref === '1') setGroupBy(true);
     } catch {/* ignore */}
+
+    // Resolve workspace id → name once. Cached in localStorage so the
+    // dropdown labels render immediately on subsequent loads (the
+    // /api/loom/workspaces fetch can take ~200ms on cold boot).
+    try {
+      const cached = localStorage.getItem('loom.tabs.wsNames');
+      if (cached) setWsNames(JSON.parse(cached));
+    } catch {/* ignore */}
+    fetch('/api/loom/workspaces')
+      .then(r => r.json())
+      .then(j => {
+        if (!j?.ok || !Array.isArray(j.workspaces)) return;
+        const map: Record<string, string> = {};
+        for (const w of j.workspaces) {
+          if (w?.id && w?.name) map[w.id] = w.name;
+        }
+        setWsNames(map);
+        try { localStorage.setItem('loom.tabs.wsNames', JSON.stringify(map)); } catch {/* ignore */}
+      })
+      .catch(() => {/* swallow — header falls back to truncated id */});
 
     fetch('/api/tabs').then(r => r.json()).then(d => {
       if (Array.isArray(d?.tabs) && d.tabs.length) {
@@ -539,11 +565,15 @@ export function TabStrip() {
     order.forEach(wsId => {
       const arr = byWs.get(wsId) || [];
       if (!arr.length) return;
-      flat.push({ kind: 'header', key: `hdr-${wsId}`, label: `ws · ${wsId.slice(0, 8)}`, count: arr.length });
+      const name = wsNames[wsId];
+      // Show resolved workspace name; fall back to a truncated id only
+      // until /api/loom/workspaces resolves (cached so this rarely shows).
+      const label = name ? name : `ws · ${wsId.slice(0, 8)}`;
+      flat.push({ kind: 'header', key: `hdr-${wsId}`, label, count: arr.length });
       arr.forEach(t => flat.push({ kind: 'tab', tab: t }));
     });
     return flat;
-  }, [groupBy, tabs]);
+  }, [groupBy, tabs, wsNames]);
 
   // Track how many items fit in the visible scroller width. Anything past
   // the limit is hidden + accessible via the overflow chevron.
@@ -580,6 +610,36 @@ export function TabStrip() {
       .filter(i => i.kind === 'tab')
       .map(i => (i as { kind: 'tab'; tab: Tab }).tab);
   }, [renderItems, visibleCount]);
+
+  // Group the overflow popover's hidden tabs by workspace name so the
+  // dropdown nests items under their owning workspace (matches Fabric's
+  // "Open items" overlay). When groupBy is off the list stays flat.
+  const overflowGroups: Array<
+    | { kind: 'tab'; tab: Tab }
+    | { kind: 'header'; key: string; label: string; count: number }
+  > = useMemo(() => {
+    if (!groupBy) return hiddenTabs.map(t => ({ kind: 'tab' as const, tab: t }));
+    const out: typeof overflowGroups = [];
+    // Tabs without a workspaceId render first (Home, pinned admin pages).
+    const orphans = hiddenTabs.filter(t => !t.workspaceId);
+    orphans.forEach(t => out.push({ kind: 'tab', tab: t }));
+    // Then per-workspace clusters, in first-seen order.
+    const seen: string[] = [];
+    const byWs = new Map<string, Tab[]>();
+    hiddenTabs.forEach(t => {
+      if (!t.workspaceId) return;
+      if (!byWs.has(t.workspaceId)) { byWs.set(t.workspaceId, []); seen.push(t.workspaceId); }
+      byWs.get(t.workspaceId)!.push(t);
+    });
+    seen.forEach(wsId => {
+      const arr = byWs.get(wsId) || [];
+      if (!arr.length) return;
+      const label = wsNames[wsId] || `ws · ${wsId.slice(0, 8)}`;
+      out.push({ kind: 'header', key: `ovf-hdr-${wsId}`, label, count: arr.length });
+      arr.forEach(t => out.push({ kind: 'tab', tab: t }));
+    });
+    return out;
+  }, [groupBy, hiddenTabs, wsNames]);
 
   return (
     <div className={styles.root} role="tablist" aria-label="Open tabs">
@@ -701,30 +761,57 @@ export function TabStrip() {
           </PopoverTrigger>
           <PopoverSurface>
             <div className={styles.overflowMenu} role="menu">
-              {hiddenTabs.map((tab) => (
-                <div
-                  key={tab.id}
-                  role="menuitem"
-                  className={styles.overflowItem}
-                  onClick={() => router.push(tab.href)}
-                >
-                  {tab.pinned && tab.id !== 'home' && (
-                    <Pin16Filled style={{ fontSize: 12, opacity: 0.7 }} aria-label="Pinned" />
-                  )}
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {tab.title}
-                  </span>
-                  {!tab.pinned && tab.id !== 'home' && (
-                    <Button
-                      appearance="transparent"
-                      size="small"
-                      icon={<Dismiss12Regular />}
-                      onClick={(e) => close(tab.id, e)}
-                      aria-label={`Close ${tab.title}`}
-                    />
-                  )}
-                </div>
-              ))}
+              {overflowGroups.map((item) => {
+                if (item.kind === 'header') {
+                  return (
+                    <div
+                      key={item.key}
+                      role="presentation"
+                      className={styles.overflowItem}
+                      style={{
+                        fontWeight: 600,
+                        opacity: 0.8,
+                        textTransform: 'uppercase',
+                        fontSize: 11,
+                        letterSpacing: 0.5,
+                        cursor: 'default',
+                        backgroundColor: 'transparent',
+                      }}
+                    >
+                      <span style={{ flex: 1 }}>{item.label}</span>
+                      <span style={{ opacity: 0.6, fontWeight: 500 }}>{item.count}</span>
+                    </div>
+                  );
+                }
+                const tab = item.tab;
+                return (
+                  <div
+                    key={tab.id}
+                    role="menuitem"
+                    className={styles.overflowItem}
+                    onClick={() => router.push(tab.href)}
+                    // Indent grouped (workspace-owned) tabs so they visually
+                    // nest under the workspace header above.
+                    style={groupBy && tab.workspaceId ? { paddingLeft: 24 } : undefined}
+                  >
+                    {tab.pinned && tab.id !== 'home' && (
+                      <Pin16Filled style={{ fontSize: 12, opacity: 0.7 }} aria-label="Pinned" />
+                    )}
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {tab.title}
+                    </span>
+                    {!tab.pinned && tab.id !== 'home' && (
+                      <Button
+                        appearance="transparent"
+                        size="small"
+                        icon={<Dismiss12Regular />}
+                        onClick={(e) => close(tab.id, e)}
+                        aria-label={`Close ${tab.title}`}
+                      />
+                    )}
+                  </div>
+                );
+              })}
               {hiddenTabs.length > 0 && <div className={styles.overflowSep} />}
               <div
                 role="menuitem"

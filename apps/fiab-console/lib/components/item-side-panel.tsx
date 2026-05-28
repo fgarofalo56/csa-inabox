@@ -52,9 +52,19 @@ export function ItemSidePanel({ type, id }: Props) {
   const [open, setOpen] = useState<null | 'comments' | 'history' | 'share' | 'learn'>(null);
   const isNew = id === 'new';
 
-  // Auto-open Learn for first visit, unless dismissed.
+  // Auto-open Learn for first visit, unless dismissed — OR unless the
+  // URL carries `?noLearn=1` / `?screenshot=1`, which lets screenshot
+  // harnesses and Playwright UATs render the editor in its clean state
+  // without manually clicking the drawer closed (the Tutorial pages on
+  // the docs site shouldn't bake the Learn drawer into every screenshot).
   useEffect(() => {
     if (isNew) return;
+    if (typeof window !== 'undefined') {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.has('noLearn') || sp.has('screenshot') || sp.get('learn') === '0') {
+        return;
+      }
+    }
     fetch(`/api/user-prefs?key=learnDismissed:${type}`).then(r => r.json()).then(d => {
       if (!d?.value) {
         const learn = getLearn(type);

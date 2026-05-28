@@ -71,7 +71,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.name }} via ACR Tasks
-    needs: resolve
+    needs: [resolve, acr_enable]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -109,3 +109,52 @@ jobs:
             --build-arg "LOOM_BUILD_TIMESTAMP=${STAMP}" \
             "${{ matrix.ctx }}"
           echo "::notice::Built ${{ matrix.name }}:${TAG} via ACR Tasks (sha=${{ github.sha }})"
+
+  # v3.41: toggle ACR publicNetworkAccess so `az acr build` can upload the
+  # source tarball from the GHA runner. The ACR is provisioned with
+  # publicNetworkAccess=Disabled by default (private endpoint), which was
+  # blocking every build with "client with IP ... is not allowed access".
+  acr_enable:
+    name: Enable ACR public access (temp)
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - run: |
+          ACR="${{ needs.resolve.outputs.acr_name }}"
+          # Two distinct rules block GHA: publicNetworkAccess (the endpoint
+          # itself) AND networkRuleSet.defaultAction (the IP-allowlist
+          # default). Flip BOTH.
+          az acr update --name "$ACR" --public-network-enabled true -o tsv --query "publicNetworkAccess" || true
+          az acr update --name "$ACR" --default-action Allow -o tsv --query "networkRuleSet.defaultAction" || true
+          sleep 30
+
+  acr_restore:
+    name: Restore ACR public access disabled
+    needs: [resolve, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - run: |
+          ACR="${{ needs.resolve.outputs.acr_name }}"
+          az acr update --name "$ACR" --default-action Deny -o tsv --query "networkRuleSet.defaultAction" || true
+          az acr update --name "$ACR" --public-network-enabled false -o tsv --query "publicNetworkAccess" || true

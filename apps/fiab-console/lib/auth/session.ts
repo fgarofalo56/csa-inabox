@@ -17,7 +17,7 @@
  * browser cookie.
  */
 
-import { cookies } from 'next/headers';
+import { cookies, type UnsafeUnwrappedCookies } from 'next/headers';
 import crypto from 'node:crypto';
 import type { UserClaims } from './msal';
 
@@ -51,7 +51,7 @@ export function encodeSessionCookie(payload: SessionPayload): string {
 }
 
 export function getSession(): SessionPayload | null {
-  const cookie = cookies().get(COOKIE_NAME);
+  const cookie = (cookies() as unknown as UnsafeUnwrappedCookies).get(COOKIE_NAME);
   if (!cookie) return null;
   try {
     const raw = Buffer.from(cookie.value, 'base64url');

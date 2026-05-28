@@ -49,7 +49,8 @@ async function assertOwner(workspaceId: string, tenantId: string) {
   }
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   if (!(await assertOwner(params.id, s.claims.oid)))
@@ -64,7 +65,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   if (!(await assertOwner(params.id, s.claims.oid)))
@@ -110,7 +112,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   return NextResponse.json({ ok: true, git: resource }, { status: 200 });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   if (!(await assertOwner(params.id, s.claims.oid)))

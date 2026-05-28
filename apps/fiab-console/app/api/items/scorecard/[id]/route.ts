@@ -14,15 +14,15 @@ import { getScorecard, listScorecardGoals, addScorecardGoalValue, PowerBiError }
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   try {
     const [scorecard, goals] = await Promise.all([
-      getScorecard(workspaceId, ctx.params.id),
-      listScorecardGoals(workspaceId, ctx.params.id).catch(() => []),
+      getScorecard(workspaceId, (await ctx.params).id),
+      listScorecardGoals(workspaceId, (await ctx.params).id).catch(() => []),
     ]);
     return NextResponse.json({ ok: true, workspaceId, scorecard, goals });
   } catch (e: any) {
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
     return NextResponse.json({ ok: false, error: 'goalId and numeric value required' }, { status: 400 });
   }
   try {
-    const result = await addScorecardGoalValue(workspaceId, ctx.params.id, goalId, {
+    const result = await addScorecardGoalValue(workspaceId, (await ctx.params).id, goalId, {
       value,
       targetValue: typeof body?.targetValue === 'number' ? body.targetValue : undefined,
       noteText: body?.noteText ? String(body.noteText) : undefined,

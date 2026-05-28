@@ -18,13 +18,15 @@ export function makeItem(slug: string, displayName: string): FabricItemType {
   };
 }
 
-/** Install a fetch mock keyed by URL substring. */
+/** Install a fetch mock keyed by URL substring. Returns the spy + call log. */
 export function installFetchMock(handlers: Record<string, (url: string, init?: RequestInit) => unknown>) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
-  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    const u = typeof url === 'string' ? url : (url as any).toString();
+  const fetchMock = vi.fn(async (url: any, init?: RequestInit) => {
+    const u = typeof url === 'string' ? url : (url?.toString?.() ?? String(url));
     calls.push({ url: u, init });
-    for (const key of Object.keys(handlers)) {
+    // Pick the longest matching key so /api/foo/bar wins over /api/foo
+    const keys = Object.keys(handlers).sort((a, b) => b.length - a.length);
+    for (const key of keys) {
       if (u.includes(key)) {
         const body = handlers[key](u, init);
         return new Response(JSON.stringify(body), {
