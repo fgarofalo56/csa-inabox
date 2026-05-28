@@ -17,6 +17,8 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Tree, TreeItem, TreeItemLayout,
+  Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  Field, Dropdown, Option,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -920,6 +922,64 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
   const [materializing, setMaterializing] = useState(false);
   const [matMsg, setMatMsg] = useState<string | null>(null);
 
+  // Add entity / Add relationship dialogs. Both append a line to the ontology
+  // DSL (`Name : Parent -- description`) and persist via useItemState.save().
+  const [entityDlgOpen, setEntityDlgOpen] = useState(false);
+  const [relDlgOpen, setRelDlgOpen] = useState(false);
+  const [entName, setEntName] = useState('');
+  const [entParent, setEntParent] = useState('');
+  const [entDesc, setEntDesc] = useState('');
+  const [relChild, setRelChild] = useState('');
+  const [relParent, setRelParent] = useState('');
+  const [dlgErr, setDlgErr] = useState<string | null>(null);
+
+  const openEntityDlg = () => { setEntName(''); setEntParent(''); setEntDesc(''); setDlgErr(null); setEntityDlgOpen(true); };
+  const openRelDlg = () => { setRelChild(''); setRelParent(''); setDlgErr(null); setRelDlgOpen(true); };
+
+  // Persist eagerly for existing items; for /new the Cosmos row doesn't exist
+  // yet so save() would 404 — the user persists with the Save button instead.
+  const persistOnto = useCallback((next: OntoState) => {
+    setState(() => next);
+    if (id && id !== 'new') save(next);
+  }, [id, setState, save]);
+
+  const appendSource = useCallback((line: string) => {
+    persistOnto({ ...state, source: `${(state.source || '').replace(/\s*$/, '')}\n${line}\n` });
+  }, [state, persistOnto]);
+
+  const addEntity = useCallback(() => {
+    const name = entName.trim();
+    if (!/^[A-Za-z_][\w]*$/.test(name)) { setDlgErr('Entity name must start with a letter/underscore (letters, digits, _).'); return; }
+    if (classes.some((c) => c.name === name)) { setDlgErr(`Entity "${name}" already exists.`); return; }
+    const parent = entParent.trim();
+    const desc = entDesc.trim();
+    appendSource(`${name} : ${parent} ${desc ? `-- ${desc}` : ''}`.trimEnd());
+    setEntityDlgOpen(false);
+  }, [entName, entParent, entDesc, classes, appendSource]);
+
+  const addRelationship = useCallback(() => {
+    const child = relChild.trim();
+    const parent = relParent.trim();
+    if (!child || !parent) { setDlgErr('Pick both a child and a parent entity.'); return; }
+    if (child === parent) { setDlgErr('Child and parent must differ.'); return; }
+    // IS_A is the `Child : Parent` edge in the DSL. Rewrite the child's
+    // existing line (keeping any description) so we set the parent in place
+    // rather than appending a duplicate class definition.
+    const lineRe = new RegExp(`^(\\s*)${child}(\\s*:)[^\\n]*$`, 'm');
+    let nextSource: string;
+    if (lineRe.test(state.source || '')) {
+      nextSource = (state.source || '').replace(lineRe, (_m, indent: string) => {
+        const existing = classes.find((c) => c.name === child);
+        const desc = existing?.description ? ` -- ${existing.description}` : '';
+        return `${indent}${child} : ${parent}${desc}`;
+      });
+    } else {
+      nextSource = `${(state.source || '').replace(/\s*$/, '')}\n${child} : ${parent} -- is_a\n`;
+    }
+    persistOnto({ ...state, source: nextSource });
+    setRelDlgOpen(false);
+  }, [relChild, relParent, classes, state, persistOnto]);
+
   // v3.27: D-upgrade — materialize the ontology hierarchy as a graph-model.
   // Each class becomes a node type; parent → child edges become an `is_a`
   // relationship type. The new graph-model can then be ADX-materialized
@@ -947,7 +1007,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           workspaceId: 'default',
-          displayName: `${item.label || 'Ontology'} graph (from ontology ${id})`,
+          displayName: `${item.displayName || 'Ontology'} graph (from ontology ${id})`,
           state: {
             nodes,
             edges,
@@ -963,19 +1023,20 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
     } catch (e: any) {
       setMatMsg(`Failed: ${e?.message || String(e)}`);
     } finally { setMaterializing(false); }
-  }, [classes, id, item.label]);
+  }, [classes, id, item.displayName]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Author', actions: [
-        { label: 'Add entity', disabled: true, title: 'use the Source editor below to add classes (e.g. `MyEntity : Parent -- description`)' },
-        { label: 'Add relationship', disabled: true, title: 'parent : child syntax in Source editor; richer relationship authoring deferred' },
+        { label: 'Add entity', onClick: openEntityDlg, disabled: saving, title: 'Add an ontology class' },
+        { label: 'Add relationship', onClick: openRelDlg, disabled: saving || classes.length < 1, title: classes.length < 1 ? 'Add at least one entity first' : 'Add an IS_A relationship between two classes' },
       ]},
       { label: 'Bind', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
         { label: materializing ? 'Materializing…' : 'Materialize', onClick: materializeToGraphModel, disabled: materializing || classes.length === 0 },
       ]},
     ]},
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [save, saving, dirty, materializeToGraphModel, materializing, classes.length]);
 
   return (
@@ -1018,6 +1079,59 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
           </div>
         </div>
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+
+        <Dialog open={entityDlgOpen} onOpenChange={(_, d) => setEntityDlgOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Add entity (ontology class)</DialogTitle>
+              <DialogContent>
+                <Field label="Class name" required>
+                  <Input value={entName} onChange={(_, d) => setEntName(d.value)} placeholder="Invoice" />
+                </Field>
+                <Field label="Parent class (optional)">
+                  <Dropdown value={entParent} selectedOptions={entParent ? [entParent] : []} onOptionSelect={(_, d) => setEntParent(d.optionValue || '')} placeholder="(none — root)">
+                    <Option value="">(none — root)</Option>
+                    {classes.map((c) => <Option key={c.name} value={c.name}>{c.name}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Description (optional)">
+                  <Input value={entDesc} onChange={(_, d) => setEntDesc(d.value)} placeholder="billing document" />
+                </Field>
+                {dlgErr && <MessageBar intent="error"><MessageBarBody>{dlgErr}</MessageBarBody></MessageBar>}
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setEntityDlgOpen(false)}>Cancel</Button>
+                <Button appearance="primary" onClick={addEntity}>Add entity</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
+
+        <Dialog open={relDlgOpen} onOpenChange={(_, d) => setRelDlgOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Add relationship (IS_A)</DialogTitle>
+              <DialogContent>
+                <Caption1>Sets the parent of one class to another (the IS_A hierarchy this ontology models).</Caption1>
+                <Field label="Child class" required>
+                  <Dropdown value={relChild} selectedOptions={relChild ? [relChild] : []} onOptionSelect={(_, d) => setRelChild(d.optionValue || '')} placeholder="Select a class">
+                    {classes.map((c) => <Option key={c.name} value={c.name}>{c.name}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Parent class" required>
+                  <Dropdown value={relParent} selectedOptions={relParent ? [relParent] : []} onOptionSelect={(_, d) => setRelParent(d.optionValue || '')} placeholder="Select a class">
+                    {classes.map((c) => <Option key={c.name} value={c.name}>{c.name}</Option>)}
+                  </Dropdown>
+                </Field>
+                {dlgErr && <MessageBar intent="error"><MessageBarBody>{dlgErr}</MessageBarBody></MessageBar>}
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setRelDlgOpen(false)}>Cancel</Button>
+                <Button appearance="primary" onClick={addRelationship}>Add relationship</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
       </div>
     } />
   );
@@ -1036,6 +1150,57 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
   });
   const [materializing, setMaterializing] = useState(false);
   const [matResult, setMatResult] = useState<any>(null);
+
+  // Add entity / Add relationship dialogs — append a typed declaration to
+  // state.nodes[] / state.edges[]. The edit flows the dirty flag so SaveBar
+  // (and Ctrl+S) persist to Cosmos via useItemState.save().
+  const [nodeDlgOpen, setNodeDlgOpen] = useState(false);
+  const [edgeDlgOpen, setEdgeDlgOpen] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [propsText, setPropsText] = useState('');
+  const [edgeSrc, setEdgeSrc] = useState('');
+  const [edgeDst, setEdgeDst] = useState('');
+  const [dlgErr, setDlgErr] = useState<string | null>(null);
+
+  // Parse "name:type, name2:type2" → [{name,type}]. Blank → [].
+  const parseProps = (txt: string): { name: string; type: string }[] =>
+    txt.split(',').map((p) => p.trim()).filter(Boolean).map((p) => {
+      const [n, t] = p.split(':').map((x) => x.trim());
+      return { name: n, type: (t || 'string') };
+    });
+
+  const openNodeDlg = () => { setNewName(''); setPropsText(''); setDlgErr(null); setNodeDlgOpen(true); };
+  const openEdgeDlg = () => { setNewName(''); setPropsText(''); setEdgeSrc(''); setEdgeDst(''); setDlgErr(null); setEdgeDlgOpen(true); };
+
+  // Add buttons mutate state + flip dirty; the user persists with Save / Ctrl+S
+  // (or Materialize, which saves first). For an already-persisted item we also
+  // fire save(next) so the addition lands immediately; for /new items save()
+  // would 404 (no Cosmos row yet), so we skip the eager save there.
+  const persistIfExisting = (next: GraphState) => {
+    setState(() => next);
+    if (id && id !== 'new') save(next);
+  };
+
+  const addEntity = useCallback(() => {
+    const name = newName.trim();
+    if (!/^[A-Za-z_][\w]*$/.test(name)) { setDlgErr('Entity name must start with a letter/underscore (letters, digits, _).'); return; }
+    if (state.nodes.some((n) => n.name === name)) { setDlgErr(`Entity "${name}" already exists.`); return; }
+    persistIfExisting({ ...state, nodes: [...state.nodes, { name, properties: parseProps(propsText) }] });
+    setNodeDlgOpen(false);
+  }, [newName, propsText, state, id, setState, save]);
+
+  const addRelationship = useCallback(() => {
+    const name = newName.trim();
+    if (!/^[A-Za-z_][\w]*$/.test(name)) { setDlgErr('Relationship name must start with a letter/underscore (letters, digits, _).'); return; }
+    if (state.edges.some((e) => e.name === name)) { setDlgErr(`Relationship "${name}" already exists.`); return; }
+    const props = parseProps(propsText);
+    // src/dst node types captured as edge properties so the materialize step +
+    // queries can reference the connected node types.
+    if (edgeSrc.trim()) props.unshift({ name: 'srcType', type: 'string' });
+    if (edgeDst.trim()) props.unshift({ name: 'dstType', type: 'string' });
+    persistIfExisting({ ...state, edges: [...state.edges, { name, properties: props }] });
+    setEdgeDlgOpen(false);
+  }, [newName, propsText, edgeSrc, edgeDst, state, id, setState, save]);
 
   const materialize = useCallback(async () => {
     setMaterializing(true); setMatResult(null);
@@ -1076,14 +1241,15 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Author', actions: [
-        { label: 'Add entity', disabled: true, title: 'edit the Node types JSON below to add node types' },
-        { label: 'Add relationship', disabled: true, title: 'edit the Edge types JSON below to add edge types' },
+        { label: 'Add entity', onClick: openNodeDlg, disabled: saving, title: 'Add a node type to the graph model' },
+        { label: 'Add relationship', onClick: openEdgeDlg, disabled: saving, title: 'Add an edge type connecting node types' },
       ]},
       { label: 'Bind', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
         { label: materializing ? 'Materializing…' : 'Materialize', onClick: materialize, disabled: materializing || saving },
       ]},
     ]},
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [save, saving, dirty, materialize, materializing]);
 
   return (
@@ -1126,6 +1292,60 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
           saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
           extraRight={<Button onClick={materialize} disabled={materializing || saving}>{materializing ? 'Materializing…' : 'Materialize to ADX'}</Button>}
         />
+
+        <Dialog open={nodeDlgOpen} onOpenChange={(_, d) => setNodeDlgOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Add entity (node type)</DialogTitle>
+              <DialogContent>
+                <Field label="Entity name" required>
+                  <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder="Customer" />
+                </Field>
+                <Field label="Properties (name:type, comma-separated)" hint="e.g. name:string, age:int, joined:datetime. An id:string column is always added at materialize.">
+                  <Input value={propsText} onChange={(_, d) => setPropsText(d.value)} placeholder="name:string, region:string" />
+                </Field>
+                {dlgErr && <MessageBar intent="error"><MessageBarBody>{dlgErr}</MessageBarBody></MessageBar>}
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setNodeDlgOpen(false)}>Cancel</Button>
+                <Button appearance="primary" onClick={addEntity}>Add entity</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
+
+        <Dialog open={edgeDlgOpen} onOpenChange={(_, d) => setEdgeDlgOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Add relationship (edge type)</DialogTitle>
+              <DialogContent>
+                <Field label="Relationship name" required>
+                  <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder="PLACED" />
+                </Field>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <Field label="From entity">
+                    <Dropdown value={edgeSrc} selectedOptions={edgeSrc ? [edgeSrc] : []} onOptionSelect={(_, d) => setEdgeSrc(d.optionValue || '')} placeholder="(optional)">
+                      {state.nodes.map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="To entity">
+                    <Dropdown value={edgeDst} selectedOptions={edgeDst ? [edgeDst] : []} onOptionSelect={(_, d) => setEdgeDst(d.optionValue || '')} placeholder="(optional)">
+                      {state.nodes.map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+                </div>
+                <Field label="Properties (name:type, comma-separated)" hint="src:string and dst:string columns are always added at materialize.">
+                  <Input value={propsText} onChange={(_, d) => setPropsText(d.value)} placeholder="at:datetime, weight:real" />
+                </Field>
+                {dlgErr && <MessageBar intent="error"><MessageBarBody>{dlgErr}</MessageBarBody></MessageBar>}
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setEdgeDlgOpen(false)}>Cancel</Button>
+                <Button appearance="primary" onClick={addRelationship}>Add relationship</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
       </div>
     } />
   );
