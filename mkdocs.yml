@@ -1998,6 +1998,10 @@ nav:
       - v1 Final Status + v2 Plan: fiab/v1-final-status-and-v2-plan.md
       - Releases:
           - "2026-05-27: App bundles + console wiring sweep": fiab/releases/2026-05-27-apps-bundles-and-wiring-sweep.md
+      - Operations:
+          - "App Install — Phase 2 live-service provisioning": fiab/operations/app-install-provisioning.md
+      - Admin:
+          - "Feature Permissions (Fabric-style RBAC)": fiab/admin/feature-rbac.md
       - Test Script (2026-05-27): fiab/TEST_SCRIPT_2026_05_27.md
       - Handoffs & Version State:
           - "v1.18 GREEN handoff": fiab/v118-handoff.md
