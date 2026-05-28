@@ -6,28 +6,22 @@ central governance plane.
 
 ## Pattern
 
-```
-                       ┌──────────────────────────────┐
-                       │   Loom Admin Plane           │
-                       │   (Department CIO governance)│
-                       │   - Catalog overlay          │
-                       │   - Domain hierarchy         │
-                       │   - Cross-domain Marketplace │
-                       │   - Federation policies      │
-                       │   - Sentinel + cost dashboard│
-                       └──────────────┬───────────────┘
-                                      │
-              ┌────────────────┬──────┼──────┬────────────────┐
-              ▼                ▼      ▼      ▼                ▼
-        ┌─────────┐      ┌─────────┐ ...  ┌─────────┐    ┌─────────┐
-        │ DLZ:    │      │ DLZ:    │      │ DLZ:    │    │ DLZ:    │
-        │ Agency A│      │ Agency B│      │ Agency C│    │ Agency N│
-        │         │      │         │      │         │    │         │
-        │ Domain  │      │ Domain  │      │ Domain  │    │ Domain  │
-        │ Steward │      │ Steward │      │ Steward │    │ Steward │
-        │ owns    │      │ owns    │      │ owns    │    │ owns    │
-        │ workspaces│    │ workspaces│    │ workspaces│  │ workspaces│
-        └─────────┘      └─────────┘      └─────────┘    └─────────┘
+```mermaid
+flowchart TB
+    classDef admin fill:#107C10,stroke:#fff,color:#fff,stroke-width:2px
+    classDef dlz fill:#0078D4,stroke:#fff,color:#fff,stroke-width:2px
+
+    Admin["Loom Admin Plane<br/>(Department CIO governance)<br/>- Catalog overlay<br/>- Domain hierarchy<br/>- Cross-domain Marketplace<br/>- Federation policies<br/>- Sentinel + cost dashboard"]:::admin
+
+    AgencyA["DLZ: Agency A<br/>Domain Steward<br/>owns workspaces"]:::dlz
+    AgencyB["DLZ: Agency B<br/>Domain Steward<br/>owns workspaces"]:::dlz
+    AgencyC["DLZ: Agency C<br/>Domain Steward<br/>owns workspaces"]:::dlz
+    AgencyN["DLZ: Agency N<br/>Domain Steward<br/>owns workspaces"]:::dlz
+
+    Admin --> AgencyA
+    Admin --> AgencyB
+    Admin --> AgencyC
+    Admin --> AgencyN
 ```
 
 ## Why this works for federal
