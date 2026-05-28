@@ -20,6 +20,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   const pipelineName = (await ctx.params).id;
+  // Unsaved pipeline (the +New surface) has no runs yet — short-circuit
+  // with an empty list instead of querying Synapse for a pipeline that
+  // doesn't exist (which surfaced as an opaque 502 in UAT).
+  if (!pipelineName || pipelineName === 'new') {
+    return NextResponse.json({ ok: true, runs: [], continuationToken: undefined, window: { after: null, before: null, status: null } });
+  }
   const after = req.nextUrl.searchParams.get('after') || undefined;
   const before = req.nextUrl.searchParams.get('before') || undefined;
   const status = req.nextUrl.searchParams.get('status') || undefined;
