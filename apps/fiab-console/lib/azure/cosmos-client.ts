@@ -35,6 +35,7 @@ let _wsGit: Container | null = null;
 let _tenantThemes: Container | null = null;
 let _tenantSettings: Container | null = null;
 let _marketplaceListings: Container | null = null;
+let _featurePermissions: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -101,8 +102,13 @@ async function ensure() {
   _tenantThemes = await mk('tenant-themes', '/tenantId');
   _tenantSettings = await mk('tenant-settings', '/tenantId');
   _marketplaceListings = await mk('marketplace-listings', '/tenantId');
+  // Phase 2 — Fabric-style RBAC: grant rows partitioned by tenant so
+  // every per-request lookup hits a single physical partition.
+  _featurePermissions = await mk('feature-permissions', '/tenantId');
   _ensured = true;
 }
+
+export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 
 export async function marketplaceListingsContainer(): Promise<Container> {
   await ensure();

@@ -148,6 +148,23 @@ param loomMsalClientSecret string = ''
 param loomSessionSecret string = newGuid()
 
 // =====================================================================
+// Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
+// =====================================================================
+
+@description('Entra group oid(s) — comma-separated — whose members bypass the Loom Feature Permissions gate. Bootstrap admins need this set OR loomTenantAdminOid to manage /admin/permissions before any grants exist.')
+param loomTenantAdminGroupId string = ''
+
+@description('Entra user oid that bypasses the Loom Feature Permissions gate. Used in single-user bootstrap scenarios. Members of loomTenantAdminGroupId are recommended for production.')
+param loomTenantAdminOid string = ''
+
+@description('Default Fabric/Power BI workspace id the Phase-2 install engine uses when a Loom workspace has no bound Fabric group yet. Optional — the wizard prompts when missing.')
+param loomDefaultFabricWorkspace string = ''
+
+@description('Phase-2 warehouse provisioner backend. synapse-dedicated (default) runs DDL against the dedicated Synapse pool via TDS+AAD; fabric-warehouse is on the v3.5 roadmap.')
+@allowed(['synapse-dedicated', 'fabric-warehouse'])
+param loomWarehouseBackend string = 'synapse-dedicated'
+
+// =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
 // because every other module wires diagnostic settings to it.
 // =====================================================================
@@ -411,6 +428,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
+            // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
+            { name: 'LOOM_TENANT_ADMIN_GROUP_ID', value: loomTenantAdminGroupId }
+            { name: 'LOOM_TENANT_ADMIN_OID', value: loomTenantAdminOid }
+            { name: 'LOOM_DEFAULT_FABRIC_WORKSPACE', value: loomDefaultFabricWorkspace }
+            { name: 'LOOM_WAREHOUSE_BACKEND', value: loomWarehouseBackend }
           ],
           !empty(loomStorageAccount) ? [
             { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }
