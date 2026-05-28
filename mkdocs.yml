@@ -2274,6 +2274,7 @@ nav:
           - Capacity Management: fiab/operations/capacity-management.md
           - Monitoring & Observability: fiab/operations/monitoring.md
           - Cost Management: fiab/operations/cost.md
+          - Persistence, Chargeback, and Multi-DLZ: fiab/operations/persistence-chargeback-multidlz.md
           - Disaster Recovery: fiab/operations/disaster-recovery.md
           - Upgrade & Migration: fiab/operations/upgrade-migration.md
           - Forward Migration to Microsoft Fabric: fiab/operations/forward-to-fabric.md
