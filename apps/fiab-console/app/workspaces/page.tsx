@@ -41,8 +41,10 @@ import {
   DialogTrigger,
   Field,
   Input,
+  Caption1,
   MessageBar,
   MessageBarBody,
+  Select,
   Menu,
   MenuItem,
   MenuItemRadio,
@@ -446,6 +448,9 @@ function compareSort(a: Workspace, b: Workspace, mode: SortMode): number {
 // CreateWorkspaceDialog — preserved from prior pane, slightly trimmed
 // ---------------------------------------------------------------------------
 
+interface CapacityLite { id: string; displayName: string; sku: string; state?: string }
+interface DomainLite { id: string; name: string; description?: string }
+
 function CreateWorkspaceDialog({ onCreated }: { onCreated?: () => void }) {
   const styles = useStyles();
   const router = useRouter();
@@ -455,6 +460,37 @@ function CreateWorkspaceDialog({ onCreated }: { onCreated?: () => void }) {
   const [description, setDescription] = useState('');
   const [capacity, setCapacity] = useState('');
   const [domain, setDomain] = useState('');
+
+  // Load real Fabric capacities the UAMI can see + Loom-managed domains.
+  // Both are best-effort — if the upstream returns an error (Power BI
+  // tenant SP not granted, Cosmos not provisioned, etc.) the field falls
+  // back to a free-text Input so the user isn't blocked.
+  const capacitiesQ = useQuery({
+    queryKey: ['capacities'],
+    queryFn: async (): Promise<{ ok: boolean; capacities?: CapacityLite[]; error?: string }> => {
+      const r = await fetch('/api/loom/capacities');
+      const ct = r.headers.get('content-type') || '';
+      return ct.includes('application/json') ? r.json() : { ok: false, error: `HTTP ${r.status}` };
+    },
+    enabled: open,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const domainsQ = useQuery({
+    queryKey: ['domains'],
+    queryFn: async (): Promise<{ ok: boolean; domains?: DomainLite[]; error?: string }> => {
+      const r = await fetch('/api/admin/domains');
+      const ct = r.headers.get('content-type') || '';
+      return ct.includes('application/json') ? r.json() : { ok: false, error: `HTTP ${r.status}` };
+    },
+    enabled: open,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const capacities = capacitiesQ.data?.capacities || [];
+  const domains = domainsQ.data?.domains || [];
+  const capacityFallback = capacitiesQ.isError || (capacitiesQ.data?.ok === false);
+  const domainFallback = domainsQ.isError || (domainsQ.data?.ok === false);
 
   const mut = useMutation({
     mutationFn: () =>
@@ -502,20 +538,63 @@ function CreateWorkspaceDialog({ onCreated }: { onCreated?: () => void }) {
                   rows={2}
                 />
               </Field>
-              <Field label="Capacity (optional)">
-                <Input
-                  value={capacity}
-                  onChange={(_, d) => setCapacity(d.value)}
-                  placeholder="F64"
-                />
+              <Field label="Capacity (optional)" hint={
+                capacityFallback
+                  ? 'Could not load Fabric capacities — falling back to free-text. Reason: ' +
+                    (capacitiesQ.data?.error || (capacitiesQ.error as Error)?.message || 'unknown')
+                  : capacities.length === 0 && !capacitiesQ.isLoading
+                    ? 'No capacities returned — UAMI may need Capacity Admin role; falling back to free-text.'
+                    : 'Picks a real Fabric / Power BI Premium capacity. Assignment is queued until the workspace gets its first PBI-backed artifact.'
+              }>
+                {capacityFallback || (capacities.length === 0 && !capacitiesQ.isLoading) ? (
+                  <Input
+                    value={capacity}
+                    onChange={(_, d) => setCapacity(d.value)}
+                    placeholder="F64"
+                  />
+                ) : (
+                  <Select value={capacity} onChange={(_, d) => setCapacity(d.value)} disabled={capacitiesQ.isLoading}>
+                    <option value="">— None —</option>
+                    {capacities.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.displayName} ({c.sku}{c.state ? ` · ${c.state}` : ''})
+                      </option>
+                    ))}
+                  </Select>
+                )}
               </Field>
-              <Field label="Domain (optional)">
-                <Input
-                  value={domain}
-                  onChange={(_, d) => setDomain(d.value)}
-                  placeholder="Sales"
-                />
+              <Field label="Domain (optional)" hint={
+                domainFallback
+                  ? 'Could not load domains — falling back to free-text. Reason: ' +
+                    (domainsQ.data?.error || (domainsQ.error as Error)?.message || 'unknown')
+                  : domains.length === 0 && !domainsQ.isLoading
+                    ? 'No domains yet — go to Admin → Domains to create one; falling back to free-text.'
+                    : 'Picks a Loom-managed business domain. On save, the workspace auto-registers in Purview + publishes to the data marketplace.'
+              }>
+                {domainFallback || (domains.length === 0 && !domainsQ.isLoading) ? (
+                  <Input
+                    value={domain}
+                    onChange={(_, d) => setDomain(d.value)}
+                    placeholder="Sales"
+                  />
+                ) : (
+                  <Select value={domain} onChange={(_, d) => setDomain(d.value)} disabled={domainsQ.isLoading}>
+                    <option value="">— None —</option>
+                    {domains.map((d) => (
+                      <option key={d.id} value={d.id}>{d.name}</option>
+                    ))}
+                  </Select>
+                )}
               </Field>
+              {(capacity || domain) && (
+                <Caption1 style={{ color: 'var(--colorNeutralForeground3, #707070)' }}>
+                  When you save: Capacity is assigned via the Fabric REST <code>assignToCapacity</code>{' '}
+                  (queued until your first PBI-backed artifact creates the underlying Fabric group),
+                  and Domain triggers a Purview catalog register + marketplace publish. Both run as
+                  best-effort — the workspace itself is always persisted; the binding status appears
+                  on the workspace settings drawer after create.
+                </Caption1>
+              )}
               {mut.error && (
                 <MessageBar intent="error">
                   <MessageBarBody>{(mut.error as Error).message}</MessageBarBody>
