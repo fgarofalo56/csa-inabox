@@ -61,17 +61,17 @@ function buildJobSpec(itemId: string, spec: DbtSpec): JobSpec {
   };
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
   const override = await req.json().catch(() => ({}));
   try {
-    const item = await loadOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid);
+    const item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
     if (!item) return jerr('not found', 404);
     const spec: DbtSpec = { ...((item.state as any) || {}), ...override };
     if (!spec.repoUrl) return jerr('spec.repoUrl is required', 400);
 
-    const jobSpec = buildJobSpec(ctx.params.id, spec);
+    const jobSpec = buildJobSpec((await ctx.params).id, spec);
     let jobId = spec.databricksJobId;
     if (jobId) {
       // Re-sync settings so changes to repo/branch/commands take effect.
@@ -82,7 +82,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
         if (e?.status === 404) {
           const created = await createJob(jobSpec);
           jobId = created.job_id;
-          await updateOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid, {
+          await updateOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid, {
             state: { ...spec, databricksJobId: jobId },
           });
         } else {
@@ -92,7 +92,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
     } else {
       const created = await createJob(jobSpec);
       jobId = created.job_id;
-      await updateOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid, {
+      await updateOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid, {
         state: { ...spec, databricksJobId: jobId },
       });
     }

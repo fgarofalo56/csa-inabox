@@ -40,7 +40,11 @@ function origin(req: NextRequest): string {
   return `${proto}://${host}`;
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { type: string; id: string } }) {
+export async function GET(
+  _req: NextRequest,
+  props: { params: Promise<{ type: string; id: string }> }
+) {
+  const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   if (!(await assertOwnedItem(params.id, params.type, s.claims.oid)))
@@ -55,7 +59,8 @@ export async function GET(_req: NextRequest, { params }: { params: { type: strin
   return NextResponse.json({ ok: true, shares: resources });
 }
 
-export async function POST(req: NextRequest, { params }: { params: { type: string; id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
+  const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   if (!(await assertOwnedItem(params.id, params.type, s.claims.oid)))
@@ -81,7 +86,8 @@ export async function POST(req: NextRequest, { params }: { params: { type: strin
   return NextResponse.json({ ok: true, url, token, expiresAt, scope }, { status: 201 });
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { type: string; id: string } }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
+  const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   if (!(await assertOwnedItem(params.id, params.type, s.claims.oid)))

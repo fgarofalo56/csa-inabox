@@ -63,6 +63,15 @@ param defenderForAIEnabled bool
 @description('Purview Data Map availability (false at IL5)')
 param purviewEnabled bool
 
+@description('Purview account name (short, NOT full URL) to wire into the Loom Console. When empty, /admin/security Purview tab returns 503 with a structured remediation hint. Set this to an EXISTING Purview account name in the tenant — only one Enterprise-tier Purview is allowed per tenant, so most deployments REUSE the tenant-level account rather than provisioning a second one (which fails with `EnterpriseTenantAlreadyExists`).')
+param loomPurviewAccount string = ''
+
+@description('Enable Microsoft Information Protection reads via Microsoft Graph for the Console (sensitivity labels + label policies + apply-label evaluation). Requires the Console UAMI to be admin-consented for InformationProtectionPolicy.Read.All + SensitivityLabel.Evaluate. Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true.')
+param loomMipEnabled bool = false
+
+@description('Enable Purview DLP reads via Microsoft Graph for the Console (DLP policies + rules + alerts + simulate). Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. Note: the DLP /beta endpoints are tenant-preview-gated — the Loom panel surfaces a precise 404→501 hint when the tenant has not opted into the Graph DLP preview.')
+param loomDlpEnabled bool = false
+
 @description('Apache Atlas on AKS deployment (IL5 only)')
 param atlasOnAksEnabled bool = false
 
@@ -202,6 +211,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     frontDoorEnabled: frontDoorEnabled
     loomStorageAccount: take('saloomdefault${uniqueString(singleDlzRg.id)}', 24)
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
+    loomPurviewAccount: loomPurviewAccount
+    loomMipEnabled: loomMipEnabled
+    loomDlpEnabled: loomDlpEnabled
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
     loomVersion: loomVersion

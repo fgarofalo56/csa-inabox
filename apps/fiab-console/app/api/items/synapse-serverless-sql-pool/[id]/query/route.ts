@@ -12,7 +12,7 @@ import { serverlessTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, _ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 

@@ -16,14 +16,14 @@ export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'spark-job-definition';
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
   const url = new URL(req.url);
   const size = Number(url.searchParams.get('size') || '20');
   const from = Number(url.searchParams.get('from') || '0');
   try {
-    const item = await loadOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid);
+    const item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
     if (!item) return jerr('not found', 404);
     const pool = (item.state as any)?.spec?.pool || url.searchParams.get('pool');
     if (!pool) return jerr('spec.pool is not configured', 400);

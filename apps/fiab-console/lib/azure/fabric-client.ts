@@ -202,6 +202,62 @@ export async function listFabricCapacities(): Promise<FabricCapacity[]> {
   return j.value || [];
 }
 
+// --- ARM-side capacity SKU update -----------------------------------
+// Fabric REST exposes /v1/capacities (read), but the scale-axis SKU
+// change is an ARM PATCH against Microsoft.Fabric/capacities/{name}.
+// Power BI Premium capacities use Microsoft.PowerBIDedicated/capacities.
+// We let the caller pass the resource id so the BFF can resolve either.
+
+const ARM_SCOPE = 'https://management.azure.com/.default';
+const FABRIC_CAPACITY_API = '2023-11-01';
+const POWERBI_CAPACITY_API = '2021-01-01';
+
+async function getArmToken(): Promise<string> {
+  const t = await credential.getToken(ARM_SCOPE);
+  if (!t?.token) throw new FabricError('Failed to acquire ARM token for Fabric capacity', 401, undefined, undefined, fabricHint(401));
+  return t.token;
+}
+
+/**
+ * PATCH Microsoft.Fabric/capacities/{name} sku.name = newSku, or
+ * Microsoft.PowerBIDedicated/capacities/{name} for Premium P-SKUs.
+ *
+ * resourceId must be the full ARM id including /providers/.
+ * The Console UAMI needs Capacity Contributor (or "Power BI Embedded
+ * Capacity Contributor" for PowerBIDedicated).
+ */
+export async function updateCapacitySku(
+  resourceId: string,
+  newSku: string,
+): Promise<{ provisioningState?: string; sku?: { name?: string; tier?: string } }> {
+  const isPowerBI = resourceId.toLowerCase().includes('/microsoft.powerbidedicated/');
+  const apiVersion = isPowerBI ? POWERBI_CAPACITY_API : FABRIC_CAPACITY_API;
+  const tier = isPowerBI ? 'PBIE_Azure' : 'Fabric';
+  const url = `https://management.azure.com${resourceId}?api-version=${apiVersion}`;
+  const token = await getArmToken();
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ sku: { name: newSku, tier } }),
+  });
+  if (!res.ok && res.status !== 202) {
+    const t = await res.text();
+    throw new FabricError(
+      `updateCapacitySku failed ${res.status}: ${t.slice(0, 300)}`,
+      res.status,
+      t,
+      url,
+      'UAMI must have Capacity Contributor on the capacity resource.',
+    );
+  }
+  if (res.status === 202) return { provisioningState: 'Updating' };
+  const j: any = await res.json().catch(() => ({}));
+  return { provisioningState: j?.properties?.provisioningState, sku: j?.sku };
+}
+
 /**
  * Assign an existing Fabric/Power BI workspace to a capacity. Fabric
  * REST: POST /v1/workspaces/{id}/assignToCapacity { capacityId }.

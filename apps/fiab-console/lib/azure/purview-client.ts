@@ -522,6 +522,7 @@ export async function registerAtlasEntity(p: RegisterAtlasEntityPayload): Promis
  */
 export interface PurviewGlossaryTerm {
   name: string;
+  shortDescription?: string;
   longDescription?: string;
   glossaryGuid?: string;
 }
@@ -533,6 +534,7 @@ export async function createGlossaryTerm(term: PurviewGlossaryTerm): Promise<{ g
     method: 'POST',
     body: JSON.stringify({
       name: term.name,
+      shortDescription: term.shortDescription || '',
       longDescription: term.longDescription || '',
       ...(term.glossaryGuid ? { anchor: { glossaryGuid: term.glossaryGuid } } : {}),
     }),
@@ -557,4 +559,197 @@ export async function applyGlossaryTerm(termGuid: string, entityGuid: string): P
     const t = await res.text();
     throw new PurviewError(res.status, t, `applyGlossaryTerm failed: ${t || res.statusText}`);
   }
+}
+
+export interface PurviewDataSource {
+  id: string;
+  name: string;
+  kind?: string;
+  endpoint?: string;
+  collectionId?: string;
+  raw?: unknown;
+}
+
+export interface PurviewScan {
+  id: string;
+  name: string;
+  kind?: string;
+  schedule?: unknown;
+  raw?: unknown;
+}
+
+export interface PurviewScanRun {
+  runId: string;
+  status?: string;
+  startTime?: string;
+  endTime?: string;
+  errorMessage?: string;
+  raw?: unknown;
+}
+
+export interface PurviewGlossaryTermRecord {
+  guid: string;
+  name?: string;
+  qualifiedName?: string;
+  longDescription?: string;
+  status?: string;
+  glossaryGuid?: string;
+  raw?: unknown;
+}
+
+export interface PurviewDataQualityRule {
+  id: string;
+  name?: string;
+  description?: string;
+  expression?: string;
+  scope?: string;
+  enabled?: boolean;
+  raw?: unknown;
+}
+
+/** GET /scan/datasources — registered data sources. */
+export async function listDataSources(): Promise<PurviewDataSource[]> {
+  purviewAccount();
+  const res = await purviewFetch('/scan/datasources');
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewDataSource => ({
+    id: raw?.id || raw?.name,
+    name: raw?.name,
+    kind: raw?.kind || raw?.properties?.kind,
+    endpoint: raw?.properties?.endpoint || raw?.properties?.serverEndpoint,
+    collectionId: raw?.properties?.collection?.referenceName,
+    raw,
+  }));
+}
+
+/** PUT /scan/datasources/{name} — register a source. */
+export async function registerDataSource(payload: {
+  name: string;
+  kind: string;
+  properties: Record<string, unknown>;
+}): Promise<PurviewDataSource> {
+  purviewAccount();
+  if (!payload?.name) throw new PurviewError(400, null, 'name is required');
+  if (!payload?.kind) throw new PurviewError(400, null, 'kind is required');
+  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(payload.name)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ kind: payload.kind, properties: payload.properties }),
+  });
+  const raw = await readJson<any>(res);
+  if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on registerDataSource');
+  return {
+    id: raw?.id || raw?.name,
+    name: raw?.name,
+    kind: raw?.kind,
+    endpoint: raw?.properties?.endpoint,
+    collectionId: raw?.properties?.collection?.referenceName,
+    raw,
+  };
+}
+
+/** DELETE /scan/datasources/{name} */
+export async function deleteDataSource(name: string): Promise<boolean> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'name is required');
+  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (res.status === 404) return false;
+  await readJson<unknown>(res);
+  return true;
+}
+
+/** GET /scan/datasources/{name}/scans — scans defined on a source. */
+export async function listScansForSource(sourceName: string): Promise<PurviewScan[]> {
+  purviewAccount();
+  if (!sourceName) throw new PurviewError(400, null, 'sourceName is required');
+  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(sourceName)}/scans`);
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewScan => ({
+    id: raw?.id || raw?.name,
+    name: raw?.name,
+    kind: raw?.kind,
+    schedule: raw?.properties?.schedule,
+    raw,
+  }));
+}
+
+/** PUT /scan/datasources/{name}/scans/{scan}/run — trigger a scan run. */
+export async function triggerScanRun(sourceName: string, scanName: string): Promise<{ runId?: string; raw: unknown }> {
+  purviewAccount();
+  if (!sourceName || !scanName) throw new PurviewError(400, null, 'sourceName + scanName required');
+  const runId = `loom-${Date.now()}`;
+  const res = await purviewFetch(
+    `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}/runs/${runId}`,
+    { method: 'PUT' },
+  );
+  const raw = await readJson<any>(res);
+  return { runId: raw?.runId || runId, raw };
+}
+
+/** GET /scan/datasources/{name}/scans/{scan}/runs — last N scan runs. */
+export async function listScanRuns(sourceName: string, scanName: string): Promise<PurviewScanRun[]> {
+  purviewAccount();
+  const res = await purviewFetch(
+    `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}/runs`,
+  );
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).slice(0, 10).map((raw): PurviewScanRun => ({
+    runId: raw?.id || raw?.runId,
+    status: raw?.status,
+    startTime: raw?.startTime,
+    endTime: raw?.endTime,
+    errorMessage: raw?.errorMessage,
+    raw,
+  }));
+}
+
+/**
+ * GET /catalog/api/atlas/v2/glossaries — list glossaries, then for the
+ * first glossary, list its terms via /glossary/{guid}/terms.
+ */
+export async function listGlossaryTerms(glossaryGuid?: string): Promise<PurviewGlossaryTermRecord[]> {
+  purviewAccount();
+
+  let targetGuid = glossaryGuid;
+  if (!targetGuid) {
+    const gRes = await purviewFetch('/catalog/api/atlas/v2/glossaries');
+    const gj = await readJson<any[]>(gRes);
+    if (!Array.isArray(gj) || gj.length === 0) return [];
+    targetGuid = gj[0]?.guid;
+  }
+  if (!targetGuid) return [];
+
+  const tRes = await purviewFetch(
+    `/catalog/api/atlas/v2/glossary/${encodeURIComponent(targetGuid)}/terms?limit=200`,
+  );
+  if (tRes.status === 404) return [];
+  const tj = await readJson<any[]>(tRes);
+  if (!Array.isArray(tj)) return [];
+  return tj.map((raw): PurviewGlossaryTermRecord => ({
+    guid: raw?.guid,
+    name: raw?.name,
+    qualifiedName: raw?.qualifiedName,
+    longDescription: raw?.longDescription,
+    status: raw?.status,
+    glossaryGuid: targetGuid,
+    raw,
+  }));
+}
+
+/** GET /datagovernance/dataquality/rules — list configured DQ rules (preview). */
+export async function listDataQualityRules(): Promise<PurviewDataQualityRule[]> {
+  purviewAccount();
+  const res = await purviewFetch('/datagovernance/dataquality/rules');
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewDataQualityRule => ({
+    id: raw?.id,
+    name: raw?.name || raw?.displayName,
+    description: raw?.description,
+    expression: raw?.expression || raw?.ruleExpression,
+    scope: raw?.scope || raw?.target,
+    enabled: raw?.enabled,
+    raw,
+  }));
 }

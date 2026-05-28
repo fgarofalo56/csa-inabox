@@ -6,13 +6,13 @@ import { getApiSpec, ApimError } from '@/lib/azure/apim-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const fmt = (req.nextUrl.searchParams.get('format') || 'openapi+json') as
     'openapi' | 'openapi+json' | 'swagger';
   try {
-    const spec = await getApiSpec(ctx.params.id, fmt);
+    const spec = await getApiSpec((await ctx.params).id, fmt);
     if (!spec) return NextResponse.json({ ok: false, error: 'no spec', status: 404 }, { status: 404 });
     return NextResponse.json({ ok: true, ...spec });
   } catch (e: any) {

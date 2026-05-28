@@ -95,6 +95,92 @@ async function readJson<T>(res: Response): Promise<T | null> {
   return (parsed as T) ?? ({} as T);
 }
 
+// ---------------- Service (top-level SKU + capacity) ----------------
+
+export interface ApimServiceShape {
+  id?: string;
+  name?: string;
+  location?: string;
+  sku: { name: string; capacity: number };
+  provisioningState?: string;
+}
+
+function shapeService(raw: any): ApimServiceShape {
+  return {
+    id: raw?.id,
+    name: raw?.name,
+    location: raw?.location,
+    sku: {
+      name: raw?.sku?.name || 'unknown',
+      capacity: raw?.sku?.capacity ?? 1,
+    },
+    provisioningState: raw?.properties?.provisioningState,
+  };
+}
+
+/**
+ * GET the APIM service resource itself (not a child like /apis or /products).
+ * We hit the parent path by calling the empty suffix.
+ */
+export async function getApimService(): Promise<ApimServiceShape | null> {
+  const token = await credential.getToken(ARM_SCOPE);
+  if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
+  const url = `${apimBase()}?api-version=${APIM_API}`;
+  const res = await fetch(url, {
+    headers: {
+      authorization: `Bearer ${token.token}`,
+      'content-type': 'application/json',
+    },
+  });
+  if (res.status === 404) return null;
+  const text = await res.text();
+  let parsed: unknown = undefined;
+  if (text) { try { parsed = JSON.parse(text); } catch { parsed = text; } }
+  if (!res.ok) {
+    const msg = (parsed as any)?.error?.message || `APIM ${res.status}`;
+    throw new ApimError(res.status, parsed, msg);
+  }
+  return shapeService(parsed);
+}
+
+/**
+ * PATCH the APIM service SKU + capacity. Valid sku.name values:
+ *   - Developer     (no SLA, no scale-out, lowest cost)
+ *   - Basic         (capacity 1-2)
+ *   - Standard      (capacity 1-4)
+ *   - Premium       (capacity 1-10 per region, multi-region)
+ *   - BasicV2 / StandardV2 (stv2 architecture)
+ * Tier mirrors name for ARM compatibility.
+ *
+ * Scale operation is async (PATCH returns 202 + Azure-AsyncOperation
+ * header); polling is the caller's responsibility.
+ */
+export async function updateApimSku(
+  newSku: string,
+  capacity = 1,
+): Promise<ApimServiceShape> {
+  const token = await credential.getToken(ARM_SCOPE);
+  if (!token?.token) throw new Error('Failed to acquire ARM token for APIM');
+  const url = `${apimBase()}?api-version=${APIM_API}`;
+  const body = { sku: { name: newSku, capacity } };
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers: {
+      authorization: `Bearer ${token.token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok && res.status !== 202) {
+    const t = await res.text();
+    throw new ApimError(res.status, t, `updateApimSku failed ${res.status}: ${t.slice(0, 200)}`);
+  }
+  if (res.status === 202) {
+    return { sku: { name: newSku, capacity }, provisioningState: 'Updating' };
+  }
+  return shapeService(await res.json());
+}
+
 // ---------------- APIs ----------------
 
 export interface ApimApiSummary {

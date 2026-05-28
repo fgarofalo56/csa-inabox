@@ -13,7 +13,7 @@ import { defineConfig } from '@playwright/test';
  * Run:  SESSION_SECRET=<from-KV> pnpm exec playwright test --project=uat
  */
 export default defineConfig({
-  testDir: './e2e',
+  testDir: '.',
   fullyParallel: false,           // serial — shared workspaces, ordered cleanup
   forbidOnly: !!process.env.CI,
   retries: 0,
@@ -31,7 +31,17 @@ export default defineConfig({
   projects: [
     {
       name: 'uat',
+      testDir: './e2e',
       testMatch: /.*\.uat\.ts/,
+    },
+    {
+      // Per-family walkthroughs (tests/e2e/<slug>.spec.ts) — lighter than
+      // the full UAT. Just renders each editor, checks h1 + no crash +
+      // no console errors + a primary action button is clickable. Wired
+      // for the Data Engineering family sweep (2026-05-27).
+      name: 'family-walkthrough',
+      testDir: './tests/e2e',
+      testMatch: /.*\.spec\.ts/,
     },
   ],
 });

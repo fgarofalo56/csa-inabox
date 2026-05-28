@@ -105,6 +105,101 @@ export async function stopWarehouse(id: string): Promise<void> {
   }
 }
 
+export interface WarehouseScaleSpec {
+  cluster_size?: string;          // '2X-Small' | 'X-Small' | 'Small' | 'Medium' | 'Large' | ... | '4X-Large'
+  min_num_clusters?: number;      // 1-30
+  max_num_clusters?: number;      // 1-30
+  auto_stop_mins?: number;
+  warehouse_type?: 'CLASSIC' | 'PRO';
+  enable_serverless_compute?: boolean;
+}
+
+/**
+ * Edit a SQL Warehouse via Databricks REST API. POST /api/2.0/sql/warehouses/{id}/edit
+ * with the new cluster_size + scaling fields. Databricks requires the
+ * warehouse to already exist (no upsert semantics) and will return 400
+ * if cluster_size is outside the allowed enum.
+ */
+export async function editWarehouse(id: string, spec: WarehouseScaleSpec): Promise<void> {
+  // Read existing to preserve required fields (name + warehouse_type) the
+  // edit endpoint requires even when not changing them.
+  const existing = await getWarehouse(id);
+  const payload: Record<string, unknown> = {
+    name: existing.name,
+    warehouse_type: spec.warehouse_type ?? existing.warehouse_type ?? 'PRO',
+    cluster_size: spec.cluster_size ?? existing.cluster_size,
+  };
+  if (typeof spec.min_num_clusters === 'number') payload.min_num_clusters = spec.min_num_clusters;
+  if (typeof spec.max_num_clusters === 'number') payload.max_num_clusters = spec.max_num_clusters;
+  if (typeof spec.auto_stop_mins === 'number') payload.auto_stop_mins = spec.auto_stop_mins;
+  if (typeof spec.enable_serverless_compute === 'boolean') payload.enable_serverless_compute = spec.enable_serverless_compute;
+
+  const res = await dbxFetch(`/api/2.0/sql/warehouses/${encodeURIComponent(id)}/edit`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`editWarehouse failed ${res.status}: ${await res.text()}`);
+  }
+}
+
+// ------------------------------------------------------------
+// Query history (SQL warehouse statement history)
+// ------------------------------------------------------------
+
+export interface DbxQueryHistoryEntry {
+  query_id: string;
+  status: string;
+  query_text?: string;
+  query_start_time_ms?: number;
+  query_end_time_ms?: number;
+  duration?: number;       // ms
+  warehouse_id?: string;
+  user_name?: string;
+  user_id?: number;
+  executed_as_user_name?: string;
+  rows_produced?: number;
+  error_message?: string;
+}
+
+export async function listQueryHistory(
+  opts: {
+    warehouseId?: string;
+    maxResults?: number;
+    pageToken?: string;
+    includeMetrics?: boolean;
+  } = {},
+): Promise<{ entries: DbxQueryHistoryEntry[]; nextPageToken?: string }> {
+  const max = Math.max(1, Math.min(opts.maxResults ?? 50, 1000));
+  const params = new URLSearchParams();
+  params.set('max_results', String(max));
+  if (opts.pageToken) params.set('page_token', opts.pageToken);
+  if (opts.includeMetrics) params.set('include_metrics', 'true');
+  if (opts.warehouseId) {
+    params.set('filter_by.warehouse_ids', opts.warehouseId);
+  }
+  const res = await dbxFetch(`/api/2.0/sql/history/queries?${params.toString()}`);
+  if (!res.ok) {
+    throw new Error(`listQueryHistory failed ${res.status}: ${await res.text()}`);
+  }
+  const body = (await res.json()) as { res?: any[]; next_page_token?: string };
+  const entries: DbxQueryHistoryEntry[] = (body.res || []).map((r) => ({
+    query_id: r.query_id,
+    status: r.status,
+    query_text: r.query_text,
+    query_start_time_ms: r.query_start_time_ms,
+    query_end_time_ms: r.query_end_time_ms,
+    duration: r.duration,
+    warehouse_id: r.warehouse_id,
+    user_name: r.user_name,
+    user_id: r.user_id,
+    executed_as_user_name: r.executed_as_user_name,
+    rows_produced: r.rows_produced,
+    error_message: r.error_message,
+  }));
+  return { entries, nextPageToken: body.next_page_token };
+}
+
 // ------------------------------------------------------------
 // Statement execution
 // ------------------------------------------------------------

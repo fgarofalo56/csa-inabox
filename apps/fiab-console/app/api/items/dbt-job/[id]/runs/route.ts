@@ -15,11 +15,11 @@ export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'dbt-job';
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
   try {
-    const item = await loadOwnedItem(ctx.params.id, ITEM_TYPE, session.claims.oid);
+    const item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
     if (!item) return jerr('not found', 404);
     const jobId = (item.state as any)?.databricksJobId;
     if (typeof jobId !== 'number') {

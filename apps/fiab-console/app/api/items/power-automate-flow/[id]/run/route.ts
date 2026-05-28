@@ -17,7 +17,7 @@ function err(e: any) {
   );
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const envId = req.nextUrl.searchParams.get('envId');
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   try {
     let body: any = {};
     try { body = await req.json(); } catch { /* empty body ok */ }
-    const out = await runFlow(envId, ctx.params.id, body?.inputs);
+    const out = await runFlow(envId, (await ctx.params).id, body?.inputs);
     return NextResponse.json({ ok: true, runName: out.runName });
   } catch (e: any) { return err(e); }
 }

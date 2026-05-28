@@ -14,7 +14,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   if (kql.length > 65_536) return NextResponse.json({ ok: false, error: 'kql too large (>64KB)' }, { status: 413 });
 
   try {
-    const item = await loadKustoItem(ctx.params.id, 'kql-database', session.claims.oid);
+    const item = await loadKustoItem((await ctx.params).id, 'kql-database', session.claims.oid);
     const database = (body?.db && String(body.db)) || resolveDatabase(item);
     const isMgmt = kql.startsWith('.');
     const result = isMgmt
