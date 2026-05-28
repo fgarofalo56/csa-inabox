@@ -1,5 +1,7 @@
 # CSA Loom — Reference Architecture
 
+![Reference architecture — seven layers, one stack](../assets/images/hero/fiab/architecture.svg){ .architecture-hero loading="eager" }
+
 This is the architecture contract. Every workload parity page, every
 deployment guide, every runbook traces back to choices on this page.
 

@@ -1,5 +1,7 @@
 # CSA Loom — Parity Matrix
 
+![Parity matrix — what Loom delivers vs Fabric, grade, and honest gaps](../assets/images/hero/fiab/parity-matrix.svg){ .architecture-hero loading="eager" }
+
 The keystone artifact: for every Microsoft Fabric capability, what
 CSA Loom delivers, the parity grade, and where to read the detail.
 

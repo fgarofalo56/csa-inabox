@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="t d" preserveAspectRatio="xMidYMid slice">
+  <title id="t">CSA Loom — Parity matrix</title>
+  <desc id="d">For every Microsoft Fabric capability: what Loom delivers, the parity grade, where the honest gaps are.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#3d2e80"/>
+      <stop offset="55%" stop-color="#1f6feb"/>
+      <stop offset="100%" stop-color="#d89f3d"/>
+    </linearGradient>
+    <radialGradient id="glow-tr" cx="0.9" cy="0.1" r="0.45" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-bl" cx="0.1" cy="1.1" r="0.5" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#d89f3d" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#d89f3d" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      .h-title { font-family:'IBM Plex Sans','Segoe UI',sans-serif; font-weight:600; font-size:60px; fill:#FFFFFF; letter-spacing:-1.2px; }
+      .h-sub   { font-family:'IBM Plex Sans','Segoe UI',sans-serif; font-weight:400; font-size:22px; fill:#FFFFFF; fill-opacity:0.92; }
+      .h-chip  { font-family:'JetBrains Mono','Consolas',monospace; font-weight:700; font-size:13px; letter-spacing:2.5px; fill:#FFFFFF; }
+      .g-label { font-family:'JetBrains Mono','Consolas',monospace; font-weight:600; font-size:11px; fill:#FFFFFF; letter-spacing:0.4px; }
+      .g-cap   { font-family:'JetBrains Mono','Consolas',monospace; font-weight:500; font-size:10px; fill:#FFFFFF; fill-opacity:0.7; letter-spacing:1.5px; }
+      .g-grade { font-family:'JetBrains Mono','Consolas',monospace; font-weight:700; font-size:11px; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="420" fill="url(#bg)"/>
+  <rect width="1600" height="420" fill="url(#glow-tr)"/>
+  <rect width="1600" height="420" fill="url(#glow-bl)"/>
+  <rect x="0" y="0" width="6" height="420" fill="#e6b566"/>
+  <rect x="0" y="0" width="6" height="120" fill="#aea0ff"/>
+  <rect x="0" y="418" width="1600" height="2" fill="#aea0ff" fill-opacity="0.30"/>
+
+  <g transform="translate(80, 60)">
+    <rect x="0" y="0" width="190" height="32" fill="#aea0ff" fill-opacity="0.10" stroke="#aea0ff" stroke-opacity="0.55" stroke-width="1"/>
+    <rect x="0" y="0" width="6" height="32" fill="#aea0ff"/>
+    <text class="h-chip" x="103" y="21" text-anchor="middle" fill="#aea0ff">PARITY MATRIX</text>
+  </g>
+
+  <text class="h-title" x="80" y="200">Parity matrix</text>
+  <text class="h-sub" x="80" y="248">For every Microsoft Fabric capability — what Loom delivers,</text>
+  <text class="h-sub" x="80" y="278" fill-opacity="0.72">the parity grade, where the honest gaps are.</text>
+
+  <g transform="translate(80, 320)">
+    <rect x="0" y="0" width="62" height="20" fill="#e6b566" fill-opacity="0.14" stroke="#e6b566" stroke-opacity="0.45" stroke-width="1"/>
+    <text class="g-cap" x="31" y="14" text-anchor="middle" fill="#e6b566">EXACT</text>
+  </g>
+  <g transform="translate(150, 320)">
+    <rect x="0" y="0" width="92" height="20" fill="#1f6feb" fill-opacity="0.20" stroke="#1f6feb" stroke-opacity="0.55" stroke-width="1"/>
+    <text class="g-cap" x="46" y="14" text-anchor="middle" fill="#aea0ff">APPROXIMATE</text>
+  </g>
+  <g transform="translate(252, 320)">
+    <rect x="0" y="0" width="92" height="20" fill="#d89f3d" fill-opacity="0.20" stroke="#d89f3d" stroke-opacity="0.55" stroke-width="1"/>
+    <text class="g-cap" x="46" y="14" text-anchor="middle" fill="#e6b566">HONEST GAP</text>
+  </g>
+
+  <!-- Workload comparison grid on the right -->
+  <g transform="translate(900, 65)" font-family="JetBrains Mono, Consolas, monospace" font-size="11" fill="#FFFFFF">
+    <text class="g-cap" x="260" y="0" text-anchor="middle" fill="#aea0ff">WORKLOAD · GRADE · WHY</text>
+    <!-- Header row -->
+    <text class="g-cap" x="0" y="22" fill-opacity="0.7">CAPABILITY</text>
+    <text class="g-cap" x="200" y="22" text-anchor="middle" fill-opacity="0.7">GRADE</text>
+    <text class="g-cap" x="290" y="22" fill-opacity="0.7">WHY</text>
+    <line x1="0" y1="30" x2="540" y2="30" stroke="#FFFFFF" stroke-opacity="0.25"/>
+
+    <!-- Row 1 — Lakehouse -->
+    <text class="g-label" x="0" y="52">Lakehouse</text>
+    <rect x="170" y="40" width="60" height="18" fill="#2EA043" fill-opacity="0.32" stroke="#2EA043" stroke-opacity="0.8"/>
+    <text class="g-grade" x="200" y="53" text-anchor="middle" fill="#a7f3a0">EXACT</text>
+    <text class="g-cap" x="245" y="52" fill-opacity="0.85">ADLS Gen2 + auto-paired SQL endpoint</text>
+
+    <!-- Row 2 — Notebook -->
+    <text class="g-label" x="0" y="80">Notebook</text>
+    <rect x="170" y="68" width="60" height="18" fill="#2EA043" fill-opacity="0.32" stroke="#2EA043" stroke-opacity="0.8"/>
+    <text class="g-grade" x="200" y="81" text-anchor="middle" fill="#a7f3a0">EXACT</text>
+    <text class="g-cap" x="245" y="80" fill-opacity="0.85">PySpark/Scala/SQL on Synapse + Databricks</text>
+
+    <!-- Row 3 — Real-Time Intelligence -->
+    <text class="g-label" x="0" y="108">RTI · Activator</text>
+    <rect x="170" y="96" width="60" height="18" fill="#2EA043" fill-opacity="0.32" stroke="#2EA043" stroke-opacity="0.8"/>
+    <text class="g-grade" x="200" y="109" text-anchor="middle" fill="#a7f3a0">EXACT</text>
+    <text class="g-cap" x="245" y="108" fill-opacity="0.85">ADX + 8-primitive engine + 4 sinks</text>
+
+    <!-- Row 4 — Direct Lake -->
+    <text class="g-label" x="0" y="136">Direct Lake</text>
+    <rect x="170" y="124" width="60" height="18" fill="#1f6feb" fill-opacity="0.40" stroke="#1f6feb" stroke-opacity="0.8"/>
+    <text class="g-grade" x="200" y="137" text-anchor="middle" fill="#aea0ff">APPROX</text>
+    <text class="g-cap" x="245" y="136" fill-opacity="0.85">PBI Premium Import + warm-cache</text>
+
+    <!-- Row 5 — Data Agents -->
+    <text class="g-label" x="0" y="164">Data Agents</text>
+    <rect x="170" y="152" width="60" height="18" fill="#1f6feb" fill-opacity="0.40" stroke="#1f6feb" stroke-opacity="0.8"/>
+    <text class="g-grade" x="200" y="165" text-anchor="middle" fill="#aea0ff">APPROX</text>
+    <text class="g-cap" x="245" y="164" fill-opacity="0.85">NL2SQL/DAX/KQL · 5 pytest passing</text>
+
+    <!-- Row 6 — Mirroring -->
+    <text class="g-label" x="0" y="192">Mirroring</text>
+    <rect x="170" y="180" width="60" height="18" fill="#2EA043" fill-opacity="0.32" stroke="#2EA043" stroke-opacity="0.8"/>
+    <text class="g-grade" x="200" y="193" text-anchor="middle" fill="#a7f3a0">EXACT</text>
+    <text class="g-cap" x="245" y="192" fill-opacity="0.85">Debezium + PySpark MERGE · 7 pytest</text>
+
+    <!-- Row 7 — Defender for AI -->
+    <text class="g-label" x="0" y="220">Defender for AI</text>
+    <rect x="170" y="208" width="60" height="18" fill="#1f6feb" fill-opacity="0.40" stroke="#1f6feb" stroke-opacity="0.8"/>
+    <text class="g-grade" x="200" y="221" text-anchor="middle" fill="#aea0ff">APPROX</text>
+    <text class="g-cap" x="245" y="220" fill-opacity="0.85">Sentinel rules + Logic App (Gov)</text>
+
+    <!-- Row 8 — Defender for Cloud (full) — honest gap -->
+    <text class="g-label" x="0" y="248">DFC AI Threat Prot</text>
+    <rect x="170" y="236" width="60" height="18" fill="#d89f3d" fill-opacity="0.35" stroke="#d89f3d" stroke-opacity="0.8"/>
+    <text class="g-grade" x="200" y="249" text-anchor="middle" fill="#e6b566">GAP</text>
+    <text class="g-cap" x="245" y="248" fill-opacity="0.85">Commercial-only · manual SOC in Gov</text>
+  </g>
+
+  <text class="g-cap" x="880" y="396" fill="#FFFFFF" fill-opacity="0.7">EVERY ROW HAS A DOC PAGE · NO HIDDEN GAPS · FORWARD-MIGRATES 1:1</text>
+</svg>
