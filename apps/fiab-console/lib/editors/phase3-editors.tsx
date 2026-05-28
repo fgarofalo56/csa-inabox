@@ -2723,20 +2723,28 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   }, [measureTable, measureName, detail?.tables]);
 
   const canRefresh = !!datasetId && !refreshing && detail?.dataset?.isRefreshable !== false;
+  const openInPbi = useCallback(() => {
+    if (workspaceId && datasetId) {
+      window.open(`https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/details`, '_blank', 'noreferrer');
+    }
+  }, [workspaceId, datasetId]);
+  // Only real, working actions. Authoring that genuinely requires the XMLA
+  // endpoint / Power BI Desktop (RLS roles, perspectives, Direct Lake toggle,
+  // TMSL import) is NOT shown as a dead button — it's documented in the
+  // Measures-tab MessageBar instead. See no-vaporware.md.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
-      { label: 'Model', actions: [
-        { label: 'New measure', onClick: datasetId ? focusNewMeasure : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Measures tab to author + validate DAX' },
-        { label: 'New role', disabled: true, title: 'RLS role editor requires XMLA endpoint write (Premium/Fabric capacity) — out of scope for v3' },
-        { label: 'New perspective', disabled: true, title: 'perspective editor requires XMLA write — out of scope for v3' },
+      { label: 'Measures', actions: [
+        { label: 'New measure (DAX)', onClick: datasetId ? focusNewMeasure : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Measures tab to author + validate DAX against the live model' },
       ]},
       { label: 'Source', actions: [
         { label: refreshing ? 'Queuing…' : 'Refresh', onClick: canRefresh ? refreshNow : undefined, disabled: !canRefresh, title: detail?.dataset?.isRefreshable === false ? 'dataset is not refreshable (push or DirectQuery without gateway)' : (!datasetId ? 'select a dataset first' : undefined) },
-        { label: 'Direct Lake', disabled: true, title: 'PREVIEW: Direct Lake storage-mode toggle requires Fabric REST /datasets PATCH with mode=DirectLake — lands in v3.4' },
-        { label: 'Import', disabled: true, title: 'PREVIEW: PBIX/TMSL import requires the XMLA endpoint — lands in v3.4' },
+      ]},
+      { label: 'Open', actions: [
+        { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -2961,6 +2969,10 @@ function ReportLikeEditor({
   const [err, setErr] = useState<string | null>(null);
   const [embed, setEmbed] = useState<{ token: string; embedUrl: string; reportId: string } | null>(null);
   const [embedErr, setEmbedErr] = useState<string | null>(null);
+  const [refreshBusy, setRefreshBusy] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [exportBusy, setExportBusy] = useState<'PDF' | 'PPTX' | null>(null);
+  const [exportErr, setExportErr] = useState<string | null>(null);
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -3002,17 +3014,70 @@ function ReportLikeEditor({
     if (!report?.webUrl) return;
     try { await navigator.clipboard.writeText(report.webUrl); } catch { /* ignore */ }
   }, [report?.webUrl]);
+
+  // Refresh the report's underlying semantic model (a report has no data of
+  // its own). Hits POST /api/items/report/{id}/refresh which resolves the
+  // datasetId and queues a real Power BI dataset refresh. Paginated/RDL
+  // reports may not have a refreshable dataset — the route says so honestly.
+  const refreshData = useCallback(async () => {
+    if (!workspaceId || !reportId) return;
+    setRefreshBusy(true); setRefreshMsg(null);
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/refresh`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId }),
+      });
+      const j = await r.json();
+      setRefreshMsg(j.ok ? { ok: true, text: 'Dataset refresh queued.' } : { ok: false, text: j.error || `HTTP ${r.status}` });
+    } catch (e: any) { setRefreshMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setRefreshBusy(false); }
+  }, [workspaceId, reportId]);
+
+  // Export the report to PDF/PPTX via the real Power BI async ExportTo job.
+  // The BFF drives start->poll->download and streams the binary back, which
+  // we save via an object URL. Paginated reports use a different export SDK,
+  // so export is offered for standard PBI reports only.
+  const exportReport = useCallback(async (format: 'PDF' | 'PPTX') => {
+    if (!workspaceId || !reportId) return;
+    setExportBusy(format); setExportErr(null);
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/export`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, format }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        setExportErr(j.error || `export failed (HTTP ${r.status})`);
+        return;
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${report?.name || 'report'}.${format.toLowerCase()}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e: any) { setExportErr(e?.message || String(e)); }
+    finally { setExportBusy(null); }
+  }, [workspaceId, reportId, report?.name]);
+
+  const hasReport = !!reportId;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Open', actions: [
         { label: kind === 'paginated' ? 'Open paginated report' : 'Open in Power BI', onClick: report?.webUrl ? openInDesktop : undefined, disabled: !report?.webUrl, title: !report?.webUrl ? 'select a report first' : 'opens Power BI Web — use Edit there to author' },
         { label: 'Copy link', onClick: report?.webUrl ? copyReportLink : undefined, disabled: !report?.webUrl, title: !report?.webUrl ? 'select a report first' : 'copy the workspace URL to clipboard' },
       ]},
-      { label: 'Metadata', actions: [
-        { label: 'Refresh', onClick: canRefresh ? refreshSelected : undefined, disabled: !canRefresh, title: !canRefresh ? 'select a workspace first' : 'reload list + selected report metadata' },
+      { label: 'Data', actions: [
+        { label: refreshBusy ? 'Refreshing…' : 'Refresh data', onClick: hasReport && !refreshBusy ? refreshData : undefined, disabled: !hasReport || refreshBusy, title: !hasReport ? 'select a report first' : 'queue a refresh of the report’s underlying semantic model' },
+        { label: 'Reload metadata', onClick: canRefresh ? refreshSelected : undefined, disabled: !canRefresh, title: !canRefresh ? 'select a workspace first' : 'reload list + selected report metadata' },
       ]},
+      ...(kind === 'paginated' ? [] : [{ label: 'Export', actions: [
+        { label: exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF', onClick: hasReport && !exportBusy ? () => exportReport('PDF') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PDF via Power BI REST' },
+        { label: exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX', onClick: hasReport && !exportBusy ? () => exportReport('PPTX') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PowerPoint via Power BI REST' },
+      ]}]),
     ]},
-  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl]);
+  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport]);
 
   // Mint a per-report embed token whenever the selected report changes.
   // Paginated reports use a different SDK (`pbi-paginated`) that we don't
@@ -3060,16 +3125,26 @@ function ReportLikeEditor({
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">{kind === 'paginated' ? 'Paginated report' : 'Power BI report'}</Badge>
             <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
-            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Reload</Button>
+            {report?.webUrl && <Button appearance="outline" onClick={openInDesktop}>Open in Power BI</Button>}
+            <Button appearance="primary" icon={refreshBusy ? <Spinner size="tiny" /> : <ArrowSync20Regular />} onClick={refreshData} disabled={!reportId || refreshBusy}>{refreshBusy ? 'Refreshing…' : 'Refresh data'}</Button>
+            {kind !== 'paginated' && (
+              <>
+                <Button appearance="outline" onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
+                <Button appearance="outline" onClick={() => exportReport('PPTX')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX'}</Button>
+              </>
+            )}
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+          {refreshMsg && <MessageBar intent={refreshMsg.ok ? 'success' : 'error'}><MessageBarBody>{refreshMsg.text}</MessageBarBody></MessageBar>}
+          {exportErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Export failed</MessageBarTitle>{exportErr}</MessageBarBody></MessageBar>}
           <MessageBar intent="info">
             <MessageBarBody>
-              <MessageBarTitle>Loom is a metadata + viewer surface for Power BI {kind === 'paginated' ? 'paginated ' : ''}reports</MessageBarTitle>
-              Authoring (pages, visuals, bookmarks, filter pane) lives in <strong>Power BI Desktop</strong> and the
-              Power BI Web editor. The Loom editor lists reports, shows metadata + last-modified, refreshes the
-              metadata cache, and embeds the report read-only for preview. Use <strong>Open in Power BI</strong>
-              above to author.
+              <MessageBarTitle>Visual authoring happens in Power BI Desktop</MessageBarTitle>
+              Visuals, pages, bookmarks and the filter pane are authored in <strong>Power BI Desktop</strong> (and the
+              Power BI Web editor) — that is by design, not a gap. This pane embeds the live {kind === 'paginated' ? 'paginated ' : ''}report,
+              {kind === 'paginated' ? ' links out to Power BI,' : ' triggers a dataset refresh, and exports to PDF/PPTX —'} all against the real
+              Power BI REST API. Use <strong>Open in Power BI</strong> to author.
             </MessageBarBody>
           </MessageBar>
           {report && (
