@@ -10,6 +10,15 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.13.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.12.0...csa-inabox-v0.13.0) (2026-05-28)
+
+
+### Features
+
+* **csa-loom-monitor:** add Refresh button + time-range filter to ActivityFeedPane ([#400](https://github.com/fgarofalo56/csa-inabox/issues/400)) ([3a63eaa](https://github.com/fgarofalo56/csa-inabox/commit/3a63eaad26c6c4aea625a469268be469d0c3d56c))
+* **csa-loom:** RTI family — production-grade across 6 editors (Eventhouse/KQL/Eventstream/Activator) ([#368](https://github.com/fgarofalo56/csa-inabox/issues/368)) ([5d83f34](https://github.com/fgarofalo56/csa-inabox/commit/5d83f343a8b25ec3a7969fbd537caa847ad69caa))
+* **csa-loom:** wire 5 F-grade editors (mirrored-databricks, mounted-adf, event-schema-set, sql-database, airflow-job) ([#401](https://github.com/fgarofalo56/csa-inabox/issues/401)) ([74dc5ac](https://github.com/fgarofalo56/csa-inabox/commit/74dc5ac605025bae89c119644a05a61ec778d988))
+
 ## [0.12.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.11.2...csa-inabox-v0.12.0) (2026-05-28)
 
 
