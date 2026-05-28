@@ -374,6 +374,64 @@ export interface PipelineRunQuery {
   continuationToken?: string;
 }
 
+// ============================================================
+// Synapse triggers (dev REST — same surface as ADF, distinct host)
+// ============================================================
+
+export interface SynapseTrigger {
+  id?: string;
+  name: string;
+  type?: string;
+  etag?: string;
+  properties: {
+    type: 'ScheduleTrigger' | 'TumblingWindowTrigger' | 'BlobEventsTrigger' | 'CustomEventsTrigger' | string;
+    description?: string;
+    runtimeState?: 'Started' | 'Stopped' | 'Disabled';
+    pipelines?: Array<{
+      pipelineReference: { referenceName: string; type: 'PipelineReference' };
+      parameters?: Record<string, unknown>;
+    }>;
+    annotations?: unknown[];
+    typeProperties?: Record<string, unknown>;
+  };
+}
+
+export async function listTriggers(): Promise<SynapseTrigger[]> {
+  const r = await callDev(`/triggers?api-version=${DEV_API}`);
+  const body = await jsonOrThrow<{ value: SynapseTrigger[] }>(r, 'listTriggers');
+  return body.value || [];
+}
+
+export async function upsertTrigger(name: string, spec: SynapseTrigger): Promise<SynapseTrigger> {
+  const body = { name: spec.name || name, properties: spec.properties };
+  const r = await callDev(`/triggers/${encodeURIComponent(name)}?api-version=${DEV_API}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<SynapseTrigger>(r, `upsertTrigger(${name})`);
+}
+
+export async function deleteTrigger(name: string): Promise<void> {
+  const r = await callDev(`/triggers/${encodeURIComponent(name)}?api-version=${DEV_API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 200 && r.status !== 204) {
+    throw new Error(`deleteTrigger failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function startTrigger(name: string): Promise<void> {
+  const r = await callDev(`/triggers/${encodeURIComponent(name)}/start?api-version=${DEV_API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`startTrigger failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function stopTrigger(name: string): Promise<void> {
+  const r = await callDev(`/triggers/${encodeURIComponent(name)}/stop?api-version=${DEV_API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`stopTrigger failed ${r.status}: ${await r.text()}`);
+  }
+}
+
 export async function queryPipelineRuns(
   query?: Partial<PipelineRunQuery>,
 ): Promise<{ value: PipelineRun[]; continuationToken?: string }> {

@@ -128,6 +128,122 @@ export async function runPipeline(
   return jsonOrThrow<PipelineRunResponse>(r, `runPipeline(${name})`);
 }
 
+/**
+ * Debug a pipeline run — ADF supports `isRecovery=true&referencePipelineRunId=`
+ * for re-runs from a known runId. When `referencePipelineRunId` is omitted,
+ * `isRecovery` is forced false so ADF treats it as a normal createRun.
+ *
+ * The Fabric Debug button in the editor maps to this — same wire format as
+ * Run but with a distinct invokedByType so the run shows up in the Output
+ * pane under "Debug" instead of "Manual".
+ */
+export async function debugPipeline(
+  name: string,
+  params?: Record<string, unknown>,
+  opts?: { referencePipelineRunId?: string; startActivityName?: string },
+): Promise<PipelineRunResponse> {
+  const qs = new URLSearchParams({ 'api-version': API });
+  if (opts?.referencePipelineRunId) {
+    qs.set('isRecovery', 'true');
+    qs.set('referencePipelineRunId', opts.referencePipelineRunId);
+  } else {
+    qs.set('isRecovery', 'false');
+  }
+  if (opts?.startActivityName) qs.set('startActivityName', opts.startActivityName);
+  const r = await call(
+    `${base()}/pipelines/${encodeURIComponent(name)}/createRun?${qs.toString()}`,
+    { method: 'POST', body: JSON.stringify(params || {}) },
+  );
+  return jsonOrThrow<PipelineRunResponse>(r, `debugPipeline(${name})`);
+}
+
+/**
+ * Validate a pipeline JSON against ADF's syntactic + reference checker.
+ *
+ * ADF exposes two flavours of validation:
+ *   1. POST factories/{f}/pipelines/{name}/validate — validate persisted pipeline
+ *   2. POST factories/{f}/validatePipeline?api-version=... — validate by value
+ *
+ * Pass `spec` to validate an in-memory payload; pass nothing to validate the
+ * persisted version. Returns the raw ADF response inside `body` plus status
+ * so callers can surface ADF's structured error message verbatim.
+ */
+export interface AdfValidateResponse {
+  activities?: Array<{ name?: string; type?: string }>;
+  parameters?: unknown;
+  variables?: unknown;
+  error?: { code?: string; message?: string };
+}
+
+export async function validatePipeline(
+  name: string,
+  spec?: AdfPipeline,
+): Promise<{ ok: boolean; status: number; body: AdfValidateResponse; errorText?: string }> {
+  if (!spec) {
+    const r = await call(
+      `${base()}/pipelines/${encodeURIComponent(name)}/validate?api-version=${API}`,
+      { method: 'POST' },
+    );
+    const text = await r.text();
+    let body: AdfValidateResponse = {};
+    try { body = text ? (JSON.parse(text) as AdfValidateResponse) : {}; } catch { /* empty */ }
+    return { ok: r.ok, status: r.status, body, errorText: r.ok ? undefined : text };
+  }
+  const r = await call(
+    `${base()}/validatePipeline?api-version=${API}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        name: spec.name || name,
+        properties: spec.properties || { activities: [] },
+      }),
+    },
+  );
+  const text = await r.text();
+  let body: AdfValidateResponse = {};
+  try { body = text ? (JSON.parse(text) as AdfValidateResponse) : {}; } catch { /* empty */ }
+  return { ok: r.ok, status: r.status, body, errorText: r.ok ? undefined : text };
+}
+
+export interface AdfActivityRun {
+  activityRunId: string;
+  activityName: string;
+  activityType: string;
+  pipelineName?: string;
+  pipelineRunId?: string;
+  status?: 'Queued' | 'InProgress' | 'Succeeded' | 'Failed' | 'Cancelled' | 'Skipped';
+  activityRunStart?: string;
+  activityRunEnd?: string;
+  durationInMs?: number;
+  input?: unknown;
+  output?: unknown;
+  error?: { errorCode?: string; message?: string; failureType?: string };
+}
+
+/**
+ * List per-activity output for a single pipeline run. Backs the Output
+ * pane in the data pipeline editor.
+ */
+export async function listActivityRuns(
+  runId: string,
+  windowDays = 1,
+): Promise<AdfActivityRun[]> {
+  const now = new Date();
+  const start = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000);
+  const r = await call(
+    `${base()}/pipelineruns/${encodeURIComponent(runId)}/queryActivityruns?api-version=${API}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        lastUpdatedAfter: start.toISOString(),
+        lastUpdatedBefore: now.toISOString(),
+      }),
+    },
+  );
+  const body = await jsonOrThrow<{ value: AdfActivityRun[] }>(r, `listActivityRuns(${runId})`);
+  return body.value || [];
+}
+
 export interface AdfPipelineRun {
   runId: string;
   pipelineName: string;
