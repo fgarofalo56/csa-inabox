@@ -1,5 +1,7 @@
 # CSA Loom — 5-Day Cloud CoE Workshops
 
+![5-day workshops — Federal CoE + Commercial CoE, day-by-day curriculum](../../assets/images/hero/fiab/workshops.svg){ .architecture-hero loading="eager" }
+
 CSA Loom ships **two 5-day Cloud Center of Excellence workshops**
 day-one (per AMENDMENTS §A12 / OQ-13):
 
