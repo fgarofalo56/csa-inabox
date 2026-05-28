@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   if (action !== 'start' && action !== 'stop') return err("action must be 'start' or 'stop'", 400);
   try {
     const items = await itemsContainer();
-    const { resource: existing } = await items.item(ctx.params.id, workspaceId).read<WorkspaceItem>();
+    const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!existing || existing.itemType !== 'mirrored-database') return err('mirrored database not found', 404);
     const desired = action === 'start' ? 'Running' : 'Stopped';
     const next: WorkspaceItem = {

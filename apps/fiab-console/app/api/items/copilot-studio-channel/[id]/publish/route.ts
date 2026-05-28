@@ -12,7 +12,7 @@ import { publishToChannel, CopilotStudioError } from '@/lib/azure/copilot-studio
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   try {
     const channel = await publishToChannel(
       String(body.envId),
-      ctx.params.id,
+      (await ctx.params).id,
       String(body.channelType),
       body.config || {},
     );

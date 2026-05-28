@@ -13,9 +13,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Dropdown, Option, Textarea,
-  Tab, TabList, Spinner,
+  Tab, TabList, Spinner, Switch, Field,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
+  Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -156,6 +157,20 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
   const [jobClass, setJobClass] = useState('');
   const [jobArgs, setJobArgs] = useState('');
 
+  // Scale dialog
+  const [scaleOpen, setScaleOpen] = useState(false);
+  const [scaleMode, setScaleMode] = useState<'fixed' | 'autoscale'>('autoscale');
+  const [scaleNodeCount, setScaleNodeCount] = useState(3);
+  const [scaleMin, setScaleMin] = useState(3);
+  const [scaleMax, setScaleMax] = useState(10);
+  const [scaleError, setScaleError] = useState<string | null>(null);
+
+  // Auto-pause dialog
+  const [apOpen, setApOpen] = useState(false);
+  const [apEnabled, setApEnabled] = useState(true);
+  const [apDelay, setApDelay] = useState(15);
+  const [apError, setApError] = useState<string | null>(null);
+
   const loadPools = useCallback(async () => {
     setLoading(true); setError(null);
     try {
@@ -214,6 +229,62 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
     finally { setBusy(false); }
   }, [selected, jobName, jobFile, jobClass, jobArgs, loadBatches]);
 
+  const openScaleDialog = useCallback(() => {
+    if (pool?.properties.autoScale?.enabled) {
+      setScaleMode('autoscale');
+      setScaleMin(pool.properties.autoScale.minNodeCount || 3);
+      setScaleMax(pool.properties.autoScale.maxNodeCount || 10);
+    } else {
+      setScaleMode('fixed');
+      setScaleNodeCount(pool?.properties.nodeCount || 3);
+    }
+    setScaleError(null);
+    setScaleOpen(true);
+  }, [pool]);
+
+  const applyScale = useCallback(async () => {
+    if (!selected) return;
+    setBusy(true); setScaleError(null);
+    try {
+      const body =
+        scaleMode === 'fixed'
+          ? { nodeCount: scaleNodeCount }
+          : { autoScale: { enabled: true, minNodeCount: scaleMin, maxNodeCount: scaleMax } };
+      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/scale`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `scale failed (${r.status})`);
+      setScaleOpen(false);
+      await loadPool(selected);
+    } catch (e: any) { setScaleError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, scaleMode, scaleNodeCount, scaleMin, scaleMax, loadPool]);
+
+  const openApDialog = useCallback(() => {
+    setApEnabled(pool?.properties.autoPause?.enabled ?? true);
+    setApDelay(pool?.properties.autoPause?.delayInMinutes ?? 15);
+    setApError(null);
+    setApOpen(true);
+  }, [pool]);
+
+  const applyAutoPause = useCallback(async () => {
+    if (!selected) return;
+    setBusy(true); setApError(null);
+    try {
+      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/auto-pause`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: apEnabled, delayInMinutes: apEnabled ? apDelay : undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `auto-pause update failed (${r.status})`);
+      setApOpen(false);
+      await loadPool(selected);
+    } catch (e: any) { setApError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, apEnabled, apDelay, loadPool]);
+
   const setAutoPause = useCallback(async (action: 'pause' | 'resume') => {
     if (!selected) return;
     setBusy(true); setError(null);
@@ -236,16 +307,16 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Pool', actions: [
-        { label: 'Scale', disabled: true, title: 'Scale — needs sparkPool PATCH for nodeCount / autoScale (deferred to v2.2)' },
+        { label: 'Scale', onClick: selected && !busy ? openScaleDialog : undefined, disabled: !selected || busy, title: !selected ? 'Select a pool first' : undefined },
         { label: 'Pause', disabled: true, title: 'Pause — use the Force pause button below (auto-pause runs via Synapse policy)' },
-        { label: 'Auto-pause', disabled: true, title: 'Auto-pause — needs sparkPool PATCH for autoPause delay (deferred)' },
+        { label: 'Auto-pause', onClick: selected && !busy ? openApDialog : undefined, disabled: !selected || busy, title: !selected ? 'Select a pool first' : undefined },
       ]},
       { label: 'Run', actions: [
         { label: 'Open notebook', disabled: true, title: 'Open notebook — use the Synapse Notebook editor (synapse-notebook slug)' },
         { label: busy ? 'Submitting…' : 'Submit Spark job', onClick: !busy && selected ? () => { setTab('submit'); submit(); } : undefined, disabled: busy || !selected, title: !selected ? 'Select a pool first' : undefined },
       ]},
     ]},
-  ], [busy, selected, submit]);
+  ], [busy, selected, submit, openScaleDialog, openApDialog]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -373,6 +444,72 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
               </Table>
             </div>
           )}
+
+          <Dialog open={scaleOpen} onOpenChange={(_, d) => setScaleOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Scale Spark pool — {selected}</DialogTitle>
+                <DialogContent>
+                  <Field label="Mode">
+                    <Dropdown
+                      value={scaleMode === 'fixed' ? 'Fixed node count' : 'Autoscale'}
+                      selectedOptions={[scaleMode]}
+                      onOptionSelect={(_, d) => setScaleMode((d.optionValue as 'fixed' | 'autoscale') || 'autoscale')}
+                    >
+                      <Option value="autoscale">Autoscale</Option>
+                      <Option value="fixed">Fixed node count</Option>
+                    </Dropdown>
+                  </Field>
+                  {scaleMode === 'fixed' ? (
+                    <Field label="Node count (≥ 3)">
+                      <Input type="number" min={3} value={String(scaleNodeCount)} onChange={(_, d) => setScaleNodeCount(Math.max(3, Number(d.value) || 3))} />
+                    </Field>
+                  ) : (
+                    <>
+                      <Field label="Min nodes (≥ 3)">
+                        <Input type="number" min={3} value={String(scaleMin)} onChange={(_, d) => setScaleMin(Math.max(3, Number(d.value) || 3))} />
+                      </Field>
+                      <Field label="Max nodes">
+                        <Input type="number" min={3} value={String(scaleMax)} onChange={(_, d) => setScaleMax(Math.max(scaleMin, Number(d.value) || scaleMin))} />
+                      </Field>
+                    </>
+                  )}
+                  {scaleError && (
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Scale failed</MessageBarTitle>{scaleError}</MessageBarBody></MessageBar>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setScaleOpen(false)} disabled={busy}>Cancel</Button>
+                  <Button appearance="primary" onClick={applyScale} disabled={busy}>{busy ? 'Applying…' : 'Apply scale'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          <Dialog open={apOpen} onOpenChange={(_, d) => setApOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Auto-pause — {selected}</DialogTitle>
+                <DialogContent>
+                  <Field label="Enable auto-pause">
+                    <Switch checked={apEnabled} onChange={(_, d) => setApEnabled(d.checked)} label={apEnabled ? 'Enabled' : 'Disabled'} />
+                  </Field>
+                  {apEnabled && (
+                    <Field label="Idle delay (minutes, ≥ 5)">
+                      <Input type="number" min={5} value={String(apDelay)} onChange={(_, d) => setApDelay(Math.max(5, Number(d.value) || 5))} />
+                    </Field>
+                  )}
+                  {apError && (
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Update failed</MessageBarTitle>{apError}</MessageBarBody></MessageBar>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setApOpen(false)} disabled={busy}>Cancel</Button>
+                  <Button appearance="primary" onClick={applyAutoPause} disabled={busy}>{busy ? 'Applying…' : 'Apply'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
@@ -408,6 +545,16 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<'graph' | 'json' | 'runs'>('graph');
+
+  // Triggers dialog state — lists triggers wired to this pipeline and
+  // lets the user start/stop or upsert a schedule trigger inline.
+  const [triggersOpen, setTriggersOpen] = useState(false);
+  const [triggersList, setTriggersList] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
+  const [triggersBusy, setTriggersBusy] = useState(false);
+  const [triggersError, setTriggersError] = useState<string | null>(null);
+  const [newTriggerName, setNewTriggerName] = useState('');
+  const [newTriggerHour, setNewTriggerHour] = useState(0);
+  const [newTriggerMinute, setNewTriggerMinute] = useState(0);
 
   const loadList = useCallback(async () => {
     setError(null);
@@ -480,6 +627,93 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
     finally { setBusy(false); }
   }, [selected, loadRuns]);
 
+  // Synapse Studio Debug — createRun?isDebugRun=true. Same UX as Run
+  // (kick off + flip to Runs tab) but Synapse tags the run as DebugRun
+  // so the editor's run history can filter on it.
+  const debug = useCallback(async () => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(selected)}/debug`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ params: {} }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'debug failed');
+      setTimeout(() => loadRuns(selected), 1500);
+      setTab('runs');
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, loadRuns]);
+
+  const loadTriggers = useCallback(async (name: string) => {
+    setTriggersError(null);
+    try {
+      const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(name)}/triggers`);
+      const j = await r.json();
+      if (!j.ok) { setTriggersList([]); setTriggersError(j.error || 'list triggers failed'); return; }
+      setTriggersList((j.triggers || []).map((t: any) => ({
+        name: t.name,
+        type: t.properties?.type || t.type,
+        runtimeState: t.properties?.runtimeState,
+      })));
+    } catch (e: any) { setTriggersError(e?.message || String(e)); }
+  }, []);
+
+  const openTriggers = useCallback(() => {
+    setTriggersOpen(true);
+    if (selected) loadTriggers(selected);
+  }, [selected, loadTriggers]);
+
+  const triggerAction = useCallback(async (name: string, action: 'start' | 'stop' | 'delete') => {
+    if (!selected) return;
+    setTriggersBusy(true); setTriggersError(null);
+    try {
+      const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(selected)}/triggers`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, action }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `${action} failed`);
+      await loadTriggers(selected);
+    } catch (e: any) { setTriggersError(e?.message || String(e)); }
+    finally { setTriggersBusy(false); }
+  }, [selected, loadTriggers]);
+
+  const createTrigger = useCallback(async () => {
+    if (!selected || !newTriggerName.trim()) return;
+    setTriggersBusy(true); setTriggersError(null);
+    try {
+      const now = new Date();
+      now.setUTCSeconds(0, 0);
+      const startTime = now.toISOString();
+      const r = await fetch(`/api/items/synapse-pipeline/${encodeURIComponent(selected)}/triggers`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: newTriggerName.trim(),
+          properties: {
+            type: 'ScheduleTrigger',
+            runtimeState: 'Stopped',
+            typeProperties: {
+              recurrence: {
+                frequency: 'Day',
+                interval: 1,
+                startTime,
+                timeZone: 'UTC',
+                schedule: { hours: [newTriggerHour], minutes: [newTriggerMinute] },
+              },
+            },
+          },
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'create failed');
+      setNewTriggerName('');
+      await loadTriggers(selected);
+    } catch (e: any) { setTriggersError(e?.message || String(e)); }
+    finally { setTriggersBusy(false); }
+  }, [selected, newTriggerName, newTriggerHour, newTriggerMinute, loadTriggers]);
+
   const dirty = spec !== origSpec;
   const activities = extractActivities(spec);
   const activityCount = activities.length;
@@ -537,11 +771,11 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
       ]},
       { label: 'Run', actions: [
         { label: busy ? 'Running…' : 'Run', onClick: !busy && selected && !dirty ? run : undefined, disabled: busy || !selected || dirty, title: dirty ? 'Save the spec first' : (!selected ? 'Select a pipeline first' : undefined) },
-        { label: 'Debug', disabled: true, title: 'Debug — needs Synapse Studio createPipelineRun?isDebugRun=true BFF route (deferred)' },
-        { label: 'Triggers', disabled: true, title: 'Triggers — use the ADF Trigger editor (adf-trigger slug); Synapse triggers BFF deferred' },
+        { label: busy ? 'Debugging…' : 'Debug', onClick: !busy && selected && !dirty ? debug : undefined, disabled: busy || !selected || dirty, title: dirty ? 'Save the spec first' : (!selected ? 'Select a pipeline first' : undefined) },
+        { label: 'Triggers', onClick: selected ? openTriggers : undefined, disabled: !selected, title: !selected ? 'Select a pipeline first' : undefined },
       ]},
     ]},
-  ], [addActivity, nextActivityName, busy, selected, dirty, run]);
+  ], [addActivity, nextActivityName, busy, selected, dirty, run, debug, openTriggers]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -627,6 +861,75 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
               </Table>
             </div>
           )}
+
+          <Dialog open={triggersOpen} onOpenChange={(_, d) => setTriggersOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '760px', width: '90vw' }}>
+              <DialogBody>
+                <DialogTitle>Triggers — {selected}</DialogTitle>
+                <DialogContent>
+                  <Caption1>Triggers that reference this pipeline. Start/stop or create a daily schedule trigger inline.</Caption1>
+                  <div style={{ overflow: 'auto', marginTop: 8, marginBottom: 12 }}>
+                    <Table aria-label="Triggers for pipeline" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Name</TableHeaderCell>
+                        <TableHeaderCell>Type</TableHeaderCell>
+                        <TableHeaderCell>State</TableHeaderCell>
+                        <TableHeaderCell>Actions</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {triggersList.length === 0 && (
+                          <TableRow><TableCell colSpan={4}><Caption1>No triggers wired to this pipeline.</Caption1></TableCell></TableRow>
+                        )}
+                        {triggersList.map((t) => (
+                          <TableRow key={t.name}>
+                            <TableCell><strong>{t.name}</strong></TableCell>
+                            <TableCell><code>{t.type || '—'}</code></TableCell>
+                            <TableCell>
+                              <Badge appearance="filled" color={t.runtimeState === 'Started' ? 'success' : t.runtimeState === 'Stopped' ? 'informative' : 'warning'}>
+                                {t.runtimeState || '—'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <div style={{ display: 'flex', gap: 4 }}>
+                                <Button size="small" disabled={triggersBusy || t.runtimeState === 'Started'} onClick={() => triggerAction(t.name, 'start')}>Start</Button>
+                                <Button size="small" disabled={triggersBusy || t.runtimeState !== 'Started'} onClick={() => triggerAction(t.name, 'stop')}>Stop</Button>
+                                <Button size="small" appearance="subtle" disabled={triggersBusy} onClick={() => triggerAction(t.name, 'delete')}>Delete</Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+
+                  <Subtitle2>Create new daily schedule trigger</Subtitle2>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                    <Field label="Name">
+                      <Input value={newTriggerName} onChange={(_, d) => setNewTriggerName(d.value)} placeholder="daily-orders" />
+                    </Field>
+                    <Field label="UTC hour (0-23)">
+                      <Input type="number" min={0} max={23} value={String(newTriggerHour)} onChange={(_, d) => setNewTriggerHour(Math.max(0, Math.min(23, Number(d.value) || 0)))} />
+                    </Field>
+                    <Field label="Minute (0-59)">
+                      <Input type="number" min={0} max={59} value={String(newTriggerMinute)} onChange={(_, d) => setNewTriggerMinute(Math.max(0, Math.min(59, Number(d.value) || 0)))} />
+                    </Field>
+                  </div>
+
+                  {triggersError && (
+                    <MessageBar intent="error" style={{ marginTop: 12 }}>
+                      <MessageBarBody><MessageBarTitle>Trigger action failed</MessageBarTitle>{triggersError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setTriggersOpen(false)} disabled={triggersBusy}>Close</Button>
+                  <Button appearance="primary" onClick={createTrigger} disabled={triggersBusy || !newTriggerName.trim()}>
+                    {triggersBusy ? 'Working…' : 'Create trigger'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />

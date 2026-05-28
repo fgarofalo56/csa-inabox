@@ -15,7 +15,7 @@ vi.mock('@azure/identity', () => {
 import {
   listBusinessDomains, createBusinessDomain, deleteBusinessDomain,
   searchPurview, getLineageSubgraph,
-  registerAtlasEntity, createGlossaryTerm, applyGlossaryTerm,
+  registerAtlasEntity, createAtlasGlossaryTerm, applyGlossaryTerm,
   PurviewNotConfiguredError,
 } from '../purview-client';
 
@@ -154,7 +154,7 @@ describe('registerAtlasEntity', () => {
   });
 });
 
-describe('createGlossaryTerm + applyGlossaryTerm', () => {
+describe('createAtlasGlossaryTerm + applyGlossaryTerm', () => {
   it('creates a term and applies it via Atlas v2 glossary API', async () => {
     const calls: { url: string; method: string }[] = [];
     mockFetch((u, init) => {
@@ -164,7 +164,7 @@ describe('createGlossaryTerm + applyGlossaryTerm', () => {
       }
       return new Response('', { status: 204 });
     });
-    const term = await createGlossaryTerm({ name: 'PII', longDescription: 'Personally identifiable info' });
+    const term = await createAtlasGlossaryTerm({ name: 'PII', longDescription: 'Personally identifiable info' });
     expect(term.guid).toBe('term-1');
     expect(calls[0].url).toContain('/datamap/api/atlas/v2/glossary/term');
     expect(calls[0].method).toBe('POST');

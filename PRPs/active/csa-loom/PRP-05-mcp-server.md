@@ -98,3 +98,35 @@ docs/fiab/operations/mcp-troubleshooting.md              created (by PRP-17)
 - github.com/microsoft/mcp/blob/main/servers/Azure.Mcp.Server/README.md
 - learn.microsoft.com/azure/developer/azure-mcp-server/overview
 - Memory: [[azure-deployment-principal]]
+
+## Validation receipt
+
+**Validated 2026-05-27 — 19/19 pytest GREEN.**
+
+Test harness: `apps/fiab-mcp-config/tests/test_mcp_config.py`. The MCP binary
+itself is vendored from `microsoft/mcp` upstream via the Dockerfile (build at
+deploy time). Tests assert the security contract the loom-mcp.json + Dockerfile
+must keep:
+
+- `loom-mcp.json` top-level shape (server / auth / cloud / tools / elevation /
+  audit / rateLimit / transport)
+- Auth = managed-identity reading `AZURE_CLIENT_ID` env (no baked-in secret)
+- Cloud is boundary-aware (`resolveAtStartup: true`)
+- Allowlist contains every tool the Setup Wizard + Copilot require (deployment
+  create/whatIf, role assignment, KV read, Cosmos / Databricks / Power BI /
+  ADX list)
+- Denylist blocks `*.delete`, `*.purge`, KV secret write, KV key delete
+- Documented JIT-cleanup exception (`azure.role.assignment.delete`) is the
+  ONLY allowlist tool that overrides a wildcard deny
+- PIM-for-Groups elevation bounded `<= 8h` with required justification
+- Audit writes to App Insights with `includeCaller=true` but
+  `includeRequestBody=false` (PII safety)
+- Rate limit caps per-caller + total per-minute
+- Dockerfile uses official mcr.microsoft.com .NET base images, runs as
+  non-root `loom` user, has /.well-known/health probe, pins upstream
+  microsoft/mcp via `ARG MS_MCP_REF`
+
+**Operator action remaining:** Build vendor Dockerfile to ACR + smoke test
+the live container at `/.well-known/health` + PIM elevation cycle end-to-end.
+Build workflow exists in `.github/workflows/build-fiab-images.yml`; depends on
+ACR private endpoint unblock (tracked in audit page).

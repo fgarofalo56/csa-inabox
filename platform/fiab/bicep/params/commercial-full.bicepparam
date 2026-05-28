@@ -30,13 +30,21 @@ param databricksSqlWarehouseEnabled = true
 
 // Security
 param defenderForAIEnabled = true
-// Unified Catalog defaults to ON: the /catalog surface federates Purview +
-// UC + OneLake and wires `LOOM_PURVIEW_ACCOUNT` into the console env.
-// NOTE: if the tenant already has an Enterprise Purview (e.g. dmlz-dev-
-// purview-eastus), set this back to `false` and instead point
-// LOOM_PURVIEW_ACCOUNT at that account in admin-plane/main.bicep — a 2nd
-// Enterprise account fails with `EnterpriseTenantAlreadyExists`.
-param purviewEnabled = true
+// Unified Catalog + Enterprise Purview reuse:
+//   The /catalog surface federates Purview + UC + OneLake. Because this
+//   tenant already has an Enterprise Purview (dmlz-dev-purview-eastus),
+//   we DO NOT deploy a second one (would fail with
+//   'EnterpriseTenantAlreadyExists'). Instead we wire the existing
+//   account into the console via LOOM_PURVIEW_ACCOUNT so /catalog and
+//   /admin/security hit real endpoints rather than the NotConfigured gate.
+param purviewEnabled = false
+// Override via env: LOOM_PURVIEW_ACCOUNT=<short-account-name>
+param loomPurviewAccount = readEnvironmentVariable('LOOM_PURVIEW_ACCOUNT', 'dmlz-dev-purview-eastus')
+// Information Protection + DLP — opt in after the post-deploy bootstrap
+// workflow grants the Graph AppRoles AND admin consent is issued.
+// Set LOOM_MIP_ENABLED / LOOM_DLP_ENABLED env vars to flip these on.
+param loomMipEnabled = bool(readEnvironmentVariable('LOOM_MIP_ENABLED', 'false'))
+param loomDlpEnabled = bool(readEnvironmentVariable('LOOM_DLP_ENABLED', 'false'))
 param storageRequireCmk = false
 param keyVaultHsmIsolated = false
 param atlasOnAksEnabled = false

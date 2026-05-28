@@ -22,24 +22,24 @@ function envIdOf(req: NextRequest): string | null {
   return new URL(req.url).searchParams.get('envId');
 }
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const envId = envIdOf(req);
   if (!envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
-    const agent = await getAgent(envId, ctx.params.id);
+    const agent = await getAgent(envId, (await ctx.params).id);
     return NextResponse.json({ ok: true, agent });
   } catch (e: any) { return handleErr(e); }
 }
 
-export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
   if (!body?.envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
-    const agent = await updateAgent(String(body.envId), ctx.params.id, {
+    const agent = await updateAgent(String(body.envId), (await ctx.params).id, {
       name: body.name,
       description: body.description,
       instructions: body.instructions,
@@ -49,13 +49,13 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
   } catch (e: any) { return handleErr(e); }
 }
 
-export async function DELETE(req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const envId = envIdOf(req);
   if (!envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
-    await deleteAgent(envId, ctx.params.id);
+    await deleteAgent(envId, (await ctx.params).id);
     return NextResponse.json({ ok: true });
   } catch (e: any) { return handleErr(e); }
 }

@@ -1,26 +1,35 @@
 'use client';
 
 /**
- * /admin/security — REAL security & governance dashboard. Composes data
- * from existing routes:
- *   - /api/governance/sensitivity   → label distribution + coverage %
- *   - /api/governance/classifications → classification hits
- *   - /api/governance/insights      → KPIs + active policies + audit count
- *   - /api/admin/audit-logs (type=share) → recent share grants
+ * /admin/security — full Purview + Information Protection + DLP
+ * management surface inside CSA Loom. Goal: users never leave Loom for
+ * portal.azure.com / compliance.microsoft.com / purview.microsoft.com.
  *
- * No new BFF route required — this is a composition layer over the
- * already-functional governance endpoints.
+ * Tabs:
+ *   - Overview              KPI dashboard (existing — sensitivity, classifications,
+ *                            policies, audit count, recent permission changes).
+ *   - Purview               Inline management of data sources, scans, glossary,
+ *                            domains, DQ + links to existing /governance/{sensitivity,lineage}.
+ *   - Information Protection Tenant sensitivity labels + label policies + apply-label
+ *                            action. Backed by Microsoft Graph (UAMI ChainedTokenCredential).
+ *   - DLP                   Purview DLP policies + rules + alerts + simulate.
+ *   - Audit                 Filterable + CSV-exportable audit log.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  TabList, Tab, type SelectTabData, type SelectTabEvent,
   Spinner, Badge, Caption1, Body1, Subtitle2, Button,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Open16Regular, Shield24Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Shield24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
+import { PurviewPanel } from '@/lib/components/admin-security/purview-panel';
+import { MipPanel } from '@/lib/components/admin-security/mip-panel';
+import { DlpPanel } from '@/lib/components/admin-security/dlp-panel';
+import { AuditPanel } from '@/lib/components/admin-security/audit-panel';
 
 interface Insights {
   kpis: { totalItems: number; sensitiveCoveragePct: number; classificationCoveragePct: number; activePolicies: number; auditEvents30d: number };
@@ -38,6 +47,7 @@ interface AuditRow {
 }
 
 const useStyles = makeStyles({
+  topTabs: { marginBottom: 16 },
   statsRow: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
     gap: 12, marginBottom: 20,
@@ -75,7 +85,43 @@ function labelColor(l: string): any {
   return 'subtle';
 }
 
+type TopTab = 'overview' | 'purview' | 'mip' | 'dlp' | 'audit';
+
 export default function SecurityPage() {
+  const s = useStyles();
+  const [tab, setTab] = useState<TopTab>('overview');
+
+  return (
+    <AdminShell sectionTitle="Security & governance">
+      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 16 }}>
+        Tenant-wide security posture + inline management of Microsoft Purview, Information Protection, and
+        DLP. Every operation is wired to a real Azure / Microsoft Graph backend — when an upstream isn't
+        wired in this deployment, the affected tab surfaces a precise remediation (env var, AppRole, bicep
+        module, bootstrap script).
+      </Body1>
+
+      <TabList
+        className={s.topTabs}
+        selectedValue={tab}
+        onTabSelect={(_e: SelectTabEvent, d: SelectTabData) => setTab(d.value as TopTab)}
+      >
+        <Tab value="overview">Overview</Tab>
+        <Tab value="purview">Purview</Tab>
+        <Tab value="mip">Information Protection</Tab>
+        <Tab value="dlp">DLP</Tab>
+        <Tab value="audit">Audit</Tab>
+      </TabList>
+
+      {tab === 'overview' && <OverviewTab />}
+      {tab === 'purview' && <PurviewPanel />}
+      {tab === 'mip' && <MipPanel />}
+      {tab === 'dlp' && <DlpPanel />}
+      {tab === 'audit' && <AuditPanel />}
+    </AdminShell>
+  );
+}
+
+function OverviewTab() {
   const s = useStyles();
   const [insights, setInsights] = useState<Insights | null>(null);
   const [sensitivity, setSensitivity] = useState<Sensitivity | null>(null);
@@ -109,12 +155,7 @@ export default function SecurityPage() {
   useEffect(() => { load(); }, [load]);
 
   return (
-    <AdminShell sectionTitle="Security & governance">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 16 }}>
-        Tenant-wide security posture. Aggregates sensitivity coverage, classification activity, active
-        governance policies, and recent permission changes.
-      </Body1>
-
+    <>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
         <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
       </div>
@@ -218,7 +259,7 @@ export default function SecurityPage() {
             </div>
           </div>
 
-          <div className={s.section} style={{ marginBottom: 20 }}>
+          <div className={s.section}>
             <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Recent permission changes</Subtitle2>
             {shareEvents.length > 0 ? (
               <Table size="small" aria-label="Permission changes">
@@ -243,32 +284,12 @@ export default function SecurityPage() {
               </Table>
             ) : (
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                No recent share / permission events in the last 30 days.
-                <a href="/admin/audit-logs" style={{ marginLeft: 8 }}>Browse full audit log</a>
+                No recent share / permission events in the last 30 days. Use the <strong>Audit</strong> tab for full history + CSV export.
               </Caption1>
             )}
           </div>
-
-          <div className={s.section}>
-            <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>External governance systems</Subtitle2>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-              For deeper Purview-backed scanning, sensitivity label authoring, and DLP policy management
-              that's enforced upstream, link out to the Microsoft 365 + Purview portals:
-            </Caption1>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
-              <a href="https://web.purview.azure.com/" target="_blank" rel="noreferrer">
-                <Button icon={<Open16Regular />} iconPosition="after">Microsoft Purview</Button>
-              </a>
-              <a href="https://compliance.microsoft.com/informationprotection" target="_blank" rel="noreferrer">
-                <Button icon={<Open16Regular />} iconPosition="after">Information Protection</Button>
-              </a>
-              <a href="https://compliance.microsoft.com/datalossprevention" target="_blank" rel="noreferrer">
-                <Button icon={<Open16Regular />} iconPosition="after">Microsoft 365 DLP</Button>
-              </a>
-            </div>
-          </div>
         </>
       )}
-    </AdminShell>
+    </>
   );
 }

@@ -16,18 +16,18 @@ function handleErr(e: any) {
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body, status }, { status });
 }
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const envId = new URL(req.url).searchParams.get('envId');
   if (!envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
-    const topic = await getTopic(envId, ctx.params.id);
+    const topic = await getTopic(envId, (await ctx.params).id);
     return NextResponse.json({ ok: true, topic });
   } catch (e: any) { return handleErr(e); }
 }
 
-export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
@@ -38,18 +38,18 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
       name: String(body.name || ''),
       triggerPhrases: Array.isArray(body.triggerPhrases) ? body.triggerPhrases.map(String) : [],
       flowYaml: typeof body.flowYaml === 'string' ? body.flowYaml : '',
-    }, ctx.params.id);
+    }, (await ctx.params).id);
     return NextResponse.json({ ok: true, topic });
   } catch (e: any) { return handleErr(e); }
 }
 
-export async function DELETE(req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const envId = new URL(req.url).searchParams.get('envId');
   if (!envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
-    await deleteTopic(envId, ctx.params.id);
+    await deleteTopic(envId, (await ctx.params).id);
     return NextResponse.json({ ok: true });
   } catch (e: any) { return handleErr(e); }
 }

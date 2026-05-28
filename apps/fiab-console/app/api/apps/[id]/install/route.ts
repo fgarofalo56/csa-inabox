@@ -1,24 +1,37 @@
 /**
  * POST /api/apps/[id]/install — install an app's bundled items into a
- * caller-chosen workspace. Idempotent: items with the same displayName +
- * itemType already in the workspace are skipped (not duplicated).
+ * caller-chosen workspace, then optionally (Phase 2) provision the
+ * matching REAL artifacts in Fabric / ADX / Synapse / AI Search.
  *
- * Body: { workspaceId: string }
+ * Body:
+ *   {
+ *     workspaceId: string,
+ *     deploy?: boolean,             // Phase 2 — default true
+ *     mode?: 'shared' | 'dedicated',// Phase 2 — default 'shared'
+ *     targetOverrides?: {...},      // Phase 2 — dedicated-mode resource ids
+ *   }
  *
  * Reads the curated app from /api/apps-catalog (Cosmos apps-catalog).
  * For each `items[i]` in the app: creates a workspace item via the same
  * createOwnedItem helper the per-type editors use, so they pick it up in
  * their normal list flow + the item gets mirrored into AI Search /
- * audit-log automatically.
+ * audit-log automatically. Then, when deploy===true, calls the Phase-2
+ * provisioning-engine which dispatches per-itemType provisioners that
+ * hit the actual Azure REST surfaces.
  *
  * Result:
- *   { ok, app, workspaceId, installed: [{itemType, id, displayName, status:'created'|'existed'}] }
+ *   {
+ *     ok, app, workspaceId,
+ *     installed: [{itemType, id, displayName, status:'created'|'existed'|'failed', error?}],
+ *     provision?: { outcome, mode, target, steps:[ {itemType, displayName, cosmosItemId, result} ] }
+ *   }
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { appsCatalogContainer, itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { resolveBundleItem, getBundle } from '@/lib/apps/content-bundles';
+import { runProvisioning, type ProvisionReport } from '@/lib/install/provisioning-engine';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,12 +48,20 @@ interface AppDoc {
   items?: AppItemRef[];
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
   const workspaceId = (body?.workspaceId || '').toString().trim();
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+
+  // Phase-2 flags
+  const deploy = body?.deploy !== false; // default true
+  const mode = body?.mode === 'dedicated' ? 'dedicated' : 'shared';
+  const targetOverrides = body?.targetOverrides && typeof body.targetOverrides === 'object'
+    ? body.targetOverrides
+    : undefined;
 
   // Verify caller owns the workspace.
   const ws = await workspacesContainer();
@@ -79,7 +100,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // Existing items in this workspace, for dedup.
   const { resources: existing } = await items.items
     .query({
-      query: 'SELECT c.id, c.itemType, c.displayName FROM c WHERE c.workspaceId = @w',
+      query: 'SELECT c.id, c.itemType, c.displayName, c.state FROM c WHERE c.workspaceId = @w',
       parameters: [{ name: '@w', value: workspaceId }],
     }, { partitionKey: workspaceId })
     .fetchAll();
@@ -95,13 +116,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     ? bundleForApp.items.map(b => ({ type: b.itemType, displayName: b.displayName }))
     : (app.items || []);
 
-  const installed: Array<{ itemType: string; id?: string; displayName: string; status: string; error?: string }> = [];
+  const installed: Array<{
+    itemType: string;
+    id?: string;
+    displayName: string;
+    status: string;
+    error?: string;
+    content?: unknown;
+  }> = [];
   for (const ref of refs) {
     // Resolve rich starter content (notebook cells, KQL DDL, dbt models,
-    // dashboard tiles, etc.) from the in-process bundle registry. The
-    // registry mirrors the canonical examples/<industry>/ reference
-    // architectures — when a bundle exists, the editor opens with a fully
-    // pre-populated workspace instead of an empty editor.
+    // dashboard tiles, etc.) from the in-process bundle registry.
     const bundle = resolveBundleItem(app.id, ref.type);
     const displayName = bundle?.displayName || ref.displayName || `${app.name} · ${ref.type}`;
     const description = bundle?.description || `Installed from app '${app.name}'${ref.template ? ` · template: ${ref.template}` : ''}`;
@@ -114,7 +139,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const key = `${ref.type}::${displayName.toLowerCase()}`;
     if (existsKey.has(key)) {
       const match = (existing as any[]).find(e => e.itemType === ref.type && (e.displayName || '').toLowerCase() === displayName.toLowerCase());
-      installed.push({ itemType: ref.type, id: match?.id, displayName, status: 'existed' });
+      installed.push({ itemType: ref.type, id: match?.id, displayName, status: 'existed', content: match?.state?.content || bundle?.content });
       continue;
     }
     const r = await createOwnedItem(s, ref.type, {
@@ -123,9 +148,68 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       description,
       state,
     });
-    if (r.ok) installed.push({ itemType: ref.type, id: r.item.id, displayName, status: 'created' });
-    else installed.push({ itemType: ref.type, displayName, status: 'failed', error: r.error });
+    if (r.ok) {
+      installed.push({ itemType: ref.type, id: r.item.id, displayName, status: 'created', content: bundle?.content });
+    } else {
+      installed.push({ itemType: ref.type, displayName, status: 'failed', error: r.error });
+    }
   }
 
-  return NextResponse.json({ ok: true, app: app.id, workspaceId, installed });
+  // Phase 2: run live-service provisioning.
+  let provision: ProvisionReport | undefined;
+  try {
+    provision = await runProvisioning(
+      s,
+      app.id,
+      workspaceId,
+      installed.filter((i) => i.id).map((i) => ({ itemType: i.itemType, id: i.id, displayName: i.displayName, content: i.content })),
+      { deploy, mode, targetOverrides },
+    );
+
+    // Stamp each Cosmos item with the provisioning result so the editor
+    // surfaces "Backed by Fabric notebook <id>" instead of an empty
+    // canvas.  Best-effort — failures here don't block the install.
+    for (const step of provision.steps) {
+      if (!step.cosmosItemId) continue;
+      try {
+        const { resource: cur } = await items.item(step.cosmosItemId, workspaceId).read<any>();
+        if (!cur) continue;
+        const nextState = {
+          ...(cur.state || {}),
+          provisioning: {
+            status: step.result.status,
+            resourceId: step.result.resourceId,
+            secondaryIds: step.result.secondaryIds,
+            gate: step.result.gate,
+            error: step.result.error,
+            mode,
+            at: new Date().toISOString(),
+          },
+        };
+        await items.item(step.cosmosItemId, workspaceId).replace({ ...cur, state: nextState, updatedAt: new Date().toISOString() });
+      } catch { /* swallow — provisioning record is best-effort */ }
+    }
+  } catch (e: any) {
+    // Engine itself failed catastrophically — return a partial report so
+    // the UI shows the failure rather than silently swallowing.
+    provision = {
+      outcome: 'partial',
+      mode,
+      target: { mode },
+      steps: installed.map((it) => ({
+        itemType: it.itemType,
+        displayName: it.displayName,
+        cosmosItemId: it.id || '',
+        result: { status: 'failed', error: e?.message || String(e), steps: [] },
+      })),
+    };
+  }
+
+  return NextResponse.json({
+    ok: true,
+    app: app.id,
+    workspaceId,
+    installed: installed.map((i) => ({ itemType: i.itemType, id: i.id, displayName: i.displayName, status: i.status, ...(i.error ? { error: i.error } : {}) })),
+    provision,
+  });
 }

@@ -214,6 +214,21 @@ Master process in Apache Spark that coordinates and schedules work across execut
 
 __Related:__ [Spark Configuration](./spark-configuration.md)
 
+### DQS
+
+__Data Quality Services__
+Legacy SQL Server feature (introduced in SQL Server 2012) for cleansing, matching, and standardizing reference data using a knowledge base of business rules. DQS provides a Data Quality Server that hosts knowledge bases and a Data Quality Client used by data stewards to author cleansing and matching projects.
+
+**Why it matters here:** DQS does **not** ship with Azure SQL Database, Azure SQL Managed Instance, Synapse, or Fabric. Customers migrating from on-prem SQL Server need a replacement path. In Cloud Scale Analytics, the canonical replacement is a combination of:
+
+- **Microsoft Purview Data Quality** (formerly Azure Purview DQ) for catalog-integrated quality rules, scoring, and lineage
+- **dbt tests + Great Expectations** for in-pipeline assertion-based quality gates ([ADR-0013 — dbt as canonical transformation](../../adr/0013-dbt-as-canonical-transformation.md))
+- **CSA Loom data-product editor** for surface-level Purview-backed quality scores when running inside an Azure Government tenant where Fabric isn't available
+
+A third-party option used by some federal customers is **Informatica IDQ** or **Ataccama ONE**.
+
+__Related:__ [SQL Server to Azure migration — DQS row](../../migrations/sql-server-to-azure/feature-mapping-complete.md), [Data Governance Best Practices](../../best-practices/data-governance.md), [CSA-in-a-Box vs Fabric](../../comparison/csa-inabox-vs-fabric.md)
+
 ### DW Unit (DWU)
 
 See Data Warehouse Unit.

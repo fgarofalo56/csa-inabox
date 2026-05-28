@@ -16,13 +16,13 @@ function err(e: any) {
   );
 }
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const envId = req.nextUrl.searchParams.get('envId');
   if (!envId) return NextResponse.json({ ok: false, error: 'envId query param required' }, { status: 400 });
   try {
-    const model = await getAiBuilderModel(envId, ctx.params.id);
+    const model = await getAiBuilderModel(envId, (await ctx.params).id);
     return NextResponse.json({ ok: true, envId, model });
   } catch (e: any) { return err(e); }
 }

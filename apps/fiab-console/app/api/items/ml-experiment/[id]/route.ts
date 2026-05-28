@@ -14,10 +14,10 @@ import { getJob, listJobs, FoundryError } from '@/lib/azure/foundry-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const id = decodeURIComponent(ctx.params.id);
+  const id = decodeURIComponent((await ctx.params).id);
   try {
     const job = await getJob(id).catch((e) => {
       if (e instanceof FoundryError && (e.status === 404 || e.status === 400)) return null;

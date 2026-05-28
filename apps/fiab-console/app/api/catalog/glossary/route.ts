@@ -23,7 +23,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  createGlossaryTerm, applyGlossaryTerm,
+  createAtlasGlossaryTerm, applyGlossaryTerm,
   PurviewNotConfiguredError, PurviewError,
 } from '@/lib/azure/purview-client';
 
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'term.name required' }, { status: 400 });
   }
   try {
-    const created = await createGlossaryTerm(term);
+    const created = await createAtlasGlossaryTerm(term);
     let applied = false;
     if (body.applyTo?.entityGuid) {
       await applyGlossaryTerm(created.guid, body.applyTo.entityGuid);
