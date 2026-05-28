@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Spinner,
+  Subtitle2, Body1, Caption1, Badge, Button, Input, Spinner, Field,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
@@ -1542,13 +1542,81 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const ready = schema?.ok === true;
 
   const canRun = ready && !loading;
+
+  // Save-as-table dialog state — CTAS helper.
+  const [ctasOpen, setCtasOpen] = useState(false);
+  const [ctasSchema, setCtasSchema] = useState('dbo');
+  const [ctasTable, setCtasTable] = useState('');
+  const [ctasBusy, setCtasBusy] = useState(false);
+  const [ctasError, setCtasError] = useState<string | null>(null);
+
+  const newSql = useCallback(() => {
+    // Multi-tab is a future v3.x — for now "New SQL query" resets the
+    // current tab to a fresh template, matching Fabric Warehouse's
+    // single-tab UX inside the embedded editor.
+    setSqlText(SAMPLE_SQL.replace(/SELECT 1 AS smoke[^;]*;/, 'SELECT TOP 100 * FROM INFORMATION_SCHEMA.TABLES;'));
+    setResult(null);
+  }, []);
+
+  const openCtas = useCallback(() => {
+    setCtasError(null);
+    setCtasTable('');
+    setCtasOpen(true);
+  }, []);
+
+  const submitCtas = useCallback(async () => {
+    if (!ctasTable.trim()) { setCtasError('table name required'); return; }
+    setCtasBusy(true); setCtasError(null);
+    try {
+      // Strip a trailing semicolon if present so we can wrap in CTAS.
+      const cleaned = sqlText.trim().replace(/;+\s*$/, '');
+      if (!/^select\b/i.test(cleaned)) {
+        throw new Error('CTAS requires the current query to start with SELECT.');
+      }
+      const ddl = `CREATE TABLE [${ctasSchema.replace(/]/g, '')}].[${ctasTable.replace(/]/g, '')}] AS\n${cleaned};`;
+      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sql: ddl }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setCtasOpen(false);
+      loadSchema();
+    } catch (e: any) { setCtasError(e?.message || String(e)); }
+    finally { setCtasBusy(false); }
+  }, [id, sqlText, ctasSchema, ctasTable, loadSchema]);
+
+  const openInExcel = useCallback(async () => {
+    if (!sqlText.trim()) return;
+    try {
+      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/iqy`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sql: sqlText }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `loom-warehouse-${id}.iqy`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e: any) {
+      setResult({ ok: false, error: e?.message || String(e) });
+    }
+  }, [id, sqlText]);
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
-        { label: 'New SQL query', disabled: true, title: 'multi-tab T-SQL editor not yet wired' },
+        { label: 'New SQL query', onClick: newSql },
         { label: loading ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
-        { label: 'Save as table', disabled: true, title: 'CTAS helper not yet wired' },
-        { label: 'Open in Excel', disabled: true, title: 'Excel ODBC link not yet wired' },
+        { label: 'Save as table', onClick: canRun && sqlText.trim() ? openCtas : undefined, disabled: !canRun || !sqlText.trim(), title: !canRun ? 'warehouse compute is not ready' : (!sqlText.trim() ? 'enter a SELECT first' : undefined) },
+        { label: 'Open in Excel', onClick: sqlText.trim() ? openInExcel : undefined, disabled: !sqlText.trim(), title: !sqlText.trim() ? 'enter a query first' : undefined },
       ]},
       { label: 'Modeling', actions: [
         { label: 'New measure', disabled: true, title: 'warehouse DAX measure editor not yet wired' },
@@ -1559,7 +1627,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Source control', disabled: true, title: 'git integration not yet wired' },
       ]},
     ]},
-  ], [loading, canRun, ready, run]);
+  ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1679,6 +1747,35 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               )}
             </>
           )}
+
+          <Dialog open={ctasOpen} onOpenChange={(_, d) => setCtasOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Save as table (CTAS)</DialogTitle>
+                <DialogContent>
+                  <Caption1>
+                    Wraps the current query as <code>CREATE TABLE … AS SELECT …</code> and runs it
+                    against the warehouse. Schema + table must not already exist.
+                  </Caption1>
+                  <Field label="Schema">
+                    <Input value={ctasSchema} onChange={(_, d) => setCtasSchema(d.value)} placeholder="dbo" />
+                  </Field>
+                  <Field label="Table name" required>
+                    <Input value={ctasTable} onChange={(_, d) => setCtasTable(d.value)} placeholder="orders_top100" />
+                  </Field>
+                  {ctasError && (
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>CTAS failed</MessageBarTitle>{ctasError}</MessageBarBody></MessageBar>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setCtasOpen(false)} disabled={ctasBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitCtas} disabled={ctasBusy || !ctasTable.trim()}>
+                    {ctasBusy ? 'Creating…' : 'Create table'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />

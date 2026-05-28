@@ -20,6 +20,8 @@ import {
   Tree, TreeItem, TreeItemLayout,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  Field,
   TabList, Tab, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -125,6 +127,9 @@ interface ServerInfo {
   state?: string; administratorLogin?: string; publicNetworkAccess?: string; version?: string;
 }
 
+interface FirewallRule { name: string; startIpAddress: string; endIpAddress: string }
+interface AadAdminState { login: string; sid: string; tenantId?: string; azureADOnlyAuthentication?: boolean }
+
 export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [servers, setServers] = useState<ServerInfo[]>([]);
@@ -132,6 +137,106 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
   const [databases, setDatabases] = useState<Array<{ name: string; status?: string; sku?: any }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Firewall dialog
+  const [fwOpen, setFwOpen] = useState(false);
+  const [fwRules, setFwRules] = useState<FirewallRule[]>([]);
+  const [fwError, setFwError] = useState<string | null>(null);
+  const [fwBusy, setFwBusy] = useState(false);
+  const [newRuleName, setNewRuleName] = useState('');
+  const [newRuleStart, setNewRuleStart] = useState('');
+  const [newRuleEnd, setNewRuleEnd] = useState('');
+
+  // AAD admin dialog
+  const [aadOpen, setAadOpen] = useState(false);
+  const [aadCurrent, setAadCurrent] = useState<AadAdminState | null>(null);
+  const [aadLogin, setAadLogin] = useState('');
+  const [aadSid, setAadSid] = useState('');
+  const [aadTenantId, setAadTenantId] = useState('');
+  const [aadError, setAadError] = useState<string | null>(null);
+  const [aadBusy, setAadBusy] = useState(false);
+
+  const loadFirewall = useCallback(async () => {
+    if (!selected) return;
+    setFwBusy(true); setFwError(null);
+    try {
+      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall?server=${encodeURIComponent(selected.name)}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setFwRules(j.rules || []);
+    } catch (e: any) { setFwError(e?.message || String(e)); }
+    finally { setFwBusy(false); }
+  }, [id, selected]);
+
+  const addRule = useCallback(async () => {
+    if (!selected || !newRuleName.trim() || !newRuleStart.trim() || !newRuleEnd.trim()) return;
+    setFwBusy(true); setFwError(null);
+    try {
+      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ server: selected.name, name: newRuleName.trim(), startIpAddress: newRuleStart.trim(), endIpAddress: newRuleEnd.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setNewRuleName(''); setNewRuleStart(''); setNewRuleEnd('');
+      await loadFirewall();
+    } catch (e: any) { setFwError(e?.message || String(e)); }
+    finally { setFwBusy(false); }
+  }, [id, selected, newRuleName, newRuleStart, newRuleEnd, loadFirewall]);
+
+  const deleteRule = useCallback(async (ruleName: string) => {
+    if (!selected) return;
+    setFwBusy(true); setFwError(null);
+    try {
+      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall?server=${encodeURIComponent(selected.name)}&rule=${encodeURIComponent(ruleName)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadFirewall();
+    } catch (e: any) { setFwError(e?.message || String(e)); }
+    finally { setFwBusy(false); }
+  }, [id, selected, loadFirewall]);
+
+  const openFw = useCallback(() => {
+    setFwOpen(true);
+    loadFirewall();
+  }, [loadFirewall]);
+
+  const loadAad = useCallback(async () => {
+    if (!selected) return;
+    setAadBusy(true); setAadError(null);
+    try {
+      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin?server=${encodeURIComponent(selected.name)}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setAadCurrent(j.admin || null);
+      if (j.admin) {
+        setAadLogin(j.admin.login || '');
+        setAadSid(j.admin.sid || '');
+        setAadTenantId(j.admin.tenantId || '');
+      }
+    } catch (e: any) { setAadError(e?.message || String(e)); }
+    finally { setAadBusy(false); }
+  }, [id, selected]);
+
+  const openAad = useCallback(() => {
+    setAadOpen(true);
+    loadAad();
+  }, [loadAad]);
+
+  const saveAad = useCallback(async () => {
+    if (!selected || !aadLogin.trim() || !aadSid.trim()) return;
+    setAadBusy(true); setAadError(null);
+    try {
+      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ server: selected.name, login: aadLogin.trim(), sid: aadSid.trim(), tenantId: aadTenantId.trim() || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setAadCurrent(j.admin || null);
+    } catch (e: any) { setAadError(e?.message || String(e)); }
+    finally { setAadBusy(false); }
+  }, [id, selected, aadLogin, aadSid, aadTenantId]);
 
   const refresh = useCallback(() => {
     setLoading(true); setError(null);
@@ -164,11 +269,11 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
         { label: loading ? 'Refreshing…' : 'Refresh list', onClick: loading ? undefined : refresh, disabled: loading },
       ]},
       { label: 'Security', actions: [
-        { label: 'Firewall', disabled: true, title: 'needs ARM mutation BFF (deferred)' },
-        { label: 'AAD admin', disabled: true, title: 'needs ARM mutation BFF (deferred)' },
+        { label: 'Firewall', onClick: selected ? openFw : undefined, disabled: !selected, title: !selected ? 'Pick a server on the left first' : undefined },
+        { label: 'AAD admin', onClick: selected ? openAad : undefined, disabled: !selected, title: !selected ? 'Pick a server on the left first' : undefined },
       ]},
     ]},
-  ], [loading, refresh]);
+  ], [loading, refresh, selected, openFw, openAad]);
 
   return (
     <ItemEditorChrome
@@ -245,11 +350,96 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                 </Table>
               </div>
               <Caption1>
-                Server-level firewall + AAD admin mutation deferred to v3.x — provision via bicep
-                (<code>Microsoft.Sql/servers/firewallRules</code>, <code>Microsoft.Sql/servers/administrators</code>).
+                Use the <strong>Firewall</strong> and <strong>AAD admin</strong> ribbon buttons above to
+                manage <code>Microsoft.Sql/servers/firewallRules</code> and
+                <code> Microsoft.Sql/servers/administrators</code> inline via ARM.
               </Caption1>
             </>
           )}
+
+          <Dialog open={fwOpen} onOpenChange={(_, d) => setFwOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '760px', width: '90vw' }}>
+              <DialogBody>
+                <DialogTitle>Firewall rules — {selected?.name}</DialogTitle>
+                <DialogContent>
+                  {fwBusy && <Spinner size="tiny" label="Calling ARM…" labelPosition="after" />}
+                  {fwError && (
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Firewall API error</MessageBarTitle>{fwError}</MessageBarBody></MessageBar>
+                  )}
+                  <div style={{ overflow: 'auto', marginTop: 8, marginBottom: 12 }}>
+                    <Table aria-label="Firewall rules" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Name</TableHeaderCell>
+                        <TableHeaderCell>Start IP</TableHeaderCell>
+                        <TableHeaderCell>End IP</TableHeaderCell>
+                        <TableHeaderCell>Action</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {fwRules.length === 0 && (
+                          <TableRow><TableCell colSpan={4}><Caption1>No firewall rules.</Caption1></TableCell></TableRow>
+                        )}
+                        {fwRules.map((r) => (
+                          <TableRow key={r.name}>
+                            <TableCell><strong>{r.name}</strong></TableCell>
+                            <TableCell><code style={{ fontSize: 11 }}>{r.startIpAddress}</code></TableCell>
+                            <TableCell><code style={{ fontSize: 11 }}>{r.endIpAddress}</code></TableCell>
+                            <TableCell><Button size="small" appearance="subtle" disabled={fwBusy} onClick={() => deleteRule(r.name)}>Delete</Button></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <Subtitle2>Add rule</Subtitle2>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                    <Field label="Name"><Input value={newRuleName} onChange={(_, d) => setNewRuleName(d.value)} placeholder="allow-corp-vpn" /></Field>
+                    <Field label="Start IP"><Input value={newRuleStart} onChange={(_, d) => setNewRuleStart(d.value)} placeholder="0.0.0.0" /></Field>
+                    <Field label="End IP"><Input value={newRuleEnd} onChange={(_, d) => setNewRuleEnd(d.value)} placeholder="0.0.0.0" /></Field>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setFwOpen(false)} disabled={fwBusy}>Close</Button>
+                  <Button appearance="primary" onClick={addRule} disabled={fwBusy || !newRuleName.trim() || !newRuleStart.trim() || !newRuleEnd.trim()}>
+                    {fwBusy ? 'Saving…' : 'Add rule'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          <Dialog open={aadOpen} onOpenChange={(_, d) => setAadOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>AAD admin — {selected?.name}</DialogTitle>
+                <DialogContent>
+                  {aadBusy && <Spinner size="tiny" label="Calling ARM…" labelPosition="after" />}
+                  {aadCurrent && (
+                    <Caption1>
+                      Current: <strong>{aadCurrent.login}</strong> (<code>{aadCurrent.sid?.slice(0, 8)}…</code>)
+                      {aadCurrent.azureADOnlyAuthentication ? ' · AAD-only auth enabled' : ''}
+                    </Caption1>
+                  )}
+                  <Field label="Login (UPN or group name)" required>
+                    <Input value={aadLogin} onChange={(_, d) => setAadLogin(d.value)} placeholder="user@contoso.com" />
+                  </Field>
+                  <Field label="Object id (sid)" required>
+                    <Input value={aadSid} onChange={(_, d) => setAadSid(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
+                  </Field>
+                  <Field label="Tenant id (optional)">
+                    <Input value={aadTenantId} onChange={(_, d) => setAadTenantId(d.value)} placeholder="leave blank to use the server's tenant" />
+                  </Field>
+                  {aadError && (
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>AAD admin update failed</MessageBarTitle>{aadError}</MessageBarBody></MessageBar>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setAadOpen(false)} disabled={aadBusy}>Close</Button>
+                  <Button appearance="primary" onClick={saveAad} disabled={aadBusy || !aadLogin.trim() || !aadSid.trim()}>
+                    {aadBusy ? 'Saving…' : 'Set AAD admin'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
@@ -331,6 +521,45 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
   const [mirrorState, setMirrorState] = useState<any>(null);
   const [sql2025State, setSql2025State] = useState<any>(null);
 
+  // Geo-replica dialog
+  const [geoOpen, setGeoOpen] = useState(false);
+  const [replicaServer, setReplicaServer] = useState('');
+  const [replicaLocation, setReplicaLocation] = useState('eastus2');
+  const [replicaDb, setReplicaDb] = useState('');
+  const [replicaSku, setReplicaSku] = useState('');
+  const [geoBusy, setGeoBusy] = useState(false);
+  const [geoError, setGeoError] = useState<string | null>(null);
+  const [geoOk, setGeoOk] = useState<string | null>(null);
+
+  const openGeo = useCallback(() => {
+    setGeoError(null); setGeoOk(null);
+    // Default replica db name to the primary; user can change.
+    setReplicaDb(database || '');
+    setGeoOpen(true);
+  }, [database]);
+
+  const submitGeo = useCallback(async () => {
+    if (!server || !database) { setGeoError('server + database required'); return; }
+    if (!replicaServer || !replicaLocation) { setGeoError('replica server + location required'); return; }
+    setGeoBusy(true); setGeoError(null); setGeoOk(null);
+    try {
+      const r = await fetch(`/api/items/azure-sql-database/${id}/replication`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          server, database,
+          replicaServer,
+          replicaDatabaseName: replicaDb || database,
+          location: replicaLocation,
+          skuName: replicaSku || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setGeoOk(`Geo-replica request accepted (${replicaServer} / ${replicaDb}). ARM provisioning continues async.`);
+    } catch (e: any) { setGeoError(e?.message || String(e)); }
+    finally { setGeoBusy(false); }
+  }, [id, server, database, replicaServer, replicaDb, replicaLocation, replicaSku]);
+
   const run = useCallback(async () => {
     if (!server || !database) { setResult({ ok: false, error: 'server + database required' }); return; }
     setLoading(true); setResult(null);
@@ -392,13 +621,13 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
         { label: 'Toggle Fabric mirror', onClick: canRun ? toggleMirror : undefined, disabled: !canRun },
       ]},
       { label: 'Replication', actions: [
-        { label: 'Add geo-replica', disabled: true, title: 'needs ARM mutation BFF (deferred)' },
+        { label: 'Add geo-replica', onClick: canRun ? openGeo : undefined, disabled: !canRun, title: !canRun ? 'pick server + database' : undefined },
       ]},
       { label: '2025', actions: [
         { label: 'Probe engine', onClick: canRun ? probe2025 : undefined, disabled: !canRun },
       ]},
     ]},
-  ], [canRun, loading, run, toggleMirror, probe2025, newTsql]);
+  ], [canRun, loading, run, toggleMirror, probe2025, newTsql, openGeo]);
 
   return (
     <ItemEditorChrome
@@ -506,11 +735,14 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
               <MessageBar intent="info">
                 <MessageBarBody>
                   <MessageBarTitle>Geo-replication</MessageBarTitle>
-                  Creates a Secondary database on a replica server via ARM REST. Form deferred to v3.x — call{' '}
-                  <code>POST /api/items/azure-sql-database/[id]/replication</code> with{' '}
-                  <code>{`{ server, database, replicaServer, location, skuName? }`}</code>.
+                  Use <strong>Add geo-replica</strong> in the ribbon to create a Secondary database on a replica server via
+                  ARM REST.
                 </MessageBarBody>
               </MessageBar>
+              <Button onClick={openGeo} icon={<Globe20Regular />} disabled={!canRun}>Add geo-replica…</Button>
+              {geoOk && (
+                <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Geo-replica accepted</MessageBarTitle>{geoOk}</MessageBarBody></MessageBar>
+              )}
             </>
           )}
           {tab === 'sql2025' && (
@@ -526,6 +758,50 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
               {sql2025State && <pre style={{ fontSize: 12, background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>{JSON.stringify(sql2025State, null, 2)}</pre>}
             </>
           )}
+
+          <Dialog open={geoOpen} onOpenChange={(_, d) => setGeoOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Add geo-replica — {database}</DialogTitle>
+                <DialogContent>
+                  <Caption1>
+                    Creates a Secondary database on the replica server via ARM REST
+                    (<code>Microsoft.Sql/servers/databases</code> with <code>createMode=Secondary</code>).
+                  </Caption1>
+                  <Field label="Replica server" required>
+                    <select
+                      value={replicaServer}
+                      onChange={(e) => setReplicaServer(e.target.value)}
+                      style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+                    >
+                      <option value="">Select a replica server</option>
+                      {(srv.servers || []).filter((sv) => sv.name !== server).map((sv) => (
+                        <option key={sv.name} value={sv.name}>{sv.name}{sv.location ? ` · ${sv.location}` : ''}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Replica DB name">
+                    <Input value={replicaDb} onChange={(_, d) => setReplicaDb(d.value)} placeholder={database} />
+                  </Field>
+                  <Field label="Replica region" required>
+                    <Input value={replicaLocation} onChange={(_, d) => setReplicaLocation(d.value)} placeholder="eastus2" />
+                  </Field>
+                  <Field label="SKU (optional, e.g. GP_Gen5_4)">
+                    <Input value={replicaSku} onChange={(_, d) => setReplicaSku(d.value)} placeholder="leave blank to match primary" />
+                  </Field>
+                  {geoError && (
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Geo-replica failed</MessageBarTitle>{geoError}</MessageBarBody></MessageBar>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setGeoOpen(false)} disabled={geoBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={submitGeo} disabled={geoBusy || !replicaServer || !replicaLocation}>
+                    {geoBusy ? 'Creating…' : 'Create geo-replica'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
