@@ -33,18 +33,6 @@ on:
         description: 'Override the version tag (default: v0.1)'
         type: string
         default: v0.1
-  push:
-    branches: [main]
-    paths:
-      - 'apps/fiab-console/**'
-      - 'apps/fiab-mcp-config/**'
-      - 'apps/fiab-setup-orchestrator/**'
-      - 'apps/copilot/**'
-      - 'apps/fiab-activator-engine/**'
-      - 'apps/fiab-mirroring-engine/**'
-      - 'apps/fiab-direct-lake-shim/**'
-      - '.github/workflows/build-fiab-images.yml'
-
 permissions:
   contents: read
 
