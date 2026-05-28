@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="t d" preserveAspectRatio="xMidYMid slice">
+  <title id="t">CSA Loom — Deployment</title>
+  <desc id="d">Push-button deploy: 60-100 minutes from `azd up` to a working Loom Console in your tenant.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#3d2e80"/>
+      <stop offset="55%" stop-color="#1f6feb"/>
+      <stop offset="100%" stop-color="#d89f3d"/>
+    </linearGradient>
+    <radialGradient id="glow-tr" cx="0.9" cy="0.1" r="0.45" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-bl" cx="0.1" cy="1.1" r="0.5" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#d89f3d" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#d89f3d" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      .h-title { font-family:'IBM Plex Sans','Segoe UI',sans-serif; font-weight:600; font-size:60px; fill:#FFFFFF; letter-spacing:-1.2px; }
+      .h-sub   { font-family:'IBM Plex Sans','Segoe UI',sans-serif; font-weight:400; font-size:22px; fill:#FFFFFF; fill-opacity:0.92; }
+      .h-chip  { font-family:'JetBrains Mono','Consolas',monospace; font-weight:700; font-size:13px; letter-spacing:2.5px; fill:#FFFFFF; }
+      .g-label { font-family:'JetBrains Mono','Consolas',monospace; font-weight:600; font-size:12px; fill:#FFFFFF; letter-spacing:0.4px; }
+      .g-cap   { font-family:'JetBrains Mono','Consolas',monospace; font-weight:500; font-size:10px; fill:#FFFFFF; fill-opacity:0.7; letter-spacing:1.5px; }
+      .g-step  { font-family:'JetBrains Mono','Consolas',monospace; font-weight:700; font-size:14px; fill:#1f6feb; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="420" fill="url(#bg)"/>
+  <rect width="1600" height="420" fill="url(#glow-tr)"/>
+  <rect width="1600" height="420" fill="url(#glow-bl)"/>
+  <rect x="0" y="0" width="6" height="420" fill="#e6b566"/>
+  <rect x="0" y="0" width="6" height="120" fill="#aea0ff"/>
+  <rect x="0" y="418" width="1600" height="2" fill="#aea0ff" fill-opacity="0.30"/>
+
+  <g transform="translate(80, 60)">
+    <rect x="0" y="0" width="180" height="32" fill="#aea0ff" fill-opacity="0.10" stroke="#aea0ff" stroke-opacity="0.55" stroke-width="1"/>
+    <rect x="0" y="0" width="6" height="32" fill="#aea0ff"/>
+    <text class="h-chip" x="98" y="21" text-anchor="middle" fill="#aea0ff">DEPLOYMENT</text>
+  </g>
+
+  <text class="h-title" x="80" y="200">Push-button deploy</text>
+  <text class="h-sub" x="80" y="248"><tspan font-family="JetBrains Mono, Consolas, monospace" fill="#e6b566">azd up</tspan> or "Deploy to Azure" button — 60-100 minutes from</text>
+  <text class="h-sub" x="80" y="278" fill-opacity="0.72">empty subscription to a working Loom Console.</text>
+
+  <g transform="translate(80, 320)">
+    <rect x="0" y="0" width="72" height="20" fill="#e6b566" fill-opacity="0.14" stroke="#e6b566" stroke-opacity="0.45" stroke-width="1"/>
+    <text class="g-cap" x="36" y="14" text-anchor="middle" fill="#e6b566">60-100 MIN</text>
+  </g>
+  <text class="g-cap" x="166" y="334" fill="#ffffff" fill-opacity="0.7">azd CLI · Deploy-to-Azure button · GH Actions · ADO · Terraform · Bicep CLI</text>
+
+  <!-- Pipeline strip on the right -->
+  <g transform="translate(880, 90)" font-family="JetBrains Mono, Consolas, monospace">
+    <text class="g-cap" x="280" y="-8" text-anchor="middle" fill="#aea0ff">DEPLOY PIPELINE</text>
+
+    <!-- Step 1: azd up -->
+    <g transform="translate(0,0)">
+      <rect x="0" y="0" width="120" height="80" rx="8" fill="#aea0ff" fill-opacity="0.14" stroke="#aea0ff" stroke-opacity="0.7"/>
+      <text class="g-step" x="60" y="28" text-anchor="middle" fill="#aea0ff">1</text>
+      <text class="g-label" x="60" y="50" text-anchor="middle">azd up</text>
+      <text class="g-cap" x="60" y="66" text-anchor="middle">2 min</text>
+    </g>
+    <!-- Arrow -->
+    <path d="M 124 40 L 156 40" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="2" marker-end="url(#arrow)"/>
+    <polygon points="156,40 148,36 148,44" fill="#FFFFFF" fill-opacity="0.7"/>
+
+    <!-- Step 2: Bicep validate -->
+    <g transform="translate(160,0)">
+      <rect x="0" y="0" width="120" height="80" rx="8" fill="#aea0ff" fill-opacity="0.14" stroke="#aea0ff" stroke-opacity="0.7"/>
+      <text class="g-step" x="60" y="28" text-anchor="middle" fill="#aea0ff">2</text>
+      <text class="g-label" x="60" y="50" text-anchor="middle">Bicep validate</text>
+      <text class="g-cap" x="60" y="66" text-anchor="middle">3 min</text>
+    </g>
+    <polygon points="316,40 308,36 308,44" fill="#FFFFFF" fill-opacity="0.7"/>
+    <path d="M 284 40 L 316 40" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="2"/>
+
+    <!-- Step 3: Provision -->
+    <g transform="translate(320,0)">
+      <rect x="0" y="0" width="120" height="80" rx="8" fill="#e6b566" fill-opacity="0.18" stroke="#e6b566" stroke-opacity="0.7"/>
+      <text class="g-step" x="60" y="28" text-anchor="middle" fill="#e6b566">3</text>
+      <text class="g-label" x="60" y="50" text-anchor="middle">Provision</text>
+      <text class="g-cap" x="60" y="66" text-anchor="middle">35-55 min</text>
+    </g>
+    <polygon points="476,40 468,36 468,44" fill="#FFFFFF" fill-opacity="0.7"/>
+    <path d="M 444 40 L 476 40" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="2"/>
+
+    <!-- Step 4: Bootstrap + Console -->
+    <g transform="translate(480,0)">
+      <rect x="0" y="0" width="120" height="80" rx="8" fill="#e6b566" fill-opacity="0.18" stroke="#e6b566" stroke-opacity="0.7"/>
+      <text class="g-step" x="60" y="28" text-anchor="middle" fill="#e6b566">4</text>
+      <text class="g-label" x="60" y="50" text-anchor="middle">Bootstrap</text>
+      <text class="g-cap" x="60" y="66" text-anchor="middle">5 min · live</text>
+    </g>
+
+    <!-- Below the strip — what gets provisioned -->
+    <g transform="translate(0,110)" font-size="11" fill="#FFFFFF">
+      <rect x="0" y="0" width="600" height="120" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.18"/>
+      <text class="g-cap" x="14" y="22" fill="#aea0ff">PROVISIONED IN STEP 3</text>
+      <text class="g-label" x="14" y="44">VNet · Bastion · Azure Firewall · 17 private DNS zones</text>
+      <text class="g-label" x="14" y="64">ADLS Gen2 · Cosmos DB · Synapse · Databricks · ADX · Power BI</text>
+      <text class="g-label" x="14" y="84">Container Apps · ACR · Key Vault · LAW + Sentinel · 7 UAMIs</text>
+      <text class="g-cap" x="14" y="104" fill="#e6b566">Per-boundary bicepparam · Commercial / GCC / GCC-H / IL5</text>
+    </g>
+  </g>
+
+  <text class="g-cap" x="880" y="396" fill="#FFFFFF" fill-opacity="0.7">IDEMPOTENT · BICEP · NO PROPRIETARY FORMAT · TEAR DOWN VIA RG DELETE</text>
+</svg>
