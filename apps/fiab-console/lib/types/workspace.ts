@@ -3,8 +3,29 @@ export interface Workspace {
   tenantId: string;
   name: string;
   description?: string;
+  /** Selected Fabric/Power BI capacity id (or SKU label for legacy free-text). */
   capacity?: string;
+  /** Selected Loom-managed business domain id. */
   domain?: string;
+  /** Bound Power BI / Fabric group id (created lazily on first PBI-backed artifact). */
+  fabricGroupId?: string;
+  /** Outcome of the post-create Capacity assignment side-effect — captured so the
+   * UI can show whether it succeeded, is pending, or failed with a reason. */
+  capacityAssignment?: {
+    status: 'pending' | 'assigned' | 'queued' | 'failed';
+    capacityId?: string;
+    queuedReason?: string;   // e.g. "no bound Fabric group yet — assignment queued for first PBI artifact"
+    error?: string;
+    at?: string;
+  };
+  /** Outcome of the post-create Purview registration + marketplace publish. */
+  domainRegistration?: {
+    status: 'pending' | 'registered' | 'failed';
+    purviewAssetGuid?: string;
+    marketplaceListingId?: string;
+    error?: string;
+    at?: string;
+  };
   createdBy: string;
   createdAt: string;
   updatedAt: string;
