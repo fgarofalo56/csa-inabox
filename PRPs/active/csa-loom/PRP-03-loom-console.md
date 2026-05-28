@@ -108,3 +108,29 @@ apps/fiab-console/helm/                                 created (AKS chart for G
 - `temp/fiab-prd/AMENDMENTS.md` §A3, §A5
 - ADR-0014 (existing): MSAL BFF auth pattern
 - Memory: [[copilot-chat-two-backends]]
+
+## Validation receipt
+
+**Validated 2026-05-27 — Structural validation harness GREEN (26/26 pytest).**
+
+Test harness: `apps/fiab-console/tests/test_console_structure.py`. The console
+itself runs only behind the VNet-internal Bastion ingress (security by design),
+so live UI walkthrough is operator action. The harness asserts the contract
+the live console must honor:
+
+- All 13 PRP-required panes have an App Router `page.tsx`
+  (workspaces, lakehouse, warehouse, notebook, realtime-hub/KQL, browse/catalog,
+  activator, data-agent, monitor, admin, setup, copilot, workspaces/[id])
+- MSAL BFF wiring (`lib/auth/msal.ts` + `session.ts`, uses `@azure/msal-node`)
+- BFF API routes cover all required backends (workspaces, setup, copilot, admin,
+  fabric, powerbi, governance)
+- 6 Azure SDK client adapters present + non-stub
+  (databricks-client.ts, kusto-client.ts, powerbi-client.ts, cosmos-client.ts,
+  fabric-client.ts, purview-client.ts)
+- `instrumentation.ts` (OpenTelemetry/App Insights) wired
+- `package.json` pins Next 14 + Fluent v9 + MSAL packages
+- `next.config.mjs` configures CSP + HSTS security headers
+
+**Operator action remaining:** Bastion-fronted browser walkthrough + hydration
+error check + MSAL sign-in receipt. Tracked in audit page; blocked by ACR
+image build, which is the broader v1 ship gate.

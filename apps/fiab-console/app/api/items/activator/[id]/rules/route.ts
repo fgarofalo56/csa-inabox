@@ -11,13 +11,13 @@ import { listRules, addRule, triggerRule, ActivatorError } from '@/lib/azure/act
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   try {
-    const rules = await listRules(workspaceId, ctx.params.id);
+    const rules = await listRules(workspaceId, (await ctx.params).id);
     return NextResponse.json({ ok: true, rules });
   } catch (e: any) {
     const status = e instanceof ActivatorError ? e.status : 502;
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   const triggerId = req.nextUrl.searchParams.get('trigger');
   if (triggerId) {
     try {
-      const out = await triggerRule(workspaceId, ctx.params.id, triggerId);
+      const out = await triggerRule(workspaceId, (await ctx.params).id, triggerId);
       return NextResponse.json(out);
     } catch (e: any) {
       const status = e instanceof ActivatorError ? e.status : 502;
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   const name = String(body?.name || '').trim();
   if (!name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
   try {
-    const rule = await addRule(workspaceId, ctx.params.id, {
+    const rule = await addRule(workspaceId, (await ctx.params).id, {
       name,
       condition: body?.condition || undefined,
       action: body?.action || undefined,

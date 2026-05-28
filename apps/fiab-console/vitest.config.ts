@@ -1,13 +1,12 @@
 /**
- * Vitest config for the fiab-console — Data Engineering sweep.
+ * Vitest config for fiab-console.
  *
- * Mounts editor components in jsdom and exercises their primary user
- * actions with mocked fetch. Specs live next to the editor sources
- * under __tests__/.
+ * Unified config — merges the Data Engineering sweep's jsdom + plugin-react
+ * needs with main's broader include globs. React plugin loads via require
+ * so vitest finds it via pnpm-resolved node_modules without ESM-only paths.
  *
- * The @vitejs/plugin-react import is `require`-loaded so vitest can
- * find the plugin via the project's pnpm-resolved node_modules
- * without forcing an ESM-only resolution path.
+ * Per .claude/rules/no-vaporware.md: do not add tests that pretend to cover
+ * backend behavior they do not exercise.
  */
 import { defineConfig } from 'vitest/config';
 import path from 'node:path';
@@ -25,9 +24,9 @@ export default defineConfig({
   plugins: react ? [react()] : [],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname),
-      '@/lib': path.resolve(__dirname, 'lib'),
-      '@/app': path.resolve(__dirname, 'app'),
+      '@': path.resolve(__dirname, '.'),
+      '@/lib': path.resolve(__dirname, './lib'),
+      '@/app': path.resolve(__dirname, './app'),
     },
   },
   test: {
@@ -35,8 +34,13 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
     css: false,
-    include: ['lib/**/__tests__/**/*.test.{ts,tsx}'],
-    exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests'],
+    passWithNoTests: true,
     testTimeout: 10_000,
+    include: [
+      'lib/**/__tests__/**/*.test.{ts,tsx}',
+      'lib/**/*.test.{ts,tsx}',
+      '__tests__/**/*.test.{ts,tsx}',
+    ],
+    exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'],
   },
 });

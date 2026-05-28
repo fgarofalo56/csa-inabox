@@ -9,13 +9,13 @@ import { deleteAction, CopilotStudioError } from '@/lib/azure/copilot-studio-cli
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function DELETE(req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const envId = new URL(req.url).searchParams.get('envId');
   if (!envId) return NextResponse.json({ ok: false, error: 'envId is required' }, { status: 400 });
   try {
-    await deleteAction(envId, ctx.params.id);
+    await deleteAction(envId, (await ctx.params).id);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     const status = e instanceof CopilotStudioError ? e.status : 502;

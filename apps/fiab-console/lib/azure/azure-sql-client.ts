@@ -348,6 +348,120 @@ export async function enableReplication(
 }
 
 // ============================================================
+// Firewall rules (ARM REST — Microsoft.Sql/servers/firewallRules)
+// ============================================================
+
+export interface FirewallRule {
+  name: string;
+  startIpAddress: string;
+  endIpAddress: string;
+}
+
+const SQL_API_VERSION = '2023-08-01-preview';
+
+export async function listFirewallRules(serverName: string): Promise<FirewallRule[]> {
+  const scope = serverName.startsWith('/') ? serverName : await defaultServerScope(serverName);
+  const res = await armRequest<{ value: any[] }>(`${scope}/firewallRules?api-version=${SQL_API_VERSION}`);
+  return (res.value || []).map((r) => ({
+    name: r.name,
+    startIpAddress: r.properties?.startIpAddress,
+    endIpAddress: r.properties?.endIpAddress,
+  }));
+}
+
+export async function upsertFirewallRule(
+  serverName: string,
+  rule: FirewallRule,
+): Promise<FirewallRule> {
+  if (!rule.name || !rule.startIpAddress || !rule.endIpAddress) {
+    throw new AzureSqlError('name, startIpAddress, endIpAddress are required', 400);
+  }
+  const scope = serverName.startsWith('/') ? serverName : await defaultServerScope(serverName);
+  const path = `${scope}/firewallRules/${encodeURIComponent(rule.name)}?api-version=${SQL_API_VERSION}`;
+  const res = await armRequest<any>(path, {
+    method: 'PUT',
+    body: JSON.stringify({
+      properties: {
+        startIpAddress: rule.startIpAddress,
+        endIpAddress: rule.endIpAddress,
+      },
+    }),
+  });
+  return {
+    name: res.name,
+    startIpAddress: res.properties?.startIpAddress,
+    endIpAddress: res.properties?.endIpAddress,
+  };
+}
+
+export async function deleteFirewallRule(serverName: string, ruleName: string): Promise<void> {
+  const scope = serverName.startsWith('/') ? serverName : await defaultServerScope(serverName);
+  await armRequest<void>(
+    `${scope}/firewallRules/${encodeURIComponent(ruleName)}?api-version=${SQL_API_VERSION}`,
+    { method: 'DELETE' },
+  );
+}
+
+// ============================================================
+// AAD admin (ARM REST — Microsoft.Sql/servers/administrators)
+// ============================================================
+
+export interface AadAdmin {
+  login: string;
+  sid: string;       // Entra object id of the principal
+  tenantId?: string;
+  azureADOnlyAuthentication?: boolean;
+}
+
+export async function getAadAdmin(serverName: string): Promise<AadAdmin | null> {
+  const scope = serverName.startsWith('/') ? serverName : await defaultServerScope(serverName);
+  try {
+    const res = await armRequest<any>(
+      `${scope}/administrators/ActiveDirectory?api-version=${SQL_API_VERSION}`,
+    );
+    return {
+      login: res.properties?.login,
+      sid: res.properties?.sid,
+      tenantId: res.properties?.tenantId,
+      azureADOnlyAuthentication: res.properties?.azureADOnlyAuthentication,
+    };
+  } catch (e: any) {
+    if (e?.status === 404) return null;
+    throw e;
+  }
+}
+
+export async function setAadAdmin(
+  serverName: string,
+  admin: AadAdmin,
+): Promise<AadAdmin> {
+  if (!admin.login || !admin.sid) {
+    throw new AzureSqlError('login (UPN/group name) and sid (object id) are required', 400);
+  }
+  const scope = serverName.startsWith('/') ? serverName : await defaultServerScope(serverName);
+  const res = await armRequest<any>(
+    `${scope}/administrators/ActiveDirectory?api-version=${SQL_API_VERSION}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        properties: {
+          administratorType: 'ActiveDirectory',
+          login: admin.login,
+          sid: admin.sid,
+          tenantId: admin.tenantId,
+        },
+      }),
+    },
+  );
+  return {
+    login: res.properties?.login,
+    sid: res.properties?.sid,
+    tenantId: res.properties?.tenantId,
+    azureADOnlyAuthentication: res.properties?.azureADOnlyAuthentication,
+  };
+}
+
+// ============================================================
 // SQL Server 2025 features
 // ============================================================
 

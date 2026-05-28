@@ -139,6 +139,15 @@ param loomStorageAccount string = ''
 @description('Loom Cosmos account name. When empty, Cosmos env vars omitted.')
 param loomCosmosAccount string = ''
 
+@description('Purview account name (short, NOT full URL) — e.g. "purview-csa-loom-eastus2". When empty, /admin/security Purview tab + /api/items/data-product/*/register-purview return HTTP 503 with a structured remediation hint.')
+param loomPurviewAccount string = ''
+
+@description('Enable Microsoft Information Protection (sensitivity labels / label policies) calls via Microsoft Graph. Requires the Console UAMI to have InformationProtectionPolicy.Read.All admin-consented. When false, /admin/security Information Protection tab returns 503.')
+param loomMipEnabled bool = false
+
+@description('Enable Purview DLP (policies / rules / alerts / simulate) calls via Microsoft Graph. Requires Console UAMI Policy.Read.All + SecurityAlert.Read.All admin-consented. When false, /admin/security DLP tab returns 503.')
+param loomDlpEnabled bool = false
+
 @description('Azure AD tenant ID for MSAL on the Console.')
 param loomMsalTenantId string = subscription().tenantId
 
@@ -152,6 +161,23 @@ param loomMsalClientSecret string = ''
 @description('Session cookie secret (HKDF input). Stored in Key Vault as "loom-session-secret". When empty, a fresh GUID is generated PER DEPLOY — this invalidates all existing sessions. Pass a stable value via env var to preserve sign-ins across deploys.')
 @secure()
 param loomSessionSecret string = newGuid()
+
+// =====================================================================
+// Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
+// =====================================================================
+
+@description('Entra group oid(s) — comma-separated — whose members bypass the Loom Feature Permissions gate. Bootstrap admins need this set OR loomTenantAdminOid to manage /admin/permissions before any grants exist.')
+param loomTenantAdminGroupId string = ''
+
+@description('Entra user oid that bypasses the Loom Feature Permissions gate. Used in single-user bootstrap scenarios. Members of loomTenantAdminGroupId are recommended for production.')
+param loomTenantAdminOid string = ''
+
+@description('Default Fabric/Power BI workspace id the Phase-2 install engine uses when a Loom workspace has no bound Fabric group yet. Optional — the wizard prompts when missing.')
+param loomDefaultFabricWorkspace string = ''
+
+@description('Phase-2 warehouse provisioner backend. synapse-dedicated (default) runs DDL against the dedicated Synapse pool via TDS+AAD; fabric-warehouse is on the v3.5 roadmap.')
+@allowed(['synapse-dedicated', 'fabric-warehouse'])
+param loomWarehouseBackend string = 'synapse-dedicated'
 
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
@@ -422,12 +448,30 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
+            // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
+            { name: 'LOOM_TENANT_ADMIN_GROUP_ID', value: loomTenantAdminGroupId }
+            { name: 'LOOM_TENANT_ADMIN_OID', value: loomTenantAdminOid }
+            { name: 'LOOM_DEFAULT_FABRIC_WORKSPACE', value: loomDefaultFabricWorkspace }
+            { name: 'LOOM_WAREHOUSE_BACKEND', value: loomWarehouseBackend }
           ],
           !empty(loomStorageAccount) ? [
             { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }
             { name: 'LOOM_SILVER_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/silver' }
             { name: 'LOOM_GOLD_URL',    value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/gold' }
             { name: 'LOOM_LANDING_URL', value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/landing' }
+          ] : [],
+          // Purview + Information Protection + DLP env wiring. Each is
+          // gated independently. When omitted, the /admin/security panel
+          // surfaces a Fluent MessageBar naming the missing env var and
+          // the Graph AppRole / Purview portal role that must be granted.
+          !empty(loomPurviewAccount) ? [
+            { name: 'LOOM_PURVIEW_ACCOUNT', value: loomPurviewAccount }
+          ] : [],
+          loomMipEnabled ? [
+            { name: 'LOOM_MIP_ENABLED', value: 'true' }
+          ] : [],
+          loomDlpEnabled ? [
+            { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],
           !empty(loomMsalClientId) ? [
             { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }
@@ -436,6 +480,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'AZURE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             { name: 'SESSION_SECRET', secretRef: 'session-secret' }
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+            // Microsoft Graph user enrichment — flipped ON by default so
+            // /admin/users surfaces displayName + department from Entra.
+            // The Console UAMI also needs the Graph Directory.Read.All
+            // app-role grant, which the
+            // scripts/csa-loom/grant-uami-graph-roles.sh post-deploy
+            // bootstrap step performs (idempotent).
+            { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
             // Dataverse auth — UAMIs can't be Dataverse Application Users
             // (Microsoft platform restriction), so re-use the MSAL Web App
             // SP credentials. The SP must be registered as a Dataverse
@@ -446,6 +497,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DATAVERSE_TENANT_ID', value: tenant().tenantId }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+            { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
           ]
         )
         secrets: !empty(loomMsalClientId) ? [

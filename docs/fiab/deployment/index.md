@@ -1,5 +1,7 @@
 # CSA Loom — Deployment
 
+![Push-button deploy — azd up or Deploy-to-Azure button, 60-100 minutes from empty sub to working Console](../../assets/images/hero/fiab/deployment.svg){ .architecture-hero loading="eager" }
+
 Deploying CSA Loom takes about 60-100 minutes from start to a working
 Loom Console URL in your tenant. The platform is shipped as
 infrastructure-as-code; you deploy it into your own Azure
@@ -9,13 +11,13 @@ subscription via one of two paths.
 
 <div class="grid cards" markdown>
 
--   :material-rocket: [**Quick Start (60 minutes)**](quickstart.md)
+-   :material-rocket-launch: [**Quick Start (60 minutes)**](quickstart.md)
 
     The fastest happy path against Azure Commercial. Use this if
     you're evaluating Loom and want the shortest path to a working
     Console.
 
--   :material-console: [**`azd up` CLI**](azd-cli.md)
+-   :material-console-line: [**`azd up` CLI**](azd-cli.md)
 
     Power-user path with full Bicep visibility. Best for platform
     engineers + production deploys.
@@ -28,19 +30,54 @@ subscription via one of two paths.
 
 </div>
 
+## Continuous-deployment pipelines
+
+CI/CD-friendly paths that fit existing GitOps workflows. Each runs the
+same `platform/fiab/bicep/main.bicep` template under environment-gated
+approvals so customers can promote Dev → Stage → Prod.
+
+<div class="grid cards" markdown>
+
+-   :material-github: [**GitHub Actions**](pipelines/github-actions.md)
+
+    OIDC federated-credential workflow with per-environment approvals.
+    Copy-paste-ready YAML. The pattern used by this repo's own
+    `.github/workflows/deploy-fiab-*.yml`.
+
+-   :material-microsoft-azure-devops: [**Azure DevOps Pipelines**](pipelines/azure-devops.md)
+
+    Multi-stage YAML with workload-identity federation + ADO Environment
+    approval gates. The path most federal customers use.
+
+-   :material-code-tags: [**Bicep CLI direct**](pipelines/bicep-cli.md)
+
+    `az deployment sub create` with the canonical parameter file. No
+    GitHub, no ADO, no azd. Bash + az CLI only.
+
+-   :material-language-terraform: [**Terraform wrapper**](pipelines/terraform.md)
+
+    `azurerm_resource_group_template_deployment` wrapping the same Bicep
+    template. For shops standardized on Terraform / OpenTofu.
+
+</div>
+
 ## Per-boundary guides
 
 <div class="grid cards" markdown>
 
--   :material-cloud: [**Azure Commercial**](commercial.md)
+-   :material-cloud: [**Azure Commercial / GCC** — *GA*](commercial.md)
 
     The full Loom stack; UC managed catalog; Foundry Agent Service;
-    Container Apps everywhere.
+    Container Apps everywhere. **Both Azure Commercial and GCC are
+    GA for Loom** — GCC customers run on Commercial regions under
+    M365 GCC identity, and Loom bridges the tenant SP gap that
+    blocks Fabric for GCC tenants.
 
--   :material-government: [**Azure Government — GCC**](gcc.md)
+-   :material-government: [**Azure Government — GCC pair (FedRAMP High)**](gcc.md)
 
-    GCC = Azure Commercial regions under M365 GCC identity. P-SKU
-    Power BI (no F-SKU; no Direct Lake parity in GCC).
+    Azure Government FedRAMP High regions. Use this for FedRAMP High
+    customers whose audit boundary requires Azure Government (not
+    Azure Commercial). P-SKU Power BI (no F-SKU; no Direct Lake parity).
 
 -   :material-shield-account: [**Azure Government — GCC-High / IL4**](gcc-high.md)
 

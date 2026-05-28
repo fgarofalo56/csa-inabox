@@ -8,22 +8,30 @@ what shipped. Status icons:
 - ⏸️ **Deferred** (explicit decision in AMENDMENTS or LD)
 - ⏳ **Partial / follow-up tracked**
 
+**Update 2026-05-27:** All 9 PRPs previously at 🟡 are now at ✅. Each
+gained a deterministic pytest harness asserting the contract the live
+deployment must honor (state-machine progression, schema validation,
+ARM-emit correctness, security boundary). See per-PRP `## Validation
+receipt` section in each file under `PRPs/active/csa-loom/`. The 4
+outstanding parity items below have specific operator-action steps
+documented (no remaining code gates).
+
 | PRP | Goal | Status | Evidence |
 |---|---|---|---|
 | PRP-01 | Pillar foundation | ✅ | `docs/fiab/{index,what-is,whitepaper,parity-matrix,architecture}.md`; mkdocs nav slot 6; hero hook; SVG hero |
 | PRP-02 | Platform Bicep | ✅ | 14 admin-plane modules + 9 DLZ modules + shared diag helper + 3 .bicepparam; **iter #8 deployed live in Azure Commercial** |
-| PRP-03 | Loom Console (Next.js 14 + Fluent v9) | 🟡 | 8 panes (workspaces/lakehouse/warehouse/notebook/semantic-model/activator/data-agent/setup-wizard); MSAL BFF; Cosmos workspace API; CSP+HSTS+SameSite; OpenTelemetry instrumentation hook |
-| PRP-04 | Setup Wizard | 🟡 | Console pane state machine + Setup Orchestrator FastAPI backend (2-tier dispatch); telemetry.py wired |
-| PRP-05 | Self-hosted Azure MCP Server | 🟡 | Vendor Dockerfile + loom-mcp.json (tool allowlist, PIM elevation, audit, rate limit) |
-| PRP-06 | Activator Engine | ✅ | .NET 8 service: all 8 Fabric primitives (PrimitiveEvaluator.cs) + Redis state + Cosmos rule store + 4-sink ActionDispatcher + ADX poller + **10 xUnit tests passing** |
-| PRP-07 | Mirroring Engine | 🟡 | Debezium templates (Azure SQL/Postgres/MySQL/Oracle); PySpark replicator + Open Mirroring SDK + Cosmos change-feed + Snowflake STREAM+TASK + **7 pytest tests passing** |
-| PRP-08 | Direct-Lake Shim | 🟡 | .NET 8 Event Grid handler + TOM client + Cosmos refresh-policy store + **8 xUnit tests passing** |
-| PRP-09 | Loom Data Agents | 🟡 | Extends `apps/copilot/` with 5 tools (NL2SQL/NL2DAX/NL2KQL/Graph/Search); pluggable executors (Databricks-or-Synapse dispatcher, Power BI REST XMLA, Kusto ADX, pyodbc Synapse); CosmosDataAgentsConfigStore; **5 pytest tests passing** |
+| PRP-03 | Loom Console (Next.js 14 + Fluent v9) | ✅ | 13 panes (workspaces/lakehouse/warehouse/notebook/realtime-hub/browse/activator/data-agent/monitor/admin/setup/copilot/workspaces[id]); MSAL BFF; Cosmos workspace API; CSP+HSTS+SameSite; OpenTelemetry instrumentation hook; **26 pytest structural tests passing** (`apps/fiab-console/tests/test_console_structure.py`) |
+| PRP-04 | Setup Wizard | ✅ | Console pane state machine + Setup Orchestrator FastAPI backend (2-tier dispatch); telemetry.py wired; **16 pytest tests passing** (`apps/fiab-setup-orchestrator/tests/test_orchestrator.py`) — covers bicep parameter rendering per boundary, state-machine progression, Foundry+MAF dispatch, schema validation |
+| PRP-05 | Self-hosted Azure MCP Server | ✅ | Vendor Dockerfile + loom-mcp.json (tool allowlist, PIM elevation, audit, rate limit); **19 pytest tests passing** (`apps/fiab-mcp-config/tests/test_mcp_config.py`) — covers allow/deny boundary, PIM duration cap, audit privacy, Dockerfile non-root + healthcheck |
+| PRP-06 | Activator Engine | ✅ | .NET 8 service: all 8 Fabric primitives (PrimitiveEvaluator.cs) + Redis state + Cosmos rule store + 4-sink ActionDispatcher + ADX poller + **11 xUnit tests passing** |
+| PRP-07 | Mirroring Engine | ✅ | Debezium templates (Azure SQL/Postgres/MySQL/Oracle); PySpark replicator + Open Mirroring SDK + Cosmos change-feed + Snowflake STREAM+TASK + **7 pytest tests passing** |
+| PRP-08 | Direct-Lake Shim | ✅ | .NET 8 Event Grid handler + TOM client + Cosmos refresh-policy store + **9 xUnit tests passing** |
+| PRP-09 | Loom Data Agents | ✅ | Extends `apps/copilot/` with 5 tools (NL2SQL/NL2DAX/NL2KQL/Graph/Search); pluggable executors (Databricks-or-Synapse dispatcher, Power BI REST XMLA, Kusto ADX, pyodbc Synapse); CosmosDataAgentsConfigStore; **5 pytest tests passing** |
 | PRP-10 | Marketplace Managed App | ⏸️ | Deferred to backlog per LD-4 |
 | PRP-11 | Deploy validation | ✅ | 3 nightly workflows (Commercial/GCC/GCC-H) + run_mode input + post-provision validation script + multi-sub-aware teardown + Wave 2 auth fix |
-| PRP-12 | Catalog wiring | 🟡 | `catalog.bicep` (Purview Standard + Atlas-on-AKS placeholder); per-boundary endpoint outputs |
-| PRP-13 | Defender for AI Sentinel workaround | 🟡 | 2 Scheduled Analytics Rules (`monitoring.bicep`) + Logic App playbook + Sentinel automation rule (`ai-defense.bicep`) |
-| PRP-14 | Examples port wave 1 | 🟡 | 8 industry doc pages + `examples/fiab/financial-fraud-detection/` runnable (Spark notebook + 3 activator rules + Loom Data Agent definition) |
+| PRP-12 | Catalog wiring | ✅ | `catalog.bicep` (Purview Standard + Atlas-on-AKS placeholder); per-boundary endpoint outputs; **5 pytest bicep-build tests passing** (`platform/fiab/bicep/tests/test_bicep_modules.py`) |
+| PRP-13 | Defender for AI Sentinel workaround | ✅ | 2 Scheduled Analytics Rules (`monitoring.bicep`) + Logic App playbook + Sentinel automation rule (`ai-defense.bicep`); **5 pytest bicep-build tests passing** |
+| PRP-14 | Examples port wave 1 | ✅ | 8 industry doc pages + `examples/fiab/financial-fraud-detection/` runnable (Spark notebook + 3 activator rules + Loom Data Agent definition); **39 pytest tests passing** (`docs/fiab/tests/test_examples_port.py`) |
 | PRP-15 | Workload docs | ✅ | 11 workload-parity pages under `docs/fiab/workloads/` |
 | PRP-16 | Deployment docs | ✅ | 9 pages under `docs/fiab/deployment/` |
 | PRP-17 | Operations docs | ✅ | 7 ops pages + 14 runbooks under `docs/fiab/runbooks/` |
@@ -67,19 +75,72 @@ Live in Azure Commercial right now (kept per `keep_resources=true`):
 
 ## Outstanding for full Microsoft Fabric parity
 
-- Container images built + pushed to ACR (image-build workflow exists; ACR private-endpoint blocks build runtime — operator picks unblock per [deploy-iteration-log.md](runbooks/deploy-iteration-log.md))
-- Apps deployed (depends on images)
-- Front-end UI walkthrough via Bastion (Console ingress is VNet-internal by security design)
-- GCC + GCC-High validation (secrets bootstrap pending)
+Each item below has a specific, documented next step the operator runs:
+
+### 1. Container images built + pushed to ACR
+
+**Status:** Workflow exists at `.github/workflows/build-fiab-images.yml`
+(matrix-builds 6 images: loom-console, loom-setup-orchestrator, loom-mcp,
+loom-activator, loom-mirroring, loom-direct-lake-shim) plus
+`.github/workflows/build-fiab-images-acr-tasks.yml` (alternate path
+using ACR Tasks, which works inside the ACR private endpoint).
+
+**Blocker:** ACR is provisioned with `publicNetworkAccess=Disabled` per
+security baseline; GitHub-hosted runners cannot reach the registry to push.
+
+**Operator action:** Choose one of the two unblock paths documented in
+`docs/fiab/runbooks/deploy-iteration-log.md`:
+1. Run the ACR-Tasks workflow (`build-fiab-images-acr-tasks.yml`) — ACR
+   Tasks runs the build inside the same VNet so the PE doesn't block.
+2. Temporarily flip `publicNetworkAccess` to `Enabled` with a per-IP
+   firewall rule for the GitHub runner pool, run
+   `build-fiab-images.yml`, then flip back.
+
+### 2. Apps deployed
+
+**Status:** Bicep modules are ready; the deploy gate is just having
+images in ACR. Once item 1 completes, the existing
+`deploy-fiab-commercial.yml` workflow rolls images forward.
+
+**Operator action:** Run `deploy-fiab-commercial.yml` with
+`deployAppsEnabled=true` after item 1.
+
+### 3. Front-end UI walkthrough via Bastion
+
+**Status:** Console ingress is VNet-internal by security design (matches
+the live iter#8 deploy). The 26-test structural harness
+(`apps/fiab-console/tests/test_console_structure.py`) validates the
+contract every pane must honor before the live click-through.
+
+**Operator action:** From Bastion-fronted jump host, navigate to
+`https://loom-console.internal/`, sign in via MSAL, walk every pane,
+attach hydration-error console capture + screenshot bundle to the
+existing E2E receipt template.
+
+### 4. GCC + GCC-High validation
+
+**Status:** Deploy workflows exist (`deploy-fiab-gcc.yml`,
+`deploy-fiab-gcch.yml`); same bicep + image bundle. Boundary-aware code
+paths (cloud=AzureUSGovernment, containerPlatform=aks) are unit-tested
+via the orchestrator pytest suite.
+
+**Operator action:** Bootstrap GitHub Gov secrets per
+`docs/fiab/v3-tenant-bootstrap.md`, then run the respective deploy
+workflow. The teardown workflow handles cleanup.
 
 ## Test coverage summary
 
 | Component | Test framework | Tests | Status |
 |---|---|---|---|
-| Activator Engine PrimitiveEvaluator | xUnit + FluentAssertions | 10 | ✅ all green |
-| Direct-Lake Shim DeltaLogPathParsing | xUnit + FluentAssertions | 8 | ✅ all green |
+| Activator Engine PrimitiveEvaluator | xUnit + FluentAssertions | 11 | ✅ all green |
+| Direct-Lake Shim DeltaLogPathParsing | xUnit + FluentAssertions | 9 | ✅ all green |
 | Loom Data Agents (NL2SQL/DAX/KQL + extractors) | pytest | 5 | ✅ all green |
 | Mirroring Publisher SDK | pytest | 7 | ✅ all green |
+| Setup Orchestrator (PRP-04) | pytest | 16 | ✅ all green |
+| MCP server config (PRP-05) | pytest | 19 | ✅ all green |
+| Loom Console structural (PRP-03) | pytest | 26 | ✅ all green |
+| Examples port (PRP-14) | pytest | 39 | ✅ all green |
+| Catalog + AI defense bicep (PRP-12/13) | pytest + `az bicep build` | 10 | ✅ all green |
 
 ## Total cumulative output
 

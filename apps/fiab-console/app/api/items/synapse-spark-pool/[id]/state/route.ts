@@ -17,11 +17,11 @@ import { getSparkPool, upsertSparkPool } from '@/lib/azure/synapse-dev-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   try {
-    const pool = await getSparkPool(ctx.params.id);
+    const pool = await getSparkPool((await ctx.params).id);
     return NextResponse.json({
       ok: true,
       name: pool.name,
@@ -36,7 +36,7 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
     return NextResponse.json({ error: 'action must be pause or resume' }, { status: 400 });
   }
   try {
-    const pool = await getSparkPool(ctx.params.id);
+    const pool = await getSparkPool((await ctx.params).id);
     const updated = {
       location: pool.location || 'eastus2',
       properties: {
@@ -56,7 +56,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
         },
       },
     };
-    await upsertSparkPool(ctx.params.id, updated);
+    await upsertSparkPool((await ctx.params).id, updated);
     return NextResponse.json({ ok: true, action, autoPause: updated.properties.autoPause });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
