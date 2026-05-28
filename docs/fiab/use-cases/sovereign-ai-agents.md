@@ -22,49 +22,44 @@ Per [Loom Data Agents parity](../workloads/data-agents-parity.md) +
 
 ## Architecture for sovereign agents
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│ Customer Azure Government tenant (GCC-H / IL4 or IL5)          │
-│                                                                  │
-│  Loom Console (Next.js, AKS workload, MSAL BFF)                │
-│   - Per-user OBO auth via Entra Gov                            │
-│   - Data Agents pane for agent config                          │
-│   - Loom Copilot sidebar (chat interface)                      │
-│                                                                  │
-│  Loom Setup Orchestrator (.NET 10 Container, AKS)              │
-│   - Microsoft Agent Framework 1.0 (deployable anywhere)        │
-│   - AOAI Gov endpoint (gpt-4o in usgovvirginia)               │
-│   - MCP client → self-hosted Azure MCP server                  │
-│                                                                  │
-│  Extended apps/copilot (Azure Function, EP1)                   │
-│   - PydanticAI agent runtime                                   │
-│   - NL2SQL / NL2DAX / NL2KQL tools                             │
-│   - Per-agent few-shot examples in Cosmos                      │
-│   - Identity passthrough (OBO) — every tool call               │
-│     carries user's Entra Gov token                             │
-│                                                                  │
-│  Presidio side-car (Container, AKS)                            │
-│   - PII detection BEFORE LLM call                              │
-│   - Replaces missing OpenAI Content Safety                     │
-│                                                                  │
-│  Azure OpenAI Gov                                              │
-│   - gpt-4o / gpt-4.1 in usgovvirginia                          │
-│   - text-embedding-3-large in usgovarizona only                │
-│                                                                  │
-│  Azure AI Search (S1+; Gov-available through IL6)              │
-│   - Per-agent vector index (schema + sample data + glossary)   │
-│                                                                  │
-│  Microsoft Sentinel                                            │
-│   - LoomCopilotTelemetry table (custom DCR)                    │
-│   - Analytics rules: PII spike, off-topic spike, exfil pattern │
-│   - Workbook: Loom Copilot SOC Dashboard                       │
-│                                                                  │
-│  Underlying engines (per-DLZ):                                 │
-│   - Databricks classic (Hive metastore)                        │
-│   - Synapse Serverless                                         │
-│   - ADX                                                        │
-│   - Power BI Premium F-SKU                                     │
-└────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    classDef ui fill:#0078D4,stroke:#fff,color:#fff,stroke-width:2px
+    classDef orchestrator fill:#107C10,stroke:#fff,color:#fff,stroke-width:2px
+    classDef ai fill:#8764B8,stroke:#fff,color:#fff,stroke-width:2px
+    classDef safety fill:#D83B01,stroke:#fff,color:#fff,stroke-width:2px
+    classDef telemetry fill:#5C2D91,stroke:#fff,color:#fff,stroke-width:2px
+    classDef engine fill:#5D5A58,stroke:#fff,color:#fff,stroke-width:2px
+
+    subgraph GovTenant["Customer Azure Government tenant (GCC-H / IL4 or IL5)"]
+        direction TB
+
+        Console["Loom Console (Next.js, AKS workload, MSAL BFF)<br/>- Per-user OBO auth via Entra Gov<br/>- Data Agents pane for agent config<br/>- Loom Copilot sidebar (chat interface)"]:::ui
+
+        Orchestrator["Loom Setup Orchestrator (.NET 10 Container, AKS)<br/>- Microsoft Agent Framework 1.0<br/>- AOAI Gov endpoint (gpt-4o in usgovvirginia)<br/>- MCP client to self-hosted Azure MCP server"]:::orchestrator
+
+        Copilot["Extended apps/copilot (Azure Function, EP1)<br/>- PydanticAI agent runtime<br/>- NL2SQL / NL2DAX / NL2KQL tools<br/>- Per-agent few-shot examples in Cosmos<br/>- Identity passthrough (OBO) on every tool call"]:::orchestrator
+
+        Presidio["Presidio side-car (Container, AKS)<br/>- PII detection BEFORE LLM call<br/>- Replaces missing OpenAI Content Safety"]:::safety
+
+        AOAI["Azure OpenAI Gov<br/>- gpt-4o / gpt-4.1 in usgovvirginia<br/>- text-embedding-3-large in usgovarizona only"]:::ai
+
+        Search["Azure AI Search (S1+; Gov-available through IL6)<br/>- Per-agent vector index (schema + sample data + glossary)"]:::ai
+
+        Sentinel["Microsoft Sentinel<br/>- LoomCopilotTelemetry table (custom DCR)<br/>- Analytics rules: PII spike, off-topic spike, exfil pattern<br/>- Workbook: Loom Copilot SOC Dashboard"]:::telemetry
+
+        Engines["Underlying engines (per-DLZ)<br/>- Databricks classic (Hive metastore)<br/>- Synapse Serverless<br/>- ADX<br/>- Power BI Premium F-SKU"]:::engine
+
+        Console --> Orchestrator
+        Console --> Copilot
+        Orchestrator --> AOAI
+        Copilot --> Presidio
+        Presidio --> AOAI
+        Copilot --> Search
+        Copilot --> Engines
+        Copilot --> Sentinel
+        Orchestrator --> Sentinel
+    end
 ```
 
 ## Per-agent configuration pattern

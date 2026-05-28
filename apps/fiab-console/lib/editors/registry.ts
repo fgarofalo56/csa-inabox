@@ -26,6 +26,10 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'data-pipeline':        reg(() => import('./data-pipeline-editor'),     'DataPipelineEditor'),
   'dataflow':             reg(() => import('./dataflow-gen2-editor'),     'DataflowGen2Editor'),
   'mirrored-database':    reg(() => import('./mirrored-database-editor'), 'MirroredDatabaseEditor'),
+  'mirrored-databricks':  reg(() => import('./mirrored-databricks-editor'), 'MirroredDatabricksEditor'),
+  'mounted-adf':          reg(() => import('./mounted-adf-editor'),       'MountedAdfEditor'),
+  'event-schema-set':     reg(() => import('./event-schema-set-editor'),  'EventSchemaSetEditor'),
+  'airflow-job':          reg(() => import('./airflow-job-editor'),       'AirflowJobEditor'),
   'spark-job-definition': reg(() => import('./phase2-misc-editors'),      'SparkJobDefinitionEditor'),
   'environment':          reg(() => import('./phase2-misc-editors'),      'EnvironmentEditor'),
   'copy-job':             reg(() => import('./phase2-misc-editors'),      'CopyJobEditor'),
@@ -118,11 +122,11 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'azure-sql-database':          reg(() => import('./azure-sql-editors'),      'AzureSqlDatabaseEditor'),
   'azure-sql-managed-instance':  reg(() => import('./azure-sql-editors'),      'SqlManagedInstanceEditor'),
   'sql-server-2025-vector-index':reg(() => import('./azure-sql-editors'),      'SqlServer2025VectorIndexEditor'),
-  // Fabric SQL database (Microsoft.Fabric SQLDatabase REST type). At the
-  // engine level this is an Azure SQL DB with Fabric-layer mirroring on
-  // top — reuse the Azure SQL editor surface so users get T-SQL Monaco +
-  // server/DB pickers + Run + mirroring toggle.
-  'sql-database':                reg(() => import('./azure-sql-editors'),      'AzureSqlDatabaseEditor'),
+  // Fabric SQL database (Microsoft.Fabric SQLDatabase REST type).
+  // Dedicated editor (sql-database-editor.tsx) that talks to Fabric REST
+  // /v1/workspaces/{ws}/SqlDatabases plus T-SQL via the Azure SQL engine
+  // (since Fabric SQL DBs share the engine).
+  'sql-database':                reg(() => import('./sql-database-editor'),    'SqlDatabaseEditor'),
 
   // v3 — Geoanalytics (Azure Maps + lakehouse geometry + H3/S2 + spatial T-SQL/KQL)
   'geo-map':                     reg(() => import('./geo-editors'),            'GeoMapEditor'),

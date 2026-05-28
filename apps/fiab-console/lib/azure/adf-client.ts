@@ -416,3 +416,66 @@ export async function listLinkedServices(): Promise<AdfLinkedService[]> {
   const body = await jsonOrThrow<{ value: AdfLinkedService[] }>(r, 'listLinkedServices');
   return body.value || [];
 }
+
+// ============================================================
+// Cross-factory helpers — back the MountedDataFactory editor which
+// targets an externally-referenced ADF by (subscriptionId, resourceGroup,
+// factoryName) rather than the env-pinned default factory above.
+//
+// All calls go through the same UAMI ARM token. The UAMI must hold
+// "Data Factory Contributor" (or read-only) on the referenced factory.
+// ============================================================
+
+function externalBase(subscriptionId: string, resourceGroup: string, factoryName: string): string {
+  return `https://management.azure.com/subscriptions/${encodeURIComponent(subscriptionId)}/resourceGroups/${encodeURIComponent(resourceGroup)}/providers/Microsoft.DataFactory/factories/${encodeURIComponent(factoryName)}`;
+}
+
+export interface MountedFactoryRef {
+  subscriptionId: string;
+  resourceGroup: string;
+  factoryName: string;
+}
+
+export async function getMountedFactory(ref: MountedFactoryRef): Promise<{ id?: string; name?: string; location?: string; properties?: any }> {
+  const r = await call(`${externalBase(ref.subscriptionId, ref.resourceGroup, ref.factoryName)}?api-version=${API}`);
+  return jsonOrThrow<any>(r, `getMountedFactory(${ref.factoryName})`);
+}
+
+export async function listMountedFactoryPipelines(ref: MountedFactoryRef): Promise<AdfPipeline[]> {
+  const r = await call(`${externalBase(ref.subscriptionId, ref.resourceGroup, ref.factoryName)}/pipelines?api-version=${API}`);
+  const body = await jsonOrThrow<{ value: AdfPipeline[] }>(r, `listMountedFactoryPipelines(${ref.factoryName})`);
+  return body.value || [];
+}
+
+export async function listMountedFactoryTriggers(ref: MountedFactoryRef): Promise<AdfTrigger[]> {
+  const r = await call(`${externalBase(ref.subscriptionId, ref.resourceGroup, ref.factoryName)}/triggers?api-version=${API}`);
+  const body = await jsonOrThrow<{ value: AdfTrigger[] }>(r, `listMountedFactoryTriggers(${ref.factoryName})`);
+  return body.value || [];
+}
+
+export async function listMountedFactoryRuns(ref: MountedFactoryRef, windowDays = 7): Promise<AdfPipelineRun[]> {
+  const now = new Date();
+  const start = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000);
+  const r = await call(`${externalBase(ref.subscriptionId, ref.resourceGroup, ref.factoryName)}/queryPipelineRuns?api-version=${API}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      lastUpdatedAfter: start.toISOString(),
+      lastUpdatedBefore: now.toISOString(),
+      orderBy: [{ orderBy: 'RunStart', order: 'DESC' }],
+    }),
+  });
+  const body = await jsonOrThrow<{ value: AdfPipelineRun[] }>(r, `listMountedFactoryRuns(${ref.factoryName})`);
+  return (body.value || []).slice(0, 50);
+}
+
+export async function runMountedFactoryPipeline(
+  ref: MountedFactoryRef,
+  pipelineName: string,
+  params?: Record<string, unknown>,
+): Promise<PipelineRunResponse> {
+  const r = await call(
+    `${externalBase(ref.subscriptionId, ref.resourceGroup, ref.factoryName)}/pipelines/${encodeURIComponent(pipelineName)}/createRun?api-version=${API}`,
+    { method: 'POST', body: JSON.stringify(params || {}) },
+  );
+  return jsonOrThrow<PipelineRunResponse>(r, `runMountedFactoryPipeline(${pipelineName})`);
+}

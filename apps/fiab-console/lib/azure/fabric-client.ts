@@ -619,3 +619,35 @@ export async function deleteOneLakeShortcut(workspaceId: string, itemId: string,
 export async function getFabricItem(workspaceId: string, itemId: string): Promise<FabricItem> {
   return call<FabricItem>(`/workspaces/${encodeURIComponent(workspaceId)}/items/${encodeURIComponent(itemId)}`);
 }
+
+// ============================================================
+// Fabric SQL databases — the Fabric-managed SQL database type
+// (Microsoft.Fabric SQLDatabase REST type), distinct from Azure SQL.
+// Backs the SqlDatabaseEditor.
+// ============================================================
+
+export async function listFabricSqlDatabases(workspaceId: string): Promise<FabricItem[]> {
+  const j = await call<{ value: FabricItem[] }>(`/workspaces/${encodeURIComponent(workspaceId)}/SqlDatabases`);
+  return j.value || [];
+}
+
+export async function getFabricSqlDatabase(workspaceId: string, id: string): Promise<FabricItem> {
+  return call<FabricItem>(`/workspaces/${encodeURIComponent(workspaceId)}/SqlDatabases/${encodeURIComponent(id)}`);
+}
+
+export async function createFabricSqlDatabase(
+  workspaceId: string,
+  body: { displayName: string; description?: string; definition?: FabricItemDefinition },
+): Promise<FabricItem | { _accepted: true; location?: string }> {
+  return call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/SqlDatabases`,
+    { method: 'POST', body, acceptLongRunning: true },
+  );
+}
+
+export async function deleteFabricSqlDatabase(workspaceId: string, id: string): Promise<void> {
+  await call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/SqlDatabases/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  );
+}
