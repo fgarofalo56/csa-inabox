@@ -56,9 +56,7 @@ exclude_docs: |
   learn/images/troubleshooting-process.md
   learn/versioning/
   prp/
-  # Temporarily excluded: stray "</>" on line 13 crashes the markdown HTML
-  # parser. Move back into nav after the markdown content is fixed.
-  fiab/apim-policy-parity-spec.md
+  # (re-included 2026-05-27 after escaping the inline "</>" sequence)
 
 plugins:
   # The search index for this site previously ballooned to ~27 MB because
@@ -2065,10 +2063,9 @@ nav:
           - AI Foundry Project: fiab/ai-foundry-project-parity-spec.md
           - AI Search Index: fiab/ai-search-index-parity-spec.md
           - AI Search Skillset: fiab/ai-search-skillset-parity-spec.md
+          - AI / APIM / Copilot Studio family sweep: fiab/ai-apim-copilot-family-sweep.md
           - APIM API: fiab/apim-api-parity-spec.md
-          # NOTE: fiab/apim-policy-parity-spec.md is excluded via exclude_docs above
-          # because its content contains a stray "</>" sequence that crashes the
-          # markdown HTML parser. Re-add here once the file is fixed.
+          - APIM Policy: fiab/apim-policy-parity-spec.md
           - APIM Product: fiab/apim-product-parity-spec.md
           - Azure SQL Database: fiab/azure-sql-database-parity-spec.md
           - Azure SQL Managed Instance: fiab/azure-sql-managed-instance-parity-spec.md
