@@ -10,6 +10,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.16.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.15.0...csa-inabox-v0.16.0) (2026-05-28)
+
+
+### Features
+
+* **csa-loom:** bump 6 D-grade editors to B + polish 2 C-grade editors ([#420](https://github.com/fgarofalo56/csa-inabox/issues/420)) ([dcd8cbf](https://github.com/fgarofalo56/csa-inabox/commit/dcd8cbff303fb394ae2aeec29ede2a7ccaed1ac9))
+
+
+### Bug Fixes
+
+* **csa-loom:** remove malformed pnpm-workspace.yaml that broke loom-console build ([#421](https://github.com/fgarofalo56/csa-inabox/issues/421)) ([7ffc54c](https://github.com/fgarofalo56/csa-inabox/commit/7ffc54c2b644f71a4f23ee75d75431ee91624515))
+
 ## [0.15.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.14.1...csa-inabox-v0.15.0) (2026-05-28)
 
 
