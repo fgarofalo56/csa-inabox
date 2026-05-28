@@ -32,15 +32,19 @@ subscription via one of two paths.
 
 <div class="grid cards" markdown>
 
--   :material-cloud: [**Azure Commercial**](commercial.md)
+-   :material-cloud: [**Azure Commercial / GCC** — *GA*](commercial.md)
 
     The full Loom stack; UC managed catalog; Foundry Agent Service;
-    Container Apps everywhere.
+    Container Apps everywhere. **Both Azure Commercial and GCC are
+    GA for Loom** — GCC customers run on Commercial regions under
+    M365 GCC identity, and Loom bridges the tenant SP gap that
+    blocks Fabric for GCC tenants.
 
--   :material-government: [**Azure Government — GCC**](gcc.md)
+-   :material-government: [**Azure Government — GCC pair (FedRAMP High)**](gcc.md)
 
-    GCC = Azure Commercial regions under M365 GCC identity. P-SKU
-    Power BI (no F-SKU; no Direct Lake parity in GCC).
+    Azure Government FedRAMP High regions. Use this for FedRAMP High
+    customers whose audit boundary requires Azure Government (not
+    Azure Commercial). P-SKU Power BI (no F-SKU; no Direct Lake parity).
 
 -   :material-shield-account: [**Azure Government — GCC-High / IL4**](gcc-high.md)
 
