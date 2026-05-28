@@ -22,6 +22,7 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { NewItemBrowseGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -66,8 +67,33 @@ interface ModelVersion {
 }
 
 export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }) {
-  const s = useStyles();
   const isNew = id === 'new' || !id;
+  // Read-only registry: models are authored in Azure ML. On /new, browse the
+  // real registry (GET /api/items/ml-model) and Open one — no fake create.
+  if (isNew) {
+    return (
+      <NewItemBrowseGate
+        item={item}
+        endpoint="/api/items/ml-model"
+        listKey="models"
+        openSlug="ml-model"
+        intro="ML models are registered in Azure Machine Learning (via training jobs / MLflow), not authored in Loom. Select a registered model below and Open it to view its versions, lineage, and apply/endpoint actions."
+        gateHint="No models found — register one by running a job in ml-experiment or Azure ML Studio. If this errors, set LOOM_AML_WORKSPACE / LOOM_FOUNDRY_* and grant the Console UAMI the AzureML Data Scientist role."
+        mapEntity={(m: ModelSummary) => ({
+          id: m.name,
+          name: m.name,
+          detail: m.description,
+          badge: m.latestVersion ? `latest v${m.latestVersion}` : undefined,
+        })}
+      />
+    );
+  }
+  return <MlModelEditorBody item={item} id={id} />;
+}
+
+function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const isNew = false;
   const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<ModelSummary | null>(null);
@@ -99,7 +125,7 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Versions', actions: [
-        { label: 'Reload', onClick: isNew ? undefined : load, disabled: isNew, title: isNew ? 'Read-only registry — open an existing model' : undefined },
+        { label: loading ? 'Reloading…' : 'Reload', onClick: loading ? undefined : load, disabled: loading },
         { label: 'Compare versions', disabled: true, title: 'needs compute target + BFF route (deferred)' },
       ]},
       { label: 'Apply', actions: [
@@ -107,33 +133,7 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
         { label: 'Real-time endpoint', disabled: true, title: 'needs compute target + BFF route (deferred)' },
       ]},
     ]},
-  ], [isNew, load]);
-
-  // v2 validator finding: /items/ml-model/new used to crash because the
-  // editor immediately fetched the registry with id='new' and got 404.
-  // ML Model is a read-only registry view — there's no "new" entity to
-  // create. Show an honest gate redirecting to Azure ML.
-  if (isNew) {
-    return (
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon}
-        main={
-          <div className={s.pad}>
-            <MessageBar intent="info">
-              <MessageBarBody>
-                <MessageBarTitle>ML models are registered in Azure ML, not authored in Loom</MessageBarTitle>
-                The Loom ML Model editor is a read-only registry view. To register a model:
-                <ol style={{ marginTop: 6, paddingLeft: 18 }}>
-                  <li>Run a training job in <code>/items/ml-experiment</code> (or Azure ML / Databricks MLflow).</li>
-                  <li>The run automatically logs to MLflow; the trained model appears here.</li>
-                </ol>
-                Open <a href="https://ml.azure.com/" target="_blank" rel="noreferrer">Azure ML Studio</a> for hands-on model registration.
-              </MessageBarBody>
-            </MessageBar>
-          </div>
-        }
-      />
-    );
-  }
+  ], [loading, load]);
 
   const current = versions.find((v) => v.version === selected) || versions[0];
 
@@ -250,8 +250,33 @@ interface FoundryJob {
 }
 
 export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: string }) {
-  const s = useStyles();
   const isNew = id === 'new' || !id;
+  // Read-only: experiments/runs are submitted via Azure ML / MLflow. On /new,
+  // browse the real experiment rollup (GET /api/items/ml-experiment) and Open
+  // one to view its runs and metrics.
+  if (isNew) {
+    return (
+      <NewItemBrowseGate
+        item={item}
+        endpoint="/api/items/ml-experiment"
+        listKey="experiments"
+        openSlug="ml-experiment"
+        intro="ML experiments group MLflow runs submitted from notebooks or Azure ML. Select an experiment below and Open it to view its runs, metrics, and register-model action."
+        gateHint="No experiments found — submit a run via mlflow.start_run() in a notebook. If this errors, set LOOM_AML_WORKSPACE / LOOM_FOUNDRY_* and grant the Console UAMI the AzureML Data Scientist role."
+        mapEntity={(e: { name: string; runCount: number }) => ({
+          id: e.name,
+          name: e.name,
+          badge: `${e.runCount} run${e.runCount === 1 ? '' : 's'}`,
+        })}
+      />
+    );
+  }
+  return <MlExperimentEditorBody item={item} id={id} />;
+}
+
+function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const isNew = false;
   const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<'job' | 'experiment' | null>(null);
@@ -291,7 +316,7 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Runs', actions: [
-        { label: 'Reload', onClick: isNew ? undefined : load, disabled: isNew, title: isNew ? 'Read-only — open an existing experiment' : undefined },
+        { label: loading ? 'Reloading…' : 'Reload', onClick: loading ? undefined : load, disabled: loading },
         { label: 'Register model', disabled: true, title: 'needs MLflow registry write + BFF route (deferred)' },
       ]},
       { label: 'Charts', actions: [
@@ -299,30 +324,7 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
         { label: 'Scatter', disabled: true, title: 'chart renderer deferred to v2.x' },
       ]},
     ]},
-  ], [isNew, load]);
-
-  if (isNew) {
-    return (
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon}
-        main={
-          <div className={s.pad}>
-            <MessageBar intent="info">
-              <MessageBarBody>
-                <MessageBarTitle>ML experiments / jobs are submitted via Azure ML, not authored here</MessageBarTitle>
-                The Loom ML Experiment editor is a read-only view of MLflow runs. To submit a new training run:
-                <ol style={{ marginTop: 6, paddingLeft: 18 }}>
-                  <li>Open a notebook (<code>/items/notebook</code> or <code>/items/databricks-notebook</code>).</li>
-                  <li>Use MLflow's <code>start_run()</code> / <code>log_metric()</code> APIs.</li>
-                  <li>The run will appear here once logged.</li>
-                </ol>
-                Open <a href="https://ml.azure.com/" target="_blank" rel="noreferrer">Azure ML Studio</a> for the full job-submission UI.
-              </MessageBarBody>
-            </MessageBar>
-          </div>
-        }
-      />
-    );
-  }
+  ], [loading, load]);
 
   return (
     <ItemEditorChrome

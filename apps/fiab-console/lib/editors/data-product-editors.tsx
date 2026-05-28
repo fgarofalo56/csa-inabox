@@ -80,11 +80,32 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
     try {
       const r = await fetch(`/api/items/data-product-template`);
       const j = await r.json();
-      if (j.ok) setTemplates(j.curated || []);
+      if (j.ok) {
+        const curated: Template[] = j.curated || [];
+        setTemplates(curated);
+        // Auto-select the first template so the instantiate form (and the
+        // primary "Spawn into workspace" action) is reachable on /new without
+        // the user having to dig through the grid first.
+        setSelected((cur) => cur ?? curated[0] ?? null);
+      }
     } finally { setRefreshing(false); }
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Default the target workspace to the first available one so the primary
+  // "Spawn into workspace" action is enabled as soon as a name is entered.
+  useEffect(() => {
+    if (!workspaceId && (ws.workspaces?.length ?? 0) > 0) {
+      setWorkspaceId(ws.workspaces![0].id);
+    }
+  }, [ws.workspaces, workspaceId]);
+
+  // Seed a sensible default instance name from the selected template so the
+  // primary action is clickable without manual typing (user can still edit it).
+  useEffect(() => {
+    if (selected && !displayName) setDisplayName(`${selected.displayName} (prod)`);
+  }, [selected, displayName]);
 
   const instantiate = useCallback(async () => {
     if (!selected || !workspaceId || !displayName) return;

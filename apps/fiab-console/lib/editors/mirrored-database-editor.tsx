@@ -16,7 +16,7 @@
  * Backed by /api/loom/workspaces + /api/items/mirrored-database/**.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input,
   Tree, TreeItem, TreeItemLayout, Select,
@@ -41,13 +41,6 @@ const SOURCES = [
   { id: 'SqlServer2025', name: 'SQL Server 2025' },
   { id: 'MSSQL', name: 'SQL Server 2016-2022' },
   { id: 'GenericMirror', name: 'Open mirroring' },
-];
-
-const RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Replication', actions: [{ label: 'Start' }, { label: 'Stop' }, { label: 'Status' }] },
-    { label: 'Item', actions: [{ label: 'New mirror' }, { label: 'Delete' }] },
-  ]},
 ];
 
 const useStyles = makeStyles({
@@ -194,8 +187,30 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const status = detail?.status?.status as string | undefined;
   const tables = detail?.tables?.data as Array<any> | undefined;
 
+  // Dynamic ribbon wired to the real handlers. The primary action is
+  // "New mirror" — enabled as soon as a workspace is selected (it opens the
+  // create dialog which POSTs a real Fabric MirroredDatabase). Start / Stop /
+  // Status / Delete enable once a mirror is selected.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'Item', actions: [
+        { label: 'New mirror', onClick: workspaceId ? () => setCreateOpen(true) : undefined, disabled: !workspaceId,
+          title: !workspaceId ? 'Select a workspace first' : undefined },
+        { label: 'Delete', onClick: mirrorId ? del : undefined, disabled: !mirrorId },
+      ]},
+      { label: 'Replication', actions: [
+        { label: 'Start', onClick: mirrorId && !acting ? () => act('start') : undefined, disabled: !mirrorId || acting },
+        { label: 'Stop', onClick: mirrorId && !acting ? () => act('stop') : undefined, disabled: !mirrorId || acting },
+        { label: 'Status', onClick: workspaceId && mirrorId ? () => loadDetail(workspaceId, mirrorId) : undefined, disabled: !workspaceId || !mirrorId },
+      ]},
+      { label: 'List', actions: [
+        { label: 'Refresh list', onClick: workspaceId ? () => loadList(workspaceId) : undefined, disabled: !workspaceId },
+      ]},
+    ]},
+  ], [workspaceId, mirrorId, acting, del, act, loadDetail, loadList]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={RIBBON}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: 8 }}>Mirrored databases</Subtitle2>

@@ -794,8 +794,28 @@ interface PurviewNotConfiguredHint {
   followUp: string;
 }
 
+// Workspace picker source for creating a brand-new data product on /new.
+function useDataProductWorkspaces() {
+  const [workspaces, setWorkspaces] = useState<{ id: string; name: string }[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/loom/workspaces');
+        const j = await r.json();
+        setWorkspaces(j.ok ? (j.workspaces || []) : []);
+      } catch { setWorkspaces([]); }
+      finally { setLoading(false); }
+    })();
+  }, []);
+  return { workspaces, loading };
+}
+
 export function DataProductEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const router = useRouter();
+  const ws = useDataProductWorkspaces();
+  const [workspaceId, setWorkspaceId] = useState('');
   const [state, setState] = useState<DataProductState>(DP_EMPTY);
   const [loading, setLoading] = useState(id !== 'new');
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -849,11 +869,26 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     // stale closure capture from when the Save callback was last memoised.
     let snapshot: DataProductState = DP_EMPTY;
     setState((prev) => { snapshot = prev; return prev; });
+    const displayName = snapshot.displayName || 'Untitled data product';
     try {
+      if (id === 'new') {
+        // Create a real Cosmos item, then navigate to the persisted editor
+        // where Register-with-Purview / Publish-to-APIM act on a real id.
+        if (!workspaceId) { setStatus({ kind: 'err', msg: 'Select a workspace before saving.' }); return; }
+        const r = await fetch(`/api/cosmos-items/data-product`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workspaceId, displayName, state: snapshot }),
+        });
+        const j = await r.json();
+        if (!j.ok || !j.item?.id) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
+        setDirty(false);
+        router.push(`/items/data-product/${encodeURIComponent(j.item.id)}`);
+        return;
+      }
       const r = await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ state: snapshot, displayName: snapshot.displayName || 'Untitled data product' }),
+        body: JSON.stringify({ state: snapshot, displayName }),
       });
       const j = await r.json();
       if (!j.ok) { setStatus({ kind: 'err', msg: j.error || `HTTP ${r.status}` }); return; }
@@ -864,7 +899,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     } catch (e: any) {
       setStatus({ kind: 'err', msg: e?.message || String(e) });
     }
-  }, [id]);
+  }, [id, workspaceId, router]);
 
   const publishApimMirror = useCallback(async () => {
     setStatus({ kind: 'saving' });
@@ -947,11 +982,19 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   // Ribbon — Save + Publish to APIM wired to inline handlers. Semantic schema /
   // SLA / Owner stay honestly disabled (the form below is the actual edit
   // surface; jumping to a separate panel is a future v2 enhancement).
+  const isNew = id === 'new';
+  // On /new the primary action is "Create": enabled once a name + workspace
+  // are set. On an existing item it's "Save", enabled when there are edits.
+  const canSave = status.kind !== 'saving' && (isNew
+    ? (!!state.displayName.trim() && !!workspaceId)
+    : dirty);
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Product', actions: [
-        { label: status.kind === 'saving' ? 'Saving…' : 'Save', onClick: status.kind !== 'saving' && dirty ? save : undefined, disabled: status.kind === 'saving' || !dirty, title: !dirty ? 'No unsaved changes' : undefined },
-        { label: 'Publish to APIM', onClick: status.kind !== 'saving' && state.displayName ? publishApimMirror : undefined, disabled: status.kind === 'saving' || !state.displayName, title: !state.displayName ? 'displayName is required' : undefined },
+        { label: status.kind === 'saving' ? (isNew ? 'Creating…' : 'Saving…') : (isNew ? 'Create' : 'Save'),
+          onClick: canSave ? save : undefined, disabled: !canSave,
+          title: isNew ? (!state.displayName.trim() ? 'Enter a name' : !workspaceId ? 'Select a workspace' : undefined) : (!dirty ? 'No unsaved changes' : undefined) },
+        { label: 'Publish to APIM', onClick: !isNew && status.kind !== 'saving' && state.displayName ? publishApimMirror : undefined, disabled: isNew || status.kind === 'saving' || !state.displayName, title: isNew ? 'Create the data product first' : !state.displayName ? 'displayName is required' : undefined },
       ]},
       { label: 'Contract', actions: [
         { label: 'Semantic schema', disabled: true, title: 'Semantic schema — use the Bundle field below to list semantic contracts (dedicated editor deferred to v2)' },
@@ -959,7 +1002,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Owner', disabled: true, title: 'Owner — use the Owner field in the form below (dedicated editor deferred to v2)' },
       ]},
     ]},
-  ], [status.kind, dirty, save, state.displayName, publishApimMirror]);
+  ], [status.kind, isNew, canSave, dirty, save, state.displayName, workspaceId, publishApimMirror]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -1008,25 +1051,41 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           {state.certified && <Badge appearance="outline" color="success">Certified</Badge>}
           {state.purviewDataProductId && <Badge appearance="outline" color="success">Purview: {state.purviewDataProductId.slice(0, 8)}…</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
-          <Button appearance="secondary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving' || !dirty}>Save</Button>
+          <Button appearance={isNew ? 'primary' : 'secondary'} icon={<Save20Regular />} onClick={save} disabled={!canSave}>
+            {status.kind === 'saving' ? (isNew ? 'Creating…' : 'Saving…') : isNew ? 'Create' : 'Save'}
+          </Button>
           <Button
             appearance={state.purviewDataProductId ? 'secondary' : 'primary'}
             icon={<Library20Regular />}
             onClick={registerPurview}
-            disabled={status.kind === 'saving' || !state.displayName}
+            disabled={isNew || status.kind === 'saving' || !state.displayName}
+            title={isNew ? 'Create the data product first' : undefined}
             style={{ marginLeft: 'auto' }}
           >
             {status.kind === 'saving'
               ? 'Registering…'
               : state.purviewDataProductId ? 'Re-register with Purview' : 'Register with Purview'}
           </Button>
-          <Button appearance="secondary" icon={<CloudArrowUp20Regular />} onClick={publishApimMirror} disabled={status.kind === 'saving' || !state.displayName}>
+          <Button appearance="secondary" icon={<CloudArrowUp20Regular />} onClick={publishApimMirror} disabled={isNew || status.kind === 'saving' || !state.displayName} title={isNew ? 'Create the data product first' : undefined}>
             {status.kind === 'saving' ? 'Publishing…' : 'Publish to APIM'}
           </Button>
         </div>
         <StatusBar status={status} />
 
         <div className={s.form}>
+          {isNew && (
+            <Field label="Workspace (required to create)" style={{ gridColumn: '1 / -1' }}>
+              <Dropdown
+                placeholder={ws.loading ? 'Loading workspaces…' : (ws.workspaces?.length ?? 0) === 0 ? 'No workspaces — create one first' : 'Select a workspace'}
+                value={(ws.workspaces || []).find((w) => w.id === workspaceId)?.name || ''}
+                selectedOptions={workspaceId ? [workspaceId] : []}
+                disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}
+                onOptionSelect={(_, d) => setWorkspaceId(d.optionValue || '')}
+              >
+                {(ws.workspaces || []).map((w) => <Option key={w.id} value={w.id}>{w.name}</Option>)}
+              </Dropdown>
+            </Field>
+          )}
           <Field label="Display name"><Input value={state.displayName} onChange={(_, d) => patchState({ displayName: d.value })} /></Field>
           <Field label="Domain (Purview businessDomainId GUID)"><Input value={state.domain} onChange={(_, d) => patchState({ domain: d.value })} placeholder="e.g. 0a1b2c3d-4e5f-6789-abcd-ef0123456789" /></Field>
           <Field label="Owner (email)"><Input value={state.owner} onChange={(_, d) => patchState({ owner: d.value })} placeholder="owner@contoso.com" /></Field>
