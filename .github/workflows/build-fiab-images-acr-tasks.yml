@@ -130,8 +130,13 @@ jobs:
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
       - run: |
-          az acr update --name "${{ needs.resolve.outputs.acr_name }}" --public-network-enabled true -o tsv --query "publicNetworkAccess" || true
-          sleep 20
+          ACR="${{ needs.resolve.outputs.acr_name }}"
+          # Two distinct rules block GHA: publicNetworkAccess (the endpoint
+          # itself) AND networkRuleSet.defaultAction (the IP-allowlist
+          # default). Flip BOTH.
+          az acr update --name "$ACR" --public-network-enabled true -o tsv --query "publicNetworkAccess" || true
+          az acr update --name "$ACR" --default-action Allow -o tsv --query "networkRuleSet.defaultAction" || true
+          sleep 30
 
   acr_restore:
     name: Restore ACR public access disabled
@@ -150,4 +155,6 @@ jobs:
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
       - run: |
-          az acr update --name "${{ needs.resolve.outputs.acr_name }}" --public-network-enabled false -o tsv --query "publicNetworkAccess" || true
+          ACR="${{ needs.resolve.outputs.acr_name }}"
+          az acr update --name "$ACR" --default-action Deny -o tsv --query "networkRuleSet.defaultAction" || true
+          az acr update --name "$ACR" --public-network-enabled false -o tsv --query "publicNetworkAccess" || true
