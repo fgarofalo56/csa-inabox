@@ -10,6 +10,22 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.14.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.13.0...csa-inabox-v0.14.0) (2026-05-28)
+
+
+### Features
+
+* **csa-loom:** AI Foundry / APIM / Copilot Studio family — production-grade across 19 editors ([#365](https://github.com/fgarofalo56/csa-inabox/issues/365)) ([81c0463](https://github.com/fgarofalo56/csa-inabox/commit/81c0463d91ccdc130db1f144e08aeed20b76b20d))
+
+
+### Bug Fixes
+
+* **docs:** render direct-lake-replacement architecture as mermaid ([#411](https://github.com/fgarofalo56/csa-inabox/issues/411)) ([570f3fd](https://github.com/fgarofalo56/csa-inabox/commit/570f3fd7ed07970f4c8678c8487df18d4a415656)), closes [#405](https://github.com/fgarofalo56/csa-inabox/issues/405)
+* **docs:** render federal-data-mesh pattern as mermaid diagram ([#413](https://github.com/fgarofalo56/csa-inabox/issues/413)) ([1bdebc4](https://github.com/fgarofalo56/csa-inabox/commit/1bdebc458dafe266a7b8cefa88b3d8e139ab131b)), closes [#404](https://github.com/fgarofalo56/csa-inabox/issues/404)
+* **docs:** render hybrid-topology pattern as mermaid diagram ([#409](https://github.com/fgarofalo56/csa-inabox/issues/409)) ([91f85ae](https://github.com/fgarofalo56/csa-inabox/commit/91f85ae3db29cf325b65013c0060f3ddfcb9881a)), closes [#407](https://github.com/fgarofalo56/csa-inabox/issues/407)
+* **docs:** render sovereign-agents architecture as mermaid diagram ([#410](https://github.com/fgarofalo56/csa-inabox/issues/410)) ([e7b6f64](https://github.com/fgarofalo56/csa-inabox/commit/e7b6f64132498c975a09f82f0aecc19129cbaade)), closes [#406](https://github.com/fgarofalo56/csa-inabox/issues/406)
+* **docs:** stop .gitignore from excluding docs/build/ (Closes [#403](https://github.com/fgarofalo56/csa-inabox/issues/403)) ([#412](https://github.com/fgarofalo56/csa-inabox/issues/412)) ([5df11d8](https://github.com/fgarofalo56/csa-inabox/commit/5df11d8c46e0d04147d9b566cc9fc29dd56b668b))
+
 ## [0.13.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.12.0...csa-inabox-v0.13.0) (2026-05-28)
 
 
