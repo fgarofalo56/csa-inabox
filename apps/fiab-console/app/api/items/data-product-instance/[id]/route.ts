@@ -8,10 +8,10 @@ import { loadOwnedItem, jerr } from '../../_lib/item-crud';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
-  const item = await loadOwnedItem(ctx.params.id, 'data-product-instance', session.claims.oid);
+  const item = await loadOwnedItem((await ctx.params).id, 'data-product-instance', session.claims.oid);
   if (!item) return jerr('not found', 404);
   return NextResponse.json({ ok: true, item });
 }

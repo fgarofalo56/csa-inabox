@@ -1,0 +1,308 @@
+/**
+ * Activity catalog — single source of truth for every Fabric / ADF /
+ * Synapse pipeline activity type, what bucket it lives in, what colour
+ * the canvas tile gets, and the JSON template used when a user drags
+ * one onto the canvas.
+ *
+ * Per .claude/rules/no-vaporware.md: every entry here must save through
+ * adf-client.upsertPipeline. Activity types that ADF *does not* natively
+ * support are marked `runnable: false` so the editor disables Run and
+ * surfaces a precise MessageBar explaining the gap (e.g. "Office 365
+ * Outlook activity requires Fabric pipelines — not available against
+ * ADF backing").
+ */
+
+import type { PipelineActivity } from './types';
+
+export type ActivityCategory = 'move-transform' | 'activities';
+
+export interface ActivityTypeDef {
+  /** Stable key shown in the palette. */
+  key: string;
+  /** Human-readable label. */
+  label: string;
+  /** Short description rendered in tooltip + property panel. */
+  description: string;
+  /** Palette category. */
+  category: ActivityCategory;
+  /** ADF-side type string (e.g. `Copy`, `DatabricksNotebook`). */
+  type: string;
+  /** Auto-name prefix when stamped onto the canvas. */
+  namePrefix: string;
+  /** Default tile background colour. */
+  color: string;
+  /** Foreground colour (white/black for contrast). */
+  fg: string;
+  /**
+   * Whether the activity can actually execute end-to-end against the
+   * deployed ADF / Synapse backing today. `false` means save+validate
+   * works, but Run will surface a MessageBar.
+   */
+  runnable: boolean;
+  /** Remediation note for non-runnable activities. */
+  remediation?: string;
+  /** Factory that returns a fresh activity JSON. */
+  build: (name: string) => PipelineActivity;
+}
+
+export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
+  // ============ Move & transform ============
+  {
+    key: 'Copy', label: 'Copy data',
+    description: 'Copy data between any supported source and sink.',
+    category: 'move-transform', type: 'Copy', namePrefix: 'Copy',
+    color: '#0078d4', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'Copy', dependsOn: [],
+      typeProperties: {
+        source: { type: 'BlobSource' },
+        sink: { type: 'BlobSink' },
+        enableStaging: false,
+      },
+      inputs: [],
+      outputs: [],
+    }),
+  },
+  {
+    key: 'DataflowGen2', label: 'Dataflow Gen2',
+    description: 'Run a published Fabric Dataflow Gen2 (Power Query M).',
+    category: 'move-transform', type: 'RefreshDataflow', namePrefix: 'Dataflow',
+    color: '#7719aa', fg: '#fff', runnable: false,
+    remediation: 'Dataflow Gen2 refresh is a Fabric-native activity. ADF backing exposes ExecuteDataFlow (mapping data flow) instead — drag that.',
+    build: (name) => ({
+      name, type: 'RefreshDataflow', dependsOn: [],
+      typeProperties: { dataflow: { referenceName: '', type: 'DataflowReference' } },
+    }),
+  },
+  {
+    key: 'ExecuteDataFlow', label: 'Mapping data flow',
+    description: 'Execute a published mapping data flow on an integration runtime.',
+    category: 'move-transform', type: 'ExecuteDataFlow', namePrefix: 'DataFlow',
+    color: '#7719aa', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'ExecuteDataFlow', dependsOn: [],
+      typeProperties: {
+        dataflow: { referenceName: '', type: 'DataFlowReference' },
+        compute: { coreCount: 8, computeType: 'General' },
+        traceLevel: 'Fine',
+      },
+    }),
+  },
+  {
+    key: 'Lookup', label: 'Lookup',
+    description: 'Read a single row or a row set from a dataset for downstream activities.',
+    category: 'move-transform', type: 'Lookup', namePrefix: 'Lookup',
+    color: '#5c2d91', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'Lookup', dependsOn: [],
+      typeProperties: {
+        source: { type: 'AzureSqlSource' },
+        dataset: { referenceName: '', type: 'DatasetReference' },
+        firstRowOnly: true,
+      },
+    }),
+  },
+
+  // ============ Activities ============
+  {
+    key: 'Notebook', label: 'Notebook',
+    description: 'Run a Fabric / Synapse / Databricks notebook.',
+    category: 'activities', type: 'DatabricksNotebook', namePrefix: 'Notebook',
+    color: '#0078d4', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'DatabricksNotebook', dependsOn: [],
+      typeProperties: { notebookPath: '', baseParameters: {} },
+      linkedServiceName: { referenceName: '', type: 'LinkedServiceReference' },
+    }),
+  },
+  {
+    key: 'SparkJob', label: 'Spark Job Definition',
+    description: 'Run a Synapse Spark batch job (JAR or .py).',
+    category: 'activities', type: 'SynapseSparkJobDefinitionActivity', namePrefix: 'SparkJob',
+    color: '#0a4f7a', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'SynapseSparkJobDefinitionActivity', dependsOn: [],
+      typeProperties: {
+        sparkJob: { referenceName: '', type: 'SparkJobDefinitionReference' },
+      },
+    }),
+  },
+  {
+    key: 'Script', label: 'Script',
+    description: 'Run inline SQL / Hive / Pig / U-SQL against a linked service.',
+    category: 'activities', type: 'Script', namePrefix: 'Script',
+    color: '#3aaaaa', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'Script', dependsOn: [],
+      typeProperties: {
+        scripts: [
+          { type: 'Query', text: 'SELECT 1' },
+        ],
+        scriptBlockExecutionTimeout: '02:00:00',
+      },
+      linkedServiceName: { referenceName: '', type: 'LinkedServiceReference' },
+    }),
+  },
+  {
+    key: 'StoredProcedure', label: 'Stored procedure',
+    description: 'Invoke a SQL stored procedure against a linked SQL server.',
+    category: 'activities', type: 'SqlServerStoredProcedure', namePrefix: 'StoredProc',
+    color: '#3aaaaa', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'SqlServerStoredProcedure', dependsOn: [],
+      typeProperties: { storedProcedureName: '', storedProcedureParameters: {} },
+      linkedServiceName: { referenceName: '', type: 'LinkedServiceReference' },
+    }),
+  },
+  {
+    key: 'Web', label: 'Web',
+    description: 'Invoke a custom REST endpoint (GET/POST/PUT/DELETE).',
+    category: 'activities', type: 'WebActivity', namePrefix: 'Web',
+    color: '#107c10', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'WebActivity', dependsOn: [],
+      typeProperties: { url: 'https://example.com', method: 'GET', headers: {} },
+    }),
+  },
+  {
+    key: 'Office365Outlook', label: 'Office 365 Outlook',
+    description: 'Send an email via an Office 365 connection.',
+    category: 'activities', type: 'Office365OutlookSendEmail', namePrefix: 'Email',
+    color: '#0062ad', fg: '#fff', runnable: false,
+    remediation: 'Office 365 Outlook send-email is a Fabric pipeline activity. ADF backing has no native equivalent — use Web activity against Microsoft Graph instead.',
+    build: (name) => ({
+      name, type: 'Office365OutlookSendEmail', dependsOn: [],
+      typeProperties: { to: '', subject: '', body: '' },
+    }),
+  },
+  {
+    key: 'SetVariable', label: 'Set variable',
+    description: 'Set a pipeline-scoped variable.',
+    category: 'activities', type: 'SetVariable', namePrefix: 'SetVar',
+    color: '#444', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'SetVariable', dependsOn: [],
+      typeProperties: { variableName: '', value: '' },
+    }),
+  },
+  {
+    key: 'AppendVariable', label: 'Append variable',
+    description: 'Append a value to a pipeline array variable.',
+    category: 'activities', type: 'AppendVariable', namePrefix: 'AppendVar',
+    color: '#444', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'AppendVariable', dependsOn: [],
+      typeProperties: { variableName: '', value: '' },
+    }),
+  },
+  {
+    key: 'Filter', label: 'Filter',
+    description: 'Apply a filter expression to an input array.',
+    category: 'activities', type: 'Filter', namePrefix: 'Filter',
+    color: '#bd7800', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'Filter', dependsOn: [],
+      typeProperties: {
+        items: { value: "@variables('items')", type: 'Expression' },
+        condition: { value: '@equals(item(),1)', type: 'Expression' },
+      },
+    }),
+  },
+  {
+    key: 'ForEach', label: 'ForEach',
+    description: 'Iterate over an array, running child activities for each item.',
+    category: 'activities', type: 'ForEach', namePrefix: 'ForEach',
+    color: '#dca900', fg: '#000', runnable: true,
+    build: (name) => ({
+      name, type: 'ForEach', dependsOn: [],
+      typeProperties: {
+        items: { value: "@variables('items')", type: 'Expression' },
+        isSequential: false,
+        batchCount: 20,
+        activities: [],
+      },
+    }),
+  },
+  {
+    key: 'IfCondition', label: 'If condition',
+    description: 'Branch the pipeline on a boolean expression.',
+    category: 'activities', type: 'IfCondition', namePrefix: 'If',
+    color: '#bd7800', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'IfCondition', dependsOn: [],
+      typeProperties: {
+        expression: { value: '@equals(1,1)', type: 'Expression' },
+        ifTrueActivities: [],
+        ifFalseActivities: [],
+      },
+    }),
+  },
+  {
+    key: 'Switch', label: 'Switch',
+    description: 'Branch the pipeline to one of N cases.',
+    category: 'activities', type: 'Switch', namePrefix: 'Switch',
+    color: '#bd7800', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'Switch', dependsOn: [],
+      typeProperties: {
+        on: { value: "@variables('case')", type: 'Expression' },
+        cases: [],
+        defaultActivities: [],
+      },
+    }),
+  },
+  {
+    key: 'Until', label: 'Until',
+    description: 'Loop until an expression evaluates true.',
+    category: 'activities', type: 'Until', namePrefix: 'Until',
+    color: '#bd7800', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'Until', dependsOn: [],
+      typeProperties: {
+        expression: { value: '@greater(1,0)', type: 'Expression' },
+        timeout: '0.00:30:00',
+        activities: [],
+      },
+    }),
+  },
+  {
+    key: 'Wait', label: 'Wait',
+    description: 'Pause for a fixed number of seconds.',
+    category: 'activities', type: 'Wait', namePrefix: 'Wait',
+    color: '#666', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'Wait', dependsOn: [],
+      typeProperties: { waitTimeInSeconds: 5 },
+    }),
+  },
+];
+
+/** Lookup by ADF type string. */
+export function findByType(type?: string): ActivityTypeDef | undefined {
+  if (!type) return undefined;
+  return ACTIVITY_CATALOG.find((a) => a.type === type);
+}
+
+/** Lookup by palette key. */
+export function findByKey(key: string): ActivityTypeDef | undefined {
+  return ACTIVITY_CATALOG.find((a) => a.key === key);
+}
+
+/** All activities in a category, in palette order. */
+export function byCategory(c: ActivityCategory): ActivityTypeDef[] {
+  return ACTIVITY_CATALOG.filter((a) => a.category === c);
+}
+
+/** Auto-increment a fresh name for the given prefix. */
+export function nextNameSuffix(activities: PipelineActivity[], prefix: string): number {
+  let max = 0;
+  for (const a of activities) {
+    const name = a.name || '';
+    if (!name.startsWith(prefix)) continue;
+    const tail = name.slice(prefix.length);
+    if (!/^\d+$/.test(tail)) continue;
+    const n = parseInt(tail, 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return max + 1;
+}

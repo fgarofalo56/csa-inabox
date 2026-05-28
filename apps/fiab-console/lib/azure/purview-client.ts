@@ -296,3 +296,308 @@ export async function listDataProducts(domain?: string): Promise<PurviewDataProd
   const j = await readJson<{ value?: any[] }>(res);
   return (j?.value || []).map(shape);
 }
+
+// ============================================================
+// Phase-2 surface area — registered data sources, scans, glossary,
+// business domains, data-quality rules.
+//
+// These call the Purview "scan" (legacy Atlas catalog) data plane plus
+// the newer Unified Catalog endpoints. Both share the same auth scope
+// (https://purview.azure.net/.default) and the same `-api.purview.azure.com`
+// host, so the existing purviewFetch / readJson helpers are reused.
+//
+// Tenant requirements:
+//   - Loom UAMI granted "Data Source Administrator" (for scans/sources)
+//   - Loom UAMI granted "Data Curator" (for glossary/domains/DQ)
+//   Both are governance-domain-scoped RBAC granted in the Purview portal.
+// ============================================================
+
+export interface PurviewDataSource {
+  id: string;
+  name: string;
+  kind?: string;          // AzureSqlDatabase, AzureDataLakeStorageGen2, etc.
+  endpoint?: string;
+  collectionId?: string;
+  raw?: unknown;
+}
+
+export interface PurviewScan {
+  id: string;
+  name: string;
+  kind?: string;
+  schedule?: unknown;
+  raw?: unknown;
+}
+
+export interface PurviewScanRun {
+  runId: string;
+  status?: string;
+  startTime?: string;
+  endTime?: string;
+  errorMessage?: string;
+  raw?: unknown;
+}
+
+export interface PurviewGlossaryTerm {
+  guid: string;
+  name?: string;
+  qualifiedName?: string;
+  longDescription?: string;
+  status?: string;
+  glossaryGuid?: string;
+  raw?: unknown;
+}
+
+export interface PurviewBusinessDomain {
+  id: string;
+  name: string;
+  description?: string;
+  type?: string;
+  raw?: unknown;
+}
+
+export interface PurviewDataQualityRule {
+  id: string;
+  name?: string;
+  description?: string;
+  expression?: string;
+  scope?: string;
+  enabled?: boolean;
+  raw?: unknown;
+}
+
+/** GET /scan/datasources — registered data sources. */
+export async function listDataSources(): Promise<PurviewDataSource[]> {
+  purviewAccount();
+  const res = await purviewFetch('/scan/datasources');
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewDataSource => ({
+    id: raw?.id || raw?.name,
+    name: raw?.name,
+    kind: raw?.kind || raw?.properties?.kind,
+    endpoint: raw?.properties?.endpoint || raw?.properties?.serverEndpoint,
+    collectionId: raw?.properties?.collection?.referenceName,
+    raw,
+  }));
+}
+
+/**
+ * Register a new data source.
+ *
+ * PUT /scan/datasources/{name}
+ *
+ * Caller supplies `{ name, kind, properties }`. We forward as-is.
+ */
+export async function registerDataSource(payload: {
+  name: string;
+  kind: string;
+  properties: Record<string, unknown>;
+}): Promise<PurviewDataSource> {
+  purviewAccount();
+  if (!payload?.name) throw new PurviewError(400, null, 'name is required');
+  if (!payload?.kind) throw new PurviewError(400, null, 'kind is required');
+  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(payload.name)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ kind: payload.kind, properties: payload.properties }),
+  });
+  const raw = await readJson<any>(res);
+  if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on registerDataSource');
+  return {
+    id: raw?.id || raw?.name,
+    name: raw?.name,
+    kind: raw?.kind,
+    endpoint: raw?.properties?.endpoint,
+    collectionId: raw?.properties?.collection?.referenceName,
+    raw,
+  };
+}
+
+/** DELETE /scan/datasources/{name} */
+export async function deleteDataSource(name: string): Promise<boolean> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'name is required');
+  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (res.status === 404) return false;
+  await readJson<unknown>(res);
+  return true;
+}
+
+/** GET /scan/datasources/{name}/scans — scans defined on a source. */
+export async function listScansForSource(sourceName: string): Promise<PurviewScan[]> {
+  purviewAccount();
+  if (!sourceName) throw new PurviewError(400, null, 'sourceName is required');
+  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(sourceName)}/scans`);
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewScan => ({
+    id: raw?.id || raw?.name,
+    name: raw?.name,
+    kind: raw?.kind,
+    schedule: raw?.properties?.schedule,
+    raw,
+  }));
+}
+
+/** PUT /scan/datasources/{name}/scans/{scan}/run — trigger a scan run. */
+export async function triggerScanRun(sourceName: string, scanName: string): Promise<{ runId?: string; raw: unknown }> {
+  purviewAccount();
+  if (!sourceName || !scanName) throw new PurviewError(400, null, 'sourceName + scanName required');
+  const runId = `loom-${Date.now()}`;
+  const res = await purviewFetch(
+    `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}/runs/${runId}`,
+    { method: 'PUT' },
+  );
+  const raw = await readJson<any>(res);
+  return { runId: raw?.runId || runId, raw };
+}
+
+/** GET /scan/datasources/{name}/scans/{scan}/runs — last N scan runs. */
+export async function listScanRuns(sourceName: string, scanName: string): Promise<PurviewScanRun[]> {
+  purviewAccount();
+  const res = await purviewFetch(
+    `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}/runs`,
+  );
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).slice(0, 10).map((raw): PurviewScanRun => ({
+    runId: raw?.id || raw?.runId,
+    status: raw?.status,
+    startTime: raw?.startTime,
+    endTime: raw?.endTime,
+    errorMessage: raw?.errorMessage,
+    raw,
+  }));
+}
+
+/**
+ * GET /catalog/api/atlas/v2/glossaries — list glossaries, then for the
+ * first glossary, list its terms via /glossary/{guid}/terms.
+ *
+ * Limited to the first 200 terms — UI is paged below this.
+ */
+export async function listGlossaryTerms(glossaryGuid?: string): Promise<PurviewGlossaryTerm[]> {
+  purviewAccount();
+
+  let targetGuid = glossaryGuid;
+  if (!targetGuid) {
+    const gRes = await purviewFetch('/catalog/api/atlas/v2/glossaries');
+    const gj = await readJson<any[]>(gRes);
+    if (!Array.isArray(gj) || gj.length === 0) return [];
+    targetGuid = gj[0]?.guid;
+  }
+  if (!targetGuid) return [];
+
+  const tRes = await purviewFetch(
+    `/catalog/api/atlas/v2/glossary/${encodeURIComponent(targetGuid)}/terms?limit=200`,
+  );
+  if (tRes.status === 404) return [];
+  const tj = await readJson<any[]>(tRes);
+  if (!Array.isArray(tj)) return [];
+  return tj.map((raw): PurviewGlossaryTerm => ({
+    guid: raw?.guid,
+    name: raw?.name,
+    qualifiedName: raw?.qualifiedName,
+    longDescription: raw?.longDescription,
+    status: raw?.status,
+    glossaryGuid: targetGuid,
+    raw,
+  }));
+}
+
+/** POST /catalog/api/atlas/v2/glossary/term — create a glossary term. */
+export async function createGlossaryTerm(payload: {
+  name: string;
+  glossaryGuid: string;
+  shortDescription?: string;
+  longDescription?: string;
+}): Promise<PurviewGlossaryTerm> {
+  purviewAccount();
+  if (!payload?.name || !payload?.glossaryGuid) {
+    throw new PurviewError(400, null, 'name + glossaryGuid are required');
+  }
+  const body = {
+    name: payload.name,
+    anchor: { glossaryGuid: payload.glossaryGuid },
+    shortDescription: payload.shortDescription || '',
+    longDescription: payload.longDescription || '',
+    status: 'Draft',
+  };
+  const res = await purviewFetch('/catalog/api/atlas/v2/glossary/term', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const raw = await readJson<any>(res);
+  if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on createGlossaryTerm');
+  return {
+    guid: raw?.guid,
+    name: raw?.name,
+    qualifiedName: raw?.qualifiedName,
+    longDescription: raw?.longDescription,
+    status: raw?.status,
+    glossaryGuid: payload.glossaryGuid,
+    raw,
+  };
+}
+
+/** GET /datagovernance/catalog/businessdomains — business / governance domains. */
+export async function listBusinessDomains(): Promise<PurviewBusinessDomain[]> {
+  purviewAccount();
+  const res = await purviewFetch('/datagovernance/catalog/businessdomains');
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewBusinessDomain => ({
+    id: raw?.id,
+    name: raw?.name || raw?.displayName,
+    description: raw?.description,
+    type: raw?.type,
+    raw,
+  }));
+}
+
+/** POST /datagovernance/catalog/businessdomains — create a domain. */
+export async function createBusinessDomain(payload: {
+  name: string;
+  description?: string;
+  type?: string;
+}): Promise<PurviewBusinessDomain> {
+  purviewAccount();
+  if (!payload?.name) throw new PurviewError(400, null, 'name is required');
+  const body = {
+    name: payload.name,
+    displayName: payload.name,
+    description: payload.description || '',
+    type: payload.type || 'Functional',
+  };
+  const res = await purviewFetch('/datagovernance/catalog/businessdomains', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const raw = await readJson<any>(res);
+  if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on createBusinessDomain');
+  return {
+    id: raw?.id,
+    name: raw?.name || raw?.displayName,
+    description: raw?.description,
+    type: raw?.type,
+    raw,
+  };
+}
+
+/** GET /datagovernance/dataquality/rules — list configured DQ rules (preview). */
+export async function listDataQualityRules(): Promise<PurviewDataQualityRule[]> {
+  purviewAccount();
+  // Endpoint is still in preview; some Purview tenants 404 this entirely.
+  // Treat 404 as "no rules / preview not enabled" rather than an error.
+  const res = await purviewFetch('/datagovernance/dataquality/rules');
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewDataQualityRule => ({
+    id: raw?.id,
+    name: raw?.name || raw?.displayName,
+    description: raw?.description,
+    expression: raw?.expression || raw?.ruleExpression,
+    scope: raw?.scope || raw?.target,
+    enabled: raw?.enabled,
+    raw,
+  }));
+}

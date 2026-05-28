@@ -118,6 +118,11 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'azure-sql-database':          reg(() => import('./azure-sql-editors'),      'AzureSqlDatabaseEditor'),
   'azure-sql-managed-instance':  reg(() => import('./azure-sql-editors'),      'SqlManagedInstanceEditor'),
   'sql-server-2025-vector-index':reg(() => import('./azure-sql-editors'),      'SqlServer2025VectorIndexEditor'),
+  // Fabric SQL database (Microsoft.Fabric SQLDatabase REST type). At the
+  // engine level this is an Azure SQL DB with Fabric-layer mirroring on
+  // top — reuse the Azure SQL editor surface so users get T-SQL Monaco +
+  // server/DB pickers + Run + mirroring toggle.
+  'sql-database':                reg(() => import('./azure-sql-editors'),      'AzureSqlDatabaseEditor'),
 
   // v3 — Geoanalytics (Azure Maps + lakehouse geometry + H3/S2 + spatial T-SQL/KQL)
   'geo-map':                     reg(() => import('./geo-editors'),            'GeoMapEditor'),

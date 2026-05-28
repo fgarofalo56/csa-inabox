@@ -58,21 +58,29 @@ After qualifying, dig deeper:
 
 ## Three pitch variants
 
-### 30-min CIO pitch
+Each variant is a *fully written, run-on-rails* doc — minute-by-minute
+agenda, narration script, Q&A bank. Don't wing these.
 
-Cover slides 1-8, 11, 13, 14 from [pitch deck](pitch-deck.md). Focus
-on "why now" + "how we fit your boundary" + "forward migration."
+### 30-min CIO pitch — [open the script →](pitches/30-min-cio-pitch.md)
 
-### 60-min architecture deep-dive
+Slides 1-8, 11, 13, 14 from the [pitch deck](pitch-deck.md). Focus on
+"why now" + "how we fit your boundary" + "forward migration." Goal:
+get a *yes* to the 60-min deep-dive with their architects.
 
-Full pitch deck + per-workload parity discussion. Bring slides on
-parity for Direct Lake, Reflex, Mirroring, Data Agents. Live demo
-(if Loom is deployed in a test tenant).
+### 60-min architecture deep-dive — [open the script →](pitches/60-min-architecture-deep-dive.md)
 
-### 2-hour technical evaluation
+Full pitch deck + per-workload parity matrix + custom parity services
++ live Console demo + architect Q&A bank (15 most-likely questions
+written out). Goal: earn the technical buy-in and book the 2-hour
+evaluation.
 
-Full pitch + workshop preview + Q&A with customer's architects +
-DRY (deploy-it-yourself) walk-through of `azd up`.
+### 2-hour technical evaluation — [open the script →](pitches/2-hour-technical-evaluation.md)
+
+Hands-on `azd up` against the customer's test subscription, live.
+Pre-flight checklist + workshop preview + 35-55 minute live deploy +
+post-deploy bootstrap + Console walkthrough + decision-matrix
+worksheet + commitment ask. Goal: leave with a signed-off "we'll
+deploy production in [N weeks]."
 
 ## Objection handling — top 10
 

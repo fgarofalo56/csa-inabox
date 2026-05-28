@@ -13,7 +13,7 @@ import { upsertApi, ApimError } from '@/lib/azure/apim-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
@@ -24,7 +24,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   if (!path) return NextResponse.json({ ok: false, error: 'path required' }, { status: 400 });
   if (!sdl.trim()) return NextResponse.json({ ok: false, error: 'sdl (schema) required' }, { status: 400 });
   try {
-    const api = await upsertApi(ctx.params.id, {
+    const api = await upsertApi((await ctx.params).id, {
       displayName,
       path,
       protocols: ['https'],

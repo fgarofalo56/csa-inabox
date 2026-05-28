@@ -23,6 +23,8 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Menu, MenuTrigger, MenuList, MenuItem, MenuPopover,
+  Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  Input, Field, Switch, Dropdown, Option, Textarea,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -118,6 +120,132 @@ export function LakehouseEditor({ item, id }: Props) {
   // pattern used by the document editors (notebook, pipeline, dataflow, etc.).
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Permissions dialog state — Azure RBAC role assignments at the container scope.
+  interface PermAssignment { id: string; principalId: string; principalType?: string; roleName?: string }
+  interface PermRole { name: string; id: string }
+  const [permsOpen, setPermsOpen] = useState(false);
+  const [permsRows, setPermsRows] = useState<PermAssignment[]>([]);
+  const [permsRoles, setPermsRoles] = useState<PermRole[]>([]);
+  const [permsBusy, setPermsBusy] = useState(false);
+  const [permsError, setPermsError] = useState<string | null>(null);
+  const [newPrincipalId, setNewPrincipalId] = useState('');
+  const [newPrincipalType, setNewPrincipalType] = useState<'User' | 'Group' | 'ServicePrincipal'>('User');
+  const [newRole, setNewRole] = useState('Storage Blob Data Reader');
+
+  // Settings dialog state — Loom-side lakehouse defaults persisted in
+  // Cosmos `tenant-settings`, consumed by Notebook + Preview editors.
+  interface LakehouseSettings {
+    displayName?: string; description?: string; defaultSparkPool?: string;
+    sparkConfig?: Record<string, string>;
+    timeTravelDays?: number;
+    deltaDefaults?: { autoOptimize?: boolean; tableProperties?: Record<string, string> };
+  }
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState<LakehouseSettings>({});
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSparkConfText, setSettingsSparkConfText] = useState('');
+
+  const loadPerms = useCallback(async () => {
+    if (!activeContainer) return;
+    setPermsBusy(true); setPermsError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/permissions?container=${encodeURIComponent(activeContainer)}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setPermsRows(j.assignments || []);
+      setPermsRoles(j.knownRoles || []);
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [activeContainer]);
+
+  const openPerms = useCallback(() => {
+    setPermsOpen(true);
+    loadPerms();
+  }, [loadPerms]);
+
+  const grantPerm = useCallback(async () => {
+    if (!activeContainer || !newPrincipalId.trim()) return;
+    setPermsBusy(true); setPermsError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/permissions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          container: activeContainer,
+          principalId: newPrincipalId.trim(),
+          principalType: newPrincipalType,
+          role: newRole,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setNewPrincipalId('');
+      await loadPerms();
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [activeContainer, newPrincipalId, newPrincipalType, newRole, loadPerms]);
+
+  const revokePerm = useCallback(async (armId: string) => {
+    setPermsBusy(true); setPermsError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/permissions?id=${encodeURIComponent(armId)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      await loadPerms();
+    } catch (e: any) { setPermsError(e?.message || String(e)); }
+    finally { setPermsBusy(false); }
+  }, [loadPerms]);
+
+  const loadSettings = useCallback(async () => {
+    if (!activeContainer) return;
+    setSettingsBusy(true); setSettingsError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setSettings(j.settings || {});
+      const cfg = j.settings?.sparkConfig || {};
+      setSettingsSparkConfText(Object.entries(cfg).map(([k, v]) => `${k}=${v}`).join('\n'));
+    } catch (e: any) { setSettingsError(e?.message || String(e)); }
+    finally { setSettingsBusy(false); }
+  }, [activeContainer]);
+
+  const openSettings = useCallback(() => {
+    setSettingsOpen(true);
+    loadSettings();
+  }, [loadSettings]);
+
+  const saveSettings = useCallback(async () => {
+    if (!activeContainer) return;
+    setSettingsBusy(true); setSettingsError(null);
+    try {
+      const sparkConfig: Record<string, string> = {};
+      for (const line of settingsSparkConfText.split(/\r?\n/)) {
+        const t = line.trim(); if (!t || t.startsWith('#')) continue;
+        const idx = t.indexOf('=');
+        if (idx > 0) sparkConfig[t.slice(0, idx).trim()] = t.slice(idx + 1).trim();
+      }
+      const r = await fetch(`/api/lakehouse/settings`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          container: activeContainer,
+          displayName: settings.displayName,
+          description: settings.description,
+          defaultSparkPool: settings.defaultSparkPool,
+          sparkConfig,
+          timeTravelDays: settings.timeTravelDays ?? 7,
+          deltaDefaults: settings.deltaDefaults || { autoOptimize: true },
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setSettings(j.settings || settings);
+      setActionStatus(`Lakehouse settings saved at ${new Date().toLocaleTimeString()}`);
+      setSettingsOpen(false);
+    } catch (e: any) { setSettingsError(e?.message || String(e)); }
+    finally { setSettingsBusy(false); }
+  }, [activeContainer, settings, settingsSparkConfText]);
 
   // ---- container load -------------------------------------------------
   useEffect(() => {
@@ -266,11 +394,31 @@ export function LakehouseEditor({ item, id }: Props) {
       fd.set('path', targetPath);
       fd.set('file', file);
       const r = await fetch('/api/lakehouse/upload', { method: 'POST', body: fd });
-      const j = await r.json();
-      if (!r.ok || j.ok === false) {
-        setActionError(j.error || `Upload failed (HTTP ${r.status})`);
+      // Defensive JSON parse — if the gateway / Container App / WAF returns
+      // an HTML error page (5xx, 413, 502), JSON.parse blows up with
+      // "Unexpected token '<'". Sniff the Content-Type first and only call
+      // .json() when the response is actually JSON; otherwise surface the
+      // status + a trimmed text body to the user.
+      const ct = r.headers.get('content-type') || '';
+      let j: any = null;
+      let bodyText: string | null = null;
+      if (ct.includes('application/json')) {
+        try { j = await r.json(); } catch { /* fall through to text */ }
+      }
+      if (!j) {
+        try { bodyText = (await r.text()).slice(0, 240); } catch { /* ignore */ }
+      }
+      if (!r.ok || j?.ok === false) {
+        const msg = j?.error
+          || (r.status === 413 ? `File too large (${file.size.toLocaleString()} bytes). Max 4 GB.`
+          : r.status === 502 ? `Upstream storage error (502). Check ADLS network/role assignments.`
+          : r.status === 401 ? `Sign in expired. Reload and re-authenticate.`
+          : `Upload failed (HTTP ${r.status}).${bodyText ? ` Server said: ${bodyText}` : ''}`);
+        setActionError(msg);
       } else {
-        setActionStatus(`Uploaded ${file.name} at ${new Date().toLocaleTimeString()}`);
+        const fmt = j.sparkFormat;
+        const fmtLabel = fmt?.label ? ` — detected ${fmt.label}` : '';
+        setActionStatus(`Uploaded ${file.name}${fmtLabel} at ${new Date().toLocaleTimeString()}`);
       }
     } catch (e: any) {
       setActionError(e?.message || String(e));
@@ -430,11 +578,11 @@ export function LakehouseEditor({ item, id }: Props) {
         { label: 'Query this file', onClick: hasFile ? () => { if (activePath) { selectFile(activePath); setTab('sql'); } } : undefined, disabled: !hasFile },
       ]},
       { label: 'Manage', actions: [
-        { label: 'Permissions', disabled: true, title: 'ADLS ACL editor BFF not wired (deferred)' },
-        { label: 'Settings', disabled: true, title: 'lakehouse settings BFF not wired (deferred)' },
+        { label: 'Permissions', onClick: activeContainer ? openPerms : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
+        { label: 'Settings', onClick: activeContainer ? openSettings : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
       ]},
     ]},
-  ], [canFileAction, uploading, onUploadClick, onNewFolder, refreshActive, hasFile, activePath, selectFile]);
+  ], [canFileAction, uploading, onUploadClick, onNewFolder, refreshActive, hasFile, activePath, selectFile, activeContainer, openPerms, openSettings]);
 
   // ---- render ---------------------------------------------------------
   return (
@@ -810,6 +958,128 @@ export function LakehouseEditor({ item, id }: Props) {
               </>
             )}
           </div>
+
+          <Dialog open={permsOpen} onOpenChange={(_, d) => setPermsOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '880px', width: '90vw' }}>
+              <DialogBody>
+                <DialogTitle>Permissions — {activeContainer}</DialogTitle>
+                <DialogContent>
+                  <Caption1>
+                    Azure RBAC role assignments scoped to the container. Storage Blob Data
+                    Reader/Contributor/Owner govern data-plane access (read/write/manage).
+                  </Caption1>
+                  {permsBusy && <Spinner size="tiny" label="Calling ARM…" labelPosition="after" />}
+                  {permsError && (
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>RBAC error</MessageBarTitle>{permsError}</MessageBarBody></MessageBar>
+                  )}
+                  <div style={{ overflow: 'auto', margin: '8px 0 12px' }}>
+                    <Table aria-label="Role assignments" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Principal id</TableHeaderCell>
+                        <TableHeaderCell>Type</TableHeaderCell>
+                        <TableHeaderCell>Role</TableHeaderCell>
+                        <TableHeaderCell>Action</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {permsRows.length === 0 && (
+                          <TableRow><TableCell colSpan={4}><Caption1>No Storage Blob Data role assignments at the container scope.</Caption1></TableCell></TableRow>
+                        )}
+                        {permsRows.map((r) => (
+                          <TableRow key={r.id}>
+                            <TableCell><code style={{ fontSize: 11 }}>{r.principalId?.slice(0, 8)}…</code></TableCell>
+                            <TableCell>{r.principalType || '—'}</TableCell>
+                            <TableCell>{r.roleName || '—'}</TableCell>
+                            <TableCell><Button size="small" appearance="subtle" disabled={permsBusy} onClick={() => revokePerm(r.id)}>Revoke</Button></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <Subtitle2>Grant access</Subtitle2>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 2fr', gap: 12, marginTop: 8 }}>
+                    <Field label="Principal object id" required>
+                      <Input value={newPrincipalId} onChange={(_, d) => setNewPrincipalId(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
+                    </Field>
+                    <Field label="Principal type">
+                      <Dropdown
+                        selectedOptions={[newPrincipalType]}
+                        value={newPrincipalType}
+                        onOptionSelect={(_, d) => setNewPrincipalType((d.optionValue as 'User' | 'Group' | 'ServicePrincipal') || 'User')}
+                      >
+                        <Option value="User">User</Option>
+                        <Option value="Group">Group</Option>
+                        <Option value="ServicePrincipal">ServicePrincipal</Option>
+                      </Dropdown>
+                    </Field>
+                    <Field label="Role">
+                      <Dropdown
+                        selectedOptions={[newRole]}
+                        value={newRole}
+                        onOptionSelect={(_, d) => setNewRole(d.optionValue || newRole)}
+                      >
+                        {permsRoles.map((r) => (
+                          <Option key={r.name} value={r.name}>{r.name}</Option>
+                        ))}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setPermsOpen(false)} disabled={permsBusy}>Close</Button>
+                  <Button appearance="primary" onClick={grantPerm} disabled={permsBusy || !newPrincipalId.trim()}>
+                    {permsBusy ? 'Working…' : 'Grant'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          <Dialog open={settingsOpen} onOpenChange={(_, d) => setSettingsOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '720px', width: '90vw' }}>
+              <DialogBody>
+                <DialogTitle>Lakehouse settings — {activeContainer}</DialogTitle>
+                <DialogContent>
+                  {settingsBusy && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
+                  {settingsError && (
+                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Settings error</MessageBarTitle>{settingsError}</MessageBarBody></MessageBar>
+                  )}
+                  <Field label="Display name (override)">
+                    <Input value={settings.displayName || ''} onChange={(_, d) => setSettings((s) => ({ ...s, displayName: d.value }))} />
+                  </Field>
+                  <Field label="Description">
+                    <Textarea value={settings.description || ''} onChange={(_, d) => setSettings((s) => ({ ...s, description: d.value }))} />
+                  </Field>
+                  <Field label="Default Spark pool (Synapse)">
+                    <Input value={settings.defaultSparkPool || ''} onChange={(_, d) => setSettings((s) => ({ ...s, defaultSparkPool: d.value }))} placeholder="loomspark" />
+                  </Field>
+                  <Field label="Time-travel retention (days)">
+                    <Input type="number" min={0} value={String(settings.timeTravelDays ?? 7)} onChange={(_, d) => setSettings((s) => ({ ...s, timeTravelDays: Math.max(0, Number(d.value) || 0) }))} />
+                  </Field>
+                  <Field label="Delta auto-optimize default">
+                    <Switch
+                      checked={settings.deltaDefaults?.autoOptimize ?? true}
+                      onChange={(_, d) => setSettings((s) => ({ ...s, deltaDefaults: { ...(s.deltaDefaults || {}), autoOptimize: d.checked } }))}
+                      label={settings.deltaDefaults?.autoOptimize ?? true ? 'Enabled' : 'Disabled'}
+                    />
+                  </Field>
+                  <Field label="Spark conf (one KEY=VALUE per line)">
+                    <Textarea
+                      rows={6}
+                      value={settingsSparkConfText}
+                      onChange={(_, d) => setSettingsSparkConfText(d.value)}
+                      placeholder="spark.sql.shuffle.partitions=200"
+                    />
+                  </Field>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setSettingsOpen(false)} disabled={settingsBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={saveSettings} disabled={settingsBusy}>
+                    {settingsBusy ? 'Saving…' : 'Save settings'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </>
       }
     />

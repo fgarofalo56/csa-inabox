@@ -10,12 +10,12 @@ import { queryPipelineRuns } from '@/lib/azure/synapse-dev-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   try {
     const res = await queryPipelineRuns({
-      filters: [{ operand: 'PipelineName', operator: 'Equals', values: [ctx.params.id] }],
+      filters: [{ operand: 'PipelineName', operator: 'Equals', values: [(await ctx.params).id] }],
     });
     return NextResponse.json({ ok: true, runs: res.value || [], continuationToken: res.continuationToken });
   } catch (e: any) {

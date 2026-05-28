@@ -11,13 +11,13 @@ import { getActivator, updateActivator, deleteActivator, ActivatorError } from '
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   try {
-    const activator = await getActivator(workspaceId, ctx.params.id);
+    const activator = await getActivator(workspaceId, (await ctx.params).id);
     return NextResponse.json({ ok: true, workspaceId, activator });
   } catch (e: any) {
     const status = e instanceof ActivatorError ? e.status : 502;
@@ -25,14 +25,14 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   const body = await req.json().catch(() => ({}));
   try {
-    const activator = await updateActivator(workspaceId, ctx.params.id, {
+    const activator = await updateActivator(workspaceId, (await ctx.params).id, {
       displayName: body?.displayName ? String(body.displayName) : undefined,
       description: body?.description ? String(body.description) : undefined,
     });
@@ -43,13 +43,13 @@ export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function DELETE(req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   try {
-    await deleteActivator(workspaceId, ctx.params.id);
+    await deleteActivator(workspaceId, (await ctx.params).id);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     const status = e instanceof ActivatorError ? e.status : 502;
