@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 420" role="img" aria-labelledby="t d" preserveAspectRatio="xMidYMid slice">
+  <title id="t">CSA Loom — Reference architecture</title>
+  <desc id="d">Per-layer architecture: storage, compute, catalog, identity, network, console, compliance.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#3d2e80"/>
+      <stop offset="55%" stop-color="#1f6feb"/>
+      <stop offset="100%" stop-color="#d89f3d"/>
+    </linearGradient>
+    <radialGradient id="glow-tr" cx="0.9" cy="0.1" r="0.45" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-bl" cx="0.1" cy="1.1" r="0.5" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#d89f3d" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#d89f3d" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      .h-title { font-family:'IBM Plex Sans','Segoe UI',sans-serif; font-weight:600; font-size:60px; fill:#FFFFFF; letter-spacing:-1.2px; }
+      .h-sub   { font-family:'IBM Plex Sans','Segoe UI',sans-serif; font-weight:400; font-size:22px; fill:#FFFFFF; fill-opacity:0.92; }
+      .h-chip  { font-family:'JetBrains Mono','Consolas',monospace; font-weight:700; font-size:13px; letter-spacing:2.5px; fill:#FFFFFF; }
+      .g-label { font-family:'JetBrains Mono','Consolas',monospace; font-weight:600; font-size:12px; fill:#FFFFFF; letter-spacing:0.4px; }
+      .g-cap   { font-family:'JetBrains Mono','Consolas',monospace; font-weight:500; font-size:10px; fill:#FFFFFF; fill-opacity:0.7; letter-spacing:1.5px; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="420" fill="url(#bg)"/>
+  <rect width="1600" height="420" fill="url(#glow-tr)"/>
+  <rect width="1600" height="420" fill="url(#glow-bl)"/>
+  <rect x="0" y="0" width="6" height="420" fill="#e6b566"/>
+  <rect x="0" y="0" width="6" height="120" fill="#aea0ff"/>
+  <rect x="0" y="418" width="1600" height="2" fill="#aea0ff" fill-opacity="0.30"/>
+
+  <g transform="translate(80, 60)">
+    <rect x="0" y="0" width="200" height="32" fill="#aea0ff" fill-opacity="0.10" stroke="#aea0ff" stroke-opacity="0.55" stroke-width="1"/>
+    <rect x="0" y="0" width="6" height="32" fill="#aea0ff"/>
+    <text class="h-chip" x="110" y="21" text-anchor="middle" fill="#aea0ff">REFERENCE ARCH</text>
+  </g>
+
+  <text class="h-title" x="80" y="200">Reference architecture</text>
+  <text class="h-sub" x="80" y="248">Seven layers, one stack — storage, compute, catalog, identity,</text>
+  <text class="h-sub" x="80" y="278" fill-opacity="0.72">network, console, compliance.</text>
+
+  <g transform="translate(80, 320)">
+    <rect x="0" y="0" width="62" height="20" fill="#e6b566" fill-opacity="0.14" stroke="#e6b566" stroke-opacity="0.45" stroke-width="1"/>
+    <text class="g-cap" x="31" y="14" text-anchor="middle" fill="#e6b566">7 LAYERS</text>
+  </g>
+  <text class="g-cap" x="156" y="334" fill="#ffffff" fill-opacity="0.7">hub-spoke · zero-trust · per-boundary bicepparam</text>
+
+  <!-- Layered stack on the right -->
+  <g transform="translate(900, 70)">
+    <text class="g-cap" x="260" y="-8" text-anchor="middle" fill="#aea0ff">LAYERED STACK</text>
+    <!-- Layer rows -->
+    <g font-family="JetBrains Mono, Consolas, monospace">
+      <!-- 7 - Compliance -->
+      <rect x="0" y="0" width="520" height="38" fill="#aea0ff" fill-opacity="0.12" stroke="#aea0ff" stroke-opacity="0.55"/>
+      <rect x="0" y="0" width="4" height="38" fill="#aea0ff"/>
+      <text class="g-label" x="20" y="24">7 · Compliance</text>
+      <text class="g-cap" x="380" y="24" text-anchor="end">FedRAMP High · IL4 · IL5 v1.1</text>
+      <!-- 6 - Console -->
+      <rect x="0" y="46" width="520" height="38" fill="#aea0ff" fill-opacity="0.12" stroke="#aea0ff" stroke-opacity="0.55"/>
+      <rect x="0" y="46" width="4" height="38" fill="#aea0ff"/>
+      <text class="g-label" x="20" y="70">6 · Console</text>
+      <text class="g-cap" x="380" y="70" text-anchor="end">Next.js 14 · Fluent UI v9 · MSAL BFF</text>
+      <!-- 5 - Network -->
+      <rect x="0" y="92" width="520" height="38" fill="#aea0ff" fill-opacity="0.12" stroke="#aea0ff" stroke-opacity="0.55"/>
+      <rect x="0" y="92" width="4" height="38" fill="#aea0ff"/>
+      <text class="g-label" x="20" y="116">5 · Network</text>
+      <text class="g-cap" x="380" y="116" text-anchor="end">Hub VNet · Bastion · Azure Firewall · 17 PEs</text>
+      <!-- 4 - Identity -->
+      <rect x="0" y="138" width="520" height="38" fill="#aea0ff" fill-opacity="0.12" stroke="#aea0ff" stroke-opacity="0.55"/>
+      <rect x="0" y="138" width="4" height="38" fill="#aea0ff"/>
+      <text class="g-label" x="20" y="162">4 · Identity</text>
+      <text class="g-cap" x="380" y="162" text-anchor="end">Entra ID · 7 UAMIs · Console SP</text>
+      <!-- 3 - Catalog -->
+      <rect x="0" y="184" width="520" height="38" fill="#e6b566" fill-opacity="0.16" stroke="#e6b566" stroke-opacity="0.65"/>
+      <rect x="0" y="184" width="4" height="38" fill="#e6b566"/>
+      <text class="g-label" x="20" y="208">3 · Catalog</text>
+      <text class="g-cap" x="380" y="208" text-anchor="end">Purview · UC · Atlas-on-AKS (IL5)</text>
+      <!-- 2 - Compute -->
+      <rect x="0" y="230" width="520" height="38" fill="#e6b566" fill-opacity="0.16" stroke="#e6b566" stroke-opacity="0.65"/>
+      <rect x="0" y="230" width="4" height="38" fill="#e6b566"/>
+      <text class="g-label" x="20" y="254">2 · Compute</text>
+      <text class="g-cap" x="380" y="254" text-anchor="end">Databricks · Synapse · ADX · Power BI</text>
+      <!-- 1 - Storage -->
+      <rect x="0" y="276" width="520" height="38" fill="#e6b566" fill-opacity="0.16" stroke="#e6b566" stroke-opacity="0.65"/>
+      <rect x="0" y="276" width="4" height="38" fill="#e6b566"/>
+      <text class="g-label" x="20" y="300">1 · Storage</text>
+      <text class="g-cap" x="380" y="300" text-anchor="end">ADLS Gen2 · Delta · OneLake-equiv paths</text>
+    </g>
+  </g>
+
+  <text class="g-cap" x="880" y="396" fill="#FFFFFF" fill-opacity="0.7">BICEP · OPEN-SOURCE · NO PROPRIETARY FORMAT · PORTS 1:1 TO FABRIC</text>
+</svg>

@@ -1500,8 +1500,39 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ spec }),
         });
-        const j = await r.json();
-        if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); return; }
+        // Defensive parse — if the Container App / WAF returns HTML,
+        // surface a useful message instead of throwing 'Unexpected
+        // token <'.
+        const ct = r.headers.get('content-type') || '';
+        const j = ct.includes('application/json') ? await r.json().catch(() => null) : null;
+        if (!j || !j.ok) {
+          const rawErr = j?.error || (await r.text().catch(() => ''))?.slice(0, 240) || `HTTP ${r.status}`;
+          // Specifically remediate the SCIM-entitlement gap. The cluster
+          // editor's most common 403 is the Console UAMI lacking the
+          // allow-cluster-create entitlement (see
+          // platform/fiab/bicep/modules/landing-zone/databricks-scim-bootstrap.bicep
+          // and docs/fiab/runbooks/databricks-cluster-create-permission.md).
+          const looksLikePermDenied =
+            /PERMISSION_DENIED/.test(rawErr) ||
+            /not authorized to create clusters/i.test(rawErr) ||
+            /allow-cluster-create/i.test(rawErr) ||
+            r.status === 403;
+          if (looksLikePermDenied) {
+            setSaveError(
+              "Databricks denied the create-cluster call (PERMISSION_DENIED). " +
+              "The Loom Console UAMI was registered in the workspace without the " +
+              "`allow-cluster-create` entitlement. Fix: re-run the SCIM bootstrap " +
+              "deploymentScript via `azd up` (idempotent, takes ~2 min) — it now " +
+              "PATCHes existing service principals with the full entitlement set " +
+              "(workspace-access, databricks-sql-access, allow-cluster-create, " +
+              "allow-instance-pool-create). Runbook: docs/fiab/runbooks/" +
+              "databricks-cluster-create-permission.md"
+            );
+          } else {
+            setSaveError(rawErr);
+          }
+          return;
+        }
         setSaveMessage(`Created cluster ${j.cluster_id} at ${new Date().toLocaleTimeString()}`);
         await loadClusters();
         setClusterId(j.cluster_id);
