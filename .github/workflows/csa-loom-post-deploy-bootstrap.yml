@@ -154,6 +154,21 @@ jobs:
             --scope "/subscriptions/$SUB/resourceGroups/$ADMIN_RG" \
             -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
 
+      - name: Grant Console UAMI Microsoft Graph roles (Directory.Read.All + User.Read.All)
+        # Unblocks /admin/users displayName + department + license
+        # enrichment so the page shows real Entra identity data instead of
+        # falling back to UPN-only Cosmos activity. Idempotent — only POSTs
+        # the assignment when it isn't already present.
+        run: |
+          export LOOM_UAMI_OBJECT_ID=$CONSOLE_UAMI_PRINCIPAL
+          export AZURE_TENANT_ID=$(az account show --query tenantId -o tsv)
+          # Pull optional extra roles from repo variable so adminstrators
+          # can extend the set without re-coding the workflow.
+          if [ -n "${{ vars.LOOM_GRAPH_EXTRA_ROLES }}" ]; then
+            export LOOM_GRAPH_EXTRA_ROLES="${{ vars.LOOM_GRAPH_EXTRA_ROLES }}"
+          fi
+          bash scripts/csa-loom/grant-uami-graph-roles.sh
+
       - name: Grant Console UAMI AzureML Data Scientist on Foundry workspace (unblocks Foundry editors)
         run: |
           FOUNDRY_WS=$(az resource list -g $ADMIN_RG --resource-type Microsoft.MachineLearningServices/workspaces --query "[0].id" -o tsv)
