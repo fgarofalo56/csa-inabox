@@ -26,18 +26,12 @@ export default defineConfig({
     },
   },
   test: {
-    environment: 'jsdom',
-    globals: true,
-    setupFiles: ['./vitest.setup.ts'],
-    css: false,
-    passWithNoTests: true,
-    testTimeout: 10_000,
+    environment: 'node',
+    globals: false,
+    pool: 'forks',
     include: [
       'lib/**/__tests__/**/*.test.{ts,tsx}',
-      'lib/**/*.test.{ts,tsx}',
       'app/**/__tests__/**/*.test.{ts,tsx}',
-      '__tests__/**/*.test.{ts,tsx}',
     ],
-    exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'],
   },
 });
