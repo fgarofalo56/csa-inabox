@@ -11,10 +11,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
-  Spinner, Badge, makeStyles, tokens,
+  Spinner, Badge, Button, Dropdown, Option, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  History20Regular, Comment20Regular, Share20Regular,
+  History20Regular, Comment20Regular, Share20Regular, ArrowSync20Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 
@@ -75,22 +75,41 @@ const useStyles = makeStyles({
   },
 });
 
+type RangeKey = '24h' | '7d' | '30d' | 'all';
+const RANGE_MS: Record<RangeKey, number | null> = {
+  '24h': 86_400_000,
+  '7d': 7 * 86_400_000,
+  '30d': 30 * 86_400_000,
+  all: null,
+};
+
 export function ActivityFeedPane({ showStats = true }: { showStats?: boolean }) {
   const styles = useStyles();
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [unauth, setUnauth] = useState(false);
+  const [tick, setTick] = useState(0);
+  const [range, setRange] = useState<RangeKey>('all');
 
   useEffect(() => {
+    setEntries(null);
     fetch('/api/activity?n=50').then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); setEntries([]); return null; }
       return r.json();
     }).then(d => {
       if (d) setEntries(Array.isArray(d?.entries) ? d.entries : []);
     }).catch(() => setEntries([]));
-  }, []);
+  }, [tick]);
+
+  const filtered = useMemo(() => {
+    const e = entries ?? [];
+    const ms = RANGE_MS[range];
+    if (ms == null) return e;
+    const cutoff = Date.now() - ms;
+    return e.filter(x => new Date(x.at).getTime() >= cutoff);
+  }, [entries, range]);
 
   const stats = useMemo(() => {
-    const e = entries ?? [];
+    const e = filtered;
     const last24h = e.filter(x => Date.now() - new Date(x.at).getTime() < 86_400_000).length;
     const uniqueActors = new Set(e.map(x => x.who?.toLowerCase()).filter(Boolean)).size;
     return [
@@ -98,13 +117,33 @@ export function ActivityFeedPane({ showStats = true }: { showStats?: boolean }) 
       { label: 'In last 24 h', value: String(last24h), hint: 'Touch frequency' },
       { label: 'Active users', value: String(uniqueActors), hint: 'Distinct UPNs in feed' },
     ];
-  }, [entries]);
+  }, [filtered]);
 
   if (entries === null) return <Spinner label="Loading activity…" />;
 
   return (
     <>
       {unauth && <SignInRequired subject="activity" />}
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+        <Button
+          appearance="primary"
+          icon={<ArrowSync20Regular />}
+          onClick={() => setTick(t => t + 1)}
+        >
+          Refresh
+        </Button>
+        <Dropdown
+          aria-label="Time range"
+          value={range === '24h' ? 'Last 24 hours' : range === '7d' ? 'Last 7 days' : range === '30d' ? 'Last 30 days' : 'All time'}
+          selectedOptions={[range]}
+          onOptionSelect={(_, d) => d.optionValue && setRange(d.optionValue as RangeKey)}
+        >
+          <Option value="24h">Last 24 hours</Option>
+          <Option value="7d">Last 7 days</Option>
+          <Option value="30d">Last 30 days</Option>
+          <Option value="all">All time</Option>
+        </Dropdown>
+      </div>
       {showStats && (
         <div className={styles.stats}>
           {stats.map(s => (
@@ -117,14 +156,14 @@ export function ActivityFeedPane({ showStats = true }: { showStats?: boolean }) 
         </div>
       )}
       <div className={styles.sectionTitle}>Recent activity</div>
-      {entries.length === 0 ? (
+      {filtered.length === 0 ? (
         <div className={styles.empty}>
           No activity yet. As items are created, commented on, audited, or shared,
           they'll appear here in real time.
         </div>
       ) : (
         <div className={styles.list}>
-          {entries.map((e, i) => {
+          {filtered.map((e, i) => {
             const Icon = e.kind === 'comment' ? Comment20Regular
               : e.kind === 'share' ? Share20Regular
               : History20Regular;
