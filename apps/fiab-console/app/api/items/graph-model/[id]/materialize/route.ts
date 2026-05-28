@@ -38,7 +38,7 @@ function buildCreate(table: string, columns: { name: string; type: string }[]): 
   return `.create-merge table ${safeIdent(table)} (${cols})`;
 }
 
-export async function POST(req: NextRequest, _ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));

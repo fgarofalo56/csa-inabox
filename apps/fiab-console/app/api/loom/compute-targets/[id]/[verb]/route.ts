@@ -20,7 +20,11 @@ import { getSession } from '@/lib/auth/session';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(_req: NextRequest, { params }: { params: { id: string; verb: string } }) {
+export async function POST(
+  _req: NextRequest,
+  props: { params: Promise<{ id: string; verb: string }> }
+) {
+  const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 

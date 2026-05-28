@@ -16,7 +16,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import {
   Spinner, makeStyles, tokens, Badge, Button, Caption1, Subtitle2, Body1,
 } from '@fluentui/react-components';
@@ -221,11 +220,15 @@ export default function WorkloadHubPage() {
                 Compliance, Geoanalytics, Graph + Vector, and other optional accelerators ship with Loom but stay opt-in until you enable them.
               </Body1>
             </div>
-            <Link href="/workloads" passHref legacyBehavior>
-              <Button appearance="primary" icon={<ArrowRight24Regular />} iconPosition="after">
-                Browse all workloads
-              </Button>
-            </Link>
+            <Button
+              as="a"
+              href="/workloads"
+              appearance="primary"
+              icon={<ArrowRight24Regular />}
+              iconPosition="after"
+            >
+              Browse all workloads
+            </Button>
           </div>
         </div>
       )}

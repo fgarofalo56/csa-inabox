@@ -15,7 +15,7 @@ import { CURATED_TEMPLATES } from '@/lib/catalog/data-product-templates';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const body = await req.json().catch(() => ({}));
@@ -24,7 +24,8 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   if (!workspaceId || !displayName) {
     return NextResponse.json({ ok: false, error: 'workspaceId and displayName are required' }, { status: 400 });
   }
-  const template = CURATED_TEMPLATES.find((t) => t.slug === ctx.params.id);
+  const { id: templateSlug } = await ctx.params;
+  const template = CURATED_TEMPLATES.find((t) => t.slug === templateSlug);
   if (!template) return NextResponse.json({ ok: false, error: 'template not found' }, { status: 404 });
 
   // Materialize each component as a child item.

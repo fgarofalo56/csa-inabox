@@ -1,4 +1,5 @@
-'use client';
+'use client';;
+import { use } from "react";
 
 /**
  * Per-item-type editor route. Dispatches to a rich editor from the
@@ -31,10 +32,11 @@ const GENERIC_RIBBON: RibbonTab[] = [
 ];
 
 interface Props {
-  params: { type: string; id: string };
+  params: Promise<{ type: string; id: string }>;
 }
 
-export default function ItemEditorPage({ params }: Props) {
+export default function ItemEditorPage(props: Props) {
+  const params = use(props.params);
   const { type, id } = params;
   const item = findItemType(type);
   if (!item) notFound();
