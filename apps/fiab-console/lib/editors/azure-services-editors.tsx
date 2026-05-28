@@ -26,7 +26,8 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
-import { PipelineDagView, extractActivities, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
+import { extractActivities, writeActivitiesToSpec, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
+import { PipelineDesigner } from '@/lib/components/pipeline/pipeline-designer';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -825,10 +826,9 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
             </TabList>
           </div>
           {tab === 'graph' && (
-            <PipelineDagView
-              activities={activities}
-              onActivityAdd={addActivity}
-              emptyHint="No activities yet. Click a palette button above to add one — or switch to the Spec (JSON) tab to author by hand."
+            <PipelineDesigner
+              activities={activities as any}
+              onActivitiesChange={(next) => setSpec((prev) => writeActivitiesToSpec(prev || '{"properties":{}}', next as any))}
             />
           )}
           {tab === 'json' && (
@@ -1330,10 +1330,9 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
             </TabList>
           </div>
           {tab === 'graph' && (
-            <PipelineDagView
-              activities={extractActivities(spec)}
-              onActivityAdd={addActivity}
-              emptyHint="No activities in this pipeline yet. Click a palette button above to add one — or switch to the Spec (JSON) tab to author by hand."
+            <PipelineDesigner
+              activities={extractActivities(spec) as any}
+              onActivitiesChange={(next) => setSpec((prev) => writeActivitiesToSpec(prev || '{"properties":{}}', next as any))}
             />
           )}
           {tab === 'json' && (

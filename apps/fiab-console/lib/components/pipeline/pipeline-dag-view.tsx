@@ -487,3 +487,19 @@ export function extractActivities(specJson: string): PipelineActivity[] {
     return Array.isArray(a) ? a as PipelineActivity[] : [];
   } catch { return []; }
 }
+
+/**
+ * Re-serialize a spec JSON string with a replacement activities[] array,
+ * preserving every other property of the pipeline definition. If the current
+ * spec text is not valid JSON we synthesize a minimal valid pipeline so the
+ * visual designer can still drive Save (the user can then refine in the JSON
+ * tab). Returns pretty-printed JSON.
+ */
+export function writeActivitiesToSpec(specJson: string, activities: PipelineActivity[]): string {
+  let parsed: any;
+  try { parsed = JSON.parse(specJson); } catch { parsed = null; }
+  if (!parsed || typeof parsed !== 'object') parsed = { properties: {} };
+  if (!parsed.properties || typeof parsed.properties !== 'object') parsed.properties = {};
+  parsed.properties.activities = activities;
+  return JSON.stringify(parsed, null, 2);
+}
