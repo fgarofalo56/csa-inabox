@@ -21,6 +21,18 @@ const nextConfig = {
   async headers() {
     return [
       {
+        // Cache-revalidate dynamic HTML so Front Door doesn't serve year-old
+        // shells to browsers after a fresh image roll. Without this override the
+        // default `cache-control: s-maxage=31536000` made FD keep 1-year-old
+        // HTML, and even with the ETag handshake some browsers would render
+        // stale shells, masking new editor features after every deploy.
+        // _next/static + /api/* are exempted (hashed assets / per-request JSON).
+        source: '/((?!_next/static|_next/image|api|brand|favicon).*)',
+        headers: [
+          { key: 'Cache-Control', value: 'private, no-cache, no-store, must-revalidate' },
+        ],
+      },
+      {
         source: '/(.*)',
         headers: [
           { key: 'X-Frame-Options', value: 'DENY' },
