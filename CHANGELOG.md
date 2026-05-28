@@ -10,6 +10,19 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.15.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.14.1...csa-inabox-v0.15.0) (2026-05-28)
+
+
+### Features
+
+* **csa-loom:** no-cuts sweep — restore every deferred feature across editors + admin + infra ([#380](https://github.com/fgarofalo56/csa-inabox/issues/380)) ([e076e97](https://github.com/fgarofalo56/csa-inabox/commit/e076e97ff798bd0b4e2c79e0d34ecdfdd50c95ab))
+* **csa-loom:** Unified Catalog — Purview + Unity Catalog + OneLake federation with cross-source ops ([#376](https://github.com/fgarofalo56/csa-inabox/issues/376)) ([49b1ed8](https://github.com/fgarofalo56/csa-inabox/commit/49b1ed8064e7ac53f88e7f035891e8c50a780c7a))
+
+
+### Tests
+
+* **csa-loom:** Vitest contract tests across all 90 editors — bump everything to A-grade ([#418](https://github.com/fgarofalo56/csa-inabox/issues/418)) ([db7b9d7](https://github.com/fgarofalo56/csa-inabox/commit/db7b9d77af1dd5ca9416e7efe230daaac3ee22d5))
+
 ## [0.14.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.14.0...csa-inabox-v0.14.1) (2026-05-28)
 
 
