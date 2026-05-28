@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
+import { applyWorkspaceBindings } from '@/lib/azure/workspace-bindings';
 import type { Workspace } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -77,8 +78,34 @@ export async function POST(req: NextRequest) {
   try {
     const c = await workspacesContainer();
     const { resource } = await c.items.create<Workspace>(ws);
-    if (resource) void upsertLoomDoc(docForWorkspace(resource));
-    return NextResponse.json(resource, { status: 201 });
+    if (!resource) {
+      return err('Cosmos returned no resource on create', 500, 'cosmos_no_resource');
+    }
+    // Best-effort side-effects: assign-to-capacity + Purview register +
+    // marketplace publish. Never blocks the create — outcome captured
+    // into status fields on the workspace doc and replaced.
+    let merged: Workspace = resource;
+    if (capacity || domain) {
+      try {
+        const bindings = await applyWorkspaceBindings(resource);
+        merged = {
+          ...resource,
+          ...(bindings.capacityAssignment ? { capacityAssignment: bindings.capacityAssignment } : {}),
+          ...(bindings.domainRegistration ? { domainRegistration: bindings.domainRegistration } : {}),
+          updatedAt: new Date().toISOString(),
+        };
+        try {
+          await c.item(merged.id, merged.tenantId).replace(merged);
+        } catch {
+          // Race / partition issue — keep the original resource; the UI will
+          // re-fetch and show the next state.
+        }
+      } catch {
+        // applyWorkspaceBindings should never throw, but fail-safe.
+      }
+    }
+    void upsertLoomDoc(docForWorkspace(merged));
+    return NextResponse.json(merged, { status: 201 });
   } catch (e: any) {
     return err(e?.message || 'Failed to create workspace', 500, 'cosmos_error');
   }
