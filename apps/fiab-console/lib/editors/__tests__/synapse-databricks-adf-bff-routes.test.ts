@@ -23,7 +23,7 @@ const REQUIRED_ROUTES: Record<string, string[]> = {
   'synapse-serverless-sql-pool': ['[id]/query', '[id]/schema'],
   'synapse-spark-pool':          ['list', '[id]', '[id]/submit', '[id]/runs'],
   'synapse-pipeline':            ['list', '[id]', '[id]/run', '[id]/runs'],
-  'databricks-notebook':         ['list', '[id]', '[id]/run', '[id]/runs'],
+  'databricks-notebook':         ['list', '[id]', '[id]/run', '[id]/runs', '[id]/command', '[id]/context'],
   'databricks-job':              ['', '[id]', '[id]/run', '[id]/runs'],
   'databricks-cluster':          ['', '[id]', '[id]/state', '[id]/events'],
   'databricks-sql-warehouse':    ['[id]/query', '[id]/schema', '[id]/state', '[id]/warehouses'],

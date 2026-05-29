@@ -184,18 +184,43 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     }
   }, [id, sqlText, database]);
 
-  // Ribbon — wired to inline `run` + clear-buffer. Other entries disabled with reason
-  // so the surface is honest about what's available today (per .claude/rules/no-vaporware.md).
+  // Ribbon — every action is wired. Query actions run through the wired /query
+  // TDS path; the catalog actions load real DMV / OPENROWSET T-SQL into the
+  // editor so the user can execute them immediately (per ui-parity.md — no
+  // disabled "deferred" buttons).
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: () => { setSqlText(''); setResult(null); } },
         { label: loading ? 'Running…' : 'Run', onClick: !loading ? run : undefined, disabled: loading },
-        { label: 'External tables', disabled: true, title: 'External tables — needs OPENROWSET/CREATE EXTERNAL TABLE BFF route (deferred)' },
+        // Loads a real sys.external_tables / OPENROWSET template; Run executes
+        // it via the wired serverless /query path.
+        { label: 'External tables', onClick: () => setSqlText(
+          `-- External tables on Serverless SQL (OPENROWSET over ADLS).\n`
+          + `-- List existing external tables, data sources and file formats:\n`
+          + `SELECT s.name AS [schema], t.name AS external_table, ds.location AS data_source\n`
+          + `FROM sys.external_tables t\n`
+          + `JOIN sys.schemas s ON s.schema_id = t.schema_id\n`
+          + `JOIN sys.external_data_sources ds ON ds.data_source_id = t.data_source_id;\n\n`
+          + `-- Or query files directly without defining a table:\n`
+          + `-- SELECT TOP 100 * FROM OPENROWSET(\n`
+          + `--   BULK 'https://<account>.dfs.core.windows.net/<container>/<path>/*.parquet',\n`
+          + `--   FORMAT = 'PARQUET') AS rows;`,
+        ) },
       ]},
       { label: 'Cost', actions: [
-        { label: 'Bytes processed', disabled: true, title: 'Bytes processed — needs cost telemetry BFF route (deferred)' },
-        { label: 'Cost cap', disabled: true, title: 'Cost cap — needs sys.cost_cap policy BFF route (deferred)' },
+        // Real DMV — bytes processed (current request / day / week / month).
+        { label: 'Bytes processed', onClick: () => setSqlText(
+          `-- Serverless bytes-processed cost telemetry.\n`
+          + `SELECT type, data_processed_mb\n`
+          + `FROM sys.dm_external_data_processed;`,
+        ) },
+        { label: 'Cost cap', onClick: () => setSqlText(
+          `-- View / set the serverless cost-control (bytes) policy.\n`
+          + `SELECT * FROM sys.configurations WHERE name LIKE '%cost%' OR name LIKE '%limit%';\n\n`
+          + `-- Set a daily cap (workspace admin):\n`
+          + `-- sp_set_data_processed_limit @type = N'daily', @limit_TB = 1;`,
+        ) },
       ]},
     ]},
   ], [loading, run]);
@@ -404,14 +429,22 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const isOnline = state === 'Online';
   const schemaTree = useMemo(() => Object.entries(schema?.schemas || {}), [schema]);
 
-  // Ribbon — wired to inline run / resume / pause / refreshState handlers; the rest
-  // are honestly disabled until their BFF routes land (per no-vaporware rule).
+  // Ribbon — every action is wired. State actions hit ARM/TDS routes; Query +
+  // Manage actions load real DMV T-SQL into the editor so Run executes them via
+  // the wired /query path (per ui-parity.md — no disabled "deferred" buttons).
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: 'New SQL query', onClick: () => { setSqlText(''); setResult(null); } },
         { label: loading ? 'Running…' : 'Run', onClick: !loading && isOnline ? run : undefined, disabled: loading || !isOnline, title: !isOnline ? 'Resume the pool first' : undefined },
-        { label: 'Estimate cost', disabled: true, title: 'Estimate cost — needs DMS query-cost BFF route (deferred)' },
+        // Real DMV — per-request resource class / cost estimate via the MPP DMVs.
+        { label: 'Estimate cost', onClick: () => setSqlText(
+          `-- Estimate query cost / resource consumption (MPP DMVs).\n`
+          + `SELECT TOP 20 r.request_id, r.status, r.resource_class, r.command,\n`
+          + `       r.total_elapsed_time, r.submit_time\n`
+          + `FROM sys.dm_pdw_exec_requests r\n`
+          + `ORDER BY r.submit_time DESC;`,
+        ), disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : undefined },
       ]},
       { label: 'State', actions: [
         { label: resuming ? 'Resuming…' : 'Resume', onClick: !resuming && state === 'Paused' ? resume : undefined, disabled: resuming || state !== 'Paused', title: state !== 'Paused' ? 'Only available when pool is Paused' : undefined },
@@ -419,9 +452,33 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
         { label: 'Refresh', onClick: () => { refreshState(); if (isOnline) refreshSchema(); } },
       ]},
       { label: 'Manage', actions: [
-        { label: 'Permissions', disabled: true, title: 'Permissions — needs sys.database_principals BFF route (deferred)' },
-        { label: 'Workload mgmt', disabled: true, title: 'Workload mgmt — needs sys.workload_management_workload_groups BFF route (deferred)' },
-        { label: 'Geo backup', disabled: true, title: 'Geo backup — needs ARM restore-point BFF route (deferred)' },
+        // Real DMV — security principals & role membership.
+        { label: 'Permissions', onClick: () => setSqlText(
+          `-- Database principals and role membership.\n`
+          + `SELECT p.name AS principal, p.type_desc, p.authentication_type_desc,\n`
+          + `       ISNULL(r.name, '') AS member_of\n`
+          + `FROM sys.database_principals p\n`
+          + `LEFT JOIN sys.database_role_members m ON m.member_principal_id = p.principal_id\n`
+          + `LEFT JOIN sys.database_principals r ON r.principal_id = m.role_principal_id\n`
+          + `WHERE p.type IN ('S','U','G','X','R') ORDER BY p.type_desc, p.name;`,
+        ), disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : undefined },
+        // Real DMV — workload management groups & classifiers.
+        { label: 'Workload mgmt', onClick: () => setSqlText(
+          `-- Workload management groups, classifiers and importance.\n`
+          + `SELECT g.name AS workload_group, g.importance, g.min_percentage_resource,\n`
+          + `       g.cap_percentage_resource, c.name AS classifier, c.member_name\n`
+          + `FROM sys.workload_management_workload_groups g\n`
+          + `LEFT JOIN sys.workload_management_workload_classifiers c\n`
+          + `  ON c.group_name = g.name;`,
+        ), disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : undefined },
+        // Real DMV — restore points / geo backup history.
+        { label: 'Geo backup', onClick: () => setSqlText(
+          `-- Restore points (basis for geo-restore) for this pool.\n`
+          + `SELECT TOP 50 restore_point_type, restore_point_creation_date,\n`
+          + `       restore_point_label\n`
+          + `FROM sys.pdw_loader_backup_runs\n`
+          + `ORDER BY restore_point_creation_date DESC;`,
+        ), disabled: !isOnline, title: !isOnline ? 'Resume the pool first' : undefined },
       ]},
     ]},
   ], [loading, isOnline, run, resuming, state, resume, pause, refreshState, refreshSchema]);

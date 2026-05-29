@@ -14,7 +14,24 @@
 
 import type { PipelineActivity } from './types';
 
-export type ActivityCategory = 'move-transform' | 'activities';
+/**
+ * Palette groups — match the Fabric / ADF "Activities" sidebar exactly:
+ *   - Move & transform : Copy data, Dataflow Gen2, Mapping data flow, Lookup,
+ *                        Get metadata, Delete
+ *   - Orchestration    : Notebook, Spark job def, Execute pipeline, Script,
+ *                        Stored procedure
+ *   - Control flow     : ForEach, If condition, Switch, Until, Wait,
+ *                        Set/Append variable, Filter, Web, Webhook, Fail,
+ *                        Validation, Office 365 Outlook
+ */
+export type ActivityCategory = 'move-transform' | 'orchestration' | 'control-flow';
+
+/** Fabric/ADF palette group display order + labels. */
+export const ACTIVITY_CATEGORY_ORDER: Array<{ id: ActivityCategory; label: string }> = [
+  { id: 'move-transform', label: 'Move & transform' },
+  { id: 'orchestration',  label: 'Orchestration' },
+  { id: 'control-flow',   label: 'Control flow' },
+];
 
 export interface ActivityTypeDef {
   /** Stable key shown in the palette. */
@@ -102,12 +119,39 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
       },
     }),
   },
+  {
+    key: 'GetMetadata', label: 'Get metadata',
+    description: 'Retrieve metadata (existence, size, item count, structure) of a dataset.',
+    category: 'move-transform', type: 'GetMetadata', namePrefix: 'GetMetadata',
+    color: '#5c2d91', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'GetMetadata', dependsOn: [],
+      typeProperties: {
+        dataset: { referenceName: '', type: 'DatasetReference' },
+        fieldList: ['exists', 'itemName', 'lastModified'],
+      },
+    }),
+  },
+  {
+    key: 'Delete', label: 'Delete data',
+    description: 'Delete files or folders from a store after processing.',
+    category: 'move-transform', type: 'Delete', namePrefix: 'Delete',
+    color: '#a4262c', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'Delete', dependsOn: [],
+      typeProperties: {
+        dataset: { referenceName: '', type: 'DatasetReference' },
+        enableLogging: false,
+        recursive: true,
+      },
+    }),
+  },
 
-  // ============ Activities ============
+  // ============ Orchestration ============
   {
     key: 'Notebook', label: 'Notebook',
     description: 'Run a Fabric / Synapse / Databricks notebook.',
-    category: 'activities', type: 'DatabricksNotebook', namePrefix: 'Notebook',
+    category: 'orchestration', type: 'DatabricksNotebook', namePrefix: 'Notebook',
     color: '#0078d4', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'DatabricksNotebook', dependsOn: [],
@@ -118,7 +162,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   {
     key: 'SparkJob', label: 'Spark Job Definition',
     description: 'Run a Synapse Spark batch job (JAR or .py).',
-    category: 'activities', type: 'SynapseSparkJobDefinitionActivity', namePrefix: 'SparkJob',
+    category: 'orchestration', type: 'SynapseSparkJobDefinitionActivity', namePrefix: 'SparkJob',
     color: '#0a4f7a', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'SynapseSparkJobDefinitionActivity', dependsOn: [],
@@ -128,9 +172,23 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     }),
   },
   {
+    key: 'ExecutePipeline', label: 'Invoke pipeline',
+    description: 'Invoke another pipeline from this one (Execute Pipeline activity).',
+    category: 'orchestration', type: 'ExecutePipeline', namePrefix: 'InvokePipeline',
+    color: '#0078d4', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'ExecutePipeline', dependsOn: [],
+      typeProperties: {
+        pipeline: { referenceName: '', type: 'PipelineReference' },
+        waitOnCompletion: true,
+        parameters: {},
+      },
+    }),
+  },
+  {
     key: 'Script', label: 'Script',
     description: 'Run inline SQL / Hive / Pig / U-SQL against a linked service.',
-    category: 'activities', type: 'Script', namePrefix: 'Script',
+    category: 'orchestration', type: 'Script', namePrefix: 'Script',
     color: '#3aaaaa', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'Script', dependsOn: [],
@@ -146,7 +204,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   {
     key: 'StoredProcedure', label: 'Stored procedure',
     description: 'Invoke a SQL stored procedure against a linked SQL server.',
-    category: 'activities', type: 'SqlServerStoredProcedure', namePrefix: 'StoredProc',
+    category: 'orchestration', type: 'SqlServerStoredProcedure', namePrefix: 'StoredProc',
     color: '#3aaaaa', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'SqlServerStoredProcedure', dependsOn: [],
@@ -154,10 +212,12 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
       linkedServiceName: { referenceName: '', type: 'LinkedServiceReference' },
     }),
   },
+
+  // ============ Control flow ============
   {
     key: 'Web', label: 'Web',
     description: 'Invoke a custom REST endpoint (GET/POST/PUT/DELETE).',
-    category: 'activities', type: 'WebActivity', namePrefix: 'Web',
+    category: 'control-flow', type: 'WebActivity', namePrefix: 'Web',
     color: '#107c10', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'WebActivity', dependsOn: [],
@@ -165,9 +225,43 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     }),
   },
   {
+    key: 'Webhook', label: 'Webhook',
+    description: 'Call an endpoint and pause until a callback URI signals completion.',
+    category: 'control-flow', type: 'WebHook', namePrefix: 'Webhook',
+    color: '#107c10', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'WebHook', dependsOn: [],
+      typeProperties: { url: 'https://example.com/hook', method: 'POST', timeout: '00:10:00', headers: {} },
+    }),
+  },
+  {
+    key: 'Fail', label: 'Fail',
+    description: 'Stop the pipeline with a custom error message and error code.',
+    category: 'control-flow', type: 'Fail', namePrefix: 'Fail',
+    color: '#a4262c', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'Fail', dependsOn: [],
+      typeProperties: { message: 'Pipeline failed.', errorCode: '1' },
+    }),
+  },
+  {
+    key: 'Validation', label: 'Validation',
+    description: 'Wait until a dataset exists / meets a condition before continuing.',
+    category: 'control-flow', type: 'Validation', namePrefix: 'Validation',
+    color: '#bd7800', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'Validation', dependsOn: [],
+      typeProperties: {
+        dataset: { referenceName: '', type: 'DatasetReference' },
+        timeout: '7.00:00:00',
+        sleep: 10,
+      },
+    }),
+  },
+  {
     key: 'Office365Outlook', label: 'Office 365 Outlook',
     description: 'Send an email via an Office 365 connection.',
-    category: 'activities', type: 'Office365OutlookSendEmail', namePrefix: 'Email',
+    category: 'control-flow', type: 'Office365OutlookSendEmail', namePrefix: 'Email',
     color: '#0062ad', fg: '#fff', runnable: false,
     remediation: 'Office 365 Outlook send-email is a Fabric pipeline activity. ADF backing has no native equivalent — use Web activity against Microsoft Graph instead.',
     build: (name) => ({
@@ -178,7 +272,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   {
     key: 'SetVariable', label: 'Set variable',
     description: 'Set a pipeline-scoped variable.',
-    category: 'activities', type: 'SetVariable', namePrefix: 'SetVar',
+    category: 'control-flow', type: 'SetVariable', namePrefix: 'SetVar',
     color: '#444', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'SetVariable', dependsOn: [],
@@ -188,7 +282,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   {
     key: 'AppendVariable', label: 'Append variable',
     description: 'Append a value to a pipeline array variable.',
-    category: 'activities', type: 'AppendVariable', namePrefix: 'AppendVar',
+    category: 'control-flow', type: 'AppendVariable', namePrefix: 'AppendVar',
     color: '#444', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'AppendVariable', dependsOn: [],
@@ -198,7 +292,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   {
     key: 'Filter', label: 'Filter',
     description: 'Apply a filter expression to an input array.',
-    category: 'activities', type: 'Filter', namePrefix: 'Filter',
+    category: 'control-flow', type: 'Filter', namePrefix: 'Filter',
     color: '#bd7800', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'Filter', dependsOn: [],
@@ -211,7 +305,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   {
     key: 'ForEach', label: 'ForEach',
     description: 'Iterate over an array, running child activities for each item.',
-    category: 'activities', type: 'ForEach', namePrefix: 'ForEach',
+    category: 'control-flow', type: 'ForEach', namePrefix: 'ForEach',
     color: '#dca900', fg: '#000', runnable: true,
     build: (name) => ({
       name, type: 'ForEach', dependsOn: [],
@@ -226,7 +320,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   {
     key: 'IfCondition', label: 'If condition',
     description: 'Branch the pipeline on a boolean expression.',
-    category: 'activities', type: 'IfCondition', namePrefix: 'If',
+    category: 'control-flow', type: 'IfCondition', namePrefix: 'If',
     color: '#bd7800', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'IfCondition', dependsOn: [],
@@ -240,7 +334,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   {
     key: 'Switch', label: 'Switch',
     description: 'Branch the pipeline to one of N cases.',
-    category: 'activities', type: 'Switch', namePrefix: 'Switch',
+    category: 'control-flow', type: 'Switch', namePrefix: 'Switch',
     color: '#bd7800', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'Switch', dependsOn: [],
@@ -254,7 +348,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   {
     key: 'Until', label: 'Until',
     description: 'Loop until an expression evaluates true.',
-    category: 'activities', type: 'Until', namePrefix: 'Until',
+    category: 'control-flow', type: 'Until', namePrefix: 'Until',
     color: '#bd7800', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'Until', dependsOn: [],
@@ -268,7 +362,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   {
     key: 'Wait', label: 'Wait',
     description: 'Pause for a fixed number of seconds.',
-    category: 'activities', type: 'Wait', namePrefix: 'Wait',
+    category: 'control-flow', type: 'Wait', namePrefix: 'Wait',
     color: '#666', fg: '#fff', runnable: true,
     build: (name) => ({
       name, type: 'Wait', dependsOn: [],

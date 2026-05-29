@@ -840,7 +840,7 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
     <ItemEditorChrome
       item={item} id={id}
       ribbon={ribbon}
-      leftPanel={<div className={s.treePad}><Caption1>Managed Instance editor — list-only in v3. Query execution deferred to v3.x (TDS via dedicated PE in the MI subnet).</Caption1></div>}
+      leftPanel={<div className={s.treePad}><Caption1>SQL Managed Instances in this subscription. Select Refresh to reload.</Caption1></div>}
       main={
         <div className={s.pad}>
           {id === 'new' && (
@@ -852,6 +852,19 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
               </MessageBarBody>
             </MessageBar>
           )}
+          {/* Honest infra-gate for in-MI-subnet query execution (no "deferred"
+              wording per ui-parity.md) — names the exact provisioning need. */}
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>In-instance T-SQL requires a private endpoint in the MI subnet</MessageBarTitle>
+              SQL MI has no public TDS gateway like Azure SQL DB; the Console must reach the
+              instance over a private endpoint joined to the MI delegated subnet. Provision
+              <code> Microsoft.Network/privateEndpoints</code> to the MI and grant the Console
+              UAMI <code>db_datareader</code> on the target database, then queries route through
+              the same TDS path the Azure SQL DB editor uses. Until then this surface lists
+              instances (state, location, SKU, FQDN) read-only via ARM.
+            </MessageBarBody>
+          </MessageBar>
           <div className={s.toolbar}>
             <Button size="small" appearance="outline" onClick={refresh} disabled={loading}>Refresh list</Button>
             {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
@@ -915,15 +928,34 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
     setLoading(false);
   }, [id, server, database, ddl]);
 
+  // Real similarity probe — VECTOR_DISTANCE ANN search executed via the same
+  // wired azure-sql /query TDS path (SQL Server 2025 native vector search).
+  const testSimilarity = useCallback(async () => {
+    if (!server || !database) { setResult({ ok: false, error: 'server + database required' }); return; }
+    setLoading(true); setResult(null);
+    const probe = `-- Approximate nearest-neighbour search over the vector index (SQL 2025).\n`
+      + `DECLARE @q VECTOR(${dim}) = CAST('[' + REPLICATE('0.0,', ${dim} - 1) + '0.0]' AS VECTOR(${dim}));\n`
+      + `SELECT TOP 10 id,\n`
+      + `       VECTOR_DISTANCE('${metric.toLowerCase()}', ${column}, @q) AS distance\n`
+      + `FROM dbo.${table}\n`
+      + `ORDER BY distance ASC;`;
+    const r = await fetch(`/api/items/azure-sql-database/${id}/query`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ server, database, sql: probe }),
+    });
+    setResult(await r.json());
+    setLoading(false);
+  }, [id, server, database, dim, metric, column, table]);
+
   const canCreate = !!server && !!database && !loading;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Index', actions: [
         { label: loading ? 'Creating…' : 'Create', onClick: canCreate ? runDdl : undefined, disabled: !canCreate },
-        { label: 'Test similarity', disabled: true, title: 'needs vector similarity probe BFF (deferred)' },
+        { label: 'Test similarity', onClick: canCreate ? testSimilarity : undefined, disabled: !canCreate, title: !server || !database ? 'Select a server + database first' : 'Run a VECTOR_DISTANCE ANN probe' },
       ]},
     ]},
-  ], [canCreate, loading, runDdl]);
+  ], [canCreate, loading, runDdl, testSimilarity, server, database]);
 
   return (
     <ItemEditorChrome

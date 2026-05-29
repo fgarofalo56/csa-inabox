@@ -5,6 +5,20 @@ description: Multi-cloud is not duplication across providers. It is an architect
 
 # What is multi-cloud?
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 !!! quote ""
     **Multi-cloud is NOT having everything in all clouds. It is
     avoiding vendor lock-in and designing/architecting solutions
@@ -27,8 +41,9 @@ provider that are now mutually incompatible. You have **multiplied**
 lock-in, not reduced it.
 
 **Definition 2 — "Multi-cloud means best-of-breed shopping."** This
-sounds smarter but ends the same way. Pick Redshift here, BigQuery
-there, Snowflake somewhere else, Cosmos for one team, DynamoDB for
+sounds smarter but ends the same way. Pick one cloud's warehouse
+here, another's there, a third-party warehouse somewhere else, Cosmos
+for one team, a per-cloud NoSQL store for
 another. After eighteen months the data sets cannot talk to each
 other, the identity model is a wall of SAML hacks, the FinOps team
 cannot produce a unified bill, and any attempt to consolidate is a
@@ -66,8 +81,9 @@ only three that actually matter at scale.
 ### Lock 1 — Data format
 
 Your data sits in a table format. If that format is proprietary —
-Redshift columnar, BigQuery Capacitor, Snowflake micro-partitions,
-Synapse dedicated SQL columnstore — then your data is held hostage
+a per-cloud warehouse's internal columnar format, a third-party
+warehouse's micro-partitions, Synapse dedicated SQL columnstore —
+then your data is held hostage
 by the engine that wrote it. Moving means a full extract + reload,
 which means downtime, dual-write windows, and a multi-month
 migration program. That is data lock-in, and it is the most
@@ -84,8 +100,8 @@ engine's storage. You can swap the engine without moving the data.
 ### Lock 2 — Identity
 
 Your users sit in an identity directory. If every cloud has its own
-directory — AWS IAM users, GCP local accounts, OCI native users,
-Azure local accounts — then your audit trail is fragmented across
+directory — each provider's native accounts plus Azure local
+accounts — then your audit trail is fragmented across
 N consoles, your offboarding is N revocations, and your access
 review is N spreadsheets. Worse, every cross-cloud integration
 becomes a service principal exchange with long-lived secrets,
@@ -105,10 +121,9 @@ already governs Microsoft 365.
 
 ### Lock 3 — Infrastructure (control plane)
 
-Your infrastructure is defined somewhere. If that somewhere is
-CloudFormation or Google Deployment Manager or OCI Resource
-Manager, then your operational knowledge is locked to one
-provider's authoring model. You cannot reuse a module across
+Your infrastructure is defined somewhere. If that somewhere is a
+single provider's proprietary IaC service, then your operational
+knowledge is locked to one provider's authoring model. You cannot reuse a module across
 clouds; every new cloud means re-authoring every pattern.
 
 The open form is **Bicep + Terraform**. Bicep is the

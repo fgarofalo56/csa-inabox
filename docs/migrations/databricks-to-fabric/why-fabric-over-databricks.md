@@ -1,5 +1,19 @@
 # Why Microsoft Fabric over Databricks
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **Status:** Authored 2026-04-30
 **Audience:** CIO, CDO, Chief Data Architect, and platform teams evaluating whether Fabric is the right strategic consolidation target for their current Databricks estate.
 **Scope:** Strategic analysis comparing Databricks and Microsoft Fabric across platform architecture, cost model, BI integration, AI capabilities, governance, and ecosystem. This is an honest assessment -- not a vendor takedown.

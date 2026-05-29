@@ -5,6 +5,20 @@ description: Purview + Unity Catalog federation for cross-cloud catalog and line
 
 # Multi-Cloud Governance — one catalog, one lineage, one tag set
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 Multi-cloud governance fails the same way every time: each cloud
 has its own catalog (AWS Glue, GCP Dataplex, Azure Purview),
 each cloud has its own tag namespace, each cloud has its own
@@ -174,8 +188,9 @@ The right framework taxonomy is:
   Azure has > 100 services in scope; AWS GovCloud and GCP Assured
   Workloads have parity for core services.
 - **FedRAMP High** — federal civilian with sensitive data.
-  Azure Government has the broadest footprint; AWS GovCloud has
-  parity for core; GCP is more limited.
+  Azure Government has a broad in-scope footprint; other government
+  clouds have parity for core services to varying degrees — verify
+  each provider's current authorized-service list.
 - **DoD IL4 / IL5 / IL6** — DoD-specific. Azure Government and
   AWS GovCloud have IL4 + IL5; IL6 is Azure DoD Government Secret
   and AWS Top Secret.

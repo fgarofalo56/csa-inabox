@@ -3,6 +3,20 @@ title: Government Data Analytics on Azure
 description: Azure Government Cloud capabilities, compliance frameworks, and reference architectures for public sector analytics
 ---
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 ## Government Data Analytics on Azure
 
 Azure provides purpose-built infrastructure for government analytics workloads through Azure Government Cloud, a physically isolated instance of Azure that meets the most stringent U.S. government compliance requirements. This page covers the platform capabilities, compliance frameworks, and reference architectures relevant to building analytics solutions for public sector organizations.

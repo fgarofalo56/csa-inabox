@@ -6,7 +6,7 @@
  * its sample query + the round-trip "explain this KQL" helper.
  */
 import { describe, it, expect } from 'vitest';
-import { cypherToKql, kqlToCypherApprox, TranslationError } from '@/lib/azure/cypher-kql-translator';
+import { cypherToKql, kqlToCypherApprox, gqlToGremlin, TranslationError } from '@/lib/azure/cypher-kql-translator';
 
 describe('cypherToKql', () => {
   it('translates a 2-hop MATCH with label predicates', () => {
@@ -53,5 +53,28 @@ describe('kqlToCypherApprox', () => {
 
   it('throws on non-canonical KQL', () => {
     expect(() => kqlToCypherApprox('print 1')).toThrow(TranslationError);
+  });
+});
+
+describe('gqlToGremlin', () => {
+  it('translates a labeled property-filtered 1-hop MATCH with property projection', () => {
+    const g = gqlToGremlin(`MATCH (p:Person {name:'Alice'})-[:KNOWS]->(f:Person) RETURN f.name LIMIT 10`);
+    expect(g).toContain("g.V()");
+    expect(g).toContain("hasLabel('Person')");
+    expect(g).toContain("has('name', 'Alice')");
+    expect(g).toContain("out('KNOWS')");
+    expect(g).toContain("values('name')");
+    expect(g).toContain('limit(10)');
+  });
+
+  it('handles inbound edges and bare-alias projection (elementMap)', () => {
+    const g = gqlToGremlin(`MATCH (a)<-[:OWNS]-(b) RETURN b`);
+    expect(g).toContain("in('OWNS')");
+    expect(g).toContain('elementMap()');
+    expect(g).toContain('limit(25)');
+  });
+
+  it('throws TranslationError when MATCH is missing', () => {
+    expect(() => gqlToGremlin('RETURN x')).toThrow(TranslationError);
   });
 });

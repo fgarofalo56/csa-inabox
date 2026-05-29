@@ -1,5 +1,19 @@
 # Migrating from SAS to Azure ML / Fabric on csa-inabox
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **Status:** Authored 2026-04-30
 **Audience:** Federal CIO / CDO / Chief Analytics Officer / Statistical Program Director running a SAS estate (Base SAS, SAS/STAT, SAS/ETS, SAS Viya, SAS Visual Analytics, SAS Data Integration) and evaluating Azure-native alternatives --- Azure ML, Microsoft Fabric, Databricks, Power BI --- or a hybrid coexistence with SAS on Azure.
 **Scope:** The full SAS analytics estate: Base SAS + SAS/STAT + SAS/ETS + SAS Visual Analytics + SAS Viya + SAS Data Integration Studio + SAS Model Manager + SAS Enterprise Guide. Covers lift-and-shift (SAS on Azure), full replacement (Azure ML + Fabric), and hybrid coexistence.

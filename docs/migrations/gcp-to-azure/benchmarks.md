@@ -1,5 +1,19 @@
 # Benchmarks and Performance Comparison: GCP Analytics vs Azure (csa-inabox)
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **A data-driven comparison for CTOs, CDOs, and platform architects evaluating query performance, storage cost, ETL throughput, streaming latency, AI inference, BI delivery, ecosystem breadth, compliance coverage, and innovation velocity across GCP and Azure analytics stacks.**
 
 ---

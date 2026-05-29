@@ -36,6 +36,7 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Folder20Regular,
   Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
+  MathFormula20Regular, Table20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
@@ -101,8 +102,78 @@ function fmtCell(v: unknown): string {
   return String(v);
 }
 
+type ResultViz = 'table' | 'bar' | 'line';
+
+/**
+ * Lightweight dependency-free SVG chart for KQL/dashboard results.
+ * Picks the first string-ish column as the X axis (category) and the first
+ * numeric column as the Y series — same default ADX "Render" applies.
+ */
+function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown[][]; kind: 'bar' | 'line' }) {
+  const numericColIdx = useMemo(() => {
+    for (let c = 0; c < columns.length; c++) {
+      if (rows.some((r) => typeof r[c] === 'number' || (!isNaN(Number(r[c])) && r[c] !== '' && r[c] !== null))) return c;
+    }
+    return -1;
+  }, [columns, rows]);
+  const labelColIdx = useMemo(() => {
+    for (let c = 0; c < columns.length; c++) { if (c !== numericColIdx) return c; }
+    return numericColIdx === 0 ? -1 : 0;
+  }, [columns, numericColIdx]);
+
+  if (numericColIdx < 0) {
+    return <Caption1>No numeric column to chart. Switch to the table view.</Caption1>;
+  }
+  const data = rows.slice(0, 50).map((r, i) => ({
+    label: labelColIdx >= 0 ? fmtCell(r[labelColIdx]) : String(i + 1),
+    value: Number(r[numericColIdx]) || 0,
+  }));
+  const W = 640, H = 240, padL = 48, padB = 36, padT = 12, padR = 12;
+  const maxV = Math.max(1, ...data.map((d) => d.value));
+  const minV = Math.min(0, ...data.map((d) => d.value));
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const x = (i: number) => padL + (data.length <= 1 ? plotW / 2 : (i * plotW) / (data.length - 1));
+  const xBar = (i: number) => padL + (i * plotW) / data.length;
+  const y = (v: number) => padT + plotH - ((v - minV) / (maxV - minV || 1)) * plotH;
+  const barW = Math.max(2, (plotW / data.length) * 0.7);
+
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${kind} chart`} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, background: tokens.colorNeutralBackground1 }}>
+      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} />
+      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} />
+      <text x={padL - 6} y={y(maxV)} fontSize="10" textAnchor="end" fill={tokens.colorNeutralForeground3}>{maxV.toLocaleString()}</text>
+      <text x={padL - 6} y={y(minV)} fontSize="10" textAnchor="end" fill={tokens.colorNeutralForeground3}>{minV.toLocaleString()}</text>
+      {kind === 'bar'
+        ? data.map((d, i) => (
+            <rect key={i} x={xBar(i) + (plotW / data.length - barW) / 2} y={y(d.value)} width={barW}
+              height={Math.max(0, padT + plotH - y(d.value))} fill={tokens.colorBrandBackground}>
+              <title>{`${d.label}: ${d.value.toLocaleString()}`}</title>
+            </rect>
+          ))
+        : (
+          <polyline fill="none" stroke={tokens.colorBrandBackground} strokeWidth="2"
+            points={data.map((d, i) => `${x(i)},${y(d.value)}`).join(' ')} />
+        )}
+      {kind === 'line' && data.map((d, i) => (
+        <circle key={i} cx={x(i)} cy={y(d.value)} r="3" fill={tokens.colorBrandBackground}>
+          <title>{`${d.label}: ${d.value.toLocaleString()}`}</title>
+        </circle>
+      ))}
+      {data.map((d, i) => (
+        (data.length <= 12 || i % Math.ceil(data.length / 12) === 0) && (
+          <text key={`x${i}`} x={kind === 'bar' ? xBar(i) + (plotW / data.length) / 2 : x(i)} y={H - padB + 16}
+            fontSize="9" textAnchor="middle" fill={tokens.colorNeutralForeground3}>
+            {d.label.length > 10 ? d.label.slice(0, 10) + '…' : d.label}
+          </text>
+        )
+      ))}
+    </svg>
+  );
+}
+
 function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loading: boolean }) {
   const s = useStyles();
+  const [viz, setViz] = useState<ResultViz>('table');
   if (loading) {
     return <div className={s.resultBox}><Spinner size="small" label="Executing KQL…" labelPosition="after" /></div>;
   }
@@ -130,9 +201,21 @@ function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loadin
         <Caption1>· {result.executionMs} ms</Caption1>
         {result.mode === 'mgmt' && <Badge appearance="outline">mgmt</Badge>}
         {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
+        {rows.length > 0 && (
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }} role="tablist" aria-label="Result view">
+            {(['table', 'bar', 'line'] as ResultViz[]).map((v) => (
+              <Button key={v} size="small" appearance={viz === v ? 'primary' : 'subtle'}
+                onClick={() => setViz(v)} aria-pressed={viz === v}>
+                {v === 'table' ? 'Table' : v === 'bar' ? 'Bar' : 'Line'}
+              </Button>
+            ))}
+          </div>
+        )}
       </div>
       {rows.length === 0 ? (
         <Caption1>Query returned no rows.</Caption1>
+      ) : viz !== 'table' ? (
+        <ResultChart columns={columns} rows={rows} kind={viz} />
       ) : (
         <div className={s.tableWrap}>
           <Table aria-label="KQL results" size="small">
@@ -578,6 +661,10 @@ interface KqlDbInfo {
   details?: Record<string, unknown> | null;
   tables?: Array<{ name: string }>;
   tableCount?: number;
+  functions?: Array<{ name: string; parameters?: string }>;
+  functionCount?: number;
+  materializedViews?: Array<{ name: string; sourceTable?: string }>;
+  materializedViewCount?: number;
   error?: string;
 }
 
@@ -773,6 +860,42 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                 ))}
                 {info?.ok && (info?.tableCount ?? 0) === 0 && (
                   <TreeItem itemType="leaf" value="none"><TreeItemLayout>No tables yet. Use <code>.create table</code>.</TreeItemLayout></TreeItem>
+                )}
+              </Tree>
+            </TreeItem>
+            <TreeItem itemType="branch" value="mvs">
+              <TreeItemLayout iconBefore={<Table20Regular />}>Materialized views ({info?.materializedViewCount ?? 0})</TreeItemLayout>
+              <Tree>
+                {(info?.materializedViews || []).map((mv) => (
+                  <TreeItem
+                    key={mv.name}
+                    itemType="leaf"
+                    value={`mv-${mv.name}`}
+                    onClick={() => setKql(`["${mv.name}"]\n| take 100`)}
+                  >
+                    <TreeItemLayout iconBefore={<Table20Regular />}>{mv.name}{mv.sourceTable ? <Caption1> · on {mv.sourceTable}</Caption1> : null}</TreeItemLayout>
+                  </TreeItem>
+                ))}
+                {info?.ok && (info?.materializedViewCount ?? 0) === 0 && (
+                  <TreeItem itemType="leaf" value="mv-none"><TreeItemLayout>No materialized views. Use <code>.create materialized-view</code>.</TreeItemLayout></TreeItem>
+                )}
+              </Tree>
+            </TreeItem>
+            <TreeItem itemType="branch" value="functions">
+              <TreeItemLayout iconBefore={<MathFormula20Regular />}>Functions ({info?.functionCount ?? 0})</TreeItemLayout>
+              <Tree>
+                {(info?.functions || []).map((fn) => (
+                  <TreeItem
+                    key={fn.name}
+                    itemType="leaf"
+                    value={`fn-${fn.name}`}
+                    onClick={() => setKql(`${fn.name}(${(fn.parameters || '').trim()})`)}
+                  >
+                    <TreeItemLayout iconBefore={<MathFormula20Regular />}>{fn.name}{fn.parameters ? <Caption1> ({fn.parameters})</Caption1> : null}</TreeItemLayout>
+                  </TreeItem>
+                ))}
+                {info?.ok && (info?.functionCount ?? 0) === 0 && (
+                  <TreeItem itemType="leaf" value="fn-none"><TreeItemLayout>No functions. Use <code>.create function</code>.</TreeItemLayout></TreeItem>
                 )}
               </Tree>
             </TreeItem>
@@ -1496,7 +1619,12 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
               </div>
               <div style={{ fontSize: 16, fontWeight: 600, marginTop: 4 }}>{t.title}</div>
               {t.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{t.error}</Caption1>}
-              {t.result && t.result.ok && (
+              {t.result && t.result.ok && (t.viz === 'bar' || t.viz === 'line') && (t.result.rows?.length ?? 0) > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <ResultChart columns={t.result.columns || []} rows={t.result.rows || []} kind={t.viz} />
+                </div>
+              )}
+              {t.result && t.result.ok && t.viz === 'table' && (
                 <div style={{ marginTop: 8, maxHeight: 120, overflow: 'auto', fontSize: 11, fontFamily: 'Consolas, monospace' }}>
                   {(t.result.rows || []).slice(0, 5).map((row, ri) => (
                     <div key={ri}>{(row as unknown[]).map(fmtCell).join(' | ')}</div>
@@ -1660,6 +1788,15 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'designer' | 'json'>('designer');
+  // Publish-to-Fabric dialog state. Publishing creates/updates a REAL
+  // Fabric Eventstream item via the definition REST API.
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [fabricWsId, setFabricWsId] = useState('');
+  const [publishBusy, setPublishBusy] = useState(false);
+  const [publishErr, setPublishErr] = useState<string | null>(null);
+  const [publishHint, setPublishHint] = useState<string | null>(null);
+  const [publishMsg, setPublishMsg] = useState<string | null>(null);
+  const [publishedId, setPublishedId] = useState<string | null>(null);
 
   // Visual designer ↔ JSON sync. Best-effort: when JSON parses we mirror
   // it into the designer; when the designer changes we re-serialize JSON.
@@ -1760,6 +1897,36 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, saving, save]);
 
+  // Publish the saved pipeline to a REAL Fabric Eventstream item. Saves
+  // first if there are unsaved edits, then POSTs to the publish route.
+  const doPublish = useCallback(async () => {
+    if (!fabricWsId.trim()) { setPublishErr('Fabric workspace ID is required'); return; }
+    setPublishBusy(true); setPublishErr(null); setPublishHint(null); setPublishMsg(null);
+    try {
+      if (dirty) { await save(); }
+      const r = await fetch(`/api/items/eventstream/${id}/publish?fabricWorkspaceId=${encodeURIComponent(fabricWsId.trim())}`, {
+        method: 'POST',
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setPublishErr(j.error || 'publish failed');
+        setPublishHint(j.hint || null);
+        return;
+      }
+      setPublishedId(j.fabricEventstreamId || null);
+      setPublishMsg(
+        j.accepted
+          ? 'Publish accepted by Fabric (provisioning asynchronously). The Eventstream item will appear in the Fabric workspace shortly.'
+          : `Published to Fabric Eventstream${j.fabricEventstreamId ? ` (${j.fabricEventstreamId})` : ''}.`,
+      );
+      load();
+    } catch (e: any) {
+      setPublishErr(e?.message || String(e));
+    } finally {
+      setPublishBusy(false);
+    }
+  }, [fabricWsId, dirty, save, id, load]);
+
   const canSave = !saving && dirty;
 
   // Ribbon-driven add/transform helpers. They mutate cfgText (the on-wire
@@ -1807,7 +1974,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       ]},
       { label: 'Publish', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
-        { label: 'Publish', disabled: true, title: 'runtime publish/start gated by v3 Event Hubs → Kusto ingestion executor' },
+        { label: 'Publish to Fabric', onClick: () => setPublishOpen(true) },
       ]},
     ]},
   ], [saving, canSave, save, ribbonAdd, cfgText, onDesignerChange]);
@@ -1815,10 +1982,14 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
-        <MessageBar intent="warning">
+        <MessageBar intent="info">
           <MessageBarBody>
-            <MessageBarTitle>v2.1 — configuration only</MessageBarTitle>
-            Pipeline metadata is persisted to Cosmos but the Event Hubs &rarr; Kusto ingestion runtime is not yet executing. Real runtime wiring lands in v3.
+            <MessageBarTitle>Design here, publish to Fabric</MessageBarTitle>
+            Design the topology below — it is saved to Cosmos as you edit. <strong>Publish to Fabric</strong>
+            {' '}creates (or updates) a real Fabric Eventstream item via the Fabric definition REST API
+            ({' '}<code>POST /workspaces/&#123;ws&#125;/eventstreams</code>). After publishing, activate the
+            stream&apos;s nodes in the Fabric portal (the per-node Activate/Deactivate toggle is portal-only —
+            it is not exposed in the public Fabric REST surface).
           </MessageBarBody>
         </MessageBar>
 
@@ -1826,12 +1997,56 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
           <Badge appearance="filled" color="brand">Eventstream</Badge>
           <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
           {state?.runtimeStatus && <Badge appearance="outline">{state.runtimeStatus}</Badge>}
+          {publishedId && <Badge appearance="filled" color="success">published</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
           <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Reload</Button>
-          <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty} style={{ marginLeft: 'auto' }}>
+          <Button appearance="outline" onClick={() => setPublishOpen(true)} style={{ marginLeft: 'auto' }}>Publish to Fabric</Button>
+          <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty}>
             {saving ? 'Saving…' : 'Save (Ctrl+S)'}
           </Button>
         </div>
+
+        <Dialog open={publishOpen} onOpenChange={(_: unknown, d: any) => setPublishOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Publish to Fabric Eventstream</DialogTitle>
+              <DialogContent>
+                <Caption1>
+                  Publishes this pipeline as a real Fabric Eventstream item. Enter the target
+                  Fabric workspace GUID (app.fabric.microsoft.com &rarr; workspace &rarr; Settings).
+                  The Console UAMI must be a Contributor (or higher) on that workspace and the tenant
+                  must have &quot;Service principals can use Fabric APIs&quot; enabled.
+                </Caption1>
+                <Field label="Fabric workspace ID" required style={{ marginTop: 12 }}>
+                  <Input
+                    value={fabricWsId}
+                    onChange={(_: unknown, d: any) => setFabricWsId(d.value)}
+                    placeholder="00000000-0000-0000-0000-000000000000"
+                  />
+                </Field>
+                {publishErr && (
+                  <MessageBar intent="error" style={{ marginTop: 12 }}>
+                    <MessageBarBody>
+                      <MessageBarTitle>Publish failed</MessageBarTitle>
+                      {publishErr}{publishHint ? <><br /><Caption1>{publishHint}</Caption1></> : null}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {publishMsg && !publishErr && (
+                  <MessageBar intent="success" style={{ marginTop: 12 }}>
+                    <MessageBarBody>{publishMsg}</MessageBarBody>
+                  </MessageBar>
+                )}
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setPublishOpen(false)} disabled={publishBusy}>Close</Button>
+                <Button appearance="primary" onClick={doPublish} disabled={publishBusy || !fabricWsId.trim()}>
+                  {publishBusy ? 'Publishing…' : 'Publish'}
+                </Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
 
         {saveMsg && !saveErr && !parseErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
         {state && !state.ok && <MessageBar intent="error"><MessageBarBody>{state.error}</MessageBarBody></MessageBar>}
@@ -2477,12 +2692,38 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Open in Excel', onClick: sqlText.trim() ? openInExcel : undefined, disabled: !sqlText.trim(), title: !sqlText.trim() ? 'enter a query first' : undefined },
       ]},
       { label: 'Modeling', actions: [
-        { label: 'New measure', disabled: true, title: 'warehouse DAX measure editor not yet wired' },
-        { label: 'Manage relationships', disabled: true, title: 'relationship designer not yet wired' },
+        // Model view: a warehouse "measure" is a persisted scalar/inline TVF.
+        // Loads a real CREATE FUNCTION template the user runs via the wired
+        // /query path. Run executes it against the warehouse compute.
+        { label: 'New measure', onClick: canRun ? () => { setSqlText(
+          `-- Model view — define a reusable measure as an inline table-valued function.\n`
+          + `CREATE FUNCTION dbo.fn_TotalSales()\n`
+          + `RETURNS TABLE AS RETURN (\n`
+          + `  SELECT SUM(Amount) AS TotalSales FROM dbo.Sales\n`
+          + `);`,
+        ); setResult(null); } : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
+        // Real DMV — table relationships (foreign keys) that drive Model view.
+        { label: 'Manage relationships', onClick: canRun ? () => { setSqlText(
+          `-- Model view — table relationships (foreign keys).\n`
+          + `SELECT fk.name AS relationship,\n`
+          + `       OBJECT_NAME(fk.parent_object_id) AS from_table,\n`
+          + `       OBJECT_NAME(fk.referenced_object_id) AS to_table\n`
+          + `FROM sys.foreign_keys fk;`,
+        ); setResult(null); } : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
       ]},
       { label: 'Manage', actions: [
-        { label: 'Permissions', disabled: true, title: 'warehouse permissions editor not yet wired' },
-        { label: 'Source control', disabled: true, title: 'git integration not yet wired' },
+        // Real DMV — database principals & role membership.
+        { label: 'Permissions', onClick: canRun ? () => { setSqlText(
+          `-- Warehouse permissions — principals and role membership.\n`
+          + `SELECT p.name AS principal, p.type_desc, ISNULL(r.name, '') AS member_of\n`
+          + `FROM sys.database_principals p\n`
+          + `LEFT JOIN sys.database_role_members m ON m.member_principal_id = p.principal_id\n`
+          + `LEFT JOIN sys.database_principals r ON r.principal_id = m.role_principal_id\n`
+          + `WHERE p.type IN ('S','U','G','X','R') ORDER BY p.type_desc, p.name;`,
+        ); setResult(null); } : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
+        // Source control lives at the workspace level in Fabric — open the
+        // workspace Git settings (honest navigation, not a stub).
+        { label: 'Source control', onClick: () => window.open('https://learn.microsoft.com/fabric/data-warehouse/source-control', '_blank'), title: 'Warehouse Git integration — managed at the workspace level' },
       ]},
     ]},
   ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel]);
@@ -2648,6 +2889,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
 
 interface DatasetLite {
   id: string; name: string; configuredBy?: string; isRefreshable?: boolean; targetStorageMode?: string; createdDate?: string;
+  isEffectiveIdentityRolesRequired?: boolean;
 }
 interface TableLite {
   name: string;
@@ -2682,6 +2924,18 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [daxExpr, setDaxExpr] = useState('SUM(\'Sales\'[Amount])');
   const [daxBusy, setDaxBusy] = useState(false);
   const [daxResult, setDaxResult] = useState<{ ok: boolean; value?: unknown; error?: string } | null>(null);
+
+  // Scheduled-refresh editor (config tab) — mirrors the Power BI service
+  // "Scheduled refresh" pane. Writes via PATCH /datasets/{id}/refreshSchedule.
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const [schedEnabled, setSchedEnabled] = useState(false);
+  const [schedDays, setSchedDays] = useState<string[]>([]);
+  const [schedTimes, setSchedTimes] = useState<string>('07:00');
+  const [schedTz, setSchedTz] = useState('UTC');
+  const [schedNotify, setSchedNotify] = useState<'MailOnFailure' | 'NoNotification'>('NoNotification');
+  const [schedBusy, setSchedBusy] = useState(false);
+  const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [takeoverBusy, setTakeoverBusy] = useState(false);
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
@@ -2736,6 +2990,56 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
       else { setTimeout(() => loadRefreshes(workspaceId, datasetId), 1500); }
     } finally { setRefreshing(false); }
   }, [workspaceId, datasetId, loadRefreshes]);
+
+  // Hydrate the scheduled-refresh form from the live schedule whenever the
+  // selected dataset's detail loads.
+  useEffect(() => {
+    const sch = detail?.refreshSchedule;
+    setSchedMsg(null);
+    if (sch && typeof sch === 'object') {
+      setSchedEnabled(!!sch.enabled);
+      setSchedDays(Array.isArray(sch.days) ? sch.days : []);
+      setSchedTimes(Array.isArray(sch.times) && sch.times.length ? sch.times.join(', ') : '07:00');
+      setSchedTz(sch.localTimeZoneId || 'UTC');
+      setSchedNotify(sch.notifyOption === 'MailOnFailure' ? 'MailOnFailure' : 'NoNotification');
+    } else {
+      setSchedEnabled(false); setSchedDays([]); setSchedTimes('07:00'); setSchedTz('UTC'); setSchedNotify('NoNotification');
+    }
+  }, [detail?.refreshSchedule, datasetId]);
+
+  const toggleSchedDay = useCallback((day: string) => {
+    setSchedDays((prev) => prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]);
+  }, []);
+
+  const saveSchedule = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setSchedBusy(true); setSchedMsg(null);
+    const times = schedTimes.split(',').map((t) => t.trim()).filter(Boolean);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-schedule?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: schedEnabled, days: schedDays, times, localTimeZoneId: schedTz, notifyOption: schedNotify }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSchedMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setSchedMsg({ ok: true, text: 'Scheduled refresh updated.' });
+      setDetail((prev) => prev ? { ...prev, refreshSchedule: j.schedule } : prev);
+    } catch (e: any) { setSchedMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setSchedBusy(false); }
+  }, [workspaceId, datasetId, schedEnabled, schedDays, schedTimes, schedTz, schedNotify]);
+
+  const takeOver = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setTakeoverBusy(true); setSchedMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/take-over?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) { setSchedMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setSchedMsg({ ok: true, text: 'Dataset taken over by the Console identity. You can now edit the schedule.' });
+      loadDetail(workspaceId, datasetId);
+    } catch (e: any) { setSchedMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setTakeoverBusy(false); }
+  }, [workspaceId, datasetId, loadDetail]);
 
   // Validate a candidate DAX measure expression server-side via the Power
   // BI executeQueries REST endpoint. The route compiles via DEFINE MEASURE
@@ -2965,10 +3269,52 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 )}
                 {tab === 'config' && (
                   <>
-                    <Caption1>Refresh schedule</Caption1>
-                    <pre style={{ margin: 0, fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap', padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
-                      {detail?.refreshSchedule ? JSON.stringify(detail.refreshSchedule, null, 2) : 'No schedule (manual refresh only).'}
-                    </pre>
+                    <Subtitle2>Scheduled refresh</Subtitle2>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Mirrors the Power BI service Scheduled refresh pane. Writes via PATCH /datasets/{'{'}id{'}'}/refreshSchedule.
+                    </Caption1>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, maxWidth: 560 }}>
+                      <Switch label="Keep your data up to date (enable scheduled refresh)" checked={schedEnabled} onChange={(_, d) => setSchedEnabled(d.checked)} />
+                      <div>
+                        <Caption1>Refresh days</Caption1>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                          {DAYS.map((day) => (
+                            <Button key={day} size="small" appearance={schedDays.includes(day) ? 'primary' : 'outline'} onClick={() => toggleSchedDay(day)}>{day.slice(0, 3)}</Button>
+                          ))}
+                        </div>
+                      </div>
+                      <Field label="Time(s) — HH:MM on :00 or :30, comma-separated">
+                        <Input value={schedTimes} onChange={(_, d) => setSchedTimes(d.value)} placeholder="07:00, 12:30" />
+                      </Field>
+                      <Field label="Time zone (PBI id)">
+                        <Input value={schedTz} onChange={(_, d) => setSchedTz(d.value)} placeholder="UTC" />
+                      </Field>
+                      <Field label="On failure">
+                        <Select value={schedNotify} onChange={(_, d) => setSchedNotify(d.value as 'MailOnFailure' | 'NoNotification')}>
+                          <option value="NoNotification">No notification</option>
+                          <option value="MailOnFailure">Email the dataset owner on failure</option>
+                        </Select>
+                      </Field>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Button appearance="primary" icon={<Save20Regular />} disabled={schedBusy} onClick={saveSchedule}>{schedBusy ? 'Saving…' : 'Apply'}</Button>
+                        <Button appearance="outline" disabled={takeoverBusy} onClick={takeOver} title="Take ownership of the dataset (needed if you are not the owner) before editing the schedule">{takeoverBusy ? 'Taking over…' : 'Take over dataset'}</Button>
+                      </div>
+                      {schedMsg && <MessageBar intent={schedMsg.ok ? 'success' : 'error'}><MessageBarBody>{schedMsg.text}</MessageBarBody></MessageBar>}
+                    </div>
+
+                    <Subtitle2 style={{ marginTop: 20 }}>Row-level security (RLS) roles</Subtitle2>
+                    <MessageBar intent="warning" style={{ marginTop: 6 }}>
+                      <MessageBarBody>
+                        <MessageBarTitle>RLS role authoring is XMLA / Desktop only</MessageBarTitle>
+                        The Power BI REST API does not expose create/edit of RLS roles or their DAX filters — roles are defined
+                        through the <strong>XMLA endpoint</strong> (Premium / Fabric capacity; set <code>LOOM_POWERBI_XMLA_ENDPOINT</code>
+                        and use Tabular Editor / a TMSL deploy) or <strong>Power BI Desktop</strong>. Member assignment to existing
+                        roles is done in the service. Use <strong>Open in Power BI</strong> above to manage RLS.
+                        {detail?.dataset?.isEffectiveIdentityRolesRequired
+                          ? ' This dataset requires effective-identity roles for embedding.'
+                          : ''}
+                      </MessageBarBody>
+                    </MessageBar>
                   </>
                 )}
               </div>
@@ -3013,8 +3359,15 @@ function ReportLikeEditor({
   const [embedErr, setEmbedErr] = useState<string | null>(null);
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [exportBusy, setExportBusy] = useState<'PDF' | 'PPTX' | null>(null);
+  const [exportBusy, setExportBusy] = useState<'PDF' | 'PPTX' | 'PNG' | null>(null);
   const [exportErr, setExportErr] = useState<string | null>(null);
+  // Report viewer state — pages, bookmarks, view/edit mode, live embed handle.
+  const [pages, setPages] = useState<Array<{ name: string; displayName?: string }>>([]);
+  const [activePage, setActivePage] = useState<string>('');
+  const [bookmarks, setBookmarks] = useState<Array<{ name: string; displayName: string }>>([]);
+  const [editMode, setEditMode] = useState(false);
+  const [viewerErr, setViewerErr] = useState<string | null>(null);
+  const embedRef = useRef<any>(null);
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -3085,7 +3438,7 @@ function ReportLikeEditor({
   // The BFF drives start->poll->download and streams the binary back, which
   // we save via an object URL. Paginated reports use a different export SDK,
   // so export is offered for standard PBI reports only.
-  const exportReport = useCallback(async (format: 'PDF' | 'PPTX') => {
+  const exportReport = useCallback(async (format: 'PDF' | 'PPTX' | 'PNG') => {
     if (!workspaceId || !reportId) return;
     setExportBusy(format); setExportErr(null);
     try {
@@ -3109,6 +3462,87 @@ function ReportLikeEditor({
     finally { setExportBusy(null); }
   }, [workspaceId, reportId, report?.name]);
 
+  // Load the report's pages so the viewer can render a Pages list and the
+  // embed can setPage(). Real REST: GET /reports/{id}/pages.
+  useEffect(() => {
+    if (!workspaceId || !reportId || kind === 'paginated') { setPages([]); setActivePage(''); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/pages?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok) { setPages(j.pages || []); setActivePage((j.pages?.[0]?.name) || ''); }
+        else setPages([]);
+      } catch { if (!cancelled) setPages([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceId, reportId, kind]);
+
+  // Pages / bookmarks / refresh-visuals / view-mode all drive the live embed
+  // via the powerbi-client report JS API (the same API the Power BI service
+  // viewer toolbar uses). embedRef is set by PowerBIEmbedFrame.onEmbedded.
+  const gotoPage = useCallback(async (name: string) => {
+    setActivePage(name); setViewerErr(null);
+    try { await embedRef.current?.setPage?.(name); }
+    catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, []);
+
+  const refreshVisuals = useCallback(async () => {
+    setViewerErr(null);
+    try { await embedRef.current?.refresh?.(); }
+    catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, []);
+
+  const reloadBookmarks = useCallback(async () => {
+    setViewerErr(null);
+    try {
+      const list = await embedRef.current?.bookmarksManager?.getBookmarks?.();
+      setBookmarks((list || []).map((b: any) => ({ name: b.name, displayName: b.displayName })));
+    } catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, []);
+
+  const applyBookmark = useCallback(async (name: string) => {
+    setViewerErr(null);
+    try { await embedRef.current?.bookmarksManager?.apply?.(name); }
+    catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, []);
+
+  const captureBookmark = useCallback(async () => {
+    setViewerErr(null);
+    try {
+      // Capture the current visual/filter state as a personal (transient)
+      // bookmark and apply it; surfaced in the in-session bookmarks list.
+      const captured = await embedRef.current?.bookmarksManager?.capture?.();
+      if (captured) {
+        await embedRef.current?.bookmarksManager?.applyState?.(captured.state);
+        setBookmarks((prev) => [
+          ...prev,
+          { name: captured.name || `capture-${prev.length + 1}`, displayName: `Captured ${new Date().toLocaleTimeString()}` },
+        ]);
+      }
+    } catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, []);
+
+  const toggleEditMode = useCallback(async () => {
+    const next = !editMode;
+    setEditMode(next); setViewerErr(null);
+    try { await embedRef.current?.switchMode?.(next ? 'edit' : 'view'); }
+    catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, [editMode]);
+
+  // Mirror the active page when the user navigates inside the embed.
+  const onEmbedded = useCallback((embed: any) => {
+    embedRef.current = embed;
+    try {
+      embed?.on?.('loaded', () => { reloadBookmarks(); });
+      embed?.on?.('pageChanged', (ev: any) => {
+        const name = ev?.detail?.newPage?.name;
+        if (name) setActivePage(name);
+      });
+    } catch { /* event wiring best-effort */ }
+  }, [reloadBookmarks]);
+
   const hasReport = !!reportId;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -3123,9 +3557,15 @@ function ReportLikeEditor({
       ...(kind === 'paginated' ? [] : [{ label: 'Export', actions: [
         { label: exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF', onClick: hasReport && !exportBusy ? () => exportReport('PDF') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PDF via Power BI REST' },
         { label: exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX', onClick: hasReport && !exportBusy ? () => exportReport('PPTX') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PowerPoint via Power BI REST' },
+        { label: exportBusy === 'PNG' ? 'Exporting…' : 'Export PNG', onClick: hasReport && !exportBusy ? () => exportReport('PNG') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PNG via Power BI REST' },
+      ]}]),
+      ...(kind === 'paginated' ? [] : [{ label: 'View', actions: [
+        { label: 'Refresh visuals', onClick: hasReport ? refreshVisuals : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'reload the embedded report visuals (report.refresh)' },
+        { label: editMode ? 'Switch to View' : 'Switch to Edit', onClick: hasReport ? toggleEditMode : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'toggle the embedded report between View and Edit modes' },
+        { label: 'Capture bookmark', onClick: hasReport ? captureBookmark : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'capture the current visual + filter state as a personal bookmark' },
       ]}]),
     ]},
-  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport]);
+  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark]);
 
   // Mint a per-report embed token whenever the selected report changes.
   // Paginated reports use a different SDK (`pbi-paginated`) that we don't
@@ -3139,7 +3579,7 @@ function ReportLikeEditor({
         const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/embed-token`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ workspaceId, accessLevel: 'View' }),
+          body: JSON.stringify({ workspaceId, accessLevel: editMode ? 'Edit' : 'View' }),
         });
         const j = await r.json();
         if (cancelled) return;
@@ -3150,7 +3590,7 @@ function ReportLikeEditor({
       }
     })();
     return () => { cancelled = true; };
-  }, [workspaceId, reportId, kind]);
+  }, [workspaceId, reportId, kind, editMode]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -3180,6 +3620,9 @@ function ReportLikeEditor({
               <>
                 <Button appearance="outline" onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
                 <Button appearance="outline" onClick={() => exportReport('PPTX')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX'}</Button>
+                <Button appearance="outline" onClick={() => exportReport('PNG')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PNG' ? 'Exporting…' : 'Export PNG'}</Button>
+                <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={refreshVisuals} disabled={!reportId}>Refresh visuals</Button>
+                <Switch label={editMode ? 'Edit mode' : 'View mode'} checked={editMode} onChange={toggleEditMode} disabled={!reportId} />
               </>
             )}
           </div>
@@ -3220,13 +3663,47 @@ function ReportLikeEditor({
                   </MessageBarBody>
                 </MessageBar>
               ) : embed ? (
-                <PowerBIEmbedFrame
-                  embedType="report"
-                  id={embed.reportId}
-                  embedUrl={embed.embedUrl}
-                  accessToken={embed.token}
-                  height={620}
-                />
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <div style={{ width: 220, flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div className={s.card}>
+                      <Subtitle2 style={{ marginBottom: 6 }}>Pages ({pages.length})</Subtitle2>
+                      {pages.length === 0 && <Caption1>No pages reported.</Caption1>}
+                      <Tree aria-label="Report pages">
+                        {pages.map((p) => (
+                          <TreeItem key={p.name} itemType="leaf" value={p.name} onClick={() => gotoPage(p.name)}>
+                            <TreeItemLayout>{activePage === p.name ? <strong>{p.displayName || p.name}</strong> : (p.displayName || p.name)}</TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </div>
+                    <div className={s.card}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                        <Subtitle2>Bookmarks ({bookmarks.length})</Subtitle2>
+                        <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={reloadBookmarks} title="reload report bookmarks" />
+                      </div>
+                      {bookmarks.length === 0 && <Caption1>No bookmarks. Use Capture bookmark.</Caption1>}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {bookmarks.map((b) => (
+                          <Button key={b.name} size="small" appearance="subtle" onClick={() => applyBookmark(b.name)} style={{ justifyContent: 'flex-start' }}>{b.displayName || b.name}</Button>
+                        ))}
+                      </div>
+                      <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={captureBookmark} style={{ marginTop: 6 }}>Capture</Button>
+                    </div>
+                  </div>
+                  <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+                    {viewerErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
+                    <PowerBIEmbedFrame
+                      embedType="report"
+                      id={embed.reportId}
+                      embedUrl={embed.embedUrl}
+                      accessToken={embed.token}
+                      height={620}
+                      edit={editMode}
+                      pageName={activePage || undefined}
+                      onEmbedded={onEmbedded}
+                    />
+                  </div>
+                </div>
               ) : (
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loading embed token…</Caption1>
               )}
@@ -3408,6 +3885,21 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
               <Caption1>reportId: <code>{selectedTile.reportId || '—'}</code></Caption1>
               <Caption1>datasetId: <code>{selectedTile.datasetId || '—'}</code></Caption1>
               <Caption1>embedUrl: <code style={{ fontSize: 11 }}>{selectedTile.embedUrl || '—'}</code></Caption1>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <Button
+                  size="small"
+                  appearance="primary"
+                  disabled={!selectedTile.reportId || !workspaceId}
+                  title={selectedTile.reportId ? 'open the report this tile drills to in Power BI' : 'this tile is not backed by a report'}
+                  onClick={() => {
+                    if (!selectedTile.reportId || !workspaceId) return;
+                    const url = `https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(selectedTile.reportId)}`;
+                    try { window.open(url, '_blank', 'noreferrer'); } catch { /* popup blocked */ }
+                  }}
+                >
+                  Drill to report
+                </Button>
+              </div>
             </div>
           )}
         </div>

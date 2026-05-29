@@ -18,7 +18,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Field, Dropdown, Option,
+  Field, Dropdown, Option, Switch,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -27,6 +27,8 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph';
+import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
 import {
@@ -34,8 +36,26 @@ import {
   parseOntologyHierarchy,
   computeGeoBbox,
   bboxToZoom,
+  parseUdfFunctions,
+  normalizeDaSources,
   type VarType,
+  type UdfFunction,
+  type DaSourceType,
+  type DaSource,
 } from './_family-utils';
+
+/**
+ * Defensive array coercion for persisted Cosmos state. Legacy / hand-edited /
+ * partially-migrated records can store an array field as a string, object, null
+ * or undefined; calling `.map`/`.length`/`.filter` on those throws at render
+ * (e.g. the reported `eo.map is not a function` on a data-agent whose `sources`
+ * was persisted as a comma-separated STRING). Every read of a persisted array
+ * field below funnels through `arr()` so an odd shape renders an empty list
+ * instead of crashing the editor. See .claude/rules/no-vaporware.md.
+ */
+function arr<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
 
 const useStyles = makeStyles({
   pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
@@ -101,10 +121,10 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const [model, setModel] = useState<ModelSummary | null>(null);
   const [versions, setVersions] = useState<ModelVersion[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  // Compute target for Apply (PREDICT) — wired even though the Apply BFF
-  // route is deferred to v2.x; at least the user can select compute now and
-  // see lifecycle state instead of staring at a dead button with no context.
-  const [computeId, setComputeId] = useState('');
+  // Instance type for the real-time endpoint deployment.
+  const [instanceType, setInstanceType] = useState('Standard_DS3_v2');
+  const [deploying, setDeploying] = useState(false);
+  const [endpointMsg, setEndpointMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -124,18 +144,30 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   }, [id, isNew]);
   useEffect(() => { load(); }, [load]);
 
+  const createEndpoint = useCallback(async () => {
+    setDeploying(true); setEndpointMsg(null);
+    try {
+      const r = await fetch(`/api/items/ml-model/${encodeURIComponent(id)}/endpoint`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ version: selected || undefined, instanceType }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setEndpointMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setEndpointMsg({ intent: 'success', text: j.message || `Endpoint ${j.endpoint?.name} provisioning.` });
+    } catch (e: any) { setEndpointMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setDeploying(false); }
+  }, [id, selected, instanceType]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Versions', actions: [
         { label: loading ? 'Reloading…' : 'Reload', onClick: loading ? undefined : load, disabled: loading },
-        { label: 'Compare versions', disabled: true, title: 'needs compute target + BFF route (deferred)' },
       ]},
-      { label: 'Apply', actions: [
-        { label: 'Apply (PREDICT)', disabled: true, title: 'needs compute target + BFF route (deferred)' },
-        { label: 'Real-time endpoint', disabled: true, title: 'needs compute target + BFF route (deferred)' },
+      { label: 'Serve', actions: [
+        { label: deploying ? 'Deploying…' : 'Real-time endpoint', onClick: createEndpoint, disabled: deploying || !versions.length },
       ]},
     ]},
-  ], [loading, load]);
+  ], [loading, load, deploying, createEndpoint, versions.length]);
 
   const current = versions.find((v) => v.version === selected) || versions[0];
 
@@ -187,18 +219,21 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                 <Badge appearance="tint">Latest: v{model.latestVersion || '—'}</Badge>
                 <Badge appearance="tint">{versions.length} version(s)</Badge>
               </div>
-              {/*
-               * Compute target for Apply (PREDICT). The Apply BFF is deferred
-               * but exposing the picker now lets users pre-select compute and
-               * see its state (Resume a paused Databricks cluster, etc.) so
-               * v2.x's Apply wiring is one click away from working.
-               */}
-              <ComputePicker
-                label="Predict compute"
-                filter={['synapse-spark', 'databricks-cluster']}
-                value={computeId}
-                onChange={setComputeId}
-              />
+              {/* Real-time endpoint: serve the selected model version from a
+                  managed online endpoint (real ARM PUT via the Serve ribbon). */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <Field label="Endpoint VM size">
+                  <Input value={instanceType} onChange={(_, d) => setInstanceType(d.value)} placeholder="Standard_DS3_v2" />
+                </Field>
+                <Button appearance="primary" disabled={deploying || !versions.length} onClick={createEndpoint}>
+                  {deploying ? 'Deploying…' : `Deploy v${selected || model.latestVersion || '?'} to real-time endpoint`}
+                </Button>
+              </div>
+              {endpointMsg && (
+                <MessageBar intent={endpointMsg.intent}>
+                  <MessageBarBody>{endpointMsg.text}</MessageBarBody>
+                </MessageBar>
+              )}
               <Subtitle2 style={{ marginTop: 8 }}>Versions</Subtitle2>
               <Table aria-label="Model versions" size="small">
                 <TableHeader><TableRow>
@@ -288,10 +323,17 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
   const [runs, setRuns] = useState<FoundryJob[]>([]);
   const [expName, setExpName] = useState<string>('');
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
-  // Compute target for hypothetical "submit new run" / Register-model flow;
-  // wired even though the submit BFF is deferred so the lifecycle UI is
-  // surfaced now (resume paused Databricks before submitting from a notebook).
+  // Submission compute for "Submit run"; plus run/environment for a real
+  // command-job submit and the Register-model flow.
   const [computeId, setComputeId] = useState('');
+  const [envId, setEnvId] = useState('azureml://registries/azureml/environments/sklearn-1.5/labels/latest');
+  const [command, setCommand] = useState('python train.py');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitMsg, setSubmitMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const [regOpen, setRegOpen] = useState(false);
+  const [regName, setRegName] = useState('');
+  const [registering, setRegistering] = useState(false);
+  const [regMsg, setRegMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -317,18 +359,53 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
   const current = runs.find((r) => r.name === selectedRun) || runs[0] || job;
 
+  const submitRun = useCallback(async () => {
+    setSubmitting(true); setSubmitMsg(null);
+    try {
+      const r = await fetch('/api/items/ml-experiment/submit', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          command, environmentId: envId,
+          computeId: computeId ? `azureml:${computeId}` : undefined,
+          experimentName: expName || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSubmitMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setSubmitMsg({ intent: 'success', text: `Submitted run ${j.job?.name} (${j.job?.status || 'queued'})` });
+      load();
+    } catch (e: any) { setSubmitMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setSubmitting(false); }
+  }, [command, envId, computeId, expName, load]);
+
+  const registerModel = useCallback(async () => {
+    const runName = current?.name;
+    if (!runName || !regName.trim()) { setRegMsg({ intent: 'error', text: 'Select a run and enter a model name.' }); return; }
+    setRegistering(true); setRegMsg(null);
+    try {
+      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(runName)}/register`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ modelName: regName.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRegMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setRegMsg({ intent: 'success', text: `Registered ${j.model} v${j.version?.version}` });
+      setRegOpen(false);
+    } catch (e: any) { setRegMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setRegistering(false); }
+  }, [current, regName]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Runs', actions: [
         { label: loading ? 'Reloading…' : 'Reload', onClick: loading ? undefined : load, disabled: loading },
-        { label: 'Register model', disabled: true, title: 'needs MLflow registry write + BFF route (deferred)' },
+        { label: submitting ? 'Submitting…' : 'Submit run', onClick: submitRun, disabled: submitting },
       ]},
-      { label: 'Charts', actions: [
-        { label: 'Parallel coordinates', disabled: true, title: 'chart renderer deferred to v2.x' },
-        { label: 'Scatter', disabled: true, title: 'chart renderer deferred to v2.x' },
+      { label: 'Model', actions: [
+        { label: 'Register model', onClick: () => { setRegName(''); setRegMsg(null); setRegOpen(true); }, disabled: !current },
       ]},
     ]},
-  ], [loading, load]);
+  ], [loading, load, submitting, submitRun, current]);
 
   return (
     <ItemEditorChrome
@@ -386,15 +463,44 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
             </>
           )}
           {!loading && !error && (kind === 'experiment' || kind === 'job') && (
-            // Picker for future "submit new run" — exposes Spark / Databricks
-            // lifecycle so users can resume a paused cluster ahead of time.
-            <ComputePicker
-              label="Submission compute"
-              filter={['synapse-spark', 'databricks-cluster']}
-              value={computeId}
-              onChange={setComputeId}
-            />
+            <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <Subtitle2>Submit a run (Command job)</Subtitle2>
+              <ComputePicker
+                label="Submission compute"
+                filter={['synapse-spark', 'databricks-cluster']}
+                value={computeId}
+                onChange={setComputeId}
+              />
+              <Field label="Environment (azureml:<name>:<ver> or registry URI)">
+                <Input value={envId} onChange={(_, d) => setEnvId(d.value)} />
+              </Field>
+              <Field label="Command">
+                <Input value={command} onChange={(_, d) => setCommand(d.value)} placeholder="python train.py" />
+              </Field>
+              <Button appearance="primary" disabled={submitting || !command || !envId} onClick={submitRun} style={{ alignSelf: 'flex-start' }}>
+                {submitting ? 'Submitting…' : 'Submit run'}
+              </Button>
+              {submitMsg && <MessageBar intent={submitMsg.intent}><MessageBarBody>{submitMsg.text}</MessageBarBody></MessageBar>}
+            </div>
           )}
+          <Dialog open={regOpen} onOpenChange={(_, d) => { if (!d.open) setRegOpen(false); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Register model from run</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Caption1>Run: <strong>{current?.displayName || current?.name || '—'}</strong></Caption1>
+                    <Field label="Model name"><Input value={regName} onChange={(_, d) => setRegName(d.value)} placeholder="fraud-classifier" /></Field>
+                    {regMsg && <MessageBar intent={regMsg.intent}><MessageBarBody>{regMsg.text}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setRegOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" disabled={registering || !regName.trim()} onClick={registerModel}>{registering ? 'Registering…' : 'Register'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
           {!loading && !error && runs.length > 0 && (
             <>
               <Table aria-label="Runs" size="small">
@@ -578,6 +684,30 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
   });
   const [publishing, setPublishing] = useState(false);
   const [publishMsg, setPublishMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  // Test query console.
+  const [queryText, setQueryText] = useState('query {\n  __typename\n}');
+  const [queryVars, setQueryVars] = useState('');
+  const [queryBusy, setQueryBusy] = useState(false);
+  const [queryResp, setQueryResp] = useState<{ status: number; body: string } | null>(null);
+  const [queryErr, setQueryErr] = useState<string | null>(null);
+
+  const runQuery = useCallback(async () => {
+    setQueryBusy(true); setQueryErr(null); setQueryResp(null);
+    let variables: any = {};
+    if (queryVars.trim()) {
+      try { variables = JSON.parse(queryVars); } catch (e: any) { setQueryErr(`Variables must be valid JSON: ${e?.message}`); setQueryBusy(false); return; }
+    }
+    try {
+      const r = await fetch(`/api/items/graphql-api/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query: queryText, variables }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setQueryErr(j.error || `HTTP ${r.status}`); return; }
+      setQueryResp({ status: j.status, body: j.body });
+    } catch (e: any) { setQueryErr(e?.message || String(e)); }
+    finally { setQueryBusy(false); }
+  }, [id, queryText, queryVars]);
 
   const publish = useCallback(async () => {
     setPublishing(true); setPublishMsg(null);
@@ -617,11 +747,14 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'Reload', onClick: reload },
         { label: publishing ? 'Publishing…' : 'Publish to APIM', onClick: publish, disabled: publishing || saving },
       ]},
-      { label: 'Auth', actions: [
-        { label: 'Subscription required', disabled: true, title: 'authoring of subscription requirements via UI deferred — toggle persists from form below' },
+      { label: 'Run', actions: [
+        { label: queryBusy ? 'Running…' : 'Run query', onClick: runQuery, disabled: queryBusy },
+      ]},
+      { label: 'Resolvers', actions: [
+        { label: 'Edit resolver policies', onClick: () => window.location.assign(`/items/apim-policy/${encodeURIComponent(id)}?scope=api&apiId=${encodeURIComponent(id)}`) },
       ]},
     ]},
-  ], [reload, publish, publishing, saving]);
+  ], [reload, publish, publishing, saving, queryBusy, runQuery, id]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -638,8 +771,17 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
         <Input value={state.serviceUrl} onChange={(_, d) => setState((p) => ({ ...p, serviceUrl: d.value }))} placeholder="https://backend.example.com/graphql" />
         <Caption1>Description</Caption1>
         <Input value={state.description} onChange={(_, d) => setState((p) => ({ ...p, description: d.value }))} />
+        {/* Subscription required — now a live form control (the deferred ribbon
+            button is removed; this persists to Cosmos and is sent on publish). */}
+        <Field label="Subscription required (consumers need an APIM subscription key)">
+          <Switch
+            checked={!!state.subscriptionRequired}
+            onChange={(_, d) => setState((p) => ({ ...p, subscriptionRequired: d.checked }))}
+            label={state.subscriptionRequired ? 'Yes' : 'No (anonymous)'}
+          />
+        </Field>
         <Subtitle2 style={{ marginTop: 8 }}>Schema (SDL)</Subtitle2>
-        <MonacoTextarea value={state.sdl} onChange={(v) => setState((p) => ({ ...p, sdl: v }))} language="graphql" height={300} minHeight={240} ariaLabel="GraphQL SDL" />
+        <MonacoTextarea value={state.sdl} onChange={(v) => setState((p) => ({ ...p, sdl: v }))} language="graphql" height={260} minHeight={200} ariaLabel="GraphQL SDL" />
         {state.lastPublishedAt && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
             Last published {new Date(state.lastPublishedAt).toLocaleString()} → <code>{state.lastPublishedTo}</code>
@@ -650,6 +792,31 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
             <MessageBarBody>{publishMsg.text}</MessageBarBody>
           </MessageBar>
         )}
+
+        {/* Test query console — runs against the published APIM GraphQL endpoint. */}
+        <Subtitle2 style={{ marginTop: 8 }}>Test query console</Subtitle2>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Runs against the published APIM GraphQL endpoint. Publish first if you haven&apos;t.</Caption1>
+        <MonacoTextarea value={queryText} onChange={setQueryText} language="graphql" height={140} minHeight={100} ariaLabel="GraphQL query" />
+        <Caption1>Variables (JSON, optional)</Caption1>
+        <Textarea value={queryVars} onChange={(_, d) => setQueryVars(d.value)} rows={2} placeholder={'{ "region": "EU" }'} />
+        <Button appearance="primary" onClick={runQuery} disabled={queryBusy} style={{ alignSelf: 'flex-start' }}>{queryBusy ? 'Running…' : 'Run query'}</Button>
+        {queryErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Query failed</MessageBarTitle>{queryErr}</MessageBarBody></MessageBar>}
+        {queryResp && (
+          <>
+            <Caption1>HTTP {queryResp.status}</Caption1>
+            <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 240 }}>{queryResp.body || '(empty)'}</div>
+          </>
+        )}
+
+        {/* Resolver authoring is the APIM synthetic-GraphQL set-graphql-resolver
+            policy at field scope — honest gate, deep-links to the policy editor. */}
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <MessageBarTitle>Field resolvers</MessageBarTitle>
+            GraphQL resolvers are authored as <code>set-graphql-resolver</code> / <code>&lt;http-data-source&gt;</code> policies at the API scope. Use the <strong>Edit resolver policies</strong> ribbon action (opens the apim-policy editor for this API) to map each field to its backend.
+          </MessageBarBody>
+        </MessageBar>
+
         <SaveBar
           saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
           extraRight={<Button onClick={publish} disabled={publishing || saving}>{publishing ? 'Publishing…' : 'Publish to APIM'}</Button>}
@@ -659,118 +826,225 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
   );
 }
 
-// ----- User Data Function (Cosmos code+config; deploy is config-only in v2.1) -----
-const UDF_SAMPLE = `import fabric.functions as fn\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    return {"user": user_id, "score": weight * 42}`;
-interface UdfState { runtime: 'python' | 'node' | 'dotnet'; entrypoint: string; source: string; functionAppName: string; connections: string; [k: string]: unknown }
-
-interface FunctionAppDTO {
-  id: string; name: string; location?: string; kind?: string;
-  state?: string; defaultHostName?: string; resourceGroup?: string;
-}
-
-function useFunctionApps() {
-  const [functionApps, setFunctionApps] = useState<FunctionAppDTO[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [hint, setHint] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch('/api/azure/function-apps');
-        const j = await r.json();
-        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setHint(j.hint || null); setFunctionApps([]); }
-        else { setFunctionApps(j.functionApps || []); }
-      } catch (e: any) {
-        setError(e?.message || String(e));
-        setFunctionApps([]);
-      } finally { setLoading(false); }
-    })();
-  }, []);
-  return { functionApps, error, hint, loading };
+// ----- User Data Function (Fabric UDF — code, test/invoke, connections, libraries) -----
+const UDF_SAMPLE = `import datetime\nimport fabric.functions as fn\nimport logging\n\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    logging.info('Python UDF trigger function processed a request.')\n    return {"user": user_id, "score": weight * 42}`;
+interface UdfLibrary { name: string; version?: string; kind: 'pypi' | 'wheel' }
+interface UdfState {
+  runtime: 'python';
+  entrypoint: string;
+  source: string;
+  connections: string;
+  libraries: UdfLibrary[];
+  // Set once the item is published to a Fabric workspace.
+  fabricEndpoint?: string;
+  fabricWorkspaceId?: string;
+  fabricItemId?: string;
+  [k: string]: unknown;
 }
 
 export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<UdfState>('user-data-function', id, {
-    runtime: 'python', entrypoint: 'compute_score', source: UDF_SAMPLE, functionAppName: '', connections: '',
+    runtime: 'python', entrypoint: 'compute_score', source: UDF_SAMPLE, connections: '', libraries: [],
   });
-  const fnApps = useFunctionApps();
+
+  // Functions parsed from the source — drives the explorer + Test panel.
+  const functions = useMemo<UdfFunction[]>(() => parseUdfFunctions(state.source || ''), [state.source]);
+
+  // Test / Run panel.
+  const [testFn, setTestFn] = useState('');
+  const [testParams, setTestParams] = useState<Record<string, string>>({});
+  const [testBusy, setTestBusy] = useState(false);
+  const [testOut, setTestOut] = useState<{ ok: boolean; status?: number; body?: string } | null>(null);
+  const [testGate, setTestGate] = useState<string | null>(null);
+  const selectedFn = functions.find((f) => f.name === testFn) || functions[0];
+
+  // Generate invocation code dialog.
+  const [genOpen, setGenOpen] = useState(false);
+  const [genTarget, setGenTarget] = useState<'notebook' | 'python' | 'openapi'>('notebook');
+
+  // Library form.
+  const [libName, setLibName] = useState('');
+  const [libVer, setLibVer] = useState('');
+  const [libKind, setLibKind] = useState<'pypi' | 'wheel'>('pypi');
+
+  const addLibrary = () => {
+    if (!libName.trim()) return;
+    setState((p) => ({ ...p, libraries: [...arr<{ name: string }>(p.libraries), { name: libName.trim(), version: libVer.trim() || undefined, kind: libKind }] }));
+    setLibName(''); setLibVer('');
+  };
+  const removeLibrary = (name: string) => setState((p) => ({ ...p, libraries: arr<{ name: string }>(p.libraries).filter((l) => l.name !== name) }));
+
+  const runTest = useCallback(async () => {
+    if (!selectedFn) return;
+    setTestBusy(true); setTestOut(null); setTestGate(null);
+    // Coerce typed params: numbers/bools parsed, everything else string.
+    const parameters: Record<string, unknown> = {};
+    for (const p of selectedFn.params) {
+      const raw = testParams[p.name] ?? '';
+      if (p.type && /int|float|number/i.test(p.type)) parameters[p.name] = raw === '' ? null : Number(raw);
+      else if (p.type && /bool/i.test(p.type)) parameters[p.name] = raw === 'true';
+      else parameters[p.name] = raw;
+    }
+    try {
+      const r = await fetch(`/api/items/user-data-function/${encodeURIComponent(id)}/invoke`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ functionName: selectedFn.name, parameters }),
+      });
+      const j = await r.json();
+      if (r.status === 409 && j.gated) { setTestGate(j.hint || j.error); return; }
+      setTestOut({ ok: j.ok, status: j.status, body: j.body || j.error });
+    } catch (e: any) { setTestOut({ ok: false, body: e?.message || String(e) }); }
+    finally { setTestBusy(false); }
+  }, [id, selectedFn, testParams]);
+
+  const invocationCode = useMemo(() => {
+    const fn = selectedFn;
+    if (!fn) return '# Add a function to generate invocation code';
+    const argList = fn.params.map((p) => `${p.name}=${p.type && /int|float|number/i.test(p.type) ? '0' : '"value"'}`).join(', ');
+    if (genTarget === 'notebook') {
+      return `# Fabric Notebook (mssparkutils)\nimport notebookutils\nresult = notebookutils.udf.run("${item.displayName || id}", "${fn.name}", { ${fn.params.map((p) => `"${p.name}": "value"`).join(', ')} })\ndisplay(result)`;
+    }
+    if (genTarget === 'python') {
+      return `# Python client (external app)\nimport requests\nfrom azure.identity import DefaultAzureCredential\n\ntoken = DefaultAzureCredential().get_token("https://api.fabric.microsoft.com/.default").token\nresp = requests.post(\n    "<UDF_ENDPOINT>/functions/${fn.name}/invoke",\n    headers={"Authorization": f"Bearer {token}"},\n    json={ ${fn.params.map((p) => `"${p.name}": "value"`).join(', ')} },\n)\nprint(resp.status_code, resp.json())`;
+    }
+    // OpenAPI fragment for the function.
+    const props = fn.params.map((p) => `        "${p.name}": { "type": "${p.type && /int|float|number/i.test(p.type) ? 'number' : p.type && /bool/i.test(p.type) ? 'boolean' : 'string'}" }`).join(',\n');
+    return `{\n  "openapi": "3.0.1",\n  "info": { "title": "${item.displayName || id}", "version": "1.0" },\n  "paths": {\n    "/functions/${fn.name}/invoke": {\n      "post": {\n        "operationId": "${fn.name}",\n        "requestBody": { "content": { "application/json": { "schema": {\n          "type": "object",\n          "properties": {\n${props}\n          }\n        } } } },\n        "responses": { "200": { "description": "OK" } }\n      }\n    }\n  }\n}`;
+  }, [selectedFn, genTarget, id, item.displayName]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Function', actions: [
         { label: 'Reload', onClick: reload },
-        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: saving ? 'Publishing…' : 'Publish', onClick: () => save(), disabled: saving || dirty === false, title: 'Saves source + definition to Cosmos (publish)' },
       ]},
-      { label: 'Deploy', actions: [
-        { label: 'Deploy to Function App', disabled: true, title: 'v2.x — requires Function App ARM mutation' },
+      { label: 'Tools', actions: [
+        { label: 'Generate invocation code', onClick: () => setGenOpen(true), disabled: functions.length === 0 },
       ]},
     ]},
-  ], [reload, save, saving, dirty]);
+  ], [reload, save, saving, dirty, functions.length]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
-      <div className={s.pad}>
-        {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="info">
-          <MessageBarBody>
-            <MessageBarTitle>v2.1: code + config persisted</MessageBarTitle>
-            Source and metadata save to Cosmos. Deploy-to-Azure-Functions wiring (ARM Microsoft.Web/sites publish) is deferred to v2.x — there is no Function App provisioned in this Loom instance yet.
-          </MessageBarBody>
-        </MessageBar>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-          {/* v3.28 Phase 4.5: functional setState everywhere. */}
-          <div>
-            <Caption1>Runtime</Caption1>
-            <select value={state.runtime} onChange={(e) => setState((p) => ({ ...p, runtime: e.target.value as UdfState['runtime'] }))}
-              style={{ width: '100%', padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
-              <option value="python">python</option>
-              <option value="node">node</option>
-              <option value="dotnet">dotnet</option>
-            </select>
-          </div>
-          <div>
-            <Caption1>Entrypoint</Caption1>
-            <Input value={state.entrypoint} onChange={(_, d) => setState((p) => ({ ...p, entrypoint: d.value }))} />
-          </div>
-          <div>
-            <Caption1>Target Function App (deploy)</Caption1>
-            <select
-              value={state.functionAppName}
-              onChange={(e) => setState((p) => ({ ...p, functionAppName: e.target.value }))}
-              disabled={fnApps.loading || (fnApps.functionApps?.length ?? 0) === 0}
-              title={fnApps.error ? `Function App discovery failed: ${fnApps.error}` : undefined}
-              style={{ width: '100%', padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
-            >
-              {fnApps.loading && <option value="">Loading Function Apps…</option>}
-              {!fnApps.loading && (fnApps.functionApps?.length ?? 0) === 0 && (
-                <option value="">{fnApps.error ? 'Discovery failed — see hint below' : 'No Function Apps found'}</option>
-              )}
-              {!fnApps.loading && (fnApps.functionApps?.length ?? 0) > 0 && !state.functionAppName && (
-                <option value="">Select a Function App</option>
-              )}
-              {(fnApps.functionApps || []).map((fa) => (
-                <option key={fa.id} value={fa.name}>
-                  {fa.name}{fa.location ? ` · ${fa.location}` : ''}{fa.state ? ` · ${fa.state}` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+    <ItemEditorChrome
+      item={item}
+      id={id}
+      ribbon={ribbon}
+      leftPanel={
+        <div style={{ padding: 8 }}>
+          <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>Functions ({functions.length})</Caption1>
+          {functions.length === 0 && <Body1 style={{ padding: 8, color: tokens.colorNeutralForeground3 }}>No <code>@udf.function()</code> definitions found.</Body1>}
+          <Tree aria-label="Functions">
+            {functions.map((f) => (
+              <TreeItem key={f.name} itemType="leaf" onClick={() => setTestFn(f.name)} style={{ background: f.name === (testFn || functions[0]?.name) ? tokens.colorNeutralBackground2 : undefined }}>
+                <TreeItemLayout>
+                  <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{f.name}({f.params.map((p) => p.name).join(', ')})</span>
+                </TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
         </div>
-        {fnApps.error && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              <MessageBarTitle>Function App discovery failed</MessageBarTitle>
-              {fnApps.error}
-              {fnApps.hint && <><br /><Caption1>{fnApps.hint}</Caption1></>}
-            </MessageBarBody>
-          </MessageBar>
-        )}
-        <Subtitle2 style={{ marginTop: 8 }}>function_app source</Subtitle2>
-        <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="python" height={320} minHeight={240} ariaLabel="Function source" />
-        <Caption1>Connections (comma-separated workspace items)</Caption1>
-        <Input value={state.connections} onChange={(_, d) => setState((p) => ({ ...p, connections: d.value }))} placeholder="fin-warehouse, ldn-gold-lakehouse" />
-        <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
-      </div>
-    } />
+      }
+      main={
+        <div className={s.pad}>
+          {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Field label="Runtime"><Input value="python (fabric-user-data-functions)" disabled /></Field>
+            <Field label="Default entrypoint"><Input value={state.entrypoint} onChange={(_, d) => setState((p) => ({ ...p, entrypoint: d.value }))} /></Field>
+          </div>
+
+          <Subtitle2 style={{ marginTop: 8 }}>function_app.py</Subtitle2>
+          <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="python" height={280} minHeight={200} ariaLabel="Function source" />
+
+          {/* Test / Run panel */}
+          <Subtitle2 style={{ marginTop: 8 }}>Test / Run</Subtitle2>
+          <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <Field label="Function">
+              <Dropdown
+                placeholder={functions.length ? 'Select a function' : 'No functions to run'}
+                value={selectedFn?.name || ''}
+                selectedOptions={selectedFn ? [selectedFn.name] : []}
+                onOptionSelect={(_, d) => { setTestFn(d.optionValue || ''); setTestParams({}); }}
+              >
+                {functions.map((f) => <Option key={f.name} value={f.name}>{f.name}</Option>)}
+              </Dropdown>
+            </Field>
+            {selectedFn?.params.map((p) => (
+              <Field key={p.name} label={`${p.name}${p.type ? ` : ${p.type}` : ''}${p.default ? ` (default ${p.default})` : ''}`}>
+                <Input value={testParams[p.name] ?? ''} onChange={(_, d) => setTestParams((cur) => ({ ...cur, [p.name]: d.value }))} placeholder={p.default || ''} />
+              </Field>
+            ))}
+            <Button appearance="primary" onClick={runTest} disabled={testBusy || !selectedFn} style={{ alignSelf: 'flex-start' }}>{testBusy ? 'Running…' : 'Run'}</Button>
+            {testGate && (
+              <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Function not published yet</MessageBarTitle>{testGate}</MessageBarBody></MessageBar>
+            )}
+            {testOut && (
+              <>
+                <Caption1>Output {testOut.status != null ? `(HTTP ${testOut.status})` : ''}</Caption1>
+                <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 200 }}>{testOut.body || '(empty)'}</div>
+              </>
+            )}
+          </div>
+
+          {/* Manage connections */}
+          <Subtitle2 style={{ marginTop: 8 }}>Manage connections (Fabric data sources)</Subtitle2>
+          <Input value={state.connections} onChange={(_, d) => setState((p) => ({ ...p, connections: d.value }))} placeholder="fin-warehouse, ldn-gold-lakehouse" />
+
+          {/* Library management */}
+          <Subtitle2 style={{ marginTop: 8 }}>Library management</Subtitle2>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <Field label="Package"><Input value={libName} onChange={(_, d) => setLibName(d.value)} placeholder="numpy" /></Field>
+            <Field label="Version"><Input value={libVer} onChange={(_, d) => setLibVer(d.value)} placeholder="2.0.0" style={{ width: 120 }} /></Field>
+            <Field label="Type">
+              <Dropdown value={libKind} selectedOptions={[libKind]} onOptionSelect={(_, d) => d.optionValue && setLibKind(d.optionValue as 'pypi' | 'wheel')}>
+                <Option value="pypi">PyPI</Option>
+                <Option value="wheel">Private wheel</Option>
+              </Dropdown>
+            </Field>
+            <Button onClick={addLibrary} disabled={!libName.trim()}>Add library</Button>
+          </div>
+          <Table size="small" aria-label="Libraries">
+            <TableHeader><TableRow><TableHeaderCell>Package</TableHeaderCell><TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader>
+            <TableBody>
+              {arr<{ name: string; version?: string; kind: string }>(state.libraries).length === 0 && <TableRow><TableCell>No libraries added.</TableCell><TableCell /><TableCell /><TableCell /></TableRow>}
+              {arr<{ name: string; version?: string; kind: string }>(state.libraries).map((l) => (
+                <TableRow key={l.name}>
+                  <TableCell><strong>{l.name}</strong></TableCell>
+                  <TableCell>{l.version || 'latest'}</TableCell>
+                  <TableCell>{l.kind}</TableCell>
+                  <TableCell><Button size="small" onClick={() => removeLibrary(l.name)}>Remove</Button></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+
+          <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+
+          {/* Generate invocation code dialog */}
+          <Dialog open={genOpen} onOpenChange={(_, d) => { if (!d.open) setGenOpen(false); }}>
+            <DialogSurface style={{ maxWidth: '90vw', width: 760 }}>
+              <DialogBody>
+                <DialogTitle>Generate invocation code — {selectedFn?.name}</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <TabList selectedValue={genTarget} onTabSelect={(_, d) => setGenTarget(d.value as typeof genTarget)}>
+                      <Tab value="notebook">Notebook</Tab>
+                      <Tab value="python">Python client</Tab>
+                      <Tab value="openapi">OpenAPI</Tab>
+                    </TabList>
+                    <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 320 }}>{invocationCode}</div>
+                    <Button onClick={() => navigator.clipboard?.writeText(invocationCode).catch(() => {})}>Copy</Button>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setGenOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+        </div>
+      }
+    />
   );
 }
 
@@ -781,7 +1055,8 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
 // `VarType` is imported from `_family-utils` (see the top-of-file
 // import block — it matches the vitest contract).
 interface VarDef { name: string; type: VarType; default: string; dev?: string; test?: string; prod?: string; description?: string; }
-interface VlState { variables: VarDef[]; [k: string]: unknown }
+// `activeValueSet` mirrors Fabric's per-workspace active value set (settings.json).
+interface VlState { variables: VarDef[]; activeValueSet?: string; [k: string]: unknown }
 const VL_VALUE_SETS: Array<'default' | 'dev' | 'test' | 'prod'> = ['default', 'dev', 'test', 'prod'];
 
 const VAR_TYPE_LABELS: Record<VarType, string> = {
@@ -824,18 +1099,18 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
   // from useItemState's PATCH response don't clobber rapid typing.
   const update = (idx: number, patch: Partial<VarDef>) => {
     setState((prev) => {
-      const next = [...prev.variables];
+      const next = [...arr<VarDef>(prev.variables)];
       next[idx] = { ...next[idx], ...patch };
       return { ...prev, variables: next };
     });
   };
-  const addRow = () => setState((prev) => ({
-    ...prev,
-    variables: [...prev.variables, { name: `var${prev.variables.length + 1}`, type: 'string', default: '' }],
-  }));
+  const addRow = () => setState((prev) => {
+    const cur = arr<VarDef>(prev.variables);
+    return { ...prev, variables: [...cur, { name: `var${cur.length + 1}`, type: 'string', default: '' }] };
+  });
   const deleteRow = (idx: number) => setState((prev) => ({
     ...prev,
-    variables: prev.variables.filter((_, i) => i !== idx),
+    variables: arr<VarDef>(prev.variables).filter((_, i) => i !== idx),
   }));
   const valueKey = tab === 'default' ? 'default' : tab;
 
@@ -869,6 +1144,17 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
               Reference variables in pipelines / notebooks as <code>@{'{'}variables.NAME{'}'}</code>. The active value set is resolved at runtime by the executor.
             </MessageBarBody>
           </MessageBar>
+          {/* Active value set — mirrors Fabric's per-workspace active set. The
+              runtime executor reads state.activeValueSet to resolve values. */}
+          <Field label="Active value set (resolved at runtime)">
+            <Dropdown
+              value={state.activeValueSet || 'default'}
+              selectedOptions={[state.activeValueSet || 'default']}
+              onOptionSelect={(_, d) => d.optionValue && setState((p) => ({ ...p, activeValueSet: d.optionValue }))}
+            >
+              {VL_VALUE_SETS.map((v) => <Option key={v} value={v}>{v}{v === (state.activeValueSet || 'default') ? ' (active)' : ''}</Option>)}
+            </Dropdown>
+          </Field>
           <Table aria-label="Variables" size="small">
             <TableHeader><TableRow>
               <TableHeaderCell>Name</TableHeaderCell>
@@ -878,7 +1164,7 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
               <TableHeaderCell />
             </TableRow></TableHeader>
             <TableBody>
-              {state.variables.map((v, i) => {
+              {arr<VarDef>(state.variables).map((v, i) => {
                 const val = (v as any)[valueKey] ?? '';
                 const validationErr = validateVarValue(v.type, val);
                 return (
@@ -920,6 +1206,20 @@ interface OntoState { source: string; [k: string]: unknown }
 
 // `parseOntologyHierarchy` is imported from `_family-utils` (vitest coverage
 // at `lib/editors/__tests__/family-utils.test.ts`).
+
+// Render the parsed ontology class hierarchy as an IS_A force-directed graph.
+function OntologyHierarchyViz({ classes }: { classes: { name: string; parent?: string; description?: string }[] }) {
+  const g = useMemo(() => {
+    const ids = new Set(classes.map((c) => c.name));
+    const nodes = classes.map((c) => ({ id: c.name, label: c.name }));
+    const edges = classes
+      .filter((c) => c.parent && ids.has(c.parent))
+      .map((c) => ({ source: c.name, target: c.parent as string, label: 'is_a' }));
+    return { nodes, edges };
+  }, [classes]);
+  if (g.nodes.length === 0) return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add a class to see the hierarchy graph.</Caption1>;
+  return <ForceDirectedGraph nodes={g.nodes} edges={g.edges} width={320} height={260} />;
+}
 
 export function OntologyEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -1074,6 +1374,8 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
                 </TreeItem>
               ))}
             </Tree>
+            <Subtitle2 style={{ marginTop: 12 }}>Hierarchy graph</Subtitle2>
+            <OntologyHierarchyViz classes={classes} />
             <Button appearance="primary" disabled={materializing || classes.length === 0} onClick={materializeToGraphModel} style={{ marginTop: 8, alignSelf: 'flex-start' }}>
               {materializing ? 'Materializing…' : `Materialize as graph-model (${classes.length} class${classes.length === 1 ? '' : 'es'})`}
             </Button>
@@ -1147,6 +1449,28 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
 interface GraphDecl { name: string; properties: { name: string; type: string }[] }
 interface GraphState { nodes: GraphDecl[]; edges: GraphDecl[]; database: string; lastMaterializedAt?: string; [k: string]: unknown }
 
+// Derive a force-directed graph from the graph-model schema: one node per
+// node type, one edge per edge type. Edges that recorded srcType/dstType
+// connect the right node types; otherwise they fan from the first node type.
+function GraphModelSchemaViz({ nodes, edges }: { nodes: GraphDecl[]; edges: GraphDecl[] }) {
+  const g = useMemo(() => {
+    const vizNodes = nodes.map((n) => ({ id: n.name, label: n.name }));
+    const ids = new Set(vizNodes.map((n) => n.id));
+    const vizEdges = edges.map((e) => {
+      const src = e.properties?.find((p) => p.name === 'srcType')?.type;
+      const dst = e.properties?.find((p) => p.name === 'dstType')?.type;
+      // srcType/dstType were stored as property *types* in the add dialog when
+      // a from/to node was chosen; fall back to first/last node type.
+      const source = (src && ids.has(src) ? src : nodes[0]?.name) || e.name;
+      const target = (dst && ids.has(dst) ? dst : nodes[nodes.length - 1]?.name) || e.name;
+      return { source, target, label: e.name };
+    });
+    return { nodes: vizNodes, edges: vizEdges };
+  }, [nodes, edges]);
+  if (g.nodes.length === 0) return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add a node type to see the schema graph.</Caption1>;
+  return <ForceDirectedGraph nodes={g.nodes} edges={g.edges} height={300} />;
+}
+
 export function GraphModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<GraphState>('graph-model', id, {
@@ -1190,21 +1514,21 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
   const addEntity = useCallback(() => {
     const name = newName.trim();
     if (!/^[A-Za-z_][\w]*$/.test(name)) { setDlgErr('Entity name must start with a letter/underscore (letters, digits, _).'); return; }
-    if (state.nodes.some((n) => n.name === name)) { setDlgErr(`Entity "${name}" already exists.`); return; }
-    persistIfExisting({ ...state, nodes: [...state.nodes, { name, properties: parseProps(propsText) }] });
+    if (arr<{ name: string }>(state.nodes).some((n) => n.name === name)) { setDlgErr(`Entity "${name}" already exists.`); return; }
+    persistIfExisting({ ...state, nodes: [...arr(state.nodes), { name, properties: parseProps(propsText) }] });
     setNodeDlgOpen(false);
   }, [newName, propsText, state, id, setState, save]);
 
   const addRelationship = useCallback(() => {
     const name = newName.trim();
     if (!/^[A-Za-z_][\w]*$/.test(name)) { setDlgErr('Relationship name must start with a letter/underscore (letters, digits, _).'); return; }
-    if (state.edges.some((e) => e.name === name)) { setDlgErr(`Relationship "${name}" already exists.`); return; }
+    if (arr<{ name: string }>(state.edges).some((e) => e.name === name)) { setDlgErr(`Relationship "${name}" already exists.`); return; }
     const props = parseProps(propsText);
     // src/dst node types captured as edge properties so the materialize step +
     // queries can reference the connected node types.
     if (edgeSrc.trim()) props.unshift({ name: 'srcType', type: 'string' });
     if (edgeDst.trim()) props.unshift({ name: 'dstType', type: 'string' });
-    persistIfExisting({ ...state, edges: [...state.edges, { name, properties: props }] });
+    persistIfExisting({ ...state, edges: [...arr(state.edges), { name, properties: props }] });
     setEdgeDlgOpen(false);
   }, [newName, propsText, edgeSrc, edgeDst, state, id, setState, save]);
 
@@ -1216,7 +1540,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
       const r = await fetch(`/api/items/graph-model/${encodeURIComponent(id)}/materialize`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ database: state.database, nodes: state.nodes, edges: state.edges }),
+        body: JSON.stringify({ database: state.database, nodes: arr(state.nodes), edges: arr(state.edges) }),
       });
       const j = await r.json();
       setMatResult(j);
@@ -1274,6 +1598,11 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
             <MonacoTextarea value={JSON.stringify(state.edges, null, 2)} onChange={(v) => editJson('edges', v)} language="json" height={260} minHeight={200} ariaLabel="Edge types JSON" />
           </div>
         </div>
+        <Subtitle2 style={{ marginTop: 8 }}>Schema graph</Subtitle2>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Node types are vertices; edge types whose properties carry <code>srcType</code> / <code>dstType</code> connect them, others link to a shared hub.
+        </Caption1>
+        <GraphModelSchemaViz nodes={arr(state.nodes)} edges={arr(state.edges)} />
         {state.lastMaterializedAt && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Last materialized {new Date(state.lastMaterializedAt).toLocaleString()}</Caption1>
         )}
@@ -1331,12 +1660,12 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                   <Field label="From entity">
                     <Dropdown value={edgeSrc} selectedOptions={edgeSrc ? [edgeSrc] : []} onOptionSelect={(_, d) => setEdgeSrc(d.optionValue || '')} placeholder="(optional)">
-                      {state.nodes.map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
+                      {arr<{ name: string }>(state.nodes).map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
                     </Dropdown>
                   </Field>
                   <Field label="To entity">
                     <Dropdown value={edgeDst} selectedOptions={edgeDst ? [edgeDst] : []} onOptionSelect={(_, d) => setEdgeDst(d.optionValue || '')} placeholder="(optional)">
-                      {state.nodes.map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
+                      {arr<{ name: string }>(state.nodes).map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
                     </Dropdown>
                   </Field>
                 </div>
@@ -1370,32 +1699,33 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   // clobber each other via the stale `state` captured at click-time.
   const update = (idx: number, patch: Partial<PlanTask>) => {
     setState((prev) => {
-      const next = [...prev.tasks];
+      const next = [...arr<PlanTask>(prev.tasks)];
       next[idx] = { ...next[idx], ...patch };
       return { ...prev, tasks: next };
     });
   };
   const add = () => setState((prev) => ({
     ...prev,
-    tasks: [...prev.tasks, { title: '', owner: '', due: '', status: 'todo' }],
+    tasks: [...arr<PlanTask>(prev.tasks), { title: '', owner: '', due: '', status: 'todo' }],
   }));
   const remove = (idx: number) => setState((prev) => ({
     ...prev,
-    tasks: prev.tasks.filter((_, i) => i !== idx),
+    tasks: arr<PlanTask>(prev.tasks).filter((_, i) => i !== idx),
   }));
 
   // v3.27: D-upgrade — compute and surface progress + overdue counts.
-  const counts = state.tasks.reduce(
+  const taskList = arr<PlanTask>(state.tasks);
+  const counts = taskList.reduce(
     (acc, t) => { acc[t.status] = (acc[t.status] || 0) + 1; return acc; },
     {} as Record<PlanTask['status'], number>,
   );
   const todo = counts.todo || 0;
   const doing = counts.doing || 0;
   const done = counts.done || 0;
-  const total = state.tasks.length;
+  const total = taskList.length;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   const today = new Date().toISOString().slice(0, 10);
-  const overdue = state.tasks.filter(t => t.status !== 'done' && t.due && t.due < today).length;
+  const overdue = taskList.filter(t => t.status !== 'done' && t.due && t.due < today).length;
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -1438,7 +1768,7 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
             <TableHeaderCell />
           </TableRow></TableHeader>
           <TableBody>
-            {state.tasks.map((t, i) => (
+            {taskList.map((t, i) => (
               <TableRow key={i}>
                 <TableCell><Input value={t.title} onChange={(_, d) => update(i, { title: d.value })} /></TableCell>
                 <TableCell><Input value={t.owner} onChange={(_, d) => update(i, { owner: d.value })} /></TableCell>
@@ -1472,10 +1802,12 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   const [validateMsg, setValidateMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   let parseErr: string | null = null;
   let featureCount = 0;
+  let parsedGeo: unknown = null;
   // bbox + zoom computed via `_family-utils` (vitest-covered).
   let bbox: { minLon: number; maxLon: number; minLat: number; maxLat: number } | null = null;
   try {
     const j = JSON.parse(state.geojson);
+    parsedGeo = j;
     featureCount = Array.isArray(j?.features) ? j.features.length : 0;
     bbox = computeGeoBbox(j);
   } catch (e: any) { parseErr = e?.message || String(e); }
@@ -1516,23 +1848,23 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         {!mapsKey && (
-          <MessageBar intent="warning">
+          <MessageBar intent="info">
             <MessageBarBody>
-              <MessageBarTitle>Azure Maps tile preview disabled</MessageBarTitle>
-              GeoJSON persists to Cosmos and validates correctly. To enable the tile preview below, set <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> in the Container App env to a key from an Azure Maps account (or use MI-auth via the future <code>/api/items/map/[id]/preview</code> proxy). Vector overlay rendering of the GeoJSON itself (atlas.data.Source) lands in v2.x.
+              <MessageBarTitle>Vector overlay rendered offline</MessageBarTitle>
+              The GeoJSON features render as a live SVG overlay below — no Azure Maps account required. To layer an
+              Azure Maps raster basemap <em>behind</em> the overlay, set <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> in
+              the Container App env to a key from a <code>Microsoft.Maps/accounts</code> resource.
             </MessageBarBody>
           </MessageBar>
         )}
         <Subtitle2>GeoJSON ({featureCount} feature{featureCount === 1 ? '' : 's'})</Subtitle2>
-        <MonacoTextarea value={state.geojson} onChange={(v) => setState((p) => ({ ...p, geojson: v }))} language="json" height={320} minHeight={240} ariaLabel="GeoJSON" />
+        <MonacoTextarea value={state.geojson} onChange={(v) => setState((p) => ({ ...p, geojson: v }))} language="json" height={280} minHeight={200} ariaLabel="GeoJSON" />
         {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid JSON: {parseErr}</MessageBarBody></MessageBar>}
         {validateMsg && <MessageBar intent={validateMsg.intent}><MessageBarBody>{validateMsg.text}</MessageBarBody></MessageBar>}
-        {tileUrl && (
+        {!parseErr && (
           <>
-            <Subtitle2>Azure Maps preview (zoom {zoom}, center {centerLat.toFixed(3)}, {centerLon.toFixed(3)})</Subtitle2>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={tileUrl} alt="Azure Maps tile preview" style={{ width: '100%', maxWidth: 640, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}` }} />
-            <Caption1>Static-map preview only — features above are NOT rendered as overlays in this snapshot. Use the vector overlay path in v2.x for live layer rendering.</Caption1>
+            <Subtitle2>Map{tileUrl ? ` (Azure Maps basemap · zoom ${zoom}, center ${centerLat.toFixed(3)}, ${centerLon.toFixed(3)})` : ' (vector overlay)'}</Subtitle2>
+            <GeoJsonMap geojson={parsedGeo} rasterUrl={tileUrl} />
           </>
         )}
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
@@ -1656,117 +1988,303 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
   );
 }
 
-// ----- Data Agent (Cosmos config + Phase 1 Foundry deploy stub) -----
+// ----- Data Agent — typed five-source picker + per-source grounding +
+// real grounded test chat + publish to Foundry Agent Service + Copilot
+// Studio handoff. Backed by:
+//   PATCH /api/items/data-agent/[id]            (Cosmos persist)
+//   POST  /api/items/data-agent/[id]/chat       (live AOAI grounded chat)
+//   POST  /api/items/data-agent/[id]/publish    (Foundry Agent Service)
+//   GET   /api/items/by-type?types=...          (typed source picker)
 interface DataAgentState {
-  systemPrompt: string; model: string; sources: string;
-  sqlEndpoints: string; kqlDatabases: string; lakehousePaths: string; examples: string;
-  foundryAgentId?: string; foundryProjectId?: string; lastDeployedAt?: string;
+  instructions: string;
+  sources: DaSource[];
+  description?: string;
+  // Back-compat with the legacy free-text bag (read-only on load).
+  systemPrompt?: string; model?: string;
+  foundryAgentId?: string; foundryProjectId?: string; publishedAt?: string;
+  lastDeployedAt?: string;
   [k: string]: unknown;
 }
+
+const DA_SOURCE_TYPES: { value: DaSourceType; label: string; itemType: string }[] = [
+  { value: 'warehouse', label: 'Warehouse', itemType: 'warehouse' },
+  { value: 'lakehouse', label: 'Lakehouse', itemType: 'lakehouse' },
+  { value: 'kql', label: 'KQL database', itemType: 'kql-database' },
+  { value: 'semantic-model', label: 'Semantic model', itemType: 'semantic-model' },
+  { value: 'ai-search', label: 'AI Search', itemType: 'ai-search-index' },
+];
+const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n\n## When asked about\n';
+
+// `normalizeDaSources` / `guessDaSourceType` / DaSource(Type) are imported from
+// `_family-utils` (vitest coverage at lib/editors/__tests__/family-utils.test.ts)
+// so the legacy-string migration is unit-tested without the Fluent UI bundle.
+
+interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean }
+
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<DataAgentState>('data-agent', id, {
-    systemPrompt: 'You are a finance analyst. Always use dim_date and roll metrics by quarter unless asked otherwise.',
-    model: 'gpt-4o',
-    sources: 'fin-warehouse, orders semantic model, ldn-gold-lakehouse, ontology-finance',
-    sqlEndpoints: '', kqlDatabases: '', lakehousePaths: '',
-    examples: 'Top 10 customers by revenue last quarter\nMonthly recurring revenue trend\nForecast next quarter',
+    instructions: 'Route financial / aggregated metrics to the semantic model; raw exploration to the lakehouse / warehouse; log analysis to the KQL database.',
+    sources: [],
+    description: '',
   });
-  const [deploying, setDeploying] = useState(false);
-  const [deployResult, setDeployResult] = useState<DeployResponse | null>(null);
+  const [tab, setTab] = useState<'build' | 'test' | 'publish'>('build');
 
-  const onDeploy = useCallback(async () => {
-    setDeploying(true); setDeployResult(null);
+  // ---- source picker data (real Loom items) ----
+  const [pickerType, setPickerType] = useState<DaSourceType>('warehouse');
+  const [available, setAvailable] = useState<Record<string, { id: string; name: string }[]>>({});
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const loadAvailable = useCallback(async (t: DaSourceType) => {
+    const cfg = DA_SOURCE_TYPES.find((x) => x.value === t)!;
+    setPickerLoading(true);
+    try {
+      const r = await fetch(`/api/items/by-type?types=${encodeURIComponent(cfg.itemType)}`);
+      const j = await r.json();
+      const items = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
+      setAvailable((prev) => ({ ...prev, [t]: items }));
+    } catch { /* leave empty; user can still pick another type */ }
+    finally { setPickerLoading(false); }
+  }, []);
+  useEffect(() => { if (!available[pickerType]) loadAvailable(pickerType); }, [pickerType, available, loadAvailable]);
+
+  const [pickSel, setPickSel] = useState('');
+  const addSource = () => {
+    if (!pickSel || arr<DaSource>(state.sources).length >= 5) return;
+    const opts = available[pickerType] || [];
+    const chosen = opts.find((o) => o.id === pickSel);
+    setState((p) => ({
+      ...p,
+      sources: [...arr<DaSource>(p.sources), {
+        id: `${pickerType}:${pickSel}:${Date.now()}`,
+        type: pickerType,
+        name: chosen?.name || pickSel,
+        tables: '', instructions: DA_INSTRUCTION_TEMPLATE, examples: [],
+      }],
+    }));
+    setPickSel('');
+  };
+  const updateSource = (sid: string, patch: Partial<DaSource>) => {
+    setState((p) => ({ ...p, sources: arr<DaSource>(p.sources).map((x) => x.id === sid ? { ...x, ...patch } : x) }));
+  };
+  const removeSource = (sid: string) => setState((p) => ({ ...p, sources: arr<DaSource>(p.sources).filter((x) => x.id !== sid) }));
+  const updateSourceExamples = (sid: string, fn: (ex: { question: string; query: string }[]) => { question: string; query: string }[]) => {
+    setState((p) => ({ ...p, sources: arr<DaSource>(p.sources).map((x) => x.id === sid ? { ...x, examples: fn(arr(x.examples)) } : x) }));
+  };
+  const addExample = (sid: string) => updateSourceExamples(sid, (ex) => [...ex, { question: '', query: '' }]);
+
+  // ---- test chat ----
+  const [chat, setChat] = useState<DaChatMsg[]>([]);
+  const [question, setQuestion] = useState('');
+  const [asking, setAsking] = useState(false);
+  const ask = useCallback(async () => {
+    const q = question.trim();
+    if (!q) return;
+    if (dirty) await save();
+    setChat((c) => [...c, { role: 'user', content: q }]);
+    setQuestion(''); setAsking(true);
+    try {
+      const history = chat.map((m) => ({ role: m.role, content: m.content }));
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/chat`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ question: q, history }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setChat((c) => [...c, { role: 'assistant', content: `${j.error}${j.hint ? `\n\n${j.hint}` : ''}`, error: true }]);
+      } else {
+        setChat((c) => [...c, { role: 'assistant', content: j.answer, query: j.query, sourceUsed: j.sourceUsed }]);
+      }
+    } catch (e: any) {
+      setChat((c) => [...c, { role: 'assistant', content: e?.message || String(e), error: true }]);
+    } finally { setAsking(false); }
+  }, [question, chat, dirty, save, id]);
+
+  // ---- publish ----
+  const [publishing, setPublishing] = useState(false);
+  const [publishResult, setPublishResult] = useState<any>(null);
+  const publish = useCallback(async () => {
+    setPublishing(true); setPublishResult(null);
     try {
       const saved = await save();
-      if (!saved) {
-        setDeployResult({ ok: false, error: 'Save failed before deploy — fix the save error and retry.' });
-        return;
-      }
-      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
-      const j: DeployResponse = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
-      setDeployResult(j);
+      if (!saved) { setPublishResult({ ok: false, error: 'Save failed before publish.' }); return; }
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/publish`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ description: state.description }),
+      });
+      const j = await r.json();
+      setPublishResult(j);
       if (j.ok) await reload();
-    } catch (e: any) {
-      setDeployResult({ ok: false, error: e?.message || String(e) });
-    } finally {
-      setDeploying(false);
+    } catch (e: any) { setPublishResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setPublishing(false); }
+  }, [id, save, reload, state.description]);
+
+  // One-time migration: if a legacy record persisted `sources` as a string (or
+  // any non-array shape), rewrite state to a clean DaSource[] so the agent both
+  // renders AND can be re-saved in the new schema. Runs after load settles.
+  useEffect(() => {
+    if (loading) return;
+    if (state.sources !== undefined && !Array.isArray(state.sources)) {
+      const migrated = normalizeDaSources(state.sources);
+      setState((p) => ({ ...p, sources: migrated }));
     }
-  }, [id, save, reload]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, state.sources]);
 
-  const deployedAgentId = state.foundryAgentId;
-  const deployedAt = state.lastDeployedAt;
-
+  const sources = normalizeDaSources(state.sources);
+  const instrLen = (typeof state.instructions === 'string' ? state.instructions : '').length;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
-      { label: 'Sources', actions: [
+      { label: 'Agent', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
-        { label: deploying ? 'Deploying…' : 'Deploy to Foundry', onClick: onDeploy, disabled: deploying || saving },
-      ]},
-      { label: 'Test', actions: [
-        { label: 'Chat preview', disabled: true, title: 'test chat pane deferred — see docs/fiab/data-agent-parity-spec.md' },
+        { label: 'Build', onClick: () => setTab('build') },
+        { label: 'Test chat', onClick: () => setTab('test') },
+        { label: 'Publish', onClick: () => setTab('publish') },
       ]},
     ]},
-  ], [save, saving, dirty, onDeploy, deploying]);
+  ], [save, saving, dirty]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
-      <div className={s.pad}>
-        {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Phase 1: Foundry Agent deploy stub</MessageBarTitle>
-            Data-agent config persists to Cosmos and the <strong>Deploy to Foundry</strong> button pushes a prompt-agent definition to the Azure AI Foundry Agent Service. The typed five-source picker, per-source instructions, test chat pane, Publish flow, and Copilot Studio handoff are tracked in <code>docs/fiab/data-agent-parity-spec.md</code> for follow-up sessions.
-          </MessageBarBody>
-        </MessageBar>
-        {deployedAgentId && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Caption1>Deployed agent:</Caption1>
-            <Badge appearance="filled" color="success">{deployedAgentId}</Badge>
-            {state.foundryProjectId && <Badge appearance="outline">project {state.foundryProjectId}</Badge>}
-            {deployedAt && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>last deployed {new Date(deployedAt).toLocaleString()}</Caption1>}
-          </div>
-        )}
-        {/* v3.28 Phase 4.5: functional setState so deploy/reload doesn't clobber typing. */}
-        <Caption1>System prompt / AI instructions</Caption1>
-        <Textarea value={state.systemPrompt} onChange={(_, d) => setState((p) => ({ ...p, systemPrompt: d.value }))} rows={5} />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState((p) => ({ ...p, model: d.value }))} /></div>
-          <div><Caption1>Sources (free text)</Caption1><Input value={state.sources} onChange={(_, d) => setState((p) => ({ ...p, sources: d.value }))} /></div>
-          <div><Caption1>Synapse Serverless SQL endpoints</Caption1><Input value={state.sqlEndpoints} onChange={(_, d) => setState((p) => ({ ...p, sqlEndpoints: d.value }))} placeholder="serverless-sql-pool name" /></div>
-          <div><Caption1>KQL databases</Caption1><Input value={state.kqlDatabases} onChange={(_, d) => setState((p) => ({ ...p, kqlDatabases: d.value }))} placeholder="loomdb-default" /></div>
-          <div style={{ gridColumn: 'span 2' }}>
-            <Caption1>Lakehouse paths (abfss://...)</Caption1>
-            <Textarea value={state.lakehousePaths} onChange={(_, d) => setState((p) => ({ ...p, lakehousePaths: d.value }))} rows={3} />
-          </div>
+      <>
+        <div className={s.tabBar}>
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+            <Tab value="build">Build ({sources.length}/5 sources)</Tab>
+            <Tab value="test">Test chat</Tab>
+            <Tab value="publish">Publish</Tab>
+          </TabList>
         </div>
-        <Caption1>Example queries (one per line)</Caption1>
-        <Textarea value={state.examples} onChange={(_, d) => setState((p) => ({ ...p, examples: d.value }))} rows={4} />
-        {deployResult && (
-          <MessageBar intent={deployResult.ok ? 'success' : deployResult.deferred ? 'warning' : 'error'}>
-            <MessageBarBody>
-              <MessageBarTitle>
-                {deployResult.ok ? 'Deployed to Foundry'
-                  : deployResult.deferred ? 'Deploy deferred — Foundry not configured'
-                  : 'Deploy failed'}
-              </MessageBarTitle>
-              {deployResult.ok && deployResult.agentId && (
-                <>Agent <code>{deployResult.agentId}</code> upserted in project <code>{deployResult.projectId}</code>. The Foundry Agent Service is now the source of truth for runtime behavior.</>
+        <div className={s.pad}>
+          {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+
+          {tab === 'build' && (
+            <>
+              <Subtitle2>Agent instructions ({instrLen}/15000)</Subtitle2>
+              <Textarea
+                value={state.instructions} maxLength={15000} rows={5}
+                onChange={(_, d) => setState((p) => ({ ...p, instructions: d.value }))}
+                placeholder="Declare which source handles which question type…"
+              />
+
+              <Subtitle2 style={{ marginTop: 8 }}>Data sources ({sources.length}/5)</Subtitle2>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <Field label="Type">
+                  <Dropdown value={DA_SOURCE_TYPES.find((t) => t.value === pickerType)?.label} selectedOptions={[pickerType]}
+                    onOptionSelect={(_, d) => { if (d.optionValue) { setPickerType(d.optionValue as DaSourceType); setPickSel(''); } }}>
+                    {DA_SOURCE_TYPES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Item">
+                  <Dropdown value={(available[pickerType] || []).find((o) => o.id === pickSel)?.name || ''} selectedOptions={pickSel ? [pickSel] : []}
+                    placeholder={pickerLoading ? 'Loading…' : ((available[pickerType] || []).length ? 'Select…' : 'None found')}
+                    onOptionSelect={(_, d) => d.optionValue && setPickSel(d.optionValue)}>
+                    {(available[pickerType] || []).map((o) => <Option key={o.id} value={o.id}>{o.name}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Button appearance="primary" onClick={addSource} disabled={!pickSel || sources.length >= 5}>+ Add source</Button>
+              </div>
+
+              {sources.map((src) => (
+                <div key={src.id} className={s.card}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Badge appearance="tint" color="brand">{DA_SOURCE_TYPES.find((t) => t.value === src.type)?.label || src.type}</Badge>
+                    <strong>{src.name}</strong>
+                    <div style={{ flex: 1 }} />
+                    <Button size="small" onClick={() => removeSource(src.id)}>Remove</Button>
+                  </div>
+                  <Caption1 style={{ marginTop: 6 }}>Selected tables / model (comma-separated)</Caption1>
+                  <Input value={src.tables || ''} onChange={(_, d) => updateSource(src.id, { tables: d.value })} placeholder="dim_date, fact_sales" />
+                  <Caption1 style={{ marginTop: 6 }}>Data source instructions</Caption1>
+                  <Textarea value={src.instructions || ''} rows={4} onChange={(_, d) => updateSource(src.id, { instructions: d.value })} />
+                  <Caption1 style={{ marginTop: 6 }}>Example question → query pairs</Caption1>
+                  {arr<{ question: string; query: string }>(src.examples).map((ex, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6, marginBottom: 4 }}>
+                      <Input value={ex.question} placeholder="question" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, question: d.value } : e))} />
+                      <Input value={ex.query} placeholder="SQL / KQL / DAX" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, query: d.value } : e))} />
+                      <Button size="small" onClick={() => updateSourceExamples(src.id, (arr) => arr.filter((_, j) => j !== i))}>×</Button>
+                    </div>
+                  ))}
+                  <Button size="small" onClick={() => addExample(src.id)}>+ Example</Button>
+                </div>
+              ))}
+              {sources.length === 0 && (
+                <MessageBar intent="info"><MessageBarBody>Attach up to five typed sources. Each becomes a grounded tool for the agent. The test chat and Publish both require at least one.</MessageBarBody></MessageBar>
               )}
-              {deployResult.error && <div>{deployResult.error}</div>}
-              {deployResult.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {deployResult.hint}</div>}
-            </MessageBarBody>
-          </MessageBar>
-        )}
-        <SaveBar
-          saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
-          extraRight={
-            <Button appearance="primary" onClick={onDeploy} disabled={deploying || saving}>
-              {deploying ? 'Deploying…' : 'Deploy to Foundry'}
-            </Button>
-          }
-        />
-      </div>
+              <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+            </>
+          )}
+
+          {tab === 'test' && (
+            <>
+              <Subtitle2>Test chat (live, grounded)</Subtitle2>
+              <Caption1>Each question runs against the live AOAI deployment on the Foundry hub, grounded on the sources + instructions above.</Caption1>
+              <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, minHeight: 220, maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {chat.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Ask a question to start a thread.</Caption1>}
+                {chat.map((m, i) => (
+                  <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
+                    <div style={{ padding: '8px 12px', borderRadius: 8, background: m.role === 'user' ? tokens.colorBrandBackground2 : m.error ? tokens.colorPaletteRedBackground2 : tokens.colorNeutralBackground3, whiteSpace: 'pre-wrap' }}>
+                      {m.content}
+                    </div>
+                    {m.query && (
+                      <details style={{ marginTop: 4 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: 12 }}>Generated query{m.sourceUsed ? ` · ${m.sourceUsed}` : ''}</summary>
+                        <pre style={{ fontFamily: 'monospace', fontSize: 12, background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, overflowX: 'auto' }}>{m.query}</pre>
+                      </details>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Input value={question} onChange={(_, d) => setQuestion(d.value)} placeholder="Ask the agent…" style={{ flex: 1 }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !asking) ask(); }} />
+                <Button appearance="primary" onClick={ask} disabled={asking || !question.trim()}>{asking ? 'Thinking…' : 'Send'}</Button>
+                <Button onClick={() => setChat([])} disabled={asking || chat.length === 0}>New thread</Button>
+              </div>
+            </>
+          )}
+
+          {tab === 'publish' && (
+            <>
+              <Subtitle2>Publish to Foundry Agent Service</Subtitle2>
+              <Caption1>Publishing upserts a prompt-agent (instructions + typed sources as tools) into the Foundry project. Consumers (Foundry agents, Copilot Studio) read the description to decide when to call this agent.</Caption1>
+              <Caption1 style={{ marginTop: 6 }}>Description (orchestrators see this)</Caption1>
+              <Textarea value={state.description || ''} rows={3} onChange={(_, d) => setState((p) => ({ ...p, description: d.value }))} placeholder="Answers finance questions grounded on the FY warehouse + revenue semantic model." />
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <Button appearance="primary" onClick={publish} disabled={publishing || saving || sources.length === 0}>{publishing ? 'Publishing…' : 'Publish'}</Button>
+              </div>
+              {state.publishedAt && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+                  <Badge appearance="filled" color="success">published</Badge>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{new Date(state.publishedAt).toLocaleString()}</Caption1>
+                </div>
+              )}
+              {publishResult && (
+                <MessageBar intent={publishResult.ok ? 'success' : publishResult.deferred ? 'warning' : 'error'}>
+                  <MessageBarBody>
+                    <MessageBarTitle>
+                      {publishResult.ok ? 'Published' : publishResult.deferred ? 'Foundry Agent Service not configured' : 'Publish failed'}
+                    </MessageBarTitle>
+                    {publishResult.ok && (
+                      <div style={{ marginTop: 4 }}>
+                        Connect from Foundry / Copilot Studio with this GUID pair (mark both as secrets):
+                        <div style={{ fontFamily: 'monospace', fontSize: 12, marginTop: 4 }}>
+                          workspace-id (project): <strong>{publishResult.workspaceId}</strong><br />
+                          artifact-id (agent): <strong>{publishResult.artifactId}</strong>
+                        </div>
+                        <Caption1 style={{ marginTop: 6, display: 'block' }}>
+                          Copilot Studio: Agents → + Add → Microsoft Fabric → pick this published agent.
+                          Foundry: Management Center → Connected resources → new Microsoft Fabric connection.
+                        </Caption1>
+                      </div>
+                    )}
+                    {publishResult.error && <div>{publishResult.error}</div>}
+                    {publishResult.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {publishResult.hint}</div>}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+            </>
+          )}
+        </div>
+      </>
     } />
   );
 }

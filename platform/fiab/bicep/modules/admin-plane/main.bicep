@@ -352,6 +352,7 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled) {
     privateDnsZoneAmlApiId: network.outputs.privateDnsZoneIds.azuremlapi
     privateDnsZoneNotebooksId: network.outputs.privateDnsZoneIds.notebooks
     adminEntraGroupId: adminEntraGroupId
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     complianceTags: complianceTags
   }
 }
@@ -586,6 +587,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DATAVERSE_CLIENT_ID', value: loomMsalClientId }
             { name: 'LOOM_DATAVERSE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
             { name: 'LOOM_DATAVERSE_TENANT_ID', value: tenant().tenantId }
+            // AI Foundry model-hosting account — used by the hub editor's
+            // Models / Quota / Keys / Networking / RBAC tabs and the
+            // data-agent test chat. Empty when AI Foundry isn't deployed.
+            { name: 'LOOM_FOUNDRY_RG', value: resourceGroup().name }
+            { name: 'LOOM_FOUNDRY_NAME', value: aiFoundryEnabled ? aiFoundry!.outputs.hubName : '' }
+            { name: 'LOOM_AOAI_ACCOUNT', value: aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }

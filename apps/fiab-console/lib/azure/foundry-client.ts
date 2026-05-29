@@ -661,6 +661,16 @@ export async function deletePromptFlow(projectName: string, flowId: string): Pro
   }
 }
 
+export async function updatePromptFlow(projectName: string, flowId: string, flowDefinition: unknown): Promise<PromptFlow> {
+  const seg = `${projectDataPlaneSegment(projectName, sub(), rg())}/PromptFlows/${encodeURIComponent(flowId)}`;
+  const res = await amlDataPlaneFetch(seg, { method: 'PUT', body: JSON.stringify({ flowDefinition }) });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `Prompt Flow update failed (${res.status}): ${t.slice(0, 240)}`);
+  }
+  return await res.json();
+}
+
 export async function submitFlowRun(projectName: string, flowId: string, inputs: Record<string, unknown>): Promise<any> {
   const seg = `${projectDataPlaneSegment(projectName, sub(), rg())}/PromptFlows/${encodeURIComponent(flowId)}/submit`;
   const res = await amlDataPlaneFetch(seg, { method: 'POST', body: JSON.stringify({ inputs }) });
@@ -975,6 +985,88 @@ export async function listDocuments(name: string, top = 25): Promise<any> {
   return searchIndex(name, '*', top);
 }
 
+/**
+ * Upload (mergeOrUpload) documents into an index via the data-plane
+ * `/docs/index` endpoint. Each doc gets `@search.action = mergeOrUpload`
+ * unless it already carries one.
+ */
+export async function uploadDocuments(name: string, docs: any[]): Promise<{ uploaded: number; results: any[] }> {
+  const svc = searchService();
+  const tok = await searchToken();
+  const value = docs.map((d) => ({ '@search.action': 'mergeOrUpload', ...d }));
+  const res = await fetch(`https://${svc}.search.windows.net/indexes/${encodeURIComponent(name)}/docs/index?api-version=${SEARCH_API}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `Search upload documents failed: ${t.slice(0, 240)}`);
+  }
+  const j: any = await res.json();
+  const results = j?.value || [];
+  const uploaded = results.filter((r: any) => r?.status).length;
+  return { uploaded, results };
+}
+
+/**
+ * Vector (k-NN) search against a vector field. `vector` is the query
+ * embedding, `field` the vector field name, `k` the neighbor count.
+ * When `text` is supplied it runs a hybrid (text + vector) query.
+ */
+export async function vectorSearch(name: string, opts: {
+  vector: number[]; field: string; k?: number; text?: string; select?: string;
+}): Promise<any> {
+  const svc = searchService();
+  const tok = await searchToken();
+  const body: any = {
+    vectorQueries: [{ kind: 'vector', vector: opts.vector, fields: opts.field, k: opts.k || 5 }],
+    top: opts.k || 5,
+  };
+  if (opts.text) body.search = opts.text;
+  if (opts.select) body.select = opts.select;
+  const res = await fetch(`https://${svc}.search.windows.net/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `Vector search failed: ${t.slice(0, 240)}`);
+  }
+  return await res.json();
+}
+
+/**
+ * Build a vector index definition (AI Search 2024-07-01) from a simple
+ * spec: a key field, a content field, and a single vector field with the
+ * given dimensions + metric. Used by the vector-store editor's Create.
+ */
+export function buildVectorIndexDefinition(opts: {
+  indexName: string; dim: number; metric: 'cosine' | 'euclidean' | 'dotProduct';
+  vectorField?: string; contentField?: string;
+}): any {
+  const vectorField = opts.vectorField || 'embedding';
+  const contentField = opts.contentField || 'content';
+  const profileName = 'loom-vec-profile';
+  const algoName = 'loom-hnsw';
+  return {
+    name: opts.indexName,
+    fields: [
+      { name: 'id', type: 'Edm.String', key: true, filterable: true },
+      { name: contentField, type: 'Edm.String', searchable: true, retrievable: true },
+      {
+        name: vectorField, type: 'Collection(Edm.Single)', searchable: true, retrievable: true,
+        dimensions: opts.dim, vectorSearchProfile: profileName,
+      },
+    ],
+    vectorSearch: {
+      algorithms: [{ name: algoName, kind: 'hnsw', hnswParameters: { metric: opts.metric, m: 4, efConstruction: 400, efSearch: 500 } }],
+      profiles: [{ name: profileName, algorithm: algoName }],
+    },
+  };
+}
+
 // ---------------- Compute (extended) ----------------
 
 export async function getCompute(name: string): Promise<FoundryCompute | null> {
@@ -1165,4 +1257,105 @@ export async function createDataAsset(name: string, body: {
   const res = await armFetch(path, { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
   const j = await readJson<any>(res);
   return j;
+}
+
+// =====================================================================
+// ML model lifecycle — register a model version + serve it from a
+// managed online endpoint. All real ARM PUTs against the hub workspace.
+// =====================================================================
+
+/**
+ * Register a new model version under the hub workspace's model registry.
+ * `modelUri` points at the model artifact (azureml:// or a run output path).
+ */
+export async function registerModelVersion(name: string, body: {
+  version?: string;
+  modelUri: string;
+  modelType?: string;       // custom_model | mlflow_model | triton_model
+  description?: string;
+}): Promise<FoundryModelVersion> {
+  const ver = body.version || String(Date.now());
+  const path = `${workspaceArmBase()}/models/${encodeURIComponent(name)}/versions/${encodeURIComponent(ver)}`;
+  const armBody = {
+    properties: {
+      modelUri: body.modelUri,
+      modelType: body.modelType || 'custom_model',
+      description: body.description || '',
+    },
+  };
+  const res = await armFetch(path, { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
+  const j = await readJson<any>(res);
+  return shapeModelVersion(j);
+}
+
+/** Create (or upsert) a managed online endpoint on the hub workspace. */
+export async function createOnlineEndpoint(name: string, opts: { authMode?: 'Key' | 'AMLToken' } = {}): Promise<FoundryEndpoint> {
+  const ws = await getWorkspaceInfo();
+  const armBody = {
+    location: ws?.location || process.env.LOOM_FOUNDRY_REGION || 'eastus2',
+    identity: { type: 'SystemAssigned' },
+    properties: { authMode: opts.authMode || 'Key' },
+  };
+  const res = await foundryFetch(`/onlineEndpoints/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(armBody) });
+  if (res.status === 202) return { id: '', name, authMode: opts.authMode || 'Key', provisioningState: 'Creating' };
+  const j = await readJson<any>(res);
+  return shapeEndpoint(j);
+}
+
+/**
+ * Create a deployment under an online endpoint that serves `modelId`
+ * (full ARM id of the model version, or azureml:<name>:<version>).
+ */
+export async function createOnlineDeployment(endpointName: string, deploymentName: string, body: {
+  modelId: string;
+  instanceType?: string;
+  instanceCount?: number;
+}): Promise<FoundryDeployment> {
+  const ws = await getWorkspaceInfo();
+  const armBody = {
+    location: ws?.location || process.env.LOOM_FOUNDRY_REGION || 'eastus2',
+    sku: { name: 'Default', capacity: body.instanceCount ?? 1 },
+    properties: {
+      endpointComputeType: 'Managed',
+      model: body.modelId,
+      instanceType: body.instanceType || 'Standard_DS3_v2',
+    },
+  };
+  const res = await foundryFetch(
+    `/onlineEndpoints/${encodeURIComponent(endpointName)}/deployments/${encodeURIComponent(deploymentName)}`,
+    { method: 'PUT', body: JSON.stringify(armBody) },
+  );
+  if (res.status === 202) return { id: '', name: deploymentName, endpointName, model: body.modelId, instanceType: body.instanceType, provisioningState: 'Creating' };
+  const j = await readJson<any>(res);
+  return shapeDeployment(j, endpointName);
+}
+
+/**
+ * Submit a command job (real-time training/inference run) to the hub.
+ * Minimal viable command-job payload — enough to genuinely create a run.
+ */
+export async function submitCommandJob(body: {
+  displayName?: string;
+  experimentName?: string;
+  command: string;
+  environmentId: string;       // azureml://… or azureml:<name>:<version>
+  computeId?: string;          // azureml:<compute-name>
+  codeId?: string;             // optional code asset
+}): Promise<FoundryJob> {
+  const name = `job-${Date.now().toString(36)}`;
+  const path = `${workspaceArmBase()}/jobs/${encodeURIComponent(name)}`;
+  const armBody = {
+    properties: {
+      jobType: 'Command',
+      displayName: body.displayName || name,
+      experimentName: body.experimentName || 'loom-runs',
+      command: body.command,
+      environmentId: body.environmentId,
+      ...(body.computeId ? { computeId: body.computeId } : {}),
+      ...(body.codeId ? { codeId: body.codeId } : {}),
+    },
+  };
+  const res = await armFetch(path, { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
+  const j = await readJson<any>(res);
+  return shapeJob(j);
 }

@@ -3,6 +3,20 @@ title: "NOAA Climate & Ocean Analytics on Azure"
 description: "Ingesting, normalizing, and analyzing NOAA climate, weather, and ocean datasets through a medallion architecture on Azure for climate trend analysis, severe weather monitoring, and marine ecosystem intelligence"
 ---
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 ## NOAA Climate & Ocean Analytics on Azure
 
 NOAA publishes some of the largest and longest-running environmental observation datasets in the world — daily weather station readings dating back to the 1700s, real-time coastal tide gauges, open-ocean buoy telemetry, severe storm event records, and satellite-derived gridded products. Individually, each dataset answers a narrow set of questions. Combined in a unified analytical platform, they enable multi-decadal climate trend analysis, real-time severe weather monitoring, flood risk scoring, and marine ecosystem health assessment.

@@ -1,5 +1,19 @@
 # Loom Vector Store Editor — Fabric-parity spec
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 > Captured 2026-05-26 by catalog agent. Sources: Microsoft Learn — [Create a vector index in Azure AI Search](https://learn.microsoft.com/azure/search/vector-search-how-to-create-index), [Vector search in Azure Cosmos DB for NoSQL](https://learn.microsoft.com/azure/cosmos-db/vector-search), [Indexing policies — vector indexes](https://learn.microsoft.com/azure/cosmos-db/index-policy#vector-indexes), [Manage indexing policies — vector examples](https://learn.microsoft.com/azure/cosmos-db/how-to-manage-indexing-policy#vector-indexing-policy-examples), [Compress vectors with scalar/binary quantization](https://learn.microsoft.com/azure/search/vector-search-how-to-quantization), [Integrated vectorization](https://learn.microsoft.com/azure/search/search-how-to-integrated-vectorization), [Create a vector query](https://learn.microsoft.com/azure/search/vector-search-how-to-query), [.NET / JS / Java vector quickstarts](https://learn.microsoft.com/azure/cosmos-db/how-to-dotnet-vector-index-query). Cross-checked against current Loom editor at `apps/fiab-console/lib/editors/graph-editors.tsx::VectorStoreEditor`.
 
 ## What it is

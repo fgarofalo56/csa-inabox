@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
   clusterUri, defaultDatabase, getDatabaseDetails, listTables,
+  listFunctions, listMaterializedViews,
   loadKustoItem, resolveDatabase, KustoError,
 } from '@/lib/azure/kusto-client';
 
@@ -20,9 +21,11 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   try {
     const item = await loadKustoItem((await ctx.params).id, 'kql-database', session.claims.oid);
     const database = resolveDatabase(item);
-    const [details, tables] = await Promise.all([
+    const [details, tables, functions, materializedViews] = await Promise.all([
       getDatabaseDetails(database).catch(() => null),
       listTables(database).catch(() => []),
+      listFunctions(database).catch(() => []),
+      listMaterializedViews(database).catch(() => []),
     ]);
     return NextResponse.json({
       ok: true,
@@ -32,6 +35,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
       details,
       tables,
       tableCount: tables.length,
+      functions,
+      functionCount: functions.length,
+      materializedViews,
+      materializedViewCount: materializedViews.length,
       displayName: item?.displayName,
     });
   } catch (e: any) {

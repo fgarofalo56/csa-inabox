@@ -23,6 +23,7 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Server20Regular,
   Pause20Regular, ArrowSync20Regular, Save20Regular,
+  Bug20Regular, Checkmark20Regular, Clock20Regular, Add20Regular, Delete20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
@@ -303,21 +304,23 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
 
   const state = pool?.properties.provisioningState || 'Unknown';
 
-  // Ribbon — wires Submit Spark job to inline `submit`; Scale/Pause/Auto-pause/Open notebook
-  // remain honestly disabled until their flows land.
+  // Ribbon — every action is wired. Pause forces the Synapse auto-pause policy
+  // to pause now (same /auto-pause route the Force-pause button uses); Open
+  // notebook opens the Spark-job submit tab where notebook code is authored
+  // and submitted to this pool (per ui-parity.md — no disabled stubs).
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Pool', actions: [
         { label: 'Scale', onClick: selected && !busy ? openScaleDialog : undefined, disabled: !selected || busy, title: !selected ? 'Select a pool first' : undefined },
-        { label: 'Pause', disabled: true, title: 'Pause — use the Force pause button below (auto-pause runs via Synapse policy)' },
+        { label: 'Pause', onClick: selected && !busy ? () => setAutoPause('pause') : undefined, disabled: !selected || busy, title: !selected ? 'Select a pool first' : undefined },
         { label: 'Auto-pause', onClick: selected && !busy ? openApDialog : undefined, disabled: !selected || busy, title: !selected ? 'Select a pool first' : undefined },
       ]},
       { label: 'Run', actions: [
-        { label: 'Open notebook', disabled: true, title: 'Open notebook — use the Synapse Notebook editor (synapse-notebook slug)' },
+        { label: 'Open notebook', onClick: selected ? () => setTab('submit') : undefined, disabled: !selected, title: !selected ? 'Select a pool first' : 'Author and submit notebook/Spark code to this pool' },
         { label: busy ? 'Submitting…' : 'Submit Spark job', onClick: !busy && selected ? () => { setTab('submit'); submit(); } : undefined, disabled: busy || !selected, title: !selected ? 'Select a pool first' : undefined },
       ]},
     ]},
-  ], [busy, selected, submit, openScaleDialog, openApDialog]);
+  ], [busy, selected, submit, openScaleDialog, openApDialog, setAutoPause]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1136,6 +1139,16 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<'graph' | 'json' | 'runs'>('graph');
+  const [validation, setValidation] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // Trigger dialog state — same UX as the Synapse pipeline editor.
+  const [triggersOpen, setTriggersOpen] = useState(false);
+  const [triggersList, setTriggersList] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
+  const [triggersBusy, setTriggersBusy] = useState(false);
+  const [triggersError, setTriggersError] = useState<string | null>(null);
+  const [newTriggerName, setNewTriggerName] = useState('');
+  const [newTriggerHour, setNewTriggerHour] = useState(0);
+  const [newTriggerMinute, setNewTriggerMinute] = useState(0);
 
   const loadList = useCallback(async () => {
     setError(null);
@@ -1206,6 +1219,101 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [selected, loadRuns]);
+
+  // Debug — ADF createRun (isRecovery=false) via the new debug BFF route.
+  const debug = useCallback(async () => {
+    if (!selected) return;
+    setBusy(true); setError(null);
+    try {
+      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(selected)}/debug`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ params: {} }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'debug failed');
+      setTimeout(() => loadRuns(selected), 1500);
+      setTab('runs');
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [selected, loadRuns]);
+
+  // Validate — ADF's syntactic + reference checker on the in-memory spec.
+  const validate = useCallback(async () => {
+    if (!selected) return;
+    setBusy(true); setError(null); setValidation(null);
+    try {
+      let parsed: any = undefined;
+      try { parsed = JSON.parse(spec); } catch { /* validate persisted version */ }
+      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(selected)}/validate`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(parsed ? { definition: parsed } : {}),
+      });
+      const j = await r.json();
+      if (!j.ok) { setValidation({ ok: false, message: j.error || 'validation failed' }); return; }
+      const n = j.validation?.activities?.length ?? 0;
+      setValidation({ ok: true, message: `Validation passed — ADF accepts ${n} activit${n === 1 ? 'y' : 'ies'}.` });
+    } catch (e: any) { setValidation({ ok: false, message: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  }, [selected, spec]);
+
+  const loadTriggers = useCallback(async (name: string) => {
+    setTriggersError(null);
+    try {
+      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(name)}/triggers`);
+      const j = await r.json();
+      if (!j.ok) { setTriggersList([]); setTriggersError(j.error || 'list triggers failed'); return; }
+      setTriggersList(j.triggers || []);
+    } catch (e: any) { setTriggersError(e?.message || String(e)); }
+  }, []);
+
+  const openTriggers = useCallback(() => {
+    setTriggersOpen(true);
+    if (selected) loadTriggers(selected);
+  }, [selected, loadTriggers]);
+
+  const triggerAction = useCallback(async (name: string, action: 'start' | 'stop' | 'delete') => {
+    if (!selected) return;
+    setTriggersBusy(true); setTriggersError(null);
+    try {
+      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(selected)}/triggers`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, action }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `${action} failed`);
+      await loadTriggers(selected);
+    } catch (e: any) { setTriggersError(e?.message || String(e)); }
+    finally { setTriggersBusy(false); }
+  }, [selected, loadTriggers]);
+
+  const createTrigger = useCallback(async () => {
+    if (!selected || !newTriggerName.trim()) return;
+    setTriggersBusy(true); setTriggersError(null);
+    try {
+      const now = new Date(); now.setUTCSeconds(0, 0);
+      const r = await fetch(`/api/items/adf-pipeline/${encodeURIComponent(selected)}/triggers`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: newTriggerName.trim(),
+          properties: {
+            type: 'ScheduleTrigger',
+            runtimeState: 'Stopped',
+            typeProperties: {
+              recurrence: {
+                frequency: 'Day', interval: 1, startTime: now.toISOString(), timeZone: 'UTC',
+                schedule: { hours: [newTriggerHour], minutes: [newTriggerMinute] },
+              },
+            },
+          },
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'create failed');
+      setNewTriggerName('');
+      await loadTriggers(selected);
+    } catch (e: any) { setTriggersError(e?.message || String(e)); }
+    finally { setTriggersBusy(false); }
+  }, [selected, newTriggerName, newTriggerHour, newTriggerMinute, loadTriggers]);
 
   const createNew = useCallback(async () => {
     const name = window.prompt('New pipeline name (letters, digits, _ -)');
@@ -1282,13 +1390,17 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Notebook', onClick: () => addActivity({ name: nextActivityName('Notebook'), type: 'DatabricksNotebook', typeProperties: { notebookPath: '' }, dependsOn: [] }) },
         { label: 'SP', onClick: () => addActivity({ name: nextActivityName('SP'), type: 'SqlServerStoredProcedure', typeProperties: { storedProcedureName: '' }, dependsOn: [] }) },
       ]},
+      { label: 'Validate', actions: [
+        { label: busy ? 'Validating…' : 'Validate', onClick: !busy && selected ? validate : undefined, disabled: busy || !selected, title: !selected ? 'Select a pipeline first' : undefined },
+      ]},
       { label: 'Debug & run', actions: [
-        { label: 'Debug', disabled: true, title: 'Debug — needs ADF createRun?isDebugRun=true BFF route (deferred)' },
-        { label: 'Add trigger', disabled: true, title: 'Add trigger — use the ADF Trigger editor (adf-trigger slug)' },
+        { label: busy ? 'Running…' : 'Run', icon: <Play20Regular />, onClick: !busy && selected && !dirty ? run : undefined, disabled: busy || !selected || dirty, title: dirty ? 'Save the spec first' : (!selected ? 'Select a pipeline first' : undefined) },
+        { label: busy ? 'Debugging…' : 'Debug', onClick: !busy && selected && !dirty ? debug : undefined, disabled: busy || !selected || dirty, title: dirty ? 'Save the spec first' : (!selected ? 'Select a pipeline first' : undefined) },
+        { label: 'Add trigger', onClick: selected ? openTriggers : undefined, disabled: !selected, title: !selected ? 'Select a pipeline first' : undefined },
         { label: busy ? 'Publishing…' : 'Publish all', onClick: !busy && dirty && selected ? save : undefined, disabled: busy || !dirty || !selected, title: !dirty ? 'No unsaved changes' : (!selected ? 'Select a pipeline first' : undefined) },
       ]},
     ]},
-  ], [addActivity, nextActivityName, busy, dirty, selected, save]);
+  ], [addActivity, nextActivityName, busy, dirty, selected, save, validate, run, debug, openTriggers]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1315,12 +1427,21 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
             <Badge appearance="filled" color="brand">{selected || '(no pipeline)'}</Badge>
             <Badge appearance="outline">{activityCount} activities</Badge>
             {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+            {validation && <Badge appearance="filled" color={validation.ok ? 'success' : 'danger'}>{validation.ok ? 'Validated' : 'Invalid'}</Badge>}
             <Button appearance="outline" icon={<Save20Regular />} disabled={busy || !dirty} onClick={save}>Save</Button>
+            <Button appearance="outline" icon={<Checkmark20Regular />} disabled={busy || !selected} onClick={validate}>Validate</Button>
             <Button appearance="primary" icon={<Play20Regular />} disabled={busy || !selected || dirty} onClick={run}>Run</Button>
+            <Button appearance="outline" icon={<Bug20Regular />} disabled={busy || !selected || dirty} onClick={debug}>Debug</Button>
+            <Button appearance="outline" icon={<Clock20Regular />} disabled={!selected} onClick={openTriggers}>Add trigger</Button>
             <Button appearance="outline" onClick={() => { if (selected) { loadPipeline(selected); loadRuns(selected); } }} style={{ marginLeft: 'auto' }}>Refresh</Button>
           </div>
           {error && (
             <BackendStateBar error={error} title="ADF Pipeline" />
+          )}
+          {validation && (
+            <MessageBar intent={validation.ok ? 'success' : 'error'}>
+              <MessageBarBody>{validation.message}</MessageBarBody>
+            </MessageBar>
           )}
           <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'graph' | 'json' | 'runs')}>
@@ -1374,6 +1495,75 @@ export function AdfPipelineEditor({ item, id }: { item: FabricItemType; id: stri
               </Table>
             </div>
           )}
+
+          <Dialog open={triggersOpen} onOpenChange={(_, d) => setTriggersOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '760px', width: '90vw' }}>
+              <DialogBody>
+                <DialogTitle>Triggers — {selected}</DialogTitle>
+                <DialogContent>
+                  <Caption1>Schedule triggers that fire this pipeline. Start/stop or create a daily schedule trigger inline (real ADF triggers REST).</Caption1>
+                  <div style={{ overflow: 'auto', marginTop: 8, marginBottom: 12 }}>
+                    <Table aria-label="Triggers for pipeline" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Name</TableHeaderCell>
+                        <TableHeaderCell>Type</TableHeaderCell>
+                        <TableHeaderCell>State</TableHeaderCell>
+                        <TableHeaderCell>Actions</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {triggersList.length === 0 && (
+                          <TableRow><TableCell colSpan={4}><Caption1>No triggers wired to this pipeline.</Caption1></TableCell></TableRow>
+                        )}
+                        {triggersList.map((t) => (
+                          <TableRow key={t.name}>
+                            <TableCell><strong>{t.name}</strong></TableCell>
+                            <TableCell><code>{t.type || '—'}</code></TableCell>
+                            <TableCell>
+                              <Badge appearance="filled" color={t.runtimeState === 'Started' ? 'success' : t.runtimeState === 'Stopped' ? 'informative' : 'warning'}>
+                                {t.runtimeState || '—'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <div style={{ display: 'flex', gap: 4 }}>
+                                <Button size="small" disabled={triggersBusy || t.runtimeState === 'Started'} onClick={() => triggerAction(t.name, 'start')}>Start</Button>
+                                <Button size="small" disabled={triggersBusy || t.runtimeState !== 'Started'} onClick={() => triggerAction(t.name, 'stop')}>Stop</Button>
+                                <Button size="small" appearance="subtle" disabled={triggersBusy} onClick={() => triggerAction(t.name, 'delete')}>Delete</Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+
+                  <Subtitle2>Create new daily schedule trigger</Subtitle2>
+                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                    <Field label="Name">
+                      <Input value={newTriggerName} onChange={(_, d) => setNewTriggerName(d.value)} placeholder="daily-orders" />
+                    </Field>
+                    <Field label="UTC hour (0-23)">
+                      <Input type="number" min={0} max={23} value={String(newTriggerHour)} onChange={(_, d) => setNewTriggerHour(Math.max(0, Math.min(23, Number(d.value) || 0)))} />
+                    </Field>
+                    <Field label="Minute (0-59)">
+                      <Input type="number" min={0} max={59} value={String(newTriggerMinute)} onChange={(_, d) => setNewTriggerMinute(Math.max(0, Math.min(59, Number(d.value) || 0)))} />
+                    </Field>
+                  </div>
+
+                  {triggersError && (
+                    <MessageBar intent="error" style={{ marginTop: 12 }}>
+                      <MessageBarBody><MessageBarTitle>Trigger action failed</MessageBarTitle>{triggersError}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setTriggersOpen(false)} disabled={triggersBusy}>Close</Button>
+                  <Button appearance="primary" onClick={createTrigger} disabled={triggersBusy || !newTriggerName.trim()}>
+                    {triggersBusy ? 'Working…' : 'Create trigger'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
@@ -1512,6 +1702,17 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
     return () => window.removeEventListener('keydown', onKey);
   }, [selected, busy, save]);
 
+  // Inline schema editing — mutate the in-memory dataset; Save PUTs the whole
+  // dataset (schema included) through the real ADF datasets REST.
+  const patchSchema = useCallback((next: Array<{ name?: string; type?: string }>) => {
+    setDs((prev) => prev ? { ...prev, properties: { ...prev.properties, schema: next } } : prev);
+  }, []);
+  const addColumn = useCallback(() => {
+    const cur = ds?.properties.schema || [];
+    patchSchema([...cur, { name: `column${cur.length + 1}`, type: 'String' }]);
+  }, [ds, patchSchema]);
+  const clearSchema = useCallback(() => patchSchema([]), [patchSchema]);
+
   const createNew = useCallback(async () => {
     const name = window.prompt('New dataset name');
     if (!name || !linkedServices.length) {
@@ -1540,16 +1741,20 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
     finally { setBusy(false); }
   }, [linkedServices, loadList]);
 
-  // Ribbon — Import schema deep-links to ADF Studio (no inline schema import BFF route);
-  // Preview data honestly disabled until SELECT TOP 100 BFF lands.
+  // Ribbon — Save + inline schema column editing (add/clear), all persisted
+  // via the real ADF datasets PUT. No dead disabled buttons.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
+      { label: 'Item', actions: [
+        { label: 'New dataset', icon: <Add20Regular />, onClick: createNew },
+        { label: busy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: !busy && selected ? save : undefined, disabled: busy || !selected },
+      ]},
       { label: 'Schema', actions: [
-        { label: 'Import schema', disabled: true, title: 'Import schema — needs ADF datasets PUT with schema-import op (deferred; use ADF Studio for now)' },
-        { label: 'Preview data', disabled: true, title: 'Preview data — needs SELECT TOP 100 BFF route' },
+        { label: 'Add column', onClick: selected ? addColumn : undefined, disabled: !selected },
+        { label: 'Clear schema', onClick: selected && (ds?.properties.schema?.length || 0) > 0 ? clearSchema : undefined, disabled: !selected || (ds?.properties.schema?.length || 0) === 0 },
       ]},
     ]},
-  ], []);
+  ], [busy, selected, save, createNew, ds]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1599,15 +1804,37 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
             <Caption1>{type === 'AzureSqlTable' ? 'Table name' : 'Path (folder/file or wildcard)'}</Caption1>
             <Input value={path} onChange={(_, d) => setPath(d.value)} placeholder={type === 'AzureSqlTable' ? 'dbo.FactSales' : 'raw/orders/year=2026/*.parquet'} />
           </div>
-          <Subtitle2 style={{ marginTop: 8 }}>Schema ({ds?.properties.schema?.length || 0} columns)</Subtitle2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+            <Subtitle2>Schema ({ds?.properties.schema?.length || 0} columns)</Subtitle2>
+            <Button size="small" icon={<Add20Regular />} disabled={!selected} onClick={addColumn}>Add column</Button>
+            {(ds?.properties.schema?.length || 0) > 0 && (
+              <Button size="small" appearance="subtle" disabled={!selected} onClick={clearSchema}>Clear</Button>
+            )}
+          </div>
+          <Caption1>Define columns inline — saved with the dataset via the ADF datasets REST. (ADF Studio "Import schema" requires an interactive debug session; type columns here instead.)</Caption1>
           <Table aria-label="Schema" size="small">
-            <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader>
             <TableBody>
               {(ds?.properties.schema || []).length === 0 && (
-                <TableRow><TableCell colSpan={2}><Caption1>No schema imported. Use ADF Studio "Import schema" to populate.</Caption1></TableCell></TableRow>
+                <TableRow><TableCell colSpan={3}><Caption1>No columns yet. Click "Add column" to define the schema.</Caption1></TableCell></TableRow>
               )}
               {(ds?.properties.schema || []).map((c, i) => (
-                <TableRow key={i}><TableCell><code>{c.name || '—'}</code></TableCell><TableCell>{c.type || '—'}</TableCell></TableRow>
+                <TableRow key={i}>
+                  <TableCell>
+                    <Input size="small" value={c.name || ''} placeholder="column name"
+                      onChange={(_, d) => patchSchema((ds?.properties.schema || []).map((x, j) => j === i ? { ...x, name: d.value } : x))} />
+                  </TableCell>
+                  <TableCell>
+                    <Dropdown size="small" value={c.type || 'String'} selectedOptions={[c.type || 'String']}
+                      onOptionSelect={(_, d) => patchSchema((ds?.properties.schema || []).map((x, j) => j === i ? { ...x, type: d.optionValue || 'String' } : x))}>
+                      {['String', 'Int32', 'Int64', 'Decimal', 'Double', 'Boolean', 'DateTime', 'Date', 'Guid', 'Binary'].map((t) => <Option key={t} value={t}>{t}</Option>)}
+                    </Dropdown>
+                  </TableCell>
+                  <TableCell>
+                    <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Delete column"
+                      onClick={() => patchSchema((ds?.properties.schema || []).filter((_, j) => j !== i))} />
+                  </TableCell>
+                </TableRow>
               ))}
             </TableBody>
           </Table>
@@ -1645,6 +1872,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
   const [interval, setIntervalMin] = useState<string>('1');
   const [timeZone, setTimeZone] = useState<string>('UTC');
   const [targetPipeline, setTargetPipeline] = useState<string>('');
+  const [paramRows, setParamRows] = useState<Array<{ key: string; value: string }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -1685,6 +1913,8 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
         setTimeZone(recur.timeZone || 'UTC');
       }
       setTargetPipeline(p.pipelines?.[0]?.pipelineReference?.referenceName || '');
+      const params = p.pipelines?.[0]?.parameters || {};
+      setParamRows(Object.entries(params).map(([key, value]) => ({ key, value: typeof value === 'string' ? value : JSON.stringify(value) })));
     } catch (e: any) { setError(e?.message || String(e)); }
   }, []);
 
@@ -1723,13 +1953,18 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
           scope: '',
         };
       }
+      const parameters: Record<string, unknown> = {};
+      for (const { key, value } of paramRows) {
+        if (!key.trim()) continue;
+        try { parameters[key.trim()] = JSON.parse(value); } catch { parameters[key.trim()] = value; }
+      }
       const body: AdfTriggerDTO = {
         name: selected,
         properties: {
           type,
           pipelines: [{
             pipelineReference: { referenceName: targetPipeline, type: 'PipelineReference' },
-            parameters: {},
+            parameters,
           }],
           typeProperties,
         },
@@ -1745,7 +1980,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
       await loadTrigger(selected);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [selected, targetPipeline, type, frequency, interval, timeZone, loadTrigger]);
+  }, [selected, targetPipeline, type, frequency, interval, timeZone, paramRows, loadTrigger]);
 
   // v3.28 Phase 4.5: Ctrl+S triggers Save.
   useEffect(() => {
@@ -1812,12 +2047,12 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'Start', onClick: !busy && selected && runtimeState !== 'Started' ? () => setState('start') : undefined, disabled: busy || !selected || runtimeState === 'Started', title: runtimeState === 'Started' ? 'Trigger already started' : (!selected ? 'Select a trigger first' : undefined) },
         { label: 'Stop', onClick: !busy && selected && runtimeState === 'Started' ? () => setState('stop') : undefined, disabled: busy || !selected || runtimeState !== 'Started', title: runtimeState !== 'Started' ? 'Trigger is not started' : undefined },
       ]},
-      { label: 'Edit', actions: [
-        { label: 'Recurrence', disabled: true, title: 'Recurrence — use the Frequency / Interval / Time zone fields in the form below' },
-        { label: 'Parameters', disabled: true, title: 'Parameters — needs pipeline-parameter pass-through editor (deferred)' },
+      { label: 'Item', actions: [
+        { label: 'New trigger', icon: <Add20Regular />, onClick: createNew },
+        { label: busy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: !busy && selected && targetPipeline ? save : undefined, disabled: busy || !selected || !targetPipeline },
       ]},
     ]},
-  ], [busy, selected, runtimeState, setState]);
+  ], [busy, selected, runtimeState, setState, createNew, save, targetPipeline]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -1877,9 +2112,22 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
               <div className={s.field}><Caption1>Time zone</Caption1><Input value={timeZone} onChange={(_, d) => setTimeZone(d.value)} /></div>
             </div>
           )}
-          <Caption1>
-            Linked pipelines: {tr?.properties.pipelines?.length || 0}
-          </Caption1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+            <Subtitle2>Pipeline parameters</Subtitle2>
+            <Button size="small" icon={<Add20Regular />} onClick={() => setParamRows((r) => [...r, { key: '', value: '' }])}>Add parameter</Button>
+          </div>
+          <Caption1>Values passed to <code>{targetPipeline || 'the pipeline'}</code> each time the trigger fires. Strings or JSON literals.</Caption1>
+          {paramRows.length === 0 && <Caption1>No parameters — the pipeline runs with its defaults.</Caption1>}
+          {paramRows.map((row, i) => (
+            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Input style={{ flex: 1 }} placeholder="name" value={row.key}
+                onChange={(_, d) => setParamRows((rs) => rs.map((x, j) => j === i ? { ...x, key: d.value } : x))} />
+              <Input style={{ flex: 2 }} placeholder='value (e.g. "raw/2026" or 5)' value={row.value}
+                onChange={(_, d) => setParamRows((rs) => rs.map((x, j) => j === i ? { ...x, value: d.value } : x))} />
+              <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Remove parameter"
+                onClick={() => setParamRows((rs) => rs.filter((_, j) => j !== i))} />
+            </div>
+          ))}
         </div>
       }
     />
