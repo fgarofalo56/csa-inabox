@@ -8,9 +8,11 @@
  *   transforms: [ { kind: string, ...config } ]
  * }
  *
- * v2.1 note: only metadata is persisted. The Event Hubs -> Kusto
- * ingestion pipeline itself is not yet wired (deferred to v3); the
- * editor surfaces this clearly via a MessageBar.
+ * The designer topology is persisted to Cosmos here. The "Publish to
+ * Fabric" action (sibling /publish route) pushes the topology to a real
+ * Fabric Eventstream item via the Fabric definition REST API. Node-level
+ * Activate/Deactivate remains a Fabric-portal toggle (not in the public
+ * REST surface); the editor discloses that honestly.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -45,11 +47,17 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       sink: item.state?.sink as Record<string, any> | undefined,
       transforms: Array.isArray(item.state?.transforms) ? item.state!.transforms : [],
     };
+    const published = typeof item.state?.fabricEventstreamId === 'string';
     return NextResponse.json({
       ok: true,
       displayName: item.displayName,
-      runtimeStatus: 'config-only',
-      runtimeNote: 'v2.1: pipeline configuration is persisted but the Event Hubs -> Kusto ingestion runtime is wired in v3.',
+      runtimeStatus: published ? 'published' : 'draft',
+      runtimeNote: published
+        ? 'Topology published to a Fabric Eventstream item. Activate nodes in the Fabric portal to start streaming.'
+        : 'Draft — design the topology and Publish to Fabric to create the live Eventstream item.',
+      fabricEventstreamId: item.state?.fabricEventstreamId ?? null,
+      fabricWorkspaceId: item.state?.fabricWorkspaceId ?? null,
+      lastPublishedAt: item.state?.lastPublishedAt ?? null,
       config,
     });
   } catch (e: any) {

@@ -526,6 +526,77 @@ export async function getTablesMirroringStatus(workspaceId: string, id: string):
 }
 
 // ============================================================
+// Eventstream (Fabric Real-Time Intelligence)
+//
+// Publishes the visual-designer topology to a real Fabric Eventstream
+// item via the definition-based REST API. The topology is carried as a
+// Base64-encoded `eventstream.json` part (Fabric's documented format).
+//
+// Docs: https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/eventstream-rest-api
+//
+// Node-level Pause/Resume (Activate/Deactivate) is a portal-only toggle —
+// it is NOT in the public REST surface — so the editor discloses that
+// honestly rather than shipping a dead "Start" button.
+// ============================================================
+
+export async function listEventstreams(workspaceId: string): Promise<FabricItem[]> {
+  const j = await call<{ value: FabricItem[] }>(`/workspaces/${encodeURIComponent(workspaceId)}/eventstreams`);
+  return j.value || [];
+}
+
+export async function getEventstream(workspaceId: string, id: string): Promise<FabricItem> {
+  return call<FabricItem>(`/workspaces/${encodeURIComponent(workspaceId)}/eventstreams/${encodeURIComponent(id)}`);
+}
+
+export async function getEventstreamDefinition(
+  workspaceId: string,
+  id: string,
+): Promise<FabricItemDefinition | { _accepted: true; location?: string }> {
+  return call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/eventstreams/${encodeURIComponent(id)}/getDefinition`,
+    { method: 'POST', acceptLongRunning: true },
+  );
+}
+
+/**
+ * Build the Fabric Eventstream item definition from a topology object.
+ * Fabric expects a single `eventstream.json` part, Base64-encoded.
+ */
+export function buildEventstreamDefinition(topology: unknown): FabricItemDefinition {
+  const payload = Buffer.from(JSON.stringify(topology), 'utf-8').toString('base64');
+  return {
+    parts: [{ path: 'eventstream.json', payload, payloadType: 'InlineBase64' }],
+  };
+}
+
+/**
+ * Create (or update) a Fabric Eventstream with the supplied topology.
+ * If `id` is provided, updates the existing item's definition; otherwise
+ * creates a new Eventstream item in the workspace. Returns the created
+ * item or a long-running operation handle (202).
+ */
+export async function publishEventstream(
+  workspaceId: string,
+  body: { id?: string; displayName: string; description?: string; topology: unknown },
+): Promise<FabricItem | { _accepted: true; location?: string }> {
+  const definition = buildEventstreamDefinition(body.topology);
+  if (body.id) {
+    return call(
+      `/workspaces/${encodeURIComponent(workspaceId)}/eventstreams/${encodeURIComponent(body.id)}/updateDefinition`,
+      { method: 'POST', body: { definition }, acceptLongRunning: true },
+    );
+  }
+  return call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/eventstreams`,
+    { method: 'POST', body: { displayName: body.displayName, description: body.description, definition }, acceptLongRunning: true },
+  );
+}
+
+export async function deleteEventstream(workspaceId: string, id: string): Promise<void> {
+  await call(`/workspaces/${encodeURIComponent(workspaceId)}/eventstreams/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+// ============================================================
 // Job instances (history)
 // ============================================================
 

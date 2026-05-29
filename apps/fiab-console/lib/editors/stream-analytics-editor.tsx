@@ -12,7 +12,9 @@
  *   - List ASA jobs via ARM (subscription-scoped via UAMI)
  *   - Show job state (Starting/Started/Stopping/Stopped) + last output time
  *   - Edit the streaming query (Stream Analytics Query Language — SQL-like)
- *   - Manage inputs / outputs (references — full create flow deferred to v2)
+ *   - Inputs / outputs / functions listed live from ARM ($expand); the
+ *     stream-analytics-client also exposes createOrUpdateInput/Output for
+ *     full CRUD wiring
  *   - Start / Stop the job
  *
  * Honest gating:
@@ -62,10 +64,12 @@ interface AsaJob {
   lastOutputEventTime?: string;
   inputs?: AsaInput[];
   outputs?: AsaOutput[];
+  functions?: AsaFunction[];
   query?: string;
 }
 interface AsaInput { name: string; type: string; serialization?: string; }
 interface AsaOutput { name: string; type: string; }
+interface AsaFunction { name: string; type?: string; binding?: string; }
 
 const STARTER_QUERY = `-- Stream Analytics Query (SAQL — SQL-like over time-windowed streams)
 -- Tumbling-window average per device, every 30 seconds.
@@ -85,7 +89,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const s = useStyles();
   const [jobs, setJobs] = useState<AsaJob[] | null>(null);
   const [selected, setSelected] = useState<string>(id !== 'new' ? id : '');
-  const [tab, setTab] = useState<'query' | 'inputs' | 'outputs' | 'monitoring'>('query');
+  const [tab, setTab] = useState<'query' | 'inputs' | 'outputs' | 'functions' | 'monitoring'>('query');
   const [job, setJob] = useState<AsaJob | null>(null);
   const [query, setQuery] = useState(STARTER_QUERY);
   const [origQuery, setOrigQuery] = useState(STARTER_QUERY);
@@ -210,7 +214,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
       { label: 'Topology', actions: [
         { label: 'Inputs', onClick: () => setTab('inputs') },
         { label: 'Outputs', onClick: () => setTab('outputs') },
-        { label: 'Functions', disabled: true, title: 'Functions — needs ARM PUT /streamingjobs/{name}/functions BFF route (deferred)' },
+        { label: 'Functions', onClick: () => setTab('functions') },
       ]},
     ]},
   ], [busy, selected, jobState, setState, loadList, loadDetail, dirty, save]);
@@ -258,6 +262,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
               <Tab value="query">Query</Tab>
               <Tab value="inputs">Inputs ({job?.inputs?.length ?? 0})</Tab>
               <Tab value="outputs">Outputs ({job?.outputs?.length ?? 0})</Tab>
+              <Tab value="functions">Functions ({job?.functions?.length ?? 0})</Tab>
               <Tab value="monitoring">Monitoring</Tab>
             </TabList>
           </div>
@@ -296,6 +301,22 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                     <TableRow key={o.name}><TableCell>{o.name}</TableCell><TableCell>{o.type}</TableCell></TableRow>
                   ))}
                   {(!job?.outputs || job.outputs.length === 0) && <TableRow><TableCell colSpan={2}>No outputs defined.</TableCell></TableRow>}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {tab === 'functions' && (
+            <div className={s.tableWrap}>
+              <Table size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Binding</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {(job?.functions || []).map(f => (
+                    <TableRow key={f.name}><TableCell>{f.name}</TableCell><TableCell>{f.type || '—'}</TableCell><TableCell>{f.binding || '—'}</TableCell></TableRow>
+                  ))}
+                  {(!job?.functions || job.functions.length === 0) && <TableRow><TableCell colSpan={3}>No functions defined. Reference UDFs / JavaScript / Azure ML endpoints in your SAQL once defined on the job.</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </div>

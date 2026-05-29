@@ -100,9 +100,11 @@ export interface AsaJobSummary {
 
 export interface AsaInput { name: string; type: string; serialization?: string; }
 export interface AsaOutput { name: string; type: string; }
+export interface AsaFunction { name: string; type?: string; binding?: string; }
 export interface AsaJobDetail extends AsaJobSummary {
   inputs?: AsaInput[];
   outputs?: AsaOutput[];
+  functions?: AsaFunction[];
   query?: string;
 }
 
@@ -141,10 +143,16 @@ export async function getJob(name: string): Promise<AsaJobDetail> {
     name: o.name,
     type: o.properties?.datasource?.type || 'Unknown',
   }));
+  const functions: AsaFunction[] = (body.properties?.functions || []).map((f: any) => ({
+    name: f.name,
+    type: f.properties?.type,
+    binding: f.properties?.properties?.binding?.type,
+  }));
   return {
     ...base,
     inputs,
     outputs,
+    functions,
     query: body.properties?.transformation?.properties?.query,
   };
 }
