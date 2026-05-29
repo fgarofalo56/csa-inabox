@@ -258,7 +258,7 @@ COBOL programs with embedded SQL (EXEC SQL) require modernization or emulation. 
 ## Related resources
 
 - **Migration playbook:** [Db2 to Azure SQL Playbook](../db2-to-azure-sql.md) -- the condensed end-to-end guide
-- **Companion database migrations:** [Oracle to Azure](../oracle-to-azure/index.md) | [SQL Server to Azure](../sql-server-to-azure/index.md) | [SAP to Azure](../sap-to-azure/index.md)
+- **Companion database migrations:** [Oracle to Azure](../oracle-to-azure/index.md) | [SQL Server to Azure](../sql-server-to-azure/index.md)
 - **CSA-in-a-Box platform:**
     - `csa_platform/unity_catalog_pattern/` -- OneLake + Unity Catalog
     - `csa_platform/csa_platform/governance/purview/` -- Purview automation, classifications
