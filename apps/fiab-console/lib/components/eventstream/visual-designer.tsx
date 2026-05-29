@@ -307,20 +307,20 @@ export function VisualDesigner({ config, onChange }: VisualDesignerProps) {
 
   return (
     <div className={s.designer} role="region" aria-label="Eventstream visual designer">
-      <div className={s.canvas}>
-        <div className={s.addButtons}>
-          <Button icon={<Add20Regular />} onClick={addSource} aria-label="Add source">
+      <div className={s.canvas} data-canvas="eventstream" aria-label="Pipeline canvas">
+        <div className={s.addButtons} data-palette="eventstream" role="toolbar" aria-label="Node palette">
+          <Button icon={<Add20Regular />} onClick={addSource} aria-label="Add source" data-palette-item="source">
             Add source
           </Button>
-          <Button icon={<Add20Regular />} onClick={addTransform} aria-label="Add transform">
+          <Button icon={<Add20Regular />} onClick={addTransform} aria-label="Add transform" data-palette-item="transform">
             Add transform
           </Button>
-          <Button icon={<Add20Regular />} onClick={addSink} aria-label="Add destination">
+          <Button icon={<Add20Regular />} onClick={addSink} aria-label="Add destination" data-palette-item="destination">
             Add destination
           </Button>
         </div>
 
-        <div className={s.flow}>
+        <div className={s.flow} data-flow="true">
           <div className={s.column}>
             <Caption1 className={s.columnLabel}>Sources</Caption1>
             {sources.length === 0 && <Caption1 className={s.inspectorEmpty}>(none)</Caption1>}
