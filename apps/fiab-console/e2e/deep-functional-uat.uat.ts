@@ -61,16 +61,15 @@ const PRIMARY_ACTIONS: Record<string, string[]> = {
   'AI & Agents': ['Ask', 'Send', 'Run'],
 };
 
-/** Slugs whose editors are visual designers and need drag/drop verification. */
+/**
+ * Slugs that are GENUINELY drag-drop pipeline designers — only these are
+ * expected to have a canvas + palette. Power BI (report/dashboard/semantic),
+ * KQL query editors, graph query editors, ai-foundry tabs, ontology, plan,
+ * activator are NOT drag-drop canvases and must NOT be down-graded for
+ * lacking one — they're scored on their real primary action instead.
+ */
 const VISUAL_DESIGNERS = new Set<string>([
-  'data-pipeline', 'synapse-pipeline', 'adf-pipeline',
-  'eventstream', 'kql-dashboard', 'kql-queryset',
-  'dataflow', 'prompt-flow',
-  'ai-foundry-hub',
-  'cosmos-gremlin-graph', 'cypher-graph', 'gql-graph', 'graph-model',
-  'ontology', 'plan',
-  'semantic-model', 'report', 'dashboard',
-  'activator',
+  'data-pipeline', 'synapse-pipeline', 'adf-pipeline', 'dataflow', 'eventstream',
 ]);
 
 interface FunctionalResult {
@@ -138,7 +137,11 @@ test.describe.serial('Deep functional UAT — every catalog item', () => {
       page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 200)); });
 
       await page.goto(`${BASE_URL}/items/${item.slug}/new`, { waitUntil: 'domcontentloaded' });
-      await page.waitForTimeout(3000); // hydration
+      // Wait for the editor to actually hydrate — poll for a ribbon button to
+      // appear (up to 12s) instead of a fixed 3s. The fixed wait caused false
+      // F grades on slow-hydrating editors (e.g. lakehouse at 7.6s nav).
+      await page.locator('main button').first().waitFor({ state: 'visible', timeout: 12_000 }).catch(() => {});
+      await page.waitForTimeout(1500); // settle after first button paints
       const navMs = Date.now() - t0;
 
       const enabled = await page.locator('main button:not([disabled])').allTextContents()
@@ -170,11 +173,17 @@ test.describe.serial('Deep functional UAT — every catalog item', () => {
       const screenshotPath = path.join(SCREENSHOT_DIR, `${item.slug}.png`);
       await page.screenshot({ path: screenshotPath, fullPage: false });
 
-      // Verdict
+      // Verdict — functional behavior first, canvas penalty only for genuine
+      // drag-drop designers that are otherwise non-functional.
       let verdict: FunctionalResult['verdict'] = 'F';
       if (enabled.length === 0) verdict = 'F';
-      else if (visualDesignerOk === false) verdict = 'D'; // visual designer but no canvas
-      else if (primaryAction.clicked && !primaryAction.toastSeen?.startsWith('click-error')) verdict = 'B';
+      else if (primaryAction.clicked && !primaryAction.toastSeen?.startsWith('click-error')) {
+        // Functional primary action. A genuine pipeline designer still drops
+        // to C (not D) if its canvas is missing — it works but lacks the
+        // visual surface. Non-designers keep their B.
+        verdict = (visualDesignerOk === false) ? 'C' : 'B';
+      }
+      else if (visualDesignerOk === false) verdict = 'D'; // designer, no canvas, no working action
       else if (enabled.length >= 3 && tabs.length >= 2) verdict = 'B';
       else if (enabled.length >= 1) verdict = 'C';
 
