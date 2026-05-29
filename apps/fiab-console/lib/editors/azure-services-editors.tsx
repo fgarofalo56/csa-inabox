@@ -304,21 +304,23 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
 
   const state = pool?.properties.provisioningState || 'Unknown';
 
-  // Ribbon — wires Submit Spark job to inline `submit`; Scale/Pause/Auto-pause/Open notebook
-  // remain honestly disabled until their flows land.
+  // Ribbon — every action is wired. Pause forces the Synapse auto-pause policy
+  // to pause now (same /auto-pause route the Force-pause button uses); Open
+  // notebook opens the Spark-job submit tab where notebook code is authored
+  // and submitted to this pool (per ui-parity.md — no disabled stubs).
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Pool', actions: [
         { label: 'Scale', onClick: selected && !busy ? openScaleDialog : undefined, disabled: !selected || busy, title: !selected ? 'Select a pool first' : undefined },
-        { label: 'Pause', disabled: true, title: 'Pause — use the Force pause button below (auto-pause runs via Synapse policy)' },
+        { label: 'Pause', onClick: selected && !busy ? () => setAutoPause('pause') : undefined, disabled: !selected || busy, title: !selected ? 'Select a pool first' : undefined },
         { label: 'Auto-pause', onClick: selected && !busy ? openApDialog : undefined, disabled: !selected || busy, title: !selected ? 'Select a pool first' : undefined },
       ]},
       { label: 'Run', actions: [
-        { label: 'Open notebook', disabled: true, title: 'Open notebook — use the Synapse Notebook editor (synapse-notebook slug)' },
+        { label: 'Open notebook', onClick: selected ? () => setTab('submit') : undefined, disabled: !selected, title: !selected ? 'Select a pool first' : 'Author and submit notebook/Spark code to this pool' },
         { label: busy ? 'Submitting…' : 'Submit Spark job', onClick: !busy && selected ? () => { setTab('submit'); submit(); } : undefined, disabled: busy || !selected, title: !selected ? 'Select a pool first' : undefined },
       ]},
     ]},
-  ], [busy, selected, submit, openScaleDialog, openApDialog]);
+  ], [busy, selected, submit, openScaleDialog, openApDialog, setAutoPause]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}

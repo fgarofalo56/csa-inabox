@@ -141,6 +141,74 @@ export function cypherToKql(cypher: string, sourceTable: string = 'GraphSnapshot
 }
 
 /**
+ * Translate a GQL (ISO/IEC 39075) MATCH … RETURN query into a Gremlin
+ * traversal for the Cosmos Gremlin API. Coverage mirrors the Cypher path:
+ *
+ *   MATCH (p:Person {name:'Alice'})-[:KNOWS]->(f:Person) RETURN f.name
+ *     → g.V().hasLabel('Person').has('name','Alice')
+ *        .out('KNOWS').hasLabel('Person')
+ *        .values('name').limit(N)
+ *
+ * Property maps inside `{ ... }` become `.has(k, v)` steps. A trailing
+ * RETURN of `alias.prop` projects with `.values(prop)`; a bare alias or `*`
+ * returns the matched vertices via `.elementMap()`. A LIMIT clause caps it.
+ * Anything outside the grammar throws TranslationError so the caller can
+ * surface an honest "couldn't translate — write Gremlin directly" message.
+ */
+export function gqlToGremlin(gql: string): string {
+  const lower = gql.toLowerCase();
+  const matchIdx = lower.indexOf('match');
+  if (matchIdx < 0) throw new TranslationError('GQL query must contain MATCH', 'e.g. MATCH (p:Person)-[:KNOWS]->(f) RETURN f.name');
+  const returnIdx = lower.indexOf('return');
+  const limitIdx = lower.indexOf('limit');
+  const patternEnd = returnIdx >= 0 ? returnIdx : (limitIdx >= 0 ? limitIdx : gql.length);
+  const patternRaw = gql.slice(matchIdx + 5, patternEnd).trim();
+  const returnPart = returnIdx >= 0 ? gql.slice(returnIdx + 6, limitIdx > returnIdx ? limitIdx : undefined).trim() : '';
+  const limit = limitIdx >= 0 ? parseInt(gql.slice(limitIdx + 5).trim(), 10) : 25;
+
+  // Strip inline `{prop:val, ...}` property maps before pattern parsing
+  // (the Cypher parsePattern grammar doesn't accept them) and stash them.
+  const propMaps: Record<string, Array<[string, string]>> = {};
+  const stripped = patternRaw.replace(/\(([^){}]*?)\s*\{([^}]*)\}\s*\)/g, (_m, head: string, props: string) => {
+    const alias = head.split(':')[0].trim();
+    propMaps[alias] = props.split(',').map((kv) => {
+      const [k, v] = kv.split(':').map((x) => x.trim());
+      return [k, v?.replace(/^['"]|['"]$/g, '') ?? ''] as [string, string];
+    });
+    return `(${head.trim()})`;
+  });
+
+  const { steps } = parsePattern(stripped);
+  const nodes = steps.filter((s) => s.kind === 'node') as Array<{ kind: 'node'; alias: string; label?: string }>;
+  const edges = steps.filter((s) => s.kind === 'edge') as Array<{ kind: 'edge'; alias: string; label?: string; dir: '->' | '<-' | '-' }>;
+  if (nodes.length === 0) throw new TranslationError('GQL pattern must contain at least one node');
+
+  const parts: string[] = ['g.V()'];
+  const first = nodes[0];
+  if (first.label) parts.push(`hasLabel('${first.label}')`);
+  for (const [k, v] of propMaps[first.alias] || []) parts.push(`has('${k}', '${v}')`);
+
+  edges.forEach((e, idx) => {
+    const target = nodes[idx + 1];
+    const stepName = e.dir === '<-' ? 'in' : 'out';
+    parts.push(e.label ? `${stepName}('${e.label}')` : `${stepName}()`);
+    if (target?.label) parts.push(`hasLabel('${target.label}')`);
+    for (const [k, v] of propMaps[target?.alias || ''] || []) parts.push(`has('${k}', '${v}')`);
+  });
+
+  // Projection: alias.prop → values(prop); bare alias / * → elementMap()
+  const proj = returnPart.split(',')[0]?.trim() || '';
+  if (proj && proj !== '*' && proj.includes('.')) {
+    const prop = proj.split('.')[1].split(/\s+as\s+/i)[0].trim();
+    parts.push(`values('${prop}')`);
+  } else {
+    parts.push('elementMap()');
+  }
+  parts.push(`limit(${Number.isFinite(limit) ? limit : 25})`);
+  return parts.join('\n  .');
+}
+
+/**
  * Approximate reverse direction. Only handles the canonical
  * `<src> | graph-match (…) [where …] project …` shape we emit. Useful
  * for "explain this KQL" labels — not a round-trip guarantee.
