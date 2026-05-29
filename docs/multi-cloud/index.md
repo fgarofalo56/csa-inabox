@@ -5,6 +5,20 @@ description: Avoid vendor lock-in by designing portable workloads. Azure is the 
 
 # Multi-Cloud
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 ![Multi-Cloud — Azure as the architectural anchor](../assets/images/hero/multi-cloud/index.svg){ .architecture-hero loading="eager" }
 
 !!! quote "The thesis"
@@ -14,8 +28,8 @@ description: Avoid vendor lock-in by designing portable workloads. Azure is the 
     cloud that designs and architects it that way.
 
 The most common multi-cloud failure is treating it as a procurement
-exercise — buy AWS for one workload, GCP for another, Azure for a
-third, and call it diversified. That is not multi-cloud. That is
+exercise — buy one cloud for one workload, another for the next,
+Azure for a third, and call it diversified. That is not multi-cloud. That is
 **multi-lock-in**. You now have three vendors holding three pieces
 of your business hostage instead of one.
 
@@ -23,11 +37,11 @@ Real multi-cloud is an **architectural posture**. It means every
 critical design decision — table format, identity, infrastructure
 definition, model API contract, networking — is made against
 **open standards** so any workload can be lifted to any provider
-on competitive terms. Azure is uniquely positioned for this because
+on competitive terms. Azure is well suited for this because
 its primary anchor services (Entra ID, ADLS Gen2 + Delta/Iceberg,
 Bicep + Terraform, AI Foundry over OpenAI-compatible APIs,
-AKS + Arc) are built around the same open standards that AWS, GCP,
-Oracle, and on-prem platforms already speak.
+AKS + Arc) are built around the same open standards that other major
+clouds and on-prem platforms already speak.
 
 This section explains the thesis, the reference architecture, and
 the concrete patterns for getting there.
@@ -84,9 +98,9 @@ the concrete patterns for getting there.
 
 | Lock | Vendor-specific form | Open form (Azure-anchored) |
 |---|---|---|
-| **Data format** | Redshift columnar, BigQuery Capacitor, Snowflake micro-partitions | Delta Lake or Apache Iceberg on ADLS Gen2 — readable by any compute engine |
-| **Identity** | AWS IAM users, GCP local accounts, per-cloud SSO islands | Entra ID as the federated identity hub via SAML / OIDC |
-| **Infrastructure** | CloudFormation, Google Deployment Manager, OCI Resource Manager | Bicep + Terraform — same authoring model, multiple providers |
+| **Data format** | Proprietary per-cloud warehouse storage formats | Delta Lake or Apache Iceberg on ADLS Gen2 — readable by any compute engine |
+| **Identity** | Per-cloud native accounts and SSO islands | Entra ID as the federated identity hub via SAML / OIDC |
+| **Infrastructure** | Per-cloud proprietary IaC templates | Bicep + Terraform — same authoring model, multiple providers |
 
 The whitepaper walks each in depth.
 

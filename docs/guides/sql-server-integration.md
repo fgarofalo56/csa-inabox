@@ -5,6 +5,20 @@ description: "Comprehensive guide for integrating on-premises SQL Server 2022 wi
 
 # On-Premises SQL Server Integration
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 ## Overview
 
 Every federal agency, defense contractor, and regulated enterprise has the same conversation at some point: "We need cloud analytics, but we cannot move the database." The reasons vary — FISMA boundary constraints, application coupling, change-control overhead, or simply that the SQL Server instance is so deeply embedded in operations that migration risk outweighs any benefit.
@@ -1168,7 +1182,7 @@ flowchart TD
 
 - **[Self-Hosted Integration Runtime](../SELF_HOSTED_IR.md)** — deploying, scaling, and monitoring the SHIR that bridges on-prem to Azure
 - **[Azure Data Factory Setup](../ADF_SETUP.md)** — ADF pipeline artifacts, linked services, and CI/CD
-- **[Multi-Cloud Data Virtualization](../use-cases/multi-cloud-data-virtualization.md)** — broader virtualization patterns including AWS, GCP, and SaaS sources
+- **[Multi-Cloud Data Virtualization](../use-cases/multi-cloud-data-virtualization.md)** — broader virtualization patterns spanning other clouds and SaaS sources
 - **[Performance Tuning](../best-practices/performance-tuning.md)** — optimizing pipeline throughput and query performance
 - **[Security & Compliance](../best-practices/security-compliance.md)** — encryption, access control, and compliance patterns
 - **[Disaster Recovery](../best-practices/disaster-recovery.md)** — DR strategies including hybrid failover scenarios

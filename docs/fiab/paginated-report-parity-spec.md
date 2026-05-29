@@ -1,5 +1,19 @@
 # Loom Paginated Report Editor — Fabric-parity spec
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 > Captured 2026-05-26 by catalog agent `fabric-parity-loop`. Source: Microsoft Learn — Power BI Report Builder (`/power-bi/paginated-reports/paginated-reports-report-design-view`, `report-builder-power-bi`, `web-authoring/paginated-formatted-table`, `paginated-reports-edit-service`) and Report Definition Language (`/power-bi/paginated-reports/report-definition-language`).
 
 A **Paginated Report** is an RDL-based pixel-perfect report — an XML report definition (`.rdl`) authored in **Power BI Report Builder** (Windows desktop) or the **paginated report web authoring** experience (Power BI service, currently Preview, limited to formatted tables on a single semantic model). Paginated reports are designed for printable / multi-page / fixed-layout output (invoices, statements, regulatory PDFs), in contrast to interactive Power BI (`.pbix`) reports.

@@ -1,5 +1,19 @@
 # Federal Cloud Adoption Trends — 2026
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 > **TL;DR:** Federal cloud spending has crossed $20 billion annually, driven by Cloud Smart mandates, zero trust executive orders, and aggressive modernization timelines. FedRAMP Rev 5 and continuous ATO automation are reshaping how agencies authorize cloud services. Azure Government has strengthened its position at IL4/IL5/IL6 while commercial hyperscalers compete fiercely for JWCC task orders. This report maps the trends that matter for CSA-in-a-Box deployments in federal, state, and local government environments.
 
 ---

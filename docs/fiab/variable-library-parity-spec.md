@@ -1,5 +1,19 @@
 # Loom Variable Library Editor — Fabric-parity build spec
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 > Reference: Microsoft Learn — *What is a variable library?* (`/fabric/cicd/variable-library/variable-library-overview`), *Variable types in variable libraries* (`/fabric/cicd/variable-library/variable-types`), *Value-sets in variable libraries* (`/fabric/cicd/variable-library/value-sets`), *Item reference variable type (preview)* (`/fabric/cicd/variable-library/item-reference-variable-type`), *Variable library permissions* (`/fabric/cicd/variable-library/variable-library-permissions`), *Variable library CI/CD* (`/fabric/cicd/variable-library/variable-library-cicd`), *Variable library definition* (`/rest/api/fabric/articles/item-management/definitions/variable-library-definition`), *Automate variable libraries by using APIs* (`/fabric/cicd/variable-library/automate-variable-library`). Documented 2026-05-26 by catalog agent.
 
 ## Overview

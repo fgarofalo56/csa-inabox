@@ -1,5 +1,19 @@
 # Migrating from IBM Db2 to Azure SQL
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **Status:** Authored 2026-04-30
 **Audience:** Federal CIO / CDO / DBA leads / Enterprise Architects running IBM Db2 estates on z/OS mainframes or LUW (Linux/UNIX/Windows) and migrating to Azure-native managed databases.
 **Scope:** IBM Db2 for z/OS, Db2 for LUW, Db2 for iSeries migrating to Azure SQL Database, Azure SQL Managed Instance, or SQL Server on Azure VMs. Covers SSMA-based schema conversion, data movement, stored procedure migration, COBOL/CICS application modernization, and CSA-in-a-Box analytics integration.
