@@ -22,7 +22,38 @@ import {
   parseOntologyHierarchy,
   aiStateLabel, aiStatusLabel,
   computeGeoBbox, bboxToZoom,
+  parseUdfFunctions,
 } from '../_family-utils';
+
+// ============================================================
+// parseUdfFunctions (UserDataFunctionEditor explorer + Test panel)
+// ============================================================
+describe('parseUdfFunctions', () => {
+  it('parses a decorated function with typed params + defaults', () => {
+    const src = `import fabric.functions as fn\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    return {}`;
+    expect(parseUdfFunctions(src)).toEqual([
+      { name: 'compute_score', returns: 'dict', params: [
+        { name: 'user_id', type: 'str', default: undefined },
+        { name: 'weight', type: 'float', default: '1.0' },
+      ] },
+    ]);
+  });
+
+  it('excludes undecorated helper functions', () => {
+    const src = `@udf.function()\ndef public_fn(x: int) -> int:\n    return helper(x)\n\ndef helper(x: int) -> int:\n    return x * 2`;
+    const fns = parseUdfFunctions(src);
+    expect(fns.map((f) => f.name)).toEqual(['public_fn']);
+  });
+
+  it('handles a no-arg function', () => {
+    const src = `@udf.function()\ndef ping() -> str:\n    return "ok"`;
+    expect(parseUdfFunctions(src)).toEqual([{ name: 'ping', returns: 'str', params: [] }]);
+  });
+
+  it('returns [] for source with no decorated functions', () => {
+    expect(parseUdfFunctions('def x(): pass')).toEqual([]);
+  });
+});
 
 // ============================================================
 // splitAdlsPath / joinAdlsPath

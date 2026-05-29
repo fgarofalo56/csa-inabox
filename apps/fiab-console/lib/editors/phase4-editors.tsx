@@ -18,7 +18,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Field, Dropdown, Option,
+  Field, Dropdown, Option, Switch,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -34,7 +34,9 @@ import {
   parseOntologyHierarchy,
   computeGeoBbox,
   bboxToZoom,
+  parseUdfFunctions,
   type VarType,
+  type UdfFunction,
 } from './_family-utils';
 
 const useStyles = makeStyles({
@@ -664,6 +666,30 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
   });
   const [publishing, setPublishing] = useState(false);
   const [publishMsg, setPublishMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  // Test query console.
+  const [queryText, setQueryText] = useState('query {\n  __typename\n}');
+  const [queryVars, setQueryVars] = useState('');
+  const [queryBusy, setQueryBusy] = useState(false);
+  const [queryResp, setQueryResp] = useState<{ status: number; body: string } | null>(null);
+  const [queryErr, setQueryErr] = useState<string | null>(null);
+
+  const runQuery = useCallback(async () => {
+    setQueryBusy(true); setQueryErr(null); setQueryResp(null);
+    let variables: any = {};
+    if (queryVars.trim()) {
+      try { variables = JSON.parse(queryVars); } catch (e: any) { setQueryErr(`Variables must be valid JSON: ${e?.message}`); setQueryBusy(false); return; }
+    }
+    try {
+      const r = await fetch(`/api/items/graphql-api/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query: queryText, variables }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setQueryErr(j.error || `HTTP ${r.status}`); return; }
+      setQueryResp({ status: j.status, body: j.body });
+    } catch (e: any) { setQueryErr(e?.message || String(e)); }
+    finally { setQueryBusy(false); }
+  }, [id, queryText, queryVars]);
 
   const publish = useCallback(async () => {
     setPublishing(true); setPublishMsg(null);
@@ -703,11 +729,14 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'Reload', onClick: reload },
         { label: publishing ? 'Publishing…' : 'Publish to APIM', onClick: publish, disabled: publishing || saving },
       ]},
-      { label: 'Auth', actions: [
-        { label: 'Subscription required', disabled: true, title: 'authoring of subscription requirements via UI deferred — toggle persists from form below' },
+      { label: 'Run', actions: [
+        { label: queryBusy ? 'Running…' : 'Run query', onClick: runQuery, disabled: queryBusy },
+      ]},
+      { label: 'Resolvers', actions: [
+        { label: 'Edit resolver policies', onClick: () => window.location.assign(`/items/apim-policy/${encodeURIComponent(id)}?scope=api&apiId=${encodeURIComponent(id)}`) },
       ]},
     ]},
-  ], [reload, publish, publishing, saving]);
+  ], [reload, publish, publishing, saving, queryBusy, runQuery, id]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -724,8 +753,17 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
         <Input value={state.serviceUrl} onChange={(_, d) => setState((p) => ({ ...p, serviceUrl: d.value }))} placeholder="https://backend.example.com/graphql" />
         <Caption1>Description</Caption1>
         <Input value={state.description} onChange={(_, d) => setState((p) => ({ ...p, description: d.value }))} />
+        {/* Subscription required — now a live form control (the deferred ribbon
+            button is removed; this persists to Cosmos and is sent on publish). */}
+        <Field label="Subscription required (consumers need an APIM subscription key)">
+          <Switch
+            checked={!!state.subscriptionRequired}
+            onChange={(_, d) => setState((p) => ({ ...p, subscriptionRequired: d.checked }))}
+            label={state.subscriptionRequired ? 'Yes' : 'No (anonymous)'}
+          />
+        </Field>
         <Subtitle2 style={{ marginTop: 8 }}>Schema (SDL)</Subtitle2>
-        <MonacoTextarea value={state.sdl} onChange={(v) => setState((p) => ({ ...p, sdl: v }))} language="graphql" height={300} minHeight={240} ariaLabel="GraphQL SDL" />
+        <MonacoTextarea value={state.sdl} onChange={(v) => setState((p) => ({ ...p, sdl: v }))} language="graphql" height={260} minHeight={200} ariaLabel="GraphQL SDL" />
         {state.lastPublishedAt && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
             Last published {new Date(state.lastPublishedAt).toLocaleString()} → <code>{state.lastPublishedTo}</code>
@@ -736,6 +774,31 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
             <MessageBarBody>{publishMsg.text}</MessageBarBody>
           </MessageBar>
         )}
+
+        {/* Test query console — runs against the published APIM GraphQL endpoint. */}
+        <Subtitle2 style={{ marginTop: 8 }}>Test query console</Subtitle2>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Runs against the published APIM GraphQL endpoint. Publish first if you haven&apos;t.</Caption1>
+        <MonacoTextarea value={queryText} onChange={setQueryText} language="graphql" height={140} minHeight={100} ariaLabel="GraphQL query" />
+        <Caption1>Variables (JSON, optional)</Caption1>
+        <Textarea value={queryVars} onChange={(_, d) => setQueryVars(d.value)} rows={2} placeholder={'{ "region": "EU" }'} />
+        <Button appearance="primary" onClick={runQuery} disabled={queryBusy} style={{ alignSelf: 'flex-start' }}>{queryBusy ? 'Running…' : 'Run query'}</Button>
+        {queryErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Query failed</MessageBarTitle>{queryErr}</MessageBarBody></MessageBar>}
+        {queryResp && (
+          <>
+            <Caption1>HTTP {queryResp.status}</Caption1>
+            <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 240 }}>{queryResp.body || '(empty)'}</div>
+          </>
+        )}
+
+        {/* Resolver authoring is the APIM synthetic-GraphQL set-graphql-resolver
+            policy at field scope — honest gate, deep-links to the policy editor. */}
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <MessageBarTitle>Field resolvers</MessageBarTitle>
+            GraphQL resolvers are authored as <code>set-graphql-resolver</code> / <code>&lt;http-data-source&gt;</code> policies at the API scope. Use the <strong>Edit resolver policies</strong> ribbon action (opens the apim-policy editor for this API) to map each field to its backend.
+          </MessageBarBody>
+        </MessageBar>
+
         <SaveBar
           saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
           extraRight={<Button onClick={publish} disabled={publishing || saving}>{publishing ? 'Publishing…' : 'Publish to APIM'}</Button>}
@@ -745,118 +808,225 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
   );
 }
 
-// ----- User Data Function (Cosmos code+config; deploy is config-only in v2.1) -----
-const UDF_SAMPLE = `import fabric.functions as fn\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    return {"user": user_id, "score": weight * 42}`;
-interface UdfState { runtime: 'python' | 'node' | 'dotnet'; entrypoint: string; source: string; functionAppName: string; connections: string; [k: string]: unknown }
-
-interface FunctionAppDTO {
-  id: string; name: string; location?: string; kind?: string;
-  state?: string; defaultHostName?: string; resourceGroup?: string;
-}
-
-function useFunctionApps() {
-  const [functionApps, setFunctionApps] = useState<FunctionAppDTO[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [hint, setHint] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch('/api/azure/function-apps');
-        const j = await r.json();
-        if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setHint(j.hint || null); setFunctionApps([]); }
-        else { setFunctionApps(j.functionApps || []); }
-      } catch (e: any) {
-        setError(e?.message || String(e));
-        setFunctionApps([]);
-      } finally { setLoading(false); }
-    })();
-  }, []);
-  return { functionApps, error, hint, loading };
+// ----- User Data Function (Fabric UDF — code, test/invoke, connections, libraries) -----
+const UDF_SAMPLE = `import datetime\nimport fabric.functions as fn\nimport logging\n\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    logging.info('Python UDF trigger function processed a request.')\n    return {"user": user_id, "score": weight * 42}`;
+interface UdfLibrary { name: string; version?: string; kind: 'pypi' | 'wheel' }
+interface UdfState {
+  runtime: 'python';
+  entrypoint: string;
+  source: string;
+  connections: string;
+  libraries: UdfLibrary[];
+  // Set once the item is published to a Fabric workspace.
+  fabricEndpoint?: string;
+  fabricWorkspaceId?: string;
+  fabricItemId?: string;
+  [k: string]: unknown;
 }
 
 export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<UdfState>('user-data-function', id, {
-    runtime: 'python', entrypoint: 'compute_score', source: UDF_SAMPLE, functionAppName: '', connections: '',
+    runtime: 'python', entrypoint: 'compute_score', source: UDF_SAMPLE, connections: '', libraries: [],
   });
-  const fnApps = useFunctionApps();
+
+  // Functions parsed from the source — drives the explorer + Test panel.
+  const functions = useMemo<UdfFunction[]>(() => parseUdfFunctions(state.source || ''), [state.source]);
+
+  // Test / Run panel.
+  const [testFn, setTestFn] = useState('');
+  const [testParams, setTestParams] = useState<Record<string, string>>({});
+  const [testBusy, setTestBusy] = useState(false);
+  const [testOut, setTestOut] = useState<{ ok: boolean; status?: number; body?: string } | null>(null);
+  const [testGate, setTestGate] = useState<string | null>(null);
+  const selectedFn = functions.find((f) => f.name === testFn) || functions[0];
+
+  // Generate invocation code dialog.
+  const [genOpen, setGenOpen] = useState(false);
+  const [genTarget, setGenTarget] = useState<'notebook' | 'python' | 'openapi'>('notebook');
+
+  // Library form.
+  const [libName, setLibName] = useState('');
+  const [libVer, setLibVer] = useState('');
+  const [libKind, setLibKind] = useState<'pypi' | 'wheel'>('pypi');
+
+  const addLibrary = () => {
+    if (!libName.trim()) return;
+    setState((p) => ({ ...p, libraries: [...(p.libraries || []), { name: libName.trim(), version: libVer.trim() || undefined, kind: libKind }] }));
+    setLibName(''); setLibVer('');
+  };
+  const removeLibrary = (name: string) => setState((p) => ({ ...p, libraries: (p.libraries || []).filter((l) => l.name !== name) }));
+
+  const runTest = useCallback(async () => {
+    if (!selectedFn) return;
+    setTestBusy(true); setTestOut(null); setTestGate(null);
+    // Coerce typed params: numbers/bools parsed, everything else string.
+    const parameters: Record<string, unknown> = {};
+    for (const p of selectedFn.params) {
+      const raw = testParams[p.name] ?? '';
+      if (p.type && /int|float|number/i.test(p.type)) parameters[p.name] = raw === '' ? null : Number(raw);
+      else if (p.type && /bool/i.test(p.type)) parameters[p.name] = raw === 'true';
+      else parameters[p.name] = raw;
+    }
+    try {
+      const r = await fetch(`/api/items/user-data-function/${encodeURIComponent(id)}/invoke`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ functionName: selectedFn.name, parameters }),
+      });
+      const j = await r.json();
+      if (r.status === 409 && j.gated) { setTestGate(j.hint || j.error); return; }
+      setTestOut({ ok: j.ok, status: j.status, body: j.body || j.error });
+    } catch (e: any) { setTestOut({ ok: false, body: e?.message || String(e) }); }
+    finally { setTestBusy(false); }
+  }, [id, selectedFn, testParams]);
+
+  const invocationCode = useMemo(() => {
+    const fn = selectedFn;
+    if (!fn) return '# Add a function to generate invocation code';
+    const argList = fn.params.map((p) => `${p.name}=${p.type && /int|float|number/i.test(p.type) ? '0' : '"value"'}`).join(', ');
+    if (genTarget === 'notebook') {
+      return `# Fabric Notebook (mssparkutils)\nimport notebookutils\nresult = notebookutils.udf.run("${item.displayName || id}", "${fn.name}", { ${fn.params.map((p) => `"${p.name}": "value"`).join(', ')} })\ndisplay(result)`;
+    }
+    if (genTarget === 'python') {
+      return `# Python client (external app)\nimport requests\nfrom azure.identity import DefaultAzureCredential\n\ntoken = DefaultAzureCredential().get_token("https://api.fabric.microsoft.com/.default").token\nresp = requests.post(\n    "<UDF_ENDPOINT>/functions/${fn.name}/invoke",\n    headers={"Authorization": f"Bearer {token}"},\n    json={ ${fn.params.map((p) => `"${p.name}": "value"`).join(', ')} },\n)\nprint(resp.status_code, resp.json())`;
+    }
+    // OpenAPI fragment for the function.
+    const props = fn.params.map((p) => `        "${p.name}": { "type": "${p.type && /int|float|number/i.test(p.type) ? 'number' : p.type && /bool/i.test(p.type) ? 'boolean' : 'string'}" }`).join(',\n');
+    return `{\n  "openapi": "3.0.1",\n  "info": { "title": "${item.displayName || id}", "version": "1.0" },\n  "paths": {\n    "/functions/${fn.name}/invoke": {\n      "post": {\n        "operationId": "${fn.name}",\n        "requestBody": { "content": { "application/json": { "schema": {\n          "type": "object",\n          "properties": {\n${props}\n          }\n        } } } },\n        "responses": { "200": { "description": "OK" } }\n      }\n    }\n  }\n}`;
+  }, [selectedFn, genTarget, id, item.displayName]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Function', actions: [
         { label: 'Reload', onClick: reload },
-        { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
+        { label: saving ? 'Publishing…' : 'Publish', onClick: () => save(), disabled: saving || dirty === false, title: 'Saves source + definition to Cosmos (publish)' },
       ]},
-      { label: 'Deploy', actions: [
-        { label: 'Deploy to Function App', disabled: true, title: 'v2.x — requires Function App ARM mutation' },
+      { label: 'Tools', actions: [
+        { label: 'Generate invocation code', onClick: () => setGenOpen(true), disabled: functions.length === 0 },
       ]},
     ]},
-  ], [reload, save, saving, dirty]);
+  ], [reload, save, saving, dirty, functions.length]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
-      <div className={s.pad}>
-        {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="info">
-          <MessageBarBody>
-            <MessageBarTitle>v2.1: code + config persisted</MessageBarTitle>
-            Source and metadata save to Cosmos. Deploy-to-Azure-Functions wiring (ARM Microsoft.Web/sites publish) is deferred to v2.x — there is no Function App provisioned in this Loom instance yet.
-          </MessageBarBody>
-        </MessageBar>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-          {/* v3.28 Phase 4.5: functional setState everywhere. */}
-          <div>
-            <Caption1>Runtime</Caption1>
-            <select value={state.runtime} onChange={(e) => setState((p) => ({ ...p, runtime: e.target.value as UdfState['runtime'] }))}
-              style={{ width: '100%', padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
-              <option value="python">python</option>
-              <option value="node">node</option>
-              <option value="dotnet">dotnet</option>
-            </select>
-          </div>
-          <div>
-            <Caption1>Entrypoint</Caption1>
-            <Input value={state.entrypoint} onChange={(_, d) => setState((p) => ({ ...p, entrypoint: d.value }))} />
-          </div>
-          <div>
-            <Caption1>Target Function App (deploy)</Caption1>
-            <select
-              value={state.functionAppName}
-              onChange={(e) => setState((p) => ({ ...p, functionAppName: e.target.value }))}
-              disabled={fnApps.loading || (fnApps.functionApps?.length ?? 0) === 0}
-              title={fnApps.error ? `Function App discovery failed: ${fnApps.error}` : undefined}
-              style={{ width: '100%', padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
-            >
-              {fnApps.loading && <option value="">Loading Function Apps…</option>}
-              {!fnApps.loading && (fnApps.functionApps?.length ?? 0) === 0 && (
-                <option value="">{fnApps.error ? 'Discovery failed — see hint below' : 'No Function Apps found'}</option>
-              )}
-              {!fnApps.loading && (fnApps.functionApps?.length ?? 0) > 0 && !state.functionAppName && (
-                <option value="">Select a Function App</option>
-              )}
-              {(fnApps.functionApps || []).map((fa) => (
-                <option key={fa.id} value={fa.name}>
-                  {fa.name}{fa.location ? ` · ${fa.location}` : ''}{fa.state ? ` · ${fa.state}` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+    <ItemEditorChrome
+      item={item}
+      id={id}
+      ribbon={ribbon}
+      leftPanel={
+        <div style={{ padding: 8 }}>
+          <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>Functions ({functions.length})</Caption1>
+          {functions.length === 0 && <Body1 style={{ padding: 8, color: tokens.colorNeutralForeground3 }}>No <code>@udf.function()</code> definitions found.</Body1>}
+          <Tree aria-label="Functions">
+            {functions.map((f) => (
+              <TreeItem key={f.name} itemType="leaf" onClick={() => setTestFn(f.name)} style={{ background: f.name === (testFn || functions[0]?.name) ? tokens.colorNeutralBackground2 : undefined }}>
+                <TreeItemLayout>
+                  <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{f.name}({f.params.map((p) => p.name).join(', ')})</span>
+                </TreeItemLayout>
+              </TreeItem>
+            ))}
+          </Tree>
         </div>
-        {fnApps.error && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              <MessageBarTitle>Function App discovery failed</MessageBarTitle>
-              {fnApps.error}
-              {fnApps.hint && <><br /><Caption1>{fnApps.hint}</Caption1></>}
-            </MessageBarBody>
-          </MessageBar>
-        )}
-        <Subtitle2 style={{ marginTop: 8 }}>function_app source</Subtitle2>
-        <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="python" height={320} minHeight={240} ariaLabel="Function source" />
-        <Caption1>Connections (comma-separated workspace items)</Caption1>
-        <Input value={state.connections} onChange={(_, d) => setState((p) => ({ ...p, connections: d.value }))} placeholder="fin-warehouse, ldn-gold-lakehouse" />
-        <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
-      </div>
-    } />
+      }
+      main={
+        <div className={s.pad}>
+          {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <Field label="Runtime"><Input value="python (fabric-user-data-functions)" disabled /></Field>
+            <Field label="Default entrypoint"><Input value={state.entrypoint} onChange={(_, d) => setState((p) => ({ ...p, entrypoint: d.value }))} /></Field>
+          </div>
+
+          <Subtitle2 style={{ marginTop: 8 }}>function_app.py</Subtitle2>
+          <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="python" height={280} minHeight={200} ariaLabel="Function source" />
+
+          {/* Test / Run panel */}
+          <Subtitle2 style={{ marginTop: 8 }}>Test / Run</Subtitle2>
+          <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <Field label="Function">
+              <Dropdown
+                placeholder={functions.length ? 'Select a function' : 'No functions to run'}
+                value={selectedFn?.name || ''}
+                selectedOptions={selectedFn ? [selectedFn.name] : []}
+                onOptionSelect={(_, d) => { setTestFn(d.optionValue || ''); setTestParams({}); }}
+              >
+                {functions.map((f) => <Option key={f.name} value={f.name}>{f.name}</Option>)}
+              </Dropdown>
+            </Field>
+            {selectedFn?.params.map((p) => (
+              <Field key={p.name} label={`${p.name}${p.type ? ` : ${p.type}` : ''}${p.default ? ` (default ${p.default})` : ''}`}>
+                <Input value={testParams[p.name] ?? ''} onChange={(_, d) => setTestParams((cur) => ({ ...cur, [p.name]: d.value }))} placeholder={p.default || ''} />
+              </Field>
+            ))}
+            <Button appearance="primary" onClick={runTest} disabled={testBusy || !selectedFn} style={{ alignSelf: 'flex-start' }}>{testBusy ? 'Running…' : 'Run'}</Button>
+            {testGate && (
+              <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Function not published yet</MessageBarTitle>{testGate}</MessageBarBody></MessageBar>
+            )}
+            {testOut && (
+              <>
+                <Caption1>Output {testOut.status != null ? `(HTTP ${testOut.status})` : ''}</Caption1>
+                <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 200 }}>{testOut.body || '(empty)'}</div>
+              </>
+            )}
+          </div>
+
+          {/* Manage connections */}
+          <Subtitle2 style={{ marginTop: 8 }}>Manage connections (Fabric data sources)</Subtitle2>
+          <Input value={state.connections} onChange={(_, d) => setState((p) => ({ ...p, connections: d.value }))} placeholder="fin-warehouse, ldn-gold-lakehouse" />
+
+          {/* Library management */}
+          <Subtitle2 style={{ marginTop: 8 }}>Library management</Subtitle2>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <Field label="Package"><Input value={libName} onChange={(_, d) => setLibName(d.value)} placeholder="numpy" /></Field>
+            <Field label="Version"><Input value={libVer} onChange={(_, d) => setLibVer(d.value)} placeholder="2.0.0" style={{ width: 120 }} /></Field>
+            <Field label="Type">
+              <Dropdown value={libKind} selectedOptions={[libKind]} onOptionSelect={(_, d) => d.optionValue && setLibKind(d.optionValue as 'pypi' | 'wheel')}>
+                <Option value="pypi">PyPI</Option>
+                <Option value="wheel">Private wheel</Option>
+              </Dropdown>
+            </Field>
+            <Button onClick={addLibrary} disabled={!libName.trim()}>Add library</Button>
+          </div>
+          <Table size="small" aria-label="Libraries">
+            <TableHeader><TableRow><TableHeaderCell>Package</TableHeaderCell><TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader>
+            <TableBody>
+              {(state.libraries || []).length === 0 && <TableRow><TableCell>No libraries added.</TableCell><TableCell /><TableCell /><TableCell /></TableRow>}
+              {(state.libraries || []).map((l) => (
+                <TableRow key={l.name}>
+                  <TableCell><strong>{l.name}</strong></TableCell>
+                  <TableCell>{l.version || 'latest'}</TableCell>
+                  <TableCell>{l.kind}</TableCell>
+                  <TableCell><Button size="small" onClick={() => removeLibrary(l.name)}>Remove</Button></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+
+          <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+
+          {/* Generate invocation code dialog */}
+          <Dialog open={genOpen} onOpenChange={(_, d) => { if (!d.open) setGenOpen(false); }}>
+            <DialogSurface style={{ maxWidth: '90vw', width: 760 }}>
+              <DialogBody>
+                <DialogTitle>Generate invocation code — {selectedFn?.name}</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <TabList selectedValue={genTarget} onTabSelect={(_, d) => setGenTarget(d.value as typeof genTarget)}>
+                      <Tab value="notebook">Notebook</Tab>
+                      <Tab value="python">Python client</Tab>
+                      <Tab value="openapi">OpenAPI</Tab>
+                    </TabList>
+                    <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 320 }}>{invocationCode}</div>
+                    <Button onClick={() => navigator.clipboard?.writeText(invocationCode).catch(() => {})}>Copy</Button>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setGenOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+        </div>
+      }
+    />
   );
 }
 
@@ -867,7 +1037,8 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
 // `VarType` is imported from `_family-utils` (see the top-of-file
 // import block — it matches the vitest contract).
 interface VarDef { name: string; type: VarType; default: string; dev?: string; test?: string; prod?: string; description?: string; }
-interface VlState { variables: VarDef[]; [k: string]: unknown }
+// `activeValueSet` mirrors Fabric's per-workspace active value set (settings.json).
+interface VlState { variables: VarDef[]; activeValueSet?: string; [k: string]: unknown }
 const VL_VALUE_SETS: Array<'default' | 'dev' | 'test' | 'prod'> = ['default', 'dev', 'test', 'prod'];
 
 const VAR_TYPE_LABELS: Record<VarType, string> = {
@@ -955,6 +1126,17 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
               Reference variables in pipelines / notebooks as <code>@{'{'}variables.NAME{'}'}</code>. The active value set is resolved at runtime by the executor.
             </MessageBarBody>
           </MessageBar>
+          {/* Active value set — mirrors Fabric's per-workspace active set. The
+              runtime executor reads state.activeValueSet to resolve values. */}
+          <Field label="Active value set (resolved at runtime)">
+            <Dropdown
+              value={state.activeValueSet || 'default'}
+              selectedOptions={[state.activeValueSet || 'default']}
+              onOptionSelect={(_, d) => d.optionValue && setState((p) => ({ ...p, activeValueSet: d.optionValue }))}
+            >
+              {VL_VALUE_SETS.map((v) => <Option key={v} value={v}>{v}{v === (state.activeValueSet || 'default') ? ' (active)' : ''}</Option>)}
+            </Dropdown>
+          </Field>
           <Table aria-label="Variables" size="small">
             <TableHeader><TableRow>
               <TableHeaderCell>Name</TableHeaderCell>
