@@ -1,19 +1,32 @@
 /**
  * Learn-popup content registry. Keys are FabricItemType ids (matches the
- * `type` URL param in /items/[type]/[id]). Only entries with real, hand-
- * authored content live here — per the no-vaporware rule we never fall
- * back to auto-generated placeholder text. Items without a learn entry
- * surface an honest "not yet authored" MessageBar in the Learn drawer.
+ * `type` URL param in /items/[type]/[id]).
  *
- * Contributions: add a new entry below. The Learn drawer auto-shows on
- * first visit to an item of that type; users can dismiss permanently
- * per-type via the "Don't show again" checkbox (persisted to user-prefs).
+ * SOURCE OF TRUTH: the authoritative per-item Learn content now lives on
+ * each catalog entry's `learnContent` field in
+ * `lib/catalog/fabric-item-types.ts` (overview + titled getting-started
+ * steps + docsUrl). `getLearn()` reads that first so every one of the 90
+ * catalog item types renders real guidance (A+ docs criterion).
+ *
+ * This REGISTRY remains for one reason: the legacy entries below carry a
+ * `tip` callout that the catalog shape doesn't model. When both exist, the
+ * catalog `learnContent` supplies title/summary/steps/docsUrl and the
+ * registry entry contributes its `tip`. Per the no-vaporware rule we never
+ * fall back to auto-generated placeholder text — an item with neither
+ * source surfaces an honest "not yet authored" MessageBar.
+ *
+ * The Learn drawer auto-shows on first visit to an item of that type; users
+ * can dismiss permanently per-type via the "Don't show again" checkbox
+ * (persisted to user-prefs).
  */
+
+import { findItemType } from '@/lib/catalog/fabric-item-types';
 
 export interface LearnEntry {
   title: string;
   summary?: string;
-  steps?: string[];
+  /** Plain step strings (legacy) OR titled steps (from catalog learnContent). */
+  steps?: Array<string | { title: string; body: string }>;
   tip?: string;
   docsUrl?: string;
 }
@@ -543,5 +556,18 @@ const REGISTRY: Record<string, LearnEntry> = {
 };
 
 export function getLearn(itemType: string): LearnEntry | null {
-  return REGISTRY[itemType] ?? null;
+  const legacy = REGISTRY[itemType] ?? null;
+  const catalog = findItemType(itemType)?.learnContent ?? null;
+
+  // Prefer the authoritative catalog learnContent; fold in the legacy `tip`.
+  if (catalog) {
+    return {
+      title: findItemType(itemType)?.displayName ?? legacy?.title ?? itemType,
+      summary: catalog.overview,
+      steps: catalog.steps.map((s) => ({ title: s.title, body: s.body })),
+      tip: legacy?.tip,
+      docsUrl: catalog.docsUrl ?? legacy?.docsUrl,
+    };
+  }
+  return legacy;
 }
