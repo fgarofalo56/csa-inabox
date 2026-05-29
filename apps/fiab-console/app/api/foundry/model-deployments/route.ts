@@ -11,15 +11,16 @@ import {
   CsError,
   CsNotConfiguredError,
 } from '@/lib/azure/foundry-cs-client';
+import { selectorFromQuery, selectorFromBody } from '../_selector';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const { account, deployments } = await listModelDeployments();
+    const { account, deployments } = await listModelDeployments(selectorFromQuery(req));
     return NextResponse.json({ ok: true, account: { name: account.name, location: account.location, kind: account.kind, endpoint: account.endpoint }, deployments });
   } catch (e: any) {
     if (e instanceof CsNotConfiguredError) return NextResponse.json({ ok: false, error: e.message, hint: e.hint, notDeployed: true }, { status: 503 });
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest) {
       skuName: body.skuName ? String(body.skuName) : undefined,
       capacity: typeof body.capacity === 'number' ? body.capacity : undefined,
       raiPolicyName: body.raiPolicyName ? String(body.raiPolicyName) : undefined,
-    });
+    }, selectorFromBody(body));
     return NextResponse.json({ ok: true, deployment });
   } catch (e: any) {
     if (e instanceof CsNotConfiguredError) return NextResponse.json({ ok: false, error: e.message, hint: e.hint, notDeployed: true }, { status: 503 });
