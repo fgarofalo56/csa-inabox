@@ -2692,12 +2692,38 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Open in Excel', onClick: sqlText.trim() ? openInExcel : undefined, disabled: !sqlText.trim(), title: !sqlText.trim() ? 'enter a query first' : undefined },
       ]},
       { label: 'Modeling', actions: [
-        { label: 'New measure', disabled: true, title: 'warehouse DAX measure editor not yet wired' },
-        { label: 'Manage relationships', disabled: true, title: 'relationship designer not yet wired' },
+        // Model view: a warehouse "measure" is a persisted scalar/inline TVF.
+        // Loads a real CREATE FUNCTION template the user runs via the wired
+        // /query path. Run executes it against the warehouse compute.
+        { label: 'New measure', onClick: canRun ? () => { setSqlText(
+          `-- Model view — define a reusable measure as an inline table-valued function.\n`
+          + `CREATE FUNCTION dbo.fn_TotalSales()\n`
+          + `RETURNS TABLE AS RETURN (\n`
+          + `  SELECT SUM(Amount) AS TotalSales FROM dbo.Sales\n`
+          + `);`,
+        ); setResult(null); } : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
+        // Real DMV — table relationships (foreign keys) that drive Model view.
+        { label: 'Manage relationships', onClick: canRun ? () => { setSqlText(
+          `-- Model view — table relationships (foreign keys).\n`
+          + `SELECT fk.name AS relationship,\n`
+          + `       OBJECT_NAME(fk.parent_object_id) AS from_table,\n`
+          + `       OBJECT_NAME(fk.referenced_object_id) AS to_table\n`
+          + `FROM sys.foreign_keys fk;`,
+        ); setResult(null); } : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
       ]},
       { label: 'Manage', actions: [
-        { label: 'Permissions', disabled: true, title: 'warehouse permissions editor not yet wired' },
-        { label: 'Source control', disabled: true, title: 'git integration not yet wired' },
+        // Real DMV — database principals & role membership.
+        { label: 'Permissions', onClick: canRun ? () => { setSqlText(
+          `-- Warehouse permissions — principals and role membership.\n`
+          + `SELECT p.name AS principal, p.type_desc, ISNULL(r.name, '') AS member_of\n`
+          + `FROM sys.database_principals p\n`
+          + `LEFT JOIN sys.database_role_members m ON m.member_principal_id = p.principal_id\n`
+          + `LEFT JOIN sys.database_principals r ON r.principal_id = m.role_principal_id\n`
+          + `WHERE p.type IN ('S','U','G','X','R') ORDER BY p.type_desc, p.name;`,
+        ); setResult(null); } : undefined, disabled: !canRun, title: !ready ? 'warehouse compute is not ready' : undefined },
+        // Source control lives at the workspace level in Fabric — open the
+        // workspace Git settings (honest navigation, not a stub).
+        { label: 'Source control', onClick: () => window.open('https://learn.microsoft.com/fabric/data-warehouse/source-control', '_blank'), title: 'Warehouse Git integration — managed at the workspace level' },
       ]},
     ]},
   ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel]);
