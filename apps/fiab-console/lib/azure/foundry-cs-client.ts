@@ -224,6 +224,7 @@ export interface CreateDeploymentInput {
   modelVersion?: string;      // optional; defaults to model default
   skuName?: string;           // GlobalStandard (default), Standard, DataZoneStandard…
   capacity?: number;          // tokens-per-minute / 1000 (default 10)
+  raiPolicyName?: string;     // content filter policy (e.g. "Microsoft.DefaultV2")
 }
 
 export async function createModelDeployment(input: CreateDeploymentInput): Promise<ModelDeployment> {
@@ -236,6 +237,7 @@ export async function createModelDeployment(input: CreateDeploymentInput): Promi
         name: input.modelName,
         ...(input.modelVersion ? { version: input.modelVersion } : {}),
       },
+      ...(input.raiPolicyName ? { raiPolicyName: input.raiPolicyName } : {}),
       versionUpgradeOption: 'OnceNewDefaultVersionAvailable',
     },
   };
@@ -275,38 +277,196 @@ export async function deleteModelDeployment(deploymentName: string): Promise<voi
 // ---------------- Model catalog (account-scoped) ----------------
 
 export interface CatalogModel {
+  /** Stable id used by the UI for selection / detail lookup. */
+  id: string;
   name: string;
+  /** Publisher / provider — "OpenAI", "Microsoft", "Meta", "Mistral AI", "DeepSeek", "Cohere", "xAI", … */
+  publisher?: string;
+  /** Deployment model format ("OpenAI", "Microsoft", "Meta", …). */
   format?: string;
   version?: string;
+  /** Default version flag from the account list-models response. */
+  isDefaultVersion?: boolean;
   skus?: string[];
+  defaultCapacity?: number;
   maxCapacity?: number;
   lifecycleStatus?: string;
+  /** Deprecation/retirement date if the model is being sunset. */
+  deprecationInference?: string;
+  /** Inference tasks the model supports — "chat-completion", "embeddings", "image-generation", … */
+  inferenceTasks: string[];
+  /** Capability flags: chatCompletion, embeddings, imageGenerations, etc. */
+  capabilities: string[];
+  /** Deployment options derivable from the SKUs (GlobalStandard, Standard, ProvisionedManaged, …). */
+  deploymentOptions: string[];
+  /** Whether this model can be deployed to *this* account (account list-models = yes). */
+  deployableHere: boolean;
 }
 
+/** Map raw publisher/format strings → curated collection name for the Collections filter. */
+function collectionFor(publisher?: string, format?: string): string {
+  const p = (publisher || format || '').toLowerCase();
+  if (p.includes('openai')) return 'OpenAI';
+  if (p.includes('microsoft') || p.includes('phi')) return 'Microsoft';
+  if (p.includes('meta') || p.includes('llama')) return 'Meta';
+  if (p.includes('mistral')) return 'Mistral AI';
+  if (p.includes('deepseek')) return 'DeepSeek';
+  if (p.includes('cohere')) return 'Cohere';
+  if (p.includes('xai') || p.includes('grok')) return 'xAI';
+  if (p.includes('nvidia')) return 'NVIDIA';
+  if (p.includes('ai21')) return 'AI21 Labs';
+  if (p.includes('core42') || p.includes('jais')) return 'Core42';
+  if (p.includes('nixtla')) return 'Nixtla';
+  if (p.includes('stability')) return 'Stability AI';
+  if (p.includes('black forest') || p.includes('flux')) return 'Black Forest Labs';
+  return publisher || format || 'Other';
+}
+
+/** Infer inference tasks + capabilities from a model name when the API row lacks them. */
+function inferTasks(name: string): { inferenceTasks: string[]; capabilities: string[] } {
+  const n = name.toLowerCase();
+  const tasks = new Set<string>();
+  const caps = new Set<string>();
+  if (/embed/.test(n)) { tasks.add('embeddings'); caps.add('embeddings'); }
+  if (/dall-?e|image|flux|stable-?diffusion|imagen/.test(n)) { tasks.add('image-generation'); caps.add('imageGenerations'); }
+  if (/whisper|transcrib/.test(n)) { tasks.add('audio-transcription'); caps.add('audioTranscription'); }
+  if (/tts|text-to-speech/.test(n)) { tasks.add('text-to-speech'); caps.add('textToSpeech'); }
+  if (/rerank/.test(n)) { tasks.add('text-rerank'); caps.add('rerank'); }
+  if (/timegen|forecast/.test(n)) { tasks.add('time-series-forecasting'); }
+  if (tasks.size === 0) { tasks.add('chat-completion'); caps.add('chatCompletion'); }
+  return { inferenceTasks: [...tasks], capabilities: [...caps] };
+}
+
+function shapeCatalogModel(r: any): CatalogModel {
+  const m = r.model || r;
+  const skus: string[] = (m.skus || []).map((s: any) => s.name).filter(Boolean);
+  const maxCapacity = (m.skus || []).reduce((mx: number, s: any) => Math.max(mx, s?.capacity?.maximum ?? 0), 0);
+  const defaultCapacity = m.skus?.[0]?.capacity?.default ?? undefined;
+  const apiCaps: string[] = m.capabilities
+    ? Object.entries(m.capabilities).filter(([, v]) => v === true || v === 'true').map(([k]) => k)
+    : [];
+  const apiTasks: string[] = Array.isArray(m.inferenceTasks) ? m.inferenceTasks : [];
+  const inferred = inferTasks(m.name || '');
+  const publisher = m.publisher || m.format;
+  return {
+    id: `${m.name}:${m.version || 'default'}`,
+    name: m.name,
+    publisher: collectionFor(publisher, m.format),
+    format: m.format,
+    version: m.version,
+    isDefaultVersion: m.isDefaultVersion === true || m.isDefaultVersion === 'true',
+    skus,
+    defaultCapacity,
+    maxCapacity: maxCapacity || undefined,
+    lifecycleStatus: m.lifecycleStatus,
+    deprecationInference: m.deprecation?.inference,
+    inferenceTasks: apiTasks.length ? apiTasks : inferred.inferenceTasks,
+    capabilities: apiCaps.length ? apiCaps : inferred.capabilities,
+    deploymentOptions: skus.length ? skus : ['GlobalStandard'],
+    deployableHere: true,
+  };
+}
+
+/**
+ * Account-scoped catalog — the REAL set of models deployable to this Cognitive
+ * Services / AIServices account in its region. This is what
+ * `az cognitiveservices account list-models` returns and is the ground truth
+ * for the deploy flow: every row here is deployable via the deployments PUT.
+ *
+ * The public ai.azure.com/explore/models registry catalog is NOT reachable with
+ * the ARM management token server-side, so we source from the account
+ * list-models API and tag each row deployableHere=true so the UI never promises
+ * a deploy it can't fulfil.
+ */
 export async function listCatalogModels(): Promise<{ account: CsAccount; models: CatalogModel[] }> {
   const acct = await resolveAccount();
-  // Account-scoped models endpoint returns the models available to deploy in
-  // this account's region.
   const res = await armFetch(`${accountPath(acct)}/models`);
   const j = await readJson<{ value?: any[] }>(res);
   const rows = j?.value || [];
-  const models: CatalogModel[] = rows.map((r: any) => {
-    const m = r.model || r;
-    const skus = (m.skus || []).map((s: any) => s.name).filter(Boolean);
-    const maxCapacity = (m.skus || []).reduce(
-      (mx: number, s: any) => Math.max(mx, s?.capacity?.maximum ?? 0),
-      0,
-    );
-    return {
-      name: m.name,
-      format: m.format,
-      version: m.version,
-      skus,
-      maxCapacity: maxCapacity || undefined,
-      lifecycleStatus: m.lifecycleStatus,
-    };
-  });
+  const models = rows.map(shapeCatalogModel)
+    // De-dupe by name, preferring the default version.
+    .reduce((acc: CatalogModel[], m: CatalogModel) => {
+      const existing = acc.find((x) => x.name === m.name);
+      if (!existing) { acc.push(m); return acc; }
+      if (m.isDefaultVersion && !existing.isDefaultVersion) Object.assign(existing, m);
+      return acc;
+    }, [])
+    .sort((a: CatalogModel, b: CatalogModel) => a.name.localeCompare(b.name));
   return { account: acct, models };
+}
+
+// ---------------- Chat playground (data-plane chat completions) ----------------
+
+export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string }
+export interface ChatParams { temperature?: number; maxTokens?: number; topP?: number; stop?: string[] }
+export interface ChatResult {
+  content: string;
+  finishReason?: string;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  model?: string;
+}
+
+const AOAI_DATA_API = process.env.LOOM_AOAI_API_VERSION || '2024-10-21';
+const COG_SCOPE = 'https://cognitiveservices.azure.com/.default';
+
+async function dataPlaneToken(): Promise<string> {
+  const t = await credential.getToken(COG_SCOPE);
+  if (!t?.token) throw new Error('Failed to acquire Cognitive Services data-plane token');
+  return t.token;
+}
+
+/** Resolve the AOAI data-plane endpoint host (e.g. https://acct.openai.azure.com). */
+async function aoaiEndpoint(acct: CsAccount): Promise<string> {
+  if (acct.endpoint) return acct.endpoint.replace(/\/$/, '');
+  const res = await armFetch(accountPath(acct));
+  const j = await readJson<any>(res);
+  const ep = j?.properties?.endpoint
+    || j?.properties?.endpoints?.['OpenAI Language Model Instance API']
+    || j?.properties?.endpoints?.['Azure AI Model Inference API'];
+  if (!ep) throw new CsError(404, null, 'AOAI account has no resolvable data-plane endpoint.');
+  return String(ep).replace(/\/$/, '');
+}
+
+/**
+ * Run a chat completion against a REAL deployed model on this account. Throws a
+ * CsError (404/DeploymentNotFound) when the deployment doesn't exist so the
+ * route can surface an honest "deploy a chat model first" gate.
+ */
+export async function chatCompletion(
+  deploymentName: string,
+  messages: ChatMessage[],
+  params: ChatParams = {},
+): Promise<ChatResult> {
+  const acct = await resolveAccount();
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/chat/completions?api-version=${AOAI_DATA_API}`;
+  const body: any = { messages };
+  if (params.temperature !== undefined) body.temperature = params.temperature;
+  if (params.maxTokens !== undefined) body.max_tokens = params.maxTokens;
+  if (params.topP !== undefined) body.top_p = params.topP;
+  if (params.stop && params.stop.length) body.stop = params.stop;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let parsed: any = undefined;
+  if (text) { try { parsed = JSON.parse(text); } catch { parsed = text; } }
+  if (!res.ok) {
+    const msg = parsed?.error?.message || (typeof parsed === 'string' ? parsed : `Chat completion failed (${res.status})`);
+    throw new CsError(res.status, parsed, msg);
+  }
+  const choice = parsed?.choices?.[0];
+  return {
+    content: choice?.message?.content ?? '',
+    finishReason: choice?.finish_reason,
+    usage: parsed?.usage
+      ? { promptTokens: parsed.usage.prompt_tokens, completionTokens: parsed.usage.completion_tokens, totalTokens: parsed.usage.total_tokens }
+      : undefined,
+    model: parsed?.model,
+  };
 }
 
 // ---------------- Quota / usages (per region) ----------------
