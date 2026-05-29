@@ -276,7 +276,13 @@ function LearnPane({ type, onClose }: { type: string; onClose: () => void }) {
       {learn.summary && <p>{learn.summary}</p>}
       {learn.steps && learn.steps.length > 0 && (
         <ol style={{ paddingLeft: 18 }}>
-          {learn.steps.map((s, i) => <li key={i} style={{ marginBottom: 8 }}>{s}</li>)}
+          {learn.steps.map((s, i) => (
+            <li key={i} style={{ marginBottom: 8 }}>
+              {typeof s === 'string' ? s : (
+                <><b>{s.title}</b>{s.body ? ` — ${s.body}` : ''}</>
+              )}
+            </li>
+          ))}
         </ol>
       )}
       {learn.tip && (
