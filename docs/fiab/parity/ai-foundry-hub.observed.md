@@ -111,6 +111,32 @@ actions deep-link into the live Foundry registry catalog.
 | Playgrounds landing with tiles | built ✅ `PlaygroundsLandingPanel` |
 | Images / Audio / Speech | honest-gate ⚠️ "deploy a &lt;type&gt; model first" — Chat is the fully functional one as specified |
 
+### Account picker — bind to a real Azure AI Foundry / Azure OpenAI account (2026-05-29) ✅
+
+Operator report: "the AI Foundry Hub doesn't have any backend / not backed by
+any Azure services. Make it selectable like the other editors so it actually
+pulls and uses the actual underlying Azure service." Built one-for-one with the
+Azure portal's resource picker.
+
+| Foundry/Azure capability | Loom coverage | Backend |
+|---|---|---|
+| Enumerate the tenant's AI Foundry / Azure OpenAI accounts | built ✅ `AccountPickerBar` dropdown at the top of the Hub (every tab) | `GET /api/foundry/accounts` → ARM `GET /subscriptions/{sub}/providers/Microsoft.CognitiveServices/accounts?api-version=2024-10-01` (Operation `Accounts_List`), filtered to kind ∈ {AIServices, OpenAI, CognitiveServices} |
+| Show name · kind · region per account | built ✅ option label `name (kind) · location` | accounts list |
+| Preselect the deployment default | built ✅ env-var/discovery account (`LOOM_AOAI_ACCOUNT`/`LOOM_FOUNDRY_RG`) is preselected and badged "default" | route returns `defaultAccount` from `resolveAccount()` |
+| Selected account drives EVERY tab | built ✅ deployments, model catalog, quota, networking, identity/RBAC, keys, activity, chat playground all query the SELECTED account | each `/api/foundry/*` route threads `?account=&rg=` (GET) / `{account,rg}` (POST/PATCH) into `resolveAccount(selector)` |
+| Switch account → all tabs re-fetch | built ✅ `useLazyFetch` keys on the account-qualified URL; catalog/chat reset + refetch on account change | per-route ARM/data-plane calls |
+| No account provisioned | honest-gate ⚠️ picker shows MessageBar naming `LOOM_AOAI_ACCOUNT` / `LOOM_FOUNDRY_RG` + bicep module; per-tab `CsNotConfiguredError` gate unchanged | — |
+
+**Backend selector plumbing:** `resolveAccount(force, selector?)` resolves the
+explicit `{name, rg?}` first (fresh, no cache so per-request switching is
+correct), then falls back to `LOOM_AOAI_ACCOUNT`, then RG discovery. Every
+account-scoped client fn (`listModelDeployments`, `listCatalogModels`,
+`createModelDeployment`, `chatCompletion`, `listUsages`, `getAccountKeys`,
+`getNetworking`, `setPublicNetworkAccess`, `listRoleAssignments`,
+`listActivityLog`) takes the optional selector. Contract-tested in
+`lib/azure/__tests__/foundry-cs-accounts.test.ts` +
+`app/api/foundry/__tests__/accounts-route.test.ts`.
+
 ### Resource management tabs (pre-existing, kept)
 
 Overview · Connections · Models + endpoints (deploy) · Quota + usage (one-click

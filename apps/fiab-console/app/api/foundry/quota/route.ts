@@ -13,6 +13,7 @@ import {
   CsError,
   CsNotConfiguredError,
 } from '@/lib/azure/foundry-cs-client';
+import { selectorFromQuery, selectorFromBody } from '../_selector';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
     const location = req.nextUrl.searchParams.get('location') || undefined;
-    const { account, location: loc, usages } = await listUsages(location);
+    const { account, location: loc, usages } = await listUsages(location, selectorFromQuery(req));
     return NextResponse.json({ ok: true, account: { name: account.name, location: account.location }, location: loc, usages });
   } catch (e: any) {
     if (e instanceof CsNotConfiguredError) return NextResponse.json({ ok: false, error: e.message, hint: e.hint, notDeployed: true }, { status: 503 });
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
     const modelName = String(body?.modelName || 'gpt-4o-mini');
     const deploymentName = String(body?.deploymentName || modelName);
     const capacity = typeof body?.capacity === 'number' ? body.capacity : 10;
-    const deployment = await createModelDeployment({ deploymentName, modelName, skuName: 'GlobalStandard', capacity });
+    const deployment = await createModelDeployment({ deploymentName, modelName, skuName: 'GlobalStandard', capacity }, selectorFromBody(body));
     return NextResponse.json({ ok: true, deployment, message: `Deploying ${modelName} as "${deploymentName}". Once provisioned, set LOOM_AOAI_DEPLOYMENT=${deploymentName} (or rely on Foundry connection discovery) to unblock cross-item Copilot.` });
   } catch (e: any) {
     if (e instanceof CsNotConfiguredError) return NextResponse.json({ ok: false, error: e.message, hint: e.hint, notDeployed: true }, { status: 503 });
