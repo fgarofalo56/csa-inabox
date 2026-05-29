@@ -245,6 +245,8 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
   const [runInputs, setRunInputs] = useState('{}');
   const [runResult, setRunResult] = useState<any>(null);
   const [running, setRunning] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => { if (id !== 'new' && id !== 'create') setSelected(id); }, [id]);
 
@@ -274,6 +276,23 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
     const j = await r.json();
     setRunResult(j);
     setRunning(false);
+  };
+
+  const saveFlow = async () => {
+    if (!project || !selected) return;
+    setSaving(true); setSaveMsg(null);
+    let flowDefinition: any;
+    try { flowDefinition = JSON.parse(defText || '{}'); } catch { setSaveMsg({ intent: 'error', text: 'Invalid JSON in flow definition' }); setSaving(false); return; }
+    try {
+      const r = await fetch(`/api/items/prompt-flow/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ flowDefinition }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSaveMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); }
+      else { setSaveMsg({ intent: 'success', text: 'Flow definition saved to Foundry.' }); setDefDirty(false); }
+    } catch (e: any) { setSaveMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setSaving(false); }
   };
 
   const ribbon = useMemo(() => {
@@ -312,20 +331,14 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
       {selected && (
         <div className={s.card}>
           <Subtitle2>Flow: {selected}</Subtitle2>
-          <MessageBar intent="info">
-            <MessageBarBody>
-              <MessageBarTitle>Definition is view-only in v2.5</MessageBarTitle>
-              The flow JSON is fetched from the Foundry runtime for inspection. Editing-and-saving the
-              flow definition (PUT against the Foundry prompt-flow API) lands in v2.6 — edits here
-              affect only the Run preview below and are not persisted.
-            </MessageBarBody>
-          </MessageBar>
           <MonacoTextarea value={defText} onChange={(v) => { setDefText(v); setDefDirty(true); }} language="json" height={300} minHeight={200} ariaLabel="Prompt Flow definition" />
-          {defDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Edits are local-only; Run uses the edited JSON for this session.</Caption1>}
+          {defDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved edits — click Save flow to PUT the definition to Foundry.</Caption1>}
+          {saveMsg && <MessageBar intent={saveMsg.intent}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>}
           <Subtitle2 style={{ marginTop: 8 }}>Run inputs (JSON)</Subtitle2>
           <MonacoTextarea value={runInputs} onChange={setRunInputs} language="json" height={140} minHeight={80} ariaLabel="Run inputs JSON" />
           <div className={s.toolbar} style={{ marginTop: 8 }}>
             <Button appearance="primary" onClick={runFlow} disabled={running}>{running ? 'Running…' : 'Run flow'}</Button>
+            <Button onClick={saveFlow} disabled={saving || !defDirty}>{saving ? 'Saving…' : 'Save flow'}</Button>
             <Button onClick={reload}>Reload list</Button>
           </div>
           {runResult && (runResult.ok
