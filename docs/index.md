@@ -7,23 +7,24 @@ status: reference implementation (community project)
 
 # Cloud Scale Analytics in a Box
 
-> **Comparative positioning note.** This document is written from the
-> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
-> description of third-party or competing products, services, pricing, or
-> capabilities is derived from **publicly available documentation and sources**
-> believed accurate at the time of writing, and is provided for **general
-> comparison only**. We do not claim expertise in, or authority over, any
-> non-Microsoft product or service; the respective vendor's official
-> documentation is the authoritative source for their offerings, which may
-> change over time. Nothing here is intended to disparage any vendor — where a
-> competing product has genuine advantages, we aim to note them honestly.
-> Verify all third-party details against the vendor's current official
-> documentation before making decisions.
+!!! info "Comparative positioning note"
+    This document is written from the
+    perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+    description of third-party or competing products, services, pricing, or
+    capabilities is derived from **publicly available documentation and sources**
+    believed accurate at the time of writing, and is provided for **general
+    comparison only**. We do not claim expertise in, or authority over, any
+    non-Microsoft product or service; the respective vendor's official
+    documentation is the authoritative source for their offerings, which may
+    change over time. Nothing here is intended to disparage any vendor — where a
+    competing product has genuine advantages, we aim to note them honestly.
+    Verify all third-party details against the vendor's current official
+    documentation before making decisions.
 
 
-**Azure-native reference implementation of Microsoft's "Unify your data platform" Cloud Adoption Framework guidance.**
+**A deployable, Azure-native data platform — Data Mesh, Data Fabric, and Data Lakehouse — for teams who can't get Microsoft Fabric yet, or who deliberately don't want SaaS and need full control of their environment.**
 
-CSA-in-a-Box assembles Azure PaaS services and open-source tooling into an opinionated, end-to-end data platform that delivers Data Mesh, Data Fabric, and Data Lakehouse capabilities today — designed for environments where Microsoft Fabric is not yet GA (Azure Government), and as an incremental on-ramp for teams building toward Fabric adoption.
+CSA-in-a-Box assembles Azure PaaS/IaaS services and open-source tooling into an opinionated, end-to-end platform that delivers Data Mesh, Data Fabric, and Data Lakehouse capabilities **today**, on services available in Azure Government (IL4/IL5) now. It follows the same data-mesh, data-fabric, and lakehouse principles as Microsoft's Cloud Adoption Framework data-platform guidance. Use it as an **on-ramp to Microsoft Fabric** (migrate workload by workload as Fabric reaches your cloud) **or as a permanent, self-operated alternative** when SaaS isn't an option — by mandate or by choice.
 
 !!! note "Personal project — not an official Microsoft offering"
     CSA-in-a-Box and CSA Loom are a personal, community reference project maintained by
@@ -200,7 +201,7 @@ The Data Lakehouse unifies data lakes (scalable, open storage) with data warehou
 - **Unified batch and streaming** — the same Delta tables serve both batch pipelines (ADF + dbt) and streaming workloads (Event Hubs + Spark Structured Streaming).
 - **Compute diversity** — Databricks, Synapse Spark, and Synapse Serverless SQL all query the same lakehouse, so teams pick the engine that fits their workload without duplicating data.
 
-> **Why "one-stop shop"?** Most reference implementations cover one of these paradigms. CSA-in-a-Box implements all three — plus AI/ML integration, compliance mappings for six regulatory frameworks, 11 migration playbooks, 18 end-to-end vertical examples, and production runbooks — in a single, fork-ready repository.
+> **Why "one-stop shop"?** Most reference implementations cover one of these paradigms. CSA-in-a-Box implements all three — plus AI/ML integration, control mappings across the major federal and commercial compliance frameworks, a library of migration playbooks and end-to-end vertical examples, and production runbooks — in a single, fork-ready repository.
 
 ---
 
@@ -262,13 +263,23 @@ The Data Lakehouse unifies data lakes (scalable, open storage) with data warehou
 
 ## Use Fabric, or use this?
 
-CSA-in-a-Box is **not** a blanket substitute for Microsoft Fabric. For most Azure Commercial greenfield workloads where Fabric is GA in the region, Fabric is the right answer.
+CSA-in-a-Box is **not** a blanket substitute for Microsoft Fabric. If Fabric is GA in your cloud and you're comfortable with SaaS, Fabric is usually the right answer — and the **[Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/)** companion site has the hands-on tutorials, POC agendas, and notebooks for it.
 
-For the full decision logic — including Fabric vs. Databricks vs. Synapse — see the [Fabric vs. Databricks vs. Synapse decision tree](decisions/fabric-vs-databricks-vs-synapse.md) and [ADR-0010: Fabric Strategic Target](adr/0010-fabric-strategic-target.md).
+Choose CSA-in-a-Box when **either** is true:
 
-For the full capability matrix and Fabric-equivalent mapping, see [Architecture → What's Included](ARCHITECTURE.md).
+- **Fabric isn't available to you** — Azure Government / DoD / IC, or a region where Fabric isn't GA yet.
+- **You won't run on SaaS** — sovereignty, data residency, custom networking, dedicated capacity, or full operational control mean a multi-tenant managed plane is off the table. Here CSA-in-a-Box is a **permanent** choice, not a stopgap.
 
-For deep-dive Fabric content — tutorials, feature guides, best practices, POC agendas, and ready-to-run notebooks — see the [Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/) companion site.
+### Which one do I use?
+
+| Your situation | Use |
+| --- | --- |
+| Fabric is GA in your cloud and you want it (SaaS, Microsoft-managed) | **Microsoft Fabric** + **[Supercharge Microsoft Fabric](https://fgarofalo56.github.io/Suppercharge_Microsoft_Fabric/)** |
+| Fabric isn't available in your cloud yet (Gov / DoD / IC) | **CSA-in-a-Box** (this repo) |
+| You could get Fabric but won't take SaaS — control / sovereignty / custom networking | **CSA-in-a-Box** (permanent, by design) |
+| You want the CSA stack with a Fabric-like console + guided deploy | **[CSA Loom](fiab/index.md)** |
+
+For the full decision logic see the [Fabric vs. Databricks vs. Synapse decision tree](decisions/fabric-vs-databricks-vs-synapse.md) and [ADR-0010: Fabric Strategic Target](adr/0010-fabric-strategic-target.md). For the capability matrix and Fabric-equivalent mapping, see [Architecture → What's Included](ARCHITECTURE.md).
 
 <!-- release v0.3.0 -->
 

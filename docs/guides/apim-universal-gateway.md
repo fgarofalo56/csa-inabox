@@ -406,6 +406,6 @@ The on-call rotation owns these playbooks. Drilling once per quarter is the disc
 - [Best practice — Multi-model AI orchestration](../best-practices/multi-model-ai-orchestration.md)
 - [Guide — APIM + MCP layered orchestration](./apim-mcp-layered-orchestration.md)
 - [Guide — APIM as the Unified Gateway for Data Mesh APIs](./apim-data-mesh-gateway.md)
-- [Comparison — Azure vs AWS API stack](../comparison/azure-vs-aws-api-stack.md)
-- [Comparison — Azure vs MuleSoft Anypoint Platform](../comparison/azure-vs-mulesoft.md)
+- [Comparison — Azure vs a competing cloud API stack](../comparison/azure-vs-aws-api-stack.md)
+- [Comparison — Azure vs a competing integration platform](../comparison/azure-vs-mulesoft.md)
 - [Solution Store — Azure API-first accelerators](../solution-store/index.md)

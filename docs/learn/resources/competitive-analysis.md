@@ -1,6 +1,6 @@
 ---
 title: "Cloud Analytics Platform Competitive Analysis"
-description: "Comprehensive comparison of Azure Cloud Scale Analytics against AWS, Google Cloud, Databricks, Snowflake, and on-premises solutions."
+description: "Comprehensive comparison, from the Azure perspective, of Azure Cloud Scale Analytics against competing clouds, Azure Databricks, a competing data warehouse, and on-premises solutions. Third-party details sourced from public documentation."
 tags:
   - resources
 ---
@@ -24,7 +24,7 @@ tags:
 ![Platforms](https://img.shields.io/badge/Platforms-5-blue?style=flat-square)
 ![Updated](https://img.shields.io/badge/Updated-2025--01-green?style=flat-square)
 
-Comprehensive comparison of Azure Cloud Scale Analytics against AWS, Google Cloud, Databricks, Snowflake, and on-premises solutions.
+Comprehensive comparison, from the Azure perspective, of Azure Cloud Scale Analytics against competing clouds, Azure Databricks, a competing data warehouse, and on-premises solutions.
 
 ---
 
@@ -32,10 +32,10 @@ Comprehensive comparison of Azure Cloud Scale Analytics against AWS, Google Clou
 
 - [Executive Summary](#executive-summary)
 - [Platform Comparison Matrix](#platform-comparison-matrix)
-- [Azure vs AWS](#azure-vs-aws)
-- [Azure vs Google Cloud](#azure-vs-google-cloud)
+- [Azure vs a competing cloud](#azure-vs-a-competing-cloud)
+- [Azure vs another competing cloud](#azure-vs-another-competing-cloud)
 - [Azure vs Databricks](#azure-vs-databricks)
-- [Azure vs Snowflake](#azure-vs-snowflake)
+- [Azure vs a competing data warehouse](#azure-vs-a-competing-data-warehouse)
 - [Cloud vs On-Premises](#cloud-vs-on-premises)
 - [Service-by-Service Comparison](#service-by-service-comparison)
 - [Pricing Comparison](#pricing-comparison)
@@ -108,11 +108,11 @@ __Legend__: ⭐⭐⭐⭐⭐ Industry Leading | ⭐⭐⭐⭐ Strong | ⭐⭐⭐ A
 
 ---
 
-## 🔵 Azure vs AWS
+## 🔵 Azure vs a competing cloud
 
 ### Service Mapping
 
-| Azure Service | AWS Equivalent | Azure Advantage | AWS Advantage |
+| Azure Service | Competing-cloud equivalent | Azure Advantage | Competing-cloud advantage |
 |---------------|----------------|-----------------|---------------|
 | __Synapse Analytics__ | Redshift + EMR + Glue | Unified workspace, serverless SQL | Mature ecosystem |
 | __Databricks (Azure)__ | EMR + SageMaker | Native integration, optimized networking | More DIY flexibility |
@@ -210,7 +210,7 @@ __Scenario__: 1,000 core-hours/month, 5TB data processed
 
 __Azure advantage: 16% lower cost__ (Synapse), __6% lower__ (Databricks)
 
-### When to Choose Azure Over AWS
+### When to Choose Azure Over the competing cloud
 
 ✅ __Strong Microsoft Ecosystem Presence__
 
@@ -236,13 +236,13 @@ __Azure advantage: 16% lower cost__ (Synapse), __6% lower__ (Databricks)
 - Shared metadata across SQL, Spark, pipelines
 - Single security and governance model
 
-### When to Choose AWS Over Azure
+### When to Choose the competing cloud Over Azure
 
-✅ __AWS-Native Ecosystem__
+✅ __Competing-cloud-native ecosystem__
 
-- Existing AWS infrastructure and expertise
-- Tight integration with other AWS services
-- Lambda, S3, DynamoDB-centric architectures
+- Existing investment in that cloud's infrastructure and expertise
+- Tight integration with that cloud's other services
+- Architectures centered on that cloud's serverless, object-storage, and NoSQL services
 
 ✅ __Broader Service Portfolio__
 
@@ -258,11 +258,11 @@ __Azure advantage: 16% lower cost__ (Synapse), __6% lower__ (Databricks)
 
 ---
 
-## 🔴 Azure vs Google Cloud
+## 🔴 Azure vs another competing cloud
 
 ### Service Mapping
 
-| Azure Service | Google Cloud Equivalent | Azure Advantage | GCP Advantage |
+| Azure Service | Competing-cloud equivalent | Azure Advantage | Competing-cloud advantage |
 |---------------|------------------------|-----------------|---------------|
 | __Synapse Analytics__ | BigQuery + Dataproc | Unified workspace | Faster queries, simpler |
 | __Databricks__ | Dataproc | Better integration | Native Spark support |
@@ -346,7 +346,7 @@ __Recommendation__:
 - __Synapse Dedicated__: Best for predictable, high-volume querying
 - __Synapse Serverless__: Best for occasional, exploratory queries
 
-### When to Choose Azure Over GCP
+### When to Choose Azure Over the competing cloud
 
 ✅ __Microsoft Ecosystem Integration__
 
@@ -372,29 +372,29 @@ __Recommendation__:
 - Easier migration from SQL Server
 - Existing T-SQL skill sets
 
-### When to Choose GCP Over Azure
+### When to Choose the competing cloud Over Azure
 
 ✅ __Data Analytics Simplicity__
 
-- BigQuery's serverless-first approach
+- The competing warehouse's serverless-first approach
 - Simpler pricing models
 - Faster time-to-value
 
 ✅ __AI/ML Innovation__
 
-- TensorFlow native integration
-- Google Research innovations
-- Stronger open-source AI tools
+- Native deep-learning-framework integration
+- Vendor research innovations
+- Strong open-source AI tools
 
-✅ __Google Workspace Integration__
+✅ __Productivity-suite integration__
 
-- Sheets, Docs, Drive connectivity
-- Gmail and Calendar data analysis
-- Google Meet analytics
+- Tight integration with the competitor's own productivity suite
+- Email and calendar data analysis
+- Collaboration-tool analytics
 
 ✅ __Cost for Variable Workloads__
 
-- BigQuery's pay-per-query model
+- The competing warehouse's pay-per-query model
 - No idle resource costs
 - Better for sporadic workloads
 
@@ -494,11 +494,11 @@ __Synapse savings: 29-44%__ vs Databricks
 
 ---
 
-## ❄️ Azure vs Snowflake
+## ❄️ Azure vs a competing data warehouse
 
 ### Service Comparison
 
-| Feature | Azure Synapse | Snowflake (on Azure) | Winner |
+| Feature | Azure Synapse | Competing data warehouse (on Azure) | Winner |
 |---------|---------------|---------------------|--------|
 | __Architecture__ | MPP (dedicated) + Serverless | Multi-cluster shared data | Snowflake (simpler) |
 | __Storage/Compute__ | ✅ Separated | ✅ Separated | Tie |
@@ -523,7 +523,7 @@ __Scenario__: 50TB data, 5,000 queries/day, 24/7 compute
 
 __Synapse savings: 15-27%__ depending on workload
 
-### When to Choose Azure Synapse Over Snowflake
+### When to Choose Azure Synapse Over the competing data warehouse
 
 ✅ __Cost Sensitivity__
 
@@ -549,7 +549,7 @@ __Synapse savings: 15-27%__ depending on workload
 - Better on-premises connectivity
 - SQL Server migration path
 
-### When to Choose Snowflake Over Synapse
+### When to Choose the competing data warehouse Over Synapse
 
 ✅ __Ease of Use & Simplicity__
 
@@ -559,7 +559,7 @@ __Synapse savings: 15-27%__ depending on workload
 
 ✅ __Advanced Data Sharing__
 
-- Native Snowflake Data Marketplace
+- Native data-sharing marketplace
 - Secure data sharing without copies
 - Cross-region and cross-cloud sharing
 

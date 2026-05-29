@@ -373,7 +373,7 @@ strongest case.
 ## Quick links
 
 - [Whitepaper — API-first data strategy on Azure](../research/api-first-data-strategy-whitepaper.md)
-- [Azure vs AWS API stack](./azure-vs-aws-api-stack.md)
+- [Azure vs a competing cloud API stack](./azure-vs-aws-api-stack.md)
 - [Guide — APIM as the universal API gateway](../guides/apim-universal-gateway.md)
 - [Reference architecture — API-first multi-model ecosystem](../reference-architecture/api-first-multi-model-ecosystem.md)
 - [Solution Store — Azure API-first accelerators](../solution-store/index.md)

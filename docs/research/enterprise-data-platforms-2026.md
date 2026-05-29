@@ -2,18 +2,19 @@
 
 # Enterprise Data Platforms — 2026 State of the Market
 
-> **Comparative positioning note.** This document is written from the
-> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
-> description of third-party or competing products, services, pricing, or
-> capabilities is derived from **publicly available documentation and sources**
-> believed accurate at the time of writing, and is provided for **general
-> comparison only**. We do not claim expertise in, or authority over, any
-> non-Microsoft product or service; the respective vendor's official
-> documentation is the authoritative source for their offerings, which may
-> change over time. Nothing here is intended to disparage any vendor — where a
-> competing product has genuine advantages, we aim to note them honestly.
-> Verify all third-party details against the vendor's current official
-> documentation before making decisions.
+!!! info "Comparative positioning note"
+    This document is written from the
+    perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+    description of third-party or competing products, services, pricing, or
+    capabilities is derived from **publicly available documentation and sources**
+    believed accurate at the time of writing, and is provided for **general
+    comparison only**. We do not claim expertise in, or authority over, any
+    non-Microsoft product or service; the respective vendor's official
+    documentation is the authoritative source for their offerings, which may
+    change over time. Nothing here is intended to disparage any vendor — where a
+    competing product has genuine advantages, we aim to note them honestly.
+    Verify all third-party details against the vendor's current official
+    documentation before making decisions.
 
 
 > **TL;DR:** The enterprise data platform market has consolidated around the lakehouse paradigm, with open table formats (Iceberg, Delta Lake) becoming the default storage layer. AI is no longer an adjacent workload -- it is the primary forcing function for platform architecture decisions. Microsoft Fabric, Databricks, and Snowflake are locked in a three-way battle for the unified analytics platform, while AWS and GCP compete on breadth and integration. Governance has shifted from afterthought to first-class platform primitive, driven by regulatory pressure and the operational demands of RAG and agentic AI. Cost optimization has matured from ad-hoc tagging exercises into automated FinOps disciplines. Organizations that fail to converge on a lakehouse-first, governance-embedded architecture will find themselves unable to operationalize AI at scale.

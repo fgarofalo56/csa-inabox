@@ -105,7 +105,7 @@ The routing layer lives in APIM, not in application code. Reasons:
 </policies>
 ```
 
-This is the production-grade answer to four hard problems at once: cost control, latency control, content safety, and chargeback telemetry. **No equivalent exists on AWS API Gateway. No equivalent exists on MuleSoft.**
+This is the production-grade answer to four hard problems at once: cost control, latency control, content safety, and chargeback telemetry. **No native equivalent exists on a competing cloud's API gateway, nor on a competing integration platform.**
 
 ---
 

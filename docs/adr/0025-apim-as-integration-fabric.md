@@ -26,8 +26,8 @@ informed: customer-facing field, partner ecosystem, federal mission accounts
 
 Customer architectures evaluating Microsoft as the strategic platform for an API-first, multi-model, zero-move AI ecosystem need a clear answer to two recurring questions:
 
-1. **"What is the seam that connects everything — Azure-native services, AWS, GCP, on-prem mission systems, partner data fabrics, sovereign LLM gateways, M365 / Graph / Dataverse, and external agencies — into one governed, identity-grounded, observable platform?"**
-2. **"Why is Microsoft's answer materially better than MuleSoft Anypoint Platform and AWS API Gateway + the surrounding AWS integration stack?"**
+1. **"What is the seam that connects everything — Azure-native services, other clouds, on-prem mission systems, partner data fabrics, sovereign LLM gateways, M365 / Graph / Dataverse, and external agencies — into one governed, identity-grounded, observable platform?"**
+2. **"Why is Microsoft's answer differentiated from a leading competing integration platform and a competing cloud's API gateway + the surrounding integration stack?"**
 
 This decision documents the position taken across the CSA-in-a-Box reference architecture, whitepaper, comparisons, use cases, best practices, and guides under the "API-First Data Strategy" pillar.
 
@@ -35,9 +35,9 @@ The candidates considered:
 
 | Candidate | Pros | Cons |
 |---|---|---|
-| **Azure API Management** | One product covers REST / GraphQL / WebSocket / gRPC / SOAP; native Entra integration; native LLM policies; built-in developer portal; FedRAMP High; self-hosted gateway for hybrid; OpenAPI-native; Premium v2 with AZ-resilience; included observability | Developer portal UX lags Anypoint Exchange in very large estates; transformation DSL less expressive than DataWeave for the rare complex case |
-| **MuleSoft Anypoint Platform** | Anypoint Exchange is best-in-class for asset discovery; DataWeave is expressive; CloudHub is fully managed | Per-core licensing typically 4–8x Azure cost; premium connectors individually licensed; no native LLM gateway features; no native M365 / Graph / Dataverse / Copilot Studio integration; no native MCP support |
-| **AWS API Gateway + adjacents** | Mature; deep AWS integration; pay-per-call shape | No native LLM gateway features; Lambda authorizer tax; no built-in developer portal; multi-cloud backends are second-class; no productivity-surface reach (M365 / Copilot has no AWS analogue) |
+| **Azure API Management** | One product covers REST / GraphQL / WebSocket / gRPC / SOAP; native Entra integration; native LLM policies; built-in developer portal; FedRAMP High; self-hosted gateway for hybrid; OpenAPI-native; Premium v2 with AZ-resilience; included observability | Developer-portal UX lags the competing platform's asset catalog in very large estates; transformation DSL less expressive than the competitor's for the rare complex case |
+| **A leading competing integration platform** | Best-in-class asset-discovery catalog; expressive transformation language; fully managed runtime | Per-core licensing typically several times Azure cost; premium connectors individually licensed; no native LLM gateway features; no native M365 / Graph / Dataverse / Copilot Studio integration; no native MCP support |
+| **A competing cloud's API gateway + adjacents** | Mature; deep integration within its own cloud; pay-per-call shape | No native LLM gateway features; serverless-authorizer tax; no built-in developer portal; multi-cloud backends are second-class; no productivity-surface reach (M365 / Copilot has no counterpart) |
 | **Build-your-own gateway (Kong / Envoy / NGINX)** | Open-source; flexible | All of the above policies and observability are now engineering work; identity, governance, lifecycle become per-team responsibility; no enterprise SLA |
 
 ## Decision
@@ -47,7 +47,7 @@ The candidates considered:
 Specifically:
 
 1. Every customer-facing API in the reference architecture flows through APIM. Internal APIs default to APIM as well, with intentional exceptions only where latency budgets make it impossible.
-2. APIM is the **single seam** between consumers (apps, agents, partners, M365 surfaces) and backends (Azure-native data, AWS data, GCP data, on-prem, SaaS, sovereign LLM gateways, partner data fabrics).
+2. APIM is the **single seam** between consumers (apps, agents, partners, M365 surfaces) and backends (Azure-native data, other-cloud data, on-prem, SaaS, sovereign LLM gateways, partner data fabrics).
 3. APIM hosts the LLM policy set (`llm-token-limit`, `llm-semantic-cache-*`, `llm-content-safety`, `llm-emit-token-metric`, multi-region backend pools with circuit breakers) for every AI workload.
 4. APIM is the recommended pattern for fronting Model Context Protocol (MCP) servers, with one APIM-fronted endpoint per MCP domain.
 5. APIM Self-Hosted Gateway is the recommended pattern for edge / sovereign / partner-cloud / on-prem reach where the data plane must stay inside a boundary.
@@ -62,27 +62,27 @@ Specifically:
 - **One cost model.** Per-subscription token budgets and chargeback dimensions emitted at the gateway, regardless of backend.
 - **One governance plane.** Purview catalogs APIs alongside data and AI artifacts. Sensitivity labels propagate through the chain.
 - **Multi-cloud reach by default.** APIM treats any HTTPS backend as a first-class citizen. OneLake shortcuts + APIM façades cover cross-cloud data access without movement.
-- **Strangler-fig migration paths.** Existing MuleSoft and AWS API Gateway deployments can co-exist for the life of current contracts; new APIs route through APIM; old APIs retire on a customer-controlled timeline.
+- **Strangler-fig migration paths.** Existing competing-platform and competing-cloud API-gateway deployments can co-exist for the life of current contracts; new APIs route through APIM; old APIs retire on a customer-controlled timeline.
 - **First-class LLM workload support.** Token budgets, semantic caching, content safety, model routing, and chargeback telemetry are native APIM policies, not engineering work.
 
 ### What this constrains
 
-- **Developer portal UX delta with Anypoint Exchange.** For estates with thousands of APIs and asset-discovery requirements, customers may need to ship a Backstage instance in front of APIM + Purview catalogs. This is documented and the cost delta funds the engineering work.
-- **DataWeave-class transformation requires a multi-product story on Azure.** APIM policies cover simple-to-moderate transformations; Logic Apps integration accounts cover B2B / EDI; dbt covers tabular; Functions cover code-first. The architectural discipline of picking the right tool per shape is required.
+- **Developer-portal UX delta with the competing platform's asset catalog.** For estates with thousands of APIs and asset-discovery requirements, customers may need to ship a Backstage instance in front of APIM + Purview catalogs. This is documented and the cost delta funds the engineering work.
+- **Advanced transformation requires a multi-product story on Azure.** APIM policies cover simple-to-moderate transformations; Logic Apps integration accounts cover B2B / EDI; dbt covers tabular; Functions cover code-first. The architectural discipline of picking the right tool per shape is required.
 - **APIM Premium v2 cost floor.** Premium v2 is capacity-priced; a minimal production deployment is several thousand dollars per month. Consumption tier is the right choice for dev/test and ephemeral environments. The Premium v2 floor is justified for production by the policy capabilities and reliability profile.
-- **CloudHub-style "fully managed" is partially recreated.** APIM is managed at the control plane; self-hosted gateway is customer-managed at the data plane. Logic Apps Standard, Functions Premium, and Container Apps are managed compute options. The aggregate is managed in spirit; the deployment-model choice is customer-controlled.
+- **Fully managed-runtime parity is partially recreated.** APIM is managed at the control plane; self-hosted gateway is customer-managed at the data plane. Logic Apps Standard, Functions Premium, and Container Apps are managed compute options. The aggregate is managed in spirit; the deployment-model choice is customer-controlled.
 
 ### What this displaces
 
 | Displaced product | When | How |
 |---|---|---|
-| MuleSoft API Manager | New AI workloads first; broader migration over 12–24 months | Strangler-fig per the [MuleSoft displacement playbook](../comparison/azure-vs-mulesoft.md) |
-| AWS API Gateway (for new workloads, especially AI) | New AI workloads on Azure; existing AWS workloads retained where appropriate | Co-existence pattern; AWS data accessed via OneLake shortcuts and APIM façades — no data movement required |
-| Anypoint MQ (for messaging) | New eventing / streaming workloads | Event Hubs (high-throughput streaming) + Service Bus (transactional queues) + Event Grid (event routing) — three products covering the three distinct workloads |
-| Anypoint Composer (for business automation) | New workflow automation | Power Automate + Copilot Studio + Power Apps |
-| AWS Cognito (for identity, in workloads touching M365 / Entra) | Whenever Entra-grounded identity is needed | Federation or replacement |
-| Anypoint Monitoring (for observability) | All Azure-hosted workloads | App Insights + Log Analytics included |
-| Lambda authorizers (for auth) | New AWS-fronted workloads moving to APIM | In-process APIM policies replace Lambda authorizers |
+| Competing platform's API manager | New AI workloads first; broader migration over 12–24 months | Strangler-fig per the [competing-platform displacement playbook](../comparison/azure-vs-mulesoft.md) |
+| Competing cloud's API gateway (for new workloads, especially AI) | New AI workloads on Azure; existing competing-cloud workloads retained where appropriate | Co-existence pattern; competing-cloud data accessed via OneLake shortcuts and APIM façades — no data movement required |
+| Competing platform's message queue (for messaging) | New eventing / streaming workloads | Event Hubs (high-throughput streaming) + Service Bus (transactional queues) + Event Grid (event routing) — three products covering the three distinct workloads |
+| Competing platform's automation tool (for business automation) | New workflow automation | Power Automate + Copilot Studio + Power Apps |
+| Competing cloud's identity service (for identity, in workloads touching M365 / Entra) | Whenever Entra-grounded identity is needed | Federation or replacement |
+| Competing platform's monitoring (for observability) | All Azure-hosted workloads | App Insights + Log Analytics included |
+| Serverless authorizers (for auth) | New competing-cloud-fronted workloads moving to APIM | In-process APIM policies replace serverless authorizers |
 
 ### Operational obligations
 
@@ -101,16 +101,16 @@ These obligations are documented in the [APIM Universal Gateway guide](../guides
 
 ## Alternatives rejected
 
-- **MuleSoft Anypoint as primary.** Rejected on cost, lack of native LLM gateway features, and weak M365 / Copilot / GitHub integration. MuleSoft Anypoint Exchange's UX edge does not offset the structural gaps.
-- **AWS API Gateway as primary (for Azure-anchored customers).** Rejected on the AI-gateway gap, the Lambda authorizer tax, the absence of native developer portal, and the cross-cloud back-end second-classness.
+- **The competing integration platform as primary.** Rejected on cost, lack of native LLM gateway features, and weak M365 / Copilot / GitHub integration. The competitor's asset-catalog UX edge does not offset the structural gaps.
+- **The competing cloud's API gateway as primary (for Azure-anchored customers).** Rejected on the AI-gateway gap, the serverless-authorizer tax, the absence of native developer portal, and the cross-cloud back-end second-classness.
 - **Build-your-own on Kong / Envoy / NGINX.** Rejected. Building APIM-equivalent functionality (auth, rate limit, semantic cache, content safety, token budget, chargeback, developer portal, lifecycle) is a multi-quarter engineering effort with no enterprise SLA at the end.
 - **No gateway — direct backend access with Entra.** Rejected. Cross-cutting concerns multiply per backend; observability fragments; rate-limit / cost governance becomes per-team responsibility; agent workloads have no central enforcement point.
 
 ## Related material
 
 - [Whitepaper — API-first data strategy on Azure](../research/api-first-data-strategy-whitepaper.md)
-- [Comparison — Azure vs MuleSoft Anypoint Platform](../comparison/azure-vs-mulesoft.md)
-- [Comparison — Azure vs AWS API stack](../comparison/azure-vs-aws-api-stack.md)
+- [Comparison — Azure vs a competing integration platform](../comparison/azure-vs-mulesoft.md)
+- [Comparison — Azure vs a competing cloud API stack](../comparison/azure-vs-aws-api-stack.md)
 - [Reference architecture — API-first multi-model ecosystem](../reference-architecture/api-first-multi-model-ecosystem.md)
 - [Guide — APIM as the universal API gateway](../guides/apim-universal-gateway.md)
 - [Guide — APIM + MCP layered orchestration](../guides/apim-mcp-layered-orchestration.md)

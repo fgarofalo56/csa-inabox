@@ -1,17 +1,18 @@
 # Loom ADF Dataset Editor — Studio-parity spec
 
-> **Comparative positioning note.** This document is written from the
-> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
-> description of third-party or competing products, services, pricing, or
-> capabilities is derived from **publicly available documentation and sources**
-> believed accurate at the time of writing, and is provided for **general
-> comparison only**. We do not claim expertise in, or authority over, any
-> non-Microsoft product or service; the respective vendor's official
-> documentation is the authoritative source for their offerings, which may
-> change over time. Nothing here is intended to disparage any vendor — where a
-> competing product has genuine advantages, we aim to note them honestly.
-> Verify all third-party details against the vendor's current official
-> documentation before making decisions.
+!!! info "Comparative positioning note"
+    This document is written from the
+    perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+    description of third-party or competing products, services, pricing, or
+    capabilities is derived from **publicly available documentation and sources**
+    believed accurate at the time of writing, and is provided for **general
+    comparison only**. We do not claim expertise in, or authority over, any
+    non-Microsoft product or service; the respective vendor's official
+    documentation is the authoritative source for their offerings, which may
+    change over time. Nothing here is intended to disparage any vendor — where a
+    competing product has genuine advantages, we aim to note them honestly.
+    Verify all third-party details against the vendor's current official
+    documentation before making decisions.
 
 
 > Captured 2026-05-26 by catalog agent. Source: ADF Studio Author tab → Datasets + `learn.microsoft.com/azure/data-factory/concepts-datasets-linked-services` + `concepts-linked-services` + ARM template ref `Microsoft.DataFactory/factories/datasets` (2018-06-01) + Loom `AdfDatasetEditor` (apps/fiab-console/lib/editors/azure-services-editors.tsx:923) + `adf-client.ts`.

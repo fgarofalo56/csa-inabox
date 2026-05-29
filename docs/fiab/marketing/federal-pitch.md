@@ -110,7 +110,7 @@ attestation including workforce + personnel security practices. See
 |---|---|
 | [Federal Data Mesh](../use-cases/federal-data-mesh.md) | Multi-agency federal departments |
 | [Multi-Agency Onboarding](../use-cases/multi-agency-onboarding.md) | Federal CIO / shared services |
-| [Direct-Lake Replacement](../use-cases/direct-lake-replacement.md) | Customers migrating from Tableau / Qlik / Power BI Report Server |
+| [Direct-Lake Replacement](../use-cases/direct-lake-replacement.md) | Customers migrating from competing BI / analytics tools or Power BI Report Server |
 | [Sovereign AI Agents](../use-cases/sovereign-ai-agents.md) | Federal AI workloads under sovereignty constraints |
 | [Hybrid Fabric Commercial + Loom Gov](../use-cases/hybrid-topology.md) | Federal customers with both Commercial + Gov estates |
 
