@@ -1988,6 +1988,19 @@ function WorkspacePicker({
           </MessageBarBody>
         </MessageBar>
       )}
+      {!loading && !error && (workspaces?.length ?? 0) === 0 && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>No Power BI workspaces</MessageBarTitle>
+            The Console service principal can&apos;t see any Power BI workspaces. Create one (or get added to one) in Power BI, then Refresh.
+            <br />
+            <Button appearance="primary" size="small" style={{ marginTop: 6 }}
+              onClick={() => { try { window.open('https://app.powerbi.com/groups/me/list', '_blank', 'noreferrer'); } catch { /* popup blocked */ } }}>
+              Open Power BI
+            </Button>
+          </MessageBarBody>
+        </MessageBar>
+      )}
     </div>
   );
 }
@@ -2701,6 +2714,13 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     } catch { /* silently keep last */ }
   }, []);
 
+  // Auto-pick the first Power BI workspace once loaded so the list fetch fires
+  // and the first dataset auto-selects — enabling New measure / Refresh / Open
+  // immediately instead of leaving them disabled behind a manual pick. Matches
+  // the Eventstream/Activator auto-pick pattern. Users can still switch.
+  useEffect(() => {
+    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
+  }, [workspaceId, ws.workspaces]);
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => {
     if (workspaceId && datasetId) { loadDetail(workspaceId, datasetId); loadRefreshes(workspaceId, datasetId); }
@@ -3016,6 +3036,12 @@ function ReportLikeEditor({
     } catch (e: any) { setErr(e?.message || String(e)); }
   }, [detailPathBase]);
 
+  // Auto-pick the first Power BI workspace so the list loads and the first
+  // report auto-selects — embed/refresh/export enable on load instead of
+  // sitting behind a manual workspace pick.
+  useEffect(() => {
+    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
+  }, [workspaceId, ws.workspaces]);
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && reportId) loadDetail(workspaceId, reportId); }, [workspaceId, reportId, loadDetail]);
 
@@ -3261,6 +3287,11 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
     } catch (e: any) { setErr(e?.message || String(e)); }
   }, []);
 
+  // Auto-pick the first Power BI workspace so the list loads and the first
+  // dashboard auto-selects — embed enables on load instead of behind a pick.
+  useEffect(() => {
+    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
+  }, [workspaceId, ws.workspaces]);
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && dashId) loadDetail(workspaceId, dashId); }, [workspaceId, dashId, loadDetail]);
 
@@ -3427,6 +3458,11 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     } catch (e: any) { setErr(e?.message || String(e)); }
   }, []);
 
+  // Auto-pick the first Power BI workspace so the list loads and the first
+  // scorecard auto-selects — Open in Power BI / Refresh enable on load.
+  useEffect(() => {
+    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
+  }, [workspaceId, ws.workspaces]);
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && scorecardId) loadGoals(workspaceId, scorecardId); }, [workspaceId, scorecardId, loadGoals]);
 

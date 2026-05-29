@@ -77,6 +77,8 @@ export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }
         endpoint="/api/items/ml-model"
         listKey="models"
         openSlug="ml-model"
+        studioUrl="https://ml.azure.com/model/list"
+        studioLabel="Open Azure ML Studio"
         intro="ML models are registered in Azure Machine Learning (via training jobs / MLflow), not authored in Loom. Select a registered model below and Open it to view its versions, lineage, and apply/endpoint actions."
         gateHint="No models found — register one by running a job in ml-experiment or Azure ML Studio. If this errors, set LOOM_AML_WORKSPACE / LOOM_FOUNDRY_* and grant the Console UAMI the AzureML Data Scientist role."
         mapEntity={(m: ModelSummary) => ({
@@ -261,6 +263,8 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
         endpoint="/api/items/ml-experiment"
         listKey="experiments"
         openSlug="ml-experiment"
+        studioUrl="https://ml.azure.com/experiments"
+        studioLabel="Open Azure ML Studio"
         intro="ML experiments group MLflow runs submitted from notebooks or Azure ML. Select an experiment below and Open it to view its runs, metrics, and register-model action."
         gateHint="No experiments found — submit a run via mlflow.start_run() in a notebook. If this errors, set LOOM_AML_WORKSPACE / LOOM_FOUNDRY_* and grant the Console UAMI the AzureML Data Scientist role."
         mapEntity={(e: { name: string; runCount: number }) => ({

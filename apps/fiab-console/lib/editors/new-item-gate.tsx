@@ -210,9 +210,16 @@ interface BrowseGateProps {
   intro?: string;
   /** Honest gate hint shown when the endpoint errors (env var / role to set). */
   gateHint?: string;
+  /**
+   * External authoring surface (e.g. Azure ML Studio). Rendered as an
+   * always-enabled secondary affordance so the page is never a dead end even
+   * when the registry is empty or unreachable. Label defaults to "Open studio".
+   */
+  studioUrl?: string;
+  studioLabel?: string;
 }
 
-export function NewItemBrowseGate({ item, endpoint, listKey, mapEntity, openSlug, intro, gateHint }: BrowseGateProps) {
+export function NewItemBrowseGate({ item, endpoint, listKey, mapEntity, openSlug, intro, gateHint, studioUrl, studioLabel }: BrowseGateProps) {
   const s = useStyles();
   const router = useRouter();
   const [rows, setRows] = useState<BrowseEntity[]>([]);
@@ -226,7 +233,15 @@ export function NewItemBrowseGate({ item, endpoint, listKey, mapEntity, openSlug
       const r = await fetch(endpoint);
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setRows([]); }
-      else { setRows(((j[listKey] as any[]) || []).map(mapEntity)); }
+      else {
+        const mapped = ((j[listKey] as any[]) || []).map(mapEntity);
+        setRows(mapped);
+        // Auto-select the first row so the primary "Open" enables immediately
+        // instead of sitting disabled until a manual click. Matches the
+        // auto-pick-first-workspace pattern in the Fabric editors. Users can
+        // still pick a different row.
+        setSelected((prev) => prev || (mapped[0]?.id ?? null));
+      }
     } catch (e: any) { setError(e?.message || String(e)); setRows([]); }
     finally { setLoading(false); }
   }, [endpoint, listKey, mapEntity]);
@@ -238,15 +253,20 @@ export function NewItemBrowseGate({ item, endpoint, listKey, mapEntity, openSlug
     router.push(`/items/${encodeURIComponent(openSlug)}/${encodeURIComponent(selected)}`);
   }, [selected, openSlug, router]);
 
+  const openStudio = useCallback(() => {
+    if (studioUrl) { try { window.open(studioUrl, '_blank', 'noreferrer'); } catch { /* popup blocked */ } }
+  }, [studioUrl]);
+
   const canOpen = !!selected && !loading;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Registry', actions: [
         { label: 'Open', onClick: canOpen ? open : undefined, disabled: !canOpen, title: !selected ? 'Select an entry first' : undefined },
         { label: loading ? 'Loading…' : 'Refresh', onClick: loading ? undefined : load, disabled: loading },
+        ...(studioUrl ? [{ label: studioLabel || 'Open studio', onClick: openStudio, disabled: false }] : []),
       ]},
     ]},
-  ], [canOpen, open, selected, loading, load]);
+  ], [canOpen, open, selected, loading, load, studioUrl, studioLabel, openStudio]);
 
   return (
     <ItemEditorChrome item={item} id="new" ribbon={ribbon} main={
@@ -286,6 +306,11 @@ export function NewItemBrowseGate({ item, endpoint, listKey, mapEntity, openSlug
 
         <div className={s.actions}>
           <Button appearance="primary" icon={<Open20Regular />} onClick={open} disabled={!canOpen}>Open</Button>
+          {studioUrl && (
+            <Button appearance="secondary" icon={<Open20Regular />} onClick={openStudio}>
+              {studioLabel || 'Open studio'}
+            </Button>
+          )}
         </div>
       </div>
     } />
