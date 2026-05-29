@@ -104,6 +104,49 @@ export function parseOntologyHierarchy(src: string): OntologyClass[] {
 }
 
 // ============================================================
+// Fabric User Data Functions — parse @udf.function() signatures
+// (phase4-editors.tsx Functions explorer + Test panel)
+// ============================================================
+
+export interface UdfParam { name: string; type?: string; default?: string }
+export interface UdfFunction { name: string; params: UdfParam[]; returns?: string }
+
+/**
+ * Parse the function_app.py source for functions decorated with
+ * `@udf.function()`. Returns the function name, its typed parameters
+ * (name/type/default), and return annotation. Helper (undecorated) functions
+ * are excluded, matching the Fabric Functions explorer behaviour.
+ */
+export function parseUdfFunctions(src: string): UdfFunction[] {
+  const out: UdfFunction[] = [];
+  const lines = src.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*@udf\.function\s*\(/.test(lines[i])) continue;
+    // Find the def line (may be the next non-decorator line).
+    let j = i + 1;
+    while (j < lines.length && /^\s*@/.test(lines[j])) j++;
+    // Accumulate the def signature across wrapped lines until the closing ):
+    let sig = '';
+    for (; j < lines.length; j++) {
+      sig += lines[j];
+      if (sig.includes(')')) break;
+      sig += ' ';
+    }
+    const m = sig.match(/def\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*(?:->\s*([^:]+))?:/);
+    if (!m) continue;
+    const params: UdfParam[] = [];
+    for (const rawP of m[2].split(',')) {
+      const p = rawP.trim();
+      if (!p || p === 'self') continue;
+      const pm = p.match(/^([A-Za-z_]\w*)\s*(?::\s*([^=]+?))?\s*(?:=\s*(.+))?$/);
+      if (pm) params.push({ name: pm[1], type: pm[2]?.trim(), default: pm[3]?.trim() });
+    }
+    out.push({ name: m[1], params, returns: m[3]?.trim() });
+  }
+  return out;
+}
+
+// ============================================================
 // AI Builder model state/status (powerplatform-editors.tsx)
 // ============================================================
 
