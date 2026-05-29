@@ -27,13 +27,13 @@ glossary terms (https://learn.microsoft.com/purview/unified-catalog-glossary-ter
 | 3 | built ✅ | Datasets tab: register Atlas entities via POST `/api/catalog/register` and list them in the bundle; classifications attach inline |
 | 4 | built ✅ | Glossary tab: list/create terms (`/api/catalog/glossary`) and link to the product asset |
 | 5 | built ✅ | Classifications field on the register-asset form (Atlas `classifications[]`) |
-| 6 | built ✅ | Register/Re-register with Purview → POST `/register-purview`; honest 501 hint when Purview unprovisioned |
+| 6 | built ✅ | Register/Re-register with Purview → POST `/register-purview` → real `POST /datagovernance/catalog/dataProducts` (2026-03-20-preview). Body is now spec-compliant: REQUIRED `id` (uuid) is minted/round-tripped, `status: DRAFT` (uppercase enum), `contacts` as a `ContactsMap` (`{ owner: [{id, description}] }`, owner sent only when it's an AAD oid GUID). Returns 200 with `dataProductId` **only** on real success and persists it to Cosmos so the gate clears; 422 when `state.domain` is missing/not a GUID; honest 501 hint when Purview unprovisioned; 4xx/502 on upstream failure. No fake-200 no-op. |
 | 7 | built ✅ | Access policies tab → GET/POST `/api/governance/policies` (kind=Access) — time limit + approvers |
 | 8 | built ✅ | Lineage tab → GET `/api/catalog/lineage?source=purview&id=<guid>` rendered as a node/edge list |
 
 ## Backend per control
 
-- Product → Cosmos `state` + `registerDataProduct` (Unified Catalog)
+- Product → Cosmos `state` + `registerDataProduct` (Unified Catalog `POST /datagovernance/catalog/dataProducts`, api-version 2026-03-20-preview, scope `https://purview.azure.net/.default`)
 - Domains → `listBusinessDomains`
 - Datasets/classifications → `registerAtlasEntity`
 - Glossary → `createAtlasGlossaryTerm` / `applyGlossaryTerm`

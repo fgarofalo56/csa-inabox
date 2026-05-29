@@ -32,6 +32,7 @@
  * 404 → returns null on GETs so the route can branch cleanly.
  * Any other non-2xx throws `PurviewError(status, body)`.
  */
+import { randomUUID } from 'node:crypto';
 import {
   DefaultAzureCredential,
   ManagedIdentityCredential,
@@ -40,6 +41,8 @@ import {
 
 const PURVIEW_SCOPE = 'https://purview.azure.net/.default';
 const PURVIEW_API_VERSION = '2026-03-20-preview';
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -179,6 +182,12 @@ async function readJson<T>(res: Response): Promise<T | null> {
  * parity spec.
  */
 export interface PurviewDataProductPayload {
+  /**
+   * Optional caller-supplied id (uuid). Purview's create contract REQUIRES an
+   * id in the request; when omitted the client mints one. Supply this on a
+   * re-register so the same Unified Catalog product is targeted.
+   */
+  id?: string;
   /** Display name. Maps to Unified Catalog `name`. */
   displayName: string;
   /** Long-form description / business narrative. Maps to `description`. */
@@ -222,9 +231,12 @@ function shape(raw: any): PurviewDataProduct {
     name: raw?.name || raw?.displayName,
     description: raw?.description,
     domain: raw?.domain || raw?.businessDomainId,
+    // CatalogModelStatus enum is UPPERCASE (DRAFT/PUBLISHED/EXPIRED).
     status: raw?.status,
     type: raw?.type,
     endorsed: raw?.endorsed,
+    // contacts is a ContactsMap ({ owner: [...], expert: [...] }) in the
+    // 2026-03-20-preview schema — pass through verbatim.
     contacts: raw?.contacts,
     documentation: raw?.documentation,
     updatedAt: raw?.updatedAt || raw?.modifiedAt || raw?.systemData?.lastModifiedAt,
@@ -232,24 +244,42 @@ function shape(raw: any): PurviewDataProduct {
   };
 }
 
-function toPurviewBody(p: PurviewDataProductPayload): Record<string, unknown> {
+/**
+ * Build the Unified Catalog `DataProducts_Create` request body.
+ *
+ * Grounded in the 2026-03-20-preview REST contract
+ * (learn.microsoft.com/rest/api/purview/purview-unified-catalog/data-products/create):
+ *   - `id`     REQUIRED string(uuid). The caller MUST supply the id it wants
+ *              the product created under; Purview does NOT mint one. We pass
+ *              it through here so the route can persist the SAME id to Cosmos.
+ *   - `status` is the `CatalogModelStatus` enum: DRAFT | PUBLISHED | EXPIRED
+ *              (UPPERCASE — `Draft` is rejected).
+ *   - `contacts` is a `ContactsMap`: { owner: [{ id(uuid), description }], … }
+ *              keyed by role — NOT a flat array. `id` must be an AAD oid GUID,
+ *              so a free-text owner email is dropped (kept in Cosmos state).
+ *   - `documentation` / `termsOfUse` are `CatalogModelExternalLink[]`, each
+ *              requiring a `url`. Free-text bundle/SLA lines without a URL are
+ *              therefore NOT valid links and are skipped here (they remain in
+ *              the Loom Cosmos record and the editor's Bundle preview).
+ */
+function toPurviewBody(p: PurviewDataProductPayload, id: string): Record<string, unknown> {
   const body: Record<string, unknown> = {
+    id,
     name: p.displayName,
     description: p.description || '',
     domain: p.domain,
     type: p.type || 'Operational',
-    status: 'Draft',
+    status: 'DRAFT',
     endorsed: !!p.endorsed,
   };
-  if (p.owner) {
-    body.contacts = [{ id: p.owner, role: 'Owner', description: 'Primary owner' }];
+  // Contacts map: only include an owner contact when the supplied owner is a
+  // real AAD object-id GUID (the schema types contacts[].id as uuid). A
+  // free-text email would 400 the create, so we omit it rather than send junk.
+  if (p.owner && GUID_RE.test(p.owner.trim())) {
+    body.contacts = { owner: [{ id: p.owner.trim(), description: 'Primary owner' }] };
   }
-  if (p.bundle && p.bundle.length > 0) {
-    body.documentation = p.bundle.map((line) => ({ name: line, type: 'Note' }));
-  }
-  if (p.sla) {
-    body.termsOfUse = [{ name: 'SLA', description: p.sla, type: 'Note' }];
-  }
+  // Bundle/SLA entries are free text, not external links with URLs, so they
+  // are not valid CatalogModelExternalLink payloads — they stay in Cosmos.
   return body;
 }
 
@@ -270,14 +300,27 @@ export async function registerDataProduct(payload: PurviewDataProductPayload): P
   purviewAccount();
   if (!payload?.displayName) throw new PurviewError(400, null, 'displayName is required');
   if (!payload?.domain) throw new PurviewError(400, null, 'domain (Purview businessDomainId GUID) is required');
+  if (!GUID_RE.test(payload.domain.trim())) {
+    throw new PurviewError(400, null, 'domain must be a Purview businessDomainId GUID');
+  }
+
+  // Per the 2026-03-20-preview contract, `id` is a REQUIRED request field —
+  // Purview does NOT mint one. Reuse a caller-supplied id (re-register /
+  // idempotent retry) or mint a fresh GUID. The route persists THIS id to
+  // Cosmos so subsequent GET/UPDATE round-trips line up.
+  const id = payload.id && GUID_RE.test(payload.id.trim()) ? payload.id.trim() : randomUUID();
 
   const res = await purviewFetch('/datagovernance/catalog/dataProducts', {
     method: 'POST',
-    body: JSON.stringify(toPurviewBody(payload)),
+    body: JSON.stringify(toPurviewBody(payload, id)),
   });
   const j = await readJson<any>(res);
-  if (!j) throw new PurviewError(500, null, 'Purview returned an empty body on create');
-  return shape(j);
+  // Purview returns 201 with the created resource. Some preview stamps reply
+  // 200 with the same body; both are handled by readJson (res.ok). If the body
+  // is empty but the call succeeded, fall back to the id we just created with.
+  const shaped = j ? shape(j) : ({} as PurviewDataProduct);
+  if (!shaped.id) shaped.id = id;
+  return shaped;
 }
 
 export async function getDataProduct(id: string): Promise<PurviewDataProduct | null> {
