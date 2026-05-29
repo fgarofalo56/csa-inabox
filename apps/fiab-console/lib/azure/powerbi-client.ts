@@ -307,17 +307,149 @@ export async function listDatasetTables(workspaceId: string, datasetId: string):
   return j.value || [];
 }
 
-export async function listDatasetRelationships(workspaceId: string, datasetId: string): Promise<any[]> {
-  // /datasets/{id}/relationships is not supported in Power BI REST; surface the
-  // model via /datasets/{id}/sources for now. Editors render whatever this returns.
+export interface PbiRelationship {
+  name?: string;
+  fromTable?: string;
+  fromColumn?: string;
+  toTable?: string;
+  toColumn?: string;
+  crossFilteringBehavior?: string;
+}
+
+/**
+ * GET /groups/{ws}/datasets/{id}/relationships — list the model's table
+ * relationships. This IS a real Power BI REST endpoint (push-dataset
+ * relationships are returned here, and imported models expose their
+ * relationship graph the same way). Falls back to an empty list on 404/400 so
+ * the editor renders an honest "no relationships" state rather than erroring.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/push-datasets/datasets-post-dataset-in-group
+ */
+export async function listDatasetRelationships(workspaceId: string, datasetId: string): Promise<PbiRelationship[]> {
   try {
-    const j = await call<{ value: any[] }>(
-      `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/datasources`,
+    const j = await call<{ value: PbiRelationship[] }>(
+      `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/relationships`,
     );
     return j.value || [];
-  } catch {
-    return [];
+  } catch (e) {
+    if (e instanceof PowerBiError && (e.status === 404 || e.status === 400)) return [];
+    throw e;
   }
+}
+
+// ============================================================
+// Push datasets (real model authoring via Power BI REST)
+//
+// Power BI REST genuinely supports BUILDING a semantic model — creating a
+// "push" dataset with tables, typed columns, measures, and relationships —
+// without the XMLA endpoint. This is the supported REST authoring path
+// (Microsoft.PowerBI.Api PostDataset). Imported / Direct Lake models still
+// require XMLA / Desktop for table/measure writes; that stays honestly gated.
+//
+// Docs: https://learn.microsoft.com/rest/api/power-bi/push-datasets/datasets-post-dataset-in-group
+// ============================================================
+
+export type PushColumnType =
+  | 'Int64' | 'Double' | 'Boolean' | 'DateTime' | 'String' | 'Decimal';
+
+export interface PushColumn {
+  name: string;
+  dataType: PushColumnType;
+  /** Optional format string (e.g. "0.00", "yyyy-mm-dd"). */
+  formatString?: string;
+}
+
+export interface PushMeasure {
+  name: string;
+  expression: string;
+  formatString?: string;
+}
+
+export interface PushTable {
+  name: string;
+  columns: PushColumn[];
+  measures?: PushMeasure[];
+}
+
+export interface PushRelationship {
+  name: string;
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+  /** "OneDirection" (default) | "BothDirections" | "Automatic". */
+  crossFilteringBehavior?: 'OneDirection' | 'BothDirections' | 'Automatic';
+}
+
+export interface CreatePushDatasetRequest {
+  name: string;
+  tables: PushTable[];
+  relationships?: PushRelationship[];
+  /** Push (default) | PushStreaming | Streaming. */
+  defaultMode?: 'Push' | 'PushStreaming' | 'Streaming' | 'AsAzure' | 'AsOnPrem';
+}
+
+/**
+ * POST /groups/{ws}/datasets — create a real push dataset (semantic model)
+ * with tables, typed columns, measures, and relationships. Returns the new
+ * dataset id. The Console UAMI must be a Member/Contributor on the workspace.
+ */
+export async function createPushDataset(
+  workspaceId: string,
+  body: CreatePushDatasetRequest,
+  retentionPolicy: 'None' | 'basicFIFO' = 'None',
+): Promise<{ id: string; name: string }> {
+  return call<{ id: string; name: string }>(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets`,
+    {
+      method: 'POST',
+      query: retentionPolicy !== 'None' ? { defaultRetentionPolicy: retentionPolicy } : undefined,
+      body: {
+        name: body.name,
+        defaultMode: body.defaultMode || 'Push',
+        tables: body.tables,
+        relationships: body.relationships,
+      },
+    },
+  );
+}
+
+/**
+ * PUT /groups/{ws}/datasets/{id}/tables/{tableName} — replace a push table's
+ * schema (the REST path to add/edit measures + columns on an existing push
+ * dataset without XMLA).
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/push-datasets/datasets-put-table-in-group
+ */
+export async function putPushTable(
+  workspaceId: string,
+  datasetId: string,
+  table: PushTable,
+): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/tables/${encodeURIComponent(table.name)}`,
+    { method: 'PUT', body: { name: table.name, columns: table.columns, measures: table.measures } },
+  );
+  return { ok: true };
+}
+
+/**
+ * POST /groups/{ws}/datasets/{id}/tables/{tableName}/rows — push rows into a
+ * push table so the model is immediately queryable (real data, not a mock).
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/push-datasets/datasets-post-rows-in-group
+ */
+export async function postPushRows(
+  workspaceId: string,
+  datasetId: string,
+  tableName: string,
+  rows: Array<Record<string, unknown>>,
+): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/tables/${encodeURIComponent(tableName)}/rows`,
+    { method: 'POST', body: { rows } },
+  );
+  return { ok: true };
 }
 
 export async function refreshDataset(
