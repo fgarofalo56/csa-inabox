@@ -25,6 +25,19 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.18.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.18.1...csa-inabox-v0.18.2) (2026-05-29)
+
+
+### Bug Fixes
+
+* **csa-loom-pipeline:** resource-binding model for ADF + Synapse pipelines ([#476](https://github.com/fgarofalo56/csa-inabox/issues/476)) ([8f8eba6](https://github.com/fgarofalo56/csa-inabox/commit/8f8eba62fcdacfb567f3ce16c8dae2dbdfa504af))
+
+
+### Documentation
+
+* **legal:** boxed disclaimer admonition + de-naming pass 2 (nav/titles/ADRs/body) + index reframe ([#468](https://github.com/fgarofalo56/csa-inabox/issues/468)) ([3956d6f](https://github.com/fgarofalo56/csa-inabox/commit/3956d6fcbc531599bf31167c01a7b6a1a100a756))
+* **review:** apply safe fixes from comprehensive review ([#467](https://github.com/fgarofalo56/csa-inabox/issues/467)) ([6d71300](https://github.com/fgarofalo56/csa-inabox/commit/6d7130017695c0ed14c4b8834db6c14aa4b30e0e))
+
 ## [0.18.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.18.0...csa-inabox-v0.18.1) (2026-05-29)
 
 
