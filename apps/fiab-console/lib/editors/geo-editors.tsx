@@ -32,7 +32,8 @@ import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
-import { splitAdlsPath, joinAdlsPath } from './_family-utils';
+import { splitAdlsPath, joinAdlsPath, computeGeoBbox, bboxToZoom } from './_family-utils';
+import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
 
 /**
  * v3.28 — Phase 4.5 fix: GeoMap / GeoDataset / GeoPipeline used to render
@@ -174,7 +175,15 @@ GROUP BY H3_LATLON_TO_CELL(lat, lon, 7)
 ORDER BY hits DESC;
 `;
 
-interface GeoMapState { account: string; style: string; tileLayerUrl: string; [k: string]: unknown }
+interface GeoMapState { account: string; style: string; tileLayerUrl: string; overlayGeoJson?: string; [k: string]: unknown }
+
+const GEO_MAP_SAMPLE_OVERLAY = `{
+  "type": "FeatureCollection",
+  "features": [
+    { "type": "Feature", "properties": { "name": "Reagan National" }, "geometry": { "type": "Point", "coordinates": [-77.0377, 38.8512] } },
+    { "type": "Feature", "properties": { "name": "Beltway" }, "geometry": { "type": "LineString", "coordinates": [[-77.04,38.90],[-77.10,38.95],[-77.15,38.88]] } }
+  ]
+}`;
 
 export function GeoMapEditor({ item, id }: { item: FabricItemType; id: string }) {
   if (id === 'new') {
@@ -189,43 +198,84 @@ export function GeoMapEditor({ item, id }: { item: FabricItemType; id: string })
 function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoMapState>('geo-map', id, {
-    account: '', style: 'main', tileLayerUrl: '',
+    account: '', style: 'main', tileLayerUrl: '', overlayGeoJson: GEO_MAP_SAMPLE_OVERLAY,
   });
+  const [previewMsg, setPreviewMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   const canSave = dirty && !saving;
+
+  // Parse the overlay GeoJSON for live SVG rendering.
+  const { parsed, parseErr, featureCount } = useMemo(() => {
+    try {
+      const j = JSON.parse(state.overlayGeoJson || '{}');
+      return { parsed: j, parseErr: null as string | null, featureCount: Array.isArray(j?.features) ? j.features.length : 0 };
+    } catch (e: any) { return { parsed: null, parseErr: e?.message || String(e), featureCount: 0 }; }
+  }, [state.overlayGeoJson]);
+
+  // Optional Azure Maps static raster basemap (client key). When unset the
+  // vector overlay still renders on a neutral canvas.
+  const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY;
+  const bbox = parsed ? computeGeoBbox(parsed) : null;
+  const zoom = bboxToZoom(bbox);
+  const centerLon = bbox ? (bbox.minLon + bbox.maxLon) / 2 : -77.0;
+  const centerLat = bbox ? (bbox.minLat + bbox.maxLat) / 2 : 38.9;
+  const rasterUrl = mapsKey
+    ? `https://atlas.microsoft.com/map/static?api-version=2024-04-01&style=${encodeURIComponent(state.style || 'main')}&zoom=${zoom}&center=${centerLon},${centerLat}&width=640&height=360&subscription-key=${mapsKey}`
+    : null;
+
+  const validate = useCallback(() => {
+    try {
+      const j = JSON.parse(state.overlayGeoJson || '{}');
+      const fc = Array.isArray(j?.features) ? j.features.length : 0;
+      setPreviewMsg({ intent: 'success', text: `Valid GeoJSON overlay — ${fc} feature(s).` });
+    } catch (e: any) { setPreviewMsg({ intent: 'error', text: `Invalid GeoJSON: ${e?.message || e}` }); }
+  }, [state.overlayGeoJson]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Map', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
-        { label: 'Preview', disabled: true, title: 'tile preview helper not yet wired in this editor (deferred)' },
+        { label: 'Validate overlay', onClick: validate },
       ]},
     ]},
-  ], [canSave, saving, save]);
+  ], [canSave, saving, save, validate]);
   return (
     <ItemEditorChrome
       item={item} id={id}
       ribbon={ribbon}
-      leftPanel={<div className={s.treePad}><Caption1>Map config — style, tile layer, and tokens.</Caption1></div>}
+      leftPanel={<div className={s.treePad}><Caption1>Map config — style, raster basemap, and a GeoJSON data overlay rendered live below.</Caption1></div>}
       main={
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              <MessageBarTitle>Runtime deferred</MessageBarTitle>
-              <code>LOOM_AZURE_MAPS_ACCOUNT</code> not configured in this Loom instance — preview will fall back
-              to OSM tiles. Provision <code>Microsoft.Maps/accounts</code> and set the env var to enable native
-              Azure Maps rendering.
-            </MessageBarBody>
-          </MessageBar>
+          {!mapsKey && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>Vector overlay renders without Azure Maps</MessageBarTitle>
+                The data overlay renders as a live SVG map below regardless of basemap. To layer an Azure Maps raster
+                basemap behind it, provision <code>Microsoft.Maps/accounts</code> and set
+                <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> on the Console Container App.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <div className={s.field}><Label>Azure Maps account name</Label>
             <Input value={state.account} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, account: d.value }))} placeholder="maps-csa-loom" />
           </div>
           <div className={s.field}><Label>Style</Label>
             <Input value={state.style} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, style: d.value }))} placeholder="main" />
           </div>
-          <div className={s.field}><Label>Tile layer URL (GeoJSON / TMS)</Label>
+          <div className={s.field}><Label>Tile layer URL (GeoJSON / TMS) — reference</Label>
             <Input value={state.tileLayerUrl} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, tileLayerUrl: d.value }))} placeholder="https://…/tiles/{z}/{x}/{y}.pbf" />
           </div>
-          <Caption1>Persisted into Cosmos item state via PATCH /api/cosmos-items/geo-map/{`{id}`}. Hooks into the GeoQuery editor for layered visualization (v3.x).</Caption1>
+          <Subtitle2>Data overlay (GeoJSON)</Subtitle2>
+          <MonacoTextarea value={state.overlayGeoJson || ''} onChange={(v) => setState((p) => ({ ...p, overlayGeoJson: v }))} language="json" height={200} minHeight={160} ariaLabel="Overlay GeoJSON" />
+          {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid GeoJSON: {parseErr}</MessageBarBody></MessageBar>}
+          {previewMsg && <MessageBar intent={previewMsg.intent}><MessageBarBody>{previewMsg.text}</MessageBarBody></MessageBar>}
+          {!parseErr && parsed && (
+            <>
+              <Subtitle2>Map render ({featureCount} feature{featureCount === 1 ? '' : 's'}{rasterUrl ? ` · Azure Maps basemap zoom ${zoom}` : ''})</Subtitle2>
+              <GeoJsonMap geojson={parsed} rasterUrl={rasterUrl} />
+            </>
+          )}
+          <Caption1>Persisted into Cosmos item state via PATCH /api/cosmos-items/geo-map/{`{id}`}.</Caption1>
           <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
         </div>
       }
@@ -280,14 +330,35 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
   const split = splitAdlsPath(state.adlsPath || '');
   const containerAccountUrl = (lh.containers || []).find((c) => c.name === split.container)?.url;
   const canSave = dirty && !saving;
+
+  // Inspect: probe the first row of the dataset via Synapse Serverless
+  // OPENROWSET. Real backend (synapse-serverless-sql-pool query route) — the
+  // route returns an honest gate (LOOM_SYNAPSE_WORKSPACE) when not provisioned.
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectResult, setInspectResult] = useState<any>(null);
+  const inspect = useCallback(async () => {
+    if (!state.adlsPath) { setInspectResult({ error: 'Select a container and path first.' }); return; }
+    setInspecting(true); setInspectResult(null);
+    const fmt = state.format === 'csv' ? "FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE" : "FORMAT = 'PARQUET'";
+    const sql = `SELECT TOP 1 * FROM OPENROWSET(BULK '${state.adlsPath.replace(/'/g, "''")}', ${fmt}) AS r;`;
+    try {
+      const r = await fetch(`/api/items/synapse-serverless-sql-pool/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sql }),
+      });
+      setInspectResult({ ...(await r.json()), sql, status: r.status });
+    } catch (e: any) { setInspectResult({ error: e?.message || String(e) }); }
+    finally { setInspecting(false); }
+  }, [state.adlsPath, state.format, id]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Dataset', actions: [
-        { label: 'Inspect', disabled: true, title: 'needs OPENROWSET probe BFF (deferred)' },
+        { label: inspecting ? 'Inspecting…' : 'Inspect', onClick: inspecting ? undefined : inspect, disabled: inspecting || !state.adlsPath },
         { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
       ]},
     ]},
-  ], [canSave, saving, save]);
+  ], [canSave, saving, save, inspecting, inspect, state.adlsPath]);
   return (
     <ItemEditorChrome
       item={item} id={id}
@@ -356,11 +427,30 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
           </div>
           <MessageBar intent="info">
             <MessageBarBody>
-              Inspector probes the first row via Serverless OPENROWSET and parses the geometry column with
-              <code> GEOGRAPHY::STGeomFromWKB</code>. Wiring deferred to v3.x — the path + column persist to
-              Cosmos via PATCH /api/cosmos-items/geo-dataset/{`{id}`}.
+              <strong>Inspect</strong> probes the first row via Synapse Serverless <code>OPENROWSET</code> over the
+              selected path. The path + column persist to Cosmos via PATCH /api/cosmos-items/geo-dataset/{`{id}`}.
             </MessageBarBody>
           </MessageBar>
+          <Button appearance="primary" icon={<Play20Regular />} onClick={inspect} disabled={inspecting || !state.adlsPath}>
+            {inspecting ? 'Inspecting…' : 'Inspect first row (OPENROWSET)'}
+          </Button>
+          {inspectResult && (
+            inspectResult.error || inspectResult.status >= 400 ? (
+              <MessageBar intent={inspectResult.status === 503 || inspectResult.notDeployed ? 'warning' : 'error'}>
+                <MessageBarBody>
+                  <MessageBarTitle>{inspectResult.status === 503 ? 'Synapse Serverless not provisioned' : 'Inspect failed'}</MessageBarTitle>
+                  {inspectResult.error}{inspectResult.hint && <><br />{inspectResult.hint}</>}
+                </MessageBarBody>
+              </MessageBar>
+            ) : (
+              <>
+                <Caption1>Probe query:</Caption1>
+                <pre style={{ fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>{inspectResult.sql}</pre>
+                <Caption1>First row:</Caption1>
+                <pre style={{ fontSize: 12, maxHeight: 240, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>{JSON.stringify(inspectResult.rows || inspectResult.result || inspectResult, null, 2)}</pre>
+              </>
+            )
+          )}
           <GeoSaveBar saving={saving} dirty={dirty} savedAt={savedAt} error={error} onSave={save} />
         </div>
       }
@@ -378,6 +468,53 @@ const H3_ADX_INSTALL = `.create-or-alter function with (folder="loom/h3", docstr
 .create-or-alter function with (folder="loom/h3", docstring="H3 cell neighbors (k-ring)") h3_cell_kring(cell:string, k:int=1) { geo_h3cell_neighbors(cell) }
 .create-or-alter function with (folder="loom/h3", docstring="Center lat/lon of an H3 cell as {lat,lon}") h3_cell_to_latlon(cell:string) { geo_h3cell_to_central_point(cell) }
 .create-or-alter function with (folder="loom/h3", docstring="Hex polygon (GeoJSON) of an H3 cell") h3_cell_to_polygon(cell:string) { geo_h3cell_to_polygon(cell) }`;
+
+/**
+ * Turn a query result into a GeoJSON FeatureCollection of points, detecting
+ * common lat/lon column names across the KQL ({columns, rows}) and Synapse
+ * ({rows: [{...}]}) result shapes. Returns a FeatureCollection (possibly
+ * empty) so the GeoQuery editor can render spatial results on the map.
+ */
+function geoFromResult(result: any): { type: 'FeatureCollection'; features: any[] } {
+  const fc = { type: 'FeatureCollection' as const, features: [] as any[] };
+  if (!result || !result.ok) return fc;
+  const LON = ['lon', 'lng', 'longitude', 'x'];
+  const LAT = ['lat', 'latitude', 'y'];
+  const find = (keys: string[], names: string[]) => keys.find((k) => names.includes(k.toLowerCase()));
+
+  // KQL shape: { columns: string[], rows: any[][] }
+  if (Array.isArray(result.columns) && Array.isArray(result.rows)) {
+    const cols: string[] = result.columns;
+    const lonI = cols.findIndex((c) => LON.includes(c.toLowerCase()));
+    const latI = cols.findIndex((c) => LAT.includes(c.toLowerCase()));
+    if (lonI >= 0 && latI >= 0) {
+      for (const row of result.rows.slice(0, 2000)) {
+        const lon = Number(row[lonI]); const lat = Number(row[latI]);
+        if (!Number.isNaN(lon) && !Number.isNaN(lat)) {
+          const props: Record<string, unknown> = {};
+          cols.forEach((c, i) => { if (i !== lonI && i !== latI) props[c] = row[i]; });
+          fc.features.push({ type: 'Feature', properties: props, geometry: { type: 'Point', coordinates: [lon, lat] } });
+        }
+      }
+    }
+    return fc;
+  }
+  // Object-row shape: { rows: [{...}] } or { result: [{...}] }
+  const rows: any[] = Array.isArray(result.rows) ? result.rows : Array.isArray(result.result) ? result.result : [];
+  for (const row of rows.slice(0, 2000)) {
+    if (!row || typeof row !== 'object') continue;
+    const keys = Object.keys(row);
+    const lonK = find(keys, LON); const latK = find(keys, LAT);
+    if (lonK && latK) {
+      const lon = Number(row[lonK]); const lat = Number(row[latK]);
+      if (!Number.isNaN(lon) && !Number.isNaN(lat)) {
+        const props = { ...row }; delete props[lonK]; delete props[latK];
+        fc.features.push({ type: 'Feature', properties: props, geometry: { type: 'Point', coordinates: [lon, lat] } });
+      }
+    }
+  }
+  return fc;
+}
 
 export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -427,6 +564,10 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
     finally { setLoading(false); }
   }, [id, engine, text]);
 
+  // Build a GeoJSON FeatureCollection from result rows that carry lat/lon
+  // (or latitude/longitude) columns, so spatial results render on the map.
+  const resultGeo = useMemo(() => geoFromResult(result), [result]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Engine', actions: [
@@ -461,6 +602,12 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
           </TabList>
           <MonacoTextarea value={text} onChange={setText} language="sql" height={220} minHeight={180} ariaLabel="Geo query editor" />
           <Button appearance="primary" icon={<Play20Regular />} onClick={run} disabled={loading}>Run</Button>
+          {resultGeo && resultGeo.features.length > 0 && (
+            <>
+              <Subtitle2>Result map ({resultGeo.features.length} point{resultGeo.features.length === 1 ? '' : 's'})</Subtitle2>
+              <GeoJsonMap geojson={resultGeo} />
+            </>
+          )}
           {result && (
             <pre style={{ fontSize: 12, maxHeight: 240, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>
               {JSON.stringify(result, null, 2)}

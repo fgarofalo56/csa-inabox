@@ -985,6 +985,88 @@ export async function listDocuments(name: string, top = 25): Promise<any> {
   return searchIndex(name, '*', top);
 }
 
+/**
+ * Upload (mergeOrUpload) documents into an index via the data-plane
+ * `/docs/index` endpoint. Each doc gets `@search.action = mergeOrUpload`
+ * unless it already carries one.
+ */
+export async function uploadDocuments(name: string, docs: any[]): Promise<{ uploaded: number; results: any[] }> {
+  const svc = searchService();
+  const tok = await searchToken();
+  const value = docs.map((d) => ({ '@search.action': 'mergeOrUpload', ...d }));
+  const res = await fetch(`https://${svc}.search.windows.net/indexes/${encodeURIComponent(name)}/docs/index?api-version=${SEARCH_API}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `Search upload documents failed: ${t.slice(0, 240)}`);
+  }
+  const j: any = await res.json();
+  const results = j?.value || [];
+  const uploaded = results.filter((r: any) => r?.status).length;
+  return { uploaded, results };
+}
+
+/**
+ * Vector (k-NN) search against a vector field. `vector` is the query
+ * embedding, `field` the vector field name, `k` the neighbor count.
+ * When `text` is supplied it runs a hybrid (text + vector) query.
+ */
+export async function vectorSearch(name: string, opts: {
+  vector: number[]; field: string; k?: number; text?: string; select?: string;
+}): Promise<any> {
+  const svc = searchService();
+  const tok = await searchToken();
+  const body: any = {
+    vectorQueries: [{ kind: 'vector', vector: opts.vector, fields: opts.field, k: opts.k || 5 }],
+    top: opts.k || 5,
+  };
+  if (opts.text) body.search = opts.text;
+  if (opts.select) body.select = opts.select;
+  const res = await fetch(`https://${svc}.search.windows.net/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `Vector search failed: ${t.slice(0, 240)}`);
+  }
+  return await res.json();
+}
+
+/**
+ * Build a vector index definition (AI Search 2024-07-01) from a simple
+ * spec: a key field, a content field, and a single vector field with the
+ * given dimensions + metric. Used by the vector-store editor's Create.
+ */
+export function buildVectorIndexDefinition(opts: {
+  indexName: string; dim: number; metric: 'cosine' | 'euclidean' | 'dotProduct';
+  vectorField?: string; contentField?: string;
+}): any {
+  const vectorField = opts.vectorField || 'embedding';
+  const contentField = opts.contentField || 'content';
+  const profileName = 'loom-vec-profile';
+  const algoName = 'loom-hnsw';
+  return {
+    name: opts.indexName,
+    fields: [
+      { name: 'id', type: 'Edm.String', key: true, filterable: true },
+      { name: contentField, type: 'Edm.String', searchable: true, retrievable: true },
+      {
+        name: vectorField, type: 'Collection(Edm.Single)', searchable: true, retrievable: true,
+        dimensions: opts.dim, vectorSearchProfile: profileName,
+      },
+    ],
+    vectorSearch: {
+      algorithms: [{ name: algoName, kind: 'hnsw', hnswParameters: { metric: opts.metric, m: 4, efConstruction: 400, efSearch: 500 } }],
+      profiles: [{ name: profileName, algorithm: algoName }],
+    },
+  };
+}
+
 // ---------------- Compute (extended) ----------------
 
 export async function getCompute(name: string): Promise<FoundryCompute | null> {

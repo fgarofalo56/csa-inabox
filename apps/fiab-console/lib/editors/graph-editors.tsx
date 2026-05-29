@@ -17,7 +17,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Caption1, Badge, Button, Input, Label,
+  Caption1, Subtitle2, Badge, Button, Input, Label, Spinner,
+  Tab, TabList, Textarea,
+  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -354,6 +356,13 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
     finally { setLoading(false); }
   }, [backend, id, query]);
 
+  const gqlGraph = useMemo(() => {
+    if (!result || !result.ok) return null;
+    const g = extractGraph(result);
+    if (g.nodes.length === 0) return null;
+    return g;
+  }, [result]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
@@ -403,6 +412,18 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>
             {loading ? 'Running…' : backend === 'persist-only' ? 'Save query' : 'Run'}
           </Button>
+          {result?.translated && (
+            <div>
+              <Caption1>Translated Gremlin:</Caption1>
+              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: 12, backgroundColor: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>{result.translated}</pre>
+            </div>
+          )}
+          {gqlGraph && (
+            <div>
+              <Caption1 style={{ marginBottom: 4 }}>Force-directed graph view ({gqlGraph.nodes.length} nodes, {gqlGraph.edges.length} edges)</Caption1>
+              <ForceDirectedGraph nodes={gqlGraph.nodes} edges={gqlGraph.edges} />
+            </div>
+          )}
           <ResultsPreview result={result} />
         </div>
       }
@@ -425,20 +446,43 @@ const VECTOR_BACKEND_DESCRIPTIONS: Record<VectorBackend, string> = {
   pgvector: 'PostgreSQL pgvector',
 };
 
+// Native AI Search vector backend is fully wired (create index / add docs /
+// vector search). The other backends persist their spec to Cosmos and show an
+// honest gate — they aren't reachable from this Loom build's network plane.
+const AI_SEARCH_BACKEND: VectorBackend = 'ai-search';
+
 export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [backend, setBackend] = useState<VectorBackend>('cosmos-nosql');
+  const [tab, setTab] = useState<'schema' | 'documents' | 'search'>('schema');
+  const [backend, setBackend] = useState<VectorBackend>('ai-search');
   const [indexName, setIndexName] = useState<string>('docs-vec');
   const [dim, setDim] = useState<number>(1536);
   const [metric, setMetric] = useState<'cosine' | 'euclidean' | 'dotProduct'>('cosine');
-  const [testQuery, setTestQuery] = useState<string>('');
-  const [result, setResult] = useState<any>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
-  // v3.28 Phase 4.5: load existing item state from Cosmos on mount so the
-  // form reflects what's persisted. New items render the defaults above.
+  // Live index schema (from AI Search) + action results.
+  const [liveIndex, setLiveIndex] = useState<any>(null);
+  const [schemaMsg, setSchemaMsg] = useState<any>(null);
+  const [creating, setCreating] = useState(false);
+  const [createResult, setCreateResult] = useState<any>(null);
+
+  // Documents tab.
+  const [docsText, setDocsText] = useState<string>('[\n  { "id": "1", "content": "hello world", "embedding": [] }\n]');
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<any>(null);
+
+  // Search tab.
+  const [searchVec, setSearchVec] = useState<string>('');
+  const [searchText, setSearchText] = useState<string>('');
+  const [k, setK] = useState<number>(5);
+  const [searching, setSearching] = useState(false);
+  const [searchResult, setSearchResult] = useState<any>(null);
+
+  const isAiSearch = backend === AI_SEARCH_BACKEND;
+
+  // Load persisted spec.
   useEffect(() => {
     if (!id || id === 'new') return;
     let cancelled = false;
@@ -460,59 +504,119 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
     return () => { cancelled = true; };
   }, [id]);
 
-  const createIndex = useCallback(async () => {
-    setSaving(true); setResult(null);
+  const persistSpec = useCallback(async () => {
+    setSaving(true);
     try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
     try {
-      // For existing items, PATCH state into Cosmos. For id === 'new', POST creates the item.
       const isNew = !id || id === 'new';
       const r = isNew
         ? await fetch(`/api/items/vector-store`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              workspaceId: 'default',
-              displayName: indexName,
-              state: { backend, indexName, dim, metric },
-            }),
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ workspaceId: 'default', displayName: indexName, state: { backend, indexName, dim, metric } }),
           })
         : await fetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`, {
-            method: 'PATCH',
-            headers: { 'content-type': 'application/json' },
+            method: 'PATCH', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ state: { backend, indexName, dim, metric } }),
           });
       const j = await r.json();
-      setResult(j);
       if (j?.ok) {
         setDirty(false);
         setSavedAt(j.item?.updatedAt || new Date().toISOString());
         try { window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: indexName } })); } catch {}
       }
-    } catch (e: any) {
-      setResult({ ok: false, error: e?.message || String(e) });
-    } finally { setSaving(false); }
+      return j;
+    } catch (e: any) { return { ok: false, error: e?.message || String(e) }; }
+    finally { setSaving(false); }
   }, [id, backend, indexName, dim, metric]);
 
-  // Ctrl+S to persist.
+  // Load the live AI Search index schema.
+  const loadSchema = useCallback(async () => {
+    if (!isAiSearch || !indexName) return;
+    setSchemaMsg(null); setLiveIndex(null);
+    try {
+      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index?name=${encodeURIComponent(indexName)}`);
+      const j = await r.json();
+      if (!j.ok) { setSchemaMsg(j); return; }
+      setLiveIndex(j.exists ? j.index : null);
+      if (!j.exists) setSchemaMsg({ ok: true, info: `Index "${indexName}" not created yet — click Create index.` });
+    } catch (e: any) { setSchemaMsg({ ok: false, error: e?.message || String(e) }); }
+  }, [isAiSearch, indexName, id]);
+
+  useEffect(() => { if (isAiSearch) loadSchema(); }, [isAiSearch, loadSchema]);
+
+  // Create / update the real AI Search vector index.
+  const createIndex = useCallback(async () => {
+    await persistSpec();
+    if (!isAiSearch) { setCreateResult({ ok: false, deferred: true, error: `Live index creation is wired for the ai-search backend only. The "${backend}" spec was persisted to Cosmos; provision that backend and switch this Loom build to reach it.` }); return; }
+    setCreating(true); setCreateResult(null);
+    try {
+      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ indexName, dim, metric }),
+      });
+      const j = await r.json();
+      setCreateResult(j);
+      if (j.ok) await loadSchema();
+    } catch (e: any) { setCreateResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setCreating(false); }
+  }, [persistSpec, isAiSearch, backend, id, indexName, dim, metric, loadSchema]);
+
+  const uploadDocs = useCallback(async () => {
+    setUploading(true); setUploadResult(null);
+    try {
+      let documents: any;
+      try { documents = JSON.parse(docsText); } catch (e: any) { setUploadResult({ ok: false, error: `Invalid JSON: ${e?.message || e}` }); return; }
+      if (!Array.isArray(documents)) documents = [documents];
+      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ indexName, documents }),
+      });
+      setUploadResult(await r.json());
+    } catch (e: any) { setUploadResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setUploading(false); }
+  }, [docsText, indexName, id]);
+
+  const runSearch = useCallback(async () => {
+    setSearching(true); setSearchResult(null);
+    try {
+      let vector: number[];
+      try { vector = JSON.parse(searchVec); } catch { setSearchResult({ ok: false, error: 'Query vector must be a JSON number array, e.g. [0.1, 0.2, …]' }); return; }
+      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/search`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ indexName, vector, k, text: searchText || undefined }),
+      });
+      setSearchResult(await r.json());
+    } catch (e: any) { setSearchResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setSearching(false); }
+  }, [searchVec, searchText, k, indexName, id]);
+
+  // Ctrl+S persists the spec.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        if (!saving) createIndex();
-      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); if (!saving) persistSpec(); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [saving, createIndex]);
+  }, [saving, persistSpec]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Index', actions: [
-        { label: saving ? 'Saving…' : 'Create', onClick: saving ? undefined : createIndex, disabled: saving },
-        { label: 'Test similarity', disabled: true, title: 'similarity probe BFF deferred to v3.x' },
+        { label: saving ? 'Saving…' : 'Save spec', onClick: saving ? undefined : () => persistSpec(), disabled: saving },
+        { label: creating ? 'Creating…' : 'Create index', onClick: creating ? undefined : createIndex, disabled: creating },
+        { label: 'Reload schema', onClick: loadSchema, disabled: !isAiSearch },
+      ]},
+      { label: 'Test', actions: [
+        { label: 'Documents', onClick: () => setTab('documents') },
+        { label: 'Vector search', onClick: () => setTab('search') },
       ]},
     ]},
-  ], [saving, createIndex]);
+  ], [saving, persistSpec, creating, createIndex, loadSchema, isAiSearch]);
+
+  const vectorField = useMemo(() => {
+    const f = (liveIndex?.fields || []).find((x: any) => x.type?.includes('Collection(Edm.Single)'));
+    return f?.name || 'embedding';
+  }, [liveIndex]);
 
   return (
     <ItemEditorChrome
@@ -523,7 +627,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
           <div className={s.field}>
             <Label>Backend</Label>
             <select value={backend} onChange={(e) => { setBackend(e.target.value as VectorBackend); setDirty(true); }} style={{ padding: 6 }}>
-              {(['cosmos-nosql', 'ai-search', 'cosmos-vcore', 'pgvector'] as VectorBackend[]).map(b => (
+              {(['ai-search', 'cosmos-nosql', 'cosmos-vcore', 'pgvector'] as VectorBackend[]).map(b => (
                 <option key={b} value={b}>{VECTOR_BACKEND_DESCRIPTIONS[b]}</option>
               ))}
             </select>
@@ -538,37 +642,130 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
               <option value="dotProduct">dotProduct</option>
             </select>
           </div>
+          {dirty && <Badge appearance="outline" color="warning">unsaved spec</Badge>}
+          {savedAt && !dirty && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Saved {new Date(savedAt).toLocaleTimeString()}</Caption1>}
         </div>
       }
       main={
-        <div className={s.pad}>
-          <MessageBar intent="info">
-            <MessageBarBody>
-              <MessageBarTitle>Vector store provisioning</MessageBarTitle>
-              v3 persists the index spec. Live creation hits backend REST in v3.x:
-              <ul style={{ margin: '4px 0 0 16px' }}>
-                <li><strong>cosmos-nosql</strong>: container <code>VectorEmbeddingPolicy</code> + indexingPolicy <code>vectorIndexes</code> (DiskANN). Recommended path.</li>
-                <li><strong>ai-search</strong>: <code>PUT /indexes/{`{name}`}?api-version=2024-07-01</code> with <code>vectorSearch</code> profile</li>
-                <li><strong>cosmos-vcore</strong>: <code>db.collection.createIndex({`{ vec: 'cosmosSearch' }`}, ...)</code></li>
-                <li><strong>pgvector</strong>: <code>CREATE INDEX ... USING ivfflat</code></li>
-              </ul>
-            </MessageBarBody>
-          </MessageBar>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Button appearance="primary" icon={<Add20Regular />} onClick={createIndex} disabled={saving}>
-              {saving ? 'Saving…' : dirty ? 'Save index spec' : 'Saved'}
-            </Button>
-            {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
-            {savedAt && !saving && !dirty && (
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Saved {new Date(savedAt).toLocaleTimeString()}</Caption1>
+        <>
+          <div style={{ padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+            <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value)}>
+              <Tab value="schema">Index schema</Tab>
+              <Tab value="documents">Add documents</Tab>
+              <Tab value="search">Vector search</Tab>
+            </TabList>
+          </div>
+          <div className={s.pad}>
+            {!isAiSearch && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>{VECTOR_BACKEND_DESCRIPTIONS[backend]} — config-only in this build</MessageBarTitle>
+                  The spec persists to Cosmos, but this Loom build only reaches the <strong>Azure AI Search</strong> data plane.
+                  To run live index/search here, switch the backend to <code>ai-search</code> and set <code>LOOM_AI_SEARCH_SERVICE</code>
+                  (+ grant the Console UAMI <em>Search Index Data Contributor</em>). For {backend}, provision the resource and wire its endpoint.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+
+            {tab === 'schema' && (
+              <>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Button appearance="primary" icon={<Add20Regular />} onClick={createIndex} disabled={creating || saving}>
+                    {creating ? 'Creating…' : 'Create / update index'}
+                  </Button>
+                  <Button onClick={() => persistSpec()} disabled={saving}>{saving ? 'Saving…' : 'Save spec'}</Button>
+                  <Button onClick={loadSchema} disabled={!isAiSearch}>Reload schema</Button>
+                </div>
+                {createResult && (
+                  <MessageBar intent={createResult.ok ? 'success' : createResult.deferred ? 'warning' : 'error'}>
+                    <MessageBarBody>
+                      <MessageBarTitle>{createResult.ok ? `Index "${indexName}" created` : createResult.deferred ? 'AI Search not provisioned' : 'Create failed'}</MessageBarTitle>
+                      {createResult.error || (createResult.ok ? `${createResult.index?.fields?.length || 0} fields, ${dim}-dim ${metric} vector field.` : '')}
+                      {createResult.hint && <><br />{createResult.hint}</>}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {schemaMsg && !schemaMsg.ok && (
+                  <MessageBar intent={schemaMsg.deferred ? 'warning' : 'error'}>
+                    <MessageBarBody>{schemaMsg.error}{schemaMsg.hint && <><br />{schemaMsg.hint}</>}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {schemaMsg?.info && <MessageBar intent="info"><MessageBarBody>{schemaMsg.info}</MessageBarBody></MessageBar>}
+                {liveIndex && (
+                  <>
+                    <Subtitle2>Live index fields — {liveIndex.name}</Subtitle2>
+                    <Table aria-label="Index fields" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Field</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
+                        <TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Dimensions</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {(liveIndex.fields || []).map((f: any) => (
+                          <TableRow key={f.name}>
+                            <TableCell><strong>{f.name}</strong></TableCell>
+                            <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{f.type}</TableCell>
+                            <TableCell>{f.key ? 'yes' : ''}</TableCell>
+                            <TableCell>{f.dimensions || ''}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </>
+                )}
+              </>
+            )}
+
+            {tab === 'documents' && (
+              <>
+                <Subtitle2>Add documents (mergeOrUpload)</Subtitle2>
+                <Caption1>Paste a JSON array of documents. Each must carry the index key (<code>id</code>) and the vector field (<code>{vectorField}</code>: number[{dim}]).</Caption1>
+                <MonacoTextarea value={docsText} onChange={setDocsText} language="json" height={220} minHeight={160} ariaLabel="Documents JSON" />
+                <Button appearance="primary" icon={<Add20Regular />} onClick={uploadDocs} disabled={uploading}>{uploading ? 'Uploading…' : 'Upload documents'}</Button>
+                {uploadResult && (
+                  <MessageBar intent={uploadResult.ok ? 'success' : uploadResult.deferred ? 'warning' : 'error'}>
+                    <MessageBarBody>
+                      {uploadResult.ok ? `Uploaded ${uploadResult.uploaded} document(s).` : uploadResult.error}
+                      {uploadResult.hint && <><br />{uploadResult.hint}</>}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+              </>
+            )}
+
+            {tab === 'search' && (
+              <>
+                <Subtitle2>Vector similarity search</Subtitle2>
+                <div className={s.field}><Label>Query vector (JSON number array, {dim}-dim)</Label>
+                  <Textarea value={searchVec} onChange={(_: unknown, d: any) => setSearchVec(d.value)} rows={3} placeholder="[0.12, -0.04, …]" />
+                </div>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <div className={s.field} style={{ flex: 1 }}><Label>Hybrid text (optional)</Label>
+                    <Input value={searchText} onChange={(_: unknown, d: any) => setSearchText(d.value)} placeholder="keyword filter (BM25 + vector)" />
+                  </div>
+                  <div className={s.field}><Label>k (neighbors)</Label>
+                    <Input type="number" value={String(k)} onChange={(_: unknown, d: any) => setK(Number(d.value || '5'))} style={{ width: 80 }} />
+                  </div>
+                  <Button appearance="primary" icon={<Search20Regular />} onClick={runSearch} disabled={searching}>{searching ? 'Searching…' : 'Search'}</Button>
+                </div>
+                {searching && <Spinner size="small" label="Running k-NN…" labelPosition="after" />}
+                {searchResult && (
+                  searchResult.ok ? (
+                    <>
+                      <Caption1>{searchResult.count} result(s)</Caption1>
+                      <pre style={{ fontSize: 12, maxHeight: 320, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>
+                        {JSON.stringify(searchResult.result?.value || searchResult.result, null, 2)}
+                      </pre>
+                    </>
+                  ) : (
+                    <MessageBar intent={searchResult.deferred ? 'warning' : 'error'}>
+                      <MessageBarBody>{searchResult.error}{searchResult.hint && <><br />{searchResult.hint}</>}</MessageBarBody>
+                    </MessageBar>
+                  )
+                )}
+              </>
             )}
           </div>
-          <div className={s.field}><Label>Test query embedding (paste JSON array)</Label>
-            <MonacoTextarea value={testQuery} onChange={setTestQuery} language="json" height={140} minHeight={100} ariaLabel="Test query" />
-          </div>
-          <Button icon={<Search20Regular />} disabled>Similarity test (v3.x)</Button>
-          {result && <ResultsPreview result={result} />}
-        </div>
+        </>
       }
     />
   );
