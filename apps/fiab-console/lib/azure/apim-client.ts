@@ -472,6 +472,199 @@ export async function getSubscription(
   return j ? shapeSubscription(j) : null;
 }
 
+// ---------------- API revisions + releases ----------------
+
+export interface ApimApiRevision {
+  apiId: string;
+  apiRevision: string;
+  isCurrent?: boolean;
+  isOnline?: boolean;
+  description?: string;
+  createdDateTime?: string;
+  updatedDateTime?: string;
+}
+
+/** GET /apis/{id}/revisions — all revisions of an API. */
+export async function listApiRevisions(apiId: string): Promise<ApimApiRevision[]> {
+  const res = await apimFetch(`/apis/${encodeURIComponent(apiId)}/revisions`);
+  const j = await readJson<{ value: any[] }>(res);
+  return (j?.value || []).map((r) => ({
+    apiId: r.apiId,
+    apiRevision: r.apiRevision,
+    isCurrent: r.isCurrent,
+    isOnline: r.isOnline,
+    description: r.description,
+    createdDateTime: r.createdDateTime,
+    updatedDateTime: r.updatedDateTime,
+  }));
+}
+
+/**
+ * Create a new API revision by copying an existing one. APIM revisions are
+ * created by PUTting /apis/{id};rev={n} with sourceApiId pointing at the
+ * current revision. Returns the shaped new revision API.
+ */
+export async function createApiRevision(
+  apiId: string,
+  apiRevision: string,
+  opts: { sourceApiRevision?: string; description?: string } = {},
+): Promise<ApimApiSummary> {
+  // Determine the source revision id. If a source revision is given, target
+  // its ;rev= suffix; otherwise APIM clones the current revision.
+  const sourceRev = opts.sourceApiRevision
+    ? `;rev=${opts.sourceApiRevision}`
+    : '';
+  const sourceApiId = `${apimBase().replace('https://management.azure.com', '')}/apis/${encodeURIComponent(apiId)}${sourceRev}`;
+  const targetId = `${encodeURIComponent(apiId)};rev=${encodeURIComponent(apiRevision)}`;
+  const res = await apimFetch(`/apis/${targetId}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      properties: {
+        sourceApiId,
+        apiRevisionDescription: opts.description || `Revision ${apiRevision}`,
+      },
+    }),
+  });
+  const j = await readJson<any>(res);
+  if (!j) throw new ApimError(404, null, 'create revision returned null');
+  return shapeApi(j);
+}
+
+export interface ApimApiRelease {
+  id: string;
+  name: string;
+  apiId?: string;
+  notes?: string;
+  createdDateTime?: string;
+}
+
+/** GET /apis/{id}/releases — change-log releases for the API. */
+export async function listApiReleases(apiId: string): Promise<ApimApiRelease[]> {
+  const res = await apimFetch(`/apis/${encodeURIComponent(apiId)}/releases`);
+  const j = await readJson<{ value: any[] }>(res);
+  return (j?.value || []).map((r) => ({
+    id: r.id,
+    name: r.name,
+    apiId: r.properties?.apiId,
+    notes: r.properties?.notes,
+    createdDateTime: r.properties?.createdDateTime,
+  }));
+}
+
+/**
+ * Create a release of a revision — makes that revision current and adds a
+ * change-log entry. PUT /apis/{id}/releases/{releaseId}.
+ */
+export async function createApiRelease(
+  apiId: string,
+  apiRevision: string,
+  notes?: string,
+): Promise<ApimApiRelease> {
+  const releaseId = `rel-${Date.now()}`;
+  const fullApiId = `${apimBase().replace('https://management.azure.com', '')}/apis/${encodeURIComponent(apiId)};rev=${encodeURIComponent(apiRevision)}`;
+  const res = await apimFetch(`/apis/${encodeURIComponent(apiId)}/releases/${encodeURIComponent(releaseId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ properties: { apiId: fullApiId, notes: notes || '' } }),
+  });
+  const j = await readJson<any>(res);
+  if (!j) throw new ApimError(404, null, 'create release returned null');
+  return { id: j.id, name: j.name, apiId: j.properties?.apiId, notes: j.properties?.notes, createdDateTime: j.properties?.createdDateTime };
+}
+
+// ---------------- Product ↔ API associations ----------------
+
+/** GET /products/{id}/apis — APIs associated with a product. */
+export async function listProductApis(productId: string): Promise<ApimApiSummary[]> {
+  const res = await apimFetch(`/products/${encodeURIComponent(productId)}/apis`);
+  const j = await readJson<{ value: any[] }>(res);
+  return (j?.value || []).map(shapeApi);
+}
+
+/** PUT /products/{pid}/apis/{aid} — add an API to a product. */
+export async function addApiToProduct(productId: string, apiId: string): Promise<void> {
+  const res = await apimFetch(
+    `/products/${encodeURIComponent(productId)}/apis/${encodeURIComponent(apiId)}`,
+    { method: 'PUT', body: JSON.stringify({}) },
+  );
+  if (res.ok || res.status === 201) return;
+  await readJson<unknown>(res);
+}
+
+/** DELETE /products/{pid}/apis/{aid} — remove an API from a product. */
+export async function removeApiFromProduct(productId: string, apiId: string): Promise<void> {
+  const res = await apimFetch(
+    `/products/${encodeURIComponent(productId)}/apis/${encodeURIComponent(apiId)}`,
+    { method: 'DELETE' },
+  );
+  if (res.status === 404 || res.ok || res.status === 204) return;
+  await readJson<unknown>(res);
+}
+
+/** GET /products/{id}/subscriptions — subscriptions scoped to a product. */
+export async function listProductSubscriptions(productId: string): Promise<ApimSubscriptionSummary[]> {
+  const res = await apimFetch(`/products/${encodeURIComponent(productId)}/subscriptions`);
+  const j = await readJson<{ value: any[] }>(res);
+  return (j?.value || []).map(shapeSubscription);
+}
+
+// ---------------- Test console (gateway call) ----------------
+
+/**
+ * List subscription keys for a subscription via POST .../listSecrets. Used to
+ * fetch the all-access (master) key for the in-portal test console.
+ */
+export async function getSubscriptionKeys(subscriptionId: string): Promise<{ primaryKey?: string; secondaryKey?: string }> {
+  const res = await apimFetch(`/subscriptions/${encodeURIComponent(subscriptionId)}/listSecrets`, { method: 'POST' });
+  const j = await readJson<any>(res);
+  return { primaryKey: j?.primaryKey, secondaryKey: j?.secondaryKey };
+}
+
+/**
+ * Execute a test request through the APIM gateway, exactly as the portal Test
+ * console does: gateway URL + the API path + operation urlTemplate, with the
+ * Ocp-Apim-Subscription-Key header set from the all-access subscription
+ * (subscriptionId "master"). Returns status, headers, and body text.
+ */
+export async function testApiCall(args: {
+  apiPath: string;
+  urlTemplate: string;
+  method: string;
+  headers?: Record<string, string>;
+  body?: string;
+  query?: Record<string, string>;
+}): Promise<{ status: number; statusText: string; headers: Record<string, string>; body: string; gatewayUrl: string }> {
+  const svc = await getServiceInfo();
+  const gatewayUrl = svc?.gatewayUrl;
+  if (!gatewayUrl) throw new ApimError(502, null, 'Could not resolve APIM gateway URL');
+
+  // The built-in all-access subscription is named "master".
+  let key: string | undefined;
+  try {
+    const keys = await getSubscriptionKeys('master');
+    key = keys.primaryKey;
+  } catch { /* fall through — call may be anonymous (subscriptionRequired=false) */ }
+
+  // Compose: gateway + path + urlTemplate. Strip a leading slash on the
+  // template; replace {path-params} with empty (caller bakes them into query).
+  const cleanPath = args.apiPath.replace(/^\/+|\/+$/g, '');
+  const cleanTpl = args.urlTemplate.replace(/^\/+/, '');
+  const qs = args.query && Object.keys(args.query).length ? `?${new URLSearchParams(args.query).toString()}` : '';
+  const url = `${gatewayUrl.replace(/\/+$/, '')}/${cleanPath}/${cleanTpl}${qs}`.replace(/([^:])\/{2,}/g, '$1/');
+
+  const headers: Record<string, string> = { ...(args.headers || {}) };
+  if (key) headers['Ocp-Apim-Subscription-Key'] = key;
+
+  const res = await fetch(url, {
+    method: args.method || 'GET',
+    headers,
+    body: ['GET', 'HEAD'].includes((args.method || 'GET').toUpperCase()) ? undefined : args.body,
+  });
+  const respHeaders: Record<string, string> = {};
+  res.headers.forEach((v, k) => { respHeaders[k] = v; });
+  const text = await res.text();
+  return { status: res.status, statusText: res.statusText, headers: respHeaders, body: text, gatewayUrl };
+}
+
 // ---------------- Service / health ----------------
 
 export async function getServiceInfo(): Promise<{

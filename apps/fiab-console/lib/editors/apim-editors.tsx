@@ -18,14 +18,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Switch, Dropdown, Option, Field,
-  Tree, TreeItem, TreeItemLayout,
+  Tree, TreeItem, TreeItemLayout, Tab, TabList,
+  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
-  Document20Regular, Code20Regular, Library20Regular,
+  Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
+  ArrowImport20Regular, Add20Regular, Delete20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
@@ -130,6 +132,34 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const [specDraft, setSpecDraft] = useState('');
   const [specSaving, setSpecSaving] = useState(false);
   const [specError, setSpecError] = useState<string | null>(null);
+
+  // Tab: Design | Test | Revisions
+  const [tab, setTab] = useState<'design' | 'test' | 'revisions'>('design');
+
+  // Import API dialog (OpenAPI / WSDL / GraphQL).
+  const [importOpen, setImportOpen] = useState(false);
+  const [importKind, setImportKind] = useState<'openapi' | 'openapi-link' | 'wsdl-link' | 'graphql-link'>('openapi');
+  const [importValue, setImportValue] = useState('');
+  const [importBusy, setImportBusy] = useState(false);
+  const [importErr, setImportErr] = useState<string | null>(null);
+
+  // Test console — pick an operation, edit method/template/headers/body, send.
+  const [testOpName, setTestOpName] = useState<string>('');
+  const [testMethod, setTestMethod] = useState('GET');
+  const [testTemplate, setTestTemplate] = useState('/');
+  const [testHeaders, setTestHeaders] = useState('');
+  const [testBody, setTestBody] = useState('');
+  const [testBusy, setTestBusy] = useState(false);
+  const [testResp, setTestResp] = useState<{ status: number; statusText: string; headers: Record<string, string>; body: string } | null>(null);
+  const [testErr, setTestErr] = useState<string | null>(null);
+
+  // Revisions tab.
+  const [revs, setRevs] = useState<LoadState<{ revisions: any[]; releases: any[] }>>({ loading: false, data: null });
+  const [newRev, setNewRev] = useState('');
+  const [newRevDesc, setNewRevDesc] = useState('');
+  const [newRevRelease, setNewRevRelease] = useState(true);
+  const [revBusy, setRevBusy] = useState(false);
+  const [revMsg, setRevMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -266,9 +296,105 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     } finally { setSpecSaving(false); }
   }, [id, specDraft, displayName, path, protocols, subscriptionRequired, serviceUrl, loadSpec, loadOps]);
 
-  // Ribbon — Save / Reload / Copy spec wired inline; Edit OpenAPI is honestly
-  // disabled (no inline editor for the OpenAPI document — APIM Studio is the
-  // path of record). Open policy editor deep-links to the apim-policy item.
+  // ---- Import API (OpenAPI / WSDL / GraphQL) ----
+  const runImport = useCallback(async () => {
+    if (!displayName.trim() || !path.trim()) { setImportErr('Set Display name + Path first.'); return; }
+    setImportBusy(true); setImportErr(null);
+    // Map the import kind to APIM contentFormat + value semantics.
+    let format: string; let value = importValue;
+    switch (importKind) {
+      case 'openapi': format = 'openapi+json'; break;       // inline document
+      case 'openapi-link': format = 'openapi-link'; break;   // URL to the spec
+      case 'wsdl-link': format = 'wsdl-link'; break;         // URL to a WSDL
+      case 'graphql-link': format = 'graphql-link'; break;   // URL to a GraphQL schema
+      default: format = 'openapi+json';
+    }
+    if (importKind === 'openapi') {
+      try { JSON.parse(importValue); } catch (e: any) { setImportErr(`Inline OpenAPI is not valid JSON: ${e?.message}`); setImportBusy(false); return; }
+    }
+    try {
+      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          displayName, path, protocols: [...protocols], subscriptionRequired,
+          serviceUrl: serviceUrl || undefined,
+          apiType: importKind === 'graphql-link' ? 'graphql' : importKind === 'wsdl-link' ? 'soap' : 'http',
+          format, value,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setImportOpen(false); setImportValue('');
+      setApi({ loading: false, data: j.api });
+      setStatus({ kind: 'ok', msg: `Imported ${importKind} at ${new Date().toLocaleTimeString()}` });
+      loadOps(); loadSpec();
+    } catch (e: any) { setImportErr(e?.message || String(e)); }
+    finally { setImportBusy(false); }
+  }, [id, importKind, importValue, displayName, path, protocols, subscriptionRequired, serviceUrl, loadOps, loadSpec]);
+
+  // ---- Test console ----
+  const sendTest = useCallback(async () => {
+    setTestBusy(true); setTestErr(null); setTestResp(null);
+    let headers: Record<string, string> = {};
+    if (testHeaders.trim()) {
+      try {
+        for (const line of testHeaders.split('\n')) {
+          const ix = line.indexOf(':'); if (ix < 0) continue;
+          headers[line.slice(0, ix).trim()] = line.slice(ix + 1).trim();
+        }
+      } catch { /* ignore */ }
+    }
+    try {
+      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/test-call`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ method: testMethod, urlTemplate: testTemplate, headers, body: testBody || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setTestErr(j.error || `HTTP ${r.status}`); return; }
+      setTestResp({ status: j.status, statusText: j.statusText, headers: j.headers, body: j.body });
+    } catch (e: any) { setTestErr(e?.message || String(e)); }
+    finally { setTestBusy(false); }
+  }, [id, testMethod, testTemplate, testHeaders, testBody]);
+
+  const pickTestOp = useCallback((opName: string) => {
+    setTestOpName(opName);
+    const op = (ops.data || []).find((o) => o.name === opName);
+    if (op) { setTestMethod(op.method || 'GET'); setTestTemplate(op.urlTemplate || '/'); }
+  }, [ops.data]);
+
+  // ---- Revisions ----
+  const loadRevs = useCallback(async () => {
+    if (isNew) return;
+    setRevs({ loading: true, data: null });
+    try {
+      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/revisions`);
+      const j = await r.json();
+      if (!j.ok) { setRevs({ loading: false, data: null, error: j.error }); return; }
+      setRevs({ loading: false, data: { revisions: j.revisions || [], releases: j.releases || [] } });
+    } catch (e: any) { setRevs({ loading: false, data: null, error: e?.message || String(e) }); }
+  }, [id, isNew]);
+
+  useEffect(() => { if (tab === 'revisions') loadRevs(); }, [tab, loadRevs]);
+
+  const createRev = useCallback(async () => {
+    if (!newRev.trim()) { setRevMsg({ intent: 'error', text: 'Enter a revision number (e.g. 2).' }); return; }
+    setRevBusy(true); setRevMsg(null);
+    try {
+      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/revisions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ apiRevision: newRev.trim(), description: newRevDesc || undefined, release: newRevRelease, notes: newRevDesc || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRevMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setRevMsg({ intent: 'success', text: `Created revision ${newRev}${newRevRelease ? ' and released (now current)' : ''}.` });
+      setNewRev(''); setNewRevDesc('');
+      loadRevs();
+    } catch (e: any) { setRevMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setRevBusy(false); }
+  }, [id, newRev, newRevDesc, newRevRelease, loadRevs]);
+
+  // Ribbon — Save / Reload / Copy spec / Import / Edit OpenAPI / Test / Revisions /
+  // Open policy editor. All actions are real; no disabled "deferred" buttons.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'API', actions: [
@@ -276,14 +402,21 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
         { label: 'Reload', onClick: !isNew ? () => { load(); loadOps(); loadSpec(); } : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
       { label: 'Definition', actions: [
+        { label: 'Import API', onClick: () => { setImportErr(null); setImportOpen(true); }, title: 'Import OpenAPI / WSDL / GraphQL' },
         { label: 'Edit OpenAPI', onClick: !isNew ? openSpecEditor : undefined, disabled: isNew, title: isNew ? 'Save the API first, then edit the spec' : undefined },
         { label: 'Copy spec', onClick: spec.data?.value ? copySpec : undefined, disabled: !spec.data?.value, title: !spec.data?.value ? 'No spec attached to this API' : undefined },
+      ]},
+      { label: 'Run', actions: [
+        { label: 'Test', onClick: !isNew ? () => setTab('test') : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
+        { label: 'Revisions', onClick: !isNew ? () => setTab('revisions') : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
       { label: 'Policy', actions: [
         { label: 'Open policy editor', onClick: !isNew ? () => router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=api&apiId=${encodeURIComponent(id)}`) : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
     ]},
   ], [status.kind, isNew, dirty, displayName, path, save, load, loadOps, loadSpec, spec.data, openSpecEditor, router, id]);
+
+  const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
   return (
     <ItemEditorChrome
@@ -328,6 +461,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
             <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving' || (!isNew && !dirty)}>
               {status.kind === 'saving' ? 'Saving…' : isNew ? 'Create' : 'Save'}
             </Button>
+            <Button appearance="outline" icon={<ArrowImport20Regular />} onClick={() => { setImportErr(null); setImportOpen(true); }}>Import</Button>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => { load(); loadOps(); loadSpec(); }}>
               Reload
             </Button>
@@ -337,41 +471,219 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
           {api.error && !api.loading && (
             <BackendStateBar error={api.error} title="APIM API" />
           )}
-          <div className={s.form}>
-            <Field label="Display name" required>
-              <Input value={displayName} onChange={(_, d) => { setDisplayName(d.value); setDirty(true); }} />
-            </Field>
-            <Field label="Path" required hint="URL suffix after the gateway hostname, e.g. 'orders'">
-              <Input value={path} onChange={(_, d) => { setPath(d.value); setDirty(true); }} />
-            </Field>
-            <Field label="Service URL" hint="Backend base URL (optional)">
-              <Input value={serviceUrl} onChange={(_, d) => { setServiceUrl(d.value); setDirty(true); }} placeholder="https://backend.example.com" />
-            </Field>
-            <Field label="Subscription required">
-              <Switch checked={subscriptionRequired} onChange={(_, d) => { setSubscriptionRequired(d.checked); setDirty(true); }} label={subscriptionRequired ? 'Yes' : 'No'} />
-            </Field>
-            <Field label="Protocols" hint="At least one">
-              <div className={s.protocolRow}>
-                {PROTOCOLS.map((p) => (
-                  <Switch key={p} checked={protocols.includes(p)} label={p} onChange={() => toggleProtocol(p)} />
-                ))}
-              </div>
-            </Field>
-          </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
-            <Subtitle2>OpenAPI spec</Subtitle2>
-            <Badge appearance="outline">{spec.data?.format || 'openapi+json'}</Badge>
-            <Button size="small" icon={<Copy20Regular />} onClick={copySpec} disabled={!spec.data?.value}>Copy</Button>
-            <Button size="small" icon={<ArrowSync20Regular />} onClick={loadSpec}>Refresh</Button>
-          </div>
-          {spec.loading && <Spinner size="tiny" label="Exporting from APIM…" labelPosition="after" />}
-          {!spec.loading && spec.error && <Caption1>Spec unavailable: {spec.error}</Caption1>}
-          {!spec.loading && !spec.error && (
-            <div className={s.specViewer} role="region" aria-label="OpenAPI spec (read-only)">
-              {spec.data?.value || (isNew ? 'Save the API first, then import a spec.' : '(no spec attached to this API)')}
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+            <Tab value="design" icon={<Document20Regular />}>Design</Tab>
+            <Tab value="test" icon={<Play20Regular />} disabled={isNew}>Test console</Tab>
+            <Tab value="revisions" icon={<BranchFork20Regular />} disabled={isNew}>Revisions</Tab>
+          </TabList>
+
+          {tab === 'design' && (
+            <>
+              <div className={s.form}>
+                <Field label="Display name" required>
+                  <Input value={displayName} onChange={(_, d) => { setDisplayName(d.value); setDirty(true); }} />
+                </Field>
+                <Field label="Path" required hint="URL suffix after the gateway hostname, e.g. 'orders'">
+                  <Input value={path} onChange={(_, d) => { setPath(d.value); setDirty(true); }} />
+                </Field>
+                <Field label="Service URL" hint="Backend base URL (optional)">
+                  <Input value={serviceUrl} onChange={(_, d) => { setServiceUrl(d.value); setDirty(true); }} placeholder="https://backend.example.com" />
+                </Field>
+                <Field label="Subscription required">
+                  <Switch checked={subscriptionRequired} onChange={(_, d) => { setSubscriptionRequired(d.checked); setDirty(true); }} label={subscriptionRequired ? 'Yes' : 'No'} />
+                </Field>
+                <Field label="Protocols" hint="At least one">
+                  <div className={s.protocolRow}>
+                    {PROTOCOLS.map((p) => (
+                      <Switch key={p} checked={protocols.includes(p)} label={p} onChange={() => toggleProtocol(p)} />
+                    ))}
+                  </div>
+                </Field>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+                <Subtitle2>OpenAPI spec</Subtitle2>
+                <Badge appearance="outline">{spec.data?.format || 'openapi+json'}</Badge>
+                <Button size="small" icon={<Copy20Regular />} onClick={copySpec} disabled={!spec.data?.value}>Copy</Button>
+                <Button size="small" icon={<ArrowSync20Regular />} onClick={loadSpec}>Refresh</Button>
+                <Button size="small" onClick={openSpecEditor} disabled={isNew}>Edit OpenAPI</Button>
+              </div>
+              {spec.loading && <Spinner size="tiny" label="Exporting from APIM…" labelPosition="after" />}
+              {!spec.loading && spec.error && <Caption1>Spec unavailable: {spec.error}</Caption1>}
+              {!spec.loading && !spec.error && (
+                <div className={s.specViewer} role="region" aria-label="OpenAPI spec (read-only)">
+                  {spec.data?.value || (isNew ? 'Save the API first, then import a spec.' : '(no spec attached to this API)')}
+                </div>
+              )}
+            </>
+          )}
+
+          {tab === 'test' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Body1>Sends a real request through the APIM gateway. The all-access subscription key is attached server-side; it never reaches the browser.</Body1>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <Field label="Operation (fills method + template)">
+                  <Dropdown
+                    placeholder={(ops.data?.length ?? 0) ? 'Select an operation' : 'No operations — type a path below'}
+                    value={testOpName}
+                    selectedOptions={testOpName ? [testOpName] : []}
+                    onOptionSelect={(_, d) => d.optionValue && pickTestOp(d.optionValue)}
+                  >
+                    {(ops.data || []).map((op) => <Option key={op.name} value={op.name}>{op.method} {op.urlTemplate}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Method">
+                  <Dropdown value={testMethod} selectedOptions={[testMethod]} onOptionSelect={(_, d) => d.optionValue && setTestMethod(d.optionValue)}>
+                    {HTTP_METHODS.map((m) => <Option key={m} value={m}>{m}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="URL template (appended to the API path)" style={{ gridColumn: '1 / -1' }}>
+                  <Input value={testTemplate} onChange={(_, d) => setTestTemplate(d.value)} placeholder="/orders/{id}" />
+                </Field>
+                <Field label="Request headers (one per line, Name: value)" style={{ gridColumn: '1 / -1' }}>
+                  <Textarea value={testHeaders} onChange={(_, d) => setTestHeaders(d.value)} rows={2} placeholder={'Accept: application/json'} />
+                </Field>
+                {!['GET', 'HEAD'].includes(testMethod) && (
+                  <Field label="Request body" style={{ gridColumn: '1 / -1' }}>
+                    <Textarea value={testBody} onChange={(_, d) => setTestBody(d.value)} rows={4} placeholder={'{ "name": "value" }'} />
+                  </Field>
+                )}
+              </div>
+              <Button appearance="primary" icon={<Play20Regular />} onClick={sendTest} disabled={testBusy} style={{ alignSelf: 'flex-start' }}>
+                {testBusy ? 'Sending…' : 'Send'}
+              </Button>
+              {testErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Request failed</MessageBarTitle>{testErr}</MessageBarBody></MessageBar>}
+              {testResp && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <Badge appearance="filled" color={testResp.status < 400 ? 'success' : testResp.status < 500 ? 'warning' : 'danger'}>
+                      {testResp.status} {testResp.statusText}
+                    </Badge>
+                    <Caption1>{testResp.headers['content-type'] || ''}</Caption1>
+                  </div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response headers</Caption1>
+                  <div className={s.specViewer} style={{ maxHeight: 140 }}>
+                    {Object.entries(testResp.headers).map(([k, v]) => `${k}: ${v}`).join('\n')}
+                  </div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response body</Caption1>
+                  <div className={s.specViewer}>{testResp.body || '(empty)'}</div>
+                </div>
+              )}
             </div>
           )}
+
+          {tab === 'revisions' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <Subtitle2>Create revision</Subtitle2>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <Field label="Revision number"><Input value={newRev} onChange={(_, d) => setNewRev(d.value)} placeholder="2" style={{ width: 100 }} /></Field>
+                  <Field label="Description" style={{ flex: 1, minWidth: 200 }}><Input value={newRevDesc} onChange={(_, d) => setNewRevDesc(d.value)} placeholder="Added new operation" /></Field>
+                  <Switch checked={newRevRelease} onChange={(_, d) => setNewRevRelease(d.checked)} label="Release (make current)" />
+                  <Button appearance="primary" icon={<BranchFork20Regular />} onClick={createRev} disabled={revBusy}>{revBusy ? 'Creating…' : 'Create revision'}</Button>
+                </div>
+                {revMsg && <MessageBar intent={revMsg.intent}><MessageBarBody>{revMsg.text}</MessageBarBody></MessageBar>}
+              </div>
+              {revs.loading && <Spinner size="tiny" label="Loading revisions…" labelPosition="after" />}
+              {revs.error && <MessageBar intent="warning"><MessageBarBody>{revs.error}</MessageBarBody></MessageBar>}
+              {revs.data && (
+                <>
+                  <Subtitle2>Revisions ({revs.data.revisions.length})</Subtitle2>
+                  <Table size="small" aria-label="Revisions">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Revision</TableHeaderCell>
+                      <TableHeaderCell>Current</TableHeaderCell>
+                      <TableHeaderCell>Online</TableHeaderCell>
+                      <TableHeaderCell>Description</TableHeaderCell>
+                      <TableHeaderCell>Updated</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {revs.data.revisions.map((r: any) => (
+                        <TableRow key={r.apiRevision}>
+                          <TableCell><strong>{r.apiRevision}</strong></TableCell>
+                          <TableCell>{r.isCurrent ? <Badge color="success">current</Badge> : '—'}</TableCell>
+                          <TableCell>{r.isOnline ? 'yes' : 'no'}</TableCell>
+                          <TableCell>{r.description || '—'}</TableCell>
+                          <TableCell>{r.updatedDateTime || '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  <Subtitle2>Releases / change log ({revs.data.releases.length})</Subtitle2>
+                  <Table size="small" aria-label="Releases">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Release</TableHeaderCell>
+                      <TableHeaderCell>Notes</TableHeaderCell>
+                      <TableHeaderCell>Created</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {revs.data.releases.map((r: any) => (
+                        <TableRow key={r.id || r.name}>
+                          <TableCell><code>{r.name}</code></TableCell>
+                          <TableCell>{r.notes || '—'}</TableCell>
+                          <TableCell>{r.createdDateTime || '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Import API dialog — OpenAPI / WSDL / GraphQL */}
+          <Dialog open={importOpen} onOpenChange={(_, d) => { if (!d.open) setImportOpen(false); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Import API definition</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Body1>Imports into <strong>{displayName || id}</strong> at path <code>{path || '(set path first)'}</code>.</Body1>
+                    <Field label="Format">
+                      <Dropdown value={importKind} selectedOptions={[importKind]} onOptionSelect={(_, d) => d.optionValue && setImportKind(d.optionValue as typeof importKind)}>
+                        <Option value="openapi">OpenAPI (inline JSON)</Option>
+                        <Option value="openapi-link">OpenAPI (link to spec URL)</Option>
+                        <Option value="wsdl-link">WSDL (link to .wsdl URL)</Option>
+                        <Option value="graphql-link">GraphQL (link to schema URL)</Option>
+                      </Dropdown>
+                    </Field>
+                    {importKind === 'openapi' ? (
+                      <Field label="OpenAPI document (JSON)">
+                        <Textarea value={importValue} onChange={(_, d) => setImportValue(d.value)} rows={8} placeholder={'{ "openapi": "3.0.1", "info": {"title":"","version":"1.0"}, "paths": {} }'} />
+                      </Field>
+                    ) : (
+                      <Field label="URL">
+                        <Input value={importValue} onChange={(_, d) => setImportValue(d.value)} placeholder="https://example.com/openapi.json" />
+                      </Field>
+                    )}
+                    {importErr && <MessageBar intent="error"><MessageBarBody>{importErr}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setImportOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" onClick={runImport} disabled={importBusy || !importValue.trim()}>{importBusy ? 'Importing…' : 'Import'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Edit OpenAPI dialog */}
+          <Dialog open={specEditorOpen} onOpenChange={(_, d) => { if (!d.open) setSpecEditorOpen(false); }}>
+            <DialogSurface style={{ maxWidth: '90vw', width: 900 }}>
+              <DialogBody>
+                <DialogTitle>Edit OpenAPI document</DialogTitle>
+                <DialogContent>
+                  <MonacoTextarea value={specDraft} onChange={setSpecDraft} language="json" height={420} minHeight={320} ariaLabel="OpenAPI document" />
+                  {specError && <MessageBar intent="error"><MessageBarBody>{specError}</MessageBarBody></MessageBar>}
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setSpecEditorOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" onClick={saveSpec} disabled={specSaving}>{specSaving ? 'Saving…' : 'Save spec'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
@@ -395,6 +707,7 @@ interface ApimProduct {
 
 export function ApimProductEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const router = useRouter();
   const isNew = id === 'new';
   const [product, setProduct] = useState<LoadState<ApimProduct>>({ loading: !isNew, data: null });
   const [status, setStatus] = useState<{ kind: 'idle' | 'saving' | 'ok' | 'err'; msg?: string }>({ kind: 'idle' });
@@ -405,6 +718,70 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [subscriptionRequired, setSubscriptionRequired] = useState(true);
   const [approvalRequired, setApprovalRequired] = useState(false);
   const [dirty, setDirty] = useState(false);
+
+  // Tabs: Settings | APIs | Subscriptions
+  const [tab, setTab] = useState<'settings' | 'apis' | 'subs'>('settings');
+
+  // APIs-in-product.
+  const [apis, setApis] = useState<LoadState<{ productApis: any[]; allApis: any[] }>>({ loading: false, data: null });
+  const [addApiId, setAddApiId] = useState('');
+  const [apiBusy, setApiBusy] = useState(false);
+  const [apiMsg, setApiMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // Subscriptions.
+  const [subs, setSubs] = useState<LoadState<any[]>>({ loading: false, data: null });
+
+  const loadApis = useCallback(async () => {
+    if (isNew) return;
+    setApis({ loading: true, data: null });
+    try {
+      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}/apis`);
+      const j = await r.json();
+      if (!j.ok) { setApis({ loading: false, data: null, error: j.error }); return; }
+      setApis({ loading: false, data: { productApis: j.productApis || [], allApis: j.allApis || [] } });
+    } catch (e: any) { setApis({ loading: false, data: null, error: e?.message || String(e) }); }
+  }, [id, isNew]);
+
+  const loadSubs = useCallback(async () => {
+    if (isNew) return;
+    setSubs({ loading: true, data: null });
+    try {
+      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}/subscriptions`);
+      const j = await r.json();
+      if (!j.ok) { setSubs({ loading: false, data: null, error: j.error }); return; }
+      setSubs({ loading: false, data: j.subscriptions || [] });
+    } catch (e: any) { setSubs({ loading: false, data: null, error: e?.message || String(e) }); }
+  }, [id, isNew]);
+
+  useEffect(() => { if (tab === 'apis') loadApis(); if (tab === 'subs') loadSubs(); }, [tab, loadApis, loadSubs]);
+
+  const addApi = useCallback(async () => {
+    if (!addApiId) return;
+    setApiBusy(true); setApiMsg(null);
+    try {
+      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}/apis`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ apiId: addApiId }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setApiMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setApis((cur) => ({ loading: false, data: { productApis: j.productApis || [], allApis: cur.data?.allApis || [] } }));
+      setApiMsg({ intent: 'success', text: `Added ${addApiId} to the product.` });
+      setAddApiId('');
+    } catch (e: any) { setApiMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setApiBusy(false); }
+  }, [id, addApiId]);
+
+  const removeApi = useCallback(async (apiName: string) => {
+    setApiBusy(true); setApiMsg(null);
+    try {
+      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}/apis?apiId=${encodeURIComponent(apiName)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) { setApiMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setApis((cur) => ({ loading: false, data: { productApis: j.productApis || [], allApis: cur.data?.allApis || [] } }));
+      setApiMsg({ intent: 'success', text: `Removed ${apiName}.` });
+    } catch (e: any) { setApiMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setApiBusy(false); }
+  }, [id]);
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -497,8 +874,13 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Publish', onClick: status.kind !== 'saving' && state !== 'published' && displayName.trim() ? () => publishToggle('published') : undefined, disabled: status.kind === 'saving' || state === 'published' || !displayName.trim(), title: state === 'published' ? 'Already published' : (!displayName.trim() ? 'displayName is required' : undefined) },
         { label: 'Unpublish', onClick: status.kind !== 'saving' && state === 'published' ? () => publishToggle('notPublished') : undefined, disabled: status.kind === 'saving' || state !== 'published', title: state !== 'published' ? 'Already not published' : undefined },
       ]},
+      { label: 'Configure', actions: [
+        { label: 'APIs', onClick: !isNew ? () => setTab('apis') : undefined, disabled: isNew, title: isNew ? 'Save the product first' : undefined },
+        { label: 'Subscriptions', onClick: !isNew ? () => setTab('subs') : undefined, disabled: isNew, title: isNew ? 'Save the product first' : undefined },
+        { label: 'Product policy', onClick: !isNew ? () => router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=product&productId=${encodeURIComponent(id)}`) : undefined, disabled: isNew, title: isNew ? 'Save the product first' : undefined },
+      ]},
     ]},
-  ], [status.kind, isNew, dirty, displayName, save, load, state, publishToggle]);
+  ], [status.kind, isNew, dirty, displayName, save, load, state, publishToggle, router, id]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -522,32 +904,115 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
         {product.error && !product.loading && (
           <BackendStateBar error={product.error} title="APIM Product" />
         )}
-        <div className={s.form}>
-          <Field label="Display name" required>
-            <Input value={displayName} onChange={(_, d) => { setDisplayName(d.value); setDirty(true); }} />
-          </Field>
-          <Field label="Lifecycle state">
-            <Dropdown
-              value={state}
-              selectedOptions={[state]}
-              onOptionSelect={(_, d) => { if (d.optionValue) { setState(d.optionValue as 'published' | 'notPublished'); setDirty(true); } }}
-            >
-              <Option value="notPublished">Not published</Option>
-              <Option value="published">Published</Option>
-            </Dropdown>
-          </Field>
-          <div style={{ gridColumn: '1 / span 2' }}>
-            <Field label="Description" hint="Shown in the developer portal">
-              <Textarea value={description} onChange={(_, d) => { setDescription(d.value); setDirty(true); }} rows={4} />
+
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+          <Tab value="settings" icon={<Document20Regular />}>Settings</Tab>
+          <Tab value="apis" icon={<Code20Regular />} disabled={isNew}>APIs</Tab>
+          <Tab value="subs" icon={<Library20Regular />} disabled={isNew}>Subscriptions</Tab>
+        </TabList>
+
+        {tab === 'settings' && (
+          <div className={s.form}>
+            <Field label="Display name" required>
+              <Input value={displayName} onChange={(_, d) => { setDisplayName(d.value); setDirty(true); }} />
+            </Field>
+            <Field label="Lifecycle state">
+              <Dropdown
+                value={state}
+                selectedOptions={[state]}
+                onOptionSelect={(_, d) => { if (d.optionValue) { setState(d.optionValue as 'published' | 'notPublished'); setDirty(true); } }}
+              >
+                <Option value="notPublished">Not published</Option>
+                <Option value="published">Published</Option>
+              </Dropdown>
+            </Field>
+            <div style={{ gridColumn: '1 / span 2' }}>
+              <Field label="Description" hint="Shown in the developer portal">
+                <Textarea value={description} onChange={(_, d) => { setDescription(d.value); setDirty(true); }} rows={4} />
+              </Field>
+            </div>
+            <Field label="Subscription required">
+              <Switch checked={subscriptionRequired} onChange={(_, d) => { setSubscriptionRequired(d.checked); setDirty(true); }} label={subscriptionRequired ? 'Yes' : 'No'} />
+            </Field>
+            <Field label="Approval required" hint="Only meaningful when subscription is required">
+              <Switch checked={approvalRequired} onChange={(_, d) => { setApprovalRequired(d.checked); setDirty(true); }} disabled={!subscriptionRequired} label={approvalRequired ? 'Yes' : 'No'} />
             </Field>
           </div>
-          <Field label="Subscription required">
-            <Switch checked={subscriptionRequired} onChange={(_, d) => { setSubscriptionRequired(d.checked); setDirty(true); }} label={subscriptionRequired ? 'Yes' : 'No'} />
-          </Field>
-          <Field label="Approval required" hint="Only meaningful when subscription is required">
-            <Switch checked={approvalRequired} onChange={(_, d) => { setApprovalRequired(d.checked); setDirty(true); }} disabled={!subscriptionRequired} label={approvalRequired ? 'Yes' : 'No'} />
-          </Field>
-        </div>
+        )}
+
+        {tab === 'apis' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <Field label="Add an API to this product" style={{ minWidth: 280 }}>
+                <Dropdown
+                  placeholder={apis.loading ? 'Loading…' : 'Select an API'}
+                  value={(apis.data?.allApis || []).find((a: any) => a.name === addApiId)?.displayName || addApiId}
+                  selectedOptions={addApiId ? [addApiId] : []}
+                  onOptionSelect={(_, d) => setAddApiId(d.optionValue || '')}
+                >
+                  {(apis.data?.allApis || []).map((a: any) => <Option key={a.name} value={a.name}>{a.displayName} ({a.name})</Option>)}
+                </Dropdown>
+              </Field>
+              <Button appearance="primary" icon={<Add20Regular />} onClick={addApi} disabled={apiBusy || !addApiId}>Add</Button>
+              <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadApis}>Reload</Button>
+            </div>
+            {apiMsg && <MessageBar intent={apiMsg.intent}><MessageBarBody>{apiMsg.text}</MessageBarBody></MessageBar>}
+            {apis.loading && <Spinner size="tiny" label="Loading product APIs…" labelPosition="after" />}
+            {apis.error && <MessageBar intent="warning"><MessageBarBody>{apis.error}</MessageBarBody></MessageBar>}
+            {apis.data && (
+              <Table size="small" aria-label="Product APIs">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>API</TableHeaderCell>
+                  <TableHeaderCell>Path</TableHeaderCell>
+                  <TableHeaderCell />
+                </TableRow></TableHeader>
+                <TableBody>
+                  {apis.data.productApis.length === 0 && (
+                    <TableRow><TableCell>No APIs in this product yet.</TableCell><TableCell /><TableCell /></TableRow>
+                  )}
+                  {apis.data.productApis.map((a: any) => (
+                    <TableRow key={a.name}>
+                      <TableCell><strong>{a.displayName}</strong> <Caption1>· {a.name}</Caption1></TableCell>
+                      <TableCell><code>{a.path}</code></TableCell>
+                      <TableCell><Button size="small" icon={<Delete20Regular />} onClick={() => removeApi(a.name)} disabled={apiBusy}>Remove</Button></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        )}
+
+        {tab === 'subs' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadSubs} style={{ alignSelf: 'flex-start' }}>Reload</Button>
+            {subs.loading && <Spinner size="tiny" label="Loading subscriptions…" labelPosition="after" />}
+            {subs.error && <MessageBar intent="warning"><MessageBarBody>{subs.error}</MessageBarBody></MessageBar>}
+            {subs.data && (
+              <Table size="small" aria-label="Subscriptions">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Name</TableHeaderCell>
+                  <TableHeaderCell>Display name</TableHeaderCell>
+                  <TableHeaderCell>State</TableHeaderCell>
+                  <TableHeaderCell>Created</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {subs.data.length === 0 && (
+                    <TableRow><TableCell>No subscriptions to this product.</TableCell><TableCell /><TableCell /><TableCell /></TableRow>
+                  )}
+                  {subs.data.map((sub: any) => (
+                    <TableRow key={sub.name}>
+                      <TableCell><code>{sub.name}</code></TableCell>
+                      <TableCell>{sub.displayName || '—'}</TableCell>
+                      <TableCell><Badge appearance="outline" color={sub.state === 'active' ? 'success' : 'informative'}>{sub.state || '—'}</Badge></TableCell>
+                      <TableCell>{sub.createdDate || '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        )}
       </div>
     } />
   );
@@ -564,6 +1029,20 @@ type PolicyScopeKind = 'service' | 'api' | 'product' | 'operation';
 
 const DEFAULT_POLICY_XML =
   `<policies>\n  <inbound>\n    <base />\n    <!-- example: validate Entra JWT -->\n    <!-- <validate-jwt header-name="Authorization" failed-validation-httpcode="401">\n      <openid-config url="https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration" />\n    </validate-jwt> -->\n    <rate-limit calls="120" renewal-period="60" />\n  </inbound>\n  <backend>\n    <base />\n  </backend>\n  <outbound>\n    <base />\n  </outbound>\n  <on-error>\n    <base />\n  </on-error>\n</policies>`;
+
+// The proven APIM policy snippets the portal "+ Add policy" gallery ships.
+const POLICY_SNIPPETS: { key: string; label: string; section: 'inbound' | 'outbound'; xml: string }[] = [
+  { key: 'rate-limit', label: 'Limit call rate', section: 'inbound', xml: `<rate-limit calls="120" renewal-period="60" />` },
+  { key: 'quota', label: 'Set usage quota', section: 'inbound', xml: `<quota calls="10000" renewal-period="86400" />` },
+  { key: 'validate-jwt', label: 'Validate Entra JWT', section: 'inbound', xml: `<validate-jwt header-name="Authorization" failed-validation-httpcode="401" failed-validation-error-message="Unauthorized">\n      <openid-config url="https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration" />\n      <audiences><audience>api://your-api</audience></audiences>\n    </validate-jwt>` },
+  { key: 'cors', label: 'Allow cross-origin (CORS)', section: 'inbound', xml: `<cors allow-credentials="false">\n      <allowed-origins><origin>*</origin></allowed-origins>\n      <allowed-methods><method>GET</method><method>POST</method></allowed-methods>\n      <allowed-headers><header>*</header></allowed-headers>\n    </cors>` },
+  { key: 'ip-filter', label: 'Restrict caller IPs', section: 'inbound', xml: `<ip-filter action="allow">\n      <address-range from="10.0.0.0" to="10.255.255.255" />\n    </ip-filter>` },
+  { key: 'set-header-in', label: 'Set request header', section: 'inbound', xml: `<set-header name="X-Forwarded-By" exists-action="override">\n      <value>csa-loom</value>\n    </set-header>` },
+  { key: 'set-backend', label: 'Set backend service', section: 'inbound', xml: `<set-backend-service base-url="https://backend.example.com" />` },
+  { key: 'mock', label: 'Mock response', section: 'inbound', xml: `<mock-response status-code="200" content-type="application/json" />` },
+  { key: 'set-header-out', label: 'Set response header', section: 'outbound', xml: `<set-header name="X-Powered-By" exists-action="override">\n      <value>CSA Loom APIM</value>\n    </set-header>` },
+  { key: 'cache-lookup', label: 'Cache responses', section: 'inbound', xml: `<cache-lookup vary-by-developer="false" vary-by-developer-groups="false" downstream-caching-type="none" />` },
+];
 
 function isWellFormedXml(xml: string): { ok: true } | { ok: false; error: string } {
   try {
@@ -671,6 +1150,20 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
     }
   }, [value]);
 
+  // Policy snippet gallery — the same proven snippets APIM's "+ Add policy"
+  // gallery ships. Inserting drops the fragment into the <inbound> (or
+  // <outbound> for set-header-out) section of the current buffer.
+  const insertSnippet = useCallback((snippet: string, section: 'inbound' | 'outbound' = 'inbound') => {
+    setValue((prev) => {
+      const tag = `<${section}>`;
+      const ix = prev.indexOf(tag);
+      if (ix < 0) return prev + '\n' + snippet;
+      const insertAt = ix + tag.length;
+      return prev.slice(0, insertAt) + '\n    ' + snippet.trim() + prev.slice(insertAt);
+    });
+    setDirty(true);
+  }, []);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Edit', actions: [
@@ -741,6 +1234,21 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
             </MessageBarBody>
           </MessageBar>
         )}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add policy snippet:</Caption1>
+          <Dropdown
+            placeholder="Choose a snippet…"
+            selectedOptions={[]}
+            value=""
+            onOptionSelect={(_, d) => {
+              const snip = POLICY_SNIPPETS.find((p) => p.key === d.optionValue);
+              if (snip) insertSnippet(snip.xml, snip.section);
+            }}
+          >
+            {POLICY_SNIPPETS.map((p) => <Option key={p.key} value={p.key}>{p.label}</Option>)}
+          </Dropdown>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Inserts into the matching inbound/outbound section.</Caption1>
+        </div>
         <MonacoTextarea
           value={value}
           onChange={(v) => { setValue(v); setDirty(true); }}
@@ -759,6 +1267,8 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
 // ============================================================
 // (Ribbon defined inside the component via useMemo.)
 
+interface DataProductDataset { name: string; typeName: string; qualifiedName: string; classifications: string[]; guid?: string; }
+interface DataProductGlossaryLink { name: string; guid?: string; }
 interface DataProductState {
   displayName: string;
   description: string;
@@ -767,11 +1277,16 @@ interface DataProductState {
   certified: boolean;
   sla: string;
   bundle: string[];
+  // Phase 2 parity surfaces — datasets/assets, linked glossary terms.
+  datasets?: DataProductDataset[];
+  glossaryLinks?: DataProductGlossaryLink[];
   // Phase 1 Purview Unified Catalog wiring — populated by
   // POST /api/items/data-product/[id]/register-purview on success.
   purviewDataProductId?: string;
   lastRegisteredAt?: string;
 }
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const DP_EMPTY: DataProductState = {
   displayName: '',
@@ -811,6 +1326,29 @@ function useDataProductWorkspaces() {
   return { workspaces, loading };
 }
 
+// Governance-domain picker source — resolves the Purview businessDomainId GUID
+// that register-purview requires. Honest gate: 501 (Purview unprovisioned)
+// surfaces as `notConfigured` so the form still renders.
+function useGovernanceDomains() {
+  const [domains, setDomains] = useState<{ id: string; name: string }[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notConfigured, setNotConfigured] = useState(false);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/catalog/domains');
+        const j = await r.json();
+        if (r.status === 501) { setNotConfigured(true); setDomains([]); }
+        else if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setDomains([]); }
+        else setDomains(j.domains || []);
+      } catch (e: any) { setError(e?.message || String(e)); setDomains([]); }
+      finally { setLoading(false); }
+    })();
+  }, []);
+  return { domains, error, notConfigured, loading };
+}
+
 export function DataProductEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const router = useRouter();
@@ -825,6 +1363,38 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   // hint payload as a dedicated MessageBar so the operator sees the bicep
   // module path + roles to grant.
   const [purviewHint, setPurviewHint] = useState<PurviewNotConfiguredHint | null>(null);
+
+  const domains = useGovernanceDomains();
+
+  // Tabs: Overview | Datasets | Glossary | Lineage | Access policies
+  const [tab, setTab] = useState<'overview' | 'datasets' | 'glossary' | 'lineage' | 'policies'>('overview');
+
+  // Dataset (Atlas entity) registration form.
+  const [dsName, setDsName] = useState('');
+  const [dsType, setDsType] = useState('fabric_lakehouse');
+  const [dsQName, setDsQName] = useState('');
+  const [dsClass, setDsClass] = useState('');
+  const [dsBusy, setDsBusy] = useState(false);
+  const [dsMsg, setDsMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // Glossary term create/link.
+  const [glName, setGlName] = useState('');
+  const [glDesc, setGlDesc] = useState('');
+  const [glBusy, setGlBusy] = useState(false);
+  const [glMsg, setGlMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // Lineage.
+  const [lineage, setLineage] = useState<{ nodes: any[]; edges: any[] } | null>(null);
+  const [lineageBusy, setLineageBusy] = useState(false);
+  const [lineageErr, setLineageErr] = useState<string | null>(null);
+
+  // Access policies (Cosmos governance policies, kind=Access).
+  const [policies, setPolicies] = useState<any[] | null>(null);
+  const [polName, setPolName] = useState('');
+  const [polApprovers, setPolApprovers] = useState('');
+  const [polLimit, setPolLimit] = useState('1 year');
+  const [polBusy, setPolBusy] = useState(false);
+  const [polMsg, setPolMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   // Phase 4.5 — all field mutations use functional updates so that if an
   // async response (e.g. registerPurview hydrating purviewDataProductId)
@@ -967,6 +1537,118 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   const setBundleText = (text: string) => patchState({ bundle: text.split('\n').map(s => s.trim()).filter(Boolean) });
 
+  // ---- Datasets (register Atlas entity + classifications) ----
+  const registerDataset = useCallback(async () => {
+    if (!dsName.trim() || !dsQName.trim()) { setDsMsg({ intent: 'error', text: 'Name and qualified name are required.' }); return; }
+    setDsBusy(true); setDsMsg(null);
+    const classifications = dsClass.split(',').map((c) => c.trim()).filter(Boolean);
+    try {
+      // register-via-Atlas through the existing cross-source register route.
+      const r = await fetch('/api/catalog/register', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          source: dsType.startsWith('databricks') ? 'unity-catalog' : 'onelake',
+          displayName: dsName.trim(),
+          // For onelake source, the route resolves workspaceId/itemId; for a
+          // direct Atlas upsert we pass the qualifiedName + classifications.
+          fullName: dsQName.trim(),
+          qualifiedName: dsQName.trim(),
+          typeName: dsType,
+          classifications,
+          domain: GUID_RE.test(state.domain) ? state.domain : undefined,
+        }),
+      });
+      const j = await r.json();
+      if (r.status === 501) { setDsMsg({ intent: 'error', text: 'Purview not provisioned in this deployment — set LOOM_PURVIEW_ACCOUNT to register datasets.' }); return; }
+      if (!j.ok) { setDsMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      const ds: DataProductDataset = { name: dsName.trim(), typeName: dsType, qualifiedName: dsQName.trim(), classifications, guid: j.guid || j.primaryGuid };
+      setState((prev) => ({ ...prev, datasets: [...(prev.datasets || []), ds] }));
+      setDirty(true);
+      setDsMsg({ intent: 'success', text: `Registered ${dsName} (guid ${ds.guid || 'assigned'}). Save to persist the link.` });
+      setDsName(''); setDsQName(''); setDsClass('');
+    } catch (e: any) { setDsMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setDsBusy(false); }
+  }, [dsName, dsType, dsQName, dsClass, state.domain]);
+
+  const removeDataset = (qn: string) => { setState((prev) => ({ ...prev, datasets: (prev.datasets || []).filter((d) => d.qualifiedName !== qn) })); setDirty(true); };
+
+  // ---- Glossary terms (create + link to the product) ----
+  const createGlossaryLink = useCallback(async () => {
+    if (!glName.trim()) { setGlMsg({ intent: 'error', text: 'Term name is required.' }); return; }
+    setGlBusy(true); setGlMsg(null);
+    try {
+      const r = await fetch('/api/catalog/glossary', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          term: { name: glName.trim(), longDescription: glDesc || undefined },
+          ...(state.purviewDataProductId ? { applyTo: { source: 'purview', entityGuid: state.purviewDataProductId } } : {}),
+        }),
+      });
+      const j = await r.json();
+      if (r.status === 501) { setGlMsg({ intent: 'error', text: 'Purview not provisioned — set LOOM_PURVIEW_ACCOUNT to manage glossary terms.' }); return; }
+      if (!j.ok) { setGlMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      const link: DataProductGlossaryLink = { name: j.term?.name || glName.trim(), guid: j.term?.guid };
+      setState((prev) => ({ ...prev, glossaryLinks: [...(prev.glossaryLinks || []), link] }));
+      setDirty(true);
+      setGlMsg({ intent: 'success', text: `Created term '${link.name}'${j.applied ? ' and linked to the data product' : ''}. Save to persist.` });
+      setGlName(''); setGlDesc('');
+    } catch (e: any) { setGlMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setGlBusy(false); }
+  }, [glName, glDesc, state.purviewDataProductId]);
+
+  const removeGlossaryLink = (name: string) => { setState((prev) => ({ ...prev, glossaryLinks: (prev.glossaryLinks || []).filter((g) => g.name !== name) })); setDirty(true); };
+
+  // ---- Lineage ----
+  const loadLineage = useCallback(async () => {
+    const guid = state.datasets?.[0]?.guid || state.purviewDataProductId;
+    if (!guid) { setLineageErr('Register a dataset (or the data product with Purview) first — lineage is centered on a Purview entity GUID.'); return; }
+    setLineageBusy(true); setLineageErr(null); setLineage(null);
+    try {
+      const r = await fetch(`/api/catalog/lineage?source=purview&id=${encodeURIComponent(guid)}`);
+      const j = await r.json();
+      if (r.status === 501) { setLineageErr('Purview not provisioned — lineage requires LOOM_PURVIEW_ACCOUNT.'); return; }
+      if (!j.ok) { setLineageErr(j.error || `HTTP ${r.status}`); return; }
+      setLineage({ nodes: j.nodes || [], edges: j.edges || [] });
+    } catch (e: any) { setLineageErr(e?.message || String(e)); }
+    finally { setLineageBusy(false); }
+  }, [state.datasets, state.purviewDataProductId]);
+
+  // ---- Access policies ----
+  const loadPolicies = useCallback(async () => {
+    try {
+      const r = await fetch('/api/governance/policies');
+      const j = await r.json();
+      if (j.ok) setPolicies((j.items || []).filter((p: any) => p.kind === 'Access'));
+    } catch { /* leave null */ }
+  }, []);
+
+  const createPolicy = useCallback(async () => {
+    if (!polName.trim()) { setPolMsg({ intent: 'error', text: 'Policy name is required.' }); return; }
+    setPolBusy(true); setPolMsg(null);
+    try {
+      const r = await fetch('/api/governance/policies', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: polName.trim(), kind: 'Access',
+          scope: `data-product:${id}`,
+          rule: JSON.stringify({ accessTimeLimit: polLimit, approvers: polApprovers.split(',').map((a) => a.trim()).filter(Boolean) }),
+          enabled: true,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setPolMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setPolMsg({ intent: 'success', text: `Access policy '${polName}' saved.` });
+      setPolName(''); setPolApprovers('');
+      loadPolicies();
+    } catch (e: any) { setPolMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setPolBusy(false); }
+  }, [polName, polApprovers, polLimit, id, loadPolicies]);
+
+  useEffect(() => {
+    if (tab === 'lineage') loadLineage();
+    if (tab === 'policies') loadPolicies();
+  }, [tab, loadLineage, loadPolicies]);
+
   // Phase 4.5 — Ctrl+S / Cmd+S shortcut for Save. Matches notebook-editor.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -979,9 +1661,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, status.kind, state.displayName, save]);
 
-  // Ribbon — Save + Publish to APIM wired to inline handlers. Semantic schema /
-  // SLA / Owner stay honestly disabled (the form below is the actual edit
-  // surface; jumping to a separate panel is a future v2 enhancement).
+  // Ribbon — Save + Publish to APIM + the full Purview governance surface
+  // (Datasets / Glossary / Lineage / Access policies). No disabled buttons.
   const isNew = id === 'new';
   // On /new the primary action is "Create": enabled once a name + workspace
   // are set. On an existing item it's "Save", enabled when there are edits.
@@ -996,10 +1677,11 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           title: isNew ? (!state.displayName.trim() ? 'Enter a name' : !workspaceId ? 'Select a workspace' : undefined) : (!dirty ? 'No unsaved changes' : undefined) },
         { label: 'Publish to APIM', onClick: !isNew && status.kind !== 'saving' && state.displayName ? publishApimMirror : undefined, disabled: isNew || status.kind === 'saving' || !state.displayName, title: isNew ? 'Create the data product first' : !state.displayName ? 'displayName is required' : undefined },
       ]},
-      { label: 'Contract', actions: [
-        { label: 'Semantic schema', disabled: true, title: 'Semantic schema — use the Bundle field below to list semantic contracts (dedicated editor deferred to v2)' },
-        { label: 'SLA', disabled: true, title: 'SLA — use the SLA field in the form below (dedicated editor deferred to v2)' },
-        { label: 'Owner', disabled: true, title: 'Owner — use the Owner field in the form below (dedicated editor deferred to v2)' },
+      { label: 'Govern', actions: [
+        { label: 'Datasets', onClick: () => setTab('datasets') },
+        { label: 'Glossary', onClick: () => setTab('glossary') },
+        { label: 'Lineage', onClick: () => setTab('lineage') },
+        { label: 'Access policies', onClick: () => setTab('policies') },
       ]},
     ]},
   ], [status.kind, isNew, canSave, dirty, save, state.displayName, workspaceId, publishApimMirror]);
@@ -1072,42 +1754,204 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         </div>
         <StatusBar status={status} />
 
-        <div className={s.form}>
-          {isNew && (
-            <Field label="Workspace (required to create)" style={{ gridColumn: '1 / -1' }}>
-              <Dropdown
-                placeholder={ws.loading ? 'Loading workspaces…' : (ws.workspaces?.length ?? 0) === 0 ? 'No workspaces — create one first' : 'Select a workspace'}
-                value={(ws.workspaces || []).find((w) => w.id === workspaceId)?.name || ''}
-                selectedOptions={workspaceId ? [workspaceId] : []}
-                disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}
-                onOptionSelect={(_, d) => setWorkspaceId(d.optionValue || '')}
-              >
-                {(ws.workspaces || []).map((w) => <Option key={w.id} value={w.id}>{w.name}</Option>)}
-              </Dropdown>
-            </Field>
-          )}
-          <Field label="Display name"><Input value={state.displayName} onChange={(_, d) => patchState({ displayName: d.value })} /></Field>
-          <Field label="Domain (Purview businessDomainId GUID)"><Input value={state.domain} onChange={(_, d) => patchState({ domain: d.value })} placeholder="e.g. 0a1b2c3d-4e5f-6789-abcd-ef0123456789" /></Field>
-          <Field label="Owner (email)"><Input value={state.owner} onChange={(_, d) => patchState({ owner: d.value })} placeholder="owner@contoso.com" /></Field>
-          <Field label="SLA"><Input value={state.sla} onChange={(_, d) => patchState({ sla: d.value })} placeholder="99.9% · P95 < 200 ms" /></Field>
-          <Field label="Description" style={{ gridColumn: '1 / -1' }}>
-            <Textarea value={state.description} onChange={(_, d) => patchState({ description: d.value })} rows={3} />
-          </Field>
-          <Field label="Certified" style={{ gridColumn: '1 / -1' }}>
-            <Switch checked={state.certified} onChange={(_, d) => patchState({ certified: d.checked })} label={state.certified ? 'Certified by data governance' : 'Not certified'} />
-          </Field>
-          <Field label="Bundle (one per line — datasets, contracts, APIs, policies)" style={{ gridColumn: '1 / -1' }}>
-            <Textarea value={state.bundle.join('\n')} onChange={(_, d) => setBundleText(d.value)} rows={6} placeholder={'Dataset: silver_revenue (Delta)\nSemantic contract: orders.yaml (v2)\nAPIM API: orders-api v2.1'} />
-          </Field>
-        </div>
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+          <Tab value="overview" icon={<Document20Regular />}>Overview</Tab>
+          <Tab value="datasets" icon={<Code20Regular />}>Datasets</Tab>
+          <Tab value="glossary" icon={<Library20Regular />}>Glossary</Tab>
+          <Tab value="lineage" icon={<BranchFork20Regular />}>Lineage</Tab>
+          <Tab value="policies" icon={<Library20Regular />}>Access policies</Tab>
+        </TabList>
 
-        {state.bundle.length > 0 && (
+        {tab === 'overview' && (
           <>
-            <Subtitle2 style={{ marginTop: 8 }}>Bundle preview</Subtitle2>
-            <div className={s.cardGrid}>
-              {state.bundle.map((b, i) => <div key={i} className={s.card}>{b}</div>)}
+            <div className={s.form}>
+              {isNew && (
+                <Field label="Workspace (required to create)" style={{ gridColumn: '1 / -1' }}>
+                  <Dropdown
+                    placeholder={ws.loading ? 'Loading workspaces…' : (ws.workspaces?.length ?? 0) === 0 ? 'No workspaces — create one first' : 'Select a workspace'}
+                    value={(ws.workspaces || []).find((w) => w.id === workspaceId)?.name || ''}
+                    selectedOptions={workspaceId ? [workspaceId] : []}
+                    disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}
+                    onOptionSelect={(_, d) => setWorkspaceId(d.optionValue || '')}
+                  >
+                    {(ws.workspaces || []).map((w) => <Option key={w.id} value={w.id}>{w.name}</Option>)}
+                  </Dropdown>
+                </Field>
+              )}
+              <Field label="Display name"><Input value={state.displayName} onChange={(_, d) => patchState({ displayName: d.value })} /></Field>
+              <Field
+                label="Governance domain"
+                hint={domains.notConfigured ? 'Purview not provisioned — set LOOM_PURVIEW_ACCOUNT to populate domains. You can still type a businessDomainId GUID below.' : 'Resolves to the Purview businessDomainId GUID required for registration.'}
+              >
+                {(domains.domains?.length ?? 0) > 0 ? (
+                  <Dropdown
+                    placeholder="Select a governance domain"
+                    value={(domains.domains || []).find((dm) => dm.id === state.domain)?.name || state.domain}
+                    selectedOptions={state.domain ? [state.domain] : []}
+                    onOptionSelect={(_, d) => patchState({ domain: d.optionValue || '' })}
+                  >
+                    {(domains.domains || []).map((dm) => <Option key={dm.id} value={dm.id}>{dm.name}</Option>)}
+                  </Dropdown>
+                ) : (
+                  <Input value={state.domain} onChange={(_, d) => patchState({ domain: d.value })} placeholder="0a1b2c3d-4e5f-6789-abcd-ef0123456789" />
+                )}
+              </Field>
+              <Field label="Owner (email)"><Input value={state.owner} onChange={(_, d) => patchState({ owner: d.value })} placeholder="owner@contoso.com" /></Field>
+              <Field label="SLA"><Input value={state.sla} onChange={(_, d) => patchState({ sla: d.value })} placeholder="99.9% · P95 < 200 ms" /></Field>
+              <Field label="Description" style={{ gridColumn: '1 / -1' }}>
+                <Textarea value={state.description} onChange={(_, d) => patchState({ description: d.value })} rows={3} />
+              </Field>
+              <Field label="Certified" style={{ gridColumn: '1 / -1' }}>
+                <Switch checked={state.certified} onChange={(_, d) => patchState({ certified: d.checked })} label={state.certified ? 'Certified by data governance' : 'Not certified'} />
+              </Field>
+              <Field label="Bundle (one per line — datasets, contracts, APIs, policies)" style={{ gridColumn: '1 / -1' }}>
+                <Textarea value={state.bundle.join('\n')} onChange={(_, d) => setBundleText(d.value)} rows={6} placeholder={'Dataset: silver_revenue (Delta)\nSemantic contract: orders.yaml (v2)\nAPIM API: orders-api v2.1'} />
+              </Field>
             </div>
+            {state.bundle.length > 0 && (
+              <>
+                <Subtitle2 style={{ marginTop: 8 }}>Bundle preview</Subtitle2>
+                <div className={s.cardGrid}>
+                  {state.bundle.map((b, i) => <div key={i} className={s.card}>{b}</div>)}
+                </div>
+              </>
+            )}
           </>
+        )}
+
+        {tab === 'datasets' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Body1>Register data assets (Atlas entities) into Purview and map them to this data product. Classifications attach inline.</Body1>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <Field label="Asset name"><Input value={dsName} onChange={(_, d) => setDsName(d.value)} placeholder="silver_revenue" /></Field>
+              <Field label="Type">
+                <Dropdown value={dsType} selectedOptions={[dsType]} onOptionSelect={(_, d) => d.optionValue && setDsType(d.optionValue)}>
+                  <Option value="fabric_lakehouse">OneLake / Fabric lakehouse</Option>
+                  <Option value="databricks_table">Databricks (Unity Catalog) table</Option>
+                  <Option value="azure_sql_table">Azure SQL table</Option>
+                  <Option value="DataSet">Generic dataset</Option>
+                </Dropdown>
+              </Field>
+              <Field label="Qualified name (unique asset id)" style={{ gridColumn: '1 / -1' }}>
+                <Input value={dsQName} onChange={(_, d) => setDsQName(d.value)} placeholder="https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>.Lakehouse/Tables/silver_revenue" />
+              </Field>
+              <Field label="Classifications (comma-separated)" style={{ gridColumn: '1 / -1' }}>
+                <Input value={dsClass} onChange={(_, d) => setDsClass(d.value)} placeholder="MICROSOFT.PERSONAL.EMAIL, MICROSOFT.FINANCIAL" />
+              </Field>
+            </div>
+            <Button appearance="primary" icon={<Add20Regular />} onClick={registerDataset} disabled={dsBusy} style={{ alignSelf: 'flex-start' }}>
+              {dsBusy ? 'Registering…' : 'Register dataset'}
+            </Button>
+            {dsMsg && <MessageBar intent={dsMsg.intent}><MessageBarBody>{dsMsg.text}</MessageBarBody></MessageBar>}
+            <Table size="small" aria-label="Datasets">
+              <TableHeader><TableRow>
+                <TableHeaderCell>Name</TableHeaderCell>
+                <TableHeaderCell>Type</TableHeaderCell>
+                <TableHeaderCell>Classifications</TableHeaderCell>
+                <TableHeaderCell>GUID</TableHeaderCell>
+                <TableHeaderCell />
+              </TableRow></TableHeader>
+              <TableBody>
+                {(state.datasets || []).length === 0 && <TableRow><TableCell>No datasets mapped yet.</TableCell><TableCell /><TableCell /><TableCell /><TableCell /></TableRow>}
+                {(state.datasets || []).map((d) => (
+                  <TableRow key={d.qualifiedName}>
+                    <TableCell><strong>{d.name}</strong></TableCell>
+                    <TableCell><code>{d.typeName}</code></TableCell>
+                    <TableCell>{d.classifications.map((c) => <Badge key={c} appearance="outline" style={{ marginRight: 4 }}>{c}</Badge>)}</TableCell>
+                    <TableCell><code style={{ fontSize: 11 }}>{d.guid?.slice(0, 12) || '—'}</code></TableCell>
+                    <TableCell><Button size="small" icon={<Delete20Regular />} onClick={() => removeDataset(d.qualifiedName)}>Remove</Button></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {tab === 'glossary' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Body1>Create glossary terms and link them to this data product. {state.purviewDataProductId ? 'Terms are applied to the registered Purview data product.' : 'Register the data product with Purview to auto-apply created terms.'}</Body1>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12, alignItems: 'flex-end' }}>
+              <Field label="Term name"><Input value={glName} onChange={(_, d) => setGlName(d.value)} placeholder="Net Revenue" /></Field>
+              <Field label="Definition"><Input value={glDesc} onChange={(_, d) => setGlDesc(d.value)} placeholder="Revenue after returns and discounts" /></Field>
+            </div>
+            <Button appearance="primary" icon={<Add20Regular />} onClick={createGlossaryLink} disabled={glBusy} style={{ alignSelf: 'flex-start' }}>
+              {glBusy ? 'Creating…' : 'Create + link term'}
+            </Button>
+            {glMsg && <MessageBar intent={glMsg.intent}><MessageBarBody>{glMsg.text}</MessageBarBody></MessageBar>}
+            <Table size="small" aria-label="Glossary terms">
+              <TableHeader><TableRow><TableHeaderCell>Term</TableHeaderCell><TableHeaderCell>GUID</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader>
+              <TableBody>
+                {(state.glossaryLinks || []).length === 0 && <TableRow><TableCell>No glossary terms linked yet.</TableCell><TableCell /><TableCell /></TableRow>}
+                {(state.glossaryLinks || []).map((g) => (
+                  <TableRow key={g.name}>
+                    <TableCell><strong>{g.name}</strong></TableCell>
+                    <TableCell><code style={{ fontSize: 11 }}>{g.guid?.slice(0, 12) || '—'}</code></TableCell>
+                    <TableCell><Button size="small" icon={<Delete20Regular />} onClick={() => removeGlossaryLink(g.name)}>Unlink</Button></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {tab === 'lineage' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadLineage} disabled={lineageBusy}>{lineageBusy ? 'Loading…' : 'Refresh lineage'}</Button>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Centered on the first registered dataset (or the Purview data product) GUID.</Caption1>
+            </div>
+            {lineageErr && <MessageBar intent="warning"><MessageBarBody>{lineageErr}</MessageBarBody></MessageBar>}
+            {lineage && (
+              <>
+                <Subtitle2>Nodes ({lineage.nodes.length})</Subtitle2>
+                <Table size="small" aria-label="Lineage nodes">
+                  <TableHeader><TableRow><TableHeaderCell>Asset</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Source</TableHeaderCell></TableRow></TableHeader>
+                  <TableBody>
+                    {lineage.nodes.map((n: any) => (
+                      <TableRow key={n.id}>
+                        <TableCell>{n.label || n.id}</TableCell>
+                        <TableCell><code>{n.type || '—'}</code></TableCell>
+                        <TableCell>{n.source || 'purview'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <Subtitle2>Edges ({lineage.edges.length})</Subtitle2>
+                <div className={s.specViewer} style={{ maxHeight: 200 }}>
+                  {lineage.edges.map((e: any, i: number) => `${e.from} → ${e.to}${e.label ? ` (${e.label})` : ''}`).join('\n') || '(no edges)'}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {tab === 'policies' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Body1>Access request policies for this data product (time limit + approvers). Mirrors Purview "Manage policies".</Body1>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, alignItems: 'flex-end' }}>
+              <Field label="Policy name"><Input value={polName} onChange={(_, d) => setPolName(d.value)} placeholder="Standard access" /></Field>
+              <Field label="Access time limit"><Input value={polLimit} onChange={(_, d) => setPolLimit(d.value)} placeholder="1 year" /></Field>
+              <Field label="Approvers (comma-separated emails)"><Input value={polApprovers} onChange={(_, d) => setPolApprovers(d.value)} placeholder="owner@contoso.com" /></Field>
+            </div>
+            <Button appearance="primary" icon={<Add20Regular />} onClick={createPolicy} disabled={polBusy} style={{ alignSelf: 'flex-start' }}>
+              {polBusy ? 'Saving…' : 'Save access policy'}
+            </Button>
+            {polMsg && <MessageBar intent={polMsg.intent}><MessageBarBody>{polMsg.text}</MessageBarBody></MessageBar>}
+            <Table size="small" aria-label="Access policies">
+              <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Scope</TableHeaderCell><TableHeaderCell>Rule</TableHeaderCell><TableHeaderCell>Enabled</TableHeaderCell></TableRow></TableHeader>
+              <TableBody>
+                {(policies || []).length === 0 && <TableRow><TableCell>No access policies yet.</TableCell><TableCell /><TableCell /><TableCell /></TableRow>}
+                {(policies || []).map((p: any) => (
+                  <TableRow key={p.id}>
+                    <TableCell><strong>{p.name}</strong></TableCell>
+                    <TableCell><code style={{ fontSize: 11 }}>{p.scope}</code></TableCell>
+                    <TableCell><code style={{ fontSize: 11 }}>{p.rule}</code></TableCell>
+                    <TableCell>{p.enabled ? 'yes' : 'no'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </div>
     } />
