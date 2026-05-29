@@ -235,8 +235,8 @@ examples/iot-streaming/
 > [!IMPORTANT]
 > **Entra-only (CSA-0025 / AQ-0014).** IoT Hub and DPS are deployed with
 > `disableLocalAuth: true`. SAS-key device authentication is disabled.
-> Legacy SAS clients must migrate before deploying this template — see
-> [`docs/migrations/iot-hub-entra.md`](../../docs/migrations/iot-hub-entra.md).
+> Legacy SAS clients must migrate to Entra ID (or X.509) device
+> authentication before deploying this template.
 
 ```bash
 # Create resource group
@@ -254,7 +254,7 @@ az deployment group create \
 # Post-deploy: establish identity-based DPS → IoT Hub link.
 # (Required because the ARM DPS schema still requires a SAS connection
 # string for inline linking — we defer linking to the CLI so the DPS
-# managed identity can be used. See docs/migrations/iot-hub-entra.md.)
+# managed identity can be used.)
 IOT_HUB_ID=$(az deployment group show \
   --resource-group rg-iot-streaming --name iot-hub \
   --query properties.outputs.iotHubResourceId.value -o tsv)

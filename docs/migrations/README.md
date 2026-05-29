@@ -31,14 +31,6 @@ Field-tested migration playbooks from common on-prem and other-cloud platforms o
 
     [:octicons-arrow-down-24: Jump to playbooks](#data-ai-analytics-migrations)
 
-- :material-domain:{ .lg .middle } **Enterprise modernization**
-
-    ***
-
-    Adjacent migrations (compute, identity, productivity, DevOps, SecOps) that customers commonly bundle with cloud / data migrations at enterprise scale. Included for big-picture planning, not because they're part of the analytics platform itself.
-
-    [:octicons-arrow-down-24: Jump to playbooks](#enterprise-modernization-beyond-analytics)
-
 </div>
 
 ---
@@ -101,64 +93,6 @@ Core CSA-aligned playbooks for cloud-scale analytics, data platforms, AI/ML, and
 | IBM Db2 (z/OS, LUW, i)  | Azure SQL                           | [db2-to-azure-sql.md](db2-to-azure-sql.md)           |
 | MongoDB                 | Cosmos DB (vCore / RU)              | [mongodb-to-cosmosdb.md](mongodb-to-cosmosdb.md)     |
 | MySQL (on-prem / cloud) | Azure Database for MySQL / PostgreSQL | [mysql-to-azure.md](mysql-to-azure.md)             |
-
-### Streaming & IoT
-
-| Source                | Target                            | Playbook                             |
-| --------------------- | --------------------------------- | ------------------------------------ |
-| IoT Hub + ADAL/X.509  | Entra ID + Event Grid + Functions | [iot-hub-entra.md](iot-hub-entra.md) |
-
-## Enterprise modernization (beyond analytics)
-
-These migrations are not part of the core analytics platform but often accompany cloud / data migrations at the enterprise level. Included so architects and customers can see the bigger picture when planning multi-year cloud transformations.
-
-### Compute & infrastructure
-
-| Source       | Target              | Playbook                                       |
-| ------------ | ------------------- | ---------------------------------------------- |
-| VMware       | Azure VMware Solution / Azure IaaS | [vmware-to-azure.md](vmware-to-azure.md)       |
-| Kubernetes (self-managed / EKS / GKE) | AKS    | [kubernetes-to-aks.md](kubernetes-to-aks.md)   |
-
-### End-user computing
-
-| Source         | Target                  | Playbook                                   |
-| -------------- | ----------------------- | ------------------------------------------ |
-| Citrix         | Azure Virtual Desktop   | [citrix-to-avd.md](citrix-to-avd.md)       |
-
-### Enterprise applications
-
-| Source            | Target                                | Playbook                             |
-| ----------------- | ------------------------------------- | ------------------------------------ |
-| SAP (ECC, S/4HANA)| SAP on Azure / S/4HANA Cloud          | [sap-to-azure.md](sap-to-azure.md)   |
-
-### Identity & access
-
-| Source                | Target              | Playbook                                           |
-| --------------------- | ------------------- | -------------------------------------------------- |
-| Active Directory      | Entra ID            | [ad-to-entra-id.md](ad-to-entra-id.md)             |
-| Okta                  | Entra ID            | [okta-to-entra-id.md](okta-to-entra-id.md)         |
-| HashiCorp Vault       | Azure Key Vault     | [vault-to-key-vault.md](vault-to-key-vault.md)     |
-
-### Productivity & collaboration
-
-| Source                                | Target                                                | Playbook                                                   |
-| ------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
-| Exchange (on-prem)                    | Exchange Online                                       | [exchange-to-online.md](exchange-to-online.md)             |
-| Google Workspace (Gmail, Drive, Docs) | Microsoft 365 (Exchange, OneDrive, SharePoint, Teams) | [google-workspace-to-m365.md](google-workspace-to-m365.md) |
-| SharePoint Server (on-prem)           | SharePoint Online                                     | [sharepoint-to-online.md](sharepoint-to-online.md)         |
-
-### DevOps tooling
-
-| Source   | Target                              | Playbook                                                       |
-| -------- | ----------------------------------- | -------------------------------------------------------------- |
-| Jenkins  | GitHub Actions / Azure DevOps       | [jenkins-to-github-actions.md](jenkins-to-github-actions.md)   |
-
-### Security operations & observability
-
-| Source                          | Target                  | Playbook                                                                     |
-| ------------------------------- | ----------------------- | ---------------------------------------------------------------------------- |
-| Splunk (SIEM)                   | Microsoft Sentinel      | [splunk-to-sentinel.md](splunk-to-sentinel.md)                               |
-| Datadog / New Relic / Dynatrace | Azure Monitor + AppInsights | [observability-to-azure-monitor.md](observability-to-azure-monitor.md)   |
 
 ## What every migration has in common
 
