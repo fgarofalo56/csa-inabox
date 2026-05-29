@@ -5,6 +5,20 @@ description: "Architecture guide and migration walkthrough for consolidating ana
 
 # Unified Analytics Platform on Microsoft Fabric
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 Fragmented analytics environments — separate systems for ingestion, warehousing, data science, and reporting — increase operational cost, slow time-to-insight, and create governance gaps. When data is copied across ADLS Gen2 accounts, Databricks workspaces, and Power BI import datasets, lineage breaks, security policies diverge, and storage costs compound.
 
 Microsoft Fabric consolidates these workloads into a single SaaS platform built on OneLake. This guide explains how CSA-in-a-Box patterns (medallion architecture, dbt transformations, data contracts, Purview governance) map directly to Fabric, and walks through a concrete domain migration from Databricks to Fabric.

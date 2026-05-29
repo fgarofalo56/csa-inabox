@@ -1,5 +1,19 @@
 # Reference Architecture — Fabric vs Synapse vs Databricks
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 
 ![Fabric vs Synapse vs Databricks comparison hero: three stacked panels labelled Fabric, Databricks, Synapse in Microsoft purple gradient](../assets/images/hero/reference-architecture/fabric-vs-synapse-vs-databricks.svg){ .architecture-hero loading="eager" }
 

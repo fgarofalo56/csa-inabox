@@ -1,5 +1,19 @@
 # Federal Migration Guide: HashiCorp Vault to Azure Key Vault
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **Status:** Authored 2026-04-30
 **Audience:** Federal Security Architects, ISSOs, ISSMs, Authorization Officials, Federal Platform Engineers
 **Purpose:** Guide for migrating HashiCorp Vault to Azure Key Vault in Azure Government with FIPS 140-3 Level 3, IL4/IL5, CMMC, and FedRAMP compliance

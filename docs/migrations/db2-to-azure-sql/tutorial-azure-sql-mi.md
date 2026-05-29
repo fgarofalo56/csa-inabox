@@ -1,5 +1,19 @@
 # Tutorial: Db2 LUW to Azure SQL Managed Instance
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **Duration:** 6-8 hours
 **Prerequisites:** Azure SQL MI provisioned (Business Critical or General Purpose), Db2 LUW 10.5+ source database, network connectivity between source and target, SSMA for Db2 installed
 **Outcome:** Complete migration of a Db2 LUW database to Azure SQL MI including stored procedures, batch jobs, and application cutover

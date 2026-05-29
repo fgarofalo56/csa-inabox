@@ -7,6 +7,20 @@ last_updated: 2026-05-15
 
 # API-First Data Strategy on Azure
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 ## The Interoperability Layer for Multi-Model, Multi-Vendor AI Ecosystems
 
 > **Thesis.** Large organizations are not buying "one AI." They are building AI **ecosystems** — multiple models, multiple vendors, data physically distributed across regions, clouds, and mission boundaries. Ecosystems generate four hard problems: **orchestration, governance, integration, lifecycle**. The vendor that solves those four problems wins the long arc — regardless of which model wins the headline. This paper argues that Microsoft is the only vendor that solves all four today, and that **Azure API Management plus the wider Microsoft platform constitutes a more complete API-first foundation than MuleSoft Anypoint Platform or the AWS API stack**.

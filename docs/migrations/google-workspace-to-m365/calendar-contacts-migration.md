@@ -1,5 +1,19 @@
 # Calendar and Contacts Migration: Google to Outlook
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **Status:** Authored 2026-04-30
 **Audience:** M365 administrators and migration engineers handling Google Calendar and Contacts migration to Exchange Online / Outlook.
 **Scope:** Calendar event migration, recurring event handling, room/resource migration, contact migration, delegation, and Google Calendar interop considerations.
