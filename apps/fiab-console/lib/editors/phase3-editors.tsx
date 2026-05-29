@@ -2889,6 +2889,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
 
 interface DatasetLite {
   id: string; name: string; configuredBy?: string; isRefreshable?: boolean; targetStorageMode?: string; createdDate?: string;
+  isEffectiveIdentityRolesRequired?: boolean;
 }
 interface TableLite {
   name: string;
@@ -2923,6 +2924,18 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [daxExpr, setDaxExpr] = useState('SUM(\'Sales\'[Amount])');
   const [daxBusy, setDaxBusy] = useState(false);
   const [daxResult, setDaxResult] = useState<{ ok: boolean; value?: unknown; error?: string } | null>(null);
+
+  // Scheduled-refresh editor (config tab) — mirrors the Power BI service
+  // "Scheduled refresh" pane. Writes via PATCH /datasets/{id}/refreshSchedule.
+  const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const [schedEnabled, setSchedEnabled] = useState(false);
+  const [schedDays, setSchedDays] = useState<string[]>([]);
+  const [schedTimes, setSchedTimes] = useState<string>('07:00');
+  const [schedTz, setSchedTz] = useState('UTC');
+  const [schedNotify, setSchedNotify] = useState<'MailOnFailure' | 'NoNotification'>('NoNotification');
+  const [schedBusy, setSchedBusy] = useState(false);
+  const [schedMsg, setSchedMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [takeoverBusy, setTakeoverBusy] = useState(false);
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
@@ -2977,6 +2990,56 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
       else { setTimeout(() => loadRefreshes(workspaceId, datasetId), 1500); }
     } finally { setRefreshing(false); }
   }, [workspaceId, datasetId, loadRefreshes]);
+
+  // Hydrate the scheduled-refresh form from the live schedule whenever the
+  // selected dataset's detail loads.
+  useEffect(() => {
+    const sch = detail?.refreshSchedule;
+    setSchedMsg(null);
+    if (sch && typeof sch === 'object') {
+      setSchedEnabled(!!sch.enabled);
+      setSchedDays(Array.isArray(sch.days) ? sch.days : []);
+      setSchedTimes(Array.isArray(sch.times) && sch.times.length ? sch.times.join(', ') : '07:00');
+      setSchedTz(sch.localTimeZoneId || 'UTC');
+      setSchedNotify(sch.notifyOption === 'MailOnFailure' ? 'MailOnFailure' : 'NoNotification');
+    } else {
+      setSchedEnabled(false); setSchedDays([]); setSchedTimes('07:00'); setSchedTz('UTC'); setSchedNotify('NoNotification');
+    }
+  }, [detail?.refreshSchedule, datasetId]);
+
+  const toggleSchedDay = useCallback((day: string) => {
+    setSchedDays((prev) => prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]);
+  }, []);
+
+  const saveSchedule = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setSchedBusy(true); setSchedMsg(null);
+    const times = schedTimes.split(',').map((t) => t.trim()).filter(Boolean);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-schedule?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: schedEnabled, days: schedDays, times, localTimeZoneId: schedTz, notifyOption: schedNotify }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSchedMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setSchedMsg({ ok: true, text: 'Scheduled refresh updated.' });
+      setDetail((prev) => prev ? { ...prev, refreshSchedule: j.schedule } : prev);
+    } catch (e: any) { setSchedMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setSchedBusy(false); }
+  }, [workspaceId, datasetId, schedEnabled, schedDays, schedTimes, schedTz, schedNotify]);
+
+  const takeOver = useCallback(async () => {
+    if (!workspaceId || !datasetId) return;
+    setTakeoverBusy(true); setSchedMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/take-over?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) { setSchedMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setSchedMsg({ ok: true, text: 'Dataset taken over by the Console identity. You can now edit the schedule.' });
+      loadDetail(workspaceId, datasetId);
+    } catch (e: any) { setSchedMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setTakeoverBusy(false); }
+  }, [workspaceId, datasetId, loadDetail]);
 
   // Validate a candidate DAX measure expression server-side via the Power
   // BI executeQueries REST endpoint. The route compiles via DEFINE MEASURE
@@ -3206,10 +3269,52 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 )}
                 {tab === 'config' && (
                   <>
-                    <Caption1>Refresh schedule</Caption1>
-                    <pre style={{ margin: 0, fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap', padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
-                      {detail?.refreshSchedule ? JSON.stringify(detail.refreshSchedule, null, 2) : 'No schedule (manual refresh only).'}
-                    </pre>
+                    <Subtitle2>Scheduled refresh</Subtitle2>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Mirrors the Power BI service Scheduled refresh pane. Writes via PATCH /datasets/{'{'}id{'}'}/refreshSchedule.
+                    </Caption1>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10, maxWidth: 560 }}>
+                      <Switch label="Keep your data up to date (enable scheduled refresh)" checked={schedEnabled} onChange={(_, d) => setSchedEnabled(d.checked)} />
+                      <div>
+                        <Caption1>Refresh days</Caption1>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                          {DAYS.map((day) => (
+                            <Button key={day} size="small" appearance={schedDays.includes(day) ? 'primary' : 'outline'} onClick={() => toggleSchedDay(day)}>{day.slice(0, 3)}</Button>
+                          ))}
+                        </div>
+                      </div>
+                      <Field label="Time(s) — HH:MM on :00 or :30, comma-separated">
+                        <Input value={schedTimes} onChange={(_, d) => setSchedTimes(d.value)} placeholder="07:00, 12:30" />
+                      </Field>
+                      <Field label="Time zone (PBI id)">
+                        <Input value={schedTz} onChange={(_, d) => setSchedTz(d.value)} placeholder="UTC" />
+                      </Field>
+                      <Field label="On failure">
+                        <Select value={schedNotify} onChange={(_, d) => setSchedNotify(d.value as 'MailOnFailure' | 'NoNotification')}>
+                          <option value="NoNotification">No notification</option>
+                          <option value="MailOnFailure">Email the dataset owner on failure</option>
+                        </Select>
+                      </Field>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Button appearance="primary" icon={<Save20Regular />} disabled={schedBusy} onClick={saveSchedule}>{schedBusy ? 'Saving…' : 'Apply'}</Button>
+                        <Button appearance="outline" disabled={takeoverBusy} onClick={takeOver} title="Take ownership of the dataset (needed if you are not the owner) before editing the schedule">{takeoverBusy ? 'Taking over…' : 'Take over dataset'}</Button>
+                      </div>
+                      {schedMsg && <MessageBar intent={schedMsg.ok ? 'success' : 'error'}><MessageBarBody>{schedMsg.text}</MessageBarBody></MessageBar>}
+                    </div>
+
+                    <Subtitle2 style={{ marginTop: 20 }}>Row-level security (RLS) roles</Subtitle2>
+                    <MessageBar intent="warning" style={{ marginTop: 6 }}>
+                      <MessageBarBody>
+                        <MessageBarTitle>RLS role authoring is XMLA / Desktop only</MessageBarTitle>
+                        The Power BI REST API does not expose create/edit of RLS roles or their DAX filters — roles are defined
+                        through the <strong>XMLA endpoint</strong> (Premium / Fabric capacity; set <code>LOOM_POWERBI_XMLA_ENDPOINT</code>
+                        and use Tabular Editor / a TMSL deploy) or <strong>Power BI Desktop</strong>. Member assignment to existing
+                        roles is done in the service. Use <strong>Open in Power BI</strong> above to manage RLS.
+                        {detail?.dataset?.isEffectiveIdentityRolesRequired
+                          ? ' This dataset requires effective-identity roles for embedding.'
+                          : ''}
+                      </MessageBarBody>
+                    </MessageBar>
                   </>
                 )}
               </div>
@@ -3254,8 +3359,15 @@ function ReportLikeEditor({
   const [embedErr, setEmbedErr] = useState<string | null>(null);
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [exportBusy, setExportBusy] = useState<'PDF' | 'PPTX' | null>(null);
+  const [exportBusy, setExportBusy] = useState<'PDF' | 'PPTX' | 'PNG' | null>(null);
   const [exportErr, setExportErr] = useState<string | null>(null);
+  // Report viewer state — pages, bookmarks, view/edit mode, live embed handle.
+  const [pages, setPages] = useState<Array<{ name: string; displayName?: string }>>([]);
+  const [activePage, setActivePage] = useState<string>('');
+  const [bookmarks, setBookmarks] = useState<Array<{ name: string; displayName: string }>>([]);
+  const [editMode, setEditMode] = useState(false);
+  const [viewerErr, setViewerErr] = useState<string | null>(null);
+  const embedRef = useRef<any>(null);
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -3326,7 +3438,7 @@ function ReportLikeEditor({
   // The BFF drives start->poll->download and streams the binary back, which
   // we save via an object URL. Paginated reports use a different export SDK,
   // so export is offered for standard PBI reports only.
-  const exportReport = useCallback(async (format: 'PDF' | 'PPTX') => {
+  const exportReport = useCallback(async (format: 'PDF' | 'PPTX' | 'PNG') => {
     if (!workspaceId || !reportId) return;
     setExportBusy(format); setExportErr(null);
     try {
@@ -3350,6 +3462,87 @@ function ReportLikeEditor({
     finally { setExportBusy(null); }
   }, [workspaceId, reportId, report?.name]);
 
+  // Load the report's pages so the viewer can render a Pages list and the
+  // embed can setPage(). Real REST: GET /reports/{id}/pages.
+  useEffect(() => {
+    if (!workspaceId || !reportId || kind === 'paginated') { setPages([]); setActivePage(''); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/pages?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.ok) { setPages(j.pages || []); setActivePage((j.pages?.[0]?.name) || ''); }
+        else setPages([]);
+      } catch { if (!cancelled) setPages([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [workspaceId, reportId, kind]);
+
+  // Pages / bookmarks / refresh-visuals / view-mode all drive the live embed
+  // via the powerbi-client report JS API (the same API the Power BI service
+  // viewer toolbar uses). embedRef is set by PowerBIEmbedFrame.onEmbedded.
+  const gotoPage = useCallback(async (name: string) => {
+    setActivePage(name); setViewerErr(null);
+    try { await embedRef.current?.setPage?.(name); }
+    catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, []);
+
+  const refreshVisuals = useCallback(async () => {
+    setViewerErr(null);
+    try { await embedRef.current?.refresh?.(); }
+    catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, []);
+
+  const reloadBookmarks = useCallback(async () => {
+    setViewerErr(null);
+    try {
+      const list = await embedRef.current?.bookmarksManager?.getBookmarks?.();
+      setBookmarks((list || []).map((b: any) => ({ name: b.name, displayName: b.displayName })));
+    } catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, []);
+
+  const applyBookmark = useCallback(async (name: string) => {
+    setViewerErr(null);
+    try { await embedRef.current?.bookmarksManager?.apply?.(name); }
+    catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, []);
+
+  const captureBookmark = useCallback(async () => {
+    setViewerErr(null);
+    try {
+      // Capture the current visual/filter state as a personal (transient)
+      // bookmark and apply it; surfaced in the in-session bookmarks list.
+      const captured = await embedRef.current?.bookmarksManager?.capture?.();
+      if (captured) {
+        await embedRef.current?.bookmarksManager?.applyState?.(captured.state);
+        setBookmarks((prev) => [
+          ...prev,
+          { name: captured.name || `capture-${prev.length + 1}`, displayName: `Captured ${new Date().toLocaleTimeString()}` },
+        ]);
+      }
+    } catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, []);
+
+  const toggleEditMode = useCallback(async () => {
+    const next = !editMode;
+    setEditMode(next); setViewerErr(null);
+    try { await embedRef.current?.switchMode?.(next ? 'edit' : 'view'); }
+    catch (e: any) { setViewerErr(e?.message || String(e)); }
+  }, [editMode]);
+
+  // Mirror the active page when the user navigates inside the embed.
+  const onEmbedded = useCallback((embed: any) => {
+    embedRef.current = embed;
+    try {
+      embed?.on?.('loaded', () => { reloadBookmarks(); });
+      embed?.on?.('pageChanged', (ev: any) => {
+        const name = ev?.detail?.newPage?.name;
+        if (name) setActivePage(name);
+      });
+    } catch { /* event wiring best-effort */ }
+  }, [reloadBookmarks]);
+
   const hasReport = !!reportId;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -3364,9 +3557,15 @@ function ReportLikeEditor({
       ...(kind === 'paginated' ? [] : [{ label: 'Export', actions: [
         { label: exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF', onClick: hasReport && !exportBusy ? () => exportReport('PDF') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PDF via Power BI REST' },
         { label: exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX', onClick: hasReport && !exportBusy ? () => exportReport('PPTX') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PowerPoint via Power BI REST' },
+        { label: exportBusy === 'PNG' ? 'Exporting…' : 'Export PNG', onClick: hasReport && !exportBusy ? () => exportReport('PNG') : undefined, disabled: !hasReport || !!exportBusy, title: !hasReport ? 'select a report first' : 'export the report to PNG via Power BI REST' },
+      ]}]),
+      ...(kind === 'paginated' ? [] : [{ label: 'View', actions: [
+        { label: 'Refresh visuals', onClick: hasReport ? refreshVisuals : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'reload the embedded report visuals (report.refresh)' },
+        { label: editMode ? 'Switch to View' : 'Switch to Edit', onClick: hasReport ? toggleEditMode : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'toggle the embedded report between View and Edit modes' },
+        { label: 'Capture bookmark', onClick: hasReport ? captureBookmark : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'capture the current visual + filter state as a personal bookmark' },
       ]}]),
     ]},
-  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport]);
+  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark]);
 
   // Mint a per-report embed token whenever the selected report changes.
   // Paginated reports use a different SDK (`pbi-paginated`) that we don't
@@ -3380,7 +3579,7 @@ function ReportLikeEditor({
         const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/embed-token`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ workspaceId, accessLevel: 'View' }),
+          body: JSON.stringify({ workspaceId, accessLevel: editMode ? 'Edit' : 'View' }),
         });
         const j = await r.json();
         if (cancelled) return;
@@ -3391,7 +3590,7 @@ function ReportLikeEditor({
       }
     })();
     return () => { cancelled = true; };
-  }, [workspaceId, reportId, kind]);
+  }, [workspaceId, reportId, kind, editMode]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -3421,6 +3620,9 @@ function ReportLikeEditor({
               <>
                 <Button appearance="outline" onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
                 <Button appearance="outline" onClick={() => exportReport('PPTX')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX'}</Button>
+                <Button appearance="outline" onClick={() => exportReport('PNG')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PNG' ? 'Exporting…' : 'Export PNG'}</Button>
+                <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={refreshVisuals} disabled={!reportId}>Refresh visuals</Button>
+                <Switch label={editMode ? 'Edit mode' : 'View mode'} checked={editMode} onChange={toggleEditMode} disabled={!reportId} />
               </>
             )}
           </div>
@@ -3461,13 +3663,47 @@ function ReportLikeEditor({
                   </MessageBarBody>
                 </MessageBar>
               ) : embed ? (
-                <PowerBIEmbedFrame
-                  embedType="report"
-                  id={embed.reportId}
-                  embedUrl={embed.embedUrl}
-                  accessToken={embed.token}
-                  height={620}
-                />
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <div style={{ width: 220, flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div className={s.card}>
+                      <Subtitle2 style={{ marginBottom: 6 }}>Pages ({pages.length})</Subtitle2>
+                      {pages.length === 0 && <Caption1>No pages reported.</Caption1>}
+                      <Tree aria-label="Report pages">
+                        {pages.map((p) => (
+                          <TreeItem key={p.name} itemType="leaf" value={p.name} onClick={() => gotoPage(p.name)}>
+                            <TreeItemLayout>{activePage === p.name ? <strong>{p.displayName || p.name}</strong> : (p.displayName || p.name)}</TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </div>
+                    <div className={s.card}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                        <Subtitle2>Bookmarks ({bookmarks.length})</Subtitle2>
+                        <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={reloadBookmarks} title="reload report bookmarks" />
+                      </div>
+                      {bookmarks.length === 0 && <Caption1>No bookmarks. Use Capture bookmark.</Caption1>}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {bookmarks.map((b) => (
+                          <Button key={b.name} size="small" appearance="subtle" onClick={() => applyBookmark(b.name)} style={{ justifyContent: 'flex-start' }}>{b.displayName || b.name}</Button>
+                        ))}
+                      </div>
+                      <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={captureBookmark} style={{ marginTop: 6 }}>Capture</Button>
+                    </div>
+                  </div>
+                  <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+                    {viewerErr && <MessageBar intent="error" style={{ marginBottom: 8 }}><MessageBarBody>{viewerErr}</MessageBarBody></MessageBar>}
+                    <PowerBIEmbedFrame
+                      embedType="report"
+                      id={embed.reportId}
+                      embedUrl={embed.embedUrl}
+                      accessToken={embed.token}
+                      height={620}
+                      edit={editMode}
+                      pageName={activePage || undefined}
+                      onEmbedded={onEmbedded}
+                    />
+                  </div>
+                </div>
               ) : (
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loading embed token…</Caption1>
               )}
@@ -3649,6 +3885,21 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
               <Caption1>reportId: <code>{selectedTile.reportId || '—'}</code></Caption1>
               <Caption1>datasetId: <code>{selectedTile.datasetId || '—'}</code></Caption1>
               <Caption1>embedUrl: <code style={{ fontSize: 11 }}>{selectedTile.embedUrl || '—'}</code></Caption1>
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <Button
+                  size="small"
+                  appearance="primary"
+                  disabled={!selectedTile.reportId || !workspaceId}
+                  title={selectedTile.reportId ? 'open the report this tile drills to in Power BI' : 'this tile is not backed by a report'}
+                  onClick={() => {
+                    if (!selectedTile.reportId || !workspaceId) return;
+                    const url = `https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(selectedTile.reportId)}`;
+                    try { window.open(url, '_blank', 'noreferrer'); } catch { /* popup blocked */ }
+                  }}
+                >
+                  Drill to report
+                </Button>
+              </div>
             </div>
           )}
         </div>

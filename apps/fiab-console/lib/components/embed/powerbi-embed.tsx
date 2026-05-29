@@ -41,9 +41,16 @@ export interface PowerBIEmbedFrameProps {
   pageName?: string;
   /** Show "Edit" toolbar (reports only — requires edit-tier embed token). */
   edit?: boolean;
+  /**
+   * Receives the live powerbi-client embed instance once the visual is loaded.
+   * The caller uses it to drive the report JS API for parity with the Power BI
+   * service viewer toolbar: `report.bookmarksManager`, `report.setPage(name)`,
+   * `report.reload()` (refresh visuals), `report.switchMode(...)`.
+   */
+  onEmbedded?: (embed: any) => void;
 }
 
-export function PowerBIEmbedFrame({ embedType, id, embedUrl, accessToken, height = 600, pageName, edit }: PowerBIEmbedFrameProps) {
+export function PowerBIEmbedFrame({ embedType, id, embedUrl, accessToken, height = 600, pageName, edit, onEmbedded }: PowerBIEmbedFrameProps) {
   const [models, setModels] = useState<any>(null);
   // Load `models` lazily client-side so we can map permissions/tokenType enums.
   useEffect(() => {
@@ -97,6 +104,7 @@ export function PowerBIEmbedFrame({ embedType, id, embedUrl, accessToken, height
       <LazyEmbed
         embedConfig={config}
         cssClassName="loom-pbi-embed"
+        getEmbeddedComponent={(embedObject: any) => { if (onEmbedded) onEmbedded(embedObject); }}
       />
     </div>
   );
