@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
       modelVersion: body.modelVersion ? String(body.modelVersion) : undefined,
       skuName: body.skuName ? String(body.skuName) : undefined,
       capacity: typeof body.capacity === 'number' ? body.capacity : undefined,
+      raiPolicyName: body.raiPolicyName ? String(body.raiPolicyName) : undefined,
     });
     return NextResponse.json({ ok: true, deployment });
   } catch (e: any) {

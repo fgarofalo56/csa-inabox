@@ -25,7 +25,10 @@ All backing routes return 200 with real Azure data. The hub overview tab renders
 | Title + friendly name + kind badge | YES (Hub badge) | — |
 | Overview metadata grid (workspace, RG, location, storage, KV, ACR, Insights) | YES (12 rows) | — |
 | Connections tab with list + Auth column | YES (table headers wired) | — |
-| Models tab with version count | YES (basic table) | MINOR — Fabric also shows Model Catalog filter sidebar; Loom is list only |
+| Models tab with version count | YES (basic table) | — |
+| **Model catalog (`/explore/models`)**: searchbox + 7 filters + paginated cards + leaderboards + detail + Deploy | YES (built 2026-05-29) — `ModelCatalogPanel`, real `list-models` + deployments PUT | — |
+| **Chat playground (`/resource/playground/chat`)**: 3-pane Setup/Chat/Config, real chat completions | YES (built 2026-05-29) — `ChatPlaygroundPanel`, real `/api/foundry/chat` | — |
+| Images / Audio / Speech playground tiles | YES (honest-gate) — `PlaygroundsLandingPanel` | — |
 | Deployments tab (online endpoints + deployments) | YES (2 sub-tables) | — |
 | Computes tab with state + VM size | YES | — |
 | Datastores tab | YES | — |
