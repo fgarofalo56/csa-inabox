@@ -24,6 +24,45 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.18.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.17.0...csa-inabox-v0.18.0) (2026-05-29)
+
+
+### Features
+
+* **csa-loom:** AI Foundry — model catalog search + deploy + chat playground (Foundry UI parity) ([#457](https://github.com/fgarofalo56/csa-inabox/issues/457)) ([1b2dbed](https://github.com/fgarofalo56/csa-inabox/commit/1b2dbed11028905cebf8d881078dce7aa572fabc))
+* **csa-loom:** AI Foundry + data-agent feature completeness (real ops, no stubs) ([#450](https://github.com/fgarofalo56/csa-inabox/issues/450)) ([23ea7b5](https://github.com/fgarofalo56/csa-inabox/commit/23ea7b5fd7df62a6f2ab3b8225f18a3115af9d4b))
+* **csa-loom:** APIs + Data Products family — Azure/Fabric UI parity ([#455](https://github.com/fgarofalo56/csa-inabox/issues/455)) ([de6d945](https://github.com/fgarofalo56/csa-inabox/commit/de6d945f1f1d2f45c7da9621597211aa691dc7ba))
+* **csa-loom:** auto-select workspace on /new for final 8 editors (no dead disabled buttons) ([#442](https://github.com/fgarofalo56/csa-inabox/issues/442)) ([1c441c6](https://github.com/fgarofalo56/csa-inabox/commit/1c441c6f86c645f8bce979e7e485944b99506f13))
+* **csa-loom:** Data Eng/Warehouse/DB family — Fabric/Azure UI parity ([#453](https://github.com/fgarofalo56/csa-inabox/issues/453)) ([2b1e216](https://github.com/fgarofalo56/csa-inabox/commit/2b1e21694e50f8bff7fe5ccac00df5fbb572a743))
+* **csa-loom:** Data Factory family — Fabric/ADF look+feel+feature parity ([#448](https://github.com/fgarofalo56/csa-inabox/issues/448)) ([44b61e1](https://github.com/fgarofalo56/csa-inabox/commit/44b61e11f789ab113b229cb8de3d43b705109509))
+* **csa-loom:** Databricks notebook cell-based parity + per-cell execution ([#462](https://github.com/fgarofalo56/csa-inabox/issues/462)) ([582e467](https://github.com/fgarofalo56/csa-inabox/commit/582e46717c7f211e0cb87658316ab1a0407701d6))
+* **csa-loom:** Graph+Geo+Fabric-IQ family — Azure/Fabric UI parity ([#452](https://github.com/fgarofalo56/csa-inabox/issues/452)) ([2f83019](https://github.com/fgarofalo56/csa-inabox/commit/2f83019b995526749c48c250ecfe5b8e3b9164fe))
+* **csa-loom:** Learn popups for all 90 catalog item types (A+ docs criterion) ([#443](https://github.com/fgarofalo56/csa-inabox/issues/443)) ([dc46d54](https://github.com/fgarofalo56/csa-inabox/commit/dc46d54c32e8f9198fc6c38600637fad0154b3d9))
+* **csa-loom:** Power BI family A-grade parity — report viewer, scheduled refresh, take-over, tile drill ([#458](https://github.com/fgarofalo56/csa-inabox/issues/458)) ([178786d](https://github.com/fgarofalo56/csa-inabox/commit/178786dc96fff656f41a9067226c303357572e00))
+* **csa-loom:** Power Platform + Copilot Studio family — UI parity ([#456](https://github.com/fgarofalo56/csa-inabox/issues/456)) ([7d6a973](https://github.com/fgarofalo56/csa-inabox/commit/7d6a973ab53c4dcb96f615ef58b163142993ccfa))
+* **csa-loom:** RTI family — Fabric/ADX look+feel+feature parity ([#449](https://github.com/fgarofalo56/csa-inabox/issues/449)) ([f25b730](https://github.com/fgarofalo56/csa-inabox/commit/f25b730219b2ff847e4f3aa496162aebaa312744))
+
+
+### Bug Fixes
+
+* Fix:  ([592d1a8](https://github.com/fgarofalo56/csa-inabox/commit/592d1a84ca97f45beda929b73a5a33d6f3f4a8f5))
+* **csa-loom:** activator /new gate + eventstream visual canvas ([#454](https://github.com/fgarofalo56/csa-inabox/issues/454)) ([a9e2222](https://github.com/fgarofalo56/csa-inabox/commit/a9e222292d8f30296aea6fe5c883027186eabe07))
+* **csa-loom:** bind AI Foundry Hub to a real selectable Azure account + harden data-agent against legacy string sources ([#463](https://github.com/fgarofalo56/csa-inabox/issues/463)) ([e5044f3](https://github.com/fgarofalo56/csa-inabox/commit/e5044f372388860b942ce0b641527c931f16e64d))
+* **csa-loom:** data-product Register-with-Purview made spec-compliant — no fake 200 ([#460](https://github.com/fgarofalo56/csa-inabox/issues/460)) ([592d1a8](https://github.com/fgarofalo56/csa-inabox/commit/592d1a84ca97f45beda929b73a5a33d6f3f4a8f5)), closes [#197](https://github.com/fgarofalo56/csa-inabox/issues/197)
+* **csa-loom:** lakehouse SQL query route + Fabric right-click menu + real shortcuts ([#461](https://github.com/fgarofalo56/csa-inabox/issues/461)) ([b7b6f59](https://github.com/fgarofalo56/csa-inabox/commit/b7b6f599df51e00b40052de7d71637bf3186f4ca))
+
+
+### Documentation
+
+* **legal:** competitor-positioning legal pass — disclaimer (592 docs) + de-name sales/strategy/whitepaper ([#464](https://github.com/fgarofalo56/csa-inabox/issues/464)) ([f799858](https://github.com/fgarofalo56/csa-inabox/commit/f799858a0ac1a4bab78691a88ad19cf93510b6e8))
+* **parity:** AI Foundry spec from LIVE screen-by-screen portal walk ([#451](https://github.com/fgarofalo56/csa-inabox/issues/451)) ([cef53c3](https://github.com/fgarofalo56/csa-inabox/commit/cef53c366323d142e41d7d0b0ed0f80cdd56681b))
+* **rules:** add UI PARITY rule — one-for-one with Azure & Fabric UIs ([#447](https://github.com/fgarofalo56/csa-inabox/issues/447)) ([b7c9434](https://github.com/fgarofalo56/csa-inabox/commit/b7c9434f289361ab3b839fda05a27539a0675dc1))
+
+
+### Tests
+
+* **csa-loom-uat:** robust primary-action click (exact match + skip tab labels) ([#445](https://github.com/fgarofalo56/csa-inabox/issues/445)) ([890ced8](https://github.com/fgarofalo56/csa-inabox/commit/890ced895e09fc7ec02391352181e9920036543e))
+
 ## [0.17.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.16.0...csa-inabox-v0.17.0) (2026-05-29)
 
 
