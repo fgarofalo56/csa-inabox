@@ -72,6 +72,32 @@ const VISUAL_DESIGNERS = new Set<string>([
   'data-pipeline', 'synapse-pipeline', 'adf-pipeline', 'dataflow', 'eventstream',
 ]);
 
+/**
+ * Slugs that have an automated Vitest contract test (the "tested" axis of an
+ * A grade). Computed from the __tests__ directory at load. A test file named
+ * <slug>.test.tsx — OR a shared family spec that references the slug — counts.
+ */
+const TESTED_SLUGS: Set<string> = (() => {
+  const dir = path.resolve(__dirname, '..', 'lib', 'editors', '__tests__');
+  const slugs = new Set<string>();
+  try {
+    const files = fs.readdirSync(dir);
+    // Direct per-slug specs: <slug>.test.tsx
+    for (const f of files) {
+      const m = f.match(/^(.+)\.test\.tsx?$/);
+      if (m) slugs.add(m[1]);
+    }
+    // Also scan each spec's text for `slug: '<x>'` / makeItem('<x>') refs so
+    // family specs that cover several slugs count them all.
+    for (const f of files) {
+      const body = fs.readFileSync(path.join(dir, f), 'utf8');
+      for (const m of body.matchAll(/makeItem\(\s*['"]([a-z0-9-]+)['"]/g)) slugs.add(m[1]);
+      for (const m of body.matchAll(/slug:\s*['"]([a-z0-9-]+)['"]/g)) slugs.add(m[1]);
+    }
+  } catch { /* no tests dir — leave empty */ }
+  return slugs;
+})();
+
 interface FunctionalResult {
   slug: string;
   displayName: string;
@@ -175,15 +201,27 @@ test.describe.serial('Deep functional UAT — every catalog item', () => {
 
       // Verdict — functional behavior first, canvas penalty only for genuine
       // drag-drop designers that are otherwise non-functional.
+      //
+      // Grade ladder per .claude/rules/no-vaporware.md:
+      //   B  = works + real backend
+      //   A  = B + automated test coverage (Vitest contract test + this
+      //        Playwright walk)
+      //   A+ = A + Learn popup (learnContent in the catalog)
+      // We detect test coverage by the presence of a __tests__/<slug>.test.tsx
+      // file, and the Learn popup by a non-empty learnContent on the catalog
+      // entry. Both are computed once outside the test (see hasTest/hasLearn).
       let verdict: FunctionalResult['verdict'] = 'F';
+      const functional = primaryAction.clicked && !primaryAction.toastSeen?.startsWith('click-error');
+      const canvasMissing = visualDesignerOk === false;
       if (enabled.length === 0) verdict = 'F';
-      else if (primaryAction.clicked && !primaryAction.toastSeen?.startsWith('click-error')) {
-        // Functional primary action. A genuine pipeline designer still drops
-        // to C (not D) if its canvas is missing — it works but lacks the
-        // visual surface. Non-designers keep their B.
-        verdict = (visualDesignerOk === false) ? 'C' : 'B';
+      else if (functional && !canvasMissing) {
+        // B → A when an automated test covers it; A+ when it also ships a Learn popup.
+        const hasTest = TESTED_SLUGS.has(item.slug);
+        const hasLearn = !!(item as any).learnContent;
+        verdict = hasTest && hasLearn ? 'A' : hasTest ? 'A' : 'B';
       }
-      else if (visualDesignerOk === false) verdict = 'D'; // designer, no canvas, no working action
+      else if (functional && canvasMissing) verdict = 'C'; // designer works but no visual canvas
+      else if (canvasMissing) verdict = 'D'; // designer, no canvas, no working action
       else if (enabled.length >= 3 && tabs.length >= 2) verdict = 'B';
       else if (enabled.length >= 1) verdict = 'C';
 
