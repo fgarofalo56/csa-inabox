@@ -237,20 +237,54 @@ function shapeModelVersion(raw: any): FoundryModelVersion {
   };
 }
 
-export async function listModels(): Promise<FoundryModelSummary[]> {
-  const rows = await pagedList('/models');
-  return rows.map(shapeModelContainer);
+/**
+ * Build an ARM-relative path under a *named* ML workspace's model registry.
+ * When `workspaceName` is omitted, the hub workspace (env LOOM_FOUNDRY_NAME)
+ * is used. Going through `armFetch` means a Loom model item can bind to ANY
+ * AML workspace the UAMI can read, not just the hub.
+ */
+function modelsArmBase(workspaceName?: string): string {
+  return `${workspaceArmBase(workspaceName)}/models`;
 }
 
-export async function getModel(name: string): Promise<FoundryModelSummary | null> {
-  const res = await foundryFetch(`/models/${encodeURIComponent(name)}`);
+export async function listModels(workspaceName?: string): Promise<FoundryModelSummary[]> {
+  if (!workspaceName) {
+    // Hub default — keep the existing /models hub-relative path.
+    const rows = await pagedList('/models');
+    return rows.map(shapeModelContainer);
+  }
+  const res = await armFetch(modelsArmBase(workspaceName), { apiVersion: ML_API });
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map(shapeModelContainer);
+}
+
+export async function getModel(name: string, workspaceName?: string): Promise<FoundryModelSummary | null> {
+  if (!workspaceName) {
+    const res = await foundryFetch(`/models/${encodeURIComponent(name)}`);
+    const j = await readJson<any>(res);
+    return j ? shapeModelContainer(j) : null;
+  }
+  const res = await armFetch(`${modelsArmBase(workspaceName)}/${encodeURIComponent(name)}`, { apiVersion: ML_API });
   const j = await readJson<any>(res);
   return j ? shapeModelContainer(j) : null;
 }
 
-export async function listModelVersions(name: string): Promise<FoundryModelVersion[]> {
-  const rows = await pagedList(`/models/${encodeURIComponent(name)}/versions`);
-  return rows.map(shapeModelVersion);
+export async function listModelVersions(name: string, workspaceName?: string): Promise<FoundryModelVersion[]> {
+  if (!workspaceName) {
+    const rows = await pagedList(`/models/${encodeURIComponent(name)}/versions`);
+    return rows.map(shapeModelVersion);
+  }
+  const res = await armFetch(`${modelsArmBase(workspaceName)}/${encodeURIComponent(name)}/versions`, { apiVersion: ML_API });
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map(shapeModelVersion);
+}
+
+export async function getModelVersion(name: string, version: string, workspaceName?: string): Promise<FoundryModelVersion | null> {
+  const res = workspaceName
+    ? await armFetch(`${modelsArmBase(workspaceName)}/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}`, { apiVersion: ML_API })
+    : await foundryFetch(`/models/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}`);
+  const j = await readJson<any>(res);
+  return j ? shapeModelVersion(j) : null;
 }
 
 // ---------------- Online endpoints + deployments ----------------
@@ -303,9 +337,14 @@ function shapeDeployment(raw: any, endpointName: string): FoundryDeployment {
   };
 }
 
-export async function listOnlineEndpoints(): Promise<FoundryEndpoint[]> {
-  const rows = await pagedList('/onlineEndpoints');
-  return rows.map(shapeEndpoint);
+export async function listOnlineEndpoints(workspaceName?: string): Promise<FoundryEndpoint[]> {
+  if (!workspaceName) {
+    const rows = await pagedList('/onlineEndpoints');
+    return rows.map(shapeEndpoint);
+  }
+  const res = await armFetch(`${workspaceArmBase(workspaceName)}/onlineEndpoints`, { apiVersion: ML_API });
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map(shapeEndpoint);
 }
 
 export async function listDeployments(): Promise<FoundryDeployment[]> {
@@ -527,6 +566,48 @@ function shapeProject(raw: any): FoundryProject {
     discoveryUrl: p.discoveryUrl,
     createdAt: raw?.systemData?.createdAt,
   };
+}
+
+// ---------------- ML workspaces (model-binding picker) ----------------
+
+export interface MlWorkspaceSummary {
+  name: string;
+  rg: string;
+  location?: string;
+  kind?: string;          // Default | Hub | Project | FeatureStore
+  friendlyName?: string;
+  provisioningState?: string;
+  isHub?: boolean;
+  discoveryUrl?: string;
+}
+
+/**
+ * List the Azure Machine Learning workspaces (default, hub, project, feature
+ * store) in the configured RG. Real ARM:
+ *   GET .../resourceGroups/{rg}/providers/Microsoft.MachineLearningServices/workspaces
+ * Used by the ml-model bind picker so a Loom model item can bind to a model
+ * registered in any of the tenant's AML workspaces.
+ */
+export async function listMlWorkspaces(): Promise<MlWorkspaceSummary[]> {
+  const res = await armFetch(
+    `/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.MachineLearningServices/workspaces`,
+    { apiVersion: ML_API },
+  );
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((w: any) => {
+    const p = w?.properties || {};
+    const kind = (w?.kind || 'Default');
+    return {
+      name: w?.name,
+      rg: rg(),
+      location: w?.location,
+      kind,
+      friendlyName: p.friendlyName,
+      provisioningState: p.provisioningState,
+      isHub: String(kind).toLowerCase() === 'hub',
+      discoveryUrl: p.discoveryUrl,
+    } as MlWorkspaceSummary;
+  });
 }
 
 export async function listProjects(): Promise<FoundryProject[]> {
@@ -1273,9 +1354,10 @@ export async function registerModelVersion(name: string, body: {
   modelUri: string;
   modelType?: string;       // custom_model | mlflow_model | triton_model
   description?: string;
+  workspaceName?: string;
 }): Promise<FoundryModelVersion> {
   const ver = body.version || String(Date.now());
-  const path = `${workspaceArmBase()}/models/${encodeURIComponent(name)}/versions/${encodeURIComponent(ver)}`;
+  const path = `${workspaceArmBase(body.workspaceName)}/models/${encodeURIComponent(name)}/versions/${encodeURIComponent(ver)}`;
   const armBody = {
     properties: {
       modelUri: body.modelUri,
@@ -1288,15 +1370,36 @@ export async function registerModelVersion(name: string, body: {
   return shapeModelVersion(j);
 }
 
-/** Create (or upsert) a managed online endpoint on the hub workspace. */
-export async function createOnlineEndpoint(name: string, opts: { authMode?: 'Key' | 'AMLToken' } = {}): Promise<FoundryEndpoint> {
-  const ws = await getWorkspaceInfo();
+/**
+ * Resolve a workspace's location for endpoint/deployment ARM bodies. For the
+ * hub we already have getWorkspaceInfo(); for a named bound workspace we read
+ * its ARM resource. Falls back to the env region.
+ */
+async function workspaceLocation(workspaceName?: string): Promise<string> {
+  const fallback = process.env.LOOM_FOUNDRY_REGION || 'eastus2';
+  if (!workspaceName) {
+    const ws = await getWorkspaceInfo();
+    return ws?.location || fallback;
+  }
+  try {
+    const res = await armFetch(workspaceArmBase(workspaceName), { apiVersion: ML_API });
+    const j = await readJson<any>(res);
+    return j?.location || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Create (or upsert) a managed online endpoint on the bound (or hub) workspace. */
+export async function createOnlineEndpoint(name: string, opts: { authMode?: 'Key' | 'AMLToken'; workspaceName?: string } = {}): Promise<FoundryEndpoint> {
+  const location = await workspaceLocation(opts.workspaceName);
   const armBody = {
-    location: ws?.location || process.env.LOOM_FOUNDRY_REGION || 'eastus2',
+    location,
     identity: { type: 'SystemAssigned' },
     properties: { authMode: opts.authMode || 'Key' },
   };
-  const res = await foundryFetch(`/onlineEndpoints/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(armBody) });
+  const path = `${workspaceArmBase(opts.workspaceName)}/onlineEndpoints/${encodeURIComponent(name)}`;
+  const res = await armFetch(path, { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
   if (res.status === 202) return { id: '', name, authMode: opts.authMode || 'Key', provisioningState: 'Creating' };
   const j = await readJson<any>(res);
   return shapeEndpoint(j);
@@ -1310,10 +1413,11 @@ export async function createOnlineDeployment(endpointName: string, deploymentNam
   modelId: string;
   instanceType?: string;
   instanceCount?: number;
+  workspaceName?: string;
 }): Promise<FoundryDeployment> {
-  const ws = await getWorkspaceInfo();
+  const location = await workspaceLocation(body.workspaceName);
   const armBody = {
-    location: ws?.location || process.env.LOOM_FOUNDRY_REGION || 'eastus2',
+    location,
     sku: { name: 'Default', capacity: body.instanceCount ?? 1 },
     properties: {
       endpointComputeType: 'Managed',
@@ -1321,9 +1425,9 @@ export async function createOnlineDeployment(endpointName: string, deploymentNam
       instanceType: body.instanceType || 'Standard_DS3_v2',
     },
   };
-  const res = await foundryFetch(
-    `/onlineEndpoints/${encodeURIComponent(endpointName)}/deployments/${encodeURIComponent(deploymentName)}`,
-    { method: 'PUT', body: JSON.stringify(armBody) },
+  const res = await armFetch(
+    `${workspaceArmBase(body.workspaceName)}/onlineEndpoints/${encodeURIComponent(endpointName)}/deployments/${encodeURIComponent(deploymentName)}`,
+    { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) },
   );
   if (res.status === 202) return { id: '', name: deploymentName, endpointName, model: body.modelId, instanceType: body.instanceType, provisioningState: 'Creating' };
   const j = await readJson<any>(res);

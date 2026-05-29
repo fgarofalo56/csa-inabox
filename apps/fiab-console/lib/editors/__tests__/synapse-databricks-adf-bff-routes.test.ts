@@ -24,7 +24,7 @@ const REQUIRED_ROUTES: Record<string, string[]> = {
   'synapse-spark-pool':          ['list', '[id]', '[id]/submit', '[id]/runs'],
   'synapse-pipeline':            ['list', '[id]', '[id]/run', '[id]/runs', '[id]/bind'],
   'databricks-notebook':         ['list', '[id]', '[id]/run', '[id]/runs', '[id]/command', '[id]/context'],
-  'databricks-job':              ['', '[id]', '[id]/run', '[id]/runs'],
+  'databricks-job':              ['', '[id]', '[id]/run', '[id]/runs', '[id]/run-output'],
   'databricks-cluster':          ['', '[id]', '[id]/state', '[id]/events'],
   'databricks-sql-warehouse':    ['[id]/query', '[id]/schema', '[id]/state', '[id]/warehouses'],
   'adf-pipeline':                ['', '[id]', '[id]/run', '[id]/runs', '[id]/bind'],

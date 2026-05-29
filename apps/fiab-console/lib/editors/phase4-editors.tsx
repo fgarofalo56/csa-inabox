@@ -3,11 +3,18 @@
 /**
  * Phase 4 editors — Data Science, APIs / Functions, Fabric IQ.
  *
- * MlModelEditor and MlExperimentEditor are wired live to the AI Foundry hub
- * (Microsoft.MachineLearningServices/workspaces) via the BFF:
- *   GET /api/items/ml-model/[id]      → model + versions
- *   GET /api/items/ml-experiment/[id] → job OR experiment grouping of runs
- * No mock data; errors surface in MessageBar.
+ * MlModelEditor binds a Loom item (Cosmos GUID) to a REAL Azure Machine
+ * Learning registered model (state.modelName + optional state.workspaceName)
+ * and drives the AML model registry via the BFF — the route id is never used
+ * as the model name (fixes the confirmed 404 crash). MlExperimentEditor is
+ * wired live to the AI Foundry hub jobs/runs.
+ *   GET  /api/items/ml-model/[id]            → bound model + versions (412 unbound)
+ *   GET  /api/items/ml-model/[id]/bind       → AML workspaces + models + binding
+ *   POST /api/items/ml-model/[id]/bind       → persist binding
+ *   POST /api/items/ml-model/[id]/register   → register a new model version
+ *   GET/POST /api/items/ml-model/[id]/endpoint → list / create online endpoint
+ *   GET /api/items/ml-experiment/[id]        → job OR experiment grouping of runs
+ * No mock data; all fetches content-type-guarded; errors surface in MessageBar.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -22,7 +29,8 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
-import { NewItemBrowseGate } from './new-item-gate';
+import { NewItemBrowseGate, NewItemCreateGate } from './new-item-gate';
+import { safeModelJson } from './model-fetch';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -84,92 +92,246 @@ interface ModelVersion {
   id: string; name: string; version: string; description?: string;
   modelType?: string; modelUri?: string; createdAt?: string;
   tags?: Record<string, string>; properties?: Record<string, string>;
+  flavors?: Record<string, unknown>;
 }
+
+interface MlWorkspaceLite { name: string; kind?: string; isHub?: boolean }
+interface ModelBindingState { modelName: string; workspaceName?: string; version?: string }
+interface OnlineEndpointLite { id?: string; name: string; provisioningState?: string; scoringUri?: string; authMode?: string }
 
 export function MlModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const isNew = id === 'new' || !id;
-  // Read-only registry: models are authored in Azure ML. On /new, browse the
-  // real registry (GET /api/items/ml-model) and Open one — no fake create.
+  // /new — real Cosmos create (workspace + name), then the editor binds the new
+  // item to a registered Azure ML model. No fake create, no dead button.
   if (isNew) {
     return (
-      <NewItemBrowseGate
+      <NewItemCreateGate
         item={item}
-        endpoint="/api/items/ml-model"
-        listKey="models"
-        openSlug="ml-model"
-        studioUrl="https://ml.azure.com/model/list"
-        studioLabel="Open Azure ML Studio"
-        intro="ML models are registered in Azure Machine Learning (via training jobs / MLflow), not authored in Loom. Select a registered model below and Open it to view its versions, lineage, and apply/endpoint actions."
-        gateHint="No models found — register one by running a job in ml-experiment or Azure ML Studio. If this errors, set LOOM_AML_WORKSPACE / LOOM_FOUNDRY_* and grant the Console UAMI the AzureML Data Scientist role."
-        mapEntity={(m: ModelSummary) => ({
-          id: m.name,
-          name: m.name,
-          detail: m.description,
-          badge: m.latestVersion ? `latest v${m.latestVersion}` : undefined,
-        })}
+        createLabel="Create ML model item"
+        intro="Creates an ML model item in your Loom workspace, then opens the editor where you bind it to a registered model in Azure Machine Learning (workspace + model registry) to view versions, register new versions, and deploy real-time endpoints."
       />
     );
   }
   return <MlModelEditorBody item={item} id={id} />;
 }
 
+/**
+ * Bound ML-model editor. The Loom item (GUID `id`) binds to a real AML
+ * registered model via `state.modelName` + optional `state.workspaceName`.
+ * Resolution happens server-side (BFF resolveModelBinding) — the route id is
+ * NEVER used as the model name (fixes the confirmed 404 crash). When unbound,
+ * the full surface still renders with a bind picker (workspace + model from the
+ * real AML registry). Tabs: Detail | Versions | Deploy. Register-version dialog
+ * + content-type-guarded fetches throughout.
+ */
 function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const isNew = false;
-  const [loading, setLoading] = useState(!isNew);
+  const apiBase = `/api/items/ml-model/${encodeURIComponent(id)}`;
+
+  // ---- Binding ----
+  const [bindLoading, setBindLoading] = useState(true);
+  const [bound, setBound] = useState<ModelBindingState | null>(null);
+  const [workspaces, setWorkspaces] = useState<MlWorkspaceLite[]>([]);
+  const [models, setModels] = useState<Array<{ name: string; latestVersion?: string }>>([]);
+  const [wsError, setWsError] = useState<string | null>(null);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [pickWs, setPickWs] = useState<string>('');
+  const [pickModel, setPickModel] = useState<string>('');
+  const [bindBusy, setBindBusy] = useState(false);
+  const [bindError, setBindError] = useState<string | null>(null);
+
+  // ---- Loaded model ----
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<ModelSummary | null>(null);
   const [versions, setVersions] = useState<ModelVersion[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  // Instance type for the real-time endpoint deployment.
+  const [tab, setTab] = useState<'detail' | 'versions' | 'deploy'>('detail');
+
+  // ---- Deploy ----
   const [instanceType, setInstanceType] = useState('Standard_DS3_v2');
   const [deploying, setDeploying] = useState(false);
   const [endpointMsg, setEndpointMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const [endpoints, setEndpoints] = useState<OnlineEndpointLite[]>([]);
 
+  // ---- Register-version dialog ----
+  const [regOpen, setRegOpen] = useState(false);
+  const [regUri, setRegUri] = useState('');
+  const [regVersion, setRegVersion] = useState('');
+  const [regType, setRegType] = useState<'mlflow_model' | 'custom_model' | 'triton_model'>('mlflow_model');
+  const [registering, setRegistering] = useState(false);
+  const [regMsg, setRegMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // Load the binding + picker data. Reloads `models` when `wsOverride` changes.
+  const loadBinding = useCallback(async (wsOverride?: string) => {
+    setBindLoading(true); setBindError(null);
+    try {
+      const url = wsOverride !== undefined
+        ? `${apiBase}/bind?workspaceName=${encodeURIComponent(wsOverride)}`
+        : `${apiBase}/bind`;
+      const res = await fetch(url);
+      const j = await safeModelJson(res);
+      if (!j.ok) { setBindError(j.error || `HTTP ${j.status}`); return; }
+      setBound(j.data?.bound || null);
+      setWorkspaces(j.data?.workspaces || []);
+      setModels(j.data?.models || []);
+      setWsError(j.data?.workspacesError || null);
+      setModelsError(j.data?.modelsError || null);
+    } catch (e: any) { setBindError(e?.message || String(e)); }
+    finally { setBindLoading(false); }
+  }, [apiBase]);
+
+  // Load the bound model + versions (content-type guarded — an HTML 404 from
+  // the BFF surfaces as a structured message, never a JSON.parse crash).
   const load = useCallback(async () => {
-    if (isNew) return;
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/items/ml-model/${encodeURIComponent(id)}`);
-      const j = await r.json();
-      if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setLoading(false); return; }
-      setModel(j.model);
-      setVersions(j.versions || []);
-      setSelected(j.versions?.[0]?.version || null);
-    } catch (e: any) {
-      setError(e?.message || String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [id, isNew]);
-  useEffect(() => { load(); }, [load]);
+      const res = await fetch(apiBase);
+      const j = await safeModelJson(res);
+      if (!j.ok) {
+        // 412 unbound is expected before binding — handled by the bind UI, not
+        // an error banner.
+        if (j.code !== 'unbound') setError(j.error || `HTTP ${j.status}`);
+        setModel(null); setVersions([]);
+        return;
+      }
+      setModel(j.data?.model || null);
+      setVersions(j.data?.versions || []);
+      setSelected(j.data?.binding?.version || j.data?.versions?.[0]?.version || null);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [apiBase]);
+
+  const loadEndpoints = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/endpoint`);
+      const j = await safeModelJson(res);
+      if (j.ok) setEndpoints(j.data?.endpoints || []);
+    } catch { /* non-critical */ }
+  }, [apiBase]);
+
+  useEffect(() => { loadBinding(); }, [loadBinding]);
+  useEffect(() => { if (bound?.modelName) { load(); loadEndpoints(); } }, [bound?.modelName, load, loadEndpoints]);
+
+  const doBind = useCallback(async () => {
+    if (!pickModel) { setBindError('Select a model to bind.'); return; }
+    setBindBusy(true); setBindError(null);
+    try {
+      const res = await fetch(`${apiBase}/bind`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ modelName: pickModel, workspaceName: pickWs || undefined }),
+      });
+      const j = await safeModelJson(res);
+      if (!j.ok) { setBindError(j.error || `HTTP ${j.status}`); return; }
+      setBound(j.data?.bound || { modelName: pickModel, workspaceName: pickWs || undefined });
+    } catch (e: any) { setBindError(e?.message || String(e)); }
+    finally { setBindBusy(false); }
+  }, [apiBase, pickModel, pickWs]);
+
+  const unbind = useCallback(() => { setBound(null); setModel(null); setVersions([]); loadBinding(pickWs); }, [loadBinding, pickWs]);
 
   const createEndpoint = useCallback(async () => {
     setDeploying(true); setEndpointMsg(null);
     try {
-      const r = await fetch(`/api/items/ml-model/${encodeURIComponent(id)}/endpoint`, {
+      const res = await fetch(`${apiBase}/endpoint`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ version: selected || undefined, instanceType }),
       });
-      const j = await r.json();
-      if (!j.ok) { setEndpointMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
-      setEndpointMsg({ intent: 'success', text: j.message || `Endpoint ${j.endpoint?.name} provisioning.` });
+      const j = await safeModelJson(res);
+      if (!j.ok) { setEndpointMsg({ intent: 'error', text: j.error || `HTTP ${j.status}` }); return; }
+      setEndpointMsg({ intent: 'success', text: j.data?.message || `Endpoint ${j.data?.endpoint?.name} provisioning.` });
+      loadEndpoints();
     } catch (e: any) { setEndpointMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setDeploying(false); }
-  }, [id, selected, instanceType]);
+  }, [apiBase, selected, instanceType, loadEndpoints]);
+
+  const registerVersion = useCallback(async () => {
+    if (!regUri.trim()) { setRegMsg({ intent: 'error', text: 'Model artifact URI is required.' }); return; }
+    setRegistering(true); setRegMsg(null);
+    try {
+      const res = await fetch(`${apiBase}/register`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ modelUri: regUri.trim(), version: regVersion.trim() || undefined, modelType: regType }),
+      });
+      const j = await safeModelJson(res);
+      if (!j.ok) { setRegMsg({ intent: 'error', text: j.error || `HTTP ${j.status}` }); return; }
+      setRegMsg({ intent: 'success', text: `Registered ${j.data?.model} v${j.data?.version?.version}` });
+      setRegOpen(false);
+      load();
+    } catch (e: any) { setRegMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setRegistering(false); }
+  }, [apiBase, regUri, regVersion, regType, load]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
+      { label: 'Model', actions: [
+        { label: loading || bindLoading ? 'Reloading…' : 'Reload', onClick: (loading || bindLoading) ? undefined : (bound?.modelName ? load : () => loadBinding(pickWs)), disabled: loading || bindLoading },
+        { label: 'Re-bind', onClick: bound?.modelName ? unbind : undefined, disabled: !bound?.modelName },
+      ]},
       { label: 'Versions', actions: [
-        { label: loading ? 'Reloading…' : 'Reload', onClick: loading ? undefined : load, disabled: loading },
+        { label: 'Register version', onClick: bound?.modelName ? () => { setRegUri(''); setRegVersion(''); setRegMsg(null); setRegOpen(true); } : undefined, disabled: !bound?.modelName },
       ]},
       { label: 'Serve', actions: [
         { label: deploying ? 'Deploying…' : 'Real-time endpoint', onClick: createEndpoint, disabled: deploying || !versions.length },
       ]},
     ]},
-  ], [loading, load, deploying, createEndpoint, versions.length]);
+  ], [loading, bindLoading, bound?.modelName, load, loadBinding, pickWs, unbind, deploying, createEndpoint, versions.length]);
 
   const current = versions.find((v) => v.version === selected) || versions[0];
+
+  // ---- Unbound: full surface still renders, with a bind picker ----
+  const bindPanel = (
+    <div className={s.card} style={{ maxWidth: 640 }}>
+      <Subtitle2>Bind to an Azure ML registered model</Subtitle2>
+      <Body1 style={{ color: tokens.colorNeutralForeground3, marginTop: 4 }}>
+        Choose the Azure Machine Learning workspace and a registered model. The binding is saved on this item; all actions then target the bound model&apos;s real registry.
+      </Body1>
+      {wsError && (
+        <MessageBar intent="warning" style={{ marginTop: 8 }}>
+          <MessageBarBody>
+            <MessageBarTitle>Azure ML workspaces not reachable</MessageBarTitle>
+            {wsError}
+            <br /><Caption1>Set <code>LOOM_SUBSCRIPTION_ID</code> + <code>LOOM_FOUNDRY_RG</code> and grant the Console UAMI <strong>AzureML Data Scientist</strong> (or Reader) on the resource group.</Caption1>
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 12 }}>
+        <Field label="Workspace (blank = Foundry hub)">
+          <Dropdown
+            placeholder={workspaces.length ? 'Foundry hub (default)' : 'No AML workspaces found'}
+            value={pickWs}
+            selectedOptions={pickWs ? [pickWs] : []}
+            onOptionSelect={(_, d) => { const w = d.optionValue || ''; setPickWs(w); setPickModel(''); loadBinding(w); }}
+          >
+            <Option value="">Foundry hub (default)</Option>
+            {workspaces.map((w) => <Option key={w.name} value={w.name}>{w.name}{w.isHub ? ' (hub)' : w.kind ? ` (${w.kind})` : ''}</Option>)}
+          </Dropdown>
+        </Field>
+        <Field label="Registered model">
+          <Dropdown
+            placeholder={models.length ? 'Select a model' : 'No models in this workspace'}
+            value={pickModel}
+            selectedOptions={pickModel ? [pickModel] : []}
+            onOptionSelect={(_, d) => setPickModel(d.optionValue || '')}
+          >
+            {models.map((m) => <Option key={m.name} value={m.name}>{m.name}{m.latestVersion ? ` (latest v${m.latestVersion})` : ''}</Option>)}
+          </Dropdown>
+        </Field>
+        <Button appearance="primary" onClick={doBind} disabled={bindBusy || !pickModel}>
+          {bindBusy ? 'Binding…' : 'Bind'}
+        </Button>
+      </div>
+      {modelsError && (
+        <MessageBar intent="warning" style={{ marginTop: 8 }}>
+          <MessageBarBody>
+            <MessageBarTitle>Models not reachable</MessageBarTitle>
+            {modelsError}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {bindError && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{bindError}</MessageBarBody></MessageBar>}
+    </div>
+  );
 
   return (
     <ItemEditorChrome
@@ -179,9 +341,9 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
       leftPanel={
         <div style={{ padding: 8 }}>
           <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>
-            Versions ({versions.length})
+            {bound?.modelName ? `Versions (${versions.length})` : 'Not bound'}
           </Caption1>
-          {versions.length === 0 && !loading && (
+          {bound?.modelName && versions.length === 0 && !loading && (
             <Body1 style={{ padding: 8, color: tokens.colorNeutralForeground3 }}>No versions registered.</Body1>
           )}
           <Tree aria-label="Model versions">
@@ -205,72 +367,195 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
       }
       main={
         <div className={s.pad}>
-          {loading && <Spinner size="small" label="Loading model…" labelPosition="after" />}
-          {error && (
-            <MessageBar intent="error">
-              <MessageBarBody><MessageBarTitle>Load failed</MessageBarTitle>{error}</MessageBarBody>
-            </MessageBar>
-          )}
-          {model && !loading && !error && (
+          {bindLoading && <Spinner size="small" label="Loading binding…" labelPosition="after" />}
+
+          {/* Unbound — render the bind picker. Full surface still present. */}
+          {!bindLoading && !bound?.modelName && bindPanel}
+
+          {/* Bound — model detail / versions / deploy. */}
+          {!bindLoading && bound?.modelName && (
             <>
-              <Subtitle2>{model.name}</Subtitle2>
-              {model.description && <Body1>{model.description}</Body1>}
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                <Badge appearance="tint">Latest: v{model.latestVersion || '—'}</Badge>
-                <Badge appearance="tint">{versions.length} version(s)</Badge>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Badge appearance="filled" color="brand">{bound.modelName}</Badge>
+                <Badge appearance="outline">{bound.workspaceName || 'Foundry hub'}</Badge>
+                <Button size="small" appearance="subtle" onClick={unbind}>Re-bind</Button>
               </div>
-              {/* Real-time endpoint: serve the selected model version from a
-                  managed online endpoint (real ARM PUT via the Serve ribbon). */}
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <Field label="Endpoint VM size">
-                  <Input value={instanceType} onChange={(_, d) => setInstanceType(d.value)} placeholder="Standard_DS3_v2" />
-                </Field>
-                <Button appearance="primary" disabled={deploying || !versions.length} onClick={createEndpoint}>
-                  {deploying ? 'Deploying…' : `Deploy v${selected || model.latestVersion || '?'} to real-time endpoint`}
-                </Button>
-              </div>
-              {endpointMsg && (
-                <MessageBar intent={endpointMsg.intent}>
-                  <MessageBarBody>{endpointMsg.text}</MessageBarBody>
+
+              {loading && <Spinner size="small" label="Loading model…" labelPosition="after" />}
+              {error && (
+                <MessageBar intent="error">
+                  <MessageBarBody><MessageBarTitle>Load failed</MessageBarTitle>{error}</MessageBarBody>
                 </MessageBar>
               )}
-              <Subtitle2 style={{ marginTop: 8 }}>Versions</Subtitle2>
-              <Table aria-label="Model versions" size="small">
-                <TableHeader><TableRow>
-                  <TableHeaderCell>Version</TableHeaderCell>
-                  <TableHeaderCell>Type</TableHeaderCell>
-                  <TableHeaderCell>Created</TableHeaderCell>
-                  <TableHeaderCell>URI</TableHeaderCell>
-                </TableRow></TableHeader>
-                <TableBody>
-                  {versions.map((v) => (
-                    <TableRow key={v.version}>
-                      <TableCell><strong>v{v.version}</strong></TableCell>
-                      <TableCell>{v.modelType || '—'}</TableCell>
-                      <TableCell>{v.createdAt || '—'}</TableCell>
-                      <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{v.modelUri || '—'}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              {current && (
+
+              {model && !error && (
                 <>
-                  <Subtitle2 style={{ marginTop: 8 }}>Selected: v{current.version}</Subtitle2>
-                  {current.description && <Body1>{current.description}</Body1>}
-                  {current.tags && Object.keys(current.tags).length > 0 && (
-                    <div>
-                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Tags</Caption1>
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-                        {Object.entries(current.tags).map(([k, v]) => (
-                          <Badge key={k} appearance="outline">{k}={String(v)}</Badge>
-                        ))}
+                  <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
+                    <Tab value="detail">Detail</Tab>
+                    <Tab value="versions">Versions ({versions.length})</Tab>
+                    <Tab value="deploy">Deploy</Tab>
+                  </TabList>
+
+                  {tab === 'detail' && (
+                    <>
+                      <Subtitle2>{model.name}</Subtitle2>
+                      {model.description && <Body1>{model.description}</Body1>}
+                      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                        <Badge appearance="tint">Latest: v{model.latestVersion || '—'}</Badge>
+                        <Badge appearance="tint">{versions.length} version(s)</Badge>
                       </div>
-                    </div>
+                      {current && (
+                        <>
+                          <Subtitle2 style={{ marginTop: 8 }}>Selected version: v{current.version}</Subtitle2>
+                          {current.description && <Body1>{current.description}</Body1>}
+                          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                            <Badge appearance="outline">type: {current.modelType || '—'}</Badge>
+                            {current.createdAt && <Badge appearance="outline">created: {current.createdAt}</Badge>}
+                          </div>
+                          {current.modelUri && (
+                            <Caption1 style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{current.modelUri}</Caption1>
+                          )}
+                          {current.flavors && Object.keys(current.flavors).length > 0 && (
+                            <div>
+                              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>MLflow flavors / signature</Caption1>
+                              <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 200 }}>
+                                {JSON.stringify(current.flavors, null, 2)}
+                              </div>
+                            </div>
+                          )}
+                          {current.tags && Object.keys(current.tags).length > 0 && (
+                            <div>
+                              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Tags</Caption1>
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                                {Object.entries(current.tags).map(([k, v]) => (
+                                  <Badge key={k} appearance="outline">{k}={String(v)}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {current.properties && Object.keys(current.properties).length > 0 && (
+                            <div>
+                              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Properties (lineage / run)</Caption1>
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                                {Object.entries(current.properties).map(([k, v]) => (
+                                  <Badge key={k} appearance="outline">{k}={String(v)}</Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  {tab === 'versions' && (
+                    <>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <Button appearance="primary" onClick={() => { setRegUri(''); setRegVersion(''); setRegMsg(null); setRegOpen(true); }}>
+                          Register new version
+                        </Button>
+                      </div>
+                      <Table aria-label="Model versions" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Version</TableHeaderCell>
+                          <TableHeaderCell>Type</TableHeaderCell>
+                          <TableHeaderCell>Created</TableHeaderCell>
+                          <TableHeaderCell>URI</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {versions.map((v) => (
+                            <TableRow key={v.version} onClick={() => setSelected(v.version)} style={{ cursor: 'pointer', background: v.version === selected ? tokens.colorNeutralBackground2 : undefined }}>
+                              <TableCell><strong>v{v.version}</strong></TableCell>
+                              <TableCell>{v.modelType || '—'}</TableCell>
+                              <TableCell>{v.createdAt || '—'}</TableCell>
+                              <TableCell style={{ fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all' }}>{v.modelUri || '—'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </>
+                  )}
+
+                  {tab === 'deploy' && (
+                    <>
+                      <Subtitle2>Deploy to a managed online (real-time) endpoint</Subtitle2>
+                      <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        Creates a managed online endpoint + a &quot;blue&quot; deployment serving <code>{bound.modelName}:{selected || model.latestVersion || '?'}</code> via real ARM PUTs in <strong>{bound.workspaceName || 'the Foundry hub'}</strong>.
+                      </Body1>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                        <Field label="Endpoint VM size">
+                          <Input value={instanceType} onChange={(_, d) => setInstanceType(d.value)} placeholder="Standard_DS3_v2" />
+                        </Field>
+                        <Button appearance="primary" disabled={deploying || !versions.length} onClick={createEndpoint}>
+                          {deploying ? 'Deploying…' : `Deploy v${selected || model.latestVersion || '?'}`}
+                        </Button>
+                      </div>
+                      {endpointMsg && (
+                        <MessageBar intent={endpointMsg.intent}>
+                          <MessageBarBody>{endpointMsg.text}</MessageBarBody>
+                        </MessageBar>
+                      )}
+                      <Subtitle2 style={{ marginTop: 8 }}>Existing endpoints ({endpoints.length})</Subtitle2>
+                      {endpoints.length === 0
+                        ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No managed online endpoints in this workspace yet.</Caption1>
+                        : (
+                          <Table aria-label="Online endpoints" size="small">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Endpoint</TableHeaderCell>
+                              <TableHeaderCell>State</TableHeaderCell>
+                              <TableHeaderCell>Auth</TableHeaderCell>
+                              <TableHeaderCell>Scoring URI</TableHeaderCell>
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {endpoints.map((ep) => (
+                                <TableRow key={ep.name}>
+                                  <TableCell><strong>{ep.name}</strong></TableCell>
+                                  <TableCell>{ep.provisioningState || '—'}</TableCell>
+                                  <TableCell>{ep.authMode || '—'}</TableCell>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all' }}>{ep.scoringUri || '—'}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        )}
+                    </>
                   )}
                 </>
               )}
             </>
           )}
+
+          {/* Register-version dialog */}
+          <Dialog open={regOpen} onOpenChange={(_, d) => { if (!d.open) setRegOpen(false); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Register a new model version</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Caption1>Registers a new version of <strong>{bound?.modelName}</strong> from a model artifact URI (real ARM PUT to the model registry).</Caption1>
+                    <Field label="Model artifact URI">
+                      <Input value={regUri} onChange={(_, d) => setRegUri(d.value)} placeholder="azureml://jobs/<run>/outputs/artifacts/paths/model/" />
+                    </Field>
+                    <Field label="Version (blank = auto)">
+                      <Input value={regVersion} onChange={(_, d) => setRegVersion(d.value)} placeholder="auto" />
+                    </Field>
+                    <Field label="Model type">
+                      <Dropdown value={regType} selectedOptions={[regType]} onOptionSelect={(_, d) => setRegType((d.optionValue as any) || 'mlflow_model')}>
+                        <Option value="mlflow_model">mlflow_model</Option>
+                        <Option value="custom_model">custom_model</Option>
+                        <Option value="triton_model">triton_model</Option>
+                      </Dropdown>
+                    </Field>
+                    {regMsg && <MessageBar intent={regMsg.intent}><MessageBarBody>{regMsg.text}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setRegOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" disabled={registering || !regUri.trim()} onClick={registerVersion}>{registering ? 'Registering…' : 'Register'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
