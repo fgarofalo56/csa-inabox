@@ -1,5 +1,19 @@
 # Spark on YARN to Databricks / Fabric Spark Migration
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **A comprehensive guide for migrating Apache Spark workloads from YARN-managed Hadoop clusters to Databricks and Microsoft Fabric Spark, covering version compatibility, job submission, cluster policies, library management, and Delta Lake integration.**
 
 ---

@@ -5,6 +5,20 @@ description: "Architecture guide and migration walkthrough for consolidating ana
 
 # Unified Analytics Platform on Microsoft Fabric
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 Fragmented analytics environments — separate systems for ingestion, warehousing, data science, and reporting — increase operational cost, slow time-to-insight, and create governance gaps. When data is copied across ADLS Gen2 accounts, Databricks workspaces, and Power BI import datasets, lineage breaks, security policies diverge, and storage costs compound.
 
 Microsoft Fabric consolidates these workloads into a single SaaS platform built on OneLake. This guide explains how CSA-in-a-Box patterns (medallion architecture, dbt transformations, data contracts, Purview governance) map directly to Fabric, and walks through a concrete domain migration from Databricks to Fabric.
@@ -16,7 +30,7 @@ Microsoft Fabric consolidates these workloads into a single SaaS platform built 
 Fabric introduces **OneLake**, a tenant-wide logical data lake that serves as the single storage layer for all Fabric workloads. Key architectural properties:
 
 - **Single copy of data**: OneLake stores all data in Delta Parquet format by default. Spark notebooks, SQL analytics, KQL queries, and Power BI all read from the same physical files — no import copies, no extract pipelines between engines.
-- **Shortcuts and mirroring**: OneLake shortcuts create logical pointers to data in external storage (ADLS Gen2, S3, GCS, Dataverse) without copying bytes. Mirroring replicates operational databases (Azure SQL, Cosmos DB, Snowflake) into OneLake as Delta Parquet in near real-time.
+- **Shortcuts and mirroring**: OneLake shortcuts create logical pointers to data in external storage (ADLS Gen2, S3, GCS, Dataverse) without copying bytes. Mirroring replicates operational databases (Azure SQL, Cosmos DB, and supported third-party warehouses) into OneLake as Delta Parquet in near real-time.
 - **Zero-ETL between engines**: A table written by a Spark notebook is immediately queryable from the SQL analytics endpoint and from Power BI via Direct Lake — no staging, no materialization pipeline.
 - **Unified capacity model**: A single Fabric capacity (F-SKU) powers Spark, SQL, Data Factory pipelines, KQL, and Power BI. Capacity scales vertically and pauses when idle.
 

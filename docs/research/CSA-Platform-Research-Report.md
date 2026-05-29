@@ -2,6 +2,20 @@
 
 # CSA-in-a-Box: Comprehensive Platform Research Report
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 !!! note
 **Quick Summary**: Deep research report for building a complete Cloud-Scale Analytics / Data Mesh / Data Fabric platform in Azure as an open-source alternative to Microsoft Fabric — covers CSA architecture (DMLZ + DLZ + Medallion), Data Mesh domain ownership, Data Fabric metadata layer, component mapping from Fabric to Azure PaaS, 50+ required Azure services, 4-subscription deployment strategy with VNet address spaces and RBAC, Well-Architected best practices, zero-trust networking, data classification, FinOps, DR/BCDR, and IaC reference templates.
 

@@ -1,5 +1,19 @@
 # Parity gap — `/realtime-hub`
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **Loom route:** `/realtime-hub` (rendered by `apps/fiab-console/app/realtime-hub/page.tsx` → `ItemsByTypePane` filtered to eventstream, eventhouse, kql-database, kql-queryset, kql-dashboard, activator)
 **Fabric reference:** Microsoft Fabric Real-Time hub — https://learn.microsoft.com/fabric/real-time-hub/real-time-hub-overview (28 streaming sources, Microsoft / External / Fabric event categories)
 **Loom screenshot:** `temp/parity/page-realtime-hub-loom.png` — 4 real items rendered

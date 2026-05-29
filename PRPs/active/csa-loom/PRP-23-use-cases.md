@@ -1,5 +1,19 @@
 # PRP-23 — Use-Case Pages (5 CSA Loom-Specific Use Cases)
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 ## Context
 
 Use cases under `docs/fiab/use-cases/` show CSA Loom in real-world
@@ -22,8 +36,8 @@ cross-cutting patterns customers will recognize.
 - [ ] `docs/fiab/use-cases/multi-agency-onboarding.md` — runbook for
   onboarding a new agency as a domain in an existing CSA Loom deploy
 - [ ] `docs/fiab/use-cases/direct-lake-replacement.md` — migration
-  from Tableau / Qlik / on-prem Power BI Report Server to the warm-
-  cache materializer pattern
+  from third-party BI tools / on-prem Power BI Report Server to the
+  warm-cache materializer pattern
 - [ ] `docs/fiab/use-cases/sovereign-ai-agents.md` — building Loom
   Data Agents under Gov constraints (no Foundry Agent Service;
   manual SOC pipeline; AOAI Gov endpoints)
