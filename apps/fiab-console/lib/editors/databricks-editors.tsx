@@ -32,6 +32,15 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { CodeCell } from '@/lib/components/notebook/code-cell';
+import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
+import { CellAdder } from '@/lib/components/notebook/cell-adder';
+import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
+import { emptyCell } from '@/lib/types/notebook-cell';
+import {
+  parseSource, serializeCells, cellLangToCommandLanguage,
+  type DbxBaseLanguage,
+} from './databricks-notebook-source';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -48,6 +57,21 @@ const useStyles = makeStyles({
   tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
   treePad: { padding: 8 },
+  treeRow: {
+    display: 'flex', alignItems: 'center', gap: 4, padding: '3px 6px', borderRadius: 4,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
+  },
+  treeDelete: { opacity: 0, ':hover': { opacity: 1 } },
+  cellList: { display: 'flex', flexDirection: 'column', gap: 0, minHeight: 0 },
+  cellOutput: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderTop: 'none',
+    borderRadius: '0 0 4px 4px', padding: 8, marginBottom: 4,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  cellPre: {
+    fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap',
+    margin: 0, maxHeight: 320, overflow: 'auto', color: tokens.colorNeutralForeground1,
+  },
 });
 
 interface QueryResponse {
@@ -710,7 +734,23 @@ function fmtDuration(ms?: number): string {
 }
 
 // ============================================================
-// Databricks Notebook editor
+// Databricks Notebook editor — cell-based, Databricks-parity
+//
+// One-for-one with the real Databricks notebook surface:
+//   - Workspace tree (browse / open / new / delete notebooks)
+//   - Cluster picker + live cluster status badge
+//   - Cell-based authoring: add code/markdown cells, reorder, delete,
+//     duplicate, per-cell language (Python/SQL/Scala/R via %-magics),
+//     Monaco editor per code cell, markdown render per md cell
+//   - Run cell / Run all against a real cluster via the Databricks
+//     Command Execution API (api/1.2). Real stdout / table / error per cell.
+//   - Save -> serialises cells to Databricks SOURCE format and imports
+//     them to the workspace (api/2.0/workspace/import).
+//   - Open -> exports SOURCE (api/2.0/workspace/export) and parses to cells.
+//
+// Honest gates: if no cluster is RUNNING, the Run controls explain the exact
+// action (start a cluster); if the workspace REST is not reachable the tree
+// surfaces the precise error from the BFF.
 // ============================================================
 
 interface WorkspaceObject {
@@ -728,60 +768,99 @@ interface RunRow {
   creator_user_name?: string;
 }
 
+interface CellResult {
+  status: 'idle' | 'running' | 'ok' | 'error';
+  resultType?: 'text' | 'table' | 'image' | 'error';
+  text?: string;
+  columns?: string[];
+  rows?: unknown[][];
+  image?: string;
+  error?: string;
+  cause?: string;
+  truncated?: boolean;
+  ms?: number;
+}
+
+// Map Databricks workspace object language -> notebook base language.
+function detectBase(lang?: string): DbxBaseLanguage {
+  const u = (lang || 'PYTHON').toUpperCase();
+  if (u === 'SQL') return 'SQL';
+  if (u === 'SCALA') return 'SCALA';
+  if (u === 'R') return 'R';
+  return 'PYTHON';
+}
+
 export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
 
+  // ---- Workspace tree ----
   const [rootPath, setRootPath] = useState('/Workspace');
   const [tree, setTree] = useState<Record<string, WorkspaceObject[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['/Workspace']));
   const [treeError, setTreeError] = useState<string | null>(null);
 
+  // ---- Open notebook ----
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [language, setLanguage] = useState<'PYTHON' | 'SQL' | 'SCALA' | 'R'>('PYTHON');
-  const [source, setSource] = useState<string>('');
+  const [baseLanguage, setBaseLanguage] = useState<DbxBaseLanguage>('PYTHON');
   const [loadingFile, setLoadingFile] = useState(false);
   const [savingFile, setSavingFile] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileMessage, setFileMessage] = useState<string | null>(null);
-  // Track the server-side source so we can mark the buffer dirty and gate
-  // Ctrl+S. setSource happens via Monaco onChange so dirty falls out from
-  // a direct comparison.
-  const [origSource, setOrigSource] = useState<string>('');
-  const dirty = source !== origSource;
 
+  // ---- Cells (the core of the editor) ----
+  const [cells, setCells] = useState<NotebookCell[]>([emptyCell('code', 'python')]);
+  const [origSerialized, setOrigSerialized] = useState<string>('');
+  const [activeCellId, setActiveCellId] = useState<string | null>(null);
+  const [cellResults, setCellResults] = useState<Record<string, CellResult>>({});
+
+  // ---- Cluster + execution context ----
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [clusterId, setClusterId] = useState<string>('');
-  const [running, setRunning] = useState(false);
-  const [runError, setRunError] = useState<string | null>(null);
-  const [activeRunId, setActiveRunId] = useState<number | null>(null);
-  const [activeRun, setActiveRun] = useState<RunRow | null>(null);
-  const [activeOutput, setActiveOutput] = useState<string | null>(null);
-  const [runs, setRuns] = useState<RunRow[]>([]);
+  const [clustersError, setClustersError] = useState<string | null>(null);
+  // One execution context per (cluster, command-language) so REPL state
+  // persists across cells of the same language. Keyed `${clusterId}:${lang}`.
+  const contextsRef = useRef<Record<string, string>>({});
+  const [runningAll, setRunningAll] = useState(false);
 
+  const serialized = useMemo(() => serializeCells(cells, baseLanguage), [cells, baseLanguage]);
+  const dirty = !!selectedPath && serialized !== origSerialized;
+
+  // ---- Load tree + clusters on mount ----
   const loadDir = useCallback(async (path: string) => {
     try {
       const r = await fetch(`/api/items/databricks-notebook/list?path=${encodeURIComponent(path)}`);
       const j = await r.json();
       if (!j.ok) { setTreeError(j.error || `HTTP ${r.status}`); return; }
+      setTreeError(null);
       setTree((t) => ({ ...t, [path]: (j.objects || []) as WorkspaceObject[] }));
     } catch (e: any) {
       setTreeError(e?.message || String(e));
     }
   }, []);
 
-  useEffect(() => {
-    void loadDir(rootPath);
-    void (async () => {
+  const loadClusters = useCallback(async () => {
+    try {
       const r = await fetch('/api/items/databricks-cluster');
       const j = await r.json();
-      if (j.ok) {
-        setClusters(j.clusters || []);
-        const running = (j.clusters || []).find((c: Cluster) => c.state === 'RUNNING');
-        if (running && !clusterId) setClusterId(running.cluster_id);
-      }
-    })();
+      if (!j.ok) { setClustersError(j.error || `HTTP ${r.status}`); return; }
+      setClustersError(null);
+      const list = (j.clusters || []) as Cluster[];
+      setClusters(list);
+      setClusterId((prev) => {
+        if (prev && list.some((c) => c.cluster_id === prev)) return prev;
+        const running = list.find((c) => c.state === 'RUNNING');
+        return running ? running.cluster_id : (list[0]?.cluster_id || '');
+      });
+    } catch (e: any) {
+      setClustersError(e?.message || String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDir(rootPath);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootPath]);
+  useEffect(() => { void loadClusters(); }, [loadClusters]);
 
   const toggle = useCallback((path: string) => {
     setExpanded((prev) => {
@@ -792,19 +871,23 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     });
   }, [tree, loadDir]);
 
+  // ---- Open a notebook: export SOURCE, parse to cells ----
   const openNotebook = useCallback(async (path: string, lang?: string) => {
     setSelectedPath(path);
     setFileError(null);
     setFileMessage(null);
     setLoadingFile(true);
+    setCellResults({});
     try {
       const r = await fetch(`/api/items/databricks-notebook/${id}?path=${encodeURIComponent(path)}`);
       const j = await r.json();
       if (!j.ok) { setFileError(j.error || `HTTP ${r.status}`); return; }
-      const content = j.content || '';
-      setSource(content);
-      setOrigSource(content);
-      setLanguage(((lang || j.language || 'PYTHON').toUpperCase() as any));
+      const base = detectBase(lang || j.language);
+      setBaseLanguage(base);
+      const parsed = parseSource(j.content || '', base);
+      setCells(parsed);
+      setOrigSerialized(serializeCells(parsed, base));
+      setActiveCellId(parsed[0]?.id || null);
     } catch (e: any) {
       setFileError(e?.message || String(e));
     } finally {
@@ -812,28 +895,23 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     }
   }, [id]);
 
+  // ---- Save: serialise cells -> SOURCE -> workspace/import ----
   const save = useCallback(async () => {
     if (!selectedPath) return;
     setSavingFile(true);
     setFileError(null);
     setFileMessage(null);
-    // Snapshot the source we are about to send so when the PUT succeeds
-    // we can mark exactly that text as the new "saved" baseline. If the
-    // user keeps typing during the await, origSource will land on the
-    // bytes the server actually accepted — not whatever the editor now
-    // contains. Matches the notebook editor's snapshot-then-confirm
-    // pattern landed 2026-05-27.
-    const snapshot = source;
+    const snapshot = serializeCells(cells, baseLanguage);
     try {
       const r = await fetch(`/api/items/databricks-notebook/${id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: selectedPath, language, content: snapshot }),
+        body: JSON.stringify({ path: selectedPath, language: baseLanguage, content: snapshot }),
       });
       const j = await r.json();
       if (!j.ok) setFileError(j.error || `HTTP ${r.status}`);
       else {
-        setOrigSource(snapshot);
+        setOrigSerialized(snapshot);
         setFileMessage(`Saved to ${selectedPath} at ${new Date().toLocaleTimeString()}`);
       }
     } catch (e: any) {
@@ -841,10 +919,9 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     } finally {
       setSavingFile(false);
     }
-  }, [id, selectedPath, language, source]);
+  }, [id, selectedPath, baseLanguage, cells]);
 
-  // Ctrl/Cmd+S to save when there are unsaved changes. Matches the Fabric
-  // notebook editor's keybinding so muscle memory works across the family.
+  // Ctrl/Cmd+S
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -856,83 +933,198 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedPath, dirty, savingFile, save]);
 
-  const runOn = useCallback(async () => {
-    if (!selectedPath || !clusterId) return;
-    setRunning(true);
-    setRunError(null);
-    setActiveOutput(null);
-    setActiveRun(null);
+  // ---- New notebook in the workspace ----
+  const newNotebook = useCallback(async () => {
+    const suggested = `${rootPath.replace(/\/$/, '')}/loom-notebook-${Date.now()}`;
+    const path = window.prompt('New notebook path', suggested);
+    if (!path) return;
+    setFileError(null); setFileMessage(null);
+    const starter = [emptyCell('code', 'python')];
+    const src = serializeCells(starter, 'PYTHON');
     try {
-      const r = await fetch(`/api/items/databricks-notebook/${id}/run`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ path: selectedPath, clusterId }),
+      const r = await fetch(`/api/items/databricks-notebook/${id}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path, language: 'PYTHON', content: src }),
       });
       const j = await r.json();
-      if (!j.ok) { setRunError(j.error || `HTTP ${r.status}`); setRunning(false); return; }
-      setActiveRunId(j.run_id);
-    } catch (e: any) {
-      setRunError(e?.message || String(e));
-      setRunning(false);
-    }
-  }, [id, selectedPath, clusterId]);
+      if (!j.ok) { setFileError(j.error || `HTTP ${r.status}`); return; }
+      setTree({}); void loadDir(rootPath);
+      await openNotebook(path, 'PYTHON');
+    } catch (e: any) { setFileError(e?.message || String(e)); }
+  }, [id, rootPath, loadDir, openNotebook]);
 
-  // Poll active run
-  useEffect(() => {
-    if (!activeRunId) return;
-    let cancelled = false;
-    const poll = async () => {
-      const r = await fetch(`/api/items/databricks-notebook/${id}/runs?runId=${activeRunId}`);
+  // ---- Delete a notebook from the tree ----
+  const deleteObject = useCallback(async (path: string, isDir: boolean) => {
+    if (!window.confirm(`Delete ${path}${isDir ? ' (and contents)' : ''}?`)) return;
+    try {
+      const qs = `path=${encodeURIComponent(path)}${isDir ? '&recursive=true' : ''}`;
+      const r = await fetch(`/api/items/databricks-notebook/${id}?${qs}`, { method: 'DELETE' });
       const j = await r.json();
-      if (cancelled) return;
-      if (j.ok) {
-        setActiveRun(j.run);
-        const lcs = j.run?.state?.life_cycle_state;
-        if (lcs === 'TERMINATED' || lcs === 'INTERNAL_ERROR' || lcs === 'SKIPPED') {
-          setRunning(false);
-          const out = j.output?.notebook_output?.result
-            || j.output?.error
-            || j.output?.logs
-            || '(no output)';
-          setActiveOutput(out);
-          return;
-        }
-      }
-      setTimeout(poll, 3000);
-    };
-    void poll();
-    return () => { cancelled = true; };
-  }, [id, activeRunId]);
+      if (!j.ok) { setTreeError(j.error || `HTTP ${r.status}`); return; }
+      if (selectedPath === path) { setSelectedPath(null); setCells([emptyCell('code', 'python')]); }
+      setTree({}); void loadDir(rootPath);
+    } catch (e: any) { setTreeError(e?.message || String(e)); }
+  }, [id, rootPath, loadDir, selectedPath]);
 
+  // ---- Cell mutations ----
+  const updateCell = useCallback((next: NotebookCell) => {
+    setCells((cs) => cs.map((c) => (c.id === next.id ? next : c)));
+  }, []);
+  const addCell = useCallback((type: 'code' | 'markdown', afterId?: string) => {
+    const fresh = emptyCell(type, type === 'code' ? 'python' : 'python');
+    setCells((cs) => {
+      if (!afterId) return [...cs, fresh];
+      const idx = cs.findIndex((c) => c.id === afterId);
+      if (idx < 0) return [...cs, fresh];
+      const copy = cs.slice();
+      copy.splice(idx + 1, 0, fresh);
+      return copy;
+    });
+    setActiveCellId(fresh.id);
+  }, []);
+  const deleteCell = useCallback((cellId: string) => {
+    setCells((cs) => (cs.length <= 1 ? cs : cs.filter((c) => c.id !== cellId)));
+    setCellResults((r) => { const n = { ...r }; delete n[cellId]; return n; });
+  }, []);
+  const duplicateCell = useCallback((cellId: string) => {
+    setCells((cs) => {
+      const idx = cs.findIndex((c) => c.id === cellId);
+      if (idx < 0) return cs;
+      const src = cs[idx];
+      const dup: NotebookCell = { ...src, id: emptyCell('code').id, output: undefined, executionCount: undefined };
+      const copy = cs.slice();
+      copy.splice(idx + 1, 0, dup);
+      return copy;
+    });
+  }, []);
+  const moveCell = useCallback((cellId: string, dir: -1 | 1) => {
+    setCells((cs) => {
+      const idx = cs.findIndex((c) => c.id === cellId);
+      const j = idx + dir;
+      if (idx < 0 || j < 0 || j >= cs.length) return cs;
+      const copy = cs.slice();
+      [copy[idx], copy[j]] = [copy[j], copy[idx]];
+      return copy;
+    });
+  }, []);
+
+  // ---- Execute a single cell against the cluster ----
+  const selectedCluster = useMemo(
+    () => clusters.find((c) => c.cluster_id === clusterId) || null,
+    [clusters, clusterId],
+  );
+  const clusterRunning = selectedCluster?.state === 'RUNNING';
+
+  const runCell = useCallback(async (cell: NotebookCell): Promise<void> => {
+    if (cell.type === 'markdown') return; // markdown renders client-side
+    if (!clusterId) {
+      setCellResults((r) => ({ ...r, [cell.id]: { status: 'error', error: 'No cluster selected. Pick a cluster above.' } }));
+      return;
+    }
+    const cmdLang = cellLangToCommandLanguage(cell.lang);
+    const ctxKey = `${clusterId}:${cmdLang}`;
+    const t0 = Date.now();
+    setCellResults((r) => ({ ...r, [cell.id]: { status: 'running' } }));
+    try {
+      const res = await fetch(`/api/items/databricks-notebook/${id}/command`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          clusterId,
+          language: cmdLang,
+          command: cell.source,
+          contextId: contextsRef.current[ctxKey] || undefined,
+        }),
+      });
+      const j = await res.json();
+      if (!j.ok) {
+        setCellResults((r) => ({ ...r, [cell.id]: { status: 'error', error: j.error || `HTTP ${res.status}` } }));
+        return;
+      }
+      // Cache the context id for REPL persistence across cells.
+      if (j.contextId) contextsRef.current[ctxKey] = j.contextId;
+      const ms = Date.now() - t0;
+      if (j.resultType === 'error' || j.status === 'Error') {
+        setCellResults((r) => ({ ...r, [cell.id]: { status: 'error', resultType: 'error', error: j.error, cause: j.cause, ms } }));
+      } else {
+        setCellResults((r) => ({
+          ...r,
+          [cell.id]: {
+            status: 'ok',
+            resultType: j.resultType,
+            text: j.text,
+            columns: j.columns,
+            rows: j.rows,
+            image: j.image,
+            truncated: j.truncated,
+            ms,
+          },
+        }));
+      }
+    } catch (e: any) {
+      setCellResults((r) => ({ ...r, [cell.id]: { status: 'error', error: e?.message || String(e) } }));
+    }
+  }, [id, clusterId]);
+
+  const runAll = useCallback(async () => {
+    setRunningAll(true);
+    try {
+      for (const cell of cells) {
+        if (cell.type === 'markdown') continue;
+        if (!cell.source.trim()) continue;
+        await runCell(cell);
+        const res = cellResults[cell.id];
+        // stop-on-error parity with Databricks "Run all"
+        if (res?.status === 'error') break;
+      }
+    } finally {
+      setRunningAll(false);
+    }
+  }, [cells, runCell, cellResults]);
+
+  const clearOutputs = useCallback(() => setCellResults({}), []);
+
+  // ---- Runs history (jobs runs/list) ----
+  const [runs, setRuns] = useState<RunRow[]>([]);
   const loadRuns = useCallback(async () => {
     const r = await fetch(`/api/items/databricks-notebook/${id}/runs`);
     const j = await r.json();
     if (j.ok) setRuns(j.runs || []);
   }, [id]);
-  useEffect(() => { void loadRuns(); }, [loadRuns]);
+  const [runsOpen, setRunsOpen] = useState(false);
+  const openRuns = useCallback(() => { setRunsOpen(true); void loadRuns(); }, [loadRuns]);
 
+  // ---- Tree render ----
   const renderTree = (path: string, depth = 0): JSX.Element[] => {
     const items = tree[path] || [];
     return items.map((o) => {
       const isDir = o.object_type === 'DIRECTORY' || o.object_type === 'REPO';
       const isNb = o.object_type === 'NOTEBOOK';
       const isOpen = expanded.has(o.path);
-      const key = o.path;
       return (
-        <div key={key} style={{ paddingLeft: depth * 12 }}>
+        <div key={o.path} style={{ paddingLeft: depth * 12 }}>
           <div
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '3px 6px', cursor: 'pointer',
-              background: selectedPath === o.path ? tokens.colorNeutralBackground2Selected : undefined,
-            }}
-            onClick={() => isDir ? toggle(o.path) : isNb ? openNotebook(o.path, o.language) : undefined}
+            className={s.treeRow}
+            style={{ background: selectedPath === o.path ? tokens.colorNeutralBackground2Selected : undefined }}
           >
-            {isDir
-              ? <Folder20Regular />
-              : isNb ? <Document20Regular /> : <DocumentTable20Regular />}
-            <Caption1>{o.path.split('/').pop() || o.path}</Caption1>
-            {o.language && <Caption1 style={{ opacity: 0.6 }}>· {o.language}</Caption1>}
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, cursor: 'pointer', minWidth: 0 }}
+              onClick={() => isDir ? toggle(o.path) : isNb ? openNotebook(o.path, o.language) : undefined}
+            >
+              {isDir ? <Folder20Regular /> : isNb ? <Document20Regular /> : <DocumentTable20Regular />}
+              <Caption1 style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {o.path.split('/').pop() || o.path}
+              </Caption1>
+              {o.language && <Caption1 style={{ opacity: 0.6 }}>· {o.language}</Caption1>}
+            </div>
+            {(isNb || isDir) && (
+              <Button
+                size="small" appearance="subtle" icon={<Delete20Regular />}
+                className={s.treeDelete}
+                aria-label={`Delete ${o.path}`}
+                onClick={(e) => { e.stopPropagation(); deleteObject(o.path, isDir); }}
+              />
+            )}
           </div>
           {isDir && isOpen && tree[o.path] !== undefined && renderTree(o.path, depth + 1)}
           {isDir && isOpen && tree[o.path] === undefined && (
@@ -943,27 +1135,30 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     });
   };
 
-  const reload = useCallback(() => {
-    if (selectedPath) openNotebook(selectedPath, language);
-  }, [selectedPath, language, openNotebook]);
   const refreshTree = useCallback(() => { setTree({}); void loadDir(rootPath); }, [rootPath, loadDir]);
-  const canSave = !!selectedPath && dirty && !savingFile;
-  const canRunOn = !!selectedPath && !!clusterId && !running;
+  const canRunAll = !!clusterId && !runningAll && cells.some((c) => c.type === 'code' && c.source.trim());
+
   const ribbonNb: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'File', actions: [
-        { label: savingFile ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
-        { label: 'Reload', onClick: selectedPath ? reload : undefined, disabled: !selectedPath },
+        { label: 'New notebook', onClick: newNotebook },
+        { label: savingFile ? 'Saving…' : 'Save', onClick: selectedPath && dirty && !savingFile ? save : undefined, disabled: !selectedPath || !dirty || savingFile },
+      ]},
+      { label: 'Cells', actions: [
+        { label: 'Add code cell', onClick: () => addCell('code', activeCellId || undefined) },
+        { label: 'Add markdown', onClick: () => addCell('markdown', activeCellId || undefined) },
       ]},
       { label: 'Run', actions: [
-        { label: running ? 'Running…' : 'Run on cluster', onClick: canRunOn ? runOn : undefined, disabled: !canRunOn },
-        { label: 'View runs', onClick: loadRuns },
+        { label: runningAll ? 'Running all…' : 'Run all', onClick: canRunAll ? runAll : undefined, disabled: !canRunAll },
+        { label: 'Clear outputs', onClick: clearOutputs },
+        { label: 'View runs', onClick: openRuns },
       ]},
       { label: 'Workspace', actions: [
         { label: 'Refresh tree', onClick: refreshTree },
+        { label: 'Refresh clusters', onClick: () => void loadClusters() },
       ]},
     ]},
-  ], [savingFile, canSave, save, selectedPath, reload, running, canRunOn, runOn, loadRuns, refreshTree]);
+  ], [newNotebook, savingFile, selectedPath, dirty, save, addCell, activeCellId, runningAll, canRunAll, runAll, clearOutputs, openRuns, refreshTree, loadClusters]);
 
   return (
     <ItemEditorChrome
@@ -979,7 +1174,8 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
               size="small"
               style={{ flex: 1 }}
             />
-            <Button size="small" icon={<ArrowSync20Regular />} onClick={() => { setTree({}); void loadDir(rootPath); }} />
+            <Button size="small" icon={<ArrowSync20Regular />} aria-label="Refresh tree" onClick={refreshTree} />
+            <Button size="small" icon={<Add20Regular />} aria-label="New notebook" onClick={newNotebook} />
           </div>
           {treeError && (
             <MessageBar intent="error">
@@ -991,52 +1187,85 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
       }
       main={
         <div className={s.pad}>
+          {/* Toolbar: notebook id + base language + cluster + run-all */}
           <div className={s.toolbar}>
-            <Caption1>{selectedPath || 'Select a notebook from the tree'}</Caption1>
+            <Caption1 style={{ fontWeight: 600 }}>{selectedPath || 'New notebook (unsaved)'}</Caption1>
             <Dropdown
-              value={language}
-              selectedOptions={[language]}
-              onOptionSelect={(_, d) => d.optionValue && setLanguage(d.optionValue as any)}
+              aria-label="Notebook language"
+              value={baseLanguage}
+              selectedOptions={[baseLanguage]}
+              onOptionSelect={(_, d) => d.optionValue && setBaseLanguage(d.optionValue as DbxBaseLanguage)}
               size="small"
-              style={{ width: 110 }}
+              style={{ width: 120 }}
             >
-              <Option value="PYTHON">PYTHON</Option>
+              <Option value="PYTHON">Python</Option>
               <Option value="SQL">SQL</Option>
-              <Option value="SCALA">SCALA</Option>
+              <Option value="SCALA">Scala</Option>
               <Option value="R">R</Option>
             </Dropdown>
-            <Button
-              appearance="primary"
-              icon={<Save20Regular />}
-              disabled={!selectedPath || savingFile || !dirty}
-              onClick={save}
-            >
-              {savingFile ? 'Saving…' : dirty ? 'Save *' : 'Save'}
-            </Button>
             <Dropdown
-              placeholder="Cluster"
-              value={clusters.find((c) => c.cluster_id === clusterId)?.cluster_name || ''}
+              placeholder="Attach cluster"
+              aria-label="Cluster"
+              value={selectedCluster ? `${selectedCluster.cluster_name || selectedCluster.cluster_id} · ${selectedCluster.state}` : ''}
               selectedOptions={clusterId ? [clusterId] : []}
               onOptionSelect={(_, d) => d.optionValue && setClusterId(d.optionValue)}
               size="small"
-              style={{ minWidth: 200 }}
+              style={{ minWidth: 240 }}
+              disabled={clusters.length === 0}
             >
               {clusters.map((c) => (
-                <Option key={c.cluster_id} value={c.cluster_id} text={c.cluster_name || c.cluster_id}>
+                <Option key={c.cluster_id} value={c.cluster_id} text={`${c.cluster_name || c.cluster_id} · ${c.state}`}>
                   {c.cluster_name || c.cluster_id} · {c.state}
                 </Option>
               ))}
             </Dropdown>
+            {selectedCluster && (
+              <Badge appearance="filled" color={clusterStateColor(selectedCluster.state)}>
+                {selectedCluster.state}
+              </Badge>
+            )}
             <Button
               appearance="primary"
               icon={<Play20Regular />}
-              disabled={running || !selectedPath || !clusterId}
-              onClick={runOn}
+              disabled={!canRunAll}
+              onClick={runAll}
               style={{ marginLeft: 'auto' }}
             >
-              {running ? 'Running…' : 'Run on cluster'}
+              {runningAll ? 'Running all…' : 'Run all'}
+            </Button>
+            <Button
+              appearance="primary"
+              icon={<Save20Regular />}
+              disabled={!selectedPath || !dirty || savingFile}
+              onClick={save}
+            >
+              {savingFile ? 'Saving…' : dirty ? 'Save *' : 'Save'}
             </Button>
           </div>
+
+          {clustersError && (
+            <MessageBar intent="error">
+              <MessageBarBody><MessageBarTitle>Could not list clusters</MessageBarTitle>{clustersError}</MessageBarBody>
+            </MessageBar>
+          )}
+          {!clustersError && clusters.length === 0 && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>No clusters in this workspace</MessageBarTitle>
+                Create a cluster in the Databricks Cluster editor (or the Databricks portal: Compute → Create compute).
+                Cells need an attached cluster to execute via the Command Execution API.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {!clustersError && clusters.length > 0 && !clusterRunning && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Cluster is {selectedCluster?.state?.toLowerCase() || 'not running'}</MessageBarTitle>
+                Start <strong>{selectedCluster?.cluster_name || clusterId}</strong> in the Databricks Cluster editor
+                (Start), then return here. Cells run against a RUNNING cluster; submitting now will start one on demand and may take 2–5 min.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           {fileError && (
             <MessageBar intent="error"><MessageBarBody>
               <MessageBarTitle>Notebook error</MessageBarTitle>{fileError}
@@ -1045,78 +1274,177 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
           {fileMessage && (
             <MessageBar intent="success"><MessageBarBody>{fileMessage}</MessageBarBody></MessageBar>
           )}
-          {loadingFile
-            ? <Spinner size="small" label="Loading notebook source…" labelPosition="after" />
-            : (
-              <MonacoTextarea
-                value={source}
-                onChange={setSource}
-                language="python"
-                height={340}
-                minHeight={280}
-                ariaLabel="Notebook source"
+
+          {/* Cell list */}
+          {loadingFile ? (
+            <Spinner size="small" label="Loading notebook source…" labelPosition="after" />
+          ) : (
+            <div className={s.cellList}>
+              <CellAdder
+                onAddCode={() => addCell('code', undefined)}
+                onAddMarkdown={() => addCell('markdown', undefined)}
               />
-            )
-          }
-          {runError && (
-            <MessageBar intent="error"><MessageBarBody>
-              <MessageBarTitle>Run failed</MessageBarTitle>{runError}
-            </MessageBarBody></MessageBar>
-          )}
-          {(activeRunId || runs.length > 0) && (
-            <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12 }}>
-              <Subtitle2>Run output</Subtitle2>
-              {activeRunId && (
-                <div style={{ marginTop: 8 }}>
-                  <Badge appearance="filled" color={runStateColor(activeRun?.state?.result_state)}>
-                    {activeRun?.state?.life_cycle_state || 'PENDING'}
-                    {activeRun?.state?.result_state ? ` · ${activeRun.state.result_state}` : ''}
-                  </Badge>
-                  <Caption1 style={{ marginLeft: 8 }}>run_id={activeRunId}</Caption1>
-                  {activeOutput && (
-                    <pre style={{
-                      background: tokens.colorNeutralBackground3, padding: 12, borderRadius: 4,
-                      maxHeight: 260, overflow: 'auto', marginTop: 8, fontSize: 12,
-                    }}>{activeOutput}</pre>
-                  )}
-                </div>
-              )}
-              <Subtitle2 style={{ marginTop: 12 }}>Recent workspace runs</Subtitle2>
-              <div className={s.tableWrap} style={{ marginTop: 6 }}>
-                <Table size="small" aria-label="Recent runs">
-                  <TableHeader><TableRow>
-                    <TableHeaderCell>run_id</TableHeaderCell>
-                    <TableHeaderCell>Name</TableHeaderCell>
-                    <TableHeaderCell>State</TableHeaderCell>
-                    <TableHeaderCell>Start</TableHeaderCell>
-                    <TableHeaderCell>Exec</TableHeaderCell>
-                    <TableHeaderCell>Creator</TableHeaderCell>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {runs.map((r) => (
-                      <TableRow key={r.run_id}>
-                        <TableCell>{r.run_id}</TableCell>
-                        <TableCell>{r.run_name || '—'}</TableCell>
-                        <TableCell>
-                          <Badge appearance="outline" color={runStateColor(r.state?.result_state)}>
-                            {r.state?.life_cycle_state || '—'}{r.state?.result_state ? ` · ${r.state.result_state}` : ''}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>{fmtTime(r.start_time)}</TableCell>
-                        <TableCell>{fmtDuration(r.execution_duration)}</TableCell>
-                        <TableCell>{r.creator_user_name || '—'}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+              {cells.map((cell, i) => {
+                const res = cellResults[cell.id];
+                const cellNode = cell.type === 'markdown' ? (
+                  <MarkdownCell
+                    key={cell.id}
+                    cell={cell}
+                    active={activeCellId === cell.id}
+                    onFocus={() => setActiveCellId(cell.id)}
+                    onChange={updateCell}
+                    onDelete={() => deleteCell(cell.id)}
+                    onMoveUp={() => moveCell(cell.id, -1)}
+                    onMoveDown={() => moveCell(cell.id, 1)}
+                    onDuplicate={() => duplicateCell(cell.id)}
+                    canMoveUp={i > 0}
+                    canMoveDown={i < cells.length - 1}
+                  />
+                ) : (
+                  <div key={cell.id}>
+                    <CodeCell
+                      cell={cell}
+                      active={activeCellId === cell.id}
+                      onFocus={() => setActiveCellId(cell.id)}
+                      onChange={updateCell}
+                      onRun={runCell}
+                      onDelete={() => deleteCell(cell.id)}
+                      onMoveUp={() => moveCell(cell.id, -1)}
+                      onMoveDown={() => moveCell(cell.id, 1)}
+                      onDuplicate={() => duplicateCell(cell.id)}
+                      canMoveUp={i > 0}
+                      canMoveDown={i < cells.length - 1}
+                    />
+                    <DbxCellOutput res={res} />
+                  </div>
+                );
+                return (
+                  <div key={`${cell.id}-wrap`}>
+                    {cellNode}
+                    <CellAdder
+                      onAddCode={() => addCell('code', cell.id)}
+                      onAddMarkdown={() => addCell('markdown', cell.id)}
+                    />
+                  </div>
+                );
+              })}
             </div>
           )}
+
+          {/* Runs history dialog */}
+          <Dialog open={runsOpen} onOpenChange={(_, d) => setRunsOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '1080px', width: '95vw' }}>
+              <DialogBody>
+                <DialogTitle>Workspace runs</DialogTitle>
+                <DialogContent>
+                  <div className={s.tableWrap}>
+                    <Table size="small" aria-label="Recent runs">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>run_id</TableHeaderCell>
+                        <TableHeaderCell>Name</TableHeaderCell>
+                        <TableHeaderCell>State</TableHeaderCell>
+                        <TableHeaderCell>Start</TableHeaderCell>
+                        <TableHeaderCell>Exec</TableHeaderCell>
+                        <TableHeaderCell>Creator</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {runs.length === 0 && (
+                          <TableRow><TableCell colSpan={6}><Caption1>No runs yet.</Caption1></TableCell></TableRow>
+                        )}
+                        {runs.map((r) => (
+                          <TableRow key={r.run_id}>
+                            <TableCell>{r.run_id}</TableCell>
+                            <TableCell>{r.run_name || '—'}</TableCell>
+                            <TableCell>
+                              <Badge appearance="outline" color={runStateColor(r.state?.result_state)}>
+                                {r.state?.life_cycle_state || '—'}{r.state?.result_state ? ` · ${r.state.result_state}` : ''}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>{fmtTime(r.start_time)}</TableCell>
+                            <TableCell>{fmtDuration(r.execution_duration)}</TableCell>
+                            <TableCell>{r.creator_user_name || '—'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setRunsOpen(false)}>Close</Button>
+                  <Button appearance="primary" onClick={() => void loadRuns()}>Refresh</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
         </div>
       }
     />
   );
 }
+
+// Renders a single cell's Command Execution result: text / table / image / error.
+function DbxCellOutput({ res }: { res?: CellResult }) {
+  const s = useStyles();
+  if (!res || res.status === 'idle') return null;
+  if (res.status === 'running') {
+    return (
+      <div className={s.cellOutput}>
+        <Spinner size="tiny" label="Running on cluster…" labelPosition="after" />
+      </div>
+    );
+  }
+  if (res.status === 'error') {
+    return (
+      <div className={s.cellOutput}>
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Command failed</MessageBarTitle>
+            {res.error || 'Unknown error'}
+          </MessageBarBody>
+        </MessageBar>
+        {res.cause && (
+          <pre className={s.cellPre} style={{ color: tokens.colorPaletteRedForeground1 }}>{res.cause}</pre>
+        )}
+      </div>
+    );
+  }
+  // ok
+  return (
+    <div className={s.cellOutput}>
+      <div className={s.resultMeta}>
+        <Badge appearance="filled" color="success">{res.resultType || 'text'}</Badge>
+        {typeof res.ms === 'number' && <Caption1>· {res.ms} ms</Caption1>}
+        {res.truncated && <Badge appearance="outline" color="warning">truncated</Badge>}
+      </div>
+      {res.resultType === 'table' ? (
+        <div className={s.tableWrap}>
+          <Table aria-label="Cell result" size="small">
+            <TableHeader>
+              <TableRow>
+                {(res.columns || []).map((c, i) => <TableHeaderCell key={`${c}-${i}`}>{c}</TableHeaderCell>)}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(res.rows || []).map((row, i) => (
+                <TableRow key={i}>
+                  {(res.columns || []).map((_, j) => (
+                    <TableCell key={j} className={s.cell}>{formatCell((row as unknown[])[j])}</TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      ) : res.resultType === 'image' && res.image ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img alt="cell output" src={res.image.startsWith('data:') ? res.image : `data:image/png;base64,${res.image}`} style={{ maxWidth: '100%' }} />
+      ) : (
+        <pre className={s.cellPre}>{res.text || '(no output)'}</pre>
+      )}
+    </div>
+  );
+}
+
 
 // ============================================================
 // Databricks Job editor
