@@ -86,7 +86,7 @@ flowchart LR
     C[Bronze→Silver→<br/>Gold tables]:::io --> S5
 ```
 
-<small>Source diagram editable in atlas-diag: `dgm_2e1fd7792f3e35c52116` ([open in designer](http://localhost:3080/designer?diagram=dgm_2e1fd7792f3e35c52116)).</small>
+<!-- diagram source: atlas-diag dgm_2e1fd7792f3e35c52116 (internal) -->
 
 ---
 
