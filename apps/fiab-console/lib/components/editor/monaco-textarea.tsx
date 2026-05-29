@@ -79,6 +79,7 @@ export type MonacoLanguage =
   | 'graphql'
   | 'javascript'
   | 'typescript'
+  | 'yaml'
   | 'plaintext';
 
 export interface MonacoTextareaProps {
@@ -111,6 +112,7 @@ function mapLanguage(lang?: MonacoLanguage): string {
     case 'kusto': return 'kusto';
     case 'xml': return 'xml';
     case 'json': return 'json';
+    case 'yaml': return 'yaml';
     case 'graphql': return 'graphql';
     case 'javascript': return 'javascript';
     case 'typescript': return 'typescript';
