@@ -16,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Dropdown, Option,
   Tab, TabList, Field, Textarea,
@@ -24,6 +25,7 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 // AI Builder model state/status label mappers extracted for vitest
@@ -77,7 +79,24 @@ function EmptyText({ children }: { children: React.ReactNode }) {
   return <div className={s.empty}>{children}</div>;
 }
 
-interface FetchState<T> { loading: boolean; data: T | null; error?: string; hint?: string; }
+interface FetchState<T> { loading: boolean; data: T | null; error?: string; hint?: string; code?: string; }
+
+/**
+ * Parse a response body defensively. A 4xx/5xx (or a Front Door / auth
+ * redirect) frequently returns HTML, not JSON — `r.json()` would throw
+ * "Unexpected token <" and crash the editor. Guard on content-type and fall
+ * back to a readable text snippet.
+ */
+export async function readJsonSafe(r: Response): Promise<{ json: any; raw: string }> {
+  const ct = r.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    try { return { json: await r.json(), raw: '' }; }
+    catch { /* fall through to text */ }
+  }
+  const raw = await r.text().catch(() => '');
+  try { return { json: raw ? JSON.parse(raw) : null, raw }; }
+  catch { return { json: null, raw }; }
+}
 
 function useApi<T>(url: string | null, deps: unknown[] = []) {
   const [state, setState] = useState<FetchState<T>>({ loading: false, data: null });
@@ -86,8 +105,12 @@ function useApi<T>(url: string | null, deps: unknown[] = []) {
     setState({ loading: true, data: null });
     try {
       const r = await fetch(url);
-      const j = await r.json();
-      if (!j.ok) { setState({ loading: false, data: null, error: j.error || `HTTP ${r.status}`, hint: j.hint }); return; }
+      const { json: j, raw } = await readJsonSafe(r);
+      if (!j) {
+        setState({ loading: false, data: null, error: `HTTP ${r.status} — ${raw ? raw.slice(0, 200) : (r.statusText || 'non-JSON response')}` });
+        return;
+      }
+      if (!j.ok) { setState({ loading: false, data: null, error: j.error || `HTTP ${r.status}`, hint: j.hint, code: j.code }); return; }
       setState({ loading: false, data: j as unknown as T });
     } catch (e: any) {
       setState({ loading: false, data: null, error: e?.message || String(e) });
@@ -586,182 +609,365 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
 
 // ============================================================
 // 3. PowerAppEditor
+//
+// Resource-binding model (fixes the 404 item-GUID-as-app-id bug, #476 class):
+//   • The Loom item id is a Cosmos GUID, NOT a Power Apps app id.
+//   • A `power-app` item BINDS to (envId, appId, appType) persisted in
+//     item.state via POST /api/items/power-app/[id]/state.
+//   • Unbound → full bind/select surface renders (env picker + app list +
+//     "Bind this app"). Never a 404 crash.
+//   • Detail + embed + publish all resolve the REAL appId from state.
+//
+// Embed: canvas apps embed via the web-player iframe
+//   (https://apps.powerapps.com/play/<appId>?source=iframe — Microsoft Learn
+//   power-apps/maker/canvas-apps/embed-apps-dev). Model-driven apps can't be
+//   iframed; we surface an "Open in Power Apps" deep link (main.aspx?appid=).
 // ============================================================
 
-interface PApp { name: string; displayName: string; appType?: string; owner?: { displayName?: string; email?: string }; createdTime?: string; lastModifiedTime?: string; appOpenUri?: string; }
+interface PAppConnRef { id?: string; displayName?: string; iconUri?: string; dataSources?: string[]; }
+interface PApp {
+  name: string; displayName: string; description?: string; appType?: string;
+  owner?: { displayName?: string; email?: string };
+  createdTime?: string; lastModifiedTime?: string;
+  appOpenUri?: string; playerEmbedUri?: string;
+  connectionReferences?: PAppConnRef[]; appVersion?: string;
+  sharedUsersCount?: number; sharedGroupsCount?: number;
+}
+
+type PAppTab = 'detail' | 'play';
 
 export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const isNew = id === 'new';
+
+  // ----- persisted binding (from the Loom item's state) ------------------
+  const itemQ = useQuery<WorkspaceItem>({
+    queryKey: ['item', 'power-app', id],
+    queryFn: () => getItem('power-app', id),
+    enabled: !isNew,
+  });
+  const boundEnvId = (itemQ.data?.state as any)?.envId as string | undefined;
+  const boundAppId = (itemQ.data?.state as any)?.appId as string | undefined;
+  const boundAppType = (itemQ.data?.state as any)?.appType as string | undefined;
+  const isBound = !!(boundEnvId && boundAppId);
+
+  // ----- environment + app picker (for binding / browsing) ----------------
   const env = useEnvironments();
+  // Once we know the bound env, default the picker to it.
+  useEffect(() => {
+    if (boundEnvId && env.selected !== boundEnvId && env.envs.some((e) => e.name === boundEnvId)) {
+      env.setSelected(boundEnvId);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boundEnvId, env.envs]);
+
   const envQ = env.selected ? `?envId=${encodeURIComponent(env.selected)}` : null;
   const [listSt, reloadList] = useApi<{ ok: boolean; apps: PApp[] }>(
     env.selected ? `/api/items/power-app${envQ}` : null,
     [env.selected],
   );
-  const [selected, setSelected] = useState<string | null>(id !== 'new' ? id : null);
-  const [detailSt] = useApi<{ ok: boolean; app: PApp }>(
-    env.selected && selected ? `/api/items/power-app/${encodeURIComponent(selected)}${envQ}` : null,
-    [env.selected, selected],
-  );
   const apps = listSt.data?.apps || [];
-  // Studio embed — the official make.powerapps.com Studio page. PowerApps
-  // Studio supports `?embed=1` to suppress the chrome and render only the
-  // canvas. We embed it in an iframe so operators can edit inline without
-  // leaving Loom. NOTE: X-Frame-Options on Microsoft Online services
-  // often blocks third-party framing — when that happens we automatically
-  // fall back to a "Open in new tab" link with a MessageBar explanation.
-  const [embedOpen, setEmbedOpen] = useState(false);
-  const [embedBlocked, setEmbedBlocked] = useState(false);
-  const studioUrl = (appName: string) =>
-    `https://make.powerapps.com/e/${encodeURIComponent(env.selected || '')}/studio/${encodeURIComponent(appName)}?embed=1`;
-  const makerNewUrl = env.selected ? `https://make.powerapps.com/e/${encodeURIComponent(env.selected)}/canvas?embed=1` : '';
-  const ribbon = baseRibbon(
-    reloadList,
-    env.selected ? `https://make.powerapps.com/environments/${encodeURIComponent(env.selected)}/apps` : undefined,
+
+  // ----- bound app detail -------------------------------------------------
+  // When bound, resolve the detail through the item route (it reads state).
+  // When picking (pre-bind), pass explicit envId+appId so the panel previews.
+  const [pick, setPick] = useState<{ appId: string; appType?: string } | null>(null);
+  const detailUrl = (() => {
+    if (pick && env.selected) {
+      return `/api/items/power-app/${encodeURIComponent(id)}?envId=${encodeURIComponent(env.selected)}&appId=${encodeURIComponent(pick.appId)}${pick.appType ? `&appType=${encodeURIComponent(pick.appType)}` : ''}`;
+    }
+    if (!isNew && isBound) return `/api/items/power-app/${encodeURIComponent(id)}`;
+    return null;
+  })();
+  const [detailSt, reloadDetail] = useApi<{ ok: boolean; app: PApp; envId: string; appId: string; bound: boolean }>(
+    detailUrl, [detailUrl],
   );
+  const app = detailSt.data?.app;
+
+  const [tab, setTab] = useState<PAppTab>('detail');
+  const [embedBlocked, setEmbedBlocked] = useState(false);
+
+  // ----- bind / publish action state --------------------------------------
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionMsg, setActionMsg] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+
+  const bind = useCallback(async (appId: string, appType?: string) => {
+    if (isNew) {
+      setActionMsg({ kind: 'error', text: 'Save this item first (it needs a workspace) before binding an app.' });
+      return;
+    }
+    if (!env.selected) return;
+    setActionBusy(true); setActionMsg(null);
+    try {
+      const r = await fetch(`/api/items/power-app/${encodeURIComponent(id)}/state`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ envId: env.selected, appId, appType }),
+      });
+      const { json: j } = await readJsonSafe(r);
+      if (!j?.ok) { setActionMsg({ kind: 'error', text: `Bind failed: ${j?.error || r.status}` }); return; }
+      setActionMsg({ kind: 'success', text: 'App bound to this Loom item.' });
+      setPick(null);
+      await itemQ.refetch();
+    } catch (e: any) {
+      setActionMsg({ kind: 'error', text: `Bind failed: ${e?.message || String(e)}` });
+    } finally { setActionBusy(false); }
+  }, [env.selected, id, isNew, itemQ]);
+
+  const publish = useCallback(async () => {
+    setActionBusy(true); setActionMsg(null);
+    try {
+      const explicit = pick && env.selected
+        ? `?envId=${encodeURIComponent(env.selected)}&appId=${encodeURIComponent(pick.appId)}` : '';
+      const r = await fetch(`/api/items/power-app/${encodeURIComponent(id)}/publish${explicit}`, { method: 'POST' });
+      const { json: j } = await readJsonSafe(r);
+      if (!j?.ok) { setActionMsg({ kind: 'error', text: `Publish failed: ${j?.error || r.status}${j?.hint ? ` — ${j.hint}` : ''}` }); return; }
+      setActionMsg({ kind: 'success', text: 'Latest revision published.' });
+      reloadDetail();
+    } catch (e: any) {
+      setActionMsg({ kind: 'error', text: `Publish failed: ${e?.message || String(e)}` });
+    } finally { setActionBusy(false); }
+  }, [id, pick, env.selected, reloadDetail]);
+
+  const reloadAll = useCallback(() => { reloadList(); if (detailUrl) reloadDetail(); void itemQ.refetch(); }, [reloadList, reloadDetail, detailUrl, itemQ]);
+
+  const makerHref = env.selected
+    ? `https://make.powerapps.com/environments/${encodeURIComponent(env.selected)}/apps`
+    : undefined;
+  const makerAppHref = (appId: string) => env.selected
+    ? `https://make.powerapps.com/e/${encodeURIComponent(env.selected)}/studio/${encodeURIComponent(appId)}`
+    : '#';
+
+  const ribbonExtra: RibbonTab['groups'] = app
+    ? [{
+        label: 'App',
+        actions: [
+          { label: 'Publish', onClick: () => { void publish(); } },
+          { label: 'Open in maker', onClick: () => { if (env.selected) window.open(makerAppHref(app.name), '_blank', 'noopener'); } },
+          ...(app.playerEmbedUri ? [{ label: 'Play', onClick: () => window.open(app.playerEmbedUri!, '_blank', 'noopener') }] : []),
+        ],
+      }]
+    : [];
+  const ribbon = baseRibbon(reloadAll, makerHref, ribbonExtra);
+
+  const isModelDriven = (app?.appType || boundAppType || '').toLowerCase().includes('modeldriven');
+  const canIframe = !!app?.playerEmbedUri && !isModelDriven;
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
-        {!embedOpen && (
-          <MessageBar intent="info">
+        {/* Infra gate — honest MessageBar when Power Platform isn't reachable. */}
+        {env.error && (
+          <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>Canvas Studio is embedded</MessageBarTitle>
-              Click <strong>Edit in Studio</strong> below to load <code>make.powerapps.com</code> inline.
-              If Microsoft's X-Frame-Options blocks the embed we fall back to a new-tab link automatically.
-              All app create/edit operations are real (executed by Studio against Power Platform APIs).
+              <MessageBarTitle>Power Platform not reachable</MessageBarTitle>
+              {env.error}{env.hint ? ` — ${env.hint}` : ''}
+              {' '}Set <code>LOOM_UAMI_CLIENT_ID</code> and add that service principal to the
+              <strong> &quot;Service principals can use Power Platform APIs&quot;</strong> allow group in the
+              Power Platform admin centre. The full editor still renders below.
             </MessageBarBody>
           </MessageBar>
         )}
+
+        {/* Bind state banner */}
+        {!isNew && !isBound && (
+          <MessageBar intent="info">
+            <MessageBarBody>
+              <MessageBarTitle>This item isn&apos;t bound to a Power App yet</MessageBarTitle>
+              Pick an environment and an app below, then <strong>Bind this app</strong>. The binding is stored on
+              the item so detail, embed, and publish target the real Power App (not the Loom item id).
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {isNew && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Save the item first</MessageBarTitle>
+              A new Power App item must be created in a workspace before it can bind to a real app.
+              New canvas apps are authored in <code>make.powerapps.com</code>; create one there (or pick an
+              existing app once this item is saved) and bind it here.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {actionMsg && (
+          <MessageBar intent={actionMsg.kind}>
+            <MessageBarBody>{actionMsg.text}</MessageBarBody>
+          </MessageBar>
+        )}
+
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
-          <Button appearance="secondary" onClick={reloadList}>Reload</Button>
+          <Button appearance="secondary" onClick={reloadAll} disabled={listSt.loading}>Reload</Button>
           {env.selected && (
-            <Button appearance="primary" onClick={() => { setEmbedBlocked(false); setEmbedOpen(true); }}>
-              New canvas app in Studio
-            </Button>
+            <a href={makerHref} target="_blank" rel="noreferrer">Open Power Apps maker</a>
           )}
         </div>
-        {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
-        {!env.selected && !env.loading && <EmptyText>Select an environment to list its Power Apps.</EmptyText>}
-        {listSt.loading && <Spinner size="small" label="Loading apps…" labelPosition="after" />}
-        {listSt.error && <ErrorBar msg={listSt.error} hint={listSt.hint} />}
-        {!selected && apps.length === 0 && !listSt.loading && env.selected && !listSt.error && (
-          <EmptyText>No Power Apps in this environment.</EmptyText>
-        )}
-        {!selected && apps.length > 0 && (
+        {env.loading && <Spinner size="small" label="Loading environments…" labelPosition="after" />}
+        {!env.selected && !env.loading && !env.error && <EmptyText>Select an environment to list its Power Apps.</EmptyText>}
+
+        {/* ===== Bound (or previewing) app detail ===== */}
+        {(isBound || pick) && (
           <>
-            <Caption1>{apps.length} app(s)</Caption1>
-            <div className={s.tableWrap}>
-              <Table aria-label="Power Apps" size="small">
-                <TableHeader><TableRow>
-                  <TableHeaderCell>Name</TableHeaderCell>
-                  <TableHeaderCell>Type</TableHeaderCell>
-                  <TableHeaderCell>Owner</TableHeaderCell>
-                  <TableHeaderCell>Last modified</TableHeaderCell>
-                  <TableHeaderCell>Open</TableHeaderCell>
-                </TableRow></TableHeader>
-                <TableBody>
-                  {apps.map((a) => (
-                    <TableRow key={a.name}>
-                      <TableCell className={s.cellClickable} onClick={() => setSelected(a.name)}>
-                        <strong>{a.displayName}</strong>
-                      </TableCell>
-                      <TableCell className={s.cell}>{a.appType || '—'}</TableCell>
-                      <TableCell className={s.cell}>{a.owner?.displayName || a.owner?.email || '—'}</TableCell>
-                      <TableCell className={s.cell}>{a.lastModifiedTime || '—'}</TableCell>
-                      <TableCell className={s.cell}>
-                        {a.appOpenUri && <a href={a.appOpenUri} target="_blank" rel="noreferrer">Play</a>}
-                        {' · '}
-                        <a
-                          href="#"
-                          onClick={(e) => { e.preventDefault(); setSelected(a.name); setEmbedBlocked(false); setEmbedOpen(true); }}
-                        >Edit in Studio</a>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </>
-        )}
-        {selected && !embedOpen && (
-          <>
-            <Button appearance="subtle" onClick={() => setSelected(null)}>&larr; Back to apps</Button>
-            {detailSt.loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+            {pick && (
+              <Button appearance="subtle" onClick={() => { setPick(null); setTab('detail'); }}>&larr; Back to app list</Button>
+            )}
+            {detailSt.loading && <Spinner size="small" label="Loading app…" labelPosition="after" />}
             {detailSt.error && <ErrorBar msg={detailSt.error} hint={detailSt.hint} />}
-            {detailSt.data?.app && (
+            {app && (
               <>
-                <div className={s.metaGrid}>
-                  <span className={s.metaKey}>Display name</span><span><strong>{detailSt.data.app.displayName}</strong></span>
-                  <span className={s.metaKey}>Name (GUID)</span><span>{detailSt.data.app.name}</span>
-                  <span className={s.metaKey}>Type</span><span><Badge appearance="tint" color="brand">{detailSt.data.app.appType || '—'}</Badge></span>
-                  <span className={s.metaKey}>Owner</span><span>{detailSt.data.app.owner?.displayName || detailSt.data.app.owner?.email || '—'}</span>
-                  <span className={s.metaKey}>Created</span><span>{detailSt.data.app.createdTime || '—'}</span>
-                  <span className={s.metaKey}>Modified</span><span>{detailSt.data.app.lastModifiedTime || '—'}</span>
-                  <span className={s.metaKey}>Play URL</span><span>{detailSt.data.app.appOpenUri ? <a href={detailSt.data.app.appOpenUri} target="_blank" rel="noreferrer">{detailSt.data.app.appOpenUri}</a> : '—'}</span>
-                </div>
-                <Button appearance="primary" onClick={() => { setEmbedBlocked(false); setEmbedOpen(true); }}>
-                  Edit in Studio
-                </Button>
+                <Subtitle2>{app.displayName}</Subtitle2>
+                <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as PAppTab)}>
+                  <Tab value="detail">Details</Tab>
+                  <Tab value="play">{isModelDriven ? 'Open' : 'Play / embed'}</Tab>
+                </TabList>
+
+                {tab === 'detail' && (
+                  <>
+                    <div className={s.metaGrid}>
+                      <span className={s.metaKey}>Display name</span><span><strong>{app.displayName}</strong></span>
+                      <span className={s.metaKey}>App id</span><span><code>{app.name}</code></span>
+                      <span className={s.metaKey}>Type</span><span><Badge appearance="tint" color="brand">{app.appType || '—'}</Badge></span>
+                      <span className={s.metaKey}>Owner</span><span>{app.owner?.displayName || app.owner?.email || '—'}</span>
+                      <span className={s.metaKey}>Version</span><span>{app.appVersion || '—'}</span>
+                      <span className={s.metaKey}>Created</span><span>{app.createdTime || '—'}</span>
+                      <span className={s.metaKey}>Modified</span><span>{app.lastModifiedTime || '—'}</span>
+                      <span className={s.metaKey}>Shared with</span><span>{`${app.sharedUsersCount ?? 0} user(s), ${app.sharedGroupsCount ?? 0} group(s)`}</span>
+                      <span className={s.metaKey}>Play URL</span><span>{app.playerEmbedUri ? <a href={app.playerEmbedUri} target="_blank" rel="noreferrer">{app.playerEmbedUri}</a> : '—'}</span>
+                    </div>
+
+                    <Subtitle2 style={{ marginTop: 8 }}>Connectors / data sources</Subtitle2>
+                    {(app.connectionReferences && app.connectionReferences.length > 0)
+                      ? (
+                        <div className={s.tableWrap}>
+                          <Table aria-label="Connectors" size="small">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Connector</TableHeaderCell>
+                              <TableHeaderCell>Id</TableHeaderCell>
+                              <TableHeaderCell>Data sources</TableHeaderCell>
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {app.connectionReferences.map((c, i) => (
+                                <TableRow key={c.id || i}>
+                                  <TableCell className={s.cell}><strong>{c.displayName || c.id}</strong></TableCell>
+                                  <TableCell className={s.cell}>{c.id || '—'}</TableCell>
+                                  <TableCell className={s.cell}>{(c.dataSources || []).join(', ') || '—'}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )
+                      : <EmptyText>No connector references reported for this app.</EmptyText>}
+
+                    <div className={s.toolbar}>
+                      {pick && !isBound && (
+                        <Button appearance="primary" disabled={actionBusy} onClick={() => bind(app.name, app.appType)}>
+                          {actionBusy ? 'Binding…' : 'Bind this app'}
+                        </Button>
+                      )}
+                      {isBound && pick && pick.appId !== boundAppId && (
+                        <Button appearance="primary" disabled={actionBusy} onClick={() => bind(app.name, app.appType)}>
+                          {actionBusy ? 'Re-binding…' : 'Re-bind to this app'}
+                        </Button>
+                      )}
+                      <Button appearance="secondary" disabled={actionBusy} onClick={() => { void publish(); }}>
+                        {actionBusy ? 'Publishing…' : 'Publish latest revision'}
+                      </Button>
+                      <a href={makerAppHref(app.name)} target="_blank" rel="noreferrer">Open in maker</a>
+                    </div>
+                  </>
+                )}
+
+                {tab === 'play' && (
+                  <>
+                    {isModelDriven && (
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          <MessageBarTitle>Model-driven apps open in a new tab</MessageBarTitle>
+                          Model-driven apps render against the Dataverse environment URL and don&apos;t support
+                          third-party iframe embedding. Use the deep link below.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {canIframe && !embedBlocked && (
+                      <iframe
+                        title={`Power App player — ${app.displayName}`}
+                        src={app.playerEmbedUri}
+                        style={{ width: '100%', height: 720, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}
+                        allow="geolocation; microphone; camera; clipboard-write; clipboard-read"
+                        onError={() => setEmbedBlocked(true)}
+                      />
+                    )}
+                    {canIframe && embedBlocked && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>Embed blocked</MessageBarTitle>
+                          The web player refused to load in an iframe (tenant iframe policy or sign-in required).
+                          Open it directly:{' '}
+                          <a href={app.playerEmbedUri} target="_blank" rel="noreferrer">Open the app</a>.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {app.playerEmbedUri && (
+                      <Caption1>
+                        <a href={app.playerEmbedUri} target="_blank" rel="noreferrer">
+                          {isModelDriven ? 'Open in Power Apps' : 'Open player in a new tab'}
+                        </a>
+                        {canIframe && !embedBlocked && (
+                          <>{' · '}<a href="#" onClick={(e) => { e.preventDefault(); setEmbedBlocked(true); }}>use new-tab fallback</a></>
+                        )}
+                      </Caption1>
+                    )}
+                    {!app.playerEmbedUri && <EmptyText>No play URL available for this app.</EmptyText>}
+                  </>
+                )}
               </>
             )}
           </>
         )}
-        {embedOpen && (
+
+        {/* ===== App list (pick to bind / browse). Hidden while previewing a pick. ===== */}
+        {!pick && env.selected && (
           <>
-            <div className={s.toolbar}>
-              <Button appearance="subtle" onClick={() => setEmbedOpen(false)}>&larr; Close Studio</Button>
-              <Caption1>Embedded canvas designer · {selected ? `app: ${selected}` : 'new app'}</Caption1>
-            </div>
-            {embedBlocked && (
-              <MessageBar intent="warning">
-                <MessageBarBody>
-                  <MessageBarTitle>Embed blocked by Microsoft</MessageBarTitle>
-                  PowerApps Studio refused to load in an iframe (X-Frame-Options). Open the canvas in a
-                  new tab instead:{' '}
-                  <a
-                    href={selected ? `https://make.powerapps.com/e/${encodeURIComponent(env.selected || '')}/studio/${encodeURIComponent(selected)}` : `https://make.powerapps.com/e/${encodeURIComponent(env.selected || '')}/canvas`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open in Maker Studio
-                  </a>.
-                </MessageBarBody>
-              </MessageBar>
+            {listSt.loading && <Spinner size="small" label="Loading apps…" labelPosition="after" />}
+            {listSt.error && <ErrorBar msg={listSt.error} hint={listSt.hint} />}
+            {apps.length === 0 && !listSt.loading && !listSt.error && (
+              <EmptyText>No Power Apps in this environment.</EmptyText>
             )}
-            {!embedBlocked && (
-              <iframe
-                title="Power Apps Studio (embedded)"
-                src={selected ? studioUrl(selected) : makerNewUrl}
-                style={{ width: '100%', height: 720, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}
-                allow="clipboard-write; clipboard-read"
-                // Detect framing block: most browsers do not fire load if XFO refused.
-                // We add a short-fuse timer; if the iframe never loads we surface the fallback.
-                onLoad={() => setEmbedBlocked(false)}
-                ref={(el) => {
-                  if (!el) return;
-                  setTimeout(() => {
-                    try {
-                      // If accessing contentWindow.location throws (cross-origin), the
-                      // iframe did load — that's the normal case for an embedded
-                      // Microsoft Online page. Only treat the absence of a child as
-                      // blocked.
-                      // No reliable XFO detection without a sentinel page; keep the
-                      // user-driven fallback below.
-                      void el.contentWindow;
-                    } catch { /* expected for cross-origin */ }
-                  }, 3000);
-                }}
-              />
+            {apps.length > 0 && (
+              <>
+                <Caption1>{apps.length} app(s) in this environment{isBound ? ' — pick another to re-bind' : ' — pick one to bind'}</Caption1>
+                <div className={s.tableWrap}>
+                  <Table aria-label="Power Apps" size="small">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Name</TableHeaderCell>
+                      <TableHeaderCell>Type</TableHeaderCell>
+                      <TableHeaderCell>Owner</TableHeaderCell>
+                      <TableHeaderCell>Last modified</TableHeaderCell>
+                      <TableHeaderCell>Action</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {apps.map((a) => (
+                        <TableRow key={a.name}>
+                          <TableCell className={s.cellClickable} onClick={() => { setPick({ appId: a.name, appType: a.appType }); setTab('detail'); setEmbedBlocked(false); }}>
+                            <strong>{a.displayName}</strong>
+                            {a.name === boundAppId && <Badge size="small" appearance="tint" color="success" style={{ marginLeft: 6 }}>Bound</Badge>}
+                          </TableCell>
+                          <TableCell className={s.cell}>{a.appType || '—'}</TableCell>
+                          <TableCell className={s.cell}>{a.owner?.displayName || a.owner?.email || '—'}</TableCell>
+                          <TableCell className={s.cell}>{a.lastModifiedTime || '—'}</TableCell>
+                          <TableCell className={s.cell}>
+                            <a href="#" onClick={(e) => { e.preventDefault(); setPick({ appId: a.name, appType: a.appType }); setTab('detail'); }}>Open</a>
+                            {' · '}
+                            <a href="#" onClick={(e) => { e.preventDefault(); void bind(a.name, a.appType); }}>{a.name === boundAppId ? 'Re-bind' : 'Bind'}</a>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
             )}
-            <Caption1>
-              If the canvas above stays blank, click{' '}
-              <a
-                href="#"
-                onClick={(e) => { e.preventDefault(); setEmbedBlocked(true); }}
-              >use the new-tab fallback</a>.
-            </Caption1>
           </>
         )}
       </div>
