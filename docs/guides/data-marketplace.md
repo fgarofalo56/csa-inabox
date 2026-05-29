@@ -21,9 +21,9 @@
 > single browse-and-buy surface.
 
 This guide consolidates the components, the wiring sequence, and the
-operational patterns. It is the closest CSA gets to "the Snowflake
-Marketplace experience, but inside your Azure tenant, on your data,
-under your audit boundary."
+operational patterns. It delivers the kind of self-service data-marketplace
+experience associated with leading data-cloud platforms — but inside your
+Azure tenant, on your data, under your audit boundary.
 
 ---
 

@@ -1182,7 +1182,7 @@ flowchart TD
 
 - **[Self-Hosted Integration Runtime](../SELF_HOSTED_IR.md)** — deploying, scaling, and monitoring the SHIR that bridges on-prem to Azure
 - **[Azure Data Factory Setup](../ADF_SETUP.md)** — ADF pipeline artifacts, linked services, and CI/CD
-- **[Multi-Cloud Data Virtualization](../use-cases/multi-cloud-data-virtualization.md)** — broader virtualization patterns including AWS, GCP, and SaaS sources
+- **[Multi-Cloud Data Virtualization](../use-cases/multi-cloud-data-virtualization.md)** — broader virtualization patterns spanning other clouds and SaaS sources
 - **[Performance Tuning](../best-practices/performance-tuning.md)** — optimizing pipeline throughput and query performance
 - **[Security & Compliance](../best-practices/security-compliance.md)** — encryption, access control, and compliance patterns
 - **[Disaster Recovery](../best-practices/disaster-recovery.md)** — DR strategies including hybrid failover scenarios
