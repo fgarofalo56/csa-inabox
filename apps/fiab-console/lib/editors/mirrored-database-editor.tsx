@@ -134,6 +134,14 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
 
+  // Auto-pick the first workspace once loaded so "New mirror" / "Refresh list"
+  // enable immediately (and the list fetch auto-selects the first mirror,
+  // enabling Start / Stop / Status / Delete) instead of every button sitting
+  // disabled behind a manual workspace pick. Matches the Eventstream/Activator
+  // auto-pick pattern. Users can still switch via the picker.
+  useEffect(() => {
+    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
+  }, [workspaceId, ws.workspaces]);
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && mirrorId) loadDetail(workspaceId, mirrorId); }, [workspaceId, mirrorId, loadDetail]);
 
@@ -285,6 +293,19 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                 <MessageBarTitle>Fabric not reachable</MessageBarTitle>
                 {ws.error || listErr}
                 {(ws.hint || listHint) && <><br /><Caption1>{ws.hint || listHint}</Caption1></>}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {!ws.loading && !ws.error && (ws.workspaces?.length ?? 0) === 0 && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>No workspaces yet</MessageBarTitle>
+                Create a Fabric workspace first, then return here to mirror a database into it.
+                <br />
+                <Button appearance="primary" size="small" style={{ marginTop: 6 }}
+                  onClick={() => { try { window.location.assign('/workspaces'); } catch { /* noop */ } }}>
+                  Go to workspaces
+                </Button>
               </MessageBarBody>
             </MessageBar>
           )}
