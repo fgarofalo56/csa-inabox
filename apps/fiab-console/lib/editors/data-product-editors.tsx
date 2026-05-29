@@ -18,7 +18,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add20Regular, BoxToolbox20Regular, Rocket20Regular } from '@fluentui/react-icons';
+import { Add20Regular, BoxToolbox20Regular, Rocket20Regular, Search20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -72,6 +72,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
   const [displayName, setDisplayName] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const [filter, setFilter] = useState('');
   const ws = useWorkspaces();
 
   const [refreshing, setRefreshing] = useState(false);
@@ -120,10 +121,20 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
   }, [selected, workspaceId, displayName]);
 
   const canSpawn = !!selected && !!workspaceId && !!displayName && !busy;
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return templates;
+    return templates.filter((t) =>
+      t.displayName.toLowerCase().includes(q) ||
+      t.category.toLowerCase().includes(q) ||
+      t.description.toLowerCase().includes(q) ||
+      t.components.some((c) => c.label.toLowerCase().includes(q) || c.slug.toLowerCase().includes(q)),
+    );
+  }, [templates, filter]);
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Library', actions: [
-        { label: 'Browse', disabled: true, title: 'cross-catalog template browser deferred (only curated templates surfaced today)' },
+        { label: 'Browse all', onClick: () => setSelected(null) },
         { label: refreshing ? 'Refreshing…' : 'Refresh', onClick: refreshing ? undefined : refresh, disabled: refreshing },
       ]},
       { label: 'Instantiate', actions: [
@@ -145,8 +156,16 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
       main={
         <div className={s.pad}>
           {!selected ? (
+            <>
+            <Input
+              value={filter}
+              onChange={(_, d) => setFilter(d.value)}
+              placeholder="Search templates by name, category, or component…"
+              contentBefore={<Search20Regular />}
+              style={{ maxWidth: 420 }}
+            />
             <div className={s.grid}>
-              {templates.map((t) => (
+              {filtered.map((t) => (
                 <div key={t.slug} className={s.card} onClick={() => setSelected(t)}>
                   <Subtitle2>{t.displayName}</Subtitle2>
                   <Caption1>{t.category} · ~${t.estimatedMonthlyCostUsd.toLocaleString()}/mo</Caption1>
@@ -154,7 +173,9 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
                   <Caption1 style={{ marginTop: 6 }}>{t.components.length} components</Caption1>
                 </div>
               ))}
+              {filtered.length === 0 && <Caption1>No templates match "{filter}".</Caption1>}
             </div>
+            </>
           ) : (
             <>
               <div>
