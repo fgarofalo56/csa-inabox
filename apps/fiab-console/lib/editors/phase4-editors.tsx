@@ -27,6 +27,8 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
+import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph';
+import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
 import {
@@ -1007,6 +1009,20 @@ interface OntoState { source: string; [k: string]: unknown }
 // `parseOntologyHierarchy` is imported from `_family-utils` (vitest coverage
 // at `lib/editors/__tests__/family-utils.test.ts`).
 
+// Render the parsed ontology class hierarchy as an IS_A force-directed graph.
+function OntologyHierarchyViz({ classes }: { classes: { name: string; parent?: string; description?: string }[] }) {
+  const g = useMemo(() => {
+    const ids = new Set(classes.map((c) => c.name));
+    const nodes = classes.map((c) => ({ id: c.name, label: c.name }));
+    const edges = classes
+      .filter((c) => c.parent && ids.has(c.parent))
+      .map((c) => ({ source: c.name, target: c.parent as string, label: 'is_a' }));
+    return { nodes, edges };
+  }, [classes]);
+  if (g.nodes.length === 0) return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add a class to see the hierarchy graph.</Caption1>;
+  return <ForceDirectedGraph nodes={g.nodes} edges={g.edges} width={320} height={260} />;
+}
+
 export function OntologyEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<OntoState>('ontology', id, { source: ONTO_SAMPLE });
@@ -1160,6 +1176,8 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
                 </TreeItem>
               ))}
             </Tree>
+            <Subtitle2 style={{ marginTop: 12 }}>Hierarchy graph</Subtitle2>
+            <OntologyHierarchyViz classes={classes} />
             <Button appearance="primary" disabled={materializing || classes.length === 0} onClick={materializeToGraphModel} style={{ marginTop: 8, alignSelf: 'flex-start' }}>
               {materializing ? 'Materializing…' : `Materialize as graph-model (${classes.length} class${classes.length === 1 ? '' : 'es'})`}
             </Button>
@@ -1232,6 +1250,28 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
 // ----- Graph Model (Cosmos config + real ADX materialize) -----
 interface GraphDecl { name: string; properties: { name: string; type: string }[] }
 interface GraphState { nodes: GraphDecl[]; edges: GraphDecl[]; database: string; lastMaterializedAt?: string; [k: string]: unknown }
+
+// Derive a force-directed graph from the graph-model schema: one node per
+// node type, one edge per edge type. Edges that recorded srcType/dstType
+// connect the right node types; otherwise they fan from the first node type.
+function GraphModelSchemaViz({ nodes, edges }: { nodes: GraphDecl[]; edges: GraphDecl[] }) {
+  const g = useMemo(() => {
+    const vizNodes = nodes.map((n) => ({ id: n.name, label: n.name }));
+    const ids = new Set(vizNodes.map((n) => n.id));
+    const vizEdges = edges.map((e) => {
+      const src = e.properties?.find((p) => p.name === 'srcType')?.type;
+      const dst = e.properties?.find((p) => p.name === 'dstType')?.type;
+      // srcType/dstType were stored as property *types* in the add dialog when
+      // a from/to node was chosen; fall back to first/last node type.
+      const source = (src && ids.has(src) ? src : nodes[0]?.name) || e.name;
+      const target = (dst && ids.has(dst) ? dst : nodes[nodes.length - 1]?.name) || e.name;
+      return { source, target, label: e.name };
+    });
+    return { nodes: vizNodes, edges: vizEdges };
+  }, [nodes, edges]);
+  if (g.nodes.length === 0) return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add a node type to see the schema graph.</Caption1>;
+  return <ForceDirectedGraph nodes={g.nodes} edges={g.edges} height={300} />;
+}
 
 export function GraphModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -1360,6 +1400,11 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
             <MonacoTextarea value={JSON.stringify(state.edges, null, 2)} onChange={(v) => editJson('edges', v)} language="json" height={260} minHeight={200} ariaLabel="Edge types JSON" />
           </div>
         </div>
+        <Subtitle2 style={{ marginTop: 8 }}>Schema graph</Subtitle2>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Node types are vertices; edge types whose properties carry <code>srcType</code> / <code>dstType</code> connect them, others link to a shared hub.
+        </Caption1>
+        <GraphModelSchemaViz nodes={state.nodes} edges={state.edges} />
         {state.lastMaterializedAt && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Last materialized {new Date(state.lastMaterializedAt).toLocaleString()}</Caption1>
         )}
@@ -1558,10 +1603,12 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   const [validateMsg, setValidateMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   let parseErr: string | null = null;
   let featureCount = 0;
+  let parsedGeo: unknown = null;
   // bbox + zoom computed via `_family-utils` (vitest-covered).
   let bbox: { minLon: number; maxLon: number; minLat: number; maxLat: number } | null = null;
   try {
     const j = JSON.parse(state.geojson);
+    parsedGeo = j;
     featureCount = Array.isArray(j?.features) ? j.features.length : 0;
     bbox = computeGeoBbox(j);
   } catch (e: any) { parseErr = e?.message || String(e); }
@@ -1602,23 +1649,23 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         {!mapsKey && (
-          <MessageBar intent="warning">
+          <MessageBar intent="info">
             <MessageBarBody>
-              <MessageBarTitle>Azure Maps tile preview disabled</MessageBarTitle>
-              GeoJSON persists to Cosmos and validates correctly. To enable the tile preview below, set <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> in the Container App env to a key from an Azure Maps account (or use MI-auth via the future <code>/api/items/map/[id]/preview</code> proxy). Vector overlay rendering of the GeoJSON itself (atlas.data.Source) lands in v2.x.
+              <MessageBarTitle>Vector overlay rendered offline</MessageBarTitle>
+              The GeoJSON features render as a live SVG overlay below — no Azure Maps account required. To layer an
+              Azure Maps raster basemap <em>behind</em> the overlay, set <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> in
+              the Container App env to a key from a <code>Microsoft.Maps/accounts</code> resource.
             </MessageBarBody>
           </MessageBar>
         )}
         <Subtitle2>GeoJSON ({featureCount} feature{featureCount === 1 ? '' : 's'})</Subtitle2>
-        <MonacoTextarea value={state.geojson} onChange={(v) => setState((p) => ({ ...p, geojson: v }))} language="json" height={320} minHeight={240} ariaLabel="GeoJSON" />
+        <MonacoTextarea value={state.geojson} onChange={(v) => setState((p) => ({ ...p, geojson: v }))} language="json" height={280} minHeight={200} ariaLabel="GeoJSON" />
         {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid JSON: {parseErr}</MessageBarBody></MessageBar>}
         {validateMsg && <MessageBar intent={validateMsg.intent}><MessageBarBody>{validateMsg.text}</MessageBarBody></MessageBar>}
-        {tileUrl && (
+        {!parseErr && (
           <>
-            <Subtitle2>Azure Maps preview (zoom {zoom}, center {centerLat.toFixed(3)}, {centerLon.toFixed(3)})</Subtitle2>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={tileUrl} alt="Azure Maps tile preview" style={{ width: '100%', maxWidth: 640, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}` }} />
-            <Caption1>Static-map preview only — features above are NOT rendered as overlays in this snapshot. Use the vector overlay path in v2.x for live layer rendering.</Caption1>
+            <Subtitle2>Map{tileUrl ? ` (Azure Maps basemap · zoom ${zoom}, center ${centerLat.toFixed(3)}, ${centerLon.toFixed(3)})` : ' (vector overlay)'}</Subtitle2>
+            <GeoJsonMap geojson={parsedGeo} rasterUrl={tileUrl} />
           </>
         )}
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
