@@ -20,6 +20,7 @@ import {
   CsError,
   CsNotConfiguredError,
 } from '@/lib/azure/foundry-cs-client';
+import { selectorFromBody } from '../_selector';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
       maxTokens: typeof body.maxTokens === 'number' ? body.maxTokens : undefined,
       topP: typeof body.topP === 'number' ? body.topP : undefined,
       stop: Array.isArray(body.stop) ? body.stop.map(String).filter(Boolean) : undefined,
-    });
+    }, selectorFromBody(body));
     return NextResponse.json({ ok: true, result });
   } catch (e: any) {
     if (e instanceof CsNotConfiguredError) {

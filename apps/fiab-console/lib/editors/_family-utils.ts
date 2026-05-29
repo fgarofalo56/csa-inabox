@@ -212,3 +212,69 @@ export function bboxToZoom(bbox: BBox | null): number {
   const span = Math.max(bbox.maxLon - bbox.minLon, bbox.maxLat - bbox.minLat);
   return Math.max(1, Math.min(18, Math.round(11 - Math.log2(Math.max(span, 0.0001)))));
 }
+
+// ============================================================
+// Data Agent source normalization (phase4-editors.tsx — DataAgentEditor)
+// ============================================================
+
+export type DaSourceType = 'warehouse' | 'lakehouse' | 'kql' | 'semantic-model' | 'ai-search';
+
+export interface DaSource {
+  id: string;
+  type: DaSourceType;
+  name: string;
+  tables?: string;
+  instructions?: string;
+  examples?: { question: string; query: string }[];
+}
+
+const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n\n## When asked about\n';
+const DA_SOURCE_TYPE_VALUES: DaSourceType[] = ['warehouse', 'lakehouse', 'kql', 'semantic-model', 'ai-search'];
+
+/** Guess a DaSourceType from a free-text legacy source name. */
+export function guessDaSourceType(name: string): DaSourceType {
+  const n = name.toLowerCase();
+  if (/semantic|dataset|power\s*bi|\bpbi\b/.test(n)) return 'semantic-model';
+  if (/lakehouse|\blh\b|delta|gold|silver|bronze/.test(n)) return 'lakehouse';
+  if (/kql|kusto|eventhouse|adx/.test(n)) return 'kql';
+  if (/ai\s*search|search\s*index|\bindex\b|vector/.test(n)) return 'ai-search';
+  if (/warehouse|\bdw\b|\bwh\b|synapse/.test(n)) return 'warehouse';
+  return 'warehouse';
+}
+
+/**
+ * Coerce a persisted `sources` value into a clean DaSource[].
+ *
+ * A legacy data-agent record could persist `sources` as a comma-separated
+ * STRING (e.g. "fin-warehouse, orders semantic model, ldn-gold-lakehouse") —
+ * calling `.map`/`.length` on that string is the confirmed
+ * `eo.map is not a function` crash. This best-effort parses the legacy string
+ * into typed sources and normalizes already-array values (filling missing
+ * id/type/name). Any other shape (object/null/number) → [].
+ */
+export function normalizeDaSources(raw: unknown): DaSource[] {
+  const slugify = (s: string, fb: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || fb;
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((x) => x && typeof x === 'object')
+      .map((x: any, i): DaSource => {
+        const name = String(x.name ?? x.id ?? `source-${i + 1}`).trim();
+        const type: DaSourceType = DA_SOURCE_TYPE_VALUES.includes(x.type) ? x.type : guessDaSourceType(name);
+        return {
+          id: typeof x.id === 'string' && x.id ? x.id : `${type}:${slugify(name, `src-${i + 1}`)}:legacy`,
+          type,
+          name,
+          tables: typeof x.tables === 'string' ? x.tables : '',
+          instructions: typeof x.instructions === 'string' ? x.instructions : DA_INSTRUCTION_TEMPLATE,
+          examples: Array.isArray(x.examples) ? x.examples : [],
+        };
+      });
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    return raw.split(',').map((tok) => tok.trim()).filter(Boolean).map((name): DaSource => {
+      const type = guessDaSourceType(name);
+      return { id: `${type}:${slugify(name, 'src')}:legacy`, type, name, tables: '', instructions: DA_INSTRUCTION_TEMPLATE, examples: [] };
+    });
+  }
+  return [];
+}
