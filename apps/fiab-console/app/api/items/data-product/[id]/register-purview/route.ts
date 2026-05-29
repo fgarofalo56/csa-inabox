@@ -88,8 +88,12 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     );
   }
 
-  // 2. Build payload and call Purview.
+  // 2. Build payload and call Purview. Re-register reuses the previously
+  // minted Unified Catalog id (stored on the item) so we update the SAME
+  // product rather than spawning a duplicate.
+  const existingId = (state.purviewDataProductId as string) || undefined;
   const payload: PurviewDataProductPayload = {
+    id: existingId,
     displayName: displayName.trim(),
     description: description || undefined,
     domain: domain.trim(),
