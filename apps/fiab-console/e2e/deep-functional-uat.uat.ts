@@ -215,8 +215,25 @@ test.describe.serial('Deep functional UAT — every catalog item', () => {
 
       const visualDesignerOk = VISUAL_DESIGNERS.has(item.slug) ? await probeVisualDesigner(page) : null;
 
+      // Detect HONEST-STUB disclosures: a visible banner admitting the editor
+      // is incomplete ("Phase 1 stub", "deferred to follow-up", "tracked in
+      // docs/...parity-spec", "coming soon"). These are NOT A-grade no matter
+      // how many buttons click — the editor itself says it isn't done. Also
+      // flag a high ratio of deferred-tooltip disabled buttons.
+      const stubBanner = await page.evaluate(() => {
+        const main = document.querySelector('main');
+        const txt = (main?.textContent || '').toLowerCase();
+        const phrases = [
+          'phase 1', 'deploy stub', 'deferred to', 'tracked in docs', 'parity-spec',
+          'follow-up session', 'follow-on phase', 'coming soon', 'tracked for follow',
+        ];
+        const hit = phrases.find(p => txt.includes(p));
+        return hit || null;
+      });
+      const deferredDisabled = disabled.filter(b => /deferred|coming soon|follow-up|v2|v3/i.test(b)).length;
+
       const screenshotPath = path.join(SCREENSHOT_DIR, `${item.slug}.png`);
-      await page.screenshot({ path: screenshotPath, fullPage: false });
+      await page.screenshot({ path: screenshotPath, fullPage: false, timeout: 30_000 }).catch(() => {});
 
       // Verdict — functional behavior first, canvas penalty only for genuine
       // drag-drop designers that are otherwise non-functional.
@@ -232,7 +249,11 @@ test.describe.serial('Deep functional UAT — every catalog item', () => {
       let verdict: FunctionalResult['verdict'] = 'F';
       const functional = primaryAction.clicked && !primaryAction.toastSeen?.startsWith('click-error');
       const canvasMissing = visualDesignerOk === false;
+      // An editor that ADMITS it's incomplete (stub banner) or has a meaningful
+      // number of "deferred to vN" disabled buttons cannot be A — cap at C.
+      const incomplete = !!stubBanner || deferredDisabled >= 2;
       if (enabled.length === 0) verdict = 'F';
+      else if (incomplete) verdict = 'C'; // honest stub / deferred features — not done
       else if (functional && !canvasMissing) {
         // B → A when an automated test covers it; A+ when it also ships a Learn popup.
         const hasTest = TESTED_SLUGS.has(item.slug);
