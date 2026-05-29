@@ -106,7 +106,7 @@ Microsoft Fabric represents the next generation of Microsoft's unified analytics
 
 ### Multi-Cloud & Data Virtualization
 
-Enterprises with data distributed across AWS, GCP, on-premises, and SaaS platforms need to query and govern data in place — without copying it everywhere.
+Enterprises with data distributed across multiple public clouds, on-premises, and SaaS platforms need to query and govern data in place — without copying it everywhere.
 
 | Use Case                                                                         | Description                                                                                                                                                                 |
 | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

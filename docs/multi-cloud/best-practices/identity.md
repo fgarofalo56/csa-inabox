@@ -28,8 +28,8 @@ gets one identity, one MFA, one audit trail, one offboarding.
 The pattern below uses **Microsoft Entra ID** as the federation
 hub. The same architectural shape works with Okta, PingFederate,
 or Keycloak as the hub; we anchor on Entra because most enterprises
-already license it for Microsoft 365 and the Conditional Access
-engine is the most mature in the market.
+already license it for Microsoft 365 and its Conditional Access
+engine is mature and widely deployed.
 
 ## The architecture
 

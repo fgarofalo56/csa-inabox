@@ -30,7 +30,7 @@ Microsoft Fabric consolidates these workloads into a single SaaS platform built 
 Fabric introduces **OneLake**, a tenant-wide logical data lake that serves as the single storage layer for all Fabric workloads. Key architectural properties:
 
 - **Single copy of data**: OneLake stores all data in Delta Parquet format by default. Spark notebooks, SQL analytics, KQL queries, and Power BI all read from the same physical files — no import copies, no extract pipelines between engines.
-- **Shortcuts and mirroring**: OneLake shortcuts create logical pointers to data in external storage (ADLS Gen2, S3, GCS, Dataverse) without copying bytes. Mirroring replicates operational databases (Azure SQL, Cosmos DB, Snowflake) into OneLake as Delta Parquet in near real-time.
+- **Shortcuts and mirroring**: OneLake shortcuts create logical pointers to data in external storage (ADLS Gen2, S3, GCS, Dataverse) without copying bytes. Mirroring replicates operational databases (Azure SQL, Cosmos DB, and supported third-party warehouses) into OneLake as Delta Parquet in near real-time.
 - **Zero-ETL between engines**: A table written by a Spark notebook is immediately queryable from the SQL analytics endpoint and from Power BI via Direct Lake — no staging, no materialization pipeline.
 - **Unified capacity model**: A single Fabric capacity (F-SKU) powers Spark, SQL, Data Factory pipelines, KQL, and Power BI. Capacity scales vertically and pauses when idle.
 

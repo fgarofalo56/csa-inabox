@@ -228,8 +228,8 @@ flowchart LR
 
 ## Anti-patterns
 
-- **Writing to Redshift, BigQuery, or Snowflake native columnar
-  formats as the source of truth.** These are warehouse-output
+- **Writing to a warehouse's native columnar format as the source
+  of truth.** Proprietary warehouse formats are warehouse-output
   formats, not source-of-truth formats. Land data in Delta /
   Iceberg first; let the warehouse query through external tables.
 - **Replicating the full lakehouse to every cloud.** This is the

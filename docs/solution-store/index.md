@@ -1,6 +1,6 @@
 ---
 title: "Azure API-First Solution Store"
-description: "A curated catalog of shippable Azure accelerators that operationalize the API-first data strategy pillar. Each entry includes scope, deployment artifacts (Bicep / Terraform / policies / sample code), required services, accreditation boundary, and a one-paragraph 'when to use' guide. Designed as a takeout/take-down portfolio against MuleSoft Anypoint Platform and the AWS API stack."
+description: "A curated catalog of shippable Azure accelerators that operationalize the API-first data strategy pillar. Each entry includes scope, deployment artifacts (Bicep / Terraform / policies / sample code), required services, accreditation boundary, and a one-paragraph 'when to use' guide. Useful when comparing Azure against a competing integration platform or a competing cloud's API stack."
 audience: "Customer architects, integration platform owners, federal mission delivery teams"
 last_updated: 2026-05-15
 ---
@@ -23,7 +23,7 @@ last_updated: 2026-05-15
 
 ## What's here
 
-This is the curated catalog of Azure accelerators for the **API-First Data Strategy** pillar. Each entry is engineered to displace a specific MuleSoft Anypoint or AWS API-stack capability with a more complete, more integrated, more cost-effective Azure equivalent.
+This is the curated catalog of Azure accelerators for the **API-First Data Strategy** pillar. Each entry provides an integrated, cost-effective Azure equivalent to a specific capability found in a competing integration platform or a competing cloud's API stack. Compare any competitor's capability against its current official documentation.
 
 Treat this page as a **portfolio one-pager** for customer conversations and a **navigation page** for the implementing artifacts in the repo.
 
@@ -89,21 +89,21 @@ Treat this page as a **portfolio one-pager** for customer conversations and a **
 
     Best practice: [API-first data strategy](../best-practices/api-first-data-strategy.md)
 
--   :material-target:{ .lg .middle } **MuleSoft Displacement Kit**
+-   :material-target:{ .lg .middle } **Integration-Platform Migration Kit**
 
     ---
 
-    Migration playbook for moving from MuleSoft Anypoint to Azure. Includes the strangler-fig sequencing, DataWeave audit checklist, connector mapping table, and an ROI worksheet.
+    Migration playbook for moving from a competing integration platform to Azure. Includes the strangler-fig sequencing, transformation-logic audit checklist, connector mapping table, and an ROI worksheet.
 
-    Comparison: [Azure vs MuleSoft Anypoint Platform](../comparison/azure-vs-mulesoft.md)
+    Comparison: [Azure vs a competing integration platform](../comparison/azure-vs-mulesoft.md)
 
--   :material-target:{ .lg .middle } **AWS API Stack Displacement Kit**
+-   :material-target:{ .lg .middle } **Competing-Cloud API Stack Migration Kit**
 
     ---
 
-    Migration playbook for moving from AWS API Gateway + Cognito + Lambda authorizers + EventBridge + AppFlow + Step Functions to the Azure equivalent. Co-existence patterns for keeping AWS data in place.
+    Migration playbook for moving from a competing cloud's API gateway, identity, serverless-authorizer, eventing, data-flow, and orchestration services to the Azure equivalent. Co-existence patterns for keeping the competitor's data in place.
 
-    Comparison: [Azure vs AWS API stack](../comparison/azure-vs-aws-api-stack.md)
+    Comparison: [Azure vs a competing cloud's API stack](../comparison/azure-vs-aws-api-stack.md)
 
 -   :material-chart-line:{ .lg .middle } **AI Chargeback Dashboard**
 
@@ -119,21 +119,23 @@ Treat this page as a **portfolio one-pager** for customer conversations and a **
 
 ## Accelerator coverage map
 
-How the accelerators displace specific competitor capabilities:
+How the accelerators map to capabilities a customer may evaluate on a
+competing integration platform or a competing cloud's API stack. Confirm any
+competitor's current capability against its own official documentation:
 
-| Customer need | MuleSoft | AWS | Azure accelerator |
-|---|---|---|---|
-| API gateway | API Manager | API Gateway | **APIM API-First Starter** |
-| LLM gateway features | (none) | (none) | **APIM API-First Starter** + LLM policy bundle |
-| Agent tool layer | (none) | Bedrock Agents (limited) | **APIM + MCP Layered Orchestration** |
-| Universal CRM/data API | Salesforce connector | AppFlow Dynamics 365 | **Dataverse API Integration Pack** |
-| Operational system façade | Composer | AppFlow | **EAM-on-APIM Façade** |
-| Federal governance | Anypoint Government Cloud | AWS GovCloud | **Zero-Trust API Governance Kit (Federal)** |
-| Cross-cloud data access | Mule connectors | (movement-based) | **Cross-Cloud Zero-Move Pattern** |
-| No-code agent + connector | Composer | Q Apps | **Copilot Studio + APIM Connector Pack** |
-| Cost governance for AI | (none native) | (DIY) | **AI Chargeback Dashboard** |
-| MuleSoft migration | — | — | **MuleSoft Displacement Kit** |
-| AWS migration | — | — | **AWS API Stack Displacement Kit** |
+| Customer need | Where competitors typically position | Azure accelerator |
+|---|---|---|
+| API gateway | A managed API gateway service | **APIM API-First Starter** |
+| LLM gateway features | Often requires custom assembly | **APIM API-First Starter** + LLM policy bundle |
+| Agent tool layer | Varies; some offer agent frameworks | **APIM + MCP Layered Orchestration** |
+| Universal CRM/data API | Per-system connectors | **Dataverse API Integration Pack** |
+| Operational system façade | Integration / data-flow tooling | **EAM-on-APIM Façade** |
+| Federal governance | Government-cloud offering | **Zero-Trust API Governance Kit (Federal)** |
+| Cross-cloud data access | Often connector- or movement-based | **Cross-Cloud Zero-Move Pattern** |
+| No-code agent + connector | Low-code composer / app tooling | **Copilot Studio + APIM Connector Pack** |
+| Cost governance for AI | Often DIY | **AI Chargeback Dashboard** |
+| Migration from a competing integration platform | — | **Integration-Platform Migration Kit** |
+| Migration from a competing cloud's API stack | — | **Competing-Cloud API Stack Migration Kit** |
 
 ---
 
@@ -164,7 +166,7 @@ Each accelerator carries its own README with prerequisites, deployment commands,
 2. **Stand up the `APIM API-First Starter`** as the foundation.
 3. **Layer the accelerator(s)** that match your first use case.
 4. **Wire telemetry into the AI Chargeback Dashboard** from day one.
-5. **Engage the Displacement Kit** for the incumbent platform (MuleSoft or AWS) to plan strangler-fig migration.
+5. **Engage the Migration Kit** for the incumbent competing platform to plan strangler-fig migration.
 
 ---
 
@@ -178,7 +180,7 @@ Each accelerator carries its own README with prerequisites, deployment commands,
 | Copilot Studio + APIM Connector Pack | Pattern documented; connector template planned next |
 | Zero-Trust API Governance Kit (Federal) | Pattern documented; Bicep bundle planned next |
 | AI Chargeback Dashboard | KQL queries published; Power BI PBIT planned next |
-| MuleSoft / AWS Displacement Kits | Playbooks published; spreadsheet ROI templates planned next |
+| Migration Kits (competing integration platform / cloud API stack) | Playbooks published; spreadsheet ROI templates planned next |
 
 This page tracks the roadmap; entries graduate from pattern → reference implementation → fully runnable accelerator as engineering work lands.
 
@@ -188,6 +190,6 @@ This page tracks the roadmap; entries graduate from pattern → reference implem
 
 - [Whitepaper — API-first data strategy on Azure](../research/api-first-data-strategy-whitepaper.md)
 - [Reference architecture — API-first multi-model ecosystem](../reference-architecture/api-first-multi-model-ecosystem.md)
-- [Comparison — Azure vs MuleSoft Anypoint Platform](../comparison/azure-vs-mulesoft.md)
-- [Comparison — Azure vs AWS API stack](../comparison/azure-vs-aws-api-stack.md)
+- [Comparison — Azure vs a competing integration platform](../comparison/azure-vs-mulesoft.md)
+- [Comparison — Azure vs a competing cloud's API stack](../comparison/azure-vs-aws-api-stack.md)
 - [ADR-0025 — APIM as the integration fabric](../adr/0025-apim-as-integration-fabric.md)

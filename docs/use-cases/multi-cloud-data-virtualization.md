@@ -36,9 +36,9 @@ The traditional answer — copy everything into one place — creates more probl
 !!! info "What Data Virtualization Is Not"
 Data virtualization is not a replacement for a data warehouse. It is a complementary pattern. Some data should be materialized (copied, transformed, stored) for performance. Other data should be virtualized (queried in place) for freshness, cost, or compliance. The art is knowing which is which.
 
-### Why Azure Is Uniquely Positioned as the Core
+### Why Azure Is Well Positioned as the Core
 
-Azure is the only cloud platform that provides the complete stack required to serve as the core of a multi-cloud data virtualization architecture. No other cloud comes close to this combination:
+Azure provides a broad, integrated stack for serving as the core of a multi-cloud data virtualization architecture. The combination below is a strong fit for this role; evaluate competing clouds against their own current documentation:
 
 | Capability                        | Azure Service                               | What It Does                                                                                     |
 | --------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -49,7 +49,7 @@ Azure is the only cloud platform that provides the complete stack required to se
 | Unified multi-cloud governance    | **Microsoft Purview**                       | Scans, catalogs, classifies, and tracks lineage across AWS, GCP, on-prem, and SaaS               |
 | Cross-cloud data integration      | **Azure Data Factory**                      | 100+ connectors with Mapping Data Flows for in-place transformation                              |
 
-AWS and GCP each have strong analytics services — but they are designed to work within their own ecosystems. Azure is designed to work across all of them.
+Other major clouds each have strong analytics services — many of which are optimized primarily for their own ecosystems. Azure's design emphasis here is working across clouds; confirm any competitor's cross-cloud capabilities against its current documentation.
 
 ---
 
@@ -125,22 +125,26 @@ graph TB
 
 ---
 
-## Why Azure as the Core — Technical Comparison
+## Why Azure as the Core — Capability Comparison
 
-This is not a marketing claim. It is an architectural reality based on what each cloud platform actually offers today.
+The table below summarizes where Azure's cross-cloud capabilities land for
+this architecture, alongside how the comparable building blocks on competing
+clouds are commonly positioned. Competing clouds' native services are often
+optimized first for their own ecosystem; confirm each one against the
+competitor's current official documentation before deciding.
 
-| Capability                           | Azure                                                                                                           | AWS                                                      | GCP                                                           |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------- |
-| **Multi-cloud management plane**     | Azure Arc — projects Azure Resource Manager to any infra (AWS EC2, GCP VMs, on-prem servers, edge)              | None. AWS Systems Manager is AWS-only.                   | Anthos — Kubernetes-focused, limited data service support     |
-| **Cross-cloud data shortcuts**       | OneLake shortcuts to S3, GCS, ADLS, Dataverse — zero-copy, metadata-only references                             | None. Lake Formation is S3-only.                         | BigQuery Omni runs on AWS/Azure but queries GCS natively only |
-| **Serverless cross-cloud SQL**       | Synapse serverless SQL pools — OPENROWSET queries Parquet/Delta/CSV in S3, GCS, ADLS, HTTP endpoints            | Athena — S3 only, no native cross-cloud                  | BigQuery — GCS only for external tables, limited cross-cloud  |
-| **Unified multi-cloud governance**   | Microsoft Purview — scans AWS S3, RDS, Redshift, GCS, BigQuery, Snowflake, Oracle, SAP, Salesforce, on-prem SQL | AWS Glue Data Catalog — AWS services only                | Dataplex — GCP services only                                  |
-| **Hybrid identity**                  | Microsoft Entra ID + Arc — single identity plane across all clouds and on-prem                                  | IAM — AWS-scoped, federate via SAML/OIDC only            | Cloud Identity — GCP-scoped                                   |
-| **BI with live cross-cloud queries** | Power BI DirectQuery + composite models — 100+ native connectors, query any source live                         | QuickSight — limited DirectQuery, primarily SPICE import | Looker — strong modeling but limited live connectivity        |
-| **Data integration connectors**      | ADF — 100+ built-in connectors including SAP, Salesforce, Oracle, Dynamics, mainframes                          | Glue — fewer connectors, AWS-focused                     | Dataflow — GCP ecosystem focused                              |
+| Capability                           | Azure                                                                                                           | Competing clouds (typical positioning — verify against vendor docs) |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **Multi-cloud management plane**     | Azure Arc — projects Azure Resource Manager to any infra (other clouds' VMs, on-prem servers, edge)             | A competitor's management plane is typically scoped to that cloud, or Kubernetes-focused with limited data-service support |
+| **Cross-cloud data shortcuts**       | OneLake shortcuts to S3, GCS, ADLS, Dataverse — zero-copy, metadata-only references                             | A competitor's catalog/lake feature is often limited to its own object store, or queries other clouds' storage with constraints |
+| **Serverless cross-cloud SQL**       | Synapse serverless SQL pools — OPENROWSET queries Parquet/Delta/CSV in S3, GCS, ADLS, HTTP endpoints            | A competitor's serverless query engine is commonly tied to its own object store, with limited native cross-cloud reach |
+| **Unified multi-cloud governance**   | Microsoft Purview — scans across S3, GCS, multiple warehouses, on-prem SQL, and SaaS sources                    | A competitor's data catalog typically governs that cloud's own services |
+| **Hybrid identity**                  | Microsoft Entra ID + Arc — single identity plane across all clouds and on-prem                                  | A competitor's identity service is generally scoped to that cloud, with federation via SAML/OIDC |
+| **BI with live cross-cloud queries** | Power BI DirectQuery + composite models — 100+ native connectors, query any source live                         | A competitor's BI tool may favor import/extract or offer narrower live connectivity |
+| **Data integration connectors**      | ADF — 100+ built-in connectors across ERP, CRM, databases, and mainframes                                       | A competitor's integration service often has fewer connectors and is focused on its own ecosystem |
 
-!!! tip "The Key Differentiator"
-Azure Arc + Purview + OneLake shortcuts is a combination no other cloud can replicate. It gives you a single management plane, a single governance catalog, and zero-copy data access — across every cloud and on-premises environment — from one control point.
+!!! tip "The combination that stands out"
+Azure Arc + Purview + OneLake shortcuts together give you a single management plane, a single governance catalog, and zero-copy data access — across clouds and on-premises — from one control point. Compare any competing combination against the relevant vendor documentation.
 
 ---
 

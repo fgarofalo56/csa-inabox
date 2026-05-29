@@ -14,14 +14,14 @@
 > documentation before making decisions.
 
 
-Customers migrating from Tableau / Qlik / on-prem Power BI Report
-Server use the CSA Loom **Direct-Lake-Shim warm-cache materializer
+Customers migrating from a third-party BI platform or on-prem Power BI
+Report Server use the CSA Loom **Direct-Lake-Shim warm-cache materializer
 pattern** to get Power BI Premium semantic models with framed-like
 freshness (5-30 s) — without waiting for Fabric Gov GA.
 
 ## When this pattern fits
 
-- Customer has aging on-prem BI server (Tableau Server / Qlik Sense
+- Customer has aging on-prem BI server (a third-party BI server
   / Power BI Report Server)
 - Customer wants to modernize to Power BI cloud + lakehouse
 - Customer's audit boundary blocks Fabric / Direct Lake
@@ -81,7 +81,7 @@ flowchart LR
 
 ### Step 1 — Inventory the source BI estate
 
-- Catalogue all Tableau workbooks / Qlik apps / on-prem PBI reports
+- Catalogue all third-party BI workbooks / apps / on-prem PBI reports
 - Identify primary data sources (databases, files, cubes)
 - Map dashboards to underlying data models
 - Prioritize: top 20% of dashboards cover 80% of usage
@@ -109,7 +109,7 @@ For each source:
 ### Step 5 — Re-author semantic models in Power BI Desktop
 
 For each priority dashboard:
-- Open original (Tableau / Qlik / PBI Report Server)
+- Open original (third-party BI tool / PBI Report Server)
 - Re-author the semantic model in Power BI Desktop targeting the
   Gold tables
 - Use TMDL format (Power BI Project / .pbip)
@@ -144,7 +144,7 @@ loom-dl-shim configure \
 
 ## Expected outcomes
 
-- Self-service Power BI authoring (vs centralized Tableau / Qlik
+- Self-service Power BI authoring (vs a centralized third-party BI
   admin model)
 - 5-30 s freshness on partition-refresh (vs daily / hourly on legacy
   BI servers)

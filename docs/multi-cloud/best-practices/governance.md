@@ -188,8 +188,9 @@ The right framework taxonomy is:
   Azure has > 100 services in scope; AWS GovCloud and GCP Assured
   Workloads have parity for core services.
 - **FedRAMP High** — federal civilian with sensitive data.
-  Azure Government has the broadest footprint; AWS GovCloud has
-  parity for core; GCP is more limited.
+  Azure Government has a broad in-scope footprint; other government
+  clouds have parity for core services to varying degrees — verify
+  each provider's current authorized-service list.
 - **DoD IL4 / IL5 / IL6** — DoD-specific. Azure Government and
   AWS GovCloud have IL4 + IL5; IL6 is Azure DoD Government Secret
   and AWS Top Secret.
