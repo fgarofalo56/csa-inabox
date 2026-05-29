@@ -29,6 +29,10 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { PromptFlowBuilder } from '@/lib/prompt-flow/flow-builder';
+import {
+  type FlowDag, parseFlowDag, serializeFlowDag, starterFlow, emptyFlow,
+} from '@/lib/prompt-flow/flow-dag';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -232,67 +236,147 @@ function ProjectPicker({ value, onChange }: { value: string | null; onChange: (v
 // 2. PromptFlowEditor
 // =====================================================================
 
+// LLM-capable connection categories — only these can back an LLM node.
+const LLM_CONNECTION_CATEGORIES = ['AzureOpenAI', 'OpenAI', 'AIServices', 'Serverless', 'CustomKeys'];
+
+/**
+ * Coerce whatever the prompt-flow REST returns for `flowDefinition` into a
+ * FlowDag. Foundry stores the definition as flow.dag.yaml; the BFF may hand
+ * it back as a YAML string OR (when round-tripped through JSON) as an object.
+ */
+function toFlowDag(raw: unknown): FlowDag {
+  if (raw == null) return emptyFlow();
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    if (!t) return emptyFlow();
+    if (t.startsWith('{')) {
+      try { return objectToFlowDag(JSON.parse(t)); } catch { /* fall through to yaml */ }
+    }
+    return parseFlowDag(raw);
+  }
+  if (typeof raw === 'object') return objectToFlowDag(raw as Record<string, unknown>);
+  return emptyFlow();
+}
+
+/** Map an already-parsed object (inputs/outputs/nodes maps) to a FlowDag. */
+function objectToFlowDag(o: Record<string, any>): FlowDag {
+  // Re-serialize to YAML and reparse so the single normalizer governs shape.
+  // The object form mirrors flow.dag.yaml's nested maps, so round-trip it.
+  const inputs = o.inputs && typeof o.inputs === 'object' && !Array.isArray(o.inputs)
+    ? Object.entries(o.inputs).map(([name, v]: [string, any]) => ({ name, type: v?.type || 'string', ...(v && 'default' in v ? { default: v.default } : {}) }))
+    : [];
+  const outputs = o.outputs && typeof o.outputs === 'object' && !Array.isArray(o.outputs)
+    ? Object.entries(o.outputs).map(([name, v]: [string, any]) => ({ name, type: v?.type || 'string', reference: v?.reference || '' }))
+    : [];
+  const nodes = Array.isArray(o.nodes)
+    ? o.nodes.map((n: any) => ({
+        name: String(n?.name ?? ''),
+        type: (['llm', 'python', 'prompt'].includes(n?.type) ? n.type : 'python'),
+        source: n?.source ? { type: n.source.type === 'package' ? 'package' : 'code', path: n.source.path, code: n.source.code, tool: n.source.tool } : undefined,
+        inputs: (n?.inputs && typeof n.inputs === 'object' && !Array.isArray(n.inputs)) ? n.inputs : {},
+        connection: n?.connection, api: n?.api, deploymentName: n?.deployment_name, provider: n?.provider, module: n?.module,
+      }))
+    : [];
+  return { inputs, outputs, nodes } as FlowDag;
+}
+
 export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const isNew = id === 'new' || id === 'create';
   const [project, setProject] = useState<string | null>(null);
   const [list, reload] = useApi<{ flows: any[] }>(project ? `/api/items/prompt-flow?project=${encodeURIComponent(project)}` : null, [project]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [defText, setDefText] = useState('');
-  // Phase 4.5 — track whether the user has typed into defText. Without this
-  // the useEffect that syncs from detail.data would clobber unsaved edits
-  // whenever the list reloads (background polling, user clicked Reload, etc).
-  const [defDirty, setDefDirty] = useState(false);
-  const [runInputs, setRunInputs] = useState('{}');
+
+  // Foundry connections — drive the LLM-node connection picker + honest gate.
+  const [conn] = useApi<{ connections: any[] }>('/api/foundry/connections');
+  const llmConnections = useMemo(
+    () => (conn.data?.connections || [])
+      .filter((c: any) => !c.category || LLM_CONNECTION_CATEGORIES.includes(c.category))
+      .map((c: any) => c.name as string),
+    [conn.data],
+  );
+
+  // The flow under edit, as a FlowDag. New flows start from a runnable starter.
+  const [dag, setDag] = useState<FlowDag>(() => emptyFlow());
+  const [dirty, setDirty] = useState(false);
+  const [newFlowName, setNewFlowName] = useState('');
   const [runResult, setRunResult] = useState<any>(null);
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ intent: 'success' | 'error' | 'info'; text: string } | null>(null);
 
-  useEffect(() => { if (id !== 'new' && id !== 'create') setSelected(id); }, [id]);
+  useEffect(() => { if (!isNew) setSelected(id); }, [id, isNew]);
 
   const detailUrl = project && selected ? `/api/items/prompt-flow/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}` : null;
   const [detail] = useApi<{ flow: any }>(detailUrl, [project, selected]);
   useEffect(() => {
-    // Only adopt server flow definition when the user hasn't typed into the
-    // local editor since the last selection. Prevents clobbering edits.
-    if (detail.data?.flow && !defDirty) {
-      setDefText(JSON.stringify(detail.data.flow.flowDefinition || detail.data.flow, null, 2));
+    if (detail.data?.flow && !dirty) {
+      setDag(toFlowDag(detail.data.flow.flowDefinition ?? detail.data.flow));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail.data]);
 
-  // Resetting selection clears the dirty flag so the next flow's body loads.
-  useEffect(() => { setDefDirty(false); }, [selected]);
+  // Selecting a different flow resets dirty + run output.
+  useEffect(() => { setDirty(false); setRunResult(null); }, [selected]);
 
-  const runFlow = async () => {
-    if (!project || !selected) return;
-    setRunning(true); setRunResult(null);
-    let inputs: any = {};
-    try { inputs = JSON.parse(runInputs || '{}'); } catch { setRunResult({ ok: false, error: 'Invalid JSON in inputs' }); setRunning(false); return; }
-    const r = await fetch(`/api/items/prompt-flow/${encodeURIComponent(selected)}/run`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ project, inputs }),
-    });
-    const j = await r.json();
-    setRunResult(j);
-    setRunning(false);
+  const onDagChange = useCallback((next: FlowDag) => { setDag(next); setDirty(true); }, []);
+
+  const loadStarter = () => { setDag(starterFlow()); setDirty(true); setSaveMsg(null); };
+
+  // Build the single-input test-run payload from the flow's input defaults.
+  const runInputs = useMemo(() => {
+    const o: Record<string, unknown> = {};
+    for (const inp of dag.inputs) o[inp.name] = inp.default ?? '';
+    return o;
+  }, [dag.inputs]);
+
+  const createFlow = async () => {
+    if (!project || !newFlowName) { setSaveMsg({ intent: 'error', text: 'Pick a project and enter a flow name.' }); return; }
+    setCreating(true); setSaveMsg(null);
+    try {
+      const r = await fetch('/api/items/prompt-flow', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ project, flowName: newFlowName, flowType: 'standard', flowDefinition: serializeFlowDag(dag) }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSaveMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); }
+      else {
+        setSaveMsg({ intent: 'success', text: `Created flow ${newFlowName} in Foundry.` });
+        setDirty(false); reload();
+        const fid = j.flow?.flowId || j.flow?.flowName || newFlowName;
+        setSelected(fid);
+      }
+    } catch (e: any) { setSaveMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setCreating(false); }
   };
 
   const saveFlow = async () => {
     if (!project || !selected) return;
     setSaving(true); setSaveMsg(null);
-    let flowDefinition: any;
-    try { flowDefinition = JSON.parse(defText || '{}'); } catch { setSaveMsg({ intent: 'error', text: 'Invalid JSON in flow definition' }); setSaving(false); return; }
     try {
       const r = await fetch(`/api/items/prompt-flow/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ flowDefinition }),
+        body: JSON.stringify({ flowDefinition: serializeFlowDag(dag) }),
       });
       const j = await r.json();
       if (!j.ok) { setSaveMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); }
-      else { setSaveMsg({ intent: 'success', text: 'Flow definition saved to Foundry.' }); setDefDirty(false); }
+      else { setSaveMsg({ intent: 'success', text: 'flow.dag.yaml saved to Foundry.' }); setDirty(false); }
     } catch (e: any) { setSaveMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setSaving(false); }
+  };
+
+  const runFlow = async () => {
+    if (!project || !selected) { setSaveMsg({ intent: 'info', text: 'Save the flow first — runs execute the persisted flow.dag.yaml.' }); return; }
+    setRunning(true); setRunResult(null);
+    try {
+      const r = await fetch(`/api/items/prompt-flow/${encodeURIComponent(selected)}/run`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ project, inputs: runInputs }),
+      });
+      setRunResult(await r.json());
+    } catch (e: any) { setRunResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setRunning(false); }
   };
 
   const ribbon = useMemo(() => {
@@ -302,49 +386,106 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
     return buildBaseRibbon(reload, portalUrl);
   }, [reload, project]);
 
+  const noLlmConnection = !conn.loading && !conn.error && llmConnections.length === 0;
+  const perNode: Array<{ node: string; output: unknown }> = useMemo(() => {
+    const nodeRuns = runResult?.result?.flowRunInfo?.node_runs || runResult?.result?.node_runs || runResult?.result?.nodeRuns;
+    if (!nodeRuns || typeof nodeRuns !== 'object') return [];
+    return Object.entries(nodeRuns).map(([node, info]: [string, any]) => ({ node, output: info?.output ?? info?.result ?? info }));
+  }, [runResult]);
+  const finalOutput = runResult?.result?.flow_runs?.[0]?.output ?? runResult?.result?.output ?? runResult?.result?.outputs ?? runResult?.result;
+
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      <ProjectPicker value={project} onChange={setProject} />
-      {!project ? <Caption1>Pick a project to list its prompt flows.</Caption1> : list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
-        <>
-          <Caption1>{(list.data?.flows || []).length} flow(s)</Caption1>
-          <div className={s.tableWrap}>
-            <Table size="small">
-              <TableHeader><TableRow>
-                <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
-                <TableHeaderCell>Modified</TableHeaderCell><TableHeaderCell></TableHeaderCell>
-              </TableRow></TableHeader>
-              <TableBody>
-                {(list.data?.flows || []).map((f: any) => (
-                  <TableRow key={f.flowId}>
-                    <TableCell className={s.cell}><strong>{f.flowName}</strong></TableCell>
-                    <TableCell className={s.cell}>{f.flowType || '—'}</TableCell>
-                    <TableCell className={s.cell}>{f.lastModifiedDate || '—'}</TableCell>
-                    <TableCell><Button size="small" onClick={() => setSelected(f.flowId)}>Open</Button></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </>
+      <div className={s.toolbar}>
+        <ProjectPicker value={project} onChange={setProject} />
+        {project && !isNew && (
+          <Field label="Flow">
+            <Dropdown
+              value={selected || ''} selectedOptions={selected ? [selected] : []}
+              placeholder={list.loading ? 'Loading…' : ((list.data?.flows || []).length ? 'Select a flow' : 'No flows')}
+              onOptionSelect={(_, d) => d.optionValue && setSelected(d.optionValue)}>
+              {(list.data?.flows || []).map((f: any) => (
+                <Option key={f.flowId} value={f.flowId}>{f.flowName || f.flowId}</Option>
+              ))}
+            </Dropdown>
+          </Field>
+        )}
+      </div>
+
+      {/* Honest infra gate — full builder still renders below. */}
+      {conn.error && <ErrorBar msg={conn.error} hint={conn.hint} notDeployed={conn.notDeployed} />}
+      {noLlmConnection && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>No LLM connection in this Foundry hub</MessageBarTitle>
+            LLM nodes need an Azure OpenAI / AI Services connection. Create one in the Foundry hub
+            (Management center → Connections) or provision it via bicep
+            (<code>platform/fiab/bicep/modules/admin-plane/ai-foundry.bicep</code> — the AOAI + AI Services
+            hub connections). The designer below still renders; Run is enabled once a connection exists
+            and the flow is saved.
+          </MessageBarBody>
+        </MessageBar>
       )}
-      {selected && (
-        <div className={s.card}>
-          <Subtitle2>Flow: {selected}</Subtitle2>
-          <MonacoTextarea value={defText} onChange={(v) => { setDefText(v); setDefDirty(true); }} language="json" height={300} minHeight={200} ariaLabel="Prompt Flow definition" />
-          {defDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved edits — click Save flow to PUT the definition to Foundry.</Caption1>}
-          {saveMsg && <MessageBar intent={saveMsg.intent}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>}
-          <Subtitle2 style={{ marginTop: 8 }}>Run inputs (JSON)</Subtitle2>
-          <MonacoTextarea value={runInputs} onChange={setRunInputs} language="json" height={140} minHeight={80} ariaLabel="Run inputs JSON" />
-          <div className={s.toolbar} style={{ marginTop: 8 }}>
-            <Button appearance="primary" onClick={runFlow} disabled={running}>{running ? 'Running…' : 'Run flow'}</Button>
-            <Button onClick={saveFlow} disabled={saving || !defDirty}>{saving ? 'Saving…' : 'Save flow'}</Button>
-            <Button onClick={reload}>Reload list</Button>
+      {!project && <Caption1>Pick a project to load / build its prompt flows.</Caption1>}
+
+      {(isNew || selected) && (
+        <>
+          <div className={s.toolbar}>
+            {isNew && (
+              <>
+                <Field label="New flow name">
+                  <Input value={newFlowName} onChange={(_, d) => setNewFlowName(d.value)} placeholder="my-flow" />
+                </Field>
+                <Button onClick={loadStarter}>Load starter flow</Button>
+                <Button appearance="primary" disabled={creating || !project || !newFlowName} onClick={createFlow}>
+                  {creating ? 'Creating…' : 'Create flow'}
+                </Button>
+              </>
+            )}
+            {!isNew && selected && (
+              <>
+                <Button appearance="primary" disabled={saving || !dirty} onClick={saveFlow}>{saving ? 'Saving…' : 'Save flow'}</Button>
+                <Button disabled={running || llmConnections.length === 0} onClick={runFlow}>{running ? 'Running…' : 'Run'}</Button>
+                <Button onClick={reload}>Reload</Button>
+                {dirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
+              </>
+            )}
           </div>
-          {runResult && (runResult.ok
-            ? <pre className={s.monaco} style={{ minHeight: 80 }}>{JSON.stringify(runResult.result, null, 2)}</pre>
-            : <ErrorBar msg={runResult.error} hint={runResult.hint} notDeployed={runResult.notDeployed} />)}
-        </div>
+          {saveMsg && <MessageBar intent={saveMsg.intent === 'info' ? 'info' : saveMsg.intent}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>}
+          {detail.error && <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} />}
+
+          <PromptFlowBuilder
+            dag={dag}
+            onChange={onDagChange}
+            connections={llmConnections}
+            connectionsLoading={conn.loading}
+          />
+
+          {runResult && (
+            runResult.ok ? (
+              <div className={s.card}>
+                <Subtitle2>Run output</Subtitle2>
+                {perNode.length > 0 && (
+                  <div className={s.tableWrap}>
+                    <Table size="small" aria-label="Per-node outputs">
+                      <TableHeader><TableRow><TableHeaderCell>Node</TableHeaderCell><TableHeaderCell>Output</TableHeaderCell></TableRow></TableHeader>
+                      <TableBody>
+                        {perNode.map((p) => (
+                          <TableRow key={p.node}>
+                            <TableCell className={s.cell}><strong>{p.node}</strong></TableCell>
+                            <TableCell className={s.cell}>{typeof p.output === 'string' ? p.output : JSON.stringify(p.output)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+                <Subtitle2 style={{ marginTop: 8 }}>Final output</Subtitle2>
+                <pre className={s.monaco} style={{ minHeight: 80 }}>{JSON.stringify(finalOutput, null, 2)}</pre>
+              </div>
+            ) : <ErrorBar msg={runResult.error} hint={runResult.hint} notDeployed={runResult.notDeployed} />
+          )}
+        </>
       )}
     </div>
   </Shell>;
