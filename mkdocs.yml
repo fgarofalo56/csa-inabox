@@ -173,6 +173,14 @@ extra_javascript:
   - https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.2/dist/svg-pan-zoom.min.js
   - javascripts/diagram-zoom.js
 
+# Link / nav validation — warn (not fail) so broken internal links surface in
+# the build log without blocking deploys. (Per docs review §5.)
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
 nav:
   - Home: index.md
 

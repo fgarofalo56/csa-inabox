@@ -1,6 +1,8 @@
 ---
 title: Home
 description: CSA-in-a-Box — Azure-native reference implementation for Data Mesh, Data Fabric, and Data Lakehouse
+last_reviewed: 2026-05-29
+status: reference implementation (community project)
 ---
 
 # Cloud Scale Analytics in a Box
@@ -22,6 +24,14 @@ description: CSA-in-a-Box — Azure-native reference implementation for Data Mes
 **Azure-native reference implementation of Microsoft's "Unify your data platform" Cloud Adoption Framework guidance.**
 
 CSA-in-a-Box assembles Azure PaaS services and open-source tooling into an opinionated, end-to-end data platform that delivers Data Mesh, Data Fabric, and Data Lakehouse capabilities today — designed for environments where Microsoft Fabric is not yet GA (Azure Government), and as an incremental on-ramp for teams building toward Fabric adoption.
+
+!!! note "Personal project — not an official Microsoft offering"
+    CSA-in-a-Box and CSA Loom are a personal, community reference project maintained by
+    [@fgarofalo56](https://github.com/fgarofalo56). They are **not** official Microsoft
+    products, services, or guidance, are **not** endorsed or supported by Microsoft, and
+    do not represent Microsoft's positions. Compliance pages are **reference control
+    mappings to help you build toward an authorization** — not attestations,
+    certifications, or authorizations to operate (ATO).
 
 !!! tip "New: **CSA Loom** — the productized Microsoft Fabric parity layer"
     For federal / DoD / IC / state + local customers blocked from
@@ -161,7 +171,7 @@ flowchart LR
     end
 ```
 
-<small>Source diagram editable in atlas-diag: `dgm_e24ec57b530af206d287` ([open in designer](http://localhost:3080/designer?diagram=dgm_e24ec57b530af206d287)).</small>
+<!-- diagram source: atlas-diag dgm_e24ec57b530af206d287 (internal) -->
 
 ### :material-hubspot:{ .lg } Data Mesh — domain-oriented ownership
 
