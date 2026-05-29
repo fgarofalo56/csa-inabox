@@ -24,6 +24,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.18.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.18.0...csa-inabox-v0.18.1) (2026-05-29)
+
+
+### Documentation
+
+* remove non-analytics 'Beyond Analytics' migrations — keep CSA scope tight ([#465](https://github.com/fgarofalo56/csa-inabox/issues/465)) ([7e7da61](https://github.com/fgarofalo56/csa-inabox/commit/7e7da61dabc57422e420d61b0c6c16fd2daceb78))
+
+
+### Tests
+
+* **csa-loom-uat:** cap honest-stub editors at C (stop inflating A) ([#446](https://github.com/fgarofalo56/csa-inabox/issues/446)) ([2873751](https://github.com/fgarofalo56/csa-inabox/commit/287375169fa370dde6491d54572acab835a4615c))
+
 ## [0.18.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.17.0...csa-inabox-v0.18.0) (2026-05-29)
 
 
