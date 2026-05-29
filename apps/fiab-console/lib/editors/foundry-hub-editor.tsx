@@ -37,6 +37,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { ModelCatalogPanel, ChatPlaygroundPanel, PlaygroundsLandingPanel } from './foundry-playground';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -733,6 +734,10 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'Reload', onClick: () => setNonce((n) => n + 1) },
         { label: 'Open in Azure portal', onClick: () => window.open(portalUrl, '_blank', 'noopener,noreferrer') },
       ]},
+      { label: 'Build', actions: [
+        { label: 'Model catalog', onClick: () => setTab('catalog') },
+        { label: 'Chat playground', onClick: () => setTab('chat') },
+      ]},
       { label: 'Models', actions: [
         { label: 'Models + deployments', onClick: () => setTab('models') },
         { label: 'Quota + deploy gpt-4o-mini', onClick: () => setTab('quota') },
@@ -746,6 +751,9 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
         <div className={s.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
             <Tab value="overview">Overview</Tab>
+            <Tab value="catalog">Model catalog</Tab>
+            <Tab value="playgrounds">Playgrounds</Tab>
+            <Tab value="chat">Chat</Tab>
             <Tab value="connections">Connections</Tab>
             <Tab value="models">Models + endpoints</Tab>
             <Tab value="quota">Quota + usage</Tab>
@@ -759,6 +767,9 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
           </TabList>
         </div>
         {tab === 'overview' && <OverviewPanel nonce={nonce} onWorkspace={onWorkspace} />}
+        <ModelCatalogPanel active={tab === 'catalog'} nonce={nonce} />
+        <PlaygroundsLandingPanel active={tab === 'playgrounds'} onOpenChat={() => setTab('chat')} />
+        <ChatPlaygroundPanel active={tab === 'chat'} nonce={nonce} />
         <ConnectionsPanel active={tab === 'connections'} nonce={nonce} />
         <ModelsPanel active={tab === 'models'} nonce={nonce} />
         <QuotaPanel active={tab === 'quota'} nonce={nonce} />
