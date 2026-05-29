@@ -29,7 +29,7 @@ import {
 import {
   Save20Regular, ArrowSync20Regular, Add20Regular, Delete20Regular, CloudArrowUp20Regular,
   Bot20Regular, BookOpen20Regular, Chat20Regular, Flow20Regular, Channel20Regular, DataBarVertical20Regular,
-  Library20Regular,
+  Library20Regular, Send20Regular, PlayCircle20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -61,6 +61,21 @@ const useStyles = makeStyles({
   },
   bar: { flex: 1, backgroundColor: tokens.colorBrandBackground, borderRadius: 2 },
   tagRow: { display: 'flex', flexWrap: 'wrap', gap: 6 },
+  chatWrap: { display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 720 },
+  chatLog: {
+    height: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  msgUser: {
+    alignSelf: 'flex-end', maxWidth: '75%', padding: '8px 12px', borderRadius: 12,
+    backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand,
+  },
+  msgBot: {
+    alignSelf: 'flex-start', maxWidth: '75%', padding: '8px 12px', borderRadius: 12,
+    backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  chatInputRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
 });
 
 // ============================================================
@@ -257,7 +272,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
   // Phase 4.5 — dirty flag protects in-flight edits from being clobbered by
   // the agents-list reload that runs after save/refresh/publish.
   const [dirty, setDirty] = useState(false);
-  const [tab, setTab] = useState<'edit' | 'knowledge' | 'topics' | 'actions' | 'channels'>('edit');
+  const [tab, setTab] = useState<'edit' | 'knowledge' | 'topics' | 'actions' | 'channels' | 'test'>('edit');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
@@ -401,6 +416,8 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
           { label: 'Topics', onClick: () => setTab('topics') },
           { label: 'Actions', onClick: () => setTab('actions') },
           { label: 'Channels', onClick: () => setTab('channels') },
+          { label: 'Test', onClick: () => setTab('test'), disabled: !selectedId,
+            title: selectedId ? undefined : 'Test — save the agent first, then chat with it over Direct Line' },
           { label: 'Analytics', disabled: true,
             title: 'Analytics — open the dedicated Copilot Analytics editor (not a tab in the Agent editor)' },
         ]},
@@ -478,6 +495,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
             <Tab value="topics" icon={<Chat20Regular />}>Topics</Tab>
             <Tab value="actions" icon={<Flow20Regular />}>Actions</Tab>
             <Tab value="channels" icon={<Channel20Regular />}>Channels</Tab>
+            <Tab value="test" icon={<Chat20Regular />}>Test</Tab>
           </TabList>
           {tab === 'edit' && (
             <div className={s.form}>
@@ -503,6 +521,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
           {tab === 'topics' && <InlineTopics envId={envId} agentId={selectedId} />}
           {tab === 'actions' && <InlineActions envId={envId} agentId={selectedId} />}
           {tab === 'channels' && <InlineChannels envId={envId} agentId={selectedId} />}
+          {tab === 'test' && <TestChatPanel agentId={selectedId} />}
         </div>
       }
     />
@@ -1136,6 +1155,126 @@ export function CopilotChannelEditor({ item, id }: { item: FabricItemType; id: s
         </div>
       }
     />
+  );
+}
+
+// ============================================================
+// TestChatPanel — live "Test your agent" over Bot Framework Direct Line
+// ============================================================
+
+interface ChatMessage { from: 'user' | 'bot'; text: string }
+
+function TestChatPanel({ agentId }: { agentId: string }) {
+  const s = useStyles();
+  const [token, setToken] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [watermark, setWatermark] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [sending, setSending] = useState(false);
+  const DL = 'https://directline.botframework.com/v3/directline';
+
+  const connect = useCallback(async () => {
+    if (!agentId) return;
+    setConnecting(true); setError(null); setHint(null); setMessages([]); setWatermark(null);
+    try {
+      const r = await fetch(`/api/items/copilot-studio-agent/${encodeURIComponent(agentId)}/directline-token`, { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) { setError(j.error || 'token request failed'); if (j.status === 424) setHint('Configure the Direct Line secret env var, then reconnect.'); return; }
+      setToken(j.token);
+      // Start a Direct Line conversation directly from the browser using the token.
+      const cr = await fetch(`${DL}/conversations`, { method: 'POST', headers: { authorization: `Bearer ${j.token}` } });
+      const cj = await cr.json();
+      if (!cr.ok || !cj.conversationId) { setError(`start conversation failed (HTTP ${cr.status})`); return; }
+      setConversationId(cj.conversationId);
+      // Trigger the greeting/welcome.
+      await fetch(`${DL}/conversations/${cj.conversationId}/activities`, {
+        method: 'POST', headers: { authorization: `Bearer ${j.token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'event', name: 'startConversation', from: { id: 'loom-user' } }),
+      }).catch(() => {});
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setConnecting(false); }
+  }, [agentId]);
+
+  const poll = useCallback(async () => {
+    if (!token || !conversationId) return;
+    const url = `${DL}/conversations/${conversationId}/activities${watermark ? `?watermark=${watermark}` : ''}`;
+    const r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j.watermark) setWatermark(j.watermark);
+    const botMsgs: ChatMessage[] = (j.activities || [])
+      .filter((a: any) => a.type === 'message' && a.from?.id !== 'loom-user' && a.text)
+      .map((a: any) => ({ from: 'bot' as const, text: a.text }));
+    if (botMsgs.length) setMessages((m) => [...m, ...botMsgs]);
+  }, [token, conversationId, watermark]);
+
+  // Poll for bot replies while a conversation is open.
+  useEffect(() => {
+    if (!token || !conversationId) return;
+    const t = setInterval(poll, 1500);
+    return () => clearInterval(t);
+  }, [token, conversationId, poll]);
+
+  const send = useCallback(async () => {
+    if (!token || !conversationId || !draft.trim()) return;
+    const text = draft.trim();
+    setDraft(''); setSending(true);
+    setMessages((m) => [...m, { from: 'user', text }]);
+    try {
+      await fetch(`${DL}/conversations/${conversationId}/activities`, {
+        method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'message', from: { id: 'loom-user' }, text }),
+      });
+      setTimeout(poll, 800);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setSending(false); }
+  }, [token, conversationId, draft, poll]);
+
+  if (!agentId) return <Caption1>Pick an agent to open the test chat.</Caption1>;
+  return (
+    <div className={s.chatWrap}>
+      <Caption1>
+        Talks to the published agent over Bot Framework Direct Line — the same channel the in-product
+        "Test your agent" panel uses. Requires a Direct Line secret (see the connect error if not configured).
+      </Caption1>
+      {error && (
+        <MessageBar intent={error.includes('Direct Line secret') ? 'warning' : 'error'}>
+          <MessageBarBody>
+            <MessageBarTitle>{error.includes('Direct Line secret') ? 'Test chat not configured' : 'Test chat error'}</MessageBarTitle>
+            {error}{hint && <div style={{ marginTop: 4 }}><Caption1>{hint}</Caption1></div>}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {!conversationId ? (
+        <Button appearance="primary" icon={<PlayCircle20Regular />} disabled={connecting} onClick={connect}>
+          {connecting ? 'Connecting…' : 'Connect & start test conversation'}
+        </Button>
+      ) : (
+        <>
+          <div className={s.chatLog} aria-label="Test chat transcript">
+            {messages.length === 0 && <Caption1>Conversation started — say hello.</Caption1>}
+            {messages.map((m, i) => (
+              <div key={i} className={m.from === 'user' ? s.msgUser : s.msgBot}>{m.text}</div>
+            ))}
+          </div>
+          <div className={s.chatInputRow}>
+            <Input
+              style={{ flex: 1 }}
+              value={draft}
+              placeholder="Type a message…"
+              onChange={(_, d) => setDraft(d.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+            />
+            <Button appearance="primary" icon={<Send20Regular />} disabled={sending || !draft.trim()} onClick={send}>Send</Button>
+            <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={connect} title="Reset conversation">Reset</Button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

@@ -715,3 +715,74 @@ export async function getAnalytics(envId: string, agentId: string, days = 30): P
     throw e;
   }
 }
+
+// ============================================================
+// Test chat (Bot Framework Direct Line)
+// ============================================================
+//
+// The in-product "Test your agent" panel talks to the published agent over
+// Direct Line. A web client can't reach the agent without a Direct Line
+// token, minted by exchanging the agent's Direct Line secret at
+// https://directline.botframework.com/v3/directline/tokens/generate.
+//
+// Copilot Studio does not expose the per-agent Direct Line secret through
+// Dataverse, so the secret is supplied out-of-band as an env var
+// (LOOM_COPILOT_DIRECTLINE_SECRET) for the deployment's shared test agent,
+// or per-agent via LOOM_COPILOT_DIRECTLINE_SECRET_<AGENTID-UPPER-NODASH>.
+// When no secret is configured we surface an honest infra-gate to the UI.
+
+const DIRECTLINE_TOKEN_URL =
+  process.env.LOOM_DIRECTLINE_TOKEN_URL || 'https://directline.botframework.com/v3/directline/tokens/generate';
+
+/** Resolve a Direct Line secret for the given agent, if configured. */
+function directLineSecretFor(agentId: string): string | undefined {
+  const perAgentKey = `LOOM_COPILOT_DIRECTLINE_SECRET_${agentId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}`;
+  return process.env[perAgentKey] || process.env.LOOM_COPILOT_DIRECTLINE_SECRET || undefined;
+}
+
+export interface DirectLineToken {
+  token: string;
+  conversationId?: string;
+  expiresInSeconds?: number;
+  endpoint: string;
+}
+
+/**
+ * Mint a single-conversation Direct Line token for the agent's test chat.
+ * Throws CopilotStudioError(424) when no Direct Line secret is configured so
+ * the BFF can render an honest infra-gate MessageBar (no mock token).
+ */
+export async function getDirectLineToken(agentId: string): Promise<DirectLineToken> {
+  const secret = directLineSecretFor(agentId);
+  if (!secret) {
+    throw new CopilotStudioError(
+      'Test chat requires a Direct Line secret. Publish this agent in Copilot Studio, ' +
+      'open Settings → Channels → Web/Direct Line, copy a channel secret, and set ' +
+      `LOOM_COPILOT_DIRECTLINE_SECRET_${agentId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()} ` +
+      '(or LOOM_COPILOT_DIRECTLINE_SECRET for a shared test agent) on the console app.',
+      424,
+    );
+  }
+  const res = await fetch(DIRECTLINE_TOKEN_URL, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${secret}`, 'content-type': 'application/json' },
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok || !json?.token) {
+    throw new CopilotStudioError(
+      json?.error?.message || `Direct Line token generation failed (HTTP ${res.status})`,
+      res.status || 502,
+      json || text,
+      DIRECTLINE_TOKEN_URL,
+    );
+  }
+  return {
+    token: json.token,
+    conversationId: json.conversationId,
+    expiresInSeconds: json.expires_in,
+    endpoint: 'https://directline.botframework.com/v3/directline',
+  };
+}
