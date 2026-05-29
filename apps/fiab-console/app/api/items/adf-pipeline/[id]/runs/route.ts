@@ -1,20 +1,23 @@
 /**
- * GET /api/items/synapse-pipeline/[id]/runs?after=ISO&before=ISO&status=Succeeded|Failed|InProgress
+ * GET /api/items/adf-pipeline/[id]/runs?after=ISO&before=ISO&status=Succeeded|Failed|InProgress
  *
- *   — query pipeline runs filtered to the BOUND pipeline. Default window: last
- *     7 days. Optional date-range overrides via `after` (lastUpdatedAfter) and
- *     `before` (lastUpdatedBefore), both ISO-8601. Optional status filter adds
- *     a Status=Equals clause to the Synapse query.
+ *   — query pipeline runs filtered to the BOUND pipeline via ADF's
+ *     queryPipelineRuns (POST factories/{f}/queryPipelineRuns). Default window:
+ *     last 7 days; the optional status filter is applied client-side here since
+ *     adf-client.listPipelineRuns already filters by PipelineName server-side.
+ *
+ * Root cause this route fixes: the ADF editor fetched `/runs` but NO route file
+ * existed → Next returned a 404 *HTML* page, and `await r.json()` in the editor
+ * threw on the HTML. This route now exists and returns structured JSON.
  *
  * `[id]` is the Loom item GUID; the real pipeline name comes from the item's
- * state.pipelineName binding. Unbound items return an empty run list (the
- * editor shows the bind picker) rather than 412 — run history is a passive
- * panel and shouldn't hard-error before binding.
+ * state.pipelineName binding. Unbound / not-found items return an empty run
+ * list (the editor shows the bind picker) — run history is a passive panel.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { queryPipelineRuns } from '@/lib/azure/synapse-dev-client';
+import { listPipelineRuns } from '@/lib/azure/adf-client';
 import { resolveBinding, UnboundPipelineError, ItemNotFoundError } from '@/lib/azure/pipeline-binding';
 
 export const runtime = 'nodejs';
@@ -26,7 +29,6 @@ function emptyRuns(after?: string, before?: string, status?: string) {
   return NextResponse.json({
     ok: true,
     runs: [],
-    continuationToken: undefined,
     window: { after: after || null, before: before || null, status: status || null },
   });
 }
@@ -39,12 +41,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const before = req.nextUrl.searchParams.get('before') || undefined;
   const status = req.nextUrl.searchParams.get('status') || undefined;
 
-  // Resolve the bound Azure pipeline name. Unbound / unsaved items have no
-  // runs yet — short-circuit with an empty list instead of querying Synapse
-  // for a pipeline that doesn't exist (which surfaced as an opaque 502 in UAT).
   let pipelineName: string;
   try {
-    ({ pipelineName } = await resolveBinding(id, 'synapse-pipeline', session.claims.oid));
+    ({ pipelineName } = await resolveBinding(id, 'adf-pipeline', session.claims.oid));
   } catch (e) {
     if (e instanceof UnboundPipelineError || e instanceof ItemNotFoundError) {
       return emptyRuns(after, before, status);
@@ -52,22 +51,22 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ ok: false, error: (e as any)?.message || String(e) }, { status: 502 });
   }
 
-  const filters: Array<{ operand: string; operator: 'Equals' | 'NotEquals' | 'In' | 'NotIn'; values: string[] }> = [
-    { operand: 'PipelineName', operator: 'Equals', values: [pipelineName] },
-  ];
-  if (status && ALLOWED_STATUS.has(status)) {
-    filters.push({ operand: 'Status', operator: 'Equals', values: [status] });
+  // Convert an `after` ISO override into a windowDays figure for the client
+  // helper (which builds the lastUpdatedAfter/Before envelope). Default 7d.
+  let windowDays = 7;
+  if (after) {
+    const ms = Date.now() - new Date(after).getTime();
+    if (Number.isFinite(ms) && ms > 0) windowDays = Math.max(1, Math.ceil(ms / (24 * 60 * 60 * 1000)));
   }
+
   try {
-    const res = await queryPipelineRuns({
-      filters,
-      lastUpdatedAfter: after,
-      lastUpdatedBefore: before,
-    });
+    let runs = await listPipelineRuns(pipelineName, windowDays);
+    if (status && ALLOWED_STATUS.has(status)) {
+      runs = runs.filter((r) => r.status === status);
+    }
     return NextResponse.json({
       ok: true,
-      runs: res.value || [],
-      continuationToken: res.continuationToken,
+      runs,
       boundTo: pipelineName,
       window: { after: after || null, before: before || null, status: status || null },
     });
