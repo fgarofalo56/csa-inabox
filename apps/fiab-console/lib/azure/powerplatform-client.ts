@@ -346,6 +346,156 @@ export async function getTableSchema(envId: string, logicalName: string): Promis
   return j.value || [];
 }
 
+// ------------------------------------------------------------
+// Dataverse table designer: keys, relationships, views, business rules, data
+// ------------------------------------------------------------
+
+export interface DataverseKey {
+  MetadataId: string;
+  LogicalName: string;
+  SchemaName?: string;
+  DisplayName?: { UserLocalizedLabel?: { Label?: string } };
+  KeyAttributes?: string[];
+  EntityKeyIndexStatus?: string;
+}
+
+export interface DataverseRelationship {
+  MetadataId: string;
+  SchemaName: string;
+  RelationshipType: '1:N' | 'N:1' | 'N:N' | string;
+  ReferencingEntity?: string;
+  ReferencingAttribute?: string;
+  ReferencedEntity?: string;
+  ReferencedAttribute?: string;
+  Entity1LogicalName?: string;
+  Entity2LogicalName?: string;
+  IntersectEntityName?: string;
+}
+
+export interface DataverseView {
+  savedqueryid?: string;
+  userqueryid?: string;
+  name: string;
+  isdefault?: boolean;
+  querytype?: number;
+  returnedtypecode?: string;
+  isuserview?: boolean;
+  fetchxml?: string;
+  modifiedon?: string;
+}
+
+export interface DataverseBusinessRule {
+  workflowid: string;
+  name: string;
+  statecode?: number;       // 0 Draft / 1 Activated
+  statecodeLabel?: string;
+  scope?: number;
+  primaryentity?: string;
+  modifiedon?: string;
+}
+
+/** Alternate keys for a table (EntityKeyMetadata). */
+export async function getTableKeys(envId: string, logicalName: string): Promise<DataverseKey[]> {
+  const { url, scope } = await dataverseBase(envId);
+  const j = await call<{ value: DataverseKey[] }>(
+    `${url}/api/data/v9.2/EntityDefinitions(LogicalName='${encodeURIComponent(logicalName)}')/Keys`,
+    scope,
+    { query: { '$select': 'MetadataId,LogicalName,SchemaName,DisplayName,KeyAttributes,EntityKeyIndexStatus' } },
+  );
+  return j.value || [];
+}
+
+/** 1:N, N:1 and N:N relationships for a table. */
+export async function getTableRelationships(envId: string, logicalName: string): Promise<DataverseRelationship[]> {
+  const { url, scope } = await dataverseBase(envId);
+  const base = `${url}/api/data/v9.2/EntityDefinitions(LogicalName='${encodeURIComponent(logicalName)}')`;
+  const [otm, mto, mtm] = await Promise.all([
+    call<{ value: any[] }>(`${base}/OneToManyRelationships`, scope,
+      { query: { '$select': 'MetadataId,SchemaName,ReferencingEntity,ReferencingAttribute,ReferencedEntity,ReferencedAttribute' } }),
+    call<{ value: any[] }>(`${base}/ManyToOneRelationships`, scope,
+      { query: { '$select': 'MetadataId,SchemaName,ReferencingEntity,ReferencingAttribute,ReferencedEntity,ReferencedAttribute' } }),
+    call<{ value: any[] }>(`${base}/ManyToManyRelationships`, scope,
+      { query: { '$select': 'MetadataId,SchemaName,Entity1LogicalName,Entity2LogicalName,IntersectEntityName' } }),
+  ]);
+  const out: DataverseRelationship[] = [];
+  for (const r of otm.value || []) out.push({ ...r, RelationshipType: '1:N' });
+  for (const r of mto.value || []) out.push({ ...r, RelationshipType: 'N:1' });
+  for (const r of mtm.value || []) out.push({ ...r, RelationshipType: 'N:N' });
+  return out;
+}
+
+/** System + personal views for a table (savedquery + userquery). */
+export async function getTableViews(envId: string, logicalName: string): Promise<DataverseView[]> {
+  const { url, scope } = await dataverseBase(envId);
+  const [sys, usr] = await Promise.all([
+    call<{ value: any[] }>(`${url}/api/data/v9.2/savedqueries`, scope, {
+      query: {
+        '$select': 'savedqueryid,name,isdefault,querytype,returnedtypecode,fetchxml,modifiedon',
+        '$filter': `returnedtypecode eq '${logicalName}'`,
+        '$orderby': 'name',
+      },
+    }),
+    call<{ value: any[] }>(`${url}/api/data/v9.2/userqueries`, scope, {
+      query: {
+        '$select': 'userqueryid,name,querytype,returnedtypecode,fetchxml,modifiedon',
+        '$filter': `returnedtypecode eq '${logicalName}'`,
+        '$orderby': 'name',
+      },
+    }).catch(() => ({ value: [] as any[] })),
+  ]);
+  const out: DataverseView[] = [];
+  for (const v of sys.value || []) out.push({ ...v, isuserview: false });
+  for (const v of usr.value || []) out.push({ ...v, isuserview: true });
+  return out;
+}
+
+/** Business rules (processes with category 2) targeting a table. */
+export async function getTableBusinessRules(envId: string, logicalName: string): Promise<DataverseBusinessRule[]> {
+  const { url, scope } = await dataverseBase(envId);
+  // category 2 = Business Rule; type 1 = Definition (not the activation copy).
+  const j = await call<{ value: any[] }>(`${url}/api/data/v9.2/workflows`, scope, {
+    query: {
+      '$select': 'workflowid,name,statecode,scope,primaryentity,modifiedon',
+      '$filter': `category eq 2 and type eq 1 and primaryentity eq '${logicalName}'`,
+      '$orderby': 'name',
+    },
+  });
+  return (j.value || []).map((w: any) => ({
+    workflowid: w.workflowid,
+    name: w.name,
+    statecode: w.statecode,
+    statecodeLabel: w['statecode@OData.Community.Display.V1.FormattedValue'] || (w.statecode === 1 ? 'Activated' : 'Draft'),
+    scope: w.scope,
+    primaryentity: w.primaryentity,
+    modifiedon: w.modifiedon,
+  }));
+}
+
+/** Top-N data rows for a table (real business data via the entity set). */
+export async function getTableData(
+  envId: string,
+  entitySetName: string,
+  top = 25,
+): Promise<{ columns: string[]; rows: Record<string, any>[] }> {
+  const { url, scope } = await dataverseBase(envId);
+  const j = await call<{ value: any[] }>(`${url}/api/data/v9.2/${entitySetName}`, scope, {
+    query: { '$top': top },
+    headers: { Prefer: 'odata.include-annotations="OData.Community.Display.V1.FormattedValue"' },
+  });
+  const rows = j.value || [];
+  // Derive a stable, readable column set: skip OData annotation keys, navigation
+  // formatted-value keys, lookup `_x_value` keys, and @odata.etag.
+  const colSet = new Set<string>();
+  for (const r of rows) {
+    for (const k of Object.keys(r)) {
+      if (k.includes('@') || k.startsWith('_')) continue;
+      colSet.add(k);
+    }
+  }
+  const columns = Array.from(colSet).slice(0, 12);
+  return { columns, rows };
+}
+
 // ============================================================
 // Power Apps
 // ============================================================
@@ -592,4 +742,63 @@ export async function getAiBuilderModel(envId: string, modelId: string): Promise
     createdon: m.createdon,
     modifiedon: m.modifiedon,
   };
+}
+
+/**
+ * Train an AI Builder model. Dataverse exposes the bound action
+ * `Microsoft.Dynamics.CRM.msdyn_AIModelTrain` on `msdyn_aimodel`. Returns
+ * the async-operation handle (training runs server-side).
+ */
+export async function trainAiBuilderModel(envId: string, modelId: string): Promise<{ ok: true; body?: any }> {
+  const { url, scope } = await dataverseBase(envId);
+  const body = await call<any>(
+    `${url}/api/data/v9.2/msdyn_aimodels(${encodeURIComponent(modelId)})/Microsoft.Dynamics.CRM.msdyn_AIModelTrain`,
+    scope,
+    { method: 'POST', body: {} },
+  );
+  return { ok: true, body };
+}
+
+/**
+ * Publish a trained AI Builder model so predictions can run. Bound action
+ * `Microsoft.Dynamics.CRM.msdyn_AIConfigurationActivate` activates the
+ * latest trained version's configuration.
+ */
+export async function publishAiBuilderModel(envId: string, modelId: string): Promise<{ ok: true; body?: any }> {
+  const { url, scope } = await dataverseBase(envId);
+  const body = await call<any>(
+    `${url}/api/data/v9.2/msdyn_aimodels(${encodeURIComponent(modelId)})/Microsoft.Dynamics.CRM.msdyn_AIConfigurationActivate`,
+    scope,
+    { method: 'POST', body: {} },
+  );
+  return { ok: true, body };
+}
+
+/**
+ * Run a real-time prediction against a published AI Builder model. Dataverse
+ * exposes the unbound action `Microsoft.Dynamics.CRM.Predict` (predict by
+ * reference). `request` is the model-specific input payload — e.g. for a
+ * prediction model `{ "V2": { "<column>": <value>, ... } }`.
+ */
+export async function predictAiBuilderModel(
+  envId: string,
+  modelId: string,
+  request: Record<string, unknown>,
+): Promise<{ ok: true; result: any }> {
+  const { url, scope } = await dataverseBase(envId);
+  const result = await call<any>(
+    `${url}/api/data/v9.2/Predict`,
+    scope,
+    {
+      method: 'POST',
+      body: {
+        Request: {
+          '@odata.type': 'Microsoft.Dynamics.CRM.expando',
+          ModelId: modelId,
+          Request: request,
+        },
+      },
+    },
+  );
+  return { ok: true, result };
 }

@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Dropdown, Option,
-  Tab, TabList,
+  Tab, TabList, Field, Textarea,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
@@ -45,11 +45,21 @@ const useStyles = makeStyles({
   empty: { padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
 });
 
-const BASE_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Item', actions: [{ label: 'Reload' }, { label: 'Open in Power Platform' }] },
-  ]},
-];
+/**
+ * Build the Home ribbon for a Power Platform editor. Both actions are wired —
+ * Reload re-runs the active fetch, "Open in Power Platform" deep-links to the
+ * maker/admin portal in a new tab. When no maker URL applies the action is
+ * omitted rather than left dead (per ui-parity.md — no "not wired" buttons).
+ */
+function baseRibbon(onReload: () => void, makerHref?: string, extra?: RibbonTab['groups']): RibbonTab[] {
+  const itemActions: RibbonTab['groups'][number]['actions'] = [{ label: 'Reload', onClick: onReload }];
+  if (makerHref) {
+    itemActions.push({ label: 'Open in Power Platform', onClick: () => window.open(makerHref, '_blank', 'noopener') });
+  }
+  return [
+    { id: 'home', label: 'Home', groups: [{ label: 'Item', actions: itemActions }, ...(extra || [])] },
+  ];
+}
 
 function ErrorBar({ msg, hint }: { msg: string; hint?: string }) {
   return (
@@ -161,9 +171,10 @@ export function PowerPlatformEnvironmentEditor({ item, id }: { item: FabricItemT
   }, [id, env.envs]);
 
   const current = env.envs.find((e) => e.name === env.selected);
+  const ribbon = baseRibbon(env.reload, 'https://admin.powerplatform.microsoft.com/environments');
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {id === 'new' && (
           <MessageBar intent="warning">
@@ -212,8 +223,14 @@ export function PowerPlatformEnvironmentEditor({ item, id }: { item: FabricItemT
 // 2. DataverseTableEditor
 // ============================================================
 
-interface DvTable { MetadataId: string; LogicalName: string; SchemaName?: string; DisplayName?: { UserLocalizedLabel?: { Label?: string } }; IsCustomEntity?: boolean; EntitySetName?: string; }
+interface DvTable { MetadataId: string; LogicalName: string; SchemaName?: string; DisplayName?: { UserLocalizedLabel?: { Label?: string } }; IsCustomEntity?: boolean; EntitySetName?: string; PrimaryIdAttribute?: string; PrimaryNameAttribute?: string; }
 interface DvAttr  { MetadataId: string; LogicalName: string; AttributeType?: string; RequiredLevel?: { Value?: string }; DisplayName?: { UserLocalizedLabel?: { Label?: string } }; IsCustomAttribute?: boolean; IsPrimaryId?: boolean; IsPrimaryName?: boolean; }
+interface DvKey   { MetadataId: string; LogicalName: string; DisplayName?: { UserLocalizedLabel?: { Label?: string } }; KeyAttributes?: string[]; EntityKeyIndexStatus?: string; }
+interface DvRel   { MetadataId: string; SchemaName: string; RelationshipType: string; ReferencingEntity?: string; ReferencingAttribute?: string; ReferencedEntity?: string; ReferencedAttribute?: string; Entity1LogicalName?: string; Entity2LogicalName?: string; IntersectEntityName?: string; }
+interface DvView  { savedqueryid?: string; userqueryid?: string; name: string; isdefault?: boolean; querytype?: number; isuserview?: boolean; modifiedon?: string; }
+interface DvRule  { workflowid: string; name: string; statecodeLabel?: string; modifiedon?: string; }
+
+type DvTab = 'columns' | 'keys' | 'relationships' | 'views' | 'rules' | 'data';
 
 export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -224,9 +241,32 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
     [env.selected],
   );
   const [selectedTable, setSelectedTable] = useState<string | null>(id !== 'new' ? id : null);
+  const [tab, setTab] = useState<DvTab>('columns');
+  const tableEnc = selectedTable ? encodeURIComponent(selectedTable) : '';
+
   const [schemaState, reloadSchema] = useApi<{ ok: boolean; table: DvTable; attributes: DvAttr[] }>(
-    env.selected && selectedTable ? `/api/items/dataverse-table/${encodeURIComponent(selectedTable)}${envQ}` : null,
+    env.selected && selectedTable ? `/api/items/dataverse-table/${tableEnc}${envQ}` : null,
     [env.selected, selectedTable],
+  );
+  const [keysState, reloadKeys] = useApi<{ ok: boolean; keys: DvKey[] }>(
+    env.selected && selectedTable && tab === 'keys' ? `/api/items/dataverse-table/${tableEnc}/keys${envQ}` : null,
+    [env.selected, selectedTable, tab],
+  );
+  const [relState, reloadRel] = useApi<{ ok: boolean; relationships: DvRel[] }>(
+    env.selected && selectedTable && tab === 'relationships' ? `/api/items/dataverse-table/${tableEnc}/relationships${envQ}` : null,
+    [env.selected, selectedTable, tab],
+  );
+  const [viewState, reloadViews] = useApi<{ ok: boolean; views: DvView[] }>(
+    env.selected && selectedTable && tab === 'views' ? `/api/items/dataverse-table/${tableEnc}/views${envQ}` : null,
+    [env.selected, selectedTable, tab],
+  );
+  const [ruleState, reloadRules] = useApi<{ ok: boolean; businessRules: DvRule[] }>(
+    env.selected && selectedTable && tab === 'rules' ? `/api/items/dataverse-table/${tableEnc}/business-rules${envQ}` : null,
+    [env.selected, selectedTable, tab],
+  );
+  const [dataState, reloadData] = useApi<{ ok: boolean; columns: string[]; rows: Record<string, any>[]; entitySet: string }>(
+    env.selected && selectedTable && tab === 'data' ? `/api/items/dataverse-table/${tableEnc}/rows${envQ}&top=25` : null,
+    [env.selected, selectedTable, tab],
   );
 
   const tables = tablesState.data?.tables || [];
@@ -234,23 +274,48 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
     return tables.filter((t) => t.IsCustomEntity || ['account', 'contact', 'systemuser', 'team', 'msdyn_aimodel', 'mspp_website'].includes(t.LogicalName)).slice(0, 500);
   }, [tables]);
 
+  const reloadActive = useCallback(() => {
+    reloadTables();
+    if (!selectedTable) return;
+    reloadSchema();
+    if (tab === 'keys') reloadKeys();
+    if (tab === 'relationships') reloadRel();
+    if (tab === 'views') reloadViews();
+    if (tab === 'rules') reloadRules();
+    if (tab === 'data') reloadData();
+  }, [reloadTables, selectedTable, tab, reloadSchema, reloadKeys, reloadRel, reloadViews, reloadRules, reloadData]);
+
+  const makerHref = env.selected
+    ? (selectedTable
+      ? `https://make.powerapps.com/environments/${encodeURIComponent(env.selected)}/entities/${encodeURIComponent(selectedTable)}`
+      : `https://make.powerapps.com/environments/${encodeURIComponent(env.selected)}/tables`)
+    : undefined;
+  const ribbon = baseRibbon(reloadActive, makerHref);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {id === 'new' && (
           <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>Dataverse tables are authored in the Maker portal</MessageBarTitle>
-              Custom tables / columns / relationships are designed in <code>make.powerapps.com</code> or via
-              solution import. This editor is a read-only schema browser — pick a table on the left to inspect
-              its attributes.
+              <MessageBarTitle>New custom tables are authored in the Maker portal</MessageBarTitle>
+              Creating a brand-new custom table (publisher prefix, ownership type) is done in
+              <code> make.powerapps.com</code> or via solution import. This designer reads + inspects every
+              facet of an existing table — columns, keys, relationships, views, business rules, and live data —
+              against the Dataverse Web API. Pick a table below.
             </MessageBarBody>
           </MessageBar>
         )}
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
-          <Button appearance="secondary" onClick={() => { reloadTables(); if (selectedTable) reloadSchema(); }}>Reload</Button>
+          <Button appearance="secondary" onClick={reloadActive}>Reload</Button>
           {selectedTable && <Caption1>Table: <strong>{selectedTable}</strong></Caption1>}
+          {selectedTable && env.selected && (
+            <a
+              href={`https://make.powerapps.com/environments/${encodeURIComponent(env.selected)}/entities/${encodeURIComponent(selectedTable)}`}
+              target="_blank" rel="noreferrer"
+            >Open in Maker</a>
+          )}
         </div>
         {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
         {!env.selected && !env.loading && <EmptyText>Select an environment to list its Dataverse tables.</EmptyText>}
@@ -270,7 +335,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                 <TableBody>
                   {filtered.map((t) => (
                     <TableRow key={t.MetadataId}>
-                      <TableCell className={s.cellClickable} onClick={() => setSelectedTable(t.LogicalName)}>
+                      <TableCell className={s.cellClickable} onClick={() => { setSelectedTable(t.LogicalName); setTab('columns'); }}>
                         <strong>{t.LogicalName}</strong>
                       </TableCell>
                       <TableCell className={s.cell}>{t.DisplayName?.UserLocalizedLabel?.Label || '—'}</TableCell>
@@ -286,37 +351,230 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
         {selectedTable && (
           <>
             <Button appearance="subtle" onClick={() => setSelectedTable(null)}>&larr; Back to table list</Button>
-            {schemaState.loading && <Spinner size="small" label="Loading schema…" labelPosition="after" />}
-            {schemaState.error && <ErrorBar msg={schemaState.error} hint={schemaState.hint} />}
-            {schemaState.data && (
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as DvTab)}>
+              <Tab value="columns">Columns</Tab>
+              <Tab value="keys">Keys</Tab>
+              <Tab value="relationships">Relationships</Tab>
+              <Tab value="views">Views</Tab>
+              <Tab value="rules">Business rules</Tab>
+              <Tab value="data">Data</Tab>
+            </TabList>
+
+            {tab === 'columns' && (
               <>
-                <Caption1>{schemaState.data.attributes.length} attribute(s)</Caption1>
-                <div className={s.tableWrap}>
-                  <Table aria-label="Attributes" size="small">
-                    <TableHeader><TableRow>
-                      <TableHeaderCell>Logical name</TableHeaderCell>
-                      <TableHeaderCell>Display name</TableHeaderCell>
-                      <TableHeaderCell>Data type</TableHeaderCell>
-                      <TableHeaderCell>Required</TableHeaderCell>
-                      <TableHeaderCell>Custom?</TableHeaderCell>
-                    </TableRow></TableHeader>
-                    <TableBody>
-                      {schemaState.data.attributes.slice(0, 500).map((a) => (
-                        <TableRow key={a.MetadataId}>
-                          <TableCell className={s.cell}>
-                            <strong>{a.LogicalName}</strong>
-                            {a.IsPrimaryId && <Badge size="small" appearance="tint" color="brand" style={{ marginLeft: 6 }}>PK</Badge>}
-                            {a.IsPrimaryName && <Badge size="small" appearance="tint" color="success" style={{ marginLeft: 6 }}>Name</Badge>}
-                          </TableCell>
-                          <TableCell className={s.cell}>{a.DisplayName?.UserLocalizedLabel?.Label || '—'}</TableCell>
-                          <TableCell className={s.cell}>{a.AttributeType || '—'}</TableCell>
-                          <TableCell className={s.cell}>{a.RequiredLevel?.Value || '—'}</TableCell>
-                          <TableCell className={s.cell}>{a.IsCustomAttribute ? 'Yes' : 'No'}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                {schemaState.loading && <Spinner size="small" label="Loading columns…" labelPosition="after" />}
+                {schemaState.error && <ErrorBar msg={schemaState.error} hint={schemaState.hint} />}
+                {schemaState.data && (
+                  <>
+                    <Caption1>{schemaState.data.attributes.length} column(s)</Caption1>
+                    <div className={s.tableWrap}>
+                      <Table aria-label="Columns" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Logical name</TableHeaderCell>
+                          <TableHeaderCell>Display name</TableHeaderCell>
+                          <TableHeaderCell>Data type</TableHeaderCell>
+                          <TableHeaderCell>Required</TableHeaderCell>
+                          <TableHeaderCell>Custom?</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {schemaState.data.attributes.slice(0, 500).map((a) => (
+                            <TableRow key={a.MetadataId}>
+                              <TableCell className={s.cell}>
+                                <strong>{a.LogicalName}</strong>
+                                {a.IsPrimaryId && <Badge size="small" appearance="tint" color="brand" style={{ marginLeft: 6 }}>PK</Badge>}
+                                {a.IsPrimaryName && <Badge size="small" appearance="tint" color="success" style={{ marginLeft: 6 }}>Name</Badge>}
+                              </TableCell>
+                              <TableCell className={s.cell}>{a.DisplayName?.UserLocalizedLabel?.Label || '—'}</TableCell>
+                              <TableCell className={s.cell}>{a.AttributeType || '—'}</TableCell>
+                              <TableCell className={s.cell}>{a.RequiredLevel?.Value || '—'}</TableCell>
+                              <TableCell className={s.cell}>{a.IsCustomAttribute ? 'Yes' : 'No'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+
+            {tab === 'keys' && (
+              <>
+                {keysState.loading && <Spinner size="small" label="Loading keys…" labelPosition="after" />}
+                {keysState.error && <ErrorBar msg={keysState.error} hint={keysState.hint} />}
+                {keysState.data && (keysState.data.keys.length === 0
+                  ? <EmptyText>No alternate keys defined on this table.</EmptyText>
+                  : (
+                    <div className={s.tableWrap}>
+                      <Table aria-label="Keys" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Display name</TableHeaderCell>
+                          <TableHeaderCell>Logical name</TableHeaderCell>
+                          <TableHeaderCell>Key columns</TableHeaderCell>
+                          <TableHeaderCell>Status</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {keysState.data.keys.map((k) => (
+                            <TableRow key={k.MetadataId}>
+                              <TableCell className={s.cell}>{k.DisplayName?.UserLocalizedLabel?.Label || '—'}</TableCell>
+                              <TableCell className={s.cell}><strong>{k.LogicalName}</strong></TableCell>
+                              <TableCell className={s.cell}>{(k.KeyAttributes || []).join(', ') || '—'}</TableCell>
+                              <TableCell className={s.cell}>
+                                <Badge appearance="tint" color={k.EntityKeyIndexStatus === 'Active' ? 'success' : 'subtle'}>
+                                  {k.EntityKeyIndexStatus || '—'}
+                                </Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ))}
+              </>
+            )}
+
+            {tab === 'relationships' && (
+              <>
+                {relState.loading && <Spinner size="small" label="Loading relationships…" labelPosition="after" />}
+                {relState.error && <ErrorBar msg={relState.error} hint={relState.hint} />}
+                {relState.data && (relState.data.relationships.length === 0
+                  ? <EmptyText>No relationships found.</EmptyText>
+                  : (
+                    <>
+                      <Caption1>{relState.data.relationships.length} relationship(s)</Caption1>
+                      <div className={s.tableWrap}>
+                        <Table aria-label="Relationships" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Type</TableHeaderCell>
+                            <TableHeaderCell>Schema name</TableHeaderCell>
+                            <TableHeaderCell>Referencing</TableHeaderCell>
+                            <TableHeaderCell>Referenced</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {relState.data.relationships.map((r) => (
+                              <TableRow key={r.MetadataId}>
+                                <TableCell className={s.cell}><Badge appearance="tint" color="brand">{r.RelationshipType}</Badge></TableCell>
+                                <TableCell className={s.cell}><strong>{r.SchemaName}</strong></TableCell>
+                                <TableCell className={s.cell}>
+                                  {r.RelationshipType === 'N:N'
+                                    ? (r.IntersectEntityName || '—')
+                                    : `${r.ReferencingEntity || '—'}.${r.ReferencingAttribute || ''}`}
+                                </TableCell>
+                                <TableCell className={s.cell}>
+                                  {r.RelationshipType === 'N:N'
+                                    ? `${r.Entity1LogicalName || '—'} ↔ ${r.Entity2LogicalName || '—'}`
+                                    : `${r.ReferencedEntity || '—'}.${r.ReferencedAttribute || ''}`}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </>
+                  ))}
+              </>
+            )}
+
+            {tab === 'views' && (
+              <>
+                {viewState.loading && <Spinner size="small" label="Loading views…" labelPosition="after" />}
+                {viewState.error && <ErrorBar msg={viewState.error} hint={viewState.hint} />}
+                {viewState.data && (viewState.data.views.length === 0
+                  ? <EmptyText>No views defined for this table.</EmptyText>
+                  : (
+                    <>
+                      <Caption1>{viewState.data.views.length} view(s)</Caption1>
+                      <div className={s.tableWrap}>
+                        <Table aria-label="Views" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Name</TableHeaderCell>
+                            <TableHeaderCell>Scope</TableHeaderCell>
+                            <TableHeaderCell>Default?</TableHeaderCell>
+                            <TableHeaderCell>Modified</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {viewState.data.views.map((v) => (
+                              <TableRow key={v.savedqueryid || v.userqueryid}>
+                                <TableCell className={s.cell}><strong>{v.name}</strong></TableCell>
+                                <TableCell className={s.cell}>
+                                  <Badge appearance="tint" color={v.isuserview ? 'informative' : 'brand'}>
+                                    {v.isuserview ? 'Personal' : 'System'}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className={s.cell}>{v.isdefault ? 'Yes' : '—'}</TableCell>
+                                <TableCell className={s.cell}>{v.modifiedon || '—'}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </>
+                  ))}
+              </>
+            )}
+
+            {tab === 'rules' && (
+              <>
+                {ruleState.loading && <Spinner size="small" label="Loading business rules…" labelPosition="after" />}
+                {ruleState.error && <ErrorBar msg={ruleState.error} hint={ruleState.hint} />}
+                {ruleState.data && (ruleState.data.businessRules.length === 0
+                  ? <EmptyText>No business rules defined for this table.</EmptyText>
+                  : (
+                    <div className={s.tableWrap}>
+                      <Table aria-label="Business rules" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Name</TableHeaderCell>
+                          <TableHeaderCell>State</TableHeaderCell>
+                          <TableHeaderCell>Modified</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {ruleState.data.businessRules.map((r) => (
+                            <TableRow key={r.workflowid}>
+                              <TableCell className={s.cell}><strong>{r.name}</strong></TableCell>
+                              <TableCell className={s.cell}>
+                                <Badge appearance="tint" color={r.statecodeLabel === 'Activated' ? 'success' : 'subtle'}>
+                                  {r.statecodeLabel || '—'}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className={s.cell}>{r.modifiedon || '—'}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ))}
+              </>
+            )}
+
+            {tab === 'data' && (
+              <>
+                {dataState.loading && <Spinner size="small" label="Loading rows…" labelPosition="after" />}
+                {dataState.error && <ErrorBar msg={dataState.error} hint={dataState.hint} />}
+                {dataState.data && (dataState.data.rows.length === 0
+                  ? <EmptyText>No rows in this table.</EmptyText>
+                  : (
+                    <>
+                      <Caption1>{dataState.data.rows.length} row(s) — entity set <code>{dataState.data.entitySet}</code> (top 25)</Caption1>
+                      <div className={s.tableWrap}>
+                        <Table aria-label="Data grid" size="small">
+                          <TableHeader><TableRow>
+                            {dataState.data.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {dataState.data.rows.map((row, i) => (
+                              <TableRow key={i}>
+                                {dataState.data!.columns.map((c) => {
+                                  const fv = row[`${c}@OData.Community.Display.V1.FormattedValue`];
+                                  const v = fv ?? row[c];
+                                  return <TableCell key={c} className={s.cell}>{v === null || v === undefined ? '—' : String(v)}</TableCell>;
+                                })}
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </>
+                  ))}
               </>
             )}
           </>
@@ -357,9 +615,13 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
   const studioUrl = (appName: string) =>
     `https://make.powerapps.com/e/${encodeURIComponent(env.selected || '')}/studio/${encodeURIComponent(appName)}?embed=1`;
   const makerNewUrl = env.selected ? `https://make.powerapps.com/e/${encodeURIComponent(env.selected)}/canvas?embed=1` : '';
+  const ribbon = baseRibbon(
+    reloadList,
+    env.selected ? `https://make.powerapps.com/environments/${encodeURIComponent(env.selected)}/apps` : undefined,
+  );
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {!embedOpen && (
           <MessageBar intent="info">
@@ -552,9 +814,13 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
   }, [env.selected, selected, reloadRuns]);
 
   const flows = listSt.data?.flows || [];
+  const ribbon = baseRibbon(
+    reloadList,
+    env.selected ? `https://make.powerautomate.com/environments/${encodeURIComponent(env.selected)}/flows` : undefined,
+  );
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {id === 'new' && (
           <MessageBar intent="warning">
@@ -682,9 +948,10 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
     [env.selected, selected],
   );
   const pages = listSt.data?.pages || [];
+  const ribbon = baseRibbon(reloadList, 'https://make.powerpages.microsoft.com');
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -780,21 +1047,67 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
     [env.selected],
   );
   const [selected, setSelected] = useState<string | null>(id !== 'new' ? id : null);
-  const [detailSt] = useApi<{ ok: boolean; model: AiModel }>(
+  const [detailSt, reloadDetail] = useApi<{ ok: boolean; model: AiModel }>(
     env.selected && selected ? `/api/items/ai-builder-model/${encodeURIComponent(selected)}${envQ}` : null,
     [env.selected, selected],
   );
   const models = listSt.data?.models || [];
 
+  // Train / Publish / Predict action state.
+  const [busy, setBusy] = useState<null | 'train' | 'publish' | 'predict'>(null);
+  const [actionMsg, setActionMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [predictJson, setPredictJson] = useState('{\n  "V2": {}\n}');
+  const [predictResult, setPredictResult] = useState<string | null>(null);
+
+  const runAction = useCallback(async (kind: 'train' | 'publish') => {
+    if (!env.selected || !selected) return;
+    setBusy(kind); setActionMsg(null);
+    try {
+      const r = await fetch(`/api/items/ai-builder-model/${encodeURIComponent(selected)}/${kind}?envId=${encodeURIComponent(env.selected)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ envId: env.selected }),
+      });
+      const j = await r.json();
+      if (!j.ok) setActionMsg({ ok: false, text: `${kind} failed: ${j.error || r.status}${j.hint ? ` — ${j.hint}` : ''}` });
+      else { setActionMsg({ ok: true, text: `${kind === 'train' ? 'Training started' : 'Model published'}.` }); reloadDetail(); reloadList(); }
+    } catch (e: any) { setActionMsg({ ok: false, text: `${kind} failed: ${e?.message || String(e)}` }); }
+    finally { setBusy(null); }
+  }, [env.selected, selected, reloadDetail, reloadList]);
+
+  const runPredict = useCallback(async () => {
+    if (!env.selected || !selected) return;
+    setBusy('predict'); setActionMsg(null); setPredictResult(null);
+    try {
+      const r = await fetch(`/api/items/ai-builder-model/${encodeURIComponent(selected)}/predict`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ envId: env.selected, requestJson: predictJson }),
+      });
+      const j = await r.json();
+      if (!j.ok) setActionMsg({ ok: false, text: `Predict failed: ${j.error || r.status}${j.hint ? ` — ${j.hint}` : ''}` });
+      else setPredictResult(JSON.stringify(j.result, null, 2));
+    } catch (e: any) { setActionMsg({ ok: false, text: `Predict failed: ${e?.message || String(e)}` }); }
+    finally { setBusy(null); }
+  }, [env.selected, selected, predictJson]);
+
+  const ribbon = baseRibbon(
+    reloadList,
+    env.selected ? `https://make.powerapps.com/environments/${encodeURIComponent(env.selected)}/aibuilder/models` : undefined,
+    selected ? [{ label: 'Model', actions: [
+      { label: 'Train', onClick: () => runAction('train'), disabled: busy !== null },
+      { label: 'Publish', onClick: () => runAction('publish'), disabled: busy !== null },
+      { label: 'Predict', onClick: runPredict, disabled: busy !== null },
+    ] }] : undefined,
+  );
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={BASE_RIBBON} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {id === 'new' && (
           <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>AI Builder models are authored in the Maker portal</MessageBarTitle>
-              Model training, document templates, and prediction inputs live in <code>make.powerapps.com → AI hub</code>.
-              This editor is a read-only registry view of models stored in <code>msdyn_aimodel</code>.
+              <MessageBarTitle>New AI Builder models are authored in the Maker portal</MessageBarTitle>
+              Choosing a model type and configuring training data is done in <code>make.powerapps.com → AI hub</code>.
+              This editor lists every model in <code>msdyn_aimodel</code> and runs the real lifecycle actions —
+              <strong> Train</strong>, <strong>Publish</strong>, and real-time <strong>Predict</strong> — against the Dataverse Web API.
             </MessageBarBody>
           </MessageBar>
         )}
@@ -858,6 +1171,48 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                 <span className={s.metaKey}>Created</span><span>{detailSt.data.model.createdon || '—'}</span>
                 <span className={s.metaKey}>Modified</span><span>{detailSt.data.model.modifiedon || '—'}</span>
               </div>
+            )}
+            {detailSt.data?.model && (
+              <>
+                <Subtitle2 style={{ marginTop: 12 }}>Lifecycle</Subtitle2>
+                <div className={s.toolbar}>
+                  <Button appearance="primary" disabled={busy !== null} onClick={() => runAction('train')}>
+                    {busy === 'train' ? 'Training…' : 'Train'}
+                  </Button>
+                  <Button appearance="outline" disabled={busy !== null} onClick={() => runAction('publish')}>
+                    {busy === 'publish' ? 'Publishing…' : 'Publish'}
+                  </Button>
+                </div>
+                {actionMsg && (
+                  <MessageBar intent={actionMsg.ok ? 'success' : 'error'}>
+                    <MessageBarBody>{actionMsg.text}</MessageBarBody>
+                  </MessageBar>
+                )}
+                <Subtitle2 style={{ marginTop: 12 }}>Real-time prediction</Subtitle2>
+                <Caption1>
+                  POSTs to the Dataverse <code>Predict</code> action. The input shape is model-specific — e.g. a
+                  prediction model expects <code>{'{ "V2": { "&lt;column&gt;": value } }'}</code>. Only published
+                  models created after 2020-04-02 support real-time predict.
+                </Caption1>
+                <Field label="Predict request (JSON)">
+                  <Textarea
+                    rows={6}
+                    value={predictJson}
+                    onChange={(_, d) => setPredictJson(d.value)}
+                    style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
+                  />
+                </Field>
+                <div>
+                  <Button appearance="primary" disabled={busy !== null} onClick={runPredict}>
+                    {busy === 'predict' ? 'Predicting…' : 'Run prediction'}
+                  </Button>
+                </div>
+                {predictResult && (
+                  <div className={s.tableWrap} style={{ padding: 8 }}>
+                    <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>{predictResult}</pre>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
