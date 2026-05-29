@@ -4,19 +4,22 @@ import {
 } from '../activity-catalog';
 
 describe('activity-catalog', () => {
-  it('exposes both palette categories', () => {
+  it('exposes all three Fabric palette categories', () => {
     const mt = byCategory('move-transform');
-    const act = byCategory('activities');
+    const orch = byCategory('orchestration');
+    const cf = byCategory('control-flow');
     expect(mt.length).toBeGreaterThan(0);
-    expect(act.length).toBeGreaterThan(0);
-    expect(mt.length + act.length).toBe(ACTIVITY_CATALOG.length);
+    expect(orch.length).toBeGreaterThan(0);
+    expect(cf.length).toBeGreaterThan(0);
+    expect(mt.length + orch.length + cf.length).toBe(ACTIVITY_CATALOG.length);
   });
 
   it('covers all Fabric activity types required by the parity spec', () => {
     const keys = ACTIVITY_CATALOG.map((a) => a.key);
     const required = [
-      'Copy', 'DataflowGen2', 'ExecuteDataFlow', 'Lookup',
-      'Notebook', 'SparkJob', 'Script', 'StoredProcedure', 'Web', 'Office365Outlook',
+      'Copy', 'DataflowGen2', 'ExecuteDataFlow', 'Lookup', 'GetMetadata', 'Delete',
+      'Notebook', 'SparkJob', 'ExecutePipeline', 'Script', 'StoredProcedure',
+      'Web', 'Webhook', 'Fail', 'Validation', 'Office365Outlook',
       'SetVariable', 'AppendVariable', 'Filter', 'ForEach', 'IfCondition',
       'Switch', 'Until', 'Wait',
     ];
