@@ -285,7 +285,7 @@ Illustrative. IBM Db2 licensing varies dramatically by platform. A federal agenc
 ## 9. Related resources
 
 - **Migration index:** [docs/migrations/README.md](README.md)
-- **Companion playbooks:** [Oracle to Azure](oracle-to-azure.md), [SQL Server to Azure](sql-server-to-azure.md), [SAP to Azure](sap-to-azure.md)
+- **Companion playbooks:** [Oracle to Azure](oracle-to-azure.md), [SQL Server to Azure](sql-server-to-azure.md)
 - **Decision trees:**
     - `docs/decisions/fabric-vs-databricks-vs-synapse.md`
     - `docs/decisions/lakehouse-vs-warehouse-vs-lake.md`
