@@ -6,19 +6,18 @@ tags:
 ---
 # 💼 Business Resources
 
-!!! info "Comparative positioning note"
-    This document is written from the
-    perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
-    description of third-party or competing products, services, pricing, or
-    capabilities is derived from **publicly available documentation and sources**
-    believed accurate at the time of writing, and is provided for **general
-    comparison only**. We do not claim expertise in, or authority over, any
-    non-Microsoft product or service; the respective vendor's official
-    documentation is the authoritative source for their offerings, which may
-    change over time. Nothing here is intended to disparage any vendor — where a
-    competing product has genuine advantages, we aim to note them honestly.
-    Verify all third-party details against the vendor's current official
-    documentation before making decisions.
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
 
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
@@ -57,14 +56,14 @@ __Key Metrics__:
 
 ### 🔍 [Competitive Analysis](competitive-analysis.md)
 
-Comprehensive comparison of Azure against AWS, Google Cloud, Databricks, Snowflake, and on-premises solutions.
+Comprehensive comparison, from the Azure perspective, of Azure against competing clouds, Azure Databricks, a competing data warehouse, and on-premises solutions.
 
 __Platform Comparisons__:
 
-- Azure vs AWS (service mapping, pricing, use cases)
-- Azure vs Google Cloud (BigQuery, Dataflow, Vertex AI)
+- Azure vs a competing cloud (service mapping, pricing, use cases)
+- Azure vs another competing cloud (serverless analytics, streaming, AI/ML)
 - Azure vs Databricks (Spark, ML, data engineering)
-- Azure vs Snowflake (data warehousing, simplicity)
+- Azure vs a competing data warehouse (data warehousing, simplicity)
 - Cloud vs On-Premises (TCO, capabilities, migration)
 
 __Decision Framework__:

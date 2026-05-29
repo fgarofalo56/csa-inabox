@@ -1,18 +1,17 @@
 # 2-hour technical evaluation — CSA Loom
 
-!!! info "Comparative positioning note"
-    This document is written from the
-    perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
-    description of third-party or competing products, services, pricing, or
-    capabilities is derived from **publicly available documentation and sources**
-    believed accurate at the time of writing, and is provided for **general
-    comparison only**. We do not claim expertise in, or authority over, any
-    non-Microsoft product or service; the respective vendor's official
-    documentation is the authoritative source for their offerings, which may
-    change over time. Nothing here is intended to disparage any vendor — where a
-    competing product has genuine advantages, we aim to note them honestly.
-    Verify all third-party details against the vendor's current official
-    documentation before making decisions.
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
 
 
 Audience: customer infra lead + security lead + (often) the architect
@@ -218,7 +217,7 @@ By minute 100, the customer should be saying "OK, this is real."
 Run this worksheet with the customer's team. It's a Loom vs alternatives
 self-assessment.
 
-| Dimension | Loom | Snowflake Gov | Palantir Foundry IL5 | Databricks Gov |
+| Dimension | Loom | Competing data warehouse (Gov) | Competing data-ops platform (IL5) | Databricks Gov |
 |---|---|---|---|---|
 | Microsoft strategic alignment | ✓ | ✗ | ✗ | partial |
 | Boundary support today (FedRAMP High / IL4 / IL5) | ✓ | partial | ✓ | partial |

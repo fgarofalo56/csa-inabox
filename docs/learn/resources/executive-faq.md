@@ -6,19 +6,18 @@ tags:
 ---
 # ❓ Executive FAQ - Azure Cloud Scale Analytics
 
-!!! info "Comparative positioning note"
-    This document is written from the
-    perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
-    description of third-party or competing products, services, pricing, or
-    capabilities is derived from **publicly available documentation and sources**
-    believed accurate at the time of writing, and is provided for **general
-    comparison only**. We do not claim expertise in, or authority over, any
-    non-Microsoft product or service; the respective vendor's official
-    documentation is the authoritative source for their offerings, which may
-    change over time. Nothing here is intended to disparage any vendor — where a
-    competing product has genuine advantages, we aim to note them honestly.
-    Verify all third-party details against the vendor's current official
-    documentation before making decisions.
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
 
 
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=flat-square)
@@ -89,7 +88,7 @@ __Recommendation__: Begin migration planning now. Even a 6-month delay represent
 
 ---
 
-### What's the business case for choosing Azure over AWS or Google Cloud?
+### What's the business case for choosing Azure over a competing cloud?
 
 __Short Answer__: Azure delivers 15-30% lower TCO for Microsoft-centric enterprises, with superior hybrid capabilities and the strongest enterprise security posture.
 
@@ -122,7 +121,7 @@ __Strategic Integration Benefits__:
 
 ✅ __Enterprise Security__
 
-- Most compliance certifications (90+ vs 80 for AWS)
+- A broad portfolio of compliance certifications (90+)
 - FedRAMP High (government requirements)
 - Industry-specific clouds (Financial Services, Healthcare)
 
@@ -134,7 +133,7 @@ __TCO Comparison (5-year, enterprise scale)__:
 | __AWS__ | $3.4M | $2.8M | $2.0M | __$8.2M__ |
 | __GCP__ | $3.2M | $2.6M | $1.9M | __$7.7M__ |
 
-__Azure savings: 16% vs AWS, 10% vs GCP__
+__Azure savings: 10-16% versus competing clouds in this scenario__
 
 __When Azure Is The Clear Winner__:
 
@@ -146,8 +145,8 @@ __When Azure Is The Clear Winner__:
 
 __When to Consider Alternatives__:
 
-- AWS: Deeply embedded in AWS ecosystem, Lambda-centric architectures
-- GCP: Pure greenfield, AI/ML innovation priority, BigQuery simplicity preference
+- A competing cloud: organization is deeply embedded in that cloud's ecosystem and serverless-centric architectures
+- Another competing cloud: pure greenfield, AI/ML innovation priority, serverless-warehouse simplicity preference
 
 ---
 
@@ -1338,13 +1337,13 @@ __POC Success Rate__:
 
 ## 🏢 Competitive Positioning
 
-### How does Azure compare to AWS and Google Cloud for analytics?
+### How does Azure compare to competing clouds for analytics?
 
 __Detailed Answer__: See [Competitive Analysis](competitive-analysis.md) for comprehensive comparison.
 
 __Quick Summary__:
 
-| Factor | Azure | AWS | Google Cloud |
+| Factor | Azure | Competing cloud A | Competing cloud B |
 |--------|-------|-----|--------------|
 | __Enterprise Integration__ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ |
 | __Cost (TCO)__ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
@@ -1355,8 +1354,8 @@ __Quick Summary__:
 __Best for__:
 
 - __Azure__: Microsoft-centric enterprises, hybrid scenarios, cost optimization
-- __AWS__: AWS-native shops, broadest service portfolio
-- __GCP__: Analytics simplicity (BigQuery), AI/ML innovation
+- __Competing cloud A__: shops already native to that cloud, broadest service portfolio
+- __Competing cloud B__: analytics simplicity via a serverless warehouse, AI/ML innovation
 
 ---
 

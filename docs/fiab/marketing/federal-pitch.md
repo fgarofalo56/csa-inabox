@@ -1,18 +1,17 @@
 # Federal Account-Team Pitch Track
 
-!!! info "Comparative positioning note"
-    This document is written from the
-    perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
-    description of third-party or competing products, services, pricing, or
-    capabilities is derived from **publicly available documentation and sources**
-    believed accurate at the time of writing, and is provided for **general
-    comparison only**. We do not claim expertise in, or authority over, any
-    non-Microsoft product or service; the respective vendor's official
-    documentation is the authoritative source for their offerings, which may
-    change over time. Nothing here is intended to disparage any vendor — where a
-    competing product has genuine advantages, we aim to note them honestly.
-    Verify all third-party details against the vendor's current official
-    documentation before making decisions.
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
 
 
 Tailored variant of the [pitch deck](pitch-deck.md) for Microsoft
@@ -111,7 +110,7 @@ attestation including workforce + personnel security practices. See
 |---|---|
 | [Federal Data Mesh](../use-cases/federal-data-mesh.md) | Multi-agency federal departments |
 | [Multi-Agency Onboarding](../use-cases/multi-agency-onboarding.md) | Federal CIO / shared services |
-| [Direct-Lake Replacement](../use-cases/direct-lake-replacement.md) | Customers migrating from Tableau / Qlik / Power BI Report Server |
+| [Direct-Lake Replacement](../use-cases/direct-lake-replacement.md) | Customers migrating from competing BI / analytics tools or Power BI Report Server |
 | [Sovereign AI Agents](../use-cases/sovereign-ai-agents.md) | Federal AI workloads under sovereignty constraints |
 | [Hybrid Fabric Commercial + Loom Gov](../use-cases/hybrid-topology.md) | Federal customers with both Commercial + Gov estates |
 

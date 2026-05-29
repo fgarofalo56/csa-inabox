@@ -7,19 +7,18 @@ last_updated: 2026-05-15
 
 # Best Practice — Multi-Model AI Orchestration
 
-!!! info "Comparative positioning note"
-    This document is written from the
-    perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
-    description of third-party or competing products, services, pricing, or
-    capabilities is derived from **publicly available documentation and sources**
-    believed accurate at the time of writing, and is provided for **general
-    comparison only**. We do not claim expertise in, or authority over, any
-    non-Microsoft product or service; the respective vendor's official
-    documentation is the authoritative source for their offerings, which may
-    change over time. Nothing here is intended to disparage any vendor — where a
-    competing product has genuine advantages, we aim to note them honestly.
-    Verify all third-party details against the vendor's current official
-    documentation before making decisions.
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
 
 
 
@@ -106,7 +105,7 @@ The routing layer lives in APIM, not in application code. Reasons:
 </policies>
 ```
 
-This is the production-grade answer to four hard problems at once: cost control, latency control, content safety, and chargeback telemetry. **No equivalent exists on AWS API Gateway. No equivalent exists on MuleSoft.**
+This is the production-grade answer to four hard problems at once: cost control, latency control, content safety, and chargeback telemetry. **No native equivalent exists on a competing cloud's API gateway, nor on a competing integration platform.**
 
 ---
 

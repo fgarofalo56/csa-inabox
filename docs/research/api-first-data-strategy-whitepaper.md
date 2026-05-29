@@ -7,19 +7,18 @@ last_updated: 2026-05-15
 
 # API-First Data Strategy on Azure
 
-!!! info "Comparative positioning note"
-    This document is written from the
-    perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
-    description of third-party or competing products, services, pricing, or
-    capabilities is derived from **publicly available documentation and sources**
-    believed accurate at the time of writing, and is provided for **general
-    comparison only**. We do not claim expertise in, or authority over, any
-    non-Microsoft product or service; the respective vendor's official
-    documentation is the authoritative source for their offerings, which may
-    change over time. Nothing here is intended to disparage any vendor — where a
-    competing product has genuine advantages, we aim to note them honestly.
-    Verify all third-party details against the vendor's current official
-    documentation before making decisions.
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
 
 
 ## The Interoperability Layer for Multi-Model, Multi-Vendor AI Ecosystems
@@ -613,7 +612,7 @@ Outcomes at the end of year one:
 ## Related reading in this repo
 
 - [Azure vs the competing integration platform — 1-for-1 capability map](../comparison/azure-vs-mulesoft.md)
-- [Azure vs AWS API stack — 1-for-1 capability map](../comparison/azure-vs-aws-api-stack.md)
+- [Azure vs a competing cloud API stack — 1-for-1 capability map](../comparison/azure-vs-aws-api-stack.md)
 - [Reference architecture: API-first multi-model AI ecosystem](../reference-architecture/api-first-multi-model-ecosystem.md)
 - [Use case: API-first multi-model AI ecosystem for a federal mission agency](../use-cases/api-first-multi-model-ai-ecosystem.md)
 - [Use case: Dataverse API integration](../use-cases/dataverse-api-integration.md)
