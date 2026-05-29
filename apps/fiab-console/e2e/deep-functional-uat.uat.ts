@@ -124,14 +124,23 @@ async function ensureSession(page: Page) {
   return j.user;
 }
 
-function pickPrimaryAction(category: string, enabled: string[]): string | null {
+function pickPrimaryAction(category: string, enabled: string[], tabs: string[] = []): string | null {
+  // A label that's ALSO a tab name (e.g. sql-database's "Tables", "Query",
+  // "Mirroring") is ambiguous to click — skip those, prefer real action verbs.
+  const tabSet = new Set(tabs.map(t => t.toLowerCase().replace(/(.+)\1/, '$1')));
+  const isTabLabel = (b: string) => {
+    const norm = b.toLowerCase().replace(/(.+)\1/, '$1'); // de-dupe doubled labels ("TablesTables")
+    return tabSet.has(norm) || tabs.some(t => t.toLowerCase().includes(norm) && norm.length > 2);
+  };
   const candidates = PRIMARY_ACTIONS[category] || ['Save', 'Run', 'Create'];
   for (const cand of candidates) {
-    const found = enabled.find(b => b.toLowerCase().includes(cand.toLowerCase()));
+    const found = enabled.find(b => b.toLowerCase().includes(cand.toLowerCase()) && !isTabLabel(b));
     if (found) return found;
   }
-  // Fallback: the first enabled non-chrome button
-  return enabled.find(b => !/^(Comments|Version history|Share|Learn|Home|Refresh)$/i.test(b)) || null;
+  // Fallback: first enabled non-chrome, non-tab button.
+  return enabled.find(b =>
+    !/^(Comments|Version history|Share|Learn|Home|Refresh)$/i.test(b) && !isTabLabel(b),
+  ) || enabled.find(b => !/^(Comments|Version history|Share|Learn|Home)$/i.test(b)) || null;
 }
 
 async function probeVisualDesigner(page: Page): Promise<boolean> {
@@ -177,15 +186,25 @@ test.describe.serial('Deep functional UAT — every catalog item', () => {
       const tabs = await page.locator('main [role="tab"]').allTextContents()
         .then(arr => arr.map(s => s.trim()));
 
-      const primaryName = pickPrimaryAction(item.category, enabled);
+      // Don't pick a label that's also a tab name (e.g. sql-database's
+      // "Tables") — clicking it is ambiguous between the tab and a button.
+      const primaryName = pickPrimaryAction(item.category, enabled, tabs);
       let primaryAction: FunctionalResult['primaryAction'] = { name: primaryName || '<none>', clicked: false };
 
       if (primaryName) {
         try {
-          const btn = page.locator(`main button:has-text("${primaryName}")`).first();
-          await btn.click({ timeout: 2000 });
+          // Exact-text match, scoped to ENABLED buttons only, first visible.
+          // has-text() is a substring match that mis-fires when one label is
+          // a prefix of another (e.g. "Refresh" vs "Refresh dataset"), so use
+          // getByRole with an exact name and filter out disabled ones.
+          let btn = page.getByRole('button', { name: primaryName, exact: true })
+            .and(page.locator(':not([disabled])')).first();
+          if (!(await btn.count())) {
+            // Fall back to a non-exact, enabled-only match.
+            btn = page.locator('main button:not([disabled])').filter({ hasText: primaryName }).first();
+          }
+          await btn.click({ timeout: 5000 });
           primaryAction.clicked = true;
-          // Wait for a toast / message
           await page.waitForTimeout(1500);
           const toast = await page.locator('[role="alert"]').first().textContent({ timeout: 1000 }).catch(() => null);
           if (toast) primaryAction.toastSeen = toast.slice(0, 200);
