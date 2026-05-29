@@ -215,6 +215,27 @@ export async function getReport(workspaceId: string, reportId: string): Promise<
   return call<PbiReport>(`/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}`);
 }
 
+export interface PbiReportPage {
+  /** Internal page name used by the embed `setPage(name)` API. */
+  name: string;
+  /** Friendly tab title shown in the report. */
+  displayName?: string;
+  order?: number;
+}
+
+/**
+ * GET /groups/{ws}/reports/{id}/pages — list the report's pages so the editor
+ * can render a page-navigation list and deep-link the embed via setPage(name).
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/reports/get-pages-in-group
+ */
+export async function getReportPages(workspaceId: string, reportId: string): Promise<PbiReportPage[]> {
+  const j = await call<{ value: PbiReportPage[] }>(
+    `/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(reportId)}/pages`,
+  );
+  return j.value || [];
+}
+
 export async function cloneReport(
   workspaceId: string,
   reportId: string,
@@ -332,6 +353,58 @@ export async function getRefreshSchedule(workspaceId: string, datasetId: string)
     if (e instanceof PowerBiError && e.status === 404) return null;
     throw e;
   }
+}
+
+/**
+ * RefreshSchedule write fields — the editable subset Power BI exposes via
+ * PATCH /datasets/{id}/refreshSchedule. The body is wrapped in `{ value: ... }`.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/datasets/update-refresh-schedule-in-group
+ */
+export interface RefreshScheduleWrite {
+  enabled?: boolean;
+  /** e.g. ["Sunday","Monday",...]; required by PBI when enabling. */
+  days?: string[];
+  /** e.g. ["07:00","12:00"]; times must be on 30-minute boundaries. */
+  times?: string[];
+  /** PBI tz id e.g. "UTC", "Pacific Standard Time". */
+  localTimeZoneId?: string;
+  notifyOption?: 'MailOnFailure' | 'NoNotification';
+}
+
+/**
+ * PATCH /groups/{ws}/datasets/{id}/refreshSchedule — update the scheduled
+ * refresh. Power BI 400s if `enabled:true` is sent without at least one day +
+ * time; the route surfaces that verbatim. Returns nothing on success (200).
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/datasets/update-refresh-schedule-in-group
+ */
+export async function patchRefreshSchedule(
+  workspaceId: string,
+  datasetId: string,
+  value: RefreshScheduleWrite,
+): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/refreshSchedule`,
+    { method: 'PATCH', body: { value } },
+  );
+  return { ok: true };
+}
+
+/**
+ * POST /groups/{ws}/datasets/{id}/Default.TakeOver — transfer dataset
+ * ownership to the calling principal (the Console UAMI). Required before the
+ * UAMI can edit the refresh schedule / bind credentials when another user or
+ * SP currently owns the dataset.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/datasets/take-over-in-group
+ */
+export async function takeOverDataset(workspaceId: string, datasetId: string): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/Default.TakeOver`,
+    { method: 'POST' },
+  );
+  return { ok: true };
 }
 
 // ============================================================
