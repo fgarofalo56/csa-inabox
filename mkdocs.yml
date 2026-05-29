@@ -224,8 +224,8 @@ nav:
       - Comparisons:
           - Cloud Scale Analytics in a Box vs Microsoft Fabric: comparison/csa-inabox-vs-fabric.md
           - CSA Loom vs Microsoft Fabric: comparison/csa-loom-vs-fabric.md
-          - Azure vs MuleSoft Anypoint Platform: comparison/azure-vs-mulesoft.md
-          - Azure vs AWS API Stack: comparison/azure-vs-aws-api-stack.md
+          - Azure vs a competing integration platform: comparison/azure-vs-mulesoft.md
+          - Azure vs a competing cloud API stack: comparison/azure-vs-aws-api-stack.md
       - Decision Trees:
           - Overview: decisions/README.md
           - Batch vs Streaming: decisions/batch-vs-streaming.md

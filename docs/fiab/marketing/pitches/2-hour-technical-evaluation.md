@@ -217,7 +217,7 @@ By minute 100, the customer should be saying "OK, this is real."
 Run this worksheet with the customer's team. It's a Loom vs alternatives
 self-assessment.
 
-| Dimension | Loom | Snowflake Gov | Palantir Foundry IL5 | Databricks Gov |
+| Dimension | Loom | Competing data warehouse (Gov) | Competing data-ops platform (IL5) | Databricks Gov |
 |---|---|---|---|---|
 | Microsoft strategic alignment | ✓ | ✗ | ✗ | partial |
 | Boundary support today (FedRAMP High / IL4 / IL5) | ✓ | partial | ✓ | partial |
