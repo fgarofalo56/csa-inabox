@@ -8,16 +8,30 @@ informed: all
 
 # ADR 0011 — Multi-cloud scope: OneLake shortcuts + Purview scans only; defer federated compute
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 ## Context and Problem Statement
 
 Vision §1 names multi-cloud as a first-class capability of CSA-in-a-Box.
 In reality the codebase is single-cloud (Azure) with an OSS-on-Kubernetes
-Helm escape hatch. There is no AWS S3 / Glue / Redshift / EMR / SageMaker
-story, no GCP BigQuery / Dataplex / Vertex AI story, and no cross-cloud
-data contract. Federal and enterprise customers routinely have
-multi-cloud footprints (S3, BigQuery, Snowflake) that need a governance
-and read-federation story **without** a full re-platform. We must decide
-a scope that is honest about what ships in v1 versus what is roadmap.
+Helm escape hatch. There is no competing-cloud object-store / ETL /
+data-warehouse / ML story, and no cross-cloud data contract. Federal and
+enterprise customers routinely have multi-cloud footprints (object stores
+and competing data warehouses) that need a governance and read-federation
+story **without** a full re-platform. We must decide a scope that is honest
+about what ships in v1 versus what is roadmap.
 
 ## Decision Drivers
 
@@ -43,17 +57,18 @@ a scope that is honest about what ships in v1 versus what is roadmap.
     - Unity Catalog federation + Trino or Denodo cross-cloud compute.
       Complete vision but 12–18 months of effort; most of the near-term
       federal-customer value is already covered by the first two items.
-2. **Scoped multi-cloud (CHOSEN)** — OneLake shortcuts to S3 and GCS
-   (read-only federation, no transformation) + Purview cross-cloud scans
-   of Snowflake, BigQuery, and Redshift (catalog + classification; no
-   compute). Ships the governance and read-federation story federal
-   customers actually need today; defers cross-cloud compute federation
-   to a future ADR.
+2. **Scoped multi-cloud (CHOSEN)** — OneLake shortcuts to competing-cloud
+   object stores (read-only federation, no transformation) + Purview
+   cross-cloud scans of competing data warehouses (catalog +
+   classification; no compute). Ships the governance and read-federation
+   story federal customers actually need today; defers cross-cloud compute
+   federation to a future ADR.
 3. **Single-cloud-only + migration playbooks** — drop multi-cloud from
    the vision entirely and rely on the four migration playbooks
-   (Palantir, Snowflake, AWS, GCP) to onboard customers. Simpler but
-   cuts off the "stay on multiple clouds while using CSA-in-a-Box as
-   the governance plane" pattern that many federal tenants need.
+   (covering the major competing analytics platforms) to onboard
+   customers. Simpler but cuts off the "stay on multiple clouds while
+   using CSA-in-a-Box as the governance plane" pattern that many federal
+   tenants need.
 4. **OSS escape hatch only** — keep the current state; position
    OSS-on-K8s (Trino + Atlas) as the multi-cloud answer and let
    customers own the operational burden. Shifts effort to the customer
@@ -66,19 +81,19 @@ cross-cloud scans)**.
 
 The in-scope capabilities for v1 are:
 
-- **OneLake shortcuts to S3 and GCS** — read-only federation. Objects
-  in S3 or GCS are surfaced inside OneLake without copying. No
-  transformation, no write-back.
-- **Purview cross-cloud scans** — Purview connectors scan Snowflake,
-  BigQuery, and Redshift for catalog metadata and classification. No
+- **OneLake shortcuts to competing-cloud object stores** — read-only
+  federation. Objects in a competing cloud's object store are surfaced
+  inside OneLake without copying. No transformation, no write-back.
+- **Purview cross-cloud scans** — Purview connectors scan competing
+  cloud data warehouses for catalog metadata and classification. No
   compute federation; lineage is catalog-level only.
 
 Explicitly **deferred** (roadmap, not committed in v1):
 
 - Unity Catalog cross-cloud federation
 - Denodo or Trino-based cross-cloud compute federation
-- Cross-cloud write paths (any S3 or GCS write-back)
-- AWS Glue / EMR / SageMaker and GCP Dataplex / Vertex AI integration
+- Cross-cloud write paths (any write-back to a competing object store)
+- Integration with competing-cloud ETL, compute, and ML services
 
 A follow-up ADR will be authored if and when federated compute is
 promoted from roadmap to committed scope.
@@ -101,7 +116,8 @@ promoted from roadmap to committed scope.
   federated query across clouds must use the migration playbooks or
   wait for a future ADR on federated compute.
 - Negative: **Writes are out of scope** — OneLake shortcuts are
-  read-only; any write-back to S3 or GCS is not part of v1.
+  read-only; any write-back to a competing cloud's object store is not
+  part of v1.
 - Negative: **Deferred work must be tracked** — Unity Catalog
   federation, Denodo, and Trino stay open as roadmap items; this ADR
   explicitly does not close those doors but does not commit them.
@@ -130,7 +146,7 @@ promoted from roadmap to committed scope.
   migration playbooks already exist.
 - Cons: Cuts off the "multi-cloud governance plane" customer pattern;
   removes a stated vision §1 capability entirely; weakens the federal
-  story where tenants keep AWS or GCP footprints for existing
+  story where tenants keep competing-cloud footprints for existing
   contracts.
 
 ### Option 4 — OSS escape hatch only
@@ -151,8 +167,8 @@ We will know this decision is right if:
 - More than 30% of customer asks in the first six months require
   cross-cloud compute federation — at that point we revisit with a new
   ADR expanding scope (Unity Catalog cross-cloud or Trino/Denodo).
-- Purview cross-cloud scan coverage for Snowflake, BigQuery, and
-  Redshift matches the in-tenant Azure coverage within one quarter of
+- Purview cross-cloud scan coverage for the major competing data
+  warehouses matches the in-tenant Azure coverage within one quarter of
   GA in Azure Government.
 
 ## References
@@ -161,13 +177,13 @@ We will know this decision is right if:
 - Fabric primacy rewrite (CSA-0063) and ADR-0010 —
   [`./0010-fabric-strategic-target.md`](./0010-fabric-strategic-target.md)
 - Purview catalog strategy — [`./0006-purview-over-atlas.md`](./0006-purview-over-atlas.md)
-- Migration playbooks (Palantir, Snowflake, AWS, GCP) —
-  [`docs/migrations/`](../migrations/README.md)
+- Migration playbooks (covering the major competing analytics
+  platforms) — [`docs/migrations/`](../migrations/README.md)
 - Fabric vs Databricks vs Synapse decision tree —
   [`docs/decisions/`](../decisions/README.md)
 - Framework controls: NIST 800-53 **CA-3** (system interconnections for
   cross-cloud scans), **AC-4** (information-flow enforcement across the
-  S3/GCS shortcut boundary), **CM-7** (least-functionality — read-only
-  federation). Mapped in
+  competing-cloud object-store shortcut boundary), **CM-7**
+  (least-functionality — read-only federation). Mapped in
   [`governance/compliance/nist-800-53-rev5.yaml`](../../csa_platform/governance/compliance/nist-800-53-rev5.yaml).
 - Finding: **CSA-0140** / approved ballot item **E11** / **AQ-0035**.
