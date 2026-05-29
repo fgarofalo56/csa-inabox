@@ -38,6 +38,7 @@ import {
   Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -2070,6 +2071,16 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     }
   }, []);
 
+  // Auto-pick the first workspace once loaded so the editor isn't blocked on a
+  // manual click for the common single-workspace deployments (matches the
+  // Eventstream editor). After NewItemCreateGate routes here post-create, this
+  // makes the Start/Stop/New rule/action-template ribbon reachable immediately.
+  useEffect(() => {
+    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) {
+      setWorkspaceId(ws.workspaces[0].id);
+    }
+  }, [workspaceId, ws.workspaces]);
+
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && selectedId) loadRules(workspaceId, selectedId); }, [workspaceId, selectedId, loadRules]);
 
@@ -2169,6 +2180,17 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       ]},
     ]},
   ], [canNewRule, reflexBusy, startStop, openTemplate]);
+
+  // On /new there is no reflex selected yet, so every rule/action button is
+  // gated. Mirror the PR #438 NewItemGate pattern: show an ENABLED create
+  // surface that mints a Cosmos activator item and routes to the live editor
+  // below, where the real Fabric-backed Start/Stop/rule/action handlers work.
+  if (id === 'new') {
+    return (
+      <NewItemCreateGate item={item} createLabel="New reflex"
+        intro="An Activator (Reflex) watches a stream or KQL query and runs actions — Email, Teams, a pipeline, a notebook, or a Power Automate flow — when a rule's condition fires. Create it, then add rules and Start the reflex against the live Fabric Activator backend." />
+    );
+  }
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
