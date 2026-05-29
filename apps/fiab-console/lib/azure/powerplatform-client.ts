@@ -184,17 +184,35 @@ export interface DataverseSolution {
   publisherid?: any;
 }
 
+export interface PowerAppConnectionRef {
+  /** Connector id, e.g. shared_sharepointonline. */
+  id?: string;
+  displayName?: string;
+  iconUri?: string;
+  dataSources?: string[];
+}
+
 export interface PowerApp {
-  name: string;            // GUID
+  name: string;            // GUID — the real Power Apps app id
   id?: string;
   displayName: string;
+  description?: string;
   appType?: string;        // CanvasApp / ModelDrivenApp
   owner?: { displayName?: string; email?: string; userPrincipalName?: string };
   createdTime?: string;
   lastModifiedTime?: string;
-  appOpenUri?: string;
+  appOpenUri?: string;          // maker-provided play URL (when present)
   appOpenProtocolUri?: string;
   environmentName?: string;
+  /** Resolved play/embed URL for an iframe (canvas) or deep link (model-driven). */
+  playerEmbedUri?: string;
+  /** Connectors / data sources the app uses (from connectionReferences). */
+  connectionReferences?: PowerAppConnectionRef[];
+  appVersion?: string;
+  isFeaturedApp?: boolean;
+  bypassConsent?: boolean;
+  sharedGroupsCount?: number;
+  sharedUsersCount?: number;
 }
 
 export interface PowerAutomateFlow {
@@ -502,30 +520,86 @@ export async function getTableData(
 
 const APPS_API_VERSION = '2016-11-01';
 
+/**
+ * Power Apps web-player base. Commercial = apps.powerapps.com; GCC/Gov set
+ * LOOM_POWERAPPS_PLAYER_BASE=https://apps.gov.powerapps.us. The canvas embed
+ * URL is `<base>/play/<appId>?source=iframe` (Microsoft Learn:
+ * power-apps/maker/canvas-apps/embed-apps-dev).
+ */
+const POWERAPPS_PLAYER_BASE = process.env.LOOM_POWERAPPS_PLAYER_BASE || 'https://apps.powerapps.com';
+
+/**
+ * Build the play/embed URI for an app.
+ *   - Canvas apps   → web-player iframe URL `<player>/play/<appId>?source=iframe`
+ *   - Model-driven  → main.aspx deep link on the env instance URL (cannot iframe;
+ *     the caller surfaces an "Open in new tab" affordance).
+ * Falls back to the maker-provided `appOpenUri` when present.
+ */
+export function powerAppPlayerEmbedUri(
+  app: { name: string; appType?: string; appOpenUri?: string },
+  opts?: { instanceUrl?: string },
+): string | undefined {
+  const type = (app.appType || '').toLowerCase();
+  if (type.includes('modeldriven')) {
+    const base = opts?.instanceUrl?.replace(/\/$/, '');
+    if (base) return `${base}/main.aspx?appid=${encodeURIComponent(app.name)}`;
+    return app.appOpenUri;
+  }
+  // Canvas (default): embeddable iframe player URL.
+  if (app.name) return `${POWERAPPS_PLAYER_BASE}/play/${encodeURIComponent(app.name)}?source=iframe`;
+  return app.appOpenUri;
+}
+
 export async function listPowerApps(envId: string): Promise<PowerApp[]> {
   const j = await call<{ value: any[] }>(
     `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps`,
     POWERAPPS_SCOPE,
     { query: { 'api-version': APPS_API_VERSION } },
   );
-  return (j.value || []).map(mapPowerApp);
+  return (j.value || []).map((a) => mapPowerApp(a));
 }
 
-export async function getPowerApp(envId: string, name: string): Promise<PowerApp> {
+export async function getPowerApp(envId: string, name: string, opts?: { instanceUrl?: string }): Promise<PowerApp> {
   const j = await call<any>(
     `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}`,
     POWERAPPS_SCOPE,
     { query: { 'api-version': APPS_API_VERSION } },
   );
-  return mapPowerApp(j);
+  return mapPowerApp(j, opts);
 }
 
-function mapPowerApp(a: any): PowerApp {
+/**
+ * Publish the latest saved revision of a canvas app so shared users run it.
+ * Power Apps exposes the action `publishAppRevision` on the app management
+ * surface (the same operation as `Publish-AdminPowerApp` / the Studio publish
+ * button). Returns the action body (often empty / the refreshed app doc).
+ */
+export async function publishPowerApp(envId: string, name: string): Promise<{ ok: true; body?: any }> {
+  const body = await call<any>(
+    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}/publishAppRevision`,
+    POWERAPPS_SCOPE,
+    { method: 'POST', query: { 'api-version': APPS_API_VERSION }, body: {} },
+  );
+  return { ok: true, body };
+}
+
+function mapConnectionRefs(refs: any): PowerAppConnectionRef[] {
+  if (!refs || typeof refs !== 'object') return [];
+  return Object.entries(refs).map(([connectorId, v]: [string, any]) => ({
+    id: connectorId,
+    displayName: v?.displayName || connectorId,
+    iconUri: v?.iconUri,
+    dataSources: Array.isArray(v?.dataSources) ? v.dataSources : undefined,
+  }));
+}
+
+function mapPowerApp(a: any, opts?: { instanceUrl?: string }): PowerApp {
   const p = a.properties || {};
-  return {
+  const app: PowerApp = {
     name: a.name,
     id: a.id,
     displayName: p.displayName || a.name,
+    description: p.description,
     appType: p.appType,
     owner: p.owner ? {
       displayName: p.owner.displayName,
@@ -537,7 +611,15 @@ function mapPowerApp(a: any): PowerApp {
     appOpenUri: p.appOpenUri,
     appOpenProtocolUri: p.appOpenProtocolUri,
     environmentName: p.environment?.name,
+    connectionReferences: mapConnectionRefs(p.connectionReferences),
+    appVersion: p.appVersion,
+    isFeaturedApp: p.isFeaturedApp,
+    bypassConsent: p.bypassConsent,
+    sharedGroupsCount: p.sharedGroupsCount,
+    sharedUsersCount: p.sharedUsersCount,
   };
+  app.playerEmbedUri = powerAppPlayerEmbedUri(app, opts);
+  return app;
 }
 
 // ============================================================
