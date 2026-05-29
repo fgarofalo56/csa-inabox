@@ -101,10 +101,10 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const [model, setModel] = useState<ModelSummary | null>(null);
   const [versions, setVersions] = useState<ModelVersion[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  // Compute target for Apply (PREDICT) — wired even though the Apply BFF
-  // route is deferred to v2.x; at least the user can select compute now and
-  // see lifecycle state instead of staring at a dead button with no context.
-  const [computeId, setComputeId] = useState('');
+  // Instance type for the real-time endpoint deployment.
+  const [instanceType, setInstanceType] = useState('Standard_DS3_v2');
+  const [deploying, setDeploying] = useState(false);
+  const [endpointMsg, setEndpointMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -124,18 +124,30 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   }, [id, isNew]);
   useEffect(() => { load(); }, [load]);
 
+  const createEndpoint = useCallback(async () => {
+    setDeploying(true); setEndpointMsg(null);
+    try {
+      const r = await fetch(`/api/items/ml-model/${encodeURIComponent(id)}/endpoint`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ version: selected || undefined, instanceType }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setEndpointMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setEndpointMsg({ intent: 'success', text: j.message || `Endpoint ${j.endpoint?.name} provisioning.` });
+    } catch (e: any) { setEndpointMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setDeploying(false); }
+  }, [id, selected, instanceType]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Versions', actions: [
         { label: loading ? 'Reloading…' : 'Reload', onClick: loading ? undefined : load, disabled: loading },
-        { label: 'Compare versions', disabled: true, title: 'needs compute target + BFF route (deferred)' },
       ]},
-      { label: 'Apply', actions: [
-        { label: 'Apply (PREDICT)', disabled: true, title: 'needs compute target + BFF route (deferred)' },
-        { label: 'Real-time endpoint', disabled: true, title: 'needs compute target + BFF route (deferred)' },
+      { label: 'Serve', actions: [
+        { label: deploying ? 'Deploying…' : 'Real-time endpoint', onClick: createEndpoint, disabled: deploying || !versions.length },
       ]},
     ]},
-  ], [loading, load]);
+  ], [loading, load, deploying, createEndpoint, versions.length]);
 
   const current = versions.find((v) => v.version === selected) || versions[0];
 
@@ -187,18 +199,21 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                 <Badge appearance="tint">Latest: v{model.latestVersion || '—'}</Badge>
                 <Badge appearance="tint">{versions.length} version(s)</Badge>
               </div>
-              {/*
-               * Compute target for Apply (PREDICT). The Apply BFF is deferred
-               * but exposing the picker now lets users pre-select compute and
-               * see its state (Resume a paused Databricks cluster, etc.) so
-               * v2.x's Apply wiring is one click away from working.
-               */}
-              <ComputePicker
-                label="Predict compute"
-                filter={['synapse-spark', 'databricks-cluster']}
-                value={computeId}
-                onChange={setComputeId}
-              />
+              {/* Real-time endpoint: serve the selected model version from a
+                  managed online endpoint (real ARM PUT via the Serve ribbon). */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <Field label="Endpoint VM size">
+                  <Input value={instanceType} onChange={(_, d) => setInstanceType(d.value)} placeholder="Standard_DS3_v2" />
+                </Field>
+                <Button appearance="primary" disabled={deploying || !versions.length} onClick={createEndpoint}>
+                  {deploying ? 'Deploying…' : `Deploy v${selected || model.latestVersion || '?'} to real-time endpoint`}
+                </Button>
+              </div>
+              {endpointMsg && (
+                <MessageBar intent={endpointMsg.intent}>
+                  <MessageBarBody>{endpointMsg.text}</MessageBarBody>
+                </MessageBar>
+              )}
               <Subtitle2 style={{ marginTop: 8 }}>Versions</Subtitle2>
               <Table aria-label="Model versions" size="small">
                 <TableHeader><TableRow>
@@ -288,10 +303,17 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
   const [runs, setRuns] = useState<FoundryJob[]>([]);
   const [expName, setExpName] = useState<string>('');
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
-  // Compute target for hypothetical "submit new run" / Register-model flow;
-  // wired even though the submit BFF is deferred so the lifecycle UI is
-  // surfaced now (resume paused Databricks before submitting from a notebook).
+  // Submission compute for "Submit run"; plus run/environment for a real
+  // command-job submit and the Register-model flow.
   const [computeId, setComputeId] = useState('');
+  const [envId, setEnvId] = useState('azureml://registries/azureml/environments/sklearn-1.5/labels/latest');
+  const [command, setCommand] = useState('python train.py');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitMsg, setSubmitMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const [regOpen, setRegOpen] = useState(false);
+  const [regName, setRegName] = useState('');
+  const [registering, setRegistering] = useState(false);
+  const [regMsg, setRegMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -317,18 +339,53 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
   const current = runs.find((r) => r.name === selectedRun) || runs[0] || job;
 
+  const submitRun = useCallback(async () => {
+    setSubmitting(true); setSubmitMsg(null);
+    try {
+      const r = await fetch('/api/items/ml-experiment/submit', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          command, environmentId: envId,
+          computeId: computeId ? `azureml:${computeId}` : undefined,
+          experimentName: expName || undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSubmitMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setSubmitMsg({ intent: 'success', text: `Submitted run ${j.job?.name} (${j.job?.status || 'queued'})` });
+      load();
+    } catch (e: any) { setSubmitMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setSubmitting(false); }
+  }, [command, envId, computeId, expName, load]);
+
+  const registerModel = useCallback(async () => {
+    const runName = current?.name;
+    if (!runName || !regName.trim()) { setRegMsg({ intent: 'error', text: 'Select a run and enter a model name.' }); return; }
+    setRegistering(true); setRegMsg(null);
+    try {
+      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(runName)}/register`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ modelName: regName.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRegMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setRegMsg({ intent: 'success', text: `Registered ${j.model} v${j.version?.version}` });
+      setRegOpen(false);
+    } catch (e: any) { setRegMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setRegistering(false); }
+  }, [current, regName]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Runs', actions: [
         { label: loading ? 'Reloading…' : 'Reload', onClick: loading ? undefined : load, disabled: loading },
-        { label: 'Register model', disabled: true, title: 'needs MLflow registry write + BFF route (deferred)' },
+        { label: submitting ? 'Submitting…' : 'Submit run', onClick: submitRun, disabled: submitting },
       ]},
-      { label: 'Charts', actions: [
-        { label: 'Parallel coordinates', disabled: true, title: 'chart renderer deferred to v2.x' },
-        { label: 'Scatter', disabled: true, title: 'chart renderer deferred to v2.x' },
+      { label: 'Model', actions: [
+        { label: 'Register model', onClick: () => { setRegName(''); setRegMsg(null); setRegOpen(true); }, disabled: !current },
       ]},
     ]},
-  ], [loading, load]);
+  ], [loading, load, submitting, submitRun, current]);
 
   return (
     <ItemEditorChrome
@@ -386,15 +443,44 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
             </>
           )}
           {!loading && !error && (kind === 'experiment' || kind === 'job') && (
-            // Picker for future "submit new run" — exposes Spark / Databricks
-            // lifecycle so users can resume a paused cluster ahead of time.
-            <ComputePicker
-              label="Submission compute"
-              filter={['synapse-spark', 'databricks-cluster']}
-              value={computeId}
-              onChange={setComputeId}
-            />
+            <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <Subtitle2>Submit a run (Command job)</Subtitle2>
+              <ComputePicker
+                label="Submission compute"
+                filter={['synapse-spark', 'databricks-cluster']}
+                value={computeId}
+                onChange={setComputeId}
+              />
+              <Field label="Environment (azureml:<name>:<ver> or registry URI)">
+                <Input value={envId} onChange={(_, d) => setEnvId(d.value)} />
+              </Field>
+              <Field label="Command">
+                <Input value={command} onChange={(_, d) => setCommand(d.value)} placeholder="python train.py" />
+              </Field>
+              <Button appearance="primary" disabled={submitting || !command || !envId} onClick={submitRun} style={{ alignSelf: 'flex-start' }}>
+                {submitting ? 'Submitting…' : 'Submit run'}
+              </Button>
+              {submitMsg && <MessageBar intent={submitMsg.intent}><MessageBarBody>{submitMsg.text}</MessageBarBody></MessageBar>}
+            </div>
           )}
+          <Dialog open={regOpen} onOpenChange={(_, d) => { if (!d.open) setRegOpen(false); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Register model from run</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Caption1>Run: <strong>{current?.displayName || current?.name || '—'}</strong></Caption1>
+                    <Field label="Model name"><Input value={regName} onChange={(_, d) => setRegName(d.value)} placeholder="fraud-classifier" /></Field>
+                    {regMsg && <MessageBar intent={regMsg.intent}><MessageBarBody>{regMsg.text}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setRegOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" disabled={registering || !regName.trim()} onClick={registerModel}>{registering ? 'Registering…' : 'Register'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
           {!loading && !error && runs.length > 0 && (
             <>
               <Table aria-label="Runs" size="small">
@@ -1656,117 +1742,289 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
   );
 }
 
-// ----- Data Agent (Cosmos config + Phase 1 Foundry deploy stub) -----
+// ----- Data Agent — typed five-source picker + per-source grounding +
+// real grounded test chat + publish to Foundry Agent Service + Copilot
+// Studio handoff. Backed by:
+//   PATCH /api/items/data-agent/[id]            (Cosmos persist)
+//   POST  /api/items/data-agent/[id]/chat       (live AOAI grounded chat)
+//   POST  /api/items/data-agent/[id]/publish    (Foundry Agent Service)
+//   GET   /api/items/by-type?types=...          (typed source picker)
+type DaSourceType = 'warehouse' | 'lakehouse' | 'kql' | 'semantic-model' | 'ai-search';
+interface DaSource { id: string; type: DaSourceType; name: string; tables?: string; instructions?: string; examples?: { question: string; query: string }[] }
 interface DataAgentState {
-  systemPrompt: string; model: string; sources: string;
-  sqlEndpoints: string; kqlDatabases: string; lakehousePaths: string; examples: string;
-  foundryAgentId?: string; foundryProjectId?: string; lastDeployedAt?: string;
+  instructions: string;
+  sources: DaSource[];
+  description?: string;
+  // Back-compat with the legacy free-text bag (read-only on load).
+  systemPrompt?: string; model?: string;
+  foundryAgentId?: string; foundryProjectId?: string; publishedAt?: string;
+  lastDeployedAt?: string;
   [k: string]: unknown;
 }
+
+const DA_SOURCE_TYPES: { value: DaSourceType; label: string; itemType: string }[] = [
+  { value: 'warehouse', label: 'Warehouse', itemType: 'warehouse' },
+  { value: 'lakehouse', label: 'Lakehouse', itemType: 'lakehouse' },
+  { value: 'kql', label: 'KQL database', itemType: 'kql-database' },
+  { value: 'semantic-model', label: 'Semantic model', itemType: 'semantic-model' },
+  { value: 'ai-search', label: 'AI Search', itemType: 'ai-search-index' },
+];
+const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n\n## When asked about\n';
+
+interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean }
+
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<DataAgentState>('data-agent', id, {
-    systemPrompt: 'You are a finance analyst. Always use dim_date and roll metrics by quarter unless asked otherwise.',
-    model: 'gpt-4o',
-    sources: 'fin-warehouse, orders semantic model, ldn-gold-lakehouse, ontology-finance',
-    sqlEndpoints: '', kqlDatabases: '', lakehousePaths: '',
-    examples: 'Top 10 customers by revenue last quarter\nMonthly recurring revenue trend\nForecast next quarter',
+    instructions: 'Route financial / aggregated metrics to the semantic model; raw exploration to the lakehouse / warehouse; log analysis to the KQL database.',
+    sources: [],
+    description: '',
   });
-  const [deploying, setDeploying] = useState(false);
-  const [deployResult, setDeployResult] = useState<DeployResponse | null>(null);
+  const [tab, setTab] = useState<'build' | 'test' | 'publish'>('build');
 
-  const onDeploy = useCallback(async () => {
-    setDeploying(true); setDeployResult(null);
+  // ---- source picker data (real Loom items) ----
+  const [pickerType, setPickerType] = useState<DaSourceType>('warehouse');
+  const [available, setAvailable] = useState<Record<string, { id: string; name: string }[]>>({});
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const loadAvailable = useCallback(async (t: DaSourceType) => {
+    const cfg = DA_SOURCE_TYPES.find((x) => x.value === t)!;
+    setPickerLoading(true);
+    try {
+      const r = await fetch(`/api/items/by-type?types=${encodeURIComponent(cfg.itemType)}`);
+      const j = await r.json();
+      const items = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
+      setAvailable((prev) => ({ ...prev, [t]: items }));
+    } catch { /* leave empty; user can still pick another type */ }
+    finally { setPickerLoading(false); }
+  }, []);
+  useEffect(() => { if (!available[pickerType]) loadAvailable(pickerType); }, [pickerType, available, loadAvailable]);
+
+  const [pickSel, setPickSel] = useState('');
+  const addSource = () => {
+    if (!pickSel || (state.sources?.length || 0) >= 5) return;
+    const opts = available[pickerType] || [];
+    const chosen = opts.find((o) => o.id === pickSel);
+    setState((p) => ({
+      ...p,
+      sources: [...(p.sources || []), {
+        id: `${pickerType}:${pickSel}:${Date.now()}`,
+        type: pickerType,
+        name: chosen?.name || pickSel,
+        tables: '', instructions: DA_INSTRUCTION_TEMPLATE, examples: [],
+      }],
+    }));
+    setPickSel('');
+  };
+  const updateSource = (sid: string, patch: Partial<DaSource>) => {
+    setState((p) => ({ ...p, sources: (p.sources || []).map((x) => x.id === sid ? { ...x, ...patch } : x) }));
+  };
+  const removeSource = (sid: string) => setState((p) => ({ ...p, sources: (p.sources || []).filter((x) => x.id !== sid) }));
+  const updateSourceExamples = (sid: string, fn: (ex: { question: string; query: string }[]) => { question: string; query: string }[]) => {
+    setState((p) => ({ ...p, sources: (p.sources || []).map((x) => x.id === sid ? { ...x, examples: fn(x.examples || []) } : x) }));
+  };
+  const addExample = (sid: string) => updateSourceExamples(sid, (ex) => [...ex, { question: '', query: '' }]);
+
+  // ---- test chat ----
+  const [chat, setChat] = useState<DaChatMsg[]>([]);
+  const [question, setQuestion] = useState('');
+  const [asking, setAsking] = useState(false);
+  const ask = useCallback(async () => {
+    const q = question.trim();
+    if (!q) return;
+    if (dirty) await save();
+    setChat((c) => [...c, { role: 'user', content: q }]);
+    setQuestion(''); setAsking(true);
+    try {
+      const history = chat.map((m) => ({ role: m.role, content: m.content }));
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/chat`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ question: q, history }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setChat((c) => [...c, { role: 'assistant', content: `${j.error}${j.hint ? `\n\n${j.hint}` : ''}`, error: true }]);
+      } else {
+        setChat((c) => [...c, { role: 'assistant', content: j.answer, query: j.query, sourceUsed: j.sourceUsed }]);
+      }
+    } catch (e: any) {
+      setChat((c) => [...c, { role: 'assistant', content: e?.message || String(e), error: true }]);
+    } finally { setAsking(false); }
+  }, [question, chat, dirty, save, id]);
+
+  // ---- publish ----
+  const [publishing, setPublishing] = useState(false);
+  const [publishResult, setPublishResult] = useState<any>(null);
+  const publish = useCallback(async () => {
+    setPublishing(true); setPublishResult(null);
     try {
       const saved = await save();
-      if (!saved) {
-        setDeployResult({ ok: false, error: 'Save failed before deploy — fix the save error and retry.' });
-        return;
-      }
-      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
-      const j: DeployResponse = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
-      setDeployResult(j);
+      if (!saved) { setPublishResult({ ok: false, error: 'Save failed before publish.' }); return; }
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/publish`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ description: state.description }),
+      });
+      const j = await r.json();
+      setPublishResult(j);
       if (j.ok) await reload();
-    } catch (e: any) {
-      setDeployResult({ ok: false, error: e?.message || String(e) });
-    } finally {
-      setDeploying(false);
-    }
-  }, [id, save, reload]);
+    } catch (e: any) { setPublishResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setPublishing(false); }
+  }, [id, save, reload, state.description]);
 
-  const deployedAgentId = state.foundryAgentId;
-  const deployedAt = state.lastDeployedAt;
-
+  const sources = state.sources || [];
+  const instrLen = (state.instructions || '').length;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
-      { label: 'Sources', actions: [
+      { label: 'Agent', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
-        { label: deploying ? 'Deploying…' : 'Deploy to Foundry', onClick: onDeploy, disabled: deploying || saving },
-      ]},
-      { label: 'Test', actions: [
-        { label: 'Chat preview', disabled: true, title: 'test chat pane deferred — see docs/fiab/data-agent-parity-spec.md' },
+        { label: 'Build', onClick: () => setTab('build') },
+        { label: 'Test chat', onClick: () => setTab('test') },
+        { label: 'Publish', onClick: () => setTab('publish') },
       ]},
     ]},
-  ], [save, saving, dirty, onDeploy, deploying]);
+  ], [save, saving, dirty]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
-      <div className={s.pad}>
-        {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Phase 1: Foundry Agent deploy stub</MessageBarTitle>
-            Data-agent config persists to Cosmos and the <strong>Deploy to Foundry</strong> button pushes a prompt-agent definition to the Azure AI Foundry Agent Service. The typed five-source picker, per-source instructions, test chat pane, Publish flow, and Copilot Studio handoff are tracked in <code>docs/fiab/data-agent-parity-spec.md</code> for follow-up sessions.
-          </MessageBarBody>
-        </MessageBar>
-        {deployedAgentId && (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Caption1>Deployed agent:</Caption1>
-            <Badge appearance="filled" color="success">{deployedAgentId}</Badge>
-            {state.foundryProjectId && <Badge appearance="outline">project {state.foundryProjectId}</Badge>}
-            {deployedAt && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>last deployed {new Date(deployedAt).toLocaleString()}</Caption1>}
-          </div>
-        )}
-        {/* v3.28 Phase 4.5: functional setState so deploy/reload doesn't clobber typing. */}
-        <Caption1>System prompt / AI instructions</Caption1>
-        <Textarea value={state.systemPrompt} onChange={(_, d) => setState((p) => ({ ...p, systemPrompt: d.value }))} rows={5} />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div><Caption1>Model</Caption1><Input value={state.model} onChange={(_, d) => setState((p) => ({ ...p, model: d.value }))} /></div>
-          <div><Caption1>Sources (free text)</Caption1><Input value={state.sources} onChange={(_, d) => setState((p) => ({ ...p, sources: d.value }))} /></div>
-          <div><Caption1>Synapse Serverless SQL endpoints</Caption1><Input value={state.sqlEndpoints} onChange={(_, d) => setState((p) => ({ ...p, sqlEndpoints: d.value }))} placeholder="serverless-sql-pool name" /></div>
-          <div><Caption1>KQL databases</Caption1><Input value={state.kqlDatabases} onChange={(_, d) => setState((p) => ({ ...p, kqlDatabases: d.value }))} placeholder="loomdb-default" /></div>
-          <div style={{ gridColumn: 'span 2' }}>
-            <Caption1>Lakehouse paths (abfss://...)</Caption1>
-            <Textarea value={state.lakehousePaths} onChange={(_, d) => setState((p) => ({ ...p, lakehousePaths: d.value }))} rows={3} />
-          </div>
+      <>
+        <div className={s.tabBar}>
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+            <Tab value="build">Build ({sources.length}/5 sources)</Tab>
+            <Tab value="test">Test chat</Tab>
+            <Tab value="publish">Publish</Tab>
+          </TabList>
         </div>
-        <Caption1>Example queries (one per line)</Caption1>
-        <Textarea value={state.examples} onChange={(_, d) => setState((p) => ({ ...p, examples: d.value }))} rows={4} />
-        {deployResult && (
-          <MessageBar intent={deployResult.ok ? 'success' : deployResult.deferred ? 'warning' : 'error'}>
-            <MessageBarBody>
-              <MessageBarTitle>
-                {deployResult.ok ? 'Deployed to Foundry'
-                  : deployResult.deferred ? 'Deploy deferred — Foundry not configured'
-                  : 'Deploy failed'}
-              </MessageBarTitle>
-              {deployResult.ok && deployResult.agentId && (
-                <>Agent <code>{deployResult.agentId}</code> upserted in project <code>{deployResult.projectId}</code>. The Foundry Agent Service is now the source of truth for runtime behavior.</>
+        <div className={s.pad}>
+          {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+
+          {tab === 'build' && (
+            <>
+              <Subtitle2>Agent instructions ({instrLen}/15000)</Subtitle2>
+              <Textarea
+                value={state.instructions} maxLength={15000} rows={5}
+                onChange={(_, d) => setState((p) => ({ ...p, instructions: d.value }))}
+                placeholder="Declare which source handles which question type…"
+              />
+
+              <Subtitle2 style={{ marginTop: 8 }}>Data sources ({sources.length}/5)</Subtitle2>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                <Field label="Type">
+                  <Dropdown value={DA_SOURCE_TYPES.find((t) => t.value === pickerType)?.label} selectedOptions={[pickerType]}
+                    onOptionSelect={(_, d) => { if (d.optionValue) { setPickerType(d.optionValue as DaSourceType); setPickSel(''); } }}>
+                    {DA_SOURCE_TYPES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Item">
+                  <Dropdown value={(available[pickerType] || []).find((o) => o.id === pickSel)?.name || ''} selectedOptions={pickSel ? [pickSel] : []}
+                    placeholder={pickerLoading ? 'Loading…' : ((available[pickerType] || []).length ? 'Select…' : 'None found')}
+                    onOptionSelect={(_, d) => d.optionValue && setPickSel(d.optionValue)}>
+                    {(available[pickerType] || []).map((o) => <Option key={o.id} value={o.id}>{o.name}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Button appearance="primary" onClick={addSource} disabled={!pickSel || sources.length >= 5}>+ Add source</Button>
+              </div>
+
+              {sources.map((src) => (
+                <div key={src.id} className={s.card}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Badge appearance="tint" color="brand">{DA_SOURCE_TYPES.find((t) => t.value === src.type)?.label || src.type}</Badge>
+                    <strong>{src.name}</strong>
+                    <div style={{ flex: 1 }} />
+                    <Button size="small" onClick={() => removeSource(src.id)}>Remove</Button>
+                  </div>
+                  <Caption1 style={{ marginTop: 6 }}>Selected tables / model (comma-separated)</Caption1>
+                  <Input value={src.tables || ''} onChange={(_, d) => updateSource(src.id, { tables: d.value })} placeholder="dim_date, fact_sales" />
+                  <Caption1 style={{ marginTop: 6 }}>Data source instructions</Caption1>
+                  <Textarea value={src.instructions || ''} rows={4} onChange={(_, d) => updateSource(src.id, { instructions: d.value })} />
+                  <Caption1 style={{ marginTop: 6 }}>Example question → query pairs</Caption1>
+                  {(src.examples || []).map((ex, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6, marginBottom: 4 }}>
+                      <Input value={ex.question} placeholder="question" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, question: d.value } : e))} />
+                      <Input value={ex.query} placeholder="SQL / KQL / DAX" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, query: d.value } : e))} />
+                      <Button size="small" onClick={() => updateSourceExamples(src.id, (arr) => arr.filter((_, j) => j !== i))}>×</Button>
+                    </div>
+                  ))}
+                  <Button size="small" onClick={() => addExample(src.id)}>+ Example</Button>
+                </div>
+              ))}
+              {sources.length === 0 && (
+                <MessageBar intent="info"><MessageBarBody>Attach up to five typed sources. Each becomes a grounded tool for the agent. The test chat and Publish both require at least one.</MessageBarBody></MessageBar>
               )}
-              {deployResult.error && <div>{deployResult.error}</div>}
-              {deployResult.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {deployResult.hint}</div>}
-            </MessageBarBody>
-          </MessageBar>
-        )}
-        <SaveBar
-          saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
-          extraRight={
-            <Button appearance="primary" onClick={onDeploy} disabled={deploying || saving}>
-              {deploying ? 'Deploying…' : 'Deploy to Foundry'}
-            </Button>
-          }
-        />
-      </div>
+              <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+            </>
+          )}
+
+          {tab === 'test' && (
+            <>
+              <Subtitle2>Test chat (live, grounded)</Subtitle2>
+              <Caption1>Each question runs against the live AOAI deployment on the Foundry hub, grounded on the sources + instructions above.</Caption1>
+              <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, minHeight: 220, maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {chat.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Ask a question to start a thread.</Caption1>}
+                {chat.map((m, i) => (
+                  <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
+                    <div style={{ padding: '8px 12px', borderRadius: 8, background: m.role === 'user' ? tokens.colorBrandBackground2 : m.error ? tokens.colorPaletteRedBackground2 : tokens.colorNeutralBackground3, whiteSpace: 'pre-wrap' }}>
+                      {m.content}
+                    </div>
+                    {m.query && (
+                      <details style={{ marginTop: 4 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: 12 }}>Generated query{m.sourceUsed ? ` · ${m.sourceUsed}` : ''}</summary>
+                        <pre style={{ fontFamily: 'monospace', fontSize: 12, background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, overflowX: 'auto' }}>{m.query}</pre>
+                      </details>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Input value={question} onChange={(_, d) => setQuestion(d.value)} placeholder="Ask the agent…" style={{ flex: 1 }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !asking) ask(); }} />
+                <Button appearance="primary" onClick={ask} disabled={asking || !question.trim()}>{asking ? 'Thinking…' : 'Send'}</Button>
+                <Button onClick={() => setChat([])} disabled={asking || chat.length === 0}>New thread</Button>
+              </div>
+            </>
+          )}
+
+          {tab === 'publish' && (
+            <>
+              <Subtitle2>Publish to Foundry Agent Service</Subtitle2>
+              <Caption1>Publishing upserts a prompt-agent (instructions + typed sources as tools) into the Foundry project. Consumers (Foundry agents, Copilot Studio) read the description to decide when to call this agent.</Caption1>
+              <Caption1 style={{ marginTop: 6 }}>Description (orchestrators see this)</Caption1>
+              <Textarea value={state.description || ''} rows={3} onChange={(_, d) => setState((p) => ({ ...p, description: d.value }))} placeholder="Answers finance questions grounded on the FY warehouse + revenue semantic model." />
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <Button appearance="primary" onClick={publish} disabled={publishing || saving || sources.length === 0}>{publishing ? 'Publishing…' : 'Publish'}</Button>
+              </div>
+              {state.publishedAt && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+                  <Badge appearance="filled" color="success">published</Badge>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{new Date(state.publishedAt).toLocaleString()}</Caption1>
+                </div>
+              )}
+              {publishResult && (
+                <MessageBar intent={publishResult.ok ? 'success' : publishResult.deferred ? 'warning' : 'error'}>
+                  <MessageBarBody>
+                    <MessageBarTitle>
+                      {publishResult.ok ? 'Published' : publishResult.deferred ? 'Foundry Agent Service not configured' : 'Publish failed'}
+                    </MessageBarTitle>
+                    {publishResult.ok && (
+                      <div style={{ marginTop: 4 }}>
+                        Connect from Foundry / Copilot Studio with this GUID pair (mark both as secrets):
+                        <div style={{ fontFamily: 'monospace', fontSize: 12, marginTop: 4 }}>
+                          workspace-id (project): <strong>{publishResult.workspaceId}</strong><br />
+                          artifact-id (agent): <strong>{publishResult.artifactId}</strong>
+                        </div>
+                        <Caption1 style={{ marginTop: 6, display: 'block' }}>
+                          Copilot Studio: Agents → + Add → Microsoft Fabric → pick this published agent.
+                          Foundry: Management Center → Connected resources → new Microsoft Fabric connection.
+                        </Caption1>
+                      </div>
+                    )}
+                    {publishResult.error && <div>{publishResult.error}</div>}
+                    {publishResult.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {publishResult.hint}</div>}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+            </>
+          )}
+        </div>
+      </>
     } />
   );
 }

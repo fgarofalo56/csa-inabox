@@ -44,6 +44,9 @@ param privateDnsZoneNotebooksId string
 @description('Admin Entra group object ID')
 param adminEntraGroupId string
 
+@description('Console UAMI principal ID — granted Cognitive Services Contributor on the model-hosting account so the BFF can deploy models / read quota / read keys. Empty skips the role assignment.')
+param consolePrincipalId string = ''
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -138,7 +141,47 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   }
 }
 
+// =====================================================================
+// Model-hosting account (Cognitive Services kind=AIServices).
+// This is what hosts AOAI model deployments, regional quota, keys and the
+// inference endpoint. The Foundry hub above does NOT host deployments —
+// the Loom hub editor's Models / Quota / Keys / Networking / RBAC tabs all
+// target THIS account (foundry-cs-client.ts resolves it by name).
+// =====================================================================
+
+resource aiServices 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
+  name: 'aoai-csa-loom-${location}'
+  location: location
+  tags: complianceTags
+  kind: 'AIServices'
+  sku: { name: 'S0' }
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    customSubDomainName: 'aoai-csa-loom-${location}'
+    publicNetworkAccess: boundary == 'Commercial' ? 'Enabled' : 'Disabled'
+    networkAcls: { defaultAction: boundary == 'Commercial' ? 'Allow' : 'Deny' }
+    disableLocalAuth: false
+  }
+}
+
+// Grant the Console UAMI Cognitive Services Contributor so the BFF can
+// deploy models, read quota, read keys, and toggle public access.
+resource aiServicesUamiRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId)) {
+  scope: aiServices
+  name: guid(aiServices.id, consolePrincipalId, 'cs-contributor')
+  properties: {
+    // Cognitive Services Contributor
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output hubId string = foundryHub.id
 output hubName string = foundryHub.name
 output hubKind string = workspaceKind
 output hubManagedIdentityPrincipalId string = foundryHub.identity.principalId
+output aiServicesAccountName string = aiServices.name
+output aiServicesEndpoint string = aiServices.properties.endpoint

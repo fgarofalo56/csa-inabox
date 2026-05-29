@@ -661,6 +661,16 @@ export async function deletePromptFlow(projectName: string, flowId: string): Pro
   }
 }
 
+export async function updatePromptFlow(projectName: string, flowId: string, flowDefinition: unknown): Promise<PromptFlow> {
+  const seg = `${projectDataPlaneSegment(projectName, sub(), rg())}/PromptFlows/${encodeURIComponent(flowId)}`;
+  const res = await amlDataPlaneFetch(seg, { method: 'PUT', body: JSON.stringify({ flowDefinition }) });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `Prompt Flow update failed (${res.status}): ${t.slice(0, 240)}`);
+  }
+  return await res.json();
+}
+
 export async function submitFlowRun(projectName: string, flowId: string, inputs: Record<string, unknown>): Promise<any> {
   const seg = `${projectDataPlaneSegment(projectName, sub(), rg())}/PromptFlows/${encodeURIComponent(flowId)}/submit`;
   const res = await amlDataPlaneFetch(seg, { method: 'POST', body: JSON.stringify({ inputs }) });
@@ -1165,4 +1175,105 @@ export async function createDataAsset(name: string, body: {
   const res = await armFetch(path, { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
   const j = await readJson<any>(res);
   return j;
+}
+
+// =====================================================================
+// ML model lifecycle — register a model version + serve it from a
+// managed online endpoint. All real ARM PUTs against the hub workspace.
+// =====================================================================
+
+/**
+ * Register a new model version under the hub workspace's model registry.
+ * `modelUri` points at the model artifact (azureml:// or a run output path).
+ */
+export async function registerModelVersion(name: string, body: {
+  version?: string;
+  modelUri: string;
+  modelType?: string;       // custom_model | mlflow_model | triton_model
+  description?: string;
+}): Promise<FoundryModelVersion> {
+  const ver = body.version || String(Date.now());
+  const path = `${workspaceArmBase()}/models/${encodeURIComponent(name)}/versions/${encodeURIComponent(ver)}`;
+  const armBody = {
+    properties: {
+      modelUri: body.modelUri,
+      modelType: body.modelType || 'custom_model',
+      description: body.description || '',
+    },
+  };
+  const res = await armFetch(path, { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
+  const j = await readJson<any>(res);
+  return shapeModelVersion(j);
+}
+
+/** Create (or upsert) a managed online endpoint on the hub workspace. */
+export async function createOnlineEndpoint(name: string, opts: { authMode?: 'Key' | 'AMLToken' } = {}): Promise<FoundryEndpoint> {
+  const ws = await getWorkspaceInfo();
+  const armBody = {
+    location: ws?.location || process.env.LOOM_FOUNDRY_REGION || 'eastus2',
+    identity: { type: 'SystemAssigned' },
+    properties: { authMode: opts.authMode || 'Key' },
+  };
+  const res = await foundryFetch(`/onlineEndpoints/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(armBody) });
+  if (res.status === 202) return { id: '', name, authMode: opts.authMode || 'Key', provisioningState: 'Creating' };
+  const j = await readJson<any>(res);
+  return shapeEndpoint(j);
+}
+
+/**
+ * Create a deployment under an online endpoint that serves `modelId`
+ * (full ARM id of the model version, or azureml:<name>:<version>).
+ */
+export async function createOnlineDeployment(endpointName: string, deploymentName: string, body: {
+  modelId: string;
+  instanceType?: string;
+  instanceCount?: number;
+}): Promise<FoundryDeployment> {
+  const ws = await getWorkspaceInfo();
+  const armBody = {
+    location: ws?.location || process.env.LOOM_FOUNDRY_REGION || 'eastus2',
+    sku: { name: 'Default', capacity: body.instanceCount ?? 1 },
+    properties: {
+      endpointComputeType: 'Managed',
+      model: body.modelId,
+      instanceType: body.instanceType || 'Standard_DS3_v2',
+    },
+  };
+  const res = await foundryFetch(
+    `/onlineEndpoints/${encodeURIComponent(endpointName)}/deployments/${encodeURIComponent(deploymentName)}`,
+    { method: 'PUT', body: JSON.stringify(armBody) },
+  );
+  if (res.status === 202) return { id: '', name: deploymentName, endpointName, model: body.modelId, instanceType: body.instanceType, provisioningState: 'Creating' };
+  const j = await readJson<any>(res);
+  return shapeDeployment(j, endpointName);
+}
+
+/**
+ * Submit a command job (real-time training/inference run) to the hub.
+ * Minimal viable command-job payload — enough to genuinely create a run.
+ */
+export async function submitCommandJob(body: {
+  displayName?: string;
+  experimentName?: string;
+  command: string;
+  environmentId: string;       // azureml://… or azureml:<name>:<version>
+  computeId?: string;          // azureml:<compute-name>
+  codeId?: string;             // optional code asset
+}): Promise<FoundryJob> {
+  const name = `job-${Date.now().toString(36)}`;
+  const path = `${workspaceArmBase()}/jobs/${encodeURIComponent(name)}`;
+  const armBody = {
+    properties: {
+      jobType: 'Command',
+      displayName: body.displayName || name,
+      experimentName: body.experimentName || 'loom-runs',
+      command: body.command,
+      environmentId: body.environmentId,
+      ...(body.computeId ? { computeId: body.computeId } : {}),
+      ...(body.codeId ? { codeId: body.codeId } : {}),
+    },
+  };
+  const res = await armFetch(path, { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
+  const j = await readJson<any>(res);
+  return shapeJob(j);
 }
