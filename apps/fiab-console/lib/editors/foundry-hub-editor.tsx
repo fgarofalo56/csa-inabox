@@ -53,6 +53,23 @@ const useStyles = makeStyles({
 
 type LoadState<T> = { loading: boolean; data: T | null; error?: string; hint?: string; notDeployed?: boolean };
 
+// ---- Selected AI Foundry / Azure OpenAI account (drives every tab) ----
+export interface FoundryAccount { id?: string; name: string; endpoint?: string; location?: string; kind?: string; resourceGroup?: string }
+
+/** Append the selected account selector to a URL as `?account=&rg=` (or `&…`). */
+function withAccount(url: string, acct: FoundryAccount | null): string {
+  if (!acct?.name) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  const rg = acct.resourceGroup ? `&rg=${encodeURIComponent(acct.resourceGroup)}` : '';
+  return `${url}${sep}account=${encodeURIComponent(acct.name)}${rg}`;
+}
+
+/** Body fields for the selected account, merged into POST/PATCH payloads. */
+function acctBody(acct: FoundryAccount | null): Record<string, string> {
+  if (!acct?.name) return {};
+  return acct.resourceGroup ? { account: acct.name, rg: acct.resourceGroup } : { account: acct.name };
+}
+
 function GateBar({ msg, hint, notDeployed }: { msg: string; hint?: string; notDeployed?: boolean }) {
   return (
     <MessageBar intent={notDeployed ? 'warning' : 'error'}>
@@ -69,22 +86,25 @@ function EmptyText({ children }: { children: React.ReactNode }) {
   return <div className={s.empty}>{children}</div>;
 }
 
-function useLazyFetch<T>(url: string, active: boolean, nonce: number = 0) {
+function useLazyFetch<T>(url: string, active: boolean, nonce: number = 0, acct: FoundryAccount | null = null) {
   const [state, setState] = useState<LoadState<T>>({ loading: false, data: null });
+  const fullUrl = withAccount(url, acct);
   const reload = useCallback(async () => {
     setState({ loading: true, data: null });
     try {
-      const r = await fetch(url);
+      const r = await fetch(fullUrl);
       const j = await r.json();
       if (!j.ok) { setState({ loading: false, data: null, error: j.error || `HTTP ${r.status}`, hint: j.hint, notDeployed: j.notDeployed }); return; }
       setState({ loading: false, data: j as unknown as T });
     } catch (e: any) {
       setState({ loading: false, data: null, error: e?.message || String(e) });
     }
-  }, [url]);
+  }, [fullUrl]);
   useEffect(() => {
     if (nonce > 0) setState({ loading: false, data: null });
   }, [nonce]);
+  // Re-fetch when the selected account changes (the resolved URL changes).
+  useEffect(() => { setState({ loading: false, data: null }); }, [fullUrl]);
   useEffect(() => {
     if (active && state.data === null && !state.loading && !state.error) reload();
   }, [active, state.data, state.loading, state.error, reload]);
@@ -133,11 +153,12 @@ function OverviewPanel({ nonce, onWorkspace }: { nonce: number; onWorkspace?: (w
 
 function ConnectionsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   const s = useStyles();
+  // Connections live on the hub workspace, not the CS account — no account selector.
   const [st] = useLazyFetch<{ ok: boolean; connections: any[] }>(`/api/foundry/connections`, active, nonce);
   if (!active) return null;
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading connections…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
-  const items = st.data?.connections || [];
+  const items = Array.isArray(st.data?.connections) ? st.data!.connections : [];
   if (!items.length) return <div className={s.pad}><EmptyText>No connections registered on this hub yet.</EmptyText></div>;
   return (
     <div className={s.pad}>
@@ -173,8 +194,8 @@ function ConnectionsPanel({ active, nonce }: { active: boolean; nonce: number })
 interface CatalogModel { name: string; format?: string; version?: string; skus?: string[]; maxCapacity?: number; lifecycleStatus?: string }
 interface ModelDeployment { name: string; modelName?: string; modelVersion?: string; skuName?: string; capacity?: number; provisioningState?: string }
 
-function DeployModelDialog({ open, onClose, onDeployed }: { open: boolean; onClose: () => void; onDeployed: () => void }) {
-  const [catalog] = useLazyFetch<{ ok: boolean; models: CatalogModel[] }>(`/api/foundry/models-catalog`, open, 0);
+function DeployModelDialog({ open, onClose, onDeployed, acct }: { open: boolean; onClose: () => void; onDeployed: () => void; acct: FoundryAccount | null }) {
+  const [catalog] = useLazyFetch<{ ok: boolean; models: CatalogModel[] }>(`/api/foundry/models-catalog`, open, 0, acct);
   const [modelName, setModelName] = useState('gpt-4o-mini');
   const [deploymentName, setDeploymentName] = useState('gpt-4o-mini');
   const [skuName, setSkuName] = useState('GlobalStandard');
@@ -188,7 +209,7 @@ function DeployModelDialog({ open, onClose, onDeployed }: { open: boolean; onClo
     try {
       const r = await fetch('/api/foundry/model-deployments', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ modelName, deploymentName, skuName, capacity: Number(capacity) || 10 }),
+        body: JSON.stringify({ modelName, deploymentName, skuName, capacity: Number(capacity) || 10, ...acctBody(acct) }),
       });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
@@ -246,19 +267,19 @@ function DeployModelDialog({ open, onClose, onDeployed }: { open: boolean; onClo
   );
 }
 
-function ModelsPanel({ active, nonce }: { active: boolean; nonce: number }) {
+function ModelsPanel({ active, nonce, acct }: { active: boolean; nonce: number; acct: FoundryAccount | null }) {
   const s = useStyles();
   const [models] = useLazyFetch<{ ok: boolean; models: any[] }>(`/api/items/ml-model`, active, nonce);
-  const [dep, reloadDep] = useLazyFetch<{ ok: boolean; account?: any; deployments: ModelDeployment[] }>(`/api/foundry/model-deployments`, active, nonce);
+  const [dep, reloadDep] = useLazyFetch<{ ok: boolean; account?: any; deployments: ModelDeployment[] }>(`/api/foundry/model-deployments`, active, nonce, acct);
   const [eps] = useLazyFetch<{ ok: boolean; endpoints: any[] }>(`/api/foundry/deployments`, active, nonce);
   const [deployOpen, setDeployOpen] = useState(false);
   if (!active) return null;
-  const regModels = models.data?.models || [];
-  const deployments = dep.data?.deployments || [];
-  const endpoints = eps.data?.endpoints || [];
+  const regModels = Array.isArray(models.data?.models) ? models.data!.models : [];
+  const deployments = Array.isArray(dep.data?.deployments) ? dep.data!.deployments : [];
+  const endpoints = Array.isArray(eps.data?.endpoints) ? eps.data!.endpoints : [];
   return (
     <div className={s.pad}>
-      <DeployModelDialog open={deployOpen} onClose={() => setDeployOpen(false)} onDeployed={reloadDep} />
+      <DeployModelDialog open={deployOpen} onClose={() => setDeployOpen(false)} onDeployed={reloadDep} acct={acct} />
       <div className={s.toolbar}>
         <Subtitle2>Model deployments</Subtitle2>
         <Button appearance="primary" onClick={() => setDeployOpen(true)}>+ Deploy a model</Button>
@@ -342,9 +363,9 @@ function ModelsPanel({ active, nonce }: { active: boolean; nonce: number }) {
 
 // ---- Quota + usage: per-region usages + one-click gpt-4o-mini ----
 
-function QuotaPanel({ active, nonce }: { active: boolean; nonce: number }) {
+function QuotaPanel({ active, nonce, acct }: { active: boolean; nonce: number; acct: FoundryAccount | null }) {
   const s = useStyles();
-  const [st, reload] = useLazyFetch<{ ok: boolean; account?: any; location?: string; usages: { name: string; unit?: string; currentValue?: number; limit?: number }[] }>(`/api/foundry/quota`, active, nonce);
+  const [st, reload] = useLazyFetch<{ ok: boolean; account?: any; location?: string; usages: { name: string; unit?: string; currentValue?: number; limit?: number }[] }>(`/api/foundry/quota`, active, nonce, acct);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string; hint?: string } | null>(null);
   if (!active) return null;
@@ -352,7 +373,7 @@ function QuotaPanel({ active, nonce }: { active: boolean; nonce: number }) {
   const deployMini = async () => {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/foundry/quota', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelName: 'gpt-4o-mini' }) });
+      const r = await fetch('/api/foundry/quota', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelName: 'gpt-4o-mini', ...acctBody(acct) }) });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
       setMsg({ intent: 'success', text: j.message || `Deploying gpt-4o-mini (${j.deployment?.provisioningState})` });
@@ -361,7 +382,7 @@ function QuotaPanel({ active, nonce }: { active: boolean; nonce: number }) {
     finally { setBusy(false); }
   };
 
-  const usages = st.data?.usages || [];
+  const usages = Array.isArray(st.data?.usages) ? st.data!.usages : [];
   // Surface the OpenAI / model TPM rows first — they're what gates Copilot.
   const interesting = usages.filter((u) => /openai|gpt|tokens|standard|deployment/i.test(u.name || '')).slice(0, 80);
   const rows = interesting.length ? interesting : usages.slice(0, 80);
@@ -403,9 +424,9 @@ function QuotaPanel({ active, nonce }: { active: boolean; nonce: number }) {
 
 // ---- Networking: public access toggle + private endpoints ----
 
-function NetworkingPanel({ active, nonce }: { active: boolean; nonce: number }) {
+function NetworkingPanel({ active, nonce, acct }: { active: boolean; nonce: number; acct: FoundryAccount | null }) {
   const s = useStyles();
-  const [st, reload] = useLazyFetch<{ ok: boolean; networking: any }>(`/api/foundry/networking`, active, nonce);
+  const [st, reload] = useLazyFetch<{ ok: boolean; networking: any }>(`/api/foundry/networking`, active, nonce, acct);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   if (!active) return null;
@@ -415,7 +436,7 @@ function NetworkingPanel({ active, nonce }: { active: boolean; nonce: number }) 
   const toggle = async (next: boolean) => {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/foundry/networking', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ publicAccess: next }) });
+      const r = await fetch('/api/foundry/networking', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ publicAccess: next, ...acctBody(acct) }) });
       const j = await r.json();
       if (!j.ok) { setMsg(j.error); return; }
       setMsg(`Public network access set to ${next ? 'Enabled' : 'Disabled'}`);
@@ -436,20 +457,20 @@ function NetworkingPanel({ active, nonce }: { active: boolean; nonce: number }) 
           {msg && <MessageBar intent="info"><MessageBarBody>{msg}</MessageBarBody></MessageBar>}
           <div className={s.metaGrid}>
             <span className={s.metaKey}>Default ACL action</span><span>{net.defaultAction || '—'}</span>
-            <span className={s.metaKey}>IP rules</span><span>{(net.ipRules || []).join(', ') || '—'}</span>
-            <span className={s.metaKey}>VNet rules</span><span>{(net.virtualNetworkRules || []).length}</span>
+            <span className={s.metaKey}>IP rules</span><span>{(Array.isArray(net.ipRules) ? net.ipRules : []).join(', ') || '—'}</span>
+            <span className={s.metaKey}>VNet rules</span><span>{(Array.isArray(net.virtualNetworkRules) ? net.virtualNetworkRules : []).length}</span>
           </div>
           <Subtitle2 style={{ marginTop: 8 }}>Private endpoints</Subtitle2>
-          {(net.privateEndpoints || []).length === 0 ? <EmptyText>No private endpoint connections.</EmptyText> : (
+          {(Array.isArray(net.privateEndpoints) ? net.privateEndpoints : []).length === 0 ? <EmptyText>No private endpoint connections.</EmptyText> : (
             <div className={s.tableWrap}>
               <Table aria-label="Private endpoints" size="small">
                 <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>State</TableHeaderCell><TableHeaderCell>Group IDs</TableHeaderCell></TableRow></TableHeader>
                 <TableBody>
-                  {net.privateEndpoints.map((pe: any) => (
+                  {(Array.isArray(net.privateEndpoints) ? net.privateEndpoints : []).map((pe: any) => (
                     <TableRow key={pe.name}>
                       <TableCell className={s.cell}>{pe.name}</TableCell>
                       <TableCell className={s.cell}>{pe.state || '—'}</TableCell>
-                      <TableCell className={s.cell}>{(pe.groupIds || []).join(', ') || '—'}</TableCell>
+                      <TableCell className={s.cell}>{(Array.isArray(pe.groupIds) ? pe.groupIds : []).join(', ') || '—'}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -464,11 +485,11 @@ function NetworkingPanel({ active, nonce }: { active: boolean; nonce: number }) 
 
 // ---- Identity / RBAC ----
 
-function IdentityPanel({ active, nonce }: { active: boolean; nonce: number }) {
+function IdentityPanel({ active, nonce, acct }: { active: boolean; nonce: number; acct: FoundryAccount | null }) {
   const s = useStyles();
-  const [st, reload] = useLazyFetch<{ ok: boolean; account?: any; assignments: any[] }>(`/api/foundry/rbac`, active, nonce);
+  const [st, reload] = useLazyFetch<{ ok: boolean; account?: any; assignments: any[] }>(`/api/foundry/rbac`, active, nonce, acct);
   if (!active) return null;
-  const rows = st.data?.assignments || [];
+  const rows = Array.isArray(st.data?.assignments) ? st.data!.assignments : [];
   return (
     <div className={s.pad}>
       <div className={s.toolbar}>
@@ -502,9 +523,9 @@ function IdentityPanel({ active, nonce }: { active: boolean; nonce: number }) {
 
 // ---- Keys / endpoints ----
 
-function KeysPanel({ active, nonce }: { active: boolean; nonce: number }) {
+function KeysPanel({ active, nonce, acct }: { active: boolean; nonce: number; acct: FoundryAccount | null }) {
   const s = useStyles();
-  const [st, reload] = useLazyFetch<{ ok: boolean; account?: any; keys: any }>(`/api/foundry/keys`, active, nonce);
+  const [st, reload] = useLazyFetch<{ ok: boolean; account?: any; keys: any }>(`/api/foundry/keys`, active, nonce, acct);
   const [reveal, setReveal] = useState(false);
   if (!active) return null;
   const keys = st.data?.keys;
@@ -546,11 +567,11 @@ function KeysPanel({ active, nonce }: { active: boolean; nonce: number }) {
 
 // ---- Activity log ----
 
-function ActivityPanel({ active, nonce }: { active: boolean; nonce: number }) {
+function ActivityPanel({ active, nonce, acct }: { active: boolean; nonce: number; acct: FoundryAccount | null }) {
   const s = useStyles();
-  const [st, reload] = useLazyFetch<{ ok: boolean; events: any[] }>(`/api/foundry/activity?hours=48`, active, nonce);
+  const [st, reload] = useLazyFetch<{ ok: boolean; events: any[] }>(`/api/foundry/activity?hours=48`, active, nonce, acct);
   if (!active) return null;
-  const rows = st.data?.events || [];
+  const rows = Array.isArray(st.data?.events) ? st.data!.events : [];
   return (
     <div className={s.pad}>
       <div className={s.toolbar}>
@@ -589,7 +610,7 @@ function ComputesPanel({ active, nonce }: { active: boolean; nonce: number }) {
   if (!active) return null;
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading computes…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
-  const items = st.data?.computes || [];
+  const items = Array.isArray(st.data?.computes) ? st.data!.computes : [];
   if (!items.length) return <div className={s.pad}><EmptyText>No computes attached.</EmptyText></div>;
   return (
     <div className={s.pad}>
@@ -626,7 +647,7 @@ function DatastoresPanel({ active, nonce }: { active: boolean; nonce: number }) 
   if (!active) return null;
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading datastores…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
-  const items = st.data?.datastores || [];
+  const items = Array.isArray(st.data?.datastores) ? st.data!.datastores : [];
   if (!items.length) return <div className={s.pad}><EmptyText>No datastores registered.</EmptyText></div>;
   return (
     <div className={s.pad}>
@@ -663,8 +684,8 @@ function JobsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   if (!active) return null;
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading jobs…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
-  const jobs = st.data?.jobs || [];
-  const exps = st.data?.experiments || [];
+  const jobs = Array.isArray(st.data?.jobs) ? st.data!.jobs : [];
+  const exps = Array.isArray(st.data?.experiments) ? st.data!.experiments : [];
   if (!jobs.length) return <div className={s.pad}><EmptyText>No jobs in this hub.</EmptyText></div>;
   return (
     <div className={s.pad}>
@@ -713,6 +734,72 @@ function JobsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   );
 }
 
+// ---------- Account picker (drives every tab) ----------
+
+const usePickerStyles = makeStyles({
+  bar: {
+    display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+    padding: '8px 16px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  grow: { flex: 1 },
+});
+
+/**
+ * Azure AI Foundry / Azure OpenAI account picker. Lists the subscription's
+ * Microsoft.CognitiveServices accounts (kind AIServices/OpenAI) via
+ * /api/foundry/accounts and drives the selected account into every tab. The
+ * env-var/discovery default (LOOM_AOAI_ACCOUNT) is preselected when present.
+ */
+function AccountPickerBar({ acct, onSelect }: { acct: FoundryAccount | null; onSelect: (a: FoundryAccount | null) => void }) {
+  const s = usePickerStyles();
+  const [st] = useLazyFetch<{ ok: boolean; accounts: FoundryAccount[]; defaultAccount?: string }>(`/api/foundry/accounts`, true, 0);
+  const accounts = Array.isArray(st.data?.accounts) ? st.data!.accounts : [];
+  const defaultName = st.data?.defaultAccount;
+
+  // Preselect the env-var/discovery default once accounts load.
+  useEffect(() => {
+    if (acct || !accounts.length) return;
+    const def = (defaultName && accounts.find((a) => a.name === defaultName)) || accounts[0];
+    if (def) onSelect(def);
+  }, [accounts, defaultName, acct, onSelect]);
+
+  return (
+    <div className={s.bar}>
+      <Field label="AI Foundry account" orientation="horizontal">
+        <Dropdown
+          style={{ minWidth: 280 }}
+          value={acct ? `${acct.name}${acct.location ? ` · ${acct.location}` : ''}` : ''}
+          selectedOptions={acct ? [acct.name] : []}
+          placeholder={st.loading ? 'Loading accounts…' : (accounts.length ? 'Select an AI Foundry / Azure OpenAI account' : 'No accounts found')}
+          disabled={st.loading || !!st.error}
+          onOptionSelect={(_, d) => {
+            const next = accounts.find((a) => a.name === d.optionValue) || null;
+            if (next) onSelect(next);
+          }}
+        >
+          {accounts.map((a) => (
+            <Option key={a.id || a.name} value={a.name} text={a.name}>
+              {`${a.name}${a.kind ? ` (${a.kind})` : ''}${a.location ? ` · ${a.location}` : ''}`}
+            </Option>
+          ))}
+        </Dropdown>
+      </Field>
+      {acct?.endpoint && <Badge appearance="outline" title={acct.endpoint}>endpoint set</Badge>}
+      {defaultName && acct?.name === defaultName && <Badge appearance="tint" color="brand">default</Badge>}
+      <div className={s.grow} />
+      {st.error && (
+        <MessageBar intent={st.notDeployed ? 'warning' : 'error'}>
+          <MessageBarBody>
+            <MessageBarTitle>{st.notDeployed ? 'No AI Foundry account provisioned' : 'Could not list accounts'}</MessageBarTitle>
+            {st.error}{st.hint ? <><br /><Caption1>{st.hint}</Caption1></> : null}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+    </div>
+  );
+}
+
 // ---------- Editor shell ----------
 
 export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -720,7 +807,9 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
   const [tab, setTab] = useState<string>('overview');
   const [nonce, setNonce] = useState(0);
   const [workspace, setWorkspace] = useState<any>(null);
+  const [acct, setAcct] = useState<FoundryAccount | null>(null);
   const onWorkspace = useCallback((w: any) => setWorkspace(w), []);
+  const onSelectAccount = useCallback((a: FoundryAccount | null) => setAcct(a), []);
 
   const portalUrl = useMemo(() => {
     const armId = workspace?.id || workspace?.armId;
@@ -748,6 +837,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <>
+        <AccountPickerBar acct={acct} onSelect={onSelectAccount} />
         <div className={s.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
             <Tab value="overview">Overview</Tab>
@@ -767,16 +857,16 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
           </TabList>
         </div>
         {tab === 'overview' && <OverviewPanel nonce={nonce} onWorkspace={onWorkspace} />}
-        <ModelCatalogPanel active={tab === 'catalog'} nonce={nonce} />
+        <ModelCatalogPanel active={tab === 'catalog'} nonce={nonce} acct={acct} />
         <PlaygroundsLandingPanel active={tab === 'playgrounds'} onOpenChat={() => setTab('chat')} />
-        <ChatPlaygroundPanel active={tab === 'chat'} nonce={nonce} />
+        <ChatPlaygroundPanel active={tab === 'chat'} nonce={nonce} acct={acct} />
         <ConnectionsPanel active={tab === 'connections'} nonce={nonce} />
-        <ModelsPanel active={tab === 'models'} nonce={nonce} />
-        <QuotaPanel active={tab === 'quota'} nonce={nonce} />
-        <NetworkingPanel active={tab === 'networking'} nonce={nonce} />
-        <IdentityPanel active={tab === 'identity'} nonce={nonce} />
-        <KeysPanel active={tab === 'keys'} nonce={nonce} />
-        <ActivityPanel active={tab === 'activity'} nonce={nonce} />
+        <ModelsPanel active={tab === 'models'} nonce={nonce} acct={acct} />
+        <QuotaPanel active={tab === 'quota'} nonce={nonce} acct={acct} />
+        <NetworkingPanel active={tab === 'networking'} nonce={nonce} acct={acct} />
+        <IdentityPanel active={tab === 'identity'} nonce={nonce} acct={acct} />
+        <KeysPanel active={tab === 'keys'} nonce={nonce} acct={acct} />
+        <ActivityPanel active={tab === 'activity'} nonce={nonce} acct={acct} />
         <ComputesPanel active={tab === 'computes'} nonce={nonce} />
         <DatastoresPanel active={tab === 'datastores'} nonce={nonce} />
         <JobsPanel active={tab === 'jobs'} nonce={nonce} />

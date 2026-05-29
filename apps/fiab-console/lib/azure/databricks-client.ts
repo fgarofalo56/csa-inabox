@@ -388,6 +388,17 @@ export async function deleteWorkspaceObject(path: string, recursive = false): Pr
   await asJsonOrThrow<unknown>(res, 'deleteWorkspaceObject');
 }
 
+export async function mkdirsWorkspace(path: string): Promise<void> {
+  const res = await dbxFetch('/api/2.0/workspace/mkdirs', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
+  // mkdirs is idempotent on the server; a 400 "already exists" is fine.
+  if (!res.ok && res.status !== 400) {
+    throw new Error(`mkdirsWorkspace failed ${res.status}: ${await res.text()}`);
+  }
+}
+
 export interface SubmittedRun {
   run_id: number;
   number_in_job?: number;
@@ -749,6 +760,161 @@ export async function runOneTimeNotebook(args: {
     }),
   });
   return asJsonOrThrow<{ run_id: number; run_page_url?: string }>(submitRes, 'runOneTimeNotebook');
+}
+
+// ============================================================
+// Command Execution API (api/1.2) — per-cell notebook execution
+//
+// This is the REST surface that backs an interactive Databricks notebook:
+// the UI creates an execution context bound to a cluster + language REPL,
+// then runs each cell's source as a command against that context and polls
+// for the command's result. Variables persist across commands in the same
+// context (same REPL), exactly like a real notebook attached to a cluster.
+//
+// Flow:
+//   1. POST /api/1.2/contexts/create   { clusterId, language }      -> { id }
+//   2. POST /api/1.2/commands/execute  { clusterId, contextId,
+//                                        language, command }        -> { id }
+//   3. GET  /api/1.2/commands/status?clusterId&contextId&commandId -> result
+//   4. POST /api/1.2/contexts/destroy  { clusterId, contextId }    (cleanup)
+//
+// Languages: 'python' | 'sql' | 'scala' | 'r'. Markdown cells are rendered
+// client-side and never sent here.
+// ============================================================
+
+export type CommandLanguage = 'python' | 'sql' | 'scala' | 'r';
+
+export interface ExecutionContext {
+  id: string;
+}
+
+/**
+ * Create an execution context (a language REPL) bound to a cluster. The
+ * returned context id is reused across cell executions so notebook state
+ * (variables, imports, temp views) persists between cells.
+ */
+export async function createExecutionContext(
+  clusterId: string,
+  language: CommandLanguage,
+): Promise<ExecutionContext> {
+  const res = await dbxFetch('/api/1.2/contexts/create', {
+    method: 'POST',
+    body: JSON.stringify({ clusterId, language }),
+  });
+  return asJsonOrThrow<ExecutionContext>(res, 'createExecutionContext');
+}
+
+export interface ContextStatus {
+  id: string;
+  status?: 'Pending' | 'Running' | 'Error' | string;
+}
+
+export async function getExecutionContextStatus(
+  clusterId: string,
+  contextId: string,
+): Promise<ContextStatus> {
+  const params = new URLSearchParams({ clusterId, contextId });
+  const res = await dbxFetch(`/api/1.2/contexts/status?${params.toString()}`);
+  return asJsonOrThrow<ContextStatus>(res, 'getExecutionContextStatus');
+}
+
+export async function destroyExecutionContext(
+  clusterId: string,
+  contextId: string,
+): Promise<void> {
+  const res = await dbxFetch('/api/1.2/contexts/destroy', {
+    method: 'POST',
+    body: JSON.stringify({ clusterId, contextId }),
+  });
+  // destroy is best-effort — a stale context returns 404/400; don't throw.
+  if (!res.ok && res.status !== 404 && res.status !== 400) {
+    throw new Error(`destroyExecutionContext failed ${res.status}: ${await res.text()}`);
+  }
+}
+
+export interface SubmittedCommand {
+  id: string;
+}
+
+export async function runCommand(
+  clusterId: string,
+  contextId: string,
+  language: CommandLanguage,
+  command: string,
+): Promise<SubmittedCommand> {
+  const res = await dbxFetch('/api/1.2/commands/execute', {
+    method: 'POST',
+    body: JSON.stringify({ clusterId, contextId, language, command }),
+  });
+  return asJsonOrThrow<SubmittedCommand>(res, 'runCommand');
+}
+
+// Databricks command result shape (api/1.2). `resultType` is 'text' for
+// stdout, 'table' for tabular results (with schema + data), 'image' for
+// inline plots, and 'error' with summary/cause for failures.
+export interface CommandResult {
+  id: string;
+  status?: 'Queued' | 'Running' | 'Cancelling' | 'Finished' | 'Cancelled' | 'Error' | string;
+  results?: {
+    resultType?: 'text' | 'table' | 'image' | 'error' | string;
+    data?: unknown;
+    schema?: Array<{ name?: string; type?: string }>;
+    cause?: string;
+    summary?: string;
+    fileName?: string;
+    truncated?: boolean;
+  };
+}
+
+export async function getCommandStatus(
+  clusterId: string,
+  contextId: string,
+  commandId: string,
+): Promise<CommandResult> {
+  const params = new URLSearchParams({ clusterId, contextId, commandId });
+  const res = await dbxFetch(`/api/1.2/commands/status?${params.toString()}`);
+  return asJsonOrThrow<CommandResult>(res, 'getCommandStatus');
+}
+
+export async function cancelCommand(
+  clusterId: string,
+  contextId: string,
+  commandId: string,
+): Promise<void> {
+  const res = await dbxFetch('/api/1.2/commands/cancel', {
+    method: 'POST',
+    body: JSON.stringify({ clusterId, contextId, commandId }),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`cancelCommand failed ${res.status}: ${await res.text()}`);
+  }
+}
+
+const CMD_POLL_INTERVAL_MS = 1_000;
+const CMD_POLL_TIMEOUT_MS = 600_000; // 10 min — long enough for Spark jobs.
+
+/**
+ * Execute a single cell end-to-end against an existing context and poll to
+ * completion. Returns the terminal CommandResult. The caller owns the
+ * context lifecycle (create once, reuse across cells, destroy on close).
+ */
+export async function executeCommand(
+  clusterId: string,
+  contextId: string,
+  language: CommandLanguage,
+  command: string,
+): Promise<CommandResult> {
+  const submitted = await runCommand(clusterId, contextId, language, command);
+  const deadline = Date.now() + CMD_POLL_TIMEOUT_MS;
+  let body = await getCommandStatus(clusterId, contextId, submitted.id);
+  while (
+    (body.status === 'Queued' || body.status === 'Running' || body.status === 'Cancelling') &&
+    Date.now() < deadline
+  ) {
+    await new Promise((r) => setTimeout(r, CMD_POLL_INTERVAL_MS));
+    body = await getCommandStatus(clusterId, contextId, submitted.id);
+  }
+  return body;
 }
 
 // ============================================================

@@ -39,6 +39,23 @@ import {
 
 // ============================================================ shared
 
+// Selected AI Foundry / Azure OpenAI account (from the Hub's account picker).
+export interface FoundryAccount { id?: string; name: string; endpoint?: string; location?: string; kind?: string; resourceGroup?: string }
+
+/** Append the selected account selector to a URL as `?account=&rg=` (or `&…`). */
+function withAccount(url: string, acct: FoundryAccount | null): string {
+  if (!acct?.name) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  const rg = acct.resourceGroup ? `&rg=${encodeURIComponent(acct.resourceGroup)}` : '';
+  return `${url}${sep}account=${encodeURIComponent(acct.name)}${rg}`;
+}
+
+/** Body fields for the selected account, merged into POST/PATCH payloads. */
+function acctBody(acct: FoundryAccount | null): Record<string, string> {
+  if (!acct?.name) return {};
+  return acct.resourceGroup ? { account: acct.name, rg: acct.resourceGroup } : { account: acct.name };
+}
+
 interface CatalogModel {
   id: string; name: string; publisher?: string; format?: string; version?: string;
   isDefaultVersion?: boolean; skus?: string[]; defaultCapacity?: number; maxCapacity?: number;
@@ -143,8 +160,8 @@ function ModelCard({ m, onClick }: { m: CatalogModel; onClick: () => void }) {
 
 interface DeployDialogState { model: CatalogModel | null }
 
-function DeployDialog({ model, open, onClose, onDeployed }: {
-  model: CatalogModel | null; open: boolean; onClose: () => void; onDeployed: () => void;
+function DeployDialog({ model, open, onClose, onDeployed, acct }: {
+  model: CatalogModel | null; open: boolean; onClose: () => void; onDeployed: () => void; acct: FoundryAccount | null;
 }) {
   const [deploymentName, setDeploymentName] = useState('');
   const [sku, setSku] = useState('GlobalStandard');
@@ -176,6 +193,7 @@ function DeployDialog({ model, open, onClose, onDeployed }: {
           skuName: sku,
           capacity: Number(capacity) || 10,
           raiPolicyName: contentFilter || undefined,
+          ...acctBody(acct),
         }),
       });
       const j = await r.json();
@@ -268,7 +286,7 @@ function ModelDetail({ model, onBack, onDeploy }: { model: CatalogModel; onBack:
 
 const ALL = '__all__';
 
-export function ModelCatalogPanel({ active, nonce }: { active: boolean; nonce: number }) {
+export function ModelCatalogPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
   const s = useCatalogStyles();
   const [state, setState] = useState<{ loading: boolean; models: CatalogModel[] | null; error?: string; hint?: string; notDeployed?: boolean; account?: any }>({ loading: false, models: null });
   const [search, setSearch] = useState('');
@@ -286,15 +304,17 @@ export function ModelCatalogPanel({ active, nonce }: { active: boolean; nonce: n
   const load = useCallback(async () => {
     setState({ loading: true, models: null });
     try {
-      const r = await fetch('/api/foundry/models-catalog');
+      const r = await fetch(withAccount('/api/foundry/models-catalog', acct));
       const j = await r.json();
       if (!j.ok) { setState({ loading: false, models: null, error: j.error, hint: j.hint, notDeployed: j.notDeployed }); return; }
-      setState({ loading: false, models: j.models || [], account: j.account });
+      setState({ loading: false, models: Array.isArray(j.models) ? j.models : [], account: j.account });
     } catch (e: any) { setState({ loading: false, models: null, error: e?.message || String(e) }); }
-  }, []);
+  }, [acct]);
 
   useEffect(() => { if (active && state.models === null && !state.loading && !state.error) load(); }, [active, state.models, state.loading, state.error, load]);
   useEffect(() => { if (nonce > 0) { setState({ loading: false, models: null }); setSelected(null); } }, [nonce]);
+  // Reset + refetch when the selected account changes.
+  useEffect(() => { setState({ loading: false, models: null }); setSelected(null); }, [acct]);
   useEffect(() => { setPage(0); }, [search, collection, capability, deployOpt, inferTask, fineTune, license, industry]);
 
   const models = state.models || [];
@@ -336,7 +356,7 @@ export function ModelCatalogPanel({ active, nonce }: { active: boolean; nonce: n
     return (
       <>
         <ModelDetail model={selected} onBack={() => setSelected(null)} onDeploy={() => setDeployState({ model: selected })} />
-        <DeployDialog model={deployState.model} open={!!deployState.model} onClose={() => setDeployState({ model: null })} onDeployed={() => { /* keep dialog open showing success */ }} />
+        <DeployDialog model={deployState.model} open={!!deployState.model} onClose={() => setDeployState({ model: null })} onDeployed={() => { /* keep dialog open showing success */ }} acct={acct} />
       </>
     );
   }
@@ -439,7 +459,7 @@ const useChatStyles = makeStyles({
 
 interface ChatMsg { role: 'user' | 'assistant'; content: string; pending?: boolean; error?: boolean }
 
-export function ChatPlaygroundPanel({ active, nonce }: { active: boolean; nonce: number }) {
+export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
   const s = useChatStyles();
   const [deps, setDeps] = useState<{ loading: boolean; list: DeployedModel[] | null; error?: string; hint?: string; notDeployed?: boolean }>({ loading: false, list: null });
   const [deployment, setDeployment] = useState<string>('');
@@ -458,10 +478,10 @@ export function ChatPlaygroundPanel({ active, nonce }: { active: boolean; nonce:
   const loadDeps = useCallback(async () => {
     setDeps({ loading: true, list: null });
     try {
-      const r = await fetch('/api/foundry/model-deployments');
+      const r = await fetch(withAccount('/api/foundry/model-deployments', acct));
       const j = await r.json();
       if (!j.ok) { setDeps({ loading: false, list: null, error: j.error, hint: j.hint, notDeployed: j.notDeployed }); return; }
-      const list: DeployedModel[] = j.deployments || [];
+      const list: DeployedModel[] = Array.isArray(j.deployments) ? j.deployments : [];
       setDeps({ loading: false, list });
       // Auto-select first chat-capable deployment.
       const chat = list.find((d) => /gpt|phi|llama|mistral|chat|o1|o3|o4/i.test(d.modelName || d.name) && !/embed|whisper|dall|tts/i.test(d.modelName || d.name));
@@ -469,10 +489,12 @@ export function ChatPlaygroundPanel({ active, nonce }: { active: boolean; nonce:
       else if (list[0] && !deployment) setDeployment(list[0].name);
     } catch (e: any) { setDeps({ loading: false, list: null, error: e?.message || String(e) }); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [acct]);
 
   useEffect(() => { if (active && deps.list === null && !deps.loading && !deps.error) loadDeps(); }, [active, deps.list, deps.loading, deps.error, loadDeps]);
   useEffect(() => { if (nonce > 0) setDeps({ loading: false, list: null }); }, [nonce]);
+  // Reset deployments + selection when the selected account changes.
+  useEffect(() => { setDeps({ loading: false, list: null }); setDeployment(''); }, [acct]);
   useEffect(() => { if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight; }, [thread]);
 
   const deployments = deps.list || [];
@@ -495,6 +517,7 @@ export function ChatPlaygroundPanel({ active, nonce }: { active: boolean; nonce:
           deployment, messages,
           temperature, maxTokens, topP,
           stop: stopSeq.split(',').map((x) => x.trim()).filter(Boolean),
+          ...acctBody(acct),
         }),
       });
       const j = await r.json();

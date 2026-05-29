@@ -116,6 +116,14 @@ export interface CsAccount {
 
 let _accountCache: CsAccount | null = null;
 
+/**
+ * Optional explicit account selector threaded from the UI's account picker.
+ * When provided, every client call targets THIS account instead of the
+ * env-var default / discovery result. `{ name, rg? }` — rg defaults to the
+ * Foundry RG (LOOM_FOUNDRY_RG) when omitted.
+ */
+export interface AccountSelector { name: string; rg?: string }
+
 function shapeAccount(raw: any): CsAccount {
   const p = raw?.properties || {};
   const idParts = String(raw?.id || '').split('/');
@@ -135,8 +143,57 @@ function shapeAccount(raw: any): CsAccount {
   };
 }
 
-/** Resolve the model-hosting Cognitive Services account; cache after first hit. */
-export async function resolveAccount(force = false): Promise<CsAccount> {
+/**
+ * List ALL Microsoft.CognitiveServices accounts in the subscription that can
+ * host model deployments / AOAI (kind in {AIServices, OpenAI, CognitiveServices}).
+ * Drives the AI Foundry account picker so every Foundry surface can target a
+ * user-selected account instead of the single env-var default.
+ *
+ * ARM: GET /subscriptions/{sub}/providers/Microsoft.CognitiveServices/accounts
+ *      (Operation Accounts_List). Grounded in Microsoft Learn.
+ */
+export async function listAccounts(): Promise<CsAccount[]> {
+  const res = await armFetch(
+    `/subscriptions/${sub()}/providers/Microsoft.CognitiveServices/accounts`,
+  );
+  const j = await readJson<{ value?: any[] }>(res);
+  const all = (j?.value || []).map(shapeAccount);
+  // Surface only model-hosting kinds; keep stable, predictable order.
+  const HOSTING = new Set(['aiservices', 'openai', 'cognitiveservices']);
+  return all
+    .filter((a) => HOSTING.has(String(a.kind || '').toLowerCase()))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+
+/**
+ * Resolve the model-hosting Cognitive Services account.
+ *
+ * Resolution order:
+ *   1. `selector` (from the UI account picker) — explicit name (+ optional rg)
+ *   2. LOOM_AOAI_ACCOUNT (+ optional LOOM_AOAI_RG) — env default
+ *   3. Discover the first AIServices/OpenAI account in LOOM_FOUNDRY_RG
+ *
+ * The single-account cache only applies to the env/discovery default (no
+ * selector); an explicit selector always resolves fresh so per-request account
+ * switching is correct.
+ */
+export async function resolveAccount(force = false, selector?: AccountSelector): Promise<CsAccount> {
+  if (selector?.name) {
+    const accountRg = selector.rg || rg();
+    const res = await armFetch(
+      `/subscriptions/${sub()}/resourceGroups/${encodeURIComponent(accountRg)}/providers/Microsoft.CognitiveServices/accounts/${encodeURIComponent(selector.name)}`,
+    );
+    const j = await readJson<any>(res);
+    if (!j) {
+      throw new CsNotConfiguredError(
+        `Selected AI Foundry account "${selector.name}" was not found in resource group "${accountRg}". ` +
+        `Pick a different account from the AI Foundry account picker, or provision one (kind=AIServices) via ` +
+        `platform/fiab/bicep/modules/admin-plane/ai-foundry.bicep.`,
+      );
+    }
+    return shapeAccount(j);
+  }
+
   if (_accountCache && !force) return _accountCache;
 
   const explicit = process.env.LOOM_AOAI_ACCOUNT;
@@ -210,8 +267,8 @@ function shapeDeployment(raw: any): ModelDeployment {
   };
 }
 
-export async function listModelDeployments(): Promise<{ account: CsAccount; deployments: ModelDeployment[] }> {
-  const acct = await resolveAccount();
+export async function listModelDeployments(selector?: AccountSelector): Promise<{ account: CsAccount; deployments: ModelDeployment[] }> {
+  const acct = await resolveAccount(false, selector);
   const res = await armFetch(`${accountPath(acct)}/deployments`);
   const j = await readJson<{ value?: any[] }>(res);
   return { account: acct, deployments: (j?.value || []).map(shapeDeployment) };
@@ -227,8 +284,8 @@ export interface CreateDeploymentInput {
   raiPolicyName?: string;     // content filter policy (e.g. "Microsoft.DefaultV2")
 }
 
-export async function createModelDeployment(input: CreateDeploymentInput): Promise<ModelDeployment> {
-  const acct = await resolveAccount();
+export async function createModelDeployment(input: CreateDeploymentInput, selector?: AccountSelector): Promise<ModelDeployment> {
+  const acct = await resolveAccount(false, selector);
   const body: any = {
     sku: { name: input.skuName || 'GlobalStandard', capacity: input.capacity ?? 10 },
     properties: {
@@ -262,8 +319,8 @@ export async function createModelDeployment(input: CreateDeploymentInput): Promi
   return shapeDeployment(j);
 }
 
-export async function deleteModelDeployment(deploymentName: string): Promise<void> {
-  const acct = await resolveAccount();
+export async function deleteModelDeployment(deploymentName: string, selector?: AccountSelector): Promise<void> {
+  const acct = await resolveAccount(false, selector);
   const res = await armFetch(
     `${accountPath(acct)}/deployments/${encodeURIComponent(deploymentName)}`,
     { method: 'DELETE' },
@@ -378,8 +435,8 @@ function shapeCatalogModel(r: any): CatalogModel {
  * list-models API and tag each row deployableHere=true so the UI never promises
  * a deploy it can't fulfil.
  */
-export async function listCatalogModels(): Promise<{ account: CsAccount; models: CatalogModel[] }> {
-  const acct = await resolveAccount();
+export async function listCatalogModels(selector?: AccountSelector): Promise<{ account: CsAccount; models: CatalogModel[] }> {
+  const acct = await resolveAccount(false, selector);
   const res = await armFetch(`${accountPath(acct)}/models`);
   const j = await readJson<{ value?: any[] }>(res);
   const rows = j?.value || [];
@@ -436,8 +493,9 @@ export async function chatCompletion(
   deploymentName: string,
   messages: ChatMessage[],
   params: ChatParams = {},
+  selector?: AccountSelector,
 ): Promise<ChatResult> {
-  const acct = await resolveAccount();
+  const acct = await resolveAccount(false, selector);
   const endpoint = await aoaiEndpoint(acct);
   const tok = await dataPlaneToken();
   const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/chat/completions?api-version=${AOAI_DATA_API}`;
@@ -478,8 +536,8 @@ export interface UsageRow {
   limit?: number;
 }
 
-export async function listUsages(location?: string): Promise<{ account: CsAccount; location: string; usages: UsageRow[] }> {
-  const acct = await resolveAccount();
+export async function listUsages(location?: string, selector?: AccountSelector): Promise<{ account: CsAccount; location: string; usages: UsageRow[] }> {
+  const acct = await resolveAccount(false, selector);
   const loc = location || acct.location;
   const res = await armFetch(
     `/subscriptions/${sub()}/providers/Microsoft.CognitiveServices/locations/${encodeURIComponent(loc)}/usages`,
@@ -503,8 +561,8 @@ export interface AccountKeys {
   regionalEndpoints?: Record<string, string>;
 }
 
-export async function getAccountKeys(): Promise<{ account: CsAccount; keys: AccountKeys }> {
-  const acct = await resolveAccount();
+export async function getAccountKeys(selector?: AccountSelector): Promise<{ account: CsAccount; keys: AccountKeys }> {
+  const acct = await resolveAccount(false, selector);
   const res = await armFetch(`${accountPath(acct)}/listKeys`, { method: 'POST' });
   const j = await readJson<any>(res);
   // Re-fetch the account to surface endpoint map (listKeys returns only keys).
@@ -531,8 +589,8 @@ export interface NetworkingInfo {
   privateEndpoints?: { name: string; state?: string; groupIds?: string[] }[];
 }
 
-export async function getNetworking(): Promise<{ account: CsAccount; networking: NetworkingInfo }> {
-  const acct = await resolveAccount();
+export async function getNetworking(selector?: AccountSelector): Promise<{ account: CsAccount; networking: NetworkingInfo }> {
+  const acct = await resolveAccount(false, selector);
   const res = await armFetch(accountPath(acct));
   const j = await readJson<any>(res);
   const p = j?.properties || {};
@@ -554,8 +612,8 @@ export async function getNetworking(): Promise<{ account: CsAccount; networking:
   };
 }
 
-export async function setPublicNetworkAccess(enabled: boolean): Promise<NetworkingInfo> {
-  const acct = await resolveAccount();
+export async function setPublicNetworkAccess(enabled: boolean, selector?: AccountSelector): Promise<NetworkingInfo> {
+  const acct = await resolveAccount(false, selector);
   const body = {
     properties: {
       publicNetworkAccess: enabled ? 'Enabled' : 'Disabled',
@@ -593,8 +651,8 @@ const ROLE_NAMES: Record<string, string> = {
   'f6c7c914-8db3-469d-8ca1-694a8f32e121': 'AzureML Data Scientist',
 };
 
-export async function listRoleAssignments(): Promise<{ account: CsAccount; assignments: RoleAssignmentRow[] }> {
-  const acct = await resolveAccount();
+export async function listRoleAssignments(selector?: AccountSelector): Promise<{ account: CsAccount; assignments: RoleAssignmentRow[] }> {
+  const acct = await resolveAccount(false, selector);
   const res = await armFetch(
     `${accountPath(acct)}/providers/Microsoft.Authorization/roleAssignments`,
     { apiVersion: '2022-04-01', query: { '$filter': 'atScope()' } },
@@ -626,8 +684,8 @@ export interface ActivityRow {
   resourceId?: string;
 }
 
-export async function listActivityLog(hours = 24): Promise<{ account: CsAccount; events: ActivityRow[] }> {
-  const acct = await resolveAccount();
+export async function listActivityLog(hours = 24, selector?: AccountSelector): Promise<{ account: CsAccount; events: ActivityRow[] }> {
+  const acct = await resolveAccount(false, selector);
   const since = new Date(Date.now() - Math.max(1, Math.min(24 * 7, hours)) * 3600 * 1000).toISOString();
   const filter = `eventTimestamp ge '${since}' and resourceUri eq '${acct.id}'`;
   const res = await armFetch(

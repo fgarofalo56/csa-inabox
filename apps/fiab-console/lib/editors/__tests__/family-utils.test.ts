@@ -23,6 +23,7 @@ import {
   aiStateLabel, aiStatusLabel,
   computeGeoBbox, bboxToZoom,
   parseUdfFunctions,
+  normalizeDaSources, guessDaSourceType,
 } from '../_family-utils';
 
 // ============================================================
@@ -294,5 +295,63 @@ describe('bboxToZoom', () => {
   it('never exceeds 18 or falls below 1', () => {
     expect(bboxToZoom({ minLon: 0, maxLon: 1e-12, minLat: 0, maxLat: 1e-12 })).toBeLessThanOrEqual(18);
     expect(bboxToZoom({ minLon: -180, maxLon: 180, minLat: -90, maxLat: 90 })).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ============================================================
+// normalizeDaSources / guessDaSourceType  [DataAgentEditor]
+// Regression for the confirmed `eo.map is not a function` crash: a legacy
+// record persisted `sources` as a comma-separated STRING.
+// ============================================================
+
+describe('guessDaSourceType', () => {
+  it('maps name keywords to the right typed source', () => {
+    expect(guessDaSourceType('fin-warehouse')).toBe('warehouse');
+    expect(guessDaSourceType('orders semantic model')).toBe('semantic-model');
+    expect(guessDaSourceType('ldn-gold-lakehouse')).toBe('lakehouse');
+    expect(guessDaSourceType('telemetry kql db')).toBe('kql');
+    expect(guessDaSourceType('docs ai search index')).toBe('ai-search');
+  });
+  it('defaults unknown names to warehouse', () => {
+    expect(guessDaSourceType('ontology-finance')).toBe('warehouse');
+  });
+});
+
+describe('normalizeDaSources', () => {
+  it('parses the confirmed legacy comma-separated STRING without throwing', () => {
+    const legacy = 'fin-warehouse, orders semantic model, ldn-gold-lakehouse, ontology-finance';
+    const out = normalizeDaSources(legacy);
+    expect(Array.isArray(out)).toBe(true);
+    expect(out).toHaveLength(4);
+    expect(out.map((s) => s.type)).toEqual(['warehouse', 'semantic-model', 'lakehouse', 'warehouse']);
+    expect(out.map((s) => s.name)).toEqual(['fin-warehouse', 'orders semantic model', 'ldn-gold-lakehouse', 'ontology-finance']);
+    // Migrated sources carry stable legacy ids + the instruction template.
+    expect(out[0].id).toBe('warehouse:fin-warehouse:legacy');
+    expect(out.every((s) => typeof s.instructions === 'string' && Array.isArray(s.examples))).toBe(true);
+  });
+
+  it('normalizes an already-array value, filling missing id/type', () => {
+    const out = normalizeDaSources([
+      { name: 'sales warehouse' },                              // missing id+type
+      { id: 'x:y:1', type: 'lakehouse', name: 'lh', tables: 't' }, // already shaped
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out[0].type).toBe('warehouse');
+    expect(out[0].id).toBe('warehouse:sales-warehouse:legacy');
+    expect(out[1]).toMatchObject({ id: 'x:y:1', type: 'lakehouse', name: 'lh', tables: 't' });
+  });
+
+  it('returns [] for non-array, non-string shapes (object/null/undefined/number)', () => {
+    expect(normalizeDaSources(undefined)).toEqual([]);
+    expect(normalizeDaSources(null)).toEqual([]);
+    expect(normalizeDaSources({})).toEqual([]);
+    expect(normalizeDaSources(42 as unknown)).toEqual([]);
+    expect(normalizeDaSources('')).toEqual([]);
+  });
+
+  it('drops non-object entries inside an array', () => {
+    const out = normalizeDaSources(['just-a-string', null, { name: 'wh' }]);
+    expect(out).toHaveLength(1);
+    expect(out[0].name).toBe('wh');
   });
 });

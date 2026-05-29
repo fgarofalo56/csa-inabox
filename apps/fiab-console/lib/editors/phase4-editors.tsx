@@ -37,9 +37,25 @@ import {
   computeGeoBbox,
   bboxToZoom,
   parseUdfFunctions,
+  normalizeDaSources,
   type VarType,
   type UdfFunction,
+  type DaSourceType,
+  type DaSource,
 } from './_family-utils';
+
+/**
+ * Defensive array coercion for persisted Cosmos state. Legacy / hand-edited /
+ * partially-migrated records can store an array field as a string, object, null
+ * or undefined; calling `.map`/`.length`/`.filter` on those throws at render
+ * (e.g. the reported `eo.map is not a function` on a data-agent whose `sources`
+ * was persisted as a comma-separated STRING). Every read of a persisted array
+ * field below funnels through `arr()` so an odd shape renders an empty list
+ * instead of crashing the editor. See .claude/rules/no-vaporware.md.
+ */
+function arr<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
 
 const useStyles = makeStyles({
   pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
@@ -854,10 +870,10 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
 
   const addLibrary = () => {
     if (!libName.trim()) return;
-    setState((p) => ({ ...p, libraries: [...(p.libraries || []), { name: libName.trim(), version: libVer.trim() || undefined, kind: libKind }] }));
+    setState((p) => ({ ...p, libraries: [...arr<{ name: string }>(p.libraries), { name: libName.trim(), version: libVer.trim() || undefined, kind: libKind }] }));
     setLibName(''); setLibVer('');
   };
-  const removeLibrary = (name: string) => setState((p) => ({ ...p, libraries: (p.libraries || []).filter((l) => l.name !== name) }));
+  const removeLibrary = (name: string) => setState((p) => ({ ...p, libraries: arr<{ name: string }>(p.libraries).filter((l) => l.name !== name) }));
 
   const runTest = useCallback(async () => {
     if (!selectedFn) return;
@@ -990,8 +1006,8 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
           <Table size="small" aria-label="Libraries">
             <TableHeader><TableRow><TableHeaderCell>Package</TableHeaderCell><TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader>
             <TableBody>
-              {(state.libraries || []).length === 0 && <TableRow><TableCell>No libraries added.</TableCell><TableCell /><TableCell /><TableCell /></TableRow>}
-              {(state.libraries || []).map((l) => (
+              {arr<{ name: string; version?: string; kind: string }>(state.libraries).length === 0 && <TableRow><TableCell>No libraries added.</TableCell><TableCell /><TableCell /><TableCell /></TableRow>}
+              {arr<{ name: string; version?: string; kind: string }>(state.libraries).map((l) => (
                 <TableRow key={l.name}>
                   <TableCell><strong>{l.name}</strong></TableCell>
                   <TableCell>{l.version || 'latest'}</TableCell>
@@ -1083,18 +1099,18 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
   // from useItemState's PATCH response don't clobber rapid typing.
   const update = (idx: number, patch: Partial<VarDef>) => {
     setState((prev) => {
-      const next = [...prev.variables];
+      const next = [...arr<VarDef>(prev.variables)];
       next[idx] = { ...next[idx], ...patch };
       return { ...prev, variables: next };
     });
   };
-  const addRow = () => setState((prev) => ({
-    ...prev,
-    variables: [...prev.variables, { name: `var${prev.variables.length + 1}`, type: 'string', default: '' }],
-  }));
+  const addRow = () => setState((prev) => {
+    const cur = arr<VarDef>(prev.variables);
+    return { ...prev, variables: [...cur, { name: `var${cur.length + 1}`, type: 'string', default: '' }] };
+  });
   const deleteRow = (idx: number) => setState((prev) => ({
     ...prev,
-    variables: prev.variables.filter((_, i) => i !== idx),
+    variables: arr<VarDef>(prev.variables).filter((_, i) => i !== idx),
   }));
   const valueKey = tab === 'default' ? 'default' : tab;
 
@@ -1148,7 +1164,7 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
               <TableHeaderCell />
             </TableRow></TableHeader>
             <TableBody>
-              {state.variables.map((v, i) => {
+              {arr<VarDef>(state.variables).map((v, i) => {
                 const val = (v as any)[valueKey] ?? '';
                 const validationErr = validateVarValue(v.type, val);
                 return (
@@ -1498,21 +1514,21 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
   const addEntity = useCallback(() => {
     const name = newName.trim();
     if (!/^[A-Za-z_][\w]*$/.test(name)) { setDlgErr('Entity name must start with a letter/underscore (letters, digits, _).'); return; }
-    if (state.nodes.some((n) => n.name === name)) { setDlgErr(`Entity "${name}" already exists.`); return; }
-    persistIfExisting({ ...state, nodes: [...state.nodes, { name, properties: parseProps(propsText) }] });
+    if (arr<{ name: string }>(state.nodes).some((n) => n.name === name)) { setDlgErr(`Entity "${name}" already exists.`); return; }
+    persistIfExisting({ ...state, nodes: [...arr(state.nodes), { name, properties: parseProps(propsText) }] });
     setNodeDlgOpen(false);
   }, [newName, propsText, state, id, setState, save]);
 
   const addRelationship = useCallback(() => {
     const name = newName.trim();
     if (!/^[A-Za-z_][\w]*$/.test(name)) { setDlgErr('Relationship name must start with a letter/underscore (letters, digits, _).'); return; }
-    if (state.edges.some((e) => e.name === name)) { setDlgErr(`Relationship "${name}" already exists.`); return; }
+    if (arr<{ name: string }>(state.edges).some((e) => e.name === name)) { setDlgErr(`Relationship "${name}" already exists.`); return; }
     const props = parseProps(propsText);
     // src/dst node types captured as edge properties so the materialize step +
     // queries can reference the connected node types.
     if (edgeSrc.trim()) props.unshift({ name: 'srcType', type: 'string' });
     if (edgeDst.trim()) props.unshift({ name: 'dstType', type: 'string' });
-    persistIfExisting({ ...state, edges: [...state.edges, { name, properties: props }] });
+    persistIfExisting({ ...state, edges: [...arr(state.edges), { name, properties: props }] });
     setEdgeDlgOpen(false);
   }, [newName, propsText, edgeSrc, edgeDst, state, id, setState, save]);
 
@@ -1524,7 +1540,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
       const r = await fetch(`/api/items/graph-model/${encodeURIComponent(id)}/materialize`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ database: state.database, nodes: state.nodes, edges: state.edges }),
+        body: JSON.stringify({ database: state.database, nodes: arr(state.nodes), edges: arr(state.edges) }),
       });
       const j = await r.json();
       setMatResult(j);
@@ -1586,7 +1602,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
           Node types are vertices; edge types whose properties carry <code>srcType</code> / <code>dstType</code> connect them, others link to a shared hub.
         </Caption1>
-        <GraphModelSchemaViz nodes={state.nodes} edges={state.edges} />
+        <GraphModelSchemaViz nodes={arr(state.nodes)} edges={arr(state.edges)} />
         {state.lastMaterializedAt && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Last materialized {new Date(state.lastMaterializedAt).toLocaleString()}</Caption1>
         )}
@@ -1644,12 +1660,12 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                   <Field label="From entity">
                     <Dropdown value={edgeSrc} selectedOptions={edgeSrc ? [edgeSrc] : []} onOptionSelect={(_, d) => setEdgeSrc(d.optionValue || '')} placeholder="(optional)">
-                      {state.nodes.map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
+                      {arr<{ name: string }>(state.nodes).map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
                     </Dropdown>
                   </Field>
                   <Field label="To entity">
                     <Dropdown value={edgeDst} selectedOptions={edgeDst ? [edgeDst] : []} onOptionSelect={(_, d) => setEdgeDst(d.optionValue || '')} placeholder="(optional)">
-                      {state.nodes.map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
+                      {arr<{ name: string }>(state.nodes).map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
                     </Dropdown>
                   </Field>
                 </div>
@@ -1683,32 +1699,33 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   // clobber each other via the stale `state` captured at click-time.
   const update = (idx: number, patch: Partial<PlanTask>) => {
     setState((prev) => {
-      const next = [...prev.tasks];
+      const next = [...arr<PlanTask>(prev.tasks)];
       next[idx] = { ...next[idx], ...patch };
       return { ...prev, tasks: next };
     });
   };
   const add = () => setState((prev) => ({
     ...prev,
-    tasks: [...prev.tasks, { title: '', owner: '', due: '', status: 'todo' }],
+    tasks: [...arr<PlanTask>(prev.tasks), { title: '', owner: '', due: '', status: 'todo' }],
   }));
   const remove = (idx: number) => setState((prev) => ({
     ...prev,
-    tasks: prev.tasks.filter((_, i) => i !== idx),
+    tasks: arr<PlanTask>(prev.tasks).filter((_, i) => i !== idx),
   }));
 
   // v3.27: D-upgrade — compute and surface progress + overdue counts.
-  const counts = state.tasks.reduce(
+  const taskList = arr<PlanTask>(state.tasks);
+  const counts = taskList.reduce(
     (acc, t) => { acc[t.status] = (acc[t.status] || 0) + 1; return acc; },
     {} as Record<PlanTask['status'], number>,
   );
   const todo = counts.todo || 0;
   const doing = counts.doing || 0;
   const done = counts.done || 0;
-  const total = state.tasks.length;
+  const total = taskList.length;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   const today = new Date().toISOString().slice(0, 10);
-  const overdue = state.tasks.filter(t => t.status !== 'done' && t.due && t.due < today).length;
+  const overdue = taskList.filter(t => t.status !== 'done' && t.due && t.due < today).length;
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -1751,7 +1768,7 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
             <TableHeaderCell />
           </TableRow></TableHeader>
           <TableBody>
-            {state.tasks.map((t, i) => (
+            {taskList.map((t, i) => (
               <TableRow key={i}>
                 <TableCell><Input value={t.title} onChange={(_, d) => update(i, { title: d.value })} /></TableCell>
                 <TableCell><Input value={t.owner} onChange={(_, d) => update(i, { owner: d.value })} /></TableCell>
@@ -1978,8 +1995,6 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
 //   POST  /api/items/data-agent/[id]/chat       (live AOAI grounded chat)
 //   POST  /api/items/data-agent/[id]/publish    (Foundry Agent Service)
 //   GET   /api/items/by-type?types=...          (typed source picker)
-type DaSourceType = 'warehouse' | 'lakehouse' | 'kql' | 'semantic-model' | 'ai-search';
-interface DaSource { id: string; type: DaSourceType; name: string; tables?: string; instructions?: string; examples?: { question: string; query: string }[] }
 interface DataAgentState {
   instructions: string;
   sources: DaSource[];
@@ -1999,6 +2014,10 @@ const DA_SOURCE_TYPES: { value: DaSourceType; label: string; itemType: string }[
   { value: 'ai-search', label: 'AI Search', itemType: 'ai-search-index' },
 ];
 const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n\n## When asked about\n';
+
+// `normalizeDaSources` / `guessDaSourceType` / DaSource(Type) are imported from
+// `_family-utils` (vitest coverage at lib/editors/__tests__/family-utils.test.ts)
+// so the legacy-string migration is unit-tested without the Fluent UI bundle.
 
 interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean }
 
@@ -2030,12 +2049,12 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
 
   const [pickSel, setPickSel] = useState('');
   const addSource = () => {
-    if (!pickSel || (state.sources?.length || 0) >= 5) return;
+    if (!pickSel || arr<DaSource>(state.sources).length >= 5) return;
     const opts = available[pickerType] || [];
     const chosen = opts.find((o) => o.id === pickSel);
     setState((p) => ({
       ...p,
-      sources: [...(p.sources || []), {
+      sources: [...arr<DaSource>(p.sources), {
         id: `${pickerType}:${pickSel}:${Date.now()}`,
         type: pickerType,
         name: chosen?.name || pickSel,
@@ -2045,11 +2064,11 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     setPickSel('');
   };
   const updateSource = (sid: string, patch: Partial<DaSource>) => {
-    setState((p) => ({ ...p, sources: (p.sources || []).map((x) => x.id === sid ? { ...x, ...patch } : x) }));
+    setState((p) => ({ ...p, sources: arr<DaSource>(p.sources).map((x) => x.id === sid ? { ...x, ...patch } : x) }));
   };
-  const removeSource = (sid: string) => setState((p) => ({ ...p, sources: (p.sources || []).filter((x) => x.id !== sid) }));
+  const removeSource = (sid: string) => setState((p) => ({ ...p, sources: arr<DaSource>(p.sources).filter((x) => x.id !== sid) }));
   const updateSourceExamples = (sid: string, fn: (ex: { question: string; query: string }[]) => { question: string; query: string }[]) => {
-    setState((p) => ({ ...p, sources: (p.sources || []).map((x) => x.id === sid ? { ...x, examples: fn(x.examples || []) } : x) }));
+    setState((p) => ({ ...p, sources: arr<DaSource>(p.sources).map((x) => x.id === sid ? { ...x, examples: fn(arr(x.examples)) } : x) }));
   };
   const addExample = (sid: string) => updateSourceExamples(sid, (ex) => [...ex, { question: '', query: '' }]);
 
@@ -2099,8 +2118,20 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     finally { setPublishing(false); }
   }, [id, save, reload, state.description]);
 
-  const sources = state.sources || [];
-  const instrLen = (state.instructions || '').length;
+  // One-time migration: if a legacy record persisted `sources` as a string (or
+  // any non-array shape), rewrite state to a clean DaSource[] so the agent both
+  // renders AND can be re-saved in the new schema. Runs after load settles.
+  useEffect(() => {
+    if (loading) return;
+    if (state.sources !== undefined && !Array.isArray(state.sources)) {
+      const migrated = normalizeDaSources(state.sources);
+      setState((p) => ({ ...p, sources: migrated }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, state.sources]);
+
+  const sources = normalizeDaSources(state.sources);
+  const instrLen = (typeof state.instructions === 'string' ? state.instructions : '').length;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Agent', actions: [
@@ -2165,7 +2196,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                   <Caption1 style={{ marginTop: 6 }}>Data source instructions</Caption1>
                   <Textarea value={src.instructions || ''} rows={4} onChange={(_, d) => updateSource(src.id, { instructions: d.value })} />
                   <Caption1 style={{ marginTop: 6 }}>Example question → query pairs</Caption1>
-                  {(src.examples || []).map((ex, i) => (
+                  {arr<{ question: string; query: string }>(src.examples).map((ex, i) => (
                     <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6, marginBottom: 4 }}>
                       <Input value={ex.question} placeholder="question" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, question: d.value } : e))} />
                       <Input value={ex.query} placeholder="SQL / KQL / DAX" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, query: d.value } : e))} />
