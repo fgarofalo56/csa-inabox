@@ -533,12 +533,59 @@ export async function deleteJob(jobId: number): Promise<void> {
   await asJsonOrThrow<unknown>(res, 'deleteJob');
 }
 
+/**
+ * Trigger an immediate run of a saved job (`POST /api/2.1/jobs/run-now`).
+ *
+ * Databricks accepts a different parameter shape per task type — all optional
+ * and combinable for multi-task jobs (each task consumes the shape it knows):
+ *   - notebook_params       Record<string,string>  (Notebook tasks)
+ *   - python_params         string[]                (spark_python / Python script)
+ *   - python_named_params   Record<string,string>  (Python wheel keyword args)
+ *   - jar_params            string[]                (JAR / spark-submit)
+ *   - spark_submit_params   string[]                (spark-submit)
+ *   - sql_params            Record<string,string>  (SQL task query params)
+ *   - dbt_commands          string[]                (dbt task)
+ *   - job_parameters        Record<string,string>  (job-level parameters)
+ *   - pipeline_params       { full_refresh?: boolean }
+ *   - idempotency_token     string
+ */
+export interface RunNowParams {
+  notebook_params?: Record<string, string>;
+  python_params?: string[];
+  python_named_params?: Record<string, string>;
+  jar_params?: string[];
+  spark_submit_params?: string[];
+  sql_params?: Record<string, string>;
+  dbt_commands?: string[];
+  job_parameters?: Record<string, string>;
+  pipeline_params?: { full_refresh?: boolean };
+  idempotency_token?: string;
+}
+
+const RUN_NOW_SHAPES = new Set([
+  'notebook_params', 'python_params', 'python_named_params', 'jar_params',
+  'spark_submit_params', 'sql_params', 'dbt_commands', 'job_parameters',
+  'pipeline_params', 'idempotency_token',
+]);
+
 export async function runJob(
   jobId: number,
-  notebookParams?: Record<string, string>,
+  params?: RunNowParams | Record<string, string>,
 ): Promise<SubmittedRun> {
   const payload: Record<string, unknown> = { job_id: jobId };
-  if (notebookParams) payload.notebook_params = notebookParams;
+  if (params && typeof params === 'object') {
+    const keys = Object.keys(params);
+    // Back-compat: a bare Record<string,string> = notebook_params.
+    const isShaped = keys.length > 0 && keys.every((k) => RUN_NOW_SHAPES.has(k));
+    if (isShaped) {
+      for (const k of keys) {
+        const v = (params as Record<string, unknown>)[k];
+        if (v !== undefined && v !== null) payload[k] = v;
+      }
+    } else if (keys.length > 0) {
+      payload.notebook_params = params;
+    }
+  }
   const res = await dbxFetch('/api/2.1/jobs/run-now', {
     method: 'POST',
     body: JSON.stringify(payload),
