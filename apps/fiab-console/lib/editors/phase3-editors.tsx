@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Spinner, Field,
+  Subtitle2, Caption1, Badge, Button, Input, Spinner, Field,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
@@ -1837,8 +1837,9 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     if (!id || id === 'new') return;
     try {
       const r = await fetch(`/api/items/eventstream/${id}`);
-      const j = (await r.json()) as EventstreamState;
+      const j = (await r.json()) as EventstreamState & { fabricEventstreamId?: string | null };
       setState(j);
+      if (j.fabricEventstreamId) setPublishedId(j.fabricEventstreamId);
       const cfg = j.config && (j.config.source || j.config.sink || (j.config.transforms?.length ?? 0) > 0)
         ? j.config
         : DEFAULT_ES_CFG;
@@ -1927,6 +1928,32 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     }
   }, [fabricWsId, dirty, save, id, load]);
 
+  // Pull the LIVE topology back from the published Fabric Eventstream item
+  // (real getDefinition REST), decode it, and load it into the designer. This
+  // closes the round-trip: design → publish → pull-back-and-edit.
+  const [pullBusy, setPullBusy] = useState(false);
+  const pullFromFabric = useCallback(async () => {
+    setPullBusy(true); setSaveErr(null); setSaveMsg('Pulling live topology from Fabric…');
+    try {
+      const qs = fabricWsId.trim() ? `?fabricWorkspaceId=${encodeURIComponent(fabricWsId.trim())}` : '';
+      const r = await fetch(`/api/items/eventstream/${id}/definition${qs}`);
+      const j = await r.json();
+      if (!j.ok) {
+        setSaveErr(j.error || `HTTP ${r.status}`);
+        setSaveMsg(j.hint ? `${j.error} — ${j.hint}` : (j.error || 'pull failed'));
+        return;
+      }
+      setCfgText(JSON.stringify(j.config, null, 2));
+      setDirty(true);
+      setActiveTab('designer');
+      setSaveMsg('Pulled the live Fabric topology into the designer. Save to persist locally.');
+    } catch (e: any) {
+      setSaveErr(e?.message || String(e));
+    } finally {
+      setPullBusy(false);
+    }
+  }, [id, fabricWsId]);
+
   const canSave = !saving && dirty;
 
   // Ribbon-driven add/transform helpers. They mutate cfgText (the on-wire
@@ -1975,9 +2002,23 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       { label: 'Publish', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
         { label: 'Publish to Fabric', onClick: () => setPublishOpen(true) },
+        { label: pullBusy ? 'Pulling…' : 'Pull from Fabric', onClick: pullBusy ? undefined : pullFromFabric, disabled: pullBusy,
+          title: 'Reload the live topology from the published Fabric Eventstream (getDefinition REST)' },
       ]},
     ]},
-  ], [saving, canSave, save, ribbonAdd, cfgText, onDesignerChange]);
+  ], [saving, canSave, save, ribbonAdd, cfgText, onDesignerChange, pullBusy, pullFromFabric]);
+
+  // On /new there is no Cosmos record yet, so Save (PUT) would 404 — the
+  // designer rendered but couldn't persist (the "wonky / not functional"
+  // verdict). Mirror the Activator pattern: an ENABLED create surface mints a
+  // Cosmos eventstream item and routes to the live editor below, where Save +
+  // Publish-to-Fabric + Pull-from-Fabric all work against the real backend.
+  if (id === 'new') {
+    return (
+      <NewItemCreateGate item={item} createLabel="New eventstream"
+        intro="An Eventstream is a streaming topology: sources (Event Hubs, IoT Hub, Kafka, sample data) → operators (filter, aggregate, group-by, join) → destinations (Eventhouse/KQL, Lakehouse, Activator, custom endpoint). Create it, then design the topology on the visual canvas and Publish to Fabric to create the live Eventstream item via the Fabric definition REST API." />
+    );
+  }
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -2000,6 +2041,11 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
           {publishedId && <Badge appearance="filled" color="success">published</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
           <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Reload</Button>
+          {publishedId && (
+            <Button appearance="outline" onClick={pullFromFabric} disabled={pullBusy}>
+              {pullBusy ? 'Pulling…' : 'Pull from Fabric'}
+            </Button>
+          )}
           <Button appearance="outline" onClick={() => setPublishOpen(true)} style={{ marginLeft: 'auto' }}>Publish to Fabric</Button>
           <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty}>
             {saving ? 'Saving…' : 'Save (Ctrl+S)'}
@@ -2914,7 +2960,24 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshes, setRefreshes] = useState<RefreshLite[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'refresh' | 'config'>('tables');
+  const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config'>('tables');
+
+  // --- Model builder (real Power BI push-dataset authoring) ---------------
+  // Builds a NEW semantic model with tables/typed-columns/measures/relationships
+  // via POST /api/items/semantic-model/build → Power BI Push Datasets REST.
+  const PBI_COL_TYPES = ['String', 'Int64', 'Double', 'Decimal', 'Boolean', 'DateTime'] as const;
+  type BuilderColumn = { name: string; dataType: typeof PBI_COL_TYPES[number] };
+  type BuilderMeasure = { name: string; expression: string };
+  type BuilderTable = { name: string; columns: BuilderColumn[]; measures: BuilderMeasure[] };
+  type BuilderRel = { name: string; fromTable: string; fromColumn: string; toTable: string; toColumn: string; crossFilteringBehavior: 'OneDirection' | 'BothDirections' };
+  const [bModelName, setBModelName] = useState('');
+  const [bTables, setBTables] = useState<BuilderTable[]>([
+    { name: 'Sales', columns: [{ name: 'OrderId', dataType: 'Int64' }, { name: 'Amount', dataType: 'Double' }, { name: 'OrderDate', dataType: 'DateTime' }], measures: [{ name: 'TotalSales', expression: 'SUM(Sales[Amount])' }] },
+  ]);
+  const [bRels, setBRels] = useState<BuilderRel[]>([]);
+  const [bBusy, setBBusy] = useState(false);
+  const [bMsg, setBMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   // DAX measure validator — name + table dropdown + Monaco DAX editor + Test
   // button. Persistence is XMLA-only (Premium / Fabric capacity feature) so
@@ -2957,6 +3020,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
       const j = await r.json();
       if (!j.ok) { setDetailErr(j.error); return; }
       setDetail({ dataset: j.dataset, tables: j.tables || [], refreshSchedule: j.refreshSchedule });
+      setRelationships(Array.isArray(j.relationships) ? j.relationships : []);
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
 
@@ -3068,6 +3132,39 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!measureName) setMeasureName('MyMeasure');
   }, [measureTable, measureName, detail?.tables]);
 
+  // Build a REAL new semantic model (push dataset) via the Power BI Push
+  // Datasets REST API. After a successful build we refresh the dataset list
+  // and select the new model so the user lands in its detail view.
+  const buildModel = useCallback(async () => {
+    if (!workspaceId || !bModelName.trim() || bTables.length === 0) return;
+    setBBusy(true); setBMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/build?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: bModelName.trim(),
+          tables: bTables.map((t) => ({
+            name: t.name.trim(),
+            columns: t.columns.filter((c) => c.name.trim()).map((c) => ({ name: c.name.trim(), dataType: c.dataType })),
+            measures: t.measures.filter((m) => m.name.trim() && m.expression.trim()).map((m) => ({ name: m.name.trim(), expression: m.expression.trim() })),
+          })),
+          relationships: bRels.filter((rl) => rl.fromTable && rl.fromColumn && rl.toTable && rl.toColumn),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setBMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setBMsg({ ok: true, text: `Created semantic model "${j.name}" (id ${String(j.datasetId).slice(0, 8)}…). Reloading workspace…` });
+      await loadList(workspaceId);
+      if (j.datasetId) { setDatasetId(j.datasetId); setTab('tables'); }
+    } catch (e: any) { setBMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setBBusy(false); }
+  }, [workspaceId, bModelName, bTables, bRels, loadList]);
+
+  const focusBuild = useCallback(() => {
+    setTab('build');
+    if (!bModelName) setBModelName('My semantic model');
+  }, [bModelName]);
+
   const canRefresh = !!datasetId && !refreshing && detail?.dataset?.isRefreshable !== false;
   const openInPbi = useCallback(() => {
     if (workspaceId && datasetId) {
@@ -3080,6 +3177,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   // Measures-tab MessageBar instead. See no-vaporware.md.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
+      { label: 'Model', actions: [
+        { label: 'Build model', onClick: workspaceId ? focusBuild : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'Create a new semantic model with tables, columns, measures & relationships via Power BI REST (push dataset)' },
+      ]},
       { label: 'Measures', actions: [
         { label: 'New measure (DAX)', onClick: datasetId ? focusNewMeasure : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Measures tab to author + validate DAX against the live model' },
       ]},
@@ -3090,7 +3190,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
         { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi, workspaceId, focusBuild]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -3117,13 +3217,13 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
               <Badge appearance="filled" color="brand">Semantic model</Badge>
               <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
               <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+              <Button appearance="outline" icon={<Add20Regular />} onClick={focusBuild} disabled={!workspaceId} title={!workspaceId ? 'select a workspace first' : 'Build a new semantic model (push dataset) via Power BI REST'} style={{ marginLeft: 'auto' }}>Build model</Button>
               <Button
                 appearance="primary"
                 icon={<Play20Regular />}
                 disabled={!datasetId || refreshing || detail?.dataset?.isRefreshable === false}
                 onClick={refreshNow}
                 title={detail?.dataset?.isRefreshable === false ? 'Dataset is not refreshable (e.g. push dataset or DirectQuery without gateway).' : undefined}
-                style={{ marginLeft: 'auto' }}
               >
                 {refreshing ? 'Queuing…' : 'Refresh dataset'}
               </Button>
@@ -3139,13 +3239,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
               </div>
             )}
           </div>
-          {datasetId && (
+          {(datasetId || tab === 'build') && (
             <>
               <div className={s.tabBar}>
                 <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value as any)}>
                   <Tab value="tables">Tables ({detail?.tables?.length ?? 0})</Tab>
-                  <Tab value="relationships">Relationships</Tab>
+                  <Tab value="relationships">Relationships ({relationships.length})</Tab>
                   <Tab value="measures">Measures (DAX)</Tab>
+                  <Tab value="build">Build model</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
                   <Tab value="config">Configuration</Tab>
                 </TabList>
@@ -3172,7 +3273,111 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   </div>
                 )}
                 {tab === 'relationships' && (
-                  <Body1>Power BI REST returns relationships only via the XMLA endpoint (TMSL). Click <strong>Refresh dataset</strong> to validate metadata; full TMSL graph rendering lands in v2.2.</Body1>
+                  <>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Table relationships from <code>GET /datasets/{'{'}id{'}'}/relationships</code> (Power BI REST). Editing relationships
+                      on an imported model requires XMLA / Desktop; push datasets accept relationships at create time via the <strong>Build model</strong> tab.
+                    </Caption1>
+                    {relationships.length === 0 ? (
+                      <Caption1 style={{ marginTop: 8 }}>No relationships returned for this model.</Caption1>
+                    ) : (
+                      <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                        <Table aria-label="Relationships" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Name</TableHeaderCell>
+                            <TableHeaderCell>From</TableHeaderCell>
+                            <TableHeaderCell>To</TableHeaderCell>
+                            <TableHeaderCell>Cross-filter</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {relationships.map((r, i) => (
+                              <TableRow key={r.name || i}>
+                                <TableCell>{r.name || '—'}</TableCell>
+                                <TableCell className={s.cell}>{r.fromTable}[{r.fromColumn}]</TableCell>
+                                <TableCell className={s.cell}>{r.toTable}[{r.toColumn}]</TableCell>
+                                <TableCell>{r.crossFilteringBehavior || '—'}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </>
+                )}
+                {tab === 'build' && (
+                  <>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Build a semantic model (push dataset)</MessageBarTitle>
+                        Define tables, typed columns, DAX measures, and relationships, then <strong>Create model</strong> —
+                        this calls the Power BI <code>POST /groups/{'{'}ws{'}'}/datasets</code> push-dataset REST API to author a
+                        real semantic model. Imported / Direct Lake model edits still require the XMLA endpoint
+                        (<code>LOOM_POWERBI_XMLA_ENDPOINT</code>) or Power BI Desktop.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <Field label="Model name" required style={{ maxWidth: 420, marginTop: 8 }}>
+                      <Input value={bModelName} onChange={(_, d) => setBModelName(d.value)} placeholder="My semantic model" />
+                    </Field>
+                    {bTables.map((t, ti) => (
+                      <div key={ti} className={s.card} style={{ marginTop: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <Field label="Table" style={{ minWidth: 220 }}>
+                            <Input value={t.name} onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, name: d.value } : x))} />
+                          </Field>
+                          <Button appearance="subtle" icon={<Delete20Regular />} aria-label="Remove table"
+                            onClick={() => setBTables((p) => p.filter((_, i) => i !== ti))} style={{ marginTop: 22 }} />
+                        </div>
+                        <Caption1 style={{ marginTop: 6 }}>Columns</Caption1>
+                        {t.columns.map((c, ci) => (
+                          <div key={ci} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+                            <Input value={c.name} placeholder="column" onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: x.columns.map((y, j) => j === ci ? { ...y, name: d.value } : y) } : x))} />
+                            <Select value={c.dataType} onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: x.columns.map((y, j) => j === ci ? { ...y, dataType: d.value as BuilderColumn['dataType'] } : y) } : x))}>
+                              {PBI_COL_TYPES.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
+                            </Select>
+                            <Button appearance="subtle" icon={<Delete20Regular />} aria-label="Remove column"
+                              onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: x.columns.filter((_, j) => j !== ci) } : x))} />
+                          </div>
+                        ))}
+                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 4 }}
+                          onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: [...x.columns, { name: '', dataType: 'String' }] } : x))}>Add column</Button>
+                        <Caption1 style={{ marginTop: 8 }}>Measures (DAX)</Caption1>
+                        {t.measures.map((m, mi) => (
+                          <div key={mi} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+                            <Input value={m.name} placeholder="MeasureName" onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: x.measures.map((y, j) => j === mi ? { ...y, name: d.value } : y) } : x))} />
+                            <Input value={m.expression} placeholder="SUM(Sales[Amount])" style={{ flex: 1, fontFamily: 'Consolas, monospace' }} onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: x.measures.map((y, j) => j === mi ? { ...y, expression: d.value } : y) } : x))} />
+                            <Button appearance="subtle" icon={<Delete20Regular />} aria-label="Remove measure"
+                              onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: x.measures.filter((_, j) => j !== mi) } : x))} />
+                          </div>
+                        ))}
+                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 4 }}
+                          onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: [...x.measures, { name: '', expression: '' }] } : x))}>Add measure</Button>
+                      </div>
+                    ))}
+                    <Button appearance="outline" icon={<Add20Regular />} style={{ marginTop: 8 }}
+                      onClick={() => setBTables((p) => [...p, { name: `Table${p.length + 1}`, columns: [{ name: 'Id', dataType: 'Int64' }], measures: [] }])}>Add table</Button>
+
+                    <Subtitle2 style={{ marginTop: 16 }}>Relationships</Subtitle2>
+                    {bRels.map((rl, ri) => (
+                      <div key={ri} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}>
+                        <Input value={rl.fromTable} placeholder="fromTable" onChange={(_, d) => setBRels((p) => p.map((x, i) => i === ri ? { ...x, fromTable: d.value } : x))} style={{ width: 140 }} />
+                        <Input value={rl.fromColumn} placeholder="fromColumn" onChange={(_, d) => setBRels((p) => p.map((x, i) => i === ri ? { ...x, fromColumn: d.value } : x))} style={{ width: 140 }} />
+                        <ArrowSync20Regular />
+                        <Input value={rl.toTable} placeholder="toTable" onChange={(_, d) => setBRels((p) => p.map((x, i) => i === ri ? { ...x, toTable: d.value } : x))} style={{ width: 140 }} />
+                        <Input value={rl.toColumn} placeholder="toColumn" onChange={(_, d) => setBRels((p) => p.map((x, i) => i === ri ? { ...x, toColumn: d.value } : x))} style={{ width: 140 }} />
+                        <Button appearance="subtle" icon={<Delete20Regular />} aria-label="Remove relationship" onClick={() => setBRels((p) => p.filter((_, i) => i !== ri))} />
+                      </div>
+                    ))}
+                    <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 4 }}
+                      onClick={() => setBRels((p) => [...p, { name: `rel-${p.length + 1}`, fromTable: '', fromColumn: '', toTable: '', toColumn: '', crossFilteringBehavior: 'OneDirection' }])}>Add relationship</Button>
+
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 16 }}>
+                      <Button appearance="primary" icon={<Save20Regular />} disabled={bBusy || !workspaceId || !bModelName.trim()} onClick={buildModel}>
+                        {bBusy ? 'Creating…' : 'Create model'}
+                      </Button>
+                      {!workspaceId && <Caption1>Select a workspace first.</Caption1>}
+                    </div>
+                    {bMsg && <MessageBar intent={bMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{bMsg.text}</MessageBarBody></MessageBar>}
+                  </>
                 )}
                 {tab === 'measures' && (
                   <>
@@ -3508,6 +3713,19 @@ function ReportLikeEditor({
     catch (e: any) { setViewerErr(e?.message || String(e)); }
   }, []);
 
+  // Bookmark slideshow — drives bookmarksManager.play (the Power BI web
+  // viewer "View → Bookmarks → View" slideshow). On = cycle bookmarks; Off =
+  // stop. Real powerbi-client API; surfaces engine errors verbatim.
+  const [slideshow, setSlideshow] = useState(false);
+  const toggleSlideshow = useCallback(async () => {
+    const next = !slideshow;
+    setSlideshow(next); setViewerErr(null);
+    try {
+      // models.BookmarksPlayMode: On = 0, Off = 1.
+      await embedRef.current?.bookmarksManager?.play?.(next ? 0 : 1);
+    } catch (e: any) { setViewerErr(e?.message || String(e)); setSlideshow(!next); }
+  }, [slideshow]);
+
   const captureBookmark = useCallback(async () => {
     setViewerErr(null);
     try {
@@ -3563,9 +3781,10 @@ function ReportLikeEditor({
         { label: 'Refresh visuals', onClick: hasReport ? refreshVisuals : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'reload the embedded report visuals (report.refresh)' },
         { label: editMode ? 'Switch to View' : 'Switch to Edit', onClick: hasReport ? toggleEditMode : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'toggle the embedded report between View and Edit modes' },
         { label: 'Capture bookmark', onClick: hasReport ? captureBookmark : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'capture the current visual + filter state as a personal bookmark' },
+        { label: slideshow ? 'Stop slideshow' : 'Play bookmarks', onClick: hasReport ? toggleSlideshow : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'play the report bookmarks as a slideshow (bookmarksManager.play)' },
       ]}]),
     ]},
-  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark]);
+  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow]);
 
   // Mint a per-report embed token whenever the selected report changes.
   // Paginated reports use a different SDK (`pbi-paginated`) that we don't
@@ -3687,7 +3906,10 @@ function ReportLikeEditor({
                           <Button key={b.name} size="small" appearance="subtle" onClick={() => applyBookmark(b.name)} style={{ justifyContent: 'flex-start' }}>{b.displayName || b.name}</Button>
                         ))}
                       </div>
-                      <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={captureBookmark} style={{ marginTop: 6 }}>Capture</Button>
+                      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={captureBookmark}>Capture</Button>
+                        <Button size="small" appearance={slideshow ? 'primary' : 'outline'} icon={<Play20Regular />} onClick={toggleSlideshow}>{slideshow ? 'Stop' : 'Play'}</Button>
+                      </div>
                     </div>
                   </div>
                   <div style={{ flex: '1 1 auto', minWidth: 0 }}>
