@@ -5,7 +5,7 @@
  * responses and confirms:
  *   - workspace list fetch fires
  *   - pipeline config GET fires on mount
- *   - the v2.1 "configuration only" MessageBar renders (no-vaporware: gap disclosure)
+ *   - the "Publish to Fabric" guidance MessageBar renders (no-vaporware: honest disclosure)
  *   - pre-save id === 'new' gate skips the config fetch
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -45,10 +45,10 @@ describe('EventstreamEditor', () => {
     });
   });
 
-  it('surfaces the v2.1 configuration-only MessageBar (no-vaporware gap disclosure)', async () => {
+  it('surfaces the publish-to-Fabric guidance MessageBar (no-vaporware honest disclosure)', async () => {
     render(<EventstreamEditor item={makeItem('eventstream', 'Eventstream')} id="es-fixture" />);
     await waitFor(() => {
-      expect(screen.getByText(/configuration only/i)).toBeInTheDocument();
+      expect(screen.getByText(/publish to fabric/i)).toBeInTheDocument();
     });
   });
 

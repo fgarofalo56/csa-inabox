@@ -154,6 +154,34 @@ export async function listTables(db: string): Promise<Array<{ name: string; fold
   }));
 }
 
+/** `.show functions` — stored KQL functions (ADX schema-tree parity). */
+export async function listFunctions(db: string): Promise<Array<{ name: string; parameters?: string; folder?: string; docString?: string }>> {
+  const r = await executeMgmtCommand(db, '.show functions');
+  const nameIdx = r.columns.indexOf('Name');
+  const paramIdx = r.columns.indexOf('Parameters');
+  const folderIdx = r.columns.indexOf('Folder');
+  const docIdx = r.columns.indexOf('DocString');
+  return r.rows.map((row) => ({
+    name: String(row[nameIdx >= 0 ? nameIdx : 0]),
+    parameters: paramIdx >= 0 ? (row[paramIdx] as string) : undefined,
+    folder: folderIdx >= 0 ? (row[folderIdx] as string) : undefined,
+    docString: docIdx >= 0 ? (row[docIdx] as string) : undefined,
+  }));
+}
+
+/** `.show materialized-views` — materialized views (ADX schema-tree parity). */
+export async function listMaterializedViews(db: string): Promise<Array<{ name: string; sourceTable?: string; query?: string }>> {
+  const r = await executeMgmtCommand(db, '.show materialized-views');
+  const nameIdx = r.columns.indexOf('Name');
+  const srcIdx = r.columns.indexOf('SourceTable');
+  const qIdx = r.columns.indexOf('Query');
+  return r.rows.map((row) => ({
+    name: String(row[nameIdx >= 0 ? nameIdx : 0]),
+    sourceTable: srcIdx >= 0 ? (row[srcIdx] as string) : undefined,
+    query: qIdx >= 0 ? (row[qIdx] as string) : undefined,
+  }));
+}
+
 /** `.show database <db> details` — size, retention, hot cache. */
 export async function getDatabaseDetails(db: string): Promise<Record<string, unknown> | null> {
   // Quote DB name; KQL identifiers tolerate `["name"]` form for hyphens.
