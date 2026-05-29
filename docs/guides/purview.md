@@ -27,8 +27,9 @@
 
 ## Why Purview
 
-Microsoft Purview was chosen over Apache Atlas, DataHub, and Collibra because
-it is Gov-GA with FedRAMP High inheritance, integrates natively with Microsoft
+Microsoft Purview was chosen over the OSS catalogs (Apache Atlas, DataHub) and
+third-party governance suites because it is Gov-GA with FedRAMP High
+inheritance, integrates natively with Microsoft
 Information Protection (MIP) sensitivity labels, and provides built-in scanners
 for every service in the CSA stack (ADLS, Databricks, Synapse, SQL Server,
 Power BI). Purview's Entra ID RBAC fits the platform's existing persona model,

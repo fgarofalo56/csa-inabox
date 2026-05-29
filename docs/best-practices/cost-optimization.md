@@ -311,11 +311,11 @@ DESCRIBE DETAIL silver.customer_transactions;
 | Same region (intra-region)  | Free        |
 | Cross-region (within Azure) | $0.02       |
 | Azure → Internet            | $0.087      |
-| AWS → Azure (cross-cloud)   | $0.09       |
-| GCP → Azure (cross-cloud)   | $0.12       |
+| Competing cloud A → Azure   | $0.09       |
+| Competing cloud B → Azure   | $0.12       |
 
 !!! warning "Cross-cloud egress adds up fast"
-Transferring 10 TB/month from AWS to Azure costs ~$900/month in egress alone. For multi-cloud scenarios, see the [Multi-Cloud Data Virtualization](../use-cases/index.md) use case.
+Transferring 10 TB/month from a competing cloud into Azure can cost ~$900/month in egress alone, based on that provider's published egress rates. For multi-cloud scenarios, see the [Multi-Cloud Data Virtualization](../use-cases/index.md) use case.
 
 ### Strategies to Minimize Egress
 

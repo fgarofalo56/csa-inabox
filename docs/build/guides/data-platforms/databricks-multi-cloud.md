@@ -46,8 +46,9 @@ billing. That model produces three disjoint analytics estates that share a name 
 nothing else.
 
 The right response is to designate a **core cloud** that owns the cross-cutting
-concerns and let the other clouds participate as federated members. Azure is the
-strongest candidate for that role for four reasons:
+concerns and let the other clouds participate as federated members. For
+Microsoft-centric estates, Azure is a natural candidate for that role for four
+reasons:
 
 - **Identity hub centralized in Entra ID.** Entra ID is already the corporate IdP for
   most enterprises running Microsoft 365, so federating AWS and GCP Databricks

@@ -1,6 +1,6 @@
 ---
 title: "Cross-Platform Integration — Microsoft as the Connective Tissue"
-description: "End-to-end use case. How Microsoft becomes the secure interoperability layer connecting Azure, AWS, GCP, on-prem systems, sovereign LLM gateways, third-party data fabrics, and the Microsoft 365 productivity surface — through a single identity, a single gateway, a single governance plane, and a productivity reach that no competitor can match."
+description: "End-to-end use case. How Microsoft becomes the secure interoperability layer connecting Azure, other clouds, on-prem systems, sovereign LLM gateways, third-party data fabrics, and the Microsoft 365 productivity surface — through a single identity, a single gateway, a single governance plane, and broad productivity reach."
 audience: "Enterprise architects, integration leads, federal CIO/CDO offices building heterogeneous AI ecosystems"
 last_updated: 2026-05-15
 ---
@@ -25,7 +25,7 @@ last_updated: 2026-05-15
 
 > Microsoft does not need to be the only AI in a heterogeneous environment. Microsoft is positioned as the **layer that makes the ecosystem work** — and the layer that connects that ecosystem to where the workforce actually does its job.
 
-A modern enterprise environment is plural. It includes Azure, AWS, often GCP, Databricks, third-party data fabrics, partner LLM gateways, on-prem systems-of-record, and a Microsoft 365 estate where the workforce reads email and edits documents. Any platform proposal that assumes mono-vendor loses. Any platform that respects the ecosystem and offers to bind it together wins.
+A modern enterprise environment is plural. It includes Azure, other public clouds, Databricks, third-party data fabrics, partner LLM gateways, on-prem systems-of-record, and a Microsoft 365 estate where the workforce reads email and edits documents. Any platform proposal that assumes mono-vendor loses. Any platform that respects the ecosystem and offers to bind it together wins.
 
 This use case documents the integration architecture in full.
 
@@ -100,10 +100,10 @@ Stand any one of these up alone and you have a useful capability. Stand all thre
 
 ### Pattern 1 — Cross-cloud data without movement
 
-Authoritative data typically lives in S3 (AWS), GCS (GCP), ADLS (Azure), and on-prem file shares simultaneously. The pattern:
+Authoritative data typically lives in another cloud's object store, in ADLS (Azure), and on-prem file shares simultaneously. The pattern:
 
 - **OneLake shortcuts** point at S3 / GCS / ADLS — the data appears in OneLake without copying
-- **APIM façades** expose AWS RDS / Redshift / on-prem databases as REST APIs
+- **APIM façades** expose other-cloud relational stores / on-prem databases as REST APIs
 - **Synapse OPENROWSET** queries Parquet / Delta in any storage with T-SQL
 - **Power BI DirectQuery** runs reports across multiple clouds in one composite model
 
@@ -120,7 +120,11 @@ Single-sign-on is a 20-year-old technology. The 2026 reality is harder: device-t
 - **CAE** that revokes tokens within minutes on risk events
 - **Workload identity** for non-human callers — managed identities, federated identity credentials for K8s, service principals with certificates
 
-No competing identity plane reaches this combination of capabilities. Cognito doesn't. Okta does some of it but not the workload identity / managed identity story. Ping does some of it but with a separate licensing model.
+Entra combines federation, Conditional Access, PIM, CAE, and workload
+identity in a single plane. Competing identity offerings cover parts of this
+set to varying degrees; compare any specific product against its own current
+documentation, including how it handles workload / managed identity and its
+licensing model.
 
 ### Pattern 3 — One gateway, many model backends
 
@@ -128,15 +132,15 @@ The MCP-server-behind-APIM pattern is documented in detail in [the APIM + MCP gu
 
 - Agents call APIM
 - APIM applies `llm-token-limit`, `llm-semantic-cache-*`, `llm-content-safety`
-- APIM routes to one of: Azure OpenAI deployments (multi-region pool with circuit breaker), Foundry MaaS models, Foundry custom deployments, brokered external models (Bedrock, sovereign)
+- APIM routes to one of: Azure OpenAI deployments (multi-region pool with circuit breaker), Foundry MaaS models, Foundry custom deployments, brokered external models (other-cloud or sovereign)
 - Token usage is emitted with subscription + model dimensions
 - Chargeback flows from App Insights to FinOps
 
-This pattern is uniquely cheap on Azure because APIM, Entra, App Insights, and Foundry compose. The equivalent on AWS is 5–7 separate products glued with Lambda.
+This pattern is cost-effective on Azure because APIM, Entra, App Insights, and Foundry compose into one stack. On a competing cloud the equivalent typically requires several separate products wired together; compare against the competitor's current service set.
 
 ### Pattern 4 — Productivity reach (the asymmetry)
 
-The Microsoft asymmetry that no competitor matches: **the same APIs that the agents call are also the surfaces where users actually work**.
+The Microsoft strength here: **the same APIs that the agents call are also the surfaces where users actually work**.
 
 | Surface | What it consumes | Why it matters |
 |---|---|---|
@@ -151,7 +155,7 @@ This is the differentiator against integration narratives anchored on SharePoint
 
 ### Pattern 5 — Governance that crosses clouds and systems
 
-Purview is the only governance plane that natively spans Azure, AWS, GCP, on-prem, and SaaS:
+Purview is a governance plane that natively spans Azure, other clouds, on-prem, and SaaS:
 
 - **Catalog scope** — data assets in any storage; APIs in any cloud; AI artifacts (models, prompt flows, evaluations)
 - **Sensitivity labels** — apply at the document, table, or API level; propagate through APIs to AI outputs
@@ -159,7 +163,11 @@ Purview is the only governance plane that natively spans Azure, AWS, GCP, on-pre
 - **DLP** — applied at endpoint, M365, cloud apps; same policies, same labels, same enforcement points
 - **Insider risk** — Purview Insider Risk Management on behavior across surfaces
 
-The Lake Formation + tags equivalent on AWS covers S3 / Glue / Redshift well. It does not cover APIs, AI artifacts, M365, or cross-cloud. The Purview reach is decisive for any environment with data outside of one cloud or a productivity estate inside Microsoft 365.
+A competing cloud's native catalog typically governs that cloud's own
+storage and analytics services well, but may not extend to APIs, AI
+artifacts, M365, or other clouds; verify scope against the competitor's
+current documentation. Purview's reach matters most for any environment with
+data outside of one cloud or a productivity estate inside Microsoft 365.
 
 ### Pattern 6 — Agent identity and lifecycle
 

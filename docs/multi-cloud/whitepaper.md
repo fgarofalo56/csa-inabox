@@ -83,17 +83,17 @@ operations.
 ### Myth 3 — Multi-cloud means best-of-breed shopping
 
 "Buy the best of each category from whichever cloud has it." This
-ends with Redshift over here, BigQuery over there, Snowflake in a
-third corner, and four months of integration work to make them
-talk. It also defeats the leverage you wanted — once each workload
-has built deep ties to its provider, you cannot consolidate, and
-the providers know it.
+ends with a proprietary warehouse engine on one cloud, a different
+proprietary engine on another, a third in yet another corner, and
+months of integration work to make them talk. It also defeats the
+leverage you wanted — once each workload has built deep ties to its
+provider, you cannot consolidate, and the providers know it.
 
 Best-of-breed is a defensible posture **inside a single open
-standard**. Choose Databricks on Azure vs. Databricks on AWS based
-on price and proximity, because the workload is the same Delta
-tables and the same notebooks. Do not choose Redshift vs.
-BigQuery, because the workload then forks.
+standard**. Choose Databricks on Azure vs. Databricks on another
+cloud based on price and proximity, because the workload is the same
+Delta tables and the same notebooks. Do not fork the workload across
+two proprietary warehouse engines, because the workload then forks.
 
 ### Myth 4 — Multi-cloud means negotiating leverage automatically
 
@@ -123,10 +123,12 @@ already exists; it is the open standard.
 Every database has a storage layout. The question is whether that
 layout is a **vendor secret** or an **open specification**.
 
-Vendor-secret layouts include Redshift columnar, BigQuery
-Capacitor, Snowflake micro-partitions, Synapse dedicated SQL
-columnstore, and Oracle exadata segments. Once your data is in one
-of these layouts, you cannot read it from another engine. You can
+Proprietary, engine-internal layouts — the columnar and
+micro-partition formats that several competing data-warehouse and
+appliance products use internally, as described in each vendor's own
+published documentation — are not designed to be read by an outside
+engine. Once your data is in one of these layouts, you cannot read it
+from another engine. You can
 only **extract and reload**, which means a full table scan, a
 serialization step (usually to CSV or Parquet), an export to object
 storage, and a re-ingest on the other side. For a multi-petabyte

@@ -150,7 +150,7 @@ The position acknowledges:
 
 ### Block 2: APIM as the enterprise API gateway
 
-APIM is positioned as the central endpoint that brokers connections across Azure, AWS, GCP, partner platforms (Databricks, Palantir, Snowflake), partner LLM gateways, M365 / Graph / Dataverse, and internal systems-of-record.
+APIM is positioned as the central endpoint that brokers connections across Azure, other clouds, partner platforms (Databricks and other partner data platforms), partner LLM gateways, M365 / Graph / Dataverse, and internal systems-of-record.
 
 Capability the gateway delivers:
 
@@ -165,10 +165,11 @@ Capability the gateway delivers:
 | Multi-cloud reach | Self-hosted gateway at edge + any HTTPS backend |
 | Sovereign coverage | APIM in Azure Gov (FedRAMP High), IL5 |
 
-Comparison delivered alongside (honest, with concessions):
+Where Loom's APIM strengths help in a comparison (honest, verify against the
+competitor's current documentation):
 
-- **vs AWS API Gateway** — APIM has native LLM policies AWS does not; APIM has a built-in developer portal; APIM evaluates auth in-process without the Lambda authorizer tax.
-- **vs MuleSoft Anypoint** — APIM has native LLM policies MuleSoft does not; APIM has a fraction of the per-core licensing cost; APIM integrates natively with Entra, M365, Graph, Dataverse, Copilot Studio.
+- **vs a competing cloud API gateway** — APIM ships native LLM policies, a built-in developer portal, and evaluates auth in-process; confirm a given competitor's offering against its own published features.
+- **vs a competing integration platform** — APIM integrates natively with Entra, M365, Graph, Dataverse, and Copilot Studio, and is typically lower cost per core; compare licensing against the competitor's current pricing.
 
 A layered MCP-behind-APIM pattern addresses two production problems concurrently: token exhaustion and cost management. The pattern generalizes — every domain in the catalog benefits from the same gateway shape.
 
@@ -224,13 +225,13 @@ The architecture is engineered to require minimum disruption to existing investm
 
 | Existing investment | What stays | What integrates |
 |---|---|---|
-| AWS footprint | All AWS data stays in S3 / Redshift / RDS | Reached via OneLake shortcuts and APIM façades |
+| Other-cloud footprint | All data stays in the other cloud's object store / warehouse / database | Reached via OneLake shortcuts and APIM façades |
 | Databricks workspaces | All Databricks workspaces stay | Unity Catalog federates; Delta Sharing publishes datasets |
 | Third-party data fabric | Stays as the operational intelligence layer | Brokered via APIM; participates in Purview catalog |
 | Sovereign / partner LLM gateways | Stay as one of the model backends | Brokered via APIM; appear as one model among many |
 | Mainframe / legacy systems | Stay in place | APIM REST façade exposes them as machine-readable endpoints |
 | Existing OIDC IdPs at regional centers | Stay as identity sources | Federated to Entra via B2B / cross-tenant |
-| Existing MuleSoft or AWS API Gateway deployments | Co-exist for the life of current contracts | New APIs route through APIM; old APIs strangled over time |
+| Existing competing API gateway or integration platform | Co-exist for the life of current contracts | New APIs route through APIM; old APIs strangled over time |
 
 No data movement. No rip-and-replace. New value layered on existing investments.
 
@@ -274,8 +275,8 @@ Measurable deliverables a platform engineer can validate:
 
 | Question | Answer |
 |---|---|
-| **"Why APIM over AWS API Gateway?"** | Native LLM policies, in-process auth without Lambda authorizer tax, built-in developer portal, multi-cloud-native, deep Entra / Conditional Access integration. See [Azure vs AWS API stack](../comparison/azure-vs-aws-api-stack.md). |
-| **"Why APIM over MuleSoft?"** | Native LLM policies, fraction of the licensing cost, native Entra / M365 / Graph / Dataverse integration, FedRAMP High native, broader productivity reach. See [Azure vs MuleSoft Anypoint](../comparison/azure-vs-mulesoft.md). |
+| **"Why APIM over a competing cloud API gateway?"** | Native LLM policies, in-process auth, built-in developer portal, multi-cloud-native, deep Entra / Conditional Access integration. See [Azure vs a competing API stack](../comparison/azure-vs-aws-api-stack.md). |
+| **"Why APIM over a competing integration platform?"** | Native LLM policies, typically lower licensing cost, native Entra / M365 / Graph / Dataverse integration, FedRAMP High native, broader productivity reach. See [Azure vs a competing integration platform](../comparison/azure-vs-mulesoft.md). |
 | **"How does Dataverse expose data via REST? How do you know what's in the API?"** | OData v4 Web API with `$metadata` endpoint; programmatic introspection of every entity, attribute, relationship. See [the Dataverse use case](./dataverse-api-integration.md). |
 | **"How does this co-exist with what we have today?"** | Co-existence pattern. No data movement. Existing identity sources federated. Existing APIs imported into APIM. Strangler-fig migration on your timeline. |
 | **"How does this hold up across FedRAMP High and DoD impact levels?"** | APIM, Entra, Purview, AOAI all accredited. Same Bicep templates deploy to any boundary. Cross-boundary federation via Entra B2B. |

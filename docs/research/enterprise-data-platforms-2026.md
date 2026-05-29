@@ -371,10 +371,10 @@ For most enterprise RAG and search use cases, integrated vector search within th
 
 **Concerns:**
 
-- Cortex AI is less capable than Azure OpenAI or Databricks Mosaic AI for complex AI workloads
-- Streaming capabilities remain weaker than Databricks or dedicated streaming platforms
+- For complex AI workloads, its in-database AI functions are, based on publicly available documentation, narrower in scope than Azure OpenAI or Databricks Mosaic AI
+- Streaming capabilities are, per public benchmarks, more limited than Databricks or dedicated streaming platforms
 - Cost model (credit-based) can be difficult to predict for variable workloads
-- Limited governance compared to Unity Catalog or Purview in complex enterprise environments
+- Governance is, in complex enterprise environments, narrower than Unity Catalog or Purview per published comparisons
 
 ### 5.4 AWS
 

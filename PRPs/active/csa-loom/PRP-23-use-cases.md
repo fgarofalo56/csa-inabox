@@ -36,8 +36,8 @@ cross-cutting patterns customers will recognize.
 - [ ] `docs/fiab/use-cases/multi-agency-onboarding.md` — runbook for
   onboarding a new agency as a domain in an existing CSA Loom deploy
 - [ ] `docs/fiab/use-cases/direct-lake-replacement.md` — migration
-  from Tableau / Qlik / on-prem Power BI Report Server to the warm-
-  cache materializer pattern
+  from third-party BI tools / on-prem Power BI Report Server to the
+  warm-cache materializer pattern
 - [ ] `docs/fiab/use-cases/sovereign-ai-agents.md` — building Loom
   Data Agents under Gov constraints (no Foundry Agent Service;
   manual SOC pipeline; AOAI Gov endpoints)

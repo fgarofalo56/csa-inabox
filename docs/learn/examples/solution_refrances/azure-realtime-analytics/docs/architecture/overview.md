@@ -258,7 +258,7 @@ Topics    Functions     AI Enrichment → Delta Lake Silver
 - **Power Platform**: Power BI, Power Apps, Power Automate
 - **Microsoft 365**: Teams, SharePoint, Outlook
 - **Dynamics 365**: Sales, Marketing, Customer Service
-- **Third-party**: Salesforce, SAP, Oracle connectors
+- **Third-party**: Salesforce plus major ERP and database connectors
 
 ## Next Steps
 

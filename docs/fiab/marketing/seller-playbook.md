@@ -173,12 +173,17 @@ subs is the canonical pattern."
 
 ## Competitive positioning
 
-| Competitor | How to win |
+When a customer is weighing a non-Microsoft offering, lead with Loom's own
+strengths rather than attacking the alternative. Where the competitor has a
+genuine advantage, say so honestly and verify against the vendor's current
+documentation.
+
+| Alternative being considered | How Loom is positioned |
 |---|---|
-| Snowflake Government | Loom is Fabric-aligned (Microsoft strategic alignment); Snowflake is independent. Forward-migration story to Fabric is unique to Loom. |
-| Palantir Foundry IL5 | Loom is dramatically lower TCO; open-source under the covers; forward-migrate-to-Fabric path. |
-| Databricks Gov standalone | Loom = Databricks + the SaaS-feel + parity services + Setup Wizard. Customer running Databricks already gets more value from Loom (Console + Direct-Lake-Shim + Activator + Data Agents). |
-| AWS analytics on GovCloud | Loom keeps you on Azure (existing Microsoft EA, Entra ID, Power BI investment). Cross-cloud reads possible via Loom Shortcuts. |
+| Independent cloud data warehouse (Gov) | Loom is Fabric-aligned, giving a forward-migration story into Microsoft Fabric as it reaches the boundary. A standalone competitor's offering is operated independently of Fabric, so that path isn't native to it. |
+| Independent operational-analytics platform (IL5) | Loom typically has lower TCO and is open-source under the covers, with a forward-migrate-to-Fabric path. Where a competitor's offering brings mature, opinionated mission tooling, note that honestly. |
+| Databricks Gov standalone | Loom is built on Databricks and adds the SaaS feel, parity services, and Setup Wizard. A customer already running Databricks gains the Console, Direct-Lake-Shim, Activator, and Data Agents on top. |
+| Competitor analytics on another government cloud | Loom keeps you on Azure (existing Microsoft EA, Entra ID, Power BI investment). Cross-cloud reads remain possible via Loom Shortcuts where the data lives elsewhere. |
 
 ## Pricing guidance
 

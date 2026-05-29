@@ -317,7 +317,7 @@ Runtime Layer:
 ### Roadmap Considerations
 
 #### **Q2 2025 Enhancements**
-- **Multi-cloud**: AWS and GCP integration for vendor diversity
+- **Multi-cloud**: competing-cloud integration for vendor diversity
 - **Edge Computing**: IoT Edge processing for ultra-low latency
 - **Advanced AI**: Custom ML models with AutoML integration
 - **Data Mesh**: Domain-driven data architecture implementation
