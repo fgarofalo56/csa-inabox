@@ -12,6 +12,20 @@ tags:
 
 # Cost Optimization Best Practices
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 
 ![Cost optimization best practice hero: dollar-marked coin stack with downward optimization arrow in amber gradient](../assets/images/hero/best-practices/cost-optimization.svg){ .architecture-hero loading="eager" }
 
@@ -297,11 +311,11 @@ DESCRIBE DETAIL silver.customer_transactions;
 | Same region (intra-region)  | Free        |
 | Cross-region (within Azure) | $0.02       |
 | Azure → Internet            | $0.087      |
-| AWS → Azure (cross-cloud)   | $0.09       |
-| GCP → Azure (cross-cloud)   | $0.12       |
+| Competing cloud A → Azure   | $0.09       |
+| Competing cloud B → Azure   | $0.12       |
 
 !!! warning "Cross-cloud egress adds up fast"
-Transferring 10 TB/month from AWS to Azure costs ~$900/month in egress alone. For multi-cloud scenarios, see the [Multi-Cloud Data Virtualization](../use-cases/index.md) use case.
+Transferring 10 TB/month from a competing cloud into Azure can cost ~$900/month in egress alone, based on that provider's published egress rates. For multi-cloud scenarios, see the [Multi-Cloud Data Virtualization](../use-cases/index.md) use case.
 
 ### Strategies to Minimize Egress
 

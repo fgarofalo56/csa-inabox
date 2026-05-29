@@ -7,6 +7,20 @@ last_updated: 2026-05-15
 
 # Dataverse as a First-Class API Surface
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 ## Why this use case exists
 
 Architects evaluating Microsoft as the integration backbone for a multi-vendor AI ecosystem ask a specific, fair, technically pointed question:
@@ -367,7 +381,7 @@ In a mature API-first catalog, Dataverse is one of several endpoint patterns tha
 | **Microsoft Graph API** | M365 content — mail, sites, files, Teams, calendar, people |
 | **Data API Builder (DAB)** | Arbitrary SQL or Cosmos backends exposed as REST + GraphQL |
 | **OneLake SQL endpoint** | Warehouse / lakehouse queries |
-| **Bring-your-own REST** | Legacy systems, mainframe, SAP, EAM behind APIM façades |
+| **Bring-your-own REST** | Legacy systems, mainframe, ERP, EAM behind APIM façades |
 
 All five flow through APIM. All five inherit the same identity model, the same rate limits, the same observability, the same Purview catalog entry, the same lineage. Dataverse is one peer among many — not a special case.
 
@@ -401,9 +415,9 @@ Most legacy patterns replicate Dataverse to a SQL store and then query SQL. This
 
 The migration is straightforward: identify SQL queries hitting the replica, translate to OData filters / expansions, point at the Web API directly or through APIM.
 
-### From MuleSoft or AWS connectors
+### From a competitor's connector
 
-If an existing integration uses MuleSoft's Dataverse connector or AWS AppFlow's Dynamics 365 connector, the Web API is what those connectors call under the hood. Replacing the connector with a direct Web API call (or a Logic Apps / Power Automate flow) removes a per-connector license line item and a layer of indirection.
+If an existing integration uses a competitor's Dataverse / Dynamics 365 connector, the Web API is what that connector calls under the hood. Replacing the connector with a direct Web API call (or a Logic Apps / Power Automate flow) can remove a per-connector license line item and a layer of indirection; confirm the connector's licensing against the vendor's current terms.
 
 ---
 

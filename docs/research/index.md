@@ -1,12 +1,26 @@
 # Research
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 Long-form research notes, white papers, and platform direction documents.
 
 ## Available
 
 | Document                                                       | Length      | Purpose                                                                                                                                         |
 | -------------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Platform Research Report](CSA-Platform-Research-Report.md)    | 1,269 lines | Strategic snapshot — service comparisons, market positioning, roadmap analysis, competitive landscape (Databricks, Snowflake, Palantir, Fabric) |
+| [Platform Research Report](CSA-Platform-Research-Report.md)    | 1,269 lines | Strategic snapshot — service comparisons, market positioning, roadmap analysis, competitive landscape (Azure Databricks, Fabric, and competing data/AI platforms) |
 | [AI Readiness Assessment Framework](ai-readiness-framework.md) | ~410 lines  | Organizational maturity model for AI adoption — 8 dimensions scored 1--5, action plans, Azure platform mapping                                  |
 | [Data Mesh Maturity Model](data-mesh-maturity-model.md)        | ~500 lines  | Maturity model for data mesh adoption — domain ownership, data products, federated governance, anti-patterns, migration paths                   |
 

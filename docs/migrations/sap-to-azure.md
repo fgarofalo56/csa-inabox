@@ -1,5 +1,19 @@
 # Migrating SAP Workloads to Azure with CSA-in-a-Box
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **Status:** Authored 2026-04-30
 **Audience:** SAP Basis administrators, enterprise architects, CIOs, and federal program managers evaluating or executing SAP migrations to Azure --- commercial, Azure Government, or RISE with SAP on Azure.
 **Scope:** The full SAP estate: SAP ECC/S/4HANA, SAP HANA database, SAP BW/BW4HANA, SAP PI/PO, SAP Fiori, SAP GRC, SAP Solution Manager, SAP Analytics Cloud, and supporting integration and identity layers. CSA-in-a-Box serves as the data, analytics, governance, and AI landing zone for SAP workloads on Azure.

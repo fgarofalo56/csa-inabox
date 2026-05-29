@@ -1,5 +1,19 @@
 # Why Azure over SAS: Executive Strategic Brief
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **Audience:** CIO, CDO, Chief Analytics Officer, Board-level decision makers
 **Reading time:** 20 minutes
 **Bottom line:** Azure ML + Fabric + Power BI delivers equivalent or superior analytical capability to SAS at 55--70% lower run-rate cost, with access to a talent pool 20x larger, native AI/GenAI integration, and no vendor lock-in --- while the SAS-Microsoft partnership provides a bridge for specialized workloads.

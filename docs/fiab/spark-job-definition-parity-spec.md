@@ -1,5 +1,19 @@
 # Loom Spark Job Definition Editor — Fabric-parity build spec
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 > Reference: Microsoft Learn — *How to create an Apache Spark job definition in Fabric* (`/fabric/data-engineering/create-spark-job-definition`), *Schedule and run an Apache Spark job definition* (`/fabric/data-engineering/run-spark-job-definition`), *Spark Job Definition REST API v2* (`/rest/api/fabric/articles/item-management/definitions/spark-job-definition`). Documented 2026-05-26 by catalog agent (no live capture — F64 SJD seat not provisioned in `casino-fabric-poc`).
 
 ## Overview

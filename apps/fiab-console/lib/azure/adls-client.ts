@@ -182,6 +182,26 @@ export async function uploadFile(
   return { ok: true, size: body.length, etag: props.etag };
 }
 
+/**
+ * Read a file's bytes from ADLS Gen2 for download passthrough. Returns the
+ * buffer + content metadata so the BFF can stream it to the browser with the
+ * right headers. Throws (with statusCode) on 404 / auth errors.
+ */
+export async function downloadFile(
+  container: string,
+  path: string,
+): Promise<{ body: Buffer; contentType?: string; size: number }> {
+  const fs = getFileSystem(container);
+  const file = fs.getFileClient(path);
+  const buf = await file.readToBuffer();
+  let contentType: string | undefined;
+  try {
+    const props = await file.getProperties();
+    contentType = props.contentType;
+  } catch { /* best-effort */ }
+  return { body: buf, contentType, size: buf.length };
+}
+
 export async function deletePath(
   container: string,
   path: string,

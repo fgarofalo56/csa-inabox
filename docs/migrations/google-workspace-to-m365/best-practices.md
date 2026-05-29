@@ -1,5 +1,19 @@
 # Best Practices: Google Workspace to M365 Migration
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 **Status:** Authored 2026-04-30
 **Audience:** Migration leads, change management professionals, IT directors, and M365 architects planning or executing a Google Workspace to Microsoft 365 migration.
 **Scope:** User training, change management, champion network, phased rollout, communication templates, Copilot adoption, and CSA-in-a-Box data/AI enablement post-migration.

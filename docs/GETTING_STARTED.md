@@ -1,5 +1,19 @@
 # Getting Started — 30-Minute Tour
 
+> **Comparative positioning note.** This document is written from the
+> perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
+> description of third-party or competing products, services, pricing, or
+> capabilities is derived from **publicly available documentation and sources**
+> believed accurate at the time of writing, and is provided for **general
+> comparison only**. We do not claim expertise in, or authority over, any
+> non-Microsoft product or service; the respective vendor's official
+> documentation is the authoritative source for their offerings, which may
+> change over time. Nothing here is intended to disparage any vendor — where a
+> competing product has genuine advantages, we aim to note them honestly.
+> Verify all third-party details against the vendor's current official
+> documentation before making decisions.
+
+
 ![CSA-in-a-Box 30-minute tour journey: six milestone nodes — Orient, Pick your path, Set up dev, First dbt run, Explore architecture, Deploy-ready — connected by a gradient path in Azure blue, purple, and teal](assets/images/hero/getting-started.svg){ .architecture-hero loading="eager" }
 
 > **Goal:** by the end of this page you will (1) understand what CSA-in-a-Box is, (2) know which deployment path matches your scenario, and (3) have a working dev environment that can run the platform locally.
