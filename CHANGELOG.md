@@ -10,6 +10,34 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.17.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.16.0...csa-inabox-v0.17.0) (2026-05-29)
+
+
+### Features
+
+* **csa-loom-uat:** pnpm uat — one-command launcher (launches Chrome, signs in, runs deep UAT) ([#431](https://github.com/fgarofalo56/csa-inabox/issues/431)) ([0e210ef](https://github.com/fgarofalo56/csa-inabox/commit/0e210ef0304982a2330a56c23852b81be4a3942e))
+* **csa-loom:** reframe Power BI editors — embed + refresh + export, remove dead authoring ribbon ([#437](https://github.com/fgarofalo56/csa-inabox/issues/437)) ([c0f465d](https://github.com/fgarofalo56/csa-inabox/commit/c0f465d144f1a6f07b9a3cfe76ca72a9a09cf8df))
+* **csa-loom:** wire primary actions on 11 C-grade editors ([#438](https://github.com/fgarofalo56/csa-inabox/issues/438)) ([1c75e31](https://github.com/fgarofalo56/csa-inabox/commit/1c75e31d3bb1e794800cd93cf1f203404b08e325))
+
+
+### Bug Fixes
+
+* **csa-loom-build:** disable legacy docker-push workflow (was racing ACR firewall) ([#424](https://github.com/fgarofalo56/csa-inabox/issues/424)) ([c6d3283](https://github.com/fgarofalo56/csa-inabox/commit/c6d328381bdffd6e340711153a516a31c095cc1b))
+* **csa-loom-console:** force HTML revalidation (stops Front Door serving stale shells) ([#426](https://github.com/fgarofalo56/csa-inabox/issues/426)) ([ce12df0](https://github.com/fgarofalo56/csa-inabox/commit/ce12df0d25bb8fb6ac9302a0bf8b74b37a335d38))
+* **csa-loom-monaco:** use absolute origin for worker URL (fixes importScripts invalid-URL) ([#432](https://github.com/fgarofalo56/csa-inabox/issues/432)) ([aa4a2a0](https://github.com/fgarofalo56/csa-inabox/commit/aa4a2a0d9c7adaa0ac49b2763eb198f2f9d9e907))
+* **csa-loom-monaco:** use absolute origin for worker URL (fixes importScripts invalid-URL) ([#433](https://github.com/fgarofalo56/csa-inabox/issues/433)) ([a5262f3](https://github.com/fgarofalo56/csa-inabox/commit/a5262f388ae0095d38b9c66914b37e4c8bc9ac14))
+* **csa-loom-notebook:** add /api/items/lakehouse list route + deep functional UAT spec ([#427](https://github.com/fgarofalo56/csa-inabox/issues/427)) ([bd5d7cd](https://github.com/fgarofalo56/csa-inabox/commit/bd5d7cd0eb1cda33e2e9126ff7b9933c1bfe5990))
+* **csa-loom-pipeline:** no 502 on run-history for unsaved pipelines ([#435](https://github.com/fgarofalo56/csa-inabox/issues/435)) ([f5093f7](https://github.com/fgarofalo56/csa-inabox/commit/f5093f734a3db70121bdf301ad93e0d0ff9f95ec))
+* **csa-loom-uat:** validate saved session against /api/me before reuse + adf runs new-guard ([#436](https://github.com/fgarofalo56/csa-inabox/issues/436)) ([69c52a2](https://github.com/fgarofalo56/csa-inabox/commit/69c52a251be29e60a23994b0763bbddaf1781df5))
+* **csa-loom:** activator /new gate + eventstream visual canvas ([#440](https://github.com/fgarofalo56/csa-inabox/issues/440)) ([26f2dd0](https://github.com/fgarofalo56/csa-inabox/commit/26f2dd02c9f1cc7926abf8097203e306c616528f))
+* **csa-loom:** adf-dataset editor + graph/ontology editor wiring ([#434](https://github.com/fgarofalo56/csa-inabox/issues/434)) ([3df44a0](https://github.com/fgarofalo56/csa-inabox/commit/3df44a03e794de7b4414e88db18539bb7fde8b5f))
+
+
+### Tests
+
+* **csa-loom-uat:** award A/A+ grades (B + Vitest test + Learn popup) ([#441](https://github.com/fgarofalo56/csa-inabox/issues/441)) ([aa188cd](https://github.com/fgarofalo56/csa-inabox/commit/aa188cd490a99750c969b2d37ef9b14526b23c1a))
+* **csa-loom-uat:** honest verdict grading + hydration-race guard ([#439](https://github.com/fgarofalo56/csa-inabox/issues/439)) ([d6d3807](https://github.com/fgarofalo56/csa-inabox/commit/d6d380750d2815121d9429ef93b618ee1f96fd00))
+
 ## [0.16.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.15.0...csa-inabox-v0.16.0) (2026-05-28)
 
 
