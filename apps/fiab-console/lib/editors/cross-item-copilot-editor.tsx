@@ -123,6 +123,23 @@ type Step =
 interface Tool { name: string; description: string; service: string; parameters: any; }
 interface SessionSummary { id: string; sessionId: string; prompt: string; createdAt: string; updatedAt: string; stepCount: number; }
 
+/**
+ * shouldAutoScroll — pure predicate for the step-stream autoscroll guard.
+ *
+ * Returns true only when the viewport is already within `threshold` px of the
+ * bottom of the scroll container. This is the load-bearing half of the flicker
+ * fix: instead of a smooth scrollIntoView on every streamed step (which stacked
+ * animations and yanked the outer page scroll = constant flicker), we only nudge
+ * the inner container to the bottom, instantly, when the user hasn't scrolled
+ * up to read history. Exported so it can be unit-tested without a DOM.
+ */
+export function shouldAutoScroll(
+  m: { scrollHeight: number; scrollTop: number; clientHeight: number },
+  threshold = 120,
+): boolean {
+  return m.scrollHeight - m.scrollTop - m.clientHeight < threshold;
+}
+
 function StepCard({ step }: { step: Step }) {
   const s = useStyles();
   const intent =
@@ -303,7 +320,10 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
   }, []);
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
-  const stepsEndRef = useRef<HTMLDivElement | null>(null);
+  // Scroll container for the live step stream. We scroll THIS element
+  // directly (not scrollIntoView on a sentinel) so the auto-scroll never
+  // bubbles up to the outer AppShell <main> scroll region.
+  const stepsRef = useRef<HTMLDivElement | null>(null);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -335,8 +355,25 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
 
   useEffect(() => { loadSessions(); loadTools(); }, [loadSessions, loadTools]);
 
+  // Auto-scroll the step stream to the bottom as new steps arrive.
+  //
+  // ROOT-CAUSE FIX (Copilot tab "constant flicker"): the previous version
+  // called stepsEndRef.scrollIntoView({ behavior: 'smooth' }) keyed on
+  // steps.length. During an orchestrate run the SSE stream appends a step
+  // per event (thought / tool_call / tool_result …) in rapid succession, so
+  // this queued a brand-new *smooth* scroll animation on every append — and
+  // scrollIntoView walks every scrollable ancestor, so it also yanked the
+  // outer AppShell <main> scroll region. Dozens of overlapping smooth-scroll
+  // animations on two nested scroll containers read as a constant screen
+  // flicker that made the surface unusable while the agent was working.
+  //
+  // Fix: scroll the inner container directly, instantly (no animation to
+  // stack), and only when the user is already near the bottom — so a user
+  // who scrolled up to read an earlier step isn't fought by the autoscroll.
   useEffect(() => {
-    stepsEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    const el = stepsRef.current;
+    if (!el) return;
+    if (shouldAutoScroll(el)) el.scrollTop = el.scrollHeight;
   }, [steps.length]);
 
   const newSession = useCallback(() => {
@@ -345,6 +382,21 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
     setSteps([]);
     setTopError(null);
   }, []);
+
+  // Wire the embedded editor's ribbon "New" / "Refresh" buttons. The
+  // CrossItemCopilotEditor ribbon dispatches a `loom-copilot:session`
+  // CustomEvent — previously nothing listened for it, so both buttons were
+  // dead (no-vaporware violation). Listen here when embedded and act on it.
+  useEffect(() => {
+    if (!embedded || typeof window === 'undefined') return;
+    const handler = (e: Event) => {
+      const kind = (e as CustomEvent<{ kind?: 'new' | 'refresh' }>).detail?.kind;
+      if (kind === 'new') newSession();
+      else if (kind === 'refresh') loadSessions();
+    };
+    window.addEventListener('loom-copilot:session', handler);
+    return () => window.removeEventListener('loom-copilot:session', handler);
+  }, [embedded, newSession, loadSessions]);
 
   const runOrchestrate = useCallback(async () => {
     const p = prompt.trim();
@@ -500,12 +552,11 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
             <Caption1>{toolCount} tools registered</Caption1>
           </div>
         </div>
-        <div className={s.steps}>
+        <div className={s.steps} ref={stepsRef}>
           {steps.length === 0 && !running && (
             <Caption1>Ask anything across Synapse, Lakehouse, Databricks, APIM, ADX, ADF, Power BI, Fabric, and Foundry. The orchestrator will pick the right tools.</Caption1>
           )}
           {steps.map((step, i) => <StepCard key={i} step={step} />)}
-          <div ref={stepsEndRef} />
         </div>
       </section>
 
