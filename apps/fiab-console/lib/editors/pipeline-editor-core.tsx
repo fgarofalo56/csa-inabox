@@ -32,6 +32,7 @@ import {
 } from '@fluentui/react-icons';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { FactoryResourcesTree } from '@/lib/components/pipeline/factory-resources-tree';
+import { SynapseWorkspaceTree } from '@/lib/components/pipeline/synapse-workspace-tree';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { extractActivities, writeActivitiesToSpec, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
@@ -119,9 +120,10 @@ export function PipelineEditorCore({
 
   // ---- Manage (factory resources) dialog state — ADF only ----
   const [manageOpen, setManageOpen] = useState(false);
-  // Bump to force the Factory Resources navigator to re-list after a
-  // bind/create/manage action mutates the factory.
+  // Bump to force the navigator (ADF Factory Resources / Synapse Workspace
+  // Resources) to re-list after a bind/create/manage action mutates the backend.
   const [factoryRefreshKey, setFactoryRefreshKey] = useState(0);
+  const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0);
 
   // ---- Triggers dialog state ----
   const [triggersOpen, setTriggersOpen] = useState(false);
@@ -167,6 +169,7 @@ export function PipelineEditorCore({
       setBound(data.bound);
       setNewName('');
       setFactoryRefreshKey((k) => k + 1);
+      setWorkspaceRefreshKey((k) => k + 1);
       await loadBinding();
     } catch (e: any) {
       setBindError(e?.message || String(e));
@@ -446,10 +449,9 @@ export function PipelineEditorCore({
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         isAdf ? (
-          // ADF Studio Factory Resources navigator — typed groups (Pipelines,
-          // Datasets, Data flows, Triggers, Linked services, Integration
-          // runtimes) with live counts + ＋ New + delete, all real ADF REST.
-          // Selecting a pipeline binds + opens it on the canvas (existing flow).
+          // ADF Studio Factory Resources navigator — typed groups with live
+          // counts + ＋ New + delete, all real ADF REST. Selecting a pipeline
+          // binds + opens it on the canvas.
           <FactoryResourcesTree
             boundPipeline={bound}
             onOpenPipeline={(name) => bindTo(name, false)}
@@ -457,23 +459,13 @@ export function PipelineEditorCore({
             refreshKey={factoryRefreshKey}
           />
         ) : (
-          <div style={{ padding: 8 }}>
-            <Tree aria-label="Pipelines" defaultOpenItems={['p']}>
-              <TreeItem itemType="branch" value="p">
-                <TreeItemLayout iconBefore={<Server20Regular />}>Pipelines ({available.length})</TreeItemLayout>
-                <Tree>
-                  {available.map((p) => (
-                    <TreeItem key={p.name} itemType="leaf" value={`pl-${p.name}`} onClick={() => bindTo(p.name, false)}>
-                      <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{p.name} {bound === p.name && '·'}</TreeItemLayout>
-                    </TreeItem>
-                  ))}
-                </Tree>
-              </TreeItem>
-            </Tree>
-            <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
-              Click a pipeline to bind this item to it.
-            </Caption1>
-          </div>
+          // Synapse Studio Workspace Resources navigator — typed groups with
+          // live counts + ＋ New + delete, all real Synapse dev-plane REST.
+          <SynapseWorkspaceTree
+            boundPipeline={bound}
+            onOpenPipeline={(name) => bindTo(name, false)}
+            refreshKey={workspaceRefreshKey}
+          />
         )
       }
       main={
