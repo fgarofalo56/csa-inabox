@@ -278,3 +278,27 @@ export function normalizeDaSources(raw: unknown): DaSource[] {
   }
   return [];
 }
+
+export interface DaChatTurn { role: 'user' | 'assistant'; content: string }
+
+/**
+ * Shape an in-memory chat thread into the `history` array the chat BFF expects:
+ * only `{role, content}` for user/assistant turns with non-empty string content,
+ * capped to the last `max` turns (default 10) to bound the prompt. Error bubbles
+ * (assistant turns flagged `error`) are excluded so a failed turn never poisons
+ * the next request's grounding. Pure + unit-tested (no Fluent UI dependency).
+ */
+export function shapeDaHistory(
+  chat: { role: 'user' | 'assistant'; content: string; error?: boolean }[],
+  max = 10,
+): DaChatTurn[] {
+  const turns = (Array.isArray(chat) ? chat : [])
+    .filter((m) => m && !m.error && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim().length > 0)
+    .map((m) => ({ role: m.role, content: m.content }));
+  return max > 0 ? turns.slice(-max) : turns;
+}
+
+/** Send is enabled only when there is a non-blank question and no turn is in flight. */
+export function canSendDaQuestion(question: string, asking: boolean): boolean {
+  return !asking && typeof question === 'string' && question.trim().length > 0;
+}
