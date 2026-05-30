@@ -242,7 +242,8 @@ jobs:
             --template-file platform/fiab/bicep/main.bicep \
             --parameters platform/fiab/bicep/params/commercial.bicepparam \
             --parameters adminEntraGroupId='${{ secrets.FIAB_ADMIN_GROUP_ID }}' \
-            --parameters deployAppsEnabled=true
+            --parameters deployAppsEnabled=true \
+            --parameters skipRoleGrants=true
           CONSOLE_URL=$(az deployment sub show --name "$DEPLOY_NAME" --query "properties.outputs.consoleUrl.value" -o tsv 2>/dev/null || echo "")
           echo "::notice::Apps deployed. Console URL: $CONSOLE_URL"
       - name: From-cluster app health
