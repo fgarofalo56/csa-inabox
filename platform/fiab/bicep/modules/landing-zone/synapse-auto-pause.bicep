@@ -26,6 +26,9 @@ param scheduleHour int = 4
 @description('Pause schedule minute.')
 param scheduleMinute int = 0
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -107,9 +110,9 @@ resource synapseWorkspace 'Microsoft.Synapse/workspaces@2021-06-01' existing = {
   name: synapseWorkspaceName
 }
 
-resource contribRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource contribRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
   scope: synapseWorkspace
-  name: guid(synapseWorkspace.id, autoPauseLogicApp.id, 'contributor')
+  name: guid(synapseWorkspace.id, autoPauseLogicApp.id, 'b24988ac-6180-42a0-ab88-20f7382dd24c')
   properties: {
     principalId: autoPauseLogicApp.identity.principalId
     principalType: 'ServicePrincipal'

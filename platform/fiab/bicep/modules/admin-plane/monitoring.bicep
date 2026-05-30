@@ -25,6 +25,9 @@ param retentionDays int = 90
 @description('Console UAMI principalId — granted Log Analytics Reader so the /monitor Logs (KQL) tab can query this workspace. Empty string skips the grant.')
 param consolePrincipalId string = ''
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 // =====================================================================
 // Log Analytics Workspace
 // =====================================================================
@@ -168,8 +171,8 @@ AppRequests
 // =====================================================================
 
 // Log Analytics Reader — 73c42c96-874c-492b-b04d-ab87d138a893
-resource consoleLaReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId)) {
-  name: guid(law.id, consolePrincipalId, 'log-analytics-reader')
+resource consoleLaReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  name: guid(law.id, consolePrincipalId, '73c42c96-874c-492b-b04d-ab87d138a893')
   scope: law
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')

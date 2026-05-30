@@ -74,6 +74,9 @@ param hubVnetCidr string
 @description('Compliance tags')
 param complianceTags object
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Deploy the Loom apps (Console, MCP, Orchestrator, Copilot, Activator, Mirroring, Direct-Lake Shim). Requires the container images to exist in ACR first — set false on initial provision, then true after images are built + pushed (PRP-16).')
 param deployAppsEnabled bool = false
 
@@ -214,6 +217,7 @@ module monitoring 'monitoring.bicep' = {
     location: location
     defenderForAIEnabled: defenderForAIEnabled
     complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
     // /monitor Logs (KQL) tab — Console UAMI gets Log Analytics Reader on the LAW.
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
   }
@@ -257,6 +261,7 @@ module keyvault 'keyvault.bicep' = {
     location: location
     hsmIsolated: keyVaultHsmIsolated
     adminEntraGroupId: adminEntraGroupId
+    skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     privateDnsZoneVaultId: network.outputs.privateDnsZoneIds.keyvault
     workspaceId: monitoring.outputs.lawId
@@ -308,6 +313,7 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled) {
     privateDnsZoneSearchId: network.outputs.privateDnsZoneIds.search
     workspaceId: monitoring.outputs.lawId
     adminEntraGroupId: adminEntraGroupId
+    skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }
 }
@@ -355,6 +361,7 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled) {
     privateDnsZoneNotebooksId: network.outputs.privateDnsZoneIds.notebooks
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }
 }
@@ -404,6 +411,7 @@ module catalog 'catalog.bicep' = {
     purviewEnabled: purviewEnabled
     atlasOnAksEnabled: atlasOnAksEnabled
     adminEntraGroupId: adminEntraGroupId
+    skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     aksClusterId: containerPlatform == 'aks' ? containerPlatformModule.outputs.aksId : ''
     complianceTags: complianceTags
@@ -429,6 +437,7 @@ module azureMaps 'azure-maps.bicep' = if (azureMapsEnabled && (boundary == 'Comm
     boundary: boundary
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     keyVaultId: keyvault.outputs.keyVaultId
+    skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }
 }

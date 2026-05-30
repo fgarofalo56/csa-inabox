@@ -47,6 +47,9 @@ param adminEntraGroupId string
 @description('Console UAMI principal ID — granted Cognitive Services Contributor on the model-hosting account so the BFF can deploy models / read quota / read keys. Empty skips the role assignment.')
 param consolePrincipalId string = ''
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -82,9 +85,9 @@ resource foundryHub 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = 
 }
 
 // Azure ML Owner role to admin group
-resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
   scope: foundryHub
-  name: guid(foundryHub.id, adminEntraGroupId, 'aml-owner')
+  name: guid(foundryHub.id, adminEntraGroupId, 'f6c7c914-8db3-469d-8ca1-694a8f32e121')
   properties: {
     // AzureML Data Scientist
     roleDefinitionId: subscriptionResourceId(
@@ -166,9 +169,9 @@ resource aiServices 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
 
 // Grant the Console UAMI Cognitive Services Contributor so the BFF can
 // deploy models, read quota, read keys, and toggle public access.
-resource aiServicesUamiRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId)) {
+resource aiServicesUamiRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: aiServices
-  name: guid(aiServices.id, consolePrincipalId, 'cs-contributor')
+  name: guid(aiServices.id, consolePrincipalId, '25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68')
   properties: {
     // Cognitive Services Contributor
     roleDefinitionId: subscriptionResourceId(

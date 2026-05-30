@@ -60,6 +60,12 @@ param openaiEmbeddingsModel = 'text-embedding-3-large'
 // Power BI
 param powerBiSku = 'F64'
 
+// Role-assignment drift guard — set LOOM_SKIP_ROLE_GRANTS=true when
+// re-provisioning an environment that already has the RBAC grants, so
+// ARM doesn't fail with RoleAssignmentExists. Defaults false for fresh
+// deploys.
+param skipRoleGrants = readEnvironmentVariable('LOOM_SKIP_ROLE_GRANTS', 'false') == 'true'
+
 // Network
 param hubVnetCidr = '10.0.0.0/16'
 
