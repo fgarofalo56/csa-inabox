@@ -38,6 +38,7 @@ import { FlowActivityNode, FLOW_NODE_W, type ActivityNodeData } from './flow-act
 import { LoomBezierEdge, type LoomEdgeData } from './loom-bezier-edge';
 import { elkLayout, topoFallback, type XY } from './flow-layout';
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
+import { isContainerType } from './drill-path';
 import type { PipelineActivity } from './types';
 
 const NODE_H = 84;
@@ -101,6 +102,13 @@ export interface PipelineCanvasProps {
    * dependency condition the source port represents.
    */
   onConnect?: (fromName: string, toName: string, cond: ConnectorCondition) => void;
+  /**
+   * Drill into a control-flow container's inner sub-canvas. Fired by the
+   * pencil button on a container node, and (for ForEach / Until) by a
+   * double-click on the node — matching ADF / Synapse Studio. The designer
+   * pushes a drill step and re-renders the canvas at the inner level.
+   */
+  onDrillInto?: (name: string) => void;
   /** Whether the snap-to-grid toggle is on. */
   snapToGrid?: boolean;
   /** Whether the dot grid is visible. */
@@ -135,7 +143,7 @@ function buildEdges(activities: PipelineActivity[]): Edge[] {
 }
 
 const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvasInner(
-  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, snapToGrid = true, showGrid = true, onZoomChange },
+  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, snapToGrid = true, showGrid = true, onZoomChange },
   ref,
 ) {
   const s = useStyles();
@@ -164,12 +172,17 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
       id: a.name,
       type: 'activity',
       position: nextPos.get(a.name) || { x: 40, y: 40 },
-      data: { activity: a } as ActivityNodeData,
+      data: {
+        activity: a,
+        // Only container activities get a drill handler (→ the pencil button
+        // renders). Non-containers leave it undefined.
+        onDrill: onDrillInto && isContainerType(a.type) ? onDrillInto : undefined,
+      } as ActivityNodeData,
       selected: selectedName === a.name,
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
     })));
-  }, [activities, selectedName, setNodes]);
+  }, [activities, selectedName, setNodes, onDrillInto]);
 
   // Re-sync when the activity set / their deps change.
   useEffect(() => { syncNodes(); }, [syncNodes]);
@@ -191,6 +204,15 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
     const cond = (conn.sourceHandle as ConnectorCondition) || 'Succeeded';
     onConnect?.(conn.source, conn.target, cond);
   }, [onConnect]);
+
+  // ADF/Synapse parity: ForEach and Until ALSO drill on double-click (not just
+  // the pencil). If/Switch use the pencil only (they have multiple branches,
+  // so the designer prompts which branch — no implicit double-click target).
+  const handleNodeDoubleClick = useCallback((_: React.MouseEvent, node: Node) => {
+    const a = (node.data as ActivityNodeData)?.activity;
+    if (!a || !onDrillInto) return;
+    if (a.type === 'ForEach' || a.type === 'Until') onDrillInto(a.name);
+  }, [onDrillInto]);
 
   // --- palette drag-drop ----------------------------------------------------
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -245,6 +267,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         onNodesChange={handleNodesChange}
         onConnect={handleConnect}
         onNodeClick={(_, n) => onSelect(n.id)}
+        onNodeDoubleClick={handleNodeDoubleClick}
         onPaneClick={() => onSelect(null)}
         onMove={(_, vp) => onZoomChange?.(vp.zoom)}
         connectionMode={ConnectionMode.Loose}
