@@ -35,7 +35,7 @@ param defenderForAIEnabled = true
 // Enterprise-tier tenant-level Purview account (only one allowed per
 // tenant). Operator opts in once they've decided whether to reuse the
 // existing account (preferred) or scope a new one.
-param purviewEnabled = false
+param purviewEnabled = true
 // /admin/security Purview tab — point at an EXISTING Purview account
 // to enable inline source/scan/glossary/domain management. Leave empty
 // to gate the tab behind a structured NotConfigured MessageBar (the
