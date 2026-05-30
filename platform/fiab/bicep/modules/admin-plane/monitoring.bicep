@@ -112,7 +112,7 @@ resource sentinelAiPromptInjection 'Microsoft.SecurityInsights/alertRules@2024-0
     query: '''
 AppRequests
 | where Name contains "openai" or Name contains "/chat/completions"
-| extend prompt = tostring(CustomDimensions.prompt)
+| extend prompt = tostring(Properties.prompt)
 | where prompt has_any (
     "ignore previous instructions",
     "ignore the above",
@@ -148,7 +148,7 @@ resource sentinelAiAbuseQuota 'Microsoft.SecurityInsights/alertRules@2024-09-01'
     query: '''
 AppRequests
 | where Name contains "openai" or Name contains "/chat/completions"
-| extend principal = tostring(CustomDimensions.user_oid)
+| extend principal = tostring(Properties.user_oid)
 | summarize requestCount = count() by principal, bin(TimeGenerated, 5m)
 | where requestCount > 200
 '''
