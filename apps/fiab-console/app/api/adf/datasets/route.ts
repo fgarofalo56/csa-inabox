@@ -1,23 +1,21 @@
 /**
- * Linked services on the deployment-default Data Factory (the Manage hub).
+ * Datasets on the deployment-default Data Factory (the Manage hub).
  *
- *   GET    /api/adf/linked-services            → { ok, linkedServices }
- *   POST   /api/adf/linked-services            body { name, properties }  → upsert
- *   DELETE /api/adf/linked-services?name=NAME  → delete
+ *   GET    /api/adf/datasets            → { ok, datasets }
+ *   POST   /api/adf/datasets            body { name, properties }  → upsert
+ *   DELETE /api/adf/datasets?name=NAME  → delete
  *
- * Factory is the env-pinned default (LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG /
- * LOOM_ADF_NAME). When those aren't set we 503 with the exact missing var so
- * the UI shows an honest infra-gate MessageBar. Real ARM REST. No mocks.
- *
- * The GET shape `{ ok, linkedServices }` is consumed by the Dataset/Copy editors
- * and must stay stable.
+ * A dataset must carry `properties.type` and a `linkedServiceName` reference
+ * (an existing linked service). Factory is the env-pinned default; honest 503
+ * gate when LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG / LOOM_ADF_NAME aren't set.
+ * Real ARM REST. No mocks.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  adfConfigGate, listLinkedServices, upsertLinkedService, deleteLinkedService,
-  type AdfLinkedService,
+  adfConfigGate, listDatasets, upsertDataset, deleteDataset,
+  type AdfDataset,
 } from '@/lib/azure/adf-client';
 
 export const runtime = 'nodejs';
@@ -41,8 +39,8 @@ export async function GET() {
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const g = gate(); if (g) return g;
   try {
-    const linkedServices = await listLinkedServices();
-    return NextResponse.json({ ok: true, linkedServices });
+    const datasets = await listDatasets();
+    return NextResponse.json({ ok: true, datasets });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
@@ -56,13 +54,22 @@ export async function POST(req: NextRequest) {
   const name: string = typeof body?.name === 'string' ? body.name.trim() : '';
   if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
   if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'name must be 1-260 chars: letters, digits, _' }, { status: 400 });
-  const properties = body?.properties as AdfLinkedService['properties'] | undefined;
+  const properties = body?.properties as AdfDataset['properties'] | undefined;
   if (!properties || typeof properties.type !== 'string') {
     return NextResponse.json({ ok: false, error: 'properties.type is required' }, { status: 400 });
   }
+  if (!properties.linkedServiceName?.referenceName) {
+    return NextResponse.json({ ok: false, error: 'properties.linkedServiceName.referenceName is required' }, { status: 400 });
+  }
+  // Force the reference type so ADF accepts it regardless of caller payload.
+  properties.linkedServiceName = {
+    referenceName: properties.linkedServiceName.referenceName,
+    type: 'LinkedServiceReference',
+    ...(properties.linkedServiceName.parameters ? { parameters: properties.linkedServiceName.parameters } : {}),
+  };
   try {
-    const saved = await upsertLinkedService(name, { name, properties });
-    return NextResponse.json({ ok: true, linkedService: saved });
+    const saved = await upsertDataset(name, { name, properties });
+    return NextResponse.json({ ok: true, dataset: saved });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
@@ -75,7 +82,7 @@ export async function DELETE(req: NextRequest) {
   const name = req.nextUrl.searchParams.get('name')?.trim();
   if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
   try {
-    await deleteLinkedService(name);
+    await deleteDataset(name);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });

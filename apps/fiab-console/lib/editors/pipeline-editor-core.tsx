@@ -28,8 +28,9 @@ import {
 import {
   DocumentTable20Regular, Play20Regular, Server20Regular,
   ArrowSync20Regular, Save20Regular, Bug20Regular, Checkmark20Regular,
-  Clock20Regular, Link20Regular, Add20Regular,
+  Clock20Regular, Link20Regular, Add20Regular, Settings20Regular,
 } from '@fluentui/react-icons';
+import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { extractActivities, writeActivitiesToSpec, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
@@ -114,6 +115,9 @@ export function PipelineEditorCore({
 
   const [runsAfterDays, setRunsAfterDays] = useState<number>(7);
   const [runsStatus, setRunsStatus] = useState<string>('');
+
+  // ---- Manage (factory resources) dialog state — ADF only ----
+  const [manageOpen, setManageOpen] = useState(false);
 
   // ---- Triggers dialog state ----
   const [triggersOpen, setTriggersOpen] = useState(false);
@@ -392,12 +396,20 @@ export function PipelineEditorCore({
         { label: busy ? 'Validating…' : 'Validate', icon: <Checkmark20Regular />, onClick: !busy && bound ? validate : undefined, disabled: busy || !bound, title: !bound ? 'Bind a pipeline first' : undefined },
       ],
     }] : [];
+    // Manage hub (factory-level: linked services / datasets / integration
+    // runtimes) — ADF only, available regardless of pipeline binding.
+    const manageGroup: RibbonTab['groups'] = isAdf ? [{
+      label: 'Manage', actions: [
+        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services, datasets and integration runtimes' },
+      ],
+    }] : [];
     return [
       { id: 'home', label: 'Home', groups: [
         { label: 'Save', actions: [
           { label: busy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: !busy && bound && dirty ? save : undefined, disabled: busy || !bound || !dirty, title: !bound ? 'Bind a pipeline first' : (!dirty ? 'No changes' : undefined) },
         ] },
         ...validateGroup,
+        ...manageGroup,
         { label: 'Run', actions: [
           { label: busy ? 'Running…' : 'Debug', icon: <Bug20Regular />, onClick: !busy && bound && !dirty ? () => kick('debug') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
           { label: busy ? 'Running…' : 'Trigger now', icon: <Play20Regular />, onClick: !busy && bound && !dirty ? () => kick('run') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
@@ -409,7 +421,7 @@ export function PipelineEditorCore({
         ] },
       ] },
     ];
-  }, [config.supportsValidate, busy, bound, dirty, save, kick, validate, openTriggers]);
+  }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers]);
 
   // ------------------------------------------------------------------
   // Render
@@ -627,6 +639,8 @@ export function PipelineEditorCore({
               )}
             </>
           )}
+
+          {isAdf && <ManagePanel open={manageOpen} onOpenChange={setManageOpen} />}
 
           <Dialog open={triggersOpen} onOpenChange={(_, d) => setTriggersOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '760px', width: '90vw' }}>
