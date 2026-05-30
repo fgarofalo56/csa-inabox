@@ -9,6 +9,15 @@
  *   2. "More workloads" — discovery view linking to /workloads for the full
  *      catalog including optional add-ons.
  *
+ * v3.28 visual redesign: the dense horizontal cards were replaced with
+ * spaced, vertical workload cards that match the homepage "Get started"
+ * aesthetic — a large gradient-tinted colored icon at the top of each card,
+ * generous 24px padding so nothing butts the border, a clear title, a
+ * 2-line description, and a footer row showing the real item-type count in
+ * the workload. Per-workload colors are preserved (the operator likes the
+ * color-coded icons); only the layout/spacing/hierarchy changed. Data and
+ * navigation are unchanged.
+ *
  * v3.27 replaced the redirect-to-/workloads stub. Future v3.x:
  *   - per-workload landing pages under /workload-hub/<id>
  *   - "Add to workspace" inline action that wires capacity assignment
@@ -17,14 +26,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Spinner, makeStyles, tokens, Badge, Button, Caption1, Subtitle2, Body1,
+  Spinner, makeStyles, tokens, Badge, Button, Caption1, Subtitle1, Subtitle2, Body1, Title3,
 } from '@fluentui/react-components';
 import {
-  Database24Regular, DataLine24Regular, Flow24Regular, Bot24Regular,
-  ServerRegular, ChartMultiple24Regular, Earth24Regular,
-  Shield24Regular, Diversity24Regular, Code24Regular, Cloud24Regular,
-  AppGeneric24Regular, PuzzlePieceRegular,
-  ArrowRight24Regular,
+  Database24Filled, DataLine24Filled, Flow24Filled, Bot24Filled,
+  Server24Filled, ChartMultiple24Filled, Earth24Filled,
+  Shield24Filled, Diversity24Filled, Code24Filled, Cloud24Filled,
+  AppGeneric24Filled, PuzzlePiece24Filled,
+  ArrowRight24Regular, ChevronRight16Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
@@ -37,116 +46,137 @@ interface Workload {
 
 const useStyles = makeStyles({
   hero: {
-    padding: '28px 32px',
-    borderRadius: 16,
+    paddingTop: 32, paddingRight: 36, paddingBottom: 32, paddingLeft: 36,
+    borderRadius: 18,
     background: `linear-gradient(135deg, ${tokens.colorBrandBackground2} 0%, ${tokens.colorNeutralBackground1} 100%)`,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    marginBottom: 32,
-    display: 'flex', gap: 28, alignItems: 'center', flexWrap: 'wrap',
+    marginBottom: 36,
+    display: 'flex', gap: 32, alignItems: 'center', flexWrap: 'wrap',
   },
   heroText: { flex: 1, minWidth: 320 },
-  heroTitle: { fontSize: 24, fontWeight: 600, marginBottom: 8, lineHeight: 1.3 },
-  heroBody: { color: tokens.colorNeutralForeground2, fontSize: 14, lineHeight: 1.55 },
+  heroTitle: { fontSize: 24, fontWeight: 700, marginBottom: 10, lineHeight: 1.3, letterSpacing: '-0.01em' },
+  heroBody: { color: tokens.colorNeutralForeground2, fontSize: 14, lineHeight: 1.55, maxWidth: 680 },
   heroStat: {
     display: 'flex', flexDirection: 'column',
-    padding: '16px 24px', borderRadius: 12,
+    paddingTop: 18, paddingRight: 26, paddingBottom: 18, paddingLeft: 26,
+    borderRadius: 14,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    minWidth: 140,
+    minWidth: 148,
+    boxShadow: tokens.shadow4,
   },
-  heroStatVal: { fontSize: 30, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.1 },
-  heroStatLabel: { fontSize: 12, color: tokens.colorNeutralForeground3, marginTop: 4 },
-  section: { marginBottom: 36 },
+  heroStatVal: { fontSize: 32, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.1 },
+  heroStatLabel: { fontSize: 12, color: tokens.colorNeutralForeground3, marginTop: 6 },
+  section: { marginBottom: 40 },
   sectionHeader: {
-    display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 16,
-    paddingLeft: 4,
+    display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 18,
+    paddingLeft: 2,
   },
-  sectionTitle: { fontSize: 17, fontWeight: 600 },
-  sectionCount: { color: tokens.colorNeutralForeground3, fontSize: 13 },
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-    gap: 20,
+    gap: 24,
   },
   card: {
-    padding: 20, borderRadius: 14,
+    paddingTop: 24, paddingRight: 24, paddingBottom: 20, paddingLeft: 24,
+    borderRadius: 14,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     cursor: 'pointer',
-    transition: 'transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease',
-    display: 'flex', flexDirection: 'column', gap: 10,
-    minHeight: 110,
+    height: '100%',
+    boxSizing: 'border-box',
+    transition: 'transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
+    display: 'flex', flexDirection: 'column',
     ':hover': {
       transform: 'translateY(-3px)',
       boxShadow: tokens.shadow16,
       borderColor: tokens.colorBrandStroke1,
     },
+    ':focus-visible': {
+      outline: `2px solid ${tokens.colorBrandStroke1}`,
+      outlineOffset: '2px',
+    },
   },
-  cardRow: { display: 'flex', alignItems: 'center', gap: 14 },
+  cardTop: {
+    display: 'flex', alignItems: 'flex-start', gap: 12,
+    marginBottom: 16,
+  },
   iconBox: {
-    width: 44, height: 44, borderRadius: 10,
+    width: 48, height: 48, borderRadius: 13,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     flexShrink: 0,
-    // background/foreground colors are applied per-icon via inline style
-    // (see iconStyleFor below) so each workload family gets its own
-    // distinct tint instead of every card being brand-blue.
+    color: 'white',
+    // gradient background applied per-workload via inline style (see workloadVisual)
   },
+  badgeSlot: { marginLeft: 'auto', flexShrink: 0 },
   name: {
-    fontSize: 15, fontWeight: 600,
-    flex: 1, minWidth: 0,
-    paddingRight: 4,
-    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontSize: 16, fontWeight: 600, lineHeight: 1.3,
+    marginBottom: 8, display: 'block',
   },
   desc: {
-    fontSize: 13, color: tokens.colorNeutralForeground2, lineHeight: 1.5,
+    fontSize: 13, color: tokens.colorNeutralForeground3, lineHeight: 1.55,
     overflow: 'hidden', display: '-webkit-box',
     WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-    paddingLeft: 58,    // align desc with the title text, past the icon
+    margin: 0,
+  },
+  cardFooter: {
+    display: 'flex', alignItems: 'center', gap: 6,
+    marginTop: 'auto', paddingTop: 16,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    color: tokens.colorNeutralForeground3, fontSize: 12,
+  },
+  footerCount: { fontWeight: 600, color: tokens.colorNeutralForeground2 },
+  footerArrow: {
+    marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2,
+    color: tokens.colorBrandForeground1, fontWeight: 600,
   },
   ctaCard: {
-    padding: '24px 28px', borderRadius: 14,
+    paddingTop: 24, paddingRight: 28, paddingBottom: 24, paddingLeft: 28,
+    borderRadius: 14,
     border: `1px dashed ${tokens.colorBrandStroke2}`,
     backgroundColor: tokens.colorBrandBackground2,
-    display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap',
+    display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap',
   },
 });
 
 /**
- * Per-icon palette — each workload family gets a distinct fill so the grid
- * scans as a visual category map (not 12 identical blue tiles).
- * Pairs a tile-background tint with a contrasting icon foreground.
+ * Per-workload-family gradient + icon. Each family gets a distinct gradient
+ * tile (white icon on a colored gradient, matching the homepage "Get
+ * started" quick-link tiles) so the grid scans as a visual category map
+ * instead of identical brand-blue tiles. Gradients mirror the homepage and
+ * item-type-icon palettes so the surfaces visually rhyme.
  */
-const ICON_PALETTE = {
-  warehouse:  { bg: '#E3F2FD', fg: '#0d47a1' },    // blue
-  rti:        { bg: '#F3E5F5', fg: '#6a1b9a' },    // purple
-  pipeline:   { bg: '#E0F2F1', fg: '#00695C' },    // teal
-  bot:        { bg: '#E8F5E9', fg: '#2E7D32' },    // green
-  database:   { bg: '#FFF3E0', fg: '#E65100' },    // orange
-  powerbi:    { bg: '#FFFDE7', fg: '#F9A825' },    // amber
-  geo:        { bg: '#E0F7FA', fg: '#00838F' },    // cyan
-  shield:     { bg: '#FFEBEE', fg: '#C62828' },    // red
-  industry:   { bg: '#F1F8E9', fg: '#558B2F' },    // light-green
-  graph:      { bg: '#EDE7F6', fg: '#4527A0' },    // deep-purple
-  ml:         { bg: '#FCE4EC', fg: '#AD1457' },    // pink
-  platform:   { bg: '#ECEFF1', fg: '#37474F' },    // blue-grey
-  default:    { bg: '#F5F5F5', fg: '#424242' },    // neutral
+const WORKLOAD_STYLE = {
+  warehouse:  { grad: 'linear-gradient(135deg, #0050b3, #1f6feb)' },  // blue
+  rti:        { grad: 'linear-gradient(135deg, #4b1d8f, #9f6df2)' },  // purple
+  pipeline:   { grad: 'linear-gradient(135deg, #117865, #1dbe9c)' },  // teal-green
+  bot:        { grad: 'linear-gradient(135deg, #1a7f4e, #34c77b)' },  // green
+  database:   { grad: 'linear-gradient(135deg, #ad6800, #d89f3d)' },  // amber-orange
+  powerbi:    { grad: 'linear-gradient(135deg, #b88600, #f0c33c)' },  // amber
+  geo:        { grad: 'linear-gradient(135deg, #0d7377, #2bb3a3)' },  // cyan-teal
+  shield:     { grad: 'linear-gradient(135deg, #b91c4b, #f25e8a)' },  // red-pink
+  industry:   { grad: 'linear-gradient(135deg, #558B2F, #8bc34a)' },  // light-green
+  graph:      { grad: 'linear-gradient(135deg, #3d2e80, #7d6cff)' },  // violet
+  ml:         { grad: 'linear-gradient(135deg, #7c3aed, #b388ff)' },  // purple
+  platform:   { grad: 'linear-gradient(135deg, #37474F, #607d8b)' },  // blue-grey
+  default:    { grad: 'linear-gradient(135deg, #424242, #6b7280)' },  // neutral
 } as const;
 
-function workloadIcon(id: string, name: string): { node: React.ReactNode; palette: { bg: string; fg: string } } {
+function workloadVisual(id: string, name: string): { node: React.ReactNode; grad: string } {
   const key = (id + ' ' + name).toLowerCase();
-  if (key.includes('warehouse') || key.includes('sql')) return { node: <Database24Regular />, palette: ICON_PALETTE.warehouse };
-  if (key.includes('realtime') || key.includes('rti') || key.includes('stream')) return { node: <DataLine24Regular />, palette: ICON_PALETTE.rti };
-  if (key.includes('factory') || key.includes('pipeline') || key.includes('engineering')) return { node: <Flow24Regular />, palette: ICON_PALETTE.pipeline };
-  if (key.includes('copilot') || key.includes('agent')) return { node: <Bot24Regular />, palette: ICON_PALETTE.bot };
-  if (key.includes('database')) return { node: <ServerRegular />, palette: ICON_PALETTE.database };
-  if (key.includes('power-bi') || key.includes('powerbi') || key.includes('bi')) return { node: <ChartMultiple24Regular />, palette: ICON_PALETTE.powerbi };
-  if (key.includes('geo') || key.includes('map')) return { node: <Earth24Regular />, palette: ICON_PALETTE.geo };
-  if (key.includes('fedramp') || key.includes('compliance')) return { node: <Shield24Regular />, palette: ICON_PALETTE.shield };
-  if (key.includes('industry')) return { node: <Diversity24Regular />, palette: ICON_PALETTE.industry };
-  if (key.includes('graph') || key.includes('vector')) return { node: <PuzzlePieceRegular />, palette: ICON_PALETTE.graph };
-  if (key.includes('data-science') || key.includes('ml') || key.includes('ai')) return { node: <Code24Regular />, palette: ICON_PALETTE.ml };
-  if (key.includes('platform')) return { node: <Cloud24Regular />, palette: ICON_PALETTE.platform };
-  return { node: <AppGeneric24Regular />, palette: ICON_PALETTE.default };
+  if (key.includes('warehouse') || key.includes('sql')) return { node: <Database24Filled />, grad: WORKLOAD_STYLE.warehouse.grad };
+  if (key.includes('realtime') || key.includes('rti') || key.includes('stream')) return { node: <DataLine24Filled />, grad: WORKLOAD_STYLE.rti.grad };
+  if (key.includes('factory') || key.includes('pipeline') || key.includes('engineering')) return { node: <Flow24Filled />, grad: WORKLOAD_STYLE.pipeline.grad };
+  if (key.includes('copilot') || key.includes('agent')) return { node: <Bot24Filled />, grad: WORKLOAD_STYLE.bot.grad };
+  if (key.includes('database')) return { node: <Server24Filled />, grad: WORKLOAD_STYLE.database.grad };
+  if (key.includes('power-bi') || key.includes('powerbi') || key.includes('bi')) return { node: <ChartMultiple24Filled />, grad: WORKLOAD_STYLE.powerbi.grad };
+  if (key.includes('geo') || key.includes('map')) return { node: <Earth24Filled />, grad: WORKLOAD_STYLE.geo.grad };
+  if (key.includes('fedramp') || key.includes('compliance')) return { node: <Shield24Filled />, grad: WORKLOAD_STYLE.shield.grad };
+  if (key.includes('industry')) return { node: <Diversity24Filled />, grad: WORKLOAD_STYLE.industry.grad };
+  if (key.includes('graph') || key.includes('vector')) return { node: <PuzzlePiece24Filled />, grad: WORKLOAD_STYLE.graph.grad };
+  if (key.includes('data-science') || key.includes('ml') || key.includes('ai')) return { node: <Code24Filled />, grad: WORKLOAD_STYLE.ml.grad };
+  if (key.includes('platform')) return { node: <Cloud24Filled />, grad: WORKLOAD_STYLE.platform.grad };
+  return { node: <AppGeneric24Filled />, grad: WORKLOAD_STYLE.default.grad };
 }
 
 export default function WorkloadHubPage() {
@@ -177,6 +207,39 @@ export default function WorkloadHubPage() {
     if (first) router.push(`/items/${first}/new`);
   }
 
+  function renderCard(w: Workload) {
+    const { node: iconNode, grad } = workloadVisual(w.id, w.name);
+    const count = (w.featureSlugs || []).length;
+    return (
+      <div
+        key={w.id}
+        className={s.card}
+        role="button"
+        tabIndex={0}
+        onClick={() => openWorkload(w)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openWorkload(w); } }}
+      >
+        <div className={s.cardTop}>
+          <div className={s.iconBox} style={{ background: grad }}>{iconNode}</div>
+          {w.category === 'CSA' && (
+            <div className={s.badgeSlot}>
+              <Badge appearance="tint" color="brand" size="small">CSA</Badge>
+            </div>
+          )}
+        </div>
+        <Subtitle1 className={s.name}>{w.name}</Subtitle1>
+        {w.description && <p className={s.desc}>{w.description}</p>}
+        <div className={s.cardFooter}>
+          <span className={s.footerCount}>{count}</span>
+          <span>{count === 1 ? 'item type' : 'item types'}</span>
+          <span className={s.footerArrow} aria-hidden>
+            Open <ChevronRight16Regular />
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <PageShell
       title="Workload hub"
@@ -190,7 +253,7 @@ export default function WorkloadHubPage() {
             <div className={s.heroTitle}>Build with the workloads that match your problem</div>
             <Body1 className={s.heroBody}>
               Workloads are bundles of related item types — Data Engineering brings Synapse + ADF + Spark,
-              Real-Time Intelligence brings Eventhouse + KQL + Activator. Click any tile to jump straight into
+              Real-Time Intelligence brings Eventhouse + KQL + Activator. Click any card to jump straight into
               creating an item from that workload.
             </Body1>
           </div>
@@ -210,32 +273,11 @@ export default function WorkloadHubPage() {
       {mine.length > 0 && (
         <div className={s.section}>
           <div className={s.sectionHeader}>
-            <div className={s.sectionTitle}>My workloads</div>
-            <Caption1 className={s.sectionCount}>· {mine.length}</Caption1>
+            <Title3 as="h2">My workloads</Title3>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>· {mine.length}</Caption1>
           </div>
           <div className={s.grid}>
-            {mine.map((w) => {
-              const { node: iconNode, palette } = workloadIcon(w.id, w.name);
-              return (
-                <div
-                  key={w.id}
-                  className={s.card}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => openWorkload(w)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openWorkload(w); } }}
-                >
-                  <div className={s.cardRow}>
-                    <div className={s.iconBox} style={{ backgroundColor: palette.bg, color: palette.fg }}>{iconNode}</div>
-                    <div className={s.name}>{w.name}</div>
-                    {w.category === 'CSA' && (
-                      <Badge appearance="outline" color="brand" size="small">CSA</Badge>
-                    )}
-                  </div>
-                  {w.description && <div className={s.desc}>{w.description}</div>}
-                </div>
-              );
-            })}
+            {mine.map(renderCard)}
           </div>
         </div>
       )}
@@ -243,13 +285,13 @@ export default function WorkloadHubPage() {
       {items !== null && (
         <div className={s.section}>
           <div className={s.sectionHeader}>
-            <div className={s.sectionTitle}>More workloads</div>
-            <Caption1 className={s.sectionCount}>· {more.length} available</Caption1>
+            <Title3 as="h2">More workloads</Title3>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>· {more.length} available</Caption1>
           </div>
           <div className={s.ctaCard}>
             <div style={{ flex: 1, minWidth: 240 }}>
               <Subtitle2>Browse the full workload catalog</Subtitle2>
-              <Body1 style={{ fontSize: 13, color: tokens.colorNeutralForeground2 }}>
+              <Body1 style={{ fontSize: 13, color: tokens.colorNeutralForeground2, display: 'block', marginTop: 4 }}>
                 Compliance, Geoanalytics, Graph + Vector, and other optional accelerators ship with Loom but stay opt-in until you enable them.
               </Body1>
             </div>
