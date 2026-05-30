@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
   let body: any = {};
   try { body = await req.json(); } catch { /* allow empty */ }
 
-  const source = body.source as 'unity-catalog' | 'onelake' | undefined;
+  const source = body.source as 'unity-catalog' | 'onelake' | 'azure-database' | undefined;
   if (!source) return NextResponse.json({ ok: false, error: 'source required' }, { status: 400 });
 
   try {
@@ -93,6 +93,25 @@ export async function POST(req: NextRequest) {
       qualifiedName = `https://onelake.dfs.fabric.microsoft.com/${workspaceId}/${itemId}`;
       displayName = displayName || item.displayName;
       comment = comment || item.description;
+    } else if (source === 'azure-database') {
+      // Register an Azure database (Azure SQL DB / MI / PostgreSQL flexible
+      // server) as an Atlas entity in Purview using its FQDN + database name
+      // as the qualifiedName. No source pre-fetch is needed — the caller
+      // already selected a live server/database from the ARM inventory.
+      const family = body.family as 'azure-sql' | 'managed-instance' | 'postgres' | undefined;
+      const fqdn = body.fqdn as string;
+      const database = body.database as string;
+      if (!family || !fqdn) {
+        return NextResponse.json({ ok: false, error: 'family and fqdn required for azure-database source' }, { status: 400 });
+      }
+      typeName = family === 'postgres' ? 'azure_postgresql_server' : 'azure_sql_db';
+      qualifiedName = database
+        ? `mssql://${fqdn}/${encodeURIComponent(database)}`
+        : `mssql://${fqdn}`;
+      if (family === 'postgres') {
+        qualifiedName = database ? `postgresql://${fqdn}/${encodeURIComponent(database)}` : `postgresql://${fqdn}`;
+      }
+      displayName = displayName || database || fqdn;
     } else {
       return NextResponse.json({ ok: false, error: `Unsupported source: ${source}` }, { status: 400 });
     }
