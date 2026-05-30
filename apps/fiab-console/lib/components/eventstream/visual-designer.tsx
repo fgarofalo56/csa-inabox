@@ -21,7 +21,13 @@
  */
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  useReactFlow, useNodesState,
+  type Node, type Edge, type NodeChange, type NodeTypes,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import {
   Button,
   Badge,
@@ -39,8 +45,8 @@ import {
 import {
   Add20Regular,
   Delete20Regular,
-  ArrowRight20Regular,
 } from '@fluentui/react-icons';
+import { EventstreamFlowNode, type EsNodeData, type NodeRole } from './eventstream-flow-node';
 
 // ============================================================
 // Types
@@ -105,61 +111,30 @@ const useStyles = makeStyles({
     minHeight: '480px',
   },
   canvas: {
-    backgroundColor: tokens.colorNeutralBackground2,
+    position: 'relative',
+    backgroundColor: tokens.colorNeutralBackground3,
+    ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
-    ...shorthands.padding(tokens.spacingVerticalL, tokens.spacingHorizontalL),
-    overflowX: 'auto',
+    overflow: 'hidden',
     minHeight: '440px',
   },
-  flow: {
+  addButtonsPanel: {
     display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalM,
-    minHeight: '440px',
-  },
-  column: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    minWidth: '180px',
-  },
-  columnLabel: {
-    color: tokens.colorNeutralForeground3,
-    textTransform: 'uppercase',
-    fontSize: tokens.fontSizeBase200,
-    marginBottom: tokens.spacingVerticalXS,
-  },
-  node: {
-    cursor: 'pointer',
+    gap: tokens.spacingHorizontalS,
     backgroundColor: tokens.colorNeutralBackground1,
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
-    ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
-    minWidth: '160px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-    transition: 'border-color 0.15s',
-    ':hover': {
-      ...shorthands.borderColor(tokens.colorBrandStroke1),
-    },
+    ...shorthands.padding(tokens.spacingVerticalXS, tokens.spacingHorizontalXS),
   },
-  nodeSelected: {
-    ...shorthands.borderColor(tokens.colorBrandStroke1),
-    boxShadow: tokens.shadow4Brand,
-  },
-  nodeTitle: {
-    fontWeight: tokens.fontWeightSemibold,
-    fontSize: tokens.fontSizeBase300,
-  },
-  nodeSubtitle: {
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-  },
-  arrow: {
-    color: tokens.colorNeutralForeground3,
+  emptyHint: {
+    position: 'absolute',
+    inset: 0,
     display: 'flex',
     alignItems: 'center',
+    justifyContent: 'center',
+    pointerEvents: 'none',
+    color: tokens.colorNeutralForeground3,
+    zIndex: 1,
   },
   inspector: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -307,112 +282,16 @@ export function VisualDesigner({ config, onChange }: VisualDesignerProps) {
 
   return (
     <div className={s.designer} role="region" aria-label="Eventstream visual designer">
-      <div className={s.canvas} data-canvas="eventstream" aria-label="Pipeline canvas">
-        <div className={s.addButtons} data-palette="eventstream" role="toolbar" aria-label="Node palette">
-          <Button icon={<Add20Regular />} onClick={addSource} aria-label="Add source" data-palette-item="source">
-            Add source
-          </Button>
-          <Button icon={<Add20Regular />} onClick={addTransform} aria-label="Add transform" data-palette-item="transform">
-            Add transform
-          </Button>
-          <Button icon={<Add20Regular />} onClick={addSink} aria-label="Add destination" data-palette-item="destination">
-            Add destination
-          </Button>
-        </div>
-
-        <div className={s.flow} data-flow="true">
-          <div className={s.column}>
-            <Caption1 className={s.columnLabel}>Sources</Caption1>
-            {sources.length === 0 && <Caption1 className={s.inspectorEmpty}>(none)</Caption1>}
-            {sources.map((src, idx) => (
-              <div
-                key={`src-${idx}`}
-                role="button"
-                tabIndex={0}
-                className={`${s.node} ${selected?.type === 'source' && selected.idx === idx ? s.nodeSelected : ''}`}
-                onClick={() => setSelected({ type: 'source', idx })}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') setSelected({ type: 'source', idx });
-                }}
-                aria-label={`Source ${src.name}`}
-                aria-pressed={selected?.type === 'source' && selected.idx === idx}
-              >
-                <span className={s.nodeTitle}>{src.name}</span>
-                <Badge size="small" appearance="outline">
-                  {src.kind}
-                </Badge>
-                {src.namespace && <Caption1 className={s.nodeSubtitle}>{src.namespace}</Caption1>}
-              </div>
-            ))}
-          </div>
-
-          {sources.length > 0 && (transforms.length > 0 || sinks.length > 0) && (
-            <span className={s.arrow} aria-hidden="true">
-              <ArrowRight20Regular />
-            </span>
-          )}
-
-          <div className={s.column}>
-            <Caption1 className={s.columnLabel}>Transforms</Caption1>
-            {transforms.length === 0 && <Caption1 className={s.inspectorEmpty}>(none)</Caption1>}
-            {transforms.map((tr, idx) => (
-              <div
-                key={`tr-${idx}`}
-                role="button"
-                tabIndex={0}
-                className={`${s.node} ${selected?.type === 'transform' && selected.idx === idx ? s.nodeSelected : ''}`}
-                onClick={() => setSelected({ type: 'transform', idx })}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') setSelected({ type: 'transform', idx });
-                }}
-                aria-label={`Transform ${tr.name}`}
-                aria-pressed={selected?.type === 'transform' && selected.idx === idx}
-              >
-                <span className={s.nodeTitle}>{tr.name}</span>
-                <Badge size="small" appearance="outline">
-                  {tr.kind}
-                </Badge>
-                {tr.expression && (
-                  <Caption1 className={s.nodeSubtitle}>
-                    {tr.expression.length > 32 ? tr.expression.slice(0, 32) + '…' : tr.expression}
-                  </Caption1>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {(transforms.length > 0 || sources.length > 0) && sinks.length > 0 && (
-            <span className={s.arrow} aria-hidden="true">
-              <ArrowRight20Regular />
-            </span>
-          )}
-
-          <div className={s.column}>
-            <Caption1 className={s.columnLabel}>Destinations</Caption1>
-            {sinks.length === 0 && <Caption1 className={s.inspectorEmpty}>(none)</Caption1>}
-            {sinks.map((sk, idx) => (
-              <div
-                key={`sk-${idx}`}
-                role="button"
-                tabIndex={0}
-                className={`${s.node} ${selected?.type === 'sink' && selected.idx === idx ? s.nodeSelected : ''}`}
-                onClick={() => setSelected({ type: 'sink', idx })}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') setSelected({ type: 'sink', idx });
-                }}
-                aria-label={`Destination ${sk.name}`}
-                aria-pressed={selected?.type === 'sink' && selected.idx === idx}
-              >
-                <span className={s.nodeTitle}>{sk.name}</span>
-                <Badge size="small" appearance="outline">
-                  {sk.kind}
-                </Badge>
-                {sk.table && <Caption1 className={s.nodeSubtitle}>{sk.table}</Caption1>}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      <EventstreamCanvas
+        sources={sources}
+        transforms={transforms}
+        sinks={sinks}
+        selected={selected}
+        onSelect={setSelected}
+        onAddSource={addSource}
+        onAddTransform={addTransform}
+        onAddSink={addSink}
+      />
 
       <aside className={s.inspector} aria-label="Node properties">
         {!selected && (
@@ -447,6 +326,149 @@ export function VisualDesigner({ config, onChange }: VisualDesignerProps) {
         )}
       </aside>
     </div>
+  );
+}
+
+// ============================================================
+// React Flow canvas — free-form, draggable, Bezier-connected, matching
+// Fabric's real Eventstream editor (source → operator → destination).
+// ============================================================
+
+const esNodeTypes: NodeTypes = { es: EventstreamFlowNode };
+
+interface XY { x: number; y: number }
+const ES_NODE_W = 184;
+const COL_GAP = 230;
+const ROW_GAP = 96;
+
+function esLayout(nSources: number, transforms: number, nSinks: number): Map<string, XY> {
+  const pos = new Map<string, XY>();
+  const sinkCol = transforms + 1;
+  for (let i = 0; i < nSources; i++) pos.set(`source-${i}`, { x: 16, y: 16 + i * ROW_GAP });
+  for (let i = 0; i < transforms; i++) pos.set(`transform-${i}`, { x: 16 + (i + 1) * COL_GAP, y: 16 });
+  for (let i = 0; i < nSinks; i++) pos.set(`sink-${i}`, { x: 16 + sinkCol * COL_GAP, y: 16 + i * ROW_GAP });
+  return pos;
+}
+
+interface EventstreamCanvasProps {
+  sources: SourceNode[];
+  transforms: TransformNode[];
+  sinks: SinkNode[];
+  selected: SelectedNode;
+  onSelect: (n: SelectedNode) => void;
+  onAddSource: () => void;
+  onAddTransform: () => void;
+  onAddSink: () => void;
+}
+
+function EventstreamCanvasInner({
+  sources, transforms, sinks, selected, onSelect,
+  onAddSource, onAddTransform, onAddSink,
+}: EventstreamCanvasProps) {
+  const s = useStyles();
+  const rf = useReactFlow();
+  const positionsRef = useRef<Map<string, XY>>(new Map());
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+
+  const total = sources.length + transforms.length + sinks.length;
+
+  const syncNodes = useCallback(() => {
+    const fallback = esLayout(sources.length, transforms.length, sinks.length);
+    const next = new Map<string, XY>();
+    const list: Node[] = [];
+    const push = (id: string, data: EsNodeData, isSel: boolean) => {
+      const p = positionsRef.current.get(id) || fallback.get(id) || { x: 16, y: 16 };
+      next.set(id, p);
+      list.push({ id, type: 'es', position: p, data: data as unknown as Record<string, unknown>, selected: isSel });
+    };
+    sources.forEach((n, i) => push(`source-${i}`,
+      { label: n.name, kind: n.kind, role: 'source' as NodeRole, subtitle: n.namespace || n.iotHub },
+      selected?.type === 'source' && selected.idx === i));
+    transforms.forEach((n, i) => push(`transform-${i}`,
+      { label: n.name, kind: n.kind, role: 'transform' as NodeRole, subtitle: n.expression ? (n.expression.length > 28 ? n.expression.slice(0, 28) + '…' : n.expression) : undefined },
+      selected?.type === 'transform' && selected.idx === i));
+    sinks.forEach((n, i) => push(`sink-${i}`,
+      { label: n.name, kind: n.kind, role: 'sink' as NodeRole, subtitle: n.table || n.lakehouseId },
+      selected?.type === 'sink' && selected.idx === i));
+    positionsRef.current = next;
+    setNodes(list);
+  }, [sources, transforms, sinks, selected, setNodes]);
+
+  useEffect(() => { syncNodes(); }, [syncNodes]);
+
+  // Derived topology edges (Bezier = React Flow default edge type). The
+  // persisted model is { sources, transforms[], sink } ordered, so edges
+  // reflect that flow: sources → transform chain → sinks.
+  const edges = useMemo<Edge[]>(() => {
+    const out: Edge[] = [];
+    const stroke = tokens.colorBrandStroke1;
+    const mk = (a: string, b: string) => out.push({
+      id: `${a}->${b}`, source: a, target: b, type: 'default',
+      style: { stroke, strokeWidth: 1.8 },
+      markerEnd: { type: 'arrowclosed' as any, color: stroke, width: 16, height: 16 },
+    });
+    if (transforms.length) {
+      sources.forEach((_, i) => mk(`source-${i}`, 'transform-0'));
+      for (let i = 0; i < transforms.length - 1; i++) mk(`transform-${i}`, `transform-${i + 1}`);
+      sinks.forEach((_, j) => mk(`transform-${transforms.length - 1}`, `sink-${j}`));
+    } else {
+      sources.forEach((_, i) => sinks.forEach((_, j) => mk(`source-${i}`, `sink-${j}`)));
+    }
+    return out;
+  }, [sources, transforms, sinks]);
+
+  const handleNodesChange = useCallback((changes: NodeChange[]) => {
+    onNodesChange(changes);
+    for (const c of changes) if (c.type === 'position' && c.position) positionsRef.current.set(c.id, c.position);
+  }, [onNodesChange]);
+
+  const handleNodeClick = useCallback((_: unknown, n: Node) => {
+    const [role, idx] = n.id.split('-');
+    onSelect({ type: role as 'source' | 'transform' | 'sink', idx: Number(idx) });
+  }, [onSelect]);
+
+  return (
+    <div className={s.canvas} data-canvas="eventstream" aria-label="Eventstream canvas">
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={esNodeTypes}
+        onNodesChange={handleNodesChange}
+        onNodeClick={handleNodeClick}
+        onPaneClick={() => onSelect(null)}
+        minZoom={0.3}
+        maxZoom={2}
+        fitView
+        fitViewOptions={{ padding: 0.2 }}
+        proOptions={{ hideAttribution: true }}
+        nodesConnectable={false}
+        deleteKeyCode={null}
+      >
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
+        <Controls showInteractive={false} />
+        <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+        <Panel position="top-left">
+          <div className={s.addButtonsPanel} data-palette="eventstream" role="toolbar" aria-label="Node palette">
+            <Button size="small" icon={<Add20Regular />} onClick={onAddSource} data-palette-item="source">Add source</Button>
+            <Button size="small" icon={<Add20Regular />} onClick={onAddTransform} data-palette-item="transform">Add transform</Button>
+            <Button size="small" icon={<Add20Regular />} onClick={onAddSink} data-palette-item="destination">Add destination</Button>
+          </div>
+        </Panel>
+      </ReactFlow>
+      {total === 0 && (
+        <div className={s.emptyHint}>
+          <Caption1>Click “Add source”, then “Add transform” / “Add destination” to build the stream.</Caption1>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EventstreamCanvas(props: EventstreamCanvasProps) {
+  return (
+    <ReactFlowProvider>
+      <EventstreamCanvasInner {...props} />
+    </ReactFlowProvider>
   );
 }
 
