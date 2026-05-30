@@ -28,6 +28,7 @@ import {
 import { Caption1, makeStyles, tokens } from '@fluentui/react-components';
 import { ActivityNode } from './activity-node';
 import { Connector, ConnectorMarkers, type ConnectorCondition } from './connector';
+import { CanvasToolbar } from './canvas-toolbar';
 import type { PipelineActivity } from './types';
 
 const useStyles = makeStyles({
@@ -100,6 +101,9 @@ const GRID = 20;
 export interface CanvasHandle {
   fitToScreen: () => void;
   resetZoom: () => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  autoAlign: () => void;
 }
 
 export interface PipelineCanvasProps {
@@ -110,13 +114,16 @@ export interface PipelineCanvasProps {
   onDropPaletteKey: (key: string, atX: number, atY: number) => void;
   /**
    * Fired when the user drags a connector from one node's output port to
-   * another node's input port. Parent should add a `dependsOn` edge.
+   * another node's input port. Parent should add a `dependsOn` edge carrying
+   * the dependency condition the source port represents.
    */
-  onConnect?: (fromName: string, toName: string) => void;
+  onConnect?: (fromName: string, toName: string, cond: ConnectorCondition) => void;
   /** Whether the snap-to-grid toggle is on. */
   snapToGrid?: boolean;
   /** Whether the dot grid is visible. */
   showGrid?: boolean;
+  /** Bubble zoom changes up so the toolbar can show the % readout. */
+  onZoomChange?: (zoom: number) => void;
 }
 
 interface Pos { x: number; y: number; }
@@ -165,8 +172,18 @@ function autoLayout(activities: PipelineActivity[], existing: Map<string, Pos>):
   return out;
 }
 
+// Four output ports stacked on the right edge — y offset from node centre,
+// matching activity-node.tsx (12px ports, 4px gap → ~16px pitch).
+const OUTPUT_ORDER: ConnectorCondition[] = ['Succeeded', 'Failed', 'Completed', 'Skipped'];
+const PORT_PITCH = 16;
+function portY(cond: ConnectorCondition | undefined): number {
+  const idx = cond ? OUTPUT_ORDER.indexOf(cond) : 0;
+  const i = idx < 0 ? 0 : idx;
+  return NODE_H / 2 + (i - (OUTPUT_ORDER.length - 1) / 2) * PORT_PITCH;
+}
+
 export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvas(
-  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, snapToGrid = true, showGrid = true },
+  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, snapToGrid = true, showGrid = true, onZoomChange },
   ref,
 ) {
   const s = useStyles();
@@ -182,9 +199,11 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
 
   // Live connector-drag state. While the user drags from a node's output
   // port we draw a rubber-band line to the cursor; on mouse-up over a
-  // target node's input port we fire onConnect.
-  const [connectDrag, setConnectDrag] = useState<{ from: string; x: number; y: number } | null>(null);
+  // target node's input port we fire onConnect with the source condition.
+  const [connectDrag, setConnectDrag] = useState<{ from: string; cond: ConnectorCondition; x: number; y: number } | null>(null);
   const hoverTargetRef = useRef<string | null>(null);
+
+  useEffect(() => { onZoomChange?.(zoom); }, [zoom, onZoomChange]);
 
   // Sync layout whenever activities change. Existing positions kept; new
   // nodes get autoLayout slots.
@@ -219,7 +238,19 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
     setPan({ x: 0, y: 0 });
   }, []);
 
-  useImperativeHandle(ref, () => ({ fitToScreen, resetZoom }), [fitToScreen, resetZoom]);
+  const zoomIn = useCallback(() => setZoom((z) => Math.min(2, +(z + 0.1).toFixed(2))), []);
+  const zoomOut = useCallback(() => setZoom((z) => Math.max(0.25, +(z - 0.1).toFixed(2))), []);
+
+  // Auto-align — re-run the topological layout for ALL nodes, discarding any
+  // manual positions (ADF Studio's "Auto align" toolbar button).
+  const autoAlign = useCallback(() => {
+    positionsRef.current = autoLayout(activities, new Map());
+    tick();
+    setTimeout(fitToScreen, 0);
+  }, [activities, fitToScreen]);
+
+  useImperativeHandle(ref, () => ({ fitToScreen, resetZoom, zoomIn, zoomOut, autoAlign }),
+    [fitToScreen, resetZoom, zoomIn, zoomOut, autoAlign]);
 
   // Drag/drop from palette
   const onDragOver = (e: React.DragEvent) => {
@@ -326,12 +357,12 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
     };
   }, [pan.x, pan.y, zoom]);
 
-  const onConnectStart = useCallback((name: string) => (e: React.MouseEvent) => {
+  const onConnectStart = useCallback((name: string) => (cond: ConnectorCondition, e: React.MouseEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
     const local = toLocal(e.clientX, e.clientY);
     hoverTargetRef.current = null;
-    setConnectDrag({ from: name, x: local.x, y: local.y });
+    setConnectDrag({ from: name, cond, x: local.x, y: local.y });
   }, [toLocal]);
 
   useEffect(() => {
@@ -343,7 +374,7 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
     const onUp = () => {
       const from = connectDrag.from;
       const to = hoverTargetRef.current;
-      if (to && to !== from && onConnect) onConnect(from, to);
+      if (to && to !== from && onConnect) onConnect(from, to, connectDrag.cond);
       hoverTargetRef.current = null;
       setConnectDrag(null);
     };
@@ -408,7 +439,7 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
               const tp = positionsRef.current.get(e.to);
               if (!fp || !tp) return null;
               const sx = fp.x + NODE_W;
-              const sy = fp.y + NODE_H / 2;
+              const sy = fp.y + portY(e.cond);
               const ex = tp.x;
               const ey = tp.y + NODE_H / 2;
               return <Connector key={e.key} id={e.key} sx={sx} sy={sy} ex={ex} ey={ey} condition={e.cond} />;
@@ -418,14 +449,14 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
               const fp = positionsRef.current.get(connectDrag.from);
               if (!fp) return null;
               const sx = fp.x + NODE_W;
-              const sy = fp.y + NODE_H / 2;
+              const sy = fp.y + portY(connectDrag.cond);
               return (
                 <Connector
                   key="__live__"
                   id="__live__"
                   sx={sx} sy={sy}
                   ex={connectDrag.x} ey={connectDrag.y}
-                  condition="Succeeded"
+                  condition={connectDrag.cond}
                   selected
                 />
               );
@@ -474,10 +505,21 @@ export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(func
           </svg>
         </div>
       )}
-      <div style={{ position: 'absolute', left: 12, bottom: 12 }}>
+      <div style={{ position: 'absolute', left: 12, bottom: 12, maxWidth: '55%' }}>
         <Caption1 style={{ color: tokens.colorNeutralForeground3, backgroundColor: tokens.colorNeutralBackground1, padding: '2px 6px', borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
-          {Math.round(zoom * 100)}% · shift+drag to pan · ctrl+wheel to zoom · drag a node's right port to connect
+          shift+drag to pan · ctrl+wheel to zoom · drag a coloured output port (success/failure/completion/skip) to connect
         </Caption1>
+      </div>
+      {/* ADF Studio's bottom-right zoom / layout controls */}
+      <div style={{ position: 'absolute', right: 12, bottom: 120 }}>
+        <CanvasToolbar
+          zoomPct={Math.round(zoom * 100)}
+          onZoomIn={zoomIn}
+          onZoomOut={zoomOut}
+          onFit={fitToScreen}
+          onAutoAlign={autoAlign}
+          onReset={resetZoom}
+        />
       </div>
     </div>
   );

@@ -1,36 +1,46 @@
 'use client';
 
 /**
- * PipelineDesigner — the reusable Azure-Data-Factory-style three-pane visual
- * builder: activity palette (left) · drag-drop canvas (center) · properties
- * (right). It is intentionally backend-agnostic: it operates purely on a
- * PipelineActivity[] and emits onChange. Each editor (Fabric data-pipeline,
- * Synapse pipeline, ADF pipeline, Dataflow Gen2) hosts this surface and is
- * responsible for serializing the activities into its own definition JSON and
- * POST/PUT-ing to the real backend on Save.
+ * PipelineDesigner — the Azure-Data-Factory / Synapse-Studio pipeline builder,
+ * rebuilt one-for-one (only the Loom Fluent-v9 theme differs):
  *
- * Per .claude/rules/no-vaporware.md this component is fully functional with NO
- * backend dependency — you can drag activities onto the canvas, move them,
- * connect them with success arrows, and edit their properties even before any
- * Azure service is reachable. The hosting editor's Save button is what hits a
- * real backend (or shows an honest MessageBar when it can't).
+ *   ┌──────────┬─────────────────────────────────────────┐
+ *   │ Activities│  Pipeline canvas (drag-drop, 4-colour    │
+ *   │  palette  │  dependency edges, zoom/fit/auto-align)  │
+ *   │ (search + ├─────────────────────────────────────────┤
+ *   │  3 groups)│  Bottom properties dock (selected         │
+ *   │           │  activity — General / activity tabs)      │
+ *   └──────────┴─────────────────────────────────────────┘
+ *
+ * Matches ADF Studio's real layout (Learn: author-visually#authoring-canvas):
+ * "Subresources such as pipeline activities … are edited using the panel at
+ * the bottom of the canvas." The palette is the left "Activities" pane; the
+ * canvas is where activities appear; the bottom dock edits the selected
+ * activity. Pipeline-level Parameters / Variables / Settings live in the
+ * hosting editor's tab row (PipelineEditorCore), per ADF's pipeline
+ * configurations pane.
+ *
+ * Backend-agnostic: operates on PipelineActivity[] + emits onChange. The host
+ * editor serialises into its definition JSON and PUTs to the real backend on
+ * Save (per .claude/rules/no-vaporware.md).
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Caption1, makeStyles, tokens } from '@fluentui/react-components';
 import { ActivityPalette } from './palette';
 import { PipelineCanvas, type CanvasHandle } from './canvas';
 import { PropertiesPanel } from './properties-panel';
+import type { ConnectorCondition } from './connector';
 import { ACTIVITY_CATALOG, findByKey, nextNameSuffix, type ActivityTypeDef } from './activity-catalog';
 import type {
   PipelineActivity, PipelineParameter, PipelineVariable,
 } from './types';
 
 const useStyles = makeStyles({
-  threePane: {
+  shell: {
     display: 'flex',
     flex: 1,
-    minHeight: '480px',
+    minHeight: '560px',
     gap: tokens.spacingHorizontalM,
     width: '100%',
   },
@@ -42,6 +52,8 @@ const useStyles = makeStyles({
     overflow: 'hidden',
     display: 'flex',
   },
+  // The canvas + bottom dock stack — this is the ADF "authoring canvas + the
+  // panel at the bottom of the canvas" arrangement.
   centerCol: {
     flex: 1,
     display: 'flex',
@@ -49,37 +61,61 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     minWidth: 0,
   },
+  canvasWrap: { display: 'flex', flex: 1, minHeight: 0 },
+  dock: { flexShrink: 0 },
+  status: {
+    color: tokens.colorNeutralForeground3,
+    paddingLeft: tokens.spacingHorizontalXS,
+  },
 });
+
+export interface PipelineDesignerHandle {
+  fitToScreen: () => void;
+  resetZoom: () => void;
+  autoAlign: () => void;
+}
 
 export interface PipelineDesignerProps {
   /** The activities to render on the canvas (single source of truth). */
   activities: PipelineActivity[];
   /** Emit the full next activities[] whenever the graph mutates. */
   onActivitiesChange: (next: PipelineActivity[]) => void;
-  /** Pipeline-scoped parameters (read-only reference in the properties pane). */
+  /** Pipeline-scoped parameters (referenceable in the properties pane). */
   parameters?: PipelineParameter[];
   /** Pipeline-scoped variables. */
   variables?: PipelineVariable[];
   /** Disable mutation (e.g. while a save is in flight). */
   readOnly?: boolean;
+  /** Externally select an activity (e.g. after the host adds one). */
+  selectedName?: string | null;
+  onSelectedNameChange?: (name: string | null) => void;
 }
 
-/**
- * The shared visual designer. Selection + canvas layout are local state;
- * the activity list itself is fully controlled by the parent.
- */
-export function PipelineDesigner({
+export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesignerProps>(function PipelineDesigner({
   activities,
   onActivitiesChange,
   parameters = [],
   variables = [],
   readOnly = false,
-}: PipelineDesignerProps) {
+  selectedName: controlledSelected,
+  onSelectedNameChange,
+}, ref) {
   const s = useStyles();
   const canvasRef = useRef<CanvasHandle>(null);
-  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [internalSelected, setInternalSelected] = useState<string | null>(null);
+  const selectedName = controlledSelected !== undefined ? controlledSelected : internalSelected;
+  const setSelectedName = useCallback((name: string | null) => {
+    if (onSelectedNameChange) onSelectedNameChange(name);
+    if (controlledSelected === undefined) setInternalSelected(name);
+  }, [onSelectedNameChange, controlledSelected]);
   const [snapToGrid] = useState(true);
   const [showGrid] = useState(true);
+
+  useImperativeHandle(ref, () => ({
+    fitToScreen: () => canvasRef.current?.fitToScreen(),
+    resetZoom: () => canvasRef.current?.resetZoom(),
+    autoAlign: () => canvasRef.current?.autoAlign(),
+  }), []);
 
   const selected = useMemo(
     () => activities.find((a) => a.name === selectedName) || null,
@@ -93,14 +129,14 @@ export function PipelineDesigner({
     const a = def.build(newName);
     onActivitiesChange([...activities, a]);
     setTimeout(() => setSelectedName(newName), 0);
-  }, [activities, onActivitiesChange, readOnly]);
+  }, [activities, onActivitiesChange, readOnly, setSelectedName]);
 
   const patchActivity = useCallback((name: string, patch: Partial<PipelineActivity>) => {
     if (readOnly) return;
     const next = activities.map((a) => (a.name === name ? { ...a, ...patch } : a));
     onActivitiesChange(next);
     if (patch.name && patch.name !== name) setSelectedName(patch.name as string);
-  }, [activities, onActivitiesChange, readOnly]);
+  }, [activities, onActivitiesChange, readOnly, setSelectedName]);
 
   const deleteActivity = useCallback((name: string) => {
     if (readOnly) return;
@@ -109,14 +145,13 @@ export function PipelineDesigner({
       .map((a) => ({ ...a, dependsOn: (a.dependsOn || []).filter((d) => d.activity !== name) }));
     onActivitiesChange(next);
     setSelectedName(null);
-  }, [activities, onActivitiesChange, readOnly]);
+  }, [activities, onActivitiesChange, readOnly, setSelectedName]);
 
-  // Wire a success dependency from `from` → `to`. Idempotent and cycle-safe:
-  // we refuse a connection that would make `to` depend on itself transitively.
-  const connect = useCallback((from: string, to: string) => {
+  // Wire a dependency from `from` → `to` carrying the source port's condition.
+  // Idempotent + cycle-safe: refuse a connection that would make `to` depend
+  // on itself transitively.
+  const connect = useCallback((from: string, to: string, cond: ConnectorCondition) => {
     if (readOnly || from === to) return;
-    // Cycle guard — walk the existing dependency graph from `from` upward; if
-    // `to` is already an ancestor of `from`, adding from→to would loop.
     const ancestors = new Set<string>();
     const stack = [from];
     while (stack.length) {
@@ -131,46 +166,64 @@ export function PipelineDesigner({
     const next = activities.map((a) => {
       if (a.name !== to) return a;
       const deps = a.dependsOn || [];
-      if (deps.some((d) => d.activity === from)) return a; // already wired
+      const existing = deps.find((d) => d.activity === from);
+      if (existing) {
+        // Merge the condition into the existing edge (ADF allows multiple
+        // conditions on one dependency, e.g. Completed alone, or Succeeded).
+        const conds = new Set(existing.dependencyConditions || []);
+        conds.add(cond);
+        return {
+          ...a,
+          dependsOn: deps.map((d) => d.activity === from
+            ? { ...d, dependencyConditions: [...conds] } : d),
+        };
+      }
       return {
         ...a,
-        dependsOn: [...deps, { activity: from, dependencyConditions: ['Succeeded'] }],
+        dependsOn: [...deps, { activity: from, dependencyConditions: [cond] }],
       };
     });
     onActivitiesChange(next);
   }, [activities, onActivitiesChange, readOnly]);
 
   return (
-    <div className={s.threePane}>
+    <div className={s.shell} data-pipeline-designer>
       <div className={s.paletteCol}>
         <ActivityPalette onInsert={insertActivity} />
       </div>
       <div className={s.centerCol}>
-        <PipelineCanvas
-          ref={canvasRef}
-          activities={activities}
-          selectedName={selectedName || undefined}
-          onSelect={setSelectedName}
-          snapToGrid={snapToGrid}
-          showGrid={showGrid}
-          onDropPaletteKey={(key) => {
-            const def = findByKey(key);
-            if (def) insertActivity(def);
-          }}
-          onConnect={connect}
-        />
-        <Caption1 style={{ color: tokens.colorNeutralForeground3, paddingLeft: tokens.spacingHorizontalXS }}>
+        <div className={s.canvasWrap}>
+          <PipelineCanvas
+            ref={canvasRef}
+            activities={activities}
+            selectedName={selectedName || undefined}
+            onSelect={setSelectedName}
+            snapToGrid={snapToGrid}
+            showGrid={showGrid}
+            onDropPaletteKey={(key) => {
+              const def = findByKey(key);
+              if (def) insertActivity(def);
+            }}
+            onConnect={connect}
+          />
+        </div>
+        {/* Bottom properties dock — ADF Studio edits the selected sub-resource
+            (activity) in a panel at the bottom of the canvas. */}
+        <div className={s.dock}>
+          <PropertiesPanel
+            layout="dock"
+            activity={selected}
+            allActivities={activities}
+            parameters={parameters}
+            variables={variables}
+            onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
+            onDelete={() => { if (selected) deleteActivity(selected.name); }}
+          />
+        </div>
+        <Caption1 className={s.status}>
           {activities.length} activit{activities.length === 1 ? 'y' : 'ies'} · {ACTIVITY_CATALOG.length} types in palette
         </Caption1>
       </div>
-      <PropertiesPanel
-        activity={selected}
-        allActivities={activities}
-        parameters={parameters}
-        variables={variables}
-        onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
-        onDelete={() => { if (selected) deleteActivity(selected.name); }}
-      />
     </div>
   );
-}
+});
