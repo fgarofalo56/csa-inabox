@@ -31,6 +31,7 @@ import {
   Clock20Regular, Link20Regular, Add20Regular, Settings20Regular,
 } from '@fluentui/react-icons';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
+import { FactoryResourcesTree } from '@/lib/components/pipeline/factory-resources-tree';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { extractActivities, writeActivitiesToSpec, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
@@ -118,6 +119,9 @@ export function PipelineEditorCore({
 
   // ---- Manage (factory resources) dialog state — ADF only ----
   const [manageOpen, setManageOpen] = useState(false);
+  // Bump to force the Factory Resources navigator to re-list after a
+  // bind/create/manage action mutates the factory.
+  const [factoryRefreshKey, setFactoryRefreshKey] = useState(0);
 
   // ---- Triggers dialog state ----
   const [triggersOpen, setTriggersOpen] = useState(false);
@@ -162,6 +166,7 @@ export function PipelineEditorCore({
       if (!ok || !data) { setBindError(e || 'bind failed'); return; }
       setBound(data.bound);
       setNewName('');
+      setFactoryRefreshKey((k) => k + 1);
       await loadBinding();
     } catch (e: any) {
       setBindError(e?.message || String(e));
@@ -440,23 +445,36 @@ export function PipelineEditorCore({
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div style={{ padding: 8 }}>
-          <Tree aria-label="Pipelines" defaultOpenItems={['p']}>
-            <TreeItem itemType="branch" value="p">
-              <TreeItemLayout iconBefore={<Server20Regular />}>Pipelines ({available.length})</TreeItemLayout>
-              <Tree>
-                {available.map((p) => (
-                  <TreeItem key={p.name} itemType="leaf" value={`pl-${p.name}`} onClick={() => bindTo(p.name, false)}>
-                    <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{p.name} {bound === p.name && '·'}</TreeItemLayout>
-                  </TreeItem>
-                ))}
-              </Tree>
-            </TreeItem>
-          </Tree>
-          <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
-            Click a pipeline to bind this item to it.
-          </Caption1>
-        </div>
+        isAdf ? (
+          // ADF Studio Factory Resources navigator — typed groups (Pipelines,
+          // Datasets, Data flows, Triggers, Linked services, Integration
+          // runtimes) with live counts + ＋ New + delete, all real ADF REST.
+          // Selecting a pipeline binds + opens it on the canvas (existing flow).
+          <FactoryResourcesTree
+            boundPipeline={bound}
+            onOpenPipeline={(name) => bindTo(name, false)}
+            onOpenManage={() => setManageOpen(true)}
+            refreshKey={factoryRefreshKey}
+          />
+        ) : (
+          <div style={{ padding: 8 }}>
+            <Tree aria-label="Pipelines" defaultOpenItems={['p']}>
+              <TreeItem itemType="branch" value="p">
+                <TreeItemLayout iconBefore={<Server20Regular />}>Pipelines ({available.length})</TreeItemLayout>
+                <Tree>
+                  {available.map((p) => (
+                    <TreeItem key={p.name} itemType="leaf" value={`pl-${p.name}`} onClick={() => bindTo(p.name, false)}>
+                      <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{p.name} {bound === p.name && '·'}</TreeItemLayout>
+                    </TreeItem>
+                  ))}
+                </Tree>
+              </TreeItem>
+            </Tree>
+            <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+              Click a pipeline to bind this item to it.
+            </Caption1>
+          </div>
+        )
       }
       main={
         <div className={s.pad}>
@@ -640,7 +658,17 @@ export function PipelineEditorCore({
             </>
           )}
 
-          {isAdf && <ManagePanel open={manageOpen} onOpenChange={setManageOpen} />}
+          {isAdf && (
+            <ManagePanel
+              open={manageOpen}
+              onOpenChange={(open) => {
+                setManageOpen(open);
+                // On close, the navigator re-lists so linked-service / dataset /
+                // IR changes made in the Manage hub reflect in the counts.
+                if (!open) setFactoryRefreshKey((k) => k + 1);
+              }}
+            />
+          )}
 
           <Dialog open={triggersOpen} onOpenChange={(_, d) => setTriggersOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '760px', width: '90vw' }}>

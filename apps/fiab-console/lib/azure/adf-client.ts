@@ -345,6 +345,59 @@ export async function deleteDataset(name: string): Promise<void> {
 }
 
 // ============================================================
+// Data flows (ADF Mapping Data Flows)
+//
+// A data flow is a visually-designed, Spark-executed transformation that a
+// pipeline invokes via an ExecuteDataFlow activity. It is a child resource of
+// the factory (Microsoft.DataFactory/factories/dataflows). Its `properties`
+// carries a `type` ("MappingDataFlow" | "Flowlet" | "WranglingDataFlow") and a
+// `typeProperties` with sources/sinks/transformations/script. We list/create/
+// delete via real ARM REST; the create payload is the structured data-flow
+// definition the caller supplies (or a minimal empty MappingDataFlow).
+// ============================================================
+
+export interface AdfDataFlow {
+  id?: string;
+  name: string;
+  type?: string;
+  etag?: string;
+  properties: {
+    type: 'MappingDataFlow' | 'Flowlet' | 'WranglingDataFlow' | string;
+    description?: string;
+    annotations?: unknown[];
+    folder?: { name: string };
+    typeProperties?: Record<string, unknown>;
+  };
+}
+
+export async function listDataFlows(): Promise<AdfDataFlow[]> {
+  const r = await call(`${base()}/dataflows?api-version=${API}`);
+  const body = await jsonOrThrow<{ value: AdfDataFlow[] }>(r, 'listDataFlows');
+  return body.value || [];
+}
+
+export async function getDataFlow(name: string): Promise<AdfDataFlow> {
+  const r = await call(`${base()}/dataflows/${encodeURIComponent(name)}?api-version=${API}`);
+  return jsonOrThrow<AdfDataFlow>(r, `getDataFlow(${name})`);
+}
+
+export async function upsertDataFlow(name: string, spec: AdfDataFlow): Promise<AdfDataFlow> {
+  const body = { name: spec.name || name, properties: spec.properties };
+  const r = await call(`${base()}/dataflows/${encodeURIComponent(name)}?api-version=${API}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<AdfDataFlow>(r, `upsertDataFlow(${name})`);
+}
+
+export async function deleteDataFlow(name: string): Promise<void> {
+  const r = await call(`${base()}/dataflows/${encodeURIComponent(name)}?api-version=${API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 200 && r.status !== 204) {
+    throw new Error(`deleteDataFlow failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+// ============================================================
 // Triggers
 // ============================================================
 
