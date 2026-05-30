@@ -128,6 +128,78 @@ function purviewBase(): string {
   return `https://${purviewAccount()}-api.purview.azure.com`;
 }
 
+/** True when LOOM_PURVIEW_ACCOUNT is set (does NOT prove reachability). */
+export function isPurviewConfigured(): boolean {
+  return !!process.env.LOOM_PURVIEW_ACCOUNT;
+}
+
+/** Resolved short account name, or null when the env var is unset. */
+export function getPurviewAccountName(): string | null {
+  return process.env.LOOM_PURVIEW_ACCOUNT ? purviewAccount() : null;
+}
+
+export interface PurviewProbeResult {
+  configured: boolean;
+  account: string | null;
+  /** 'live' | 'not_configured' | 'cross_cloud' | 'upstream_error' */
+  reason: 'live' | 'not_configured' | 'cross_cloud' | 'upstream_error';
+  message?: string;
+  hint?: PurviewNotConfiguredHint;
+}
+
+/**
+ * Lightweight reachability probe. Distinguishes:
+ *   - not_configured   → LOOM_PURVIEW_ACCOUNT unset
+ *   - live             → data plane answered 2xx / 401 / 403 (DNS resolved + TLS ok)
+ *   - cross_cloud      → DNS / network failure reaching `<account>-api.purview.azure.com`
+ *                        (the classic symptom of a Gov account name resolved from a
+ *                        Commercial-cloud Console, or vice-versa) OR a token-audience
+ *                        mismatch from acquiring a token for the wrong sovereign cloud.
+ *   - upstream_error   → reachable but answered 5xx / unexpected error.
+ *
+ * We hit a cheap GET (businessdomains) and inspect the outcome. A 401/403 still
+ * means the host is reachable in this cloud — that's a role-grant problem, not a
+ * cross-cloud problem, so we report it as 'live' (the surfaces then show the
+ * specific Purview error from their own calls).
+ */
+export async function probePurview(): Promise<PurviewProbeResult> {
+  if (!process.env.LOOM_PURVIEW_ACCOUNT) {
+    return {
+      configured: false,
+      account: null,
+      reason: 'not_configured',
+      hint: notConfiguredHint('LOOM_PURVIEW_ACCOUNT'),
+    };
+  }
+  const account = purviewAccount();
+  try {
+    const token = await credential.getToken(PURVIEW_SCOPE);
+    if (!token?.token) {
+      return { configured: true, account, reason: 'upstream_error', message: 'Failed to acquire a Purview data-plane token.' };
+    }
+    const url = `${purviewBase()}/datagovernance/businessdomains?api-version=${PURVIEW_API_VERSION}`;
+    const res = await fetch(url, { headers: { authorization: `Bearer ${token.token}` } });
+    // Any HTTP answer (even 401/403/404) proves the host resolves in this cloud.
+    if (res.status >= 500) {
+      return { configured: true, account, reason: 'upstream_error', message: `Purview answered ${res.status}.` };
+    }
+    return { configured: true, account, reason: 'live' };
+  } catch (e: any) {
+    // fetch throws on DNS / connection failures — the cross-cloud signature.
+    const msg = e?.message || String(e);
+    const networkish = /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|getaddrinfo|fetch failed|network|certificate/i.test(msg);
+    if (networkish) {
+      const hint = notConfiguredHint('LOOM_PURVIEW_ACCOUNT');
+      hint.followUp =
+        `The account name "${account}" did not resolve from this Console's cloud (${msg}). ` +
+        'This usually means the Purview account lives in a different Azure cloud (e.g. US Gov) than the Loom Console (Commercial). ' +
+        'Provision a Purview account in the Console cloud and set LOOM_PURVIEW_ACCOUNT to it, then restart the Console.';
+      return { configured: true, account, reason: 'cross_cloud', message: msg, hint };
+    }
+    return { configured: true, account, reason: 'upstream_error', message: msg };
+  }
+}
+
 // ============================================================
 // Low-level fetch
 // ============================================================
