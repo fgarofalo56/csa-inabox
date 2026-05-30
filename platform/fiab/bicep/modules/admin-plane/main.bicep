@@ -214,6 +214,8 @@ module monitoring 'monitoring.bicep' = {
     location: location
     defenderForAIEnabled: defenderForAIEnabled
     complianceTags: complianceTags
+    // /monitor Logs (KQL) tab — Console UAMI gets Log Analytics Reader on the LAW.
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
   }
 }
 
@@ -487,6 +489,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_AI_SEARCH_RG', value: resourceGroup().name }
             { name: 'LOOM_ACA_RG', value: resourceGroup().name }
             { name: 'LOOM_DLZ_RG', value: loomDlzRg }
+            // /monitor observability surface — Log Analytics workspace GUID
+            // (customerId) for the Logs (KQL) tab. The UAMI needs
+            // "Log Analytics Reader" on this workspace + "Monitoring Reader"
+            // on the sub for metrics/activity/health/alerts.
+            { name: 'LOOM_LOG_ANALYTICS_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
