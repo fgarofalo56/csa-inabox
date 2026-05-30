@@ -597,6 +597,141 @@ export async function deleteEventstream(workspaceId: string, id: string): Promis
 }
 
 // ============================================================
+// Real-Time Hub — Microsoft / Fabric / Azure source connectors
+//
+// The Fabric Real-Time Hub is the tenant-wide place to discover all
+// streaming data and connect to Microsoft sources. There is no separate
+// "Real-Time Hub REST API"; the hub is composed on top of the Eventstream
+// REST surface (create an Eventstream item whose topology includes the
+// chosen source) plus per-workspace item listing.
+//
+// `RTH_SOURCE_TYPES` mirrors the documented Fabric Eventstream source
+// `type` enum exactly:
+//   AmazonKinesis, AmazonMSKKafka, ApacheKafka, AzureCosmosDBCDC,
+//   AzureBlobStorageEvents, AzureEventHub, AzureIoTHub, AzureSQLDBCDC,
+//   AzureSQLMIDBCDC, ConfluentCloud, CustomEndpoint,
+//   FabricCapacityUtilizationEvents, GooglePubSub, MySQLCDC, PostgreSQLCDC,
+//   SampleData, FabricWorkspaceItemEvents, FabricJobEvents, FabricOneLakeEvents
+//
+// Docs:
+//   https://learn.microsoft.com/fabric/real-time-hub/real-time-hub-overview
+//   https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/eventstream-rest-api
+// ============================================================
+
+/** Canonical Fabric Eventstream source `type` enum (Real-Time Hub connectors). */
+export const RTH_SOURCE_TYPES = [
+  'AzureEventHub',
+  'AzureIoTHub',
+  'AzureServiceBus',
+  'AzureSQLDBCDC',
+  'AzureSQLMIDBCDC',
+  'AzureCosmosDBCDC',
+  'PostgreSQLCDC',
+  'MySQLCDC',
+  'AzureBlobStorageEvents',
+  'AmazonKinesis',
+  'AmazonMSKKafka',
+  'ApacheKafka',
+  'ConfluentCloud',
+  'GooglePubSub',
+  'SampleData',
+  'CustomEndpoint',
+  'FabricWorkspaceItemEvents',
+  'FabricJobEvents',
+  'FabricOneLakeEvents',
+  'FabricCapacityUtilizationEvents',
+] as const;
+
+export type RthSourceType = (typeof RTH_SOURCE_TYPES)[number];
+
+export function isRthSourceType(t: string): t is RthSourceType {
+  return (RTH_SOURCE_TYPES as readonly string[]).includes(t);
+}
+
+/**
+ * Build a single-source Eventstream topology in the documented Fabric
+ * shape { sources[], destinations[], operators[], streams[] }. The source
+ * `type` MUST be one of `RTH_SOURCE_TYPES`; `properties` carries the
+ * source-specific connection settings (e.g. dataConnectionId,
+ * consumerGroupName for AzureEventHub). A DefaultStream is always emitted
+ * so the new stream shows up in Real-Time Hub's All-data-streams list.
+ */
+export function buildSourceTopology(input: {
+  displayName: string;
+  sourceName: string;
+  sourceType: RthSourceType;
+  properties?: Record<string, unknown>;
+}): {
+  sources: Array<{ name: string; type: string; properties: Record<string, unknown> }>;
+  destinations: never[];
+  operators: never[];
+  streams: Array<{ name: string; type: string; properties: Record<string, unknown> }>;
+  compatibilityLevel: string;
+} {
+  const streamName = `${input.sourceName}-stream`;
+  return {
+    sources: [{ name: input.sourceName, type: input.sourceType, properties: input.properties || {} }],
+    destinations: [],
+    operators: [],
+    streams: [{ name: streamName, type: 'DefaultStream', properties: { inputNodes: [{ name: input.sourceName }] } }],
+    compatibilityLevel: '1.0',
+  };
+}
+
+/**
+ * Real-Time Hub "Connect source" — creates a REAL Fabric Eventstream item
+ * carrying the chosen Microsoft/Fabric/Azure source. Backed by
+ * POST /workspaces/{ws}/eventstreams with a Base64 eventstream.json part
+ * (the same definition REST API the Eventstream editor publishes through).
+ */
+export async function connectEventstreamSource(
+  fabricWorkspaceId: string,
+  input: {
+    displayName: string;
+    description?: string;
+    sourceName: string;
+    sourceType: RthSourceType;
+    properties?: Record<string, unknown>;
+  },
+): Promise<FabricItem | { _accepted: true; location?: string }> {
+  if (!fabricWorkspaceId) throw new FabricError('fabricWorkspaceId is required', 400);
+  if (!input?.displayName) throw new FabricError('displayName is required', 400);
+  if (!isRthSourceType(input.sourceType)) {
+    throw new FabricError(`Unsupported source type "${input.sourceType}". Allowed: ${RTH_SOURCE_TYPES.join(', ')}`, 400);
+  }
+  const topology = buildSourceTopology({
+    displayName: input.displayName,
+    sourceName: input.sourceName || 'source-1',
+    sourceType: input.sourceType,
+    properties: input.properties,
+  });
+  const definition = buildEventstreamDefinition(topology);
+  return call(
+    `/workspaces/${encodeURIComponent(fabricWorkspaceId)}/eventstreams`,
+    {
+      method: 'POST',
+      body: { displayName: input.displayName, description: input.description, definition },
+      acceptLongRunning: true,
+    },
+  );
+}
+
+// ============================================================
+// KQL Databases (Real-Time Intelligence) — for Real-Time Hub
+// "All data streams" KQL-table rows. Listed per workspace.
+// ============================================================
+
+export async function listKqlDatabases(workspaceId: string): Promise<FabricItem[]> {
+  const j = await call<{ value: FabricItem[] }>(`/workspaces/${encodeURIComponent(workspaceId)}/kqlDatabases`);
+  return j.value || [];
+}
+
+export async function listEventhouses(workspaceId: string): Promise<FabricItem[]> {
+  const j = await call<{ value: FabricItem[] }>(`/workspaces/${encodeURIComponent(workspaceId)}/eventhouses`);
+  return j.value || [];
+}
+
+// ============================================================
 // Job instances (history)
 // ============================================================
 
