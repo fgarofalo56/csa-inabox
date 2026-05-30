@@ -46,6 +46,8 @@ import {
   bboxToZoom,
   parseUdfFunctions,
   normalizeDaSources,
+  shapeDaHistory,
+  canSendDaQuestion,
   type VarType,
   type UdfFunction,
   type DaSourceType,
@@ -80,6 +82,63 @@ const useStyles = makeStyles({
   tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   card: { padding: '12px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px' },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px' },
+
+  /* ---- Data-agent test chat: flex column with a scrollable thread that grows
+     and a composer pinned at the bottom so Send is ALWAYS reachable. ---- */
+  chatShell: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minHeight: 0,
+    height: '62vh',
+    gap: '10px',
+  },
+  chatHead: { display: 'flex', flexDirection: 'column', gap: '2px', flexShrink: 0 },
+  chatThread: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '6px',
+    padding: '12px',
+    backgroundColor: tokens.colorNeutralBackground2,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  chatRowUser: { alignSelf: 'flex-end', maxWidth: '85%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' },
+  chatRowBot: { alignSelf: 'flex-start', maxWidth: '85%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '4px' },
+  bubbleUser: {
+    padding: '8px 12px', borderRadius: '12px 12px 2px 12px',
+    backgroundColor: tokens.colorBrandBackground,
+    color: tokens.colorNeutralForegroundOnBrand,
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '14px', lineHeight: '20px',
+  },
+  bubbleBot: {
+    padding: '8px 12px', borderRadius: '12px 12px 12px 2px',
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    color: tokens.colorNeutralForeground1,
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '14px', lineHeight: '20px',
+  },
+  bubbleErr: {
+    padding: '8px 12px', borderRadius: '12px 12px 12px 2px',
+    backgroundColor: tokens.colorStatusDangerBackground1,
+    border: `1px solid ${tokens.colorStatusDangerBorder1}`,
+    color: tokens.colorStatusDangerForeground1,
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '14px', lineHeight: '20px',
+  },
+  chatMeta: { color: tokens.colorNeutralForeground3, fontSize: '11px', paddingLeft: '4px' },
+  chatComposer: {
+    display: 'flex', gap: '8px', alignItems: 'flex-end', flexShrink: 0,
+    paddingTop: '4px',
+  },
+  chatSource: {
+    fontFamily: 'monospace', fontSize: '12px',
+    backgroundColor: tokens.colorNeutralBackground3,
+    padding: '8px', borderRadius: '4px', overflowX: 'auto',
+    marginTop: '4px', whiteSpace: 'pre', color: tokens.colorNeutralForeground1,
+  },
 });
 
 // ----- ML Model -----
@@ -2361,28 +2420,41 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const [chat, setChat] = useState<DaChatMsg[]>([]);
   const [question, setQuestion] = useState('');
   const [asking, setAsking] = useState(false);
+  const threadRef = useRef<HTMLDivElement | null>(null);
+  // Keep the latest turn in view as the thread grows / a turn lands.
+  useEffect(() => {
+    const el = threadRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chat, asking]);
+  const canSend = canSendDaQuestion(question, asking);
   const ask = useCallback(async () => {
     const q = question.trim();
-    if (!q) return;
+    if (!q || asking) return;
     if (dirty) await save();
+    // Build history from the thread BEFORE we append the new user turn.
+    const history = shapeDaHistory(chat);
     setChat((c) => [...c, { role: 'user', content: q }]);
     setQuestion(''); setAsking(true);
     try {
-      const history = chat.map((m) => ({ role: m.role, content: m.content }));
       const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/chat`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ question: q, history }),
       });
-      const j = await r.json();
-      if (!j.ok) {
-        setChat((c) => [...c, { role: 'assistant', content: `${j.error}${j.hint ? `\n\n${j.hint}` : ''}`, error: true }]);
+      // Content-type guard: a 404/500 returns an HTML page, not JSON — calling
+      // r.json() on that throws "Unexpected token <" and the answer is lost.
+      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string }>(r);
+      const j = res.data;
+      if (res.ok && j) {
+        setChat((c) => [...c, { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed }]);
       } else {
-        setChat((c) => [...c, { role: 'assistant', content: j.answer, query: j.query, sourceUsed: j.sourceUsed }]);
+        const detail = res.error || j?.error || `HTTP ${res.status}`;
+        const hint = j?.hint ? `\n\n${j.hint}` : '';
+        setChat((c) => [...c, { role: 'assistant', content: `${detail}${hint}`, error: true }]);
       }
     } catch (e: any) {
       setChat((c) => [...c, { role: 'assistant', content: e?.message || String(e), error: true }]);
     } finally { setAsking(false); }
-  }, [question, chat, dirty, save, id]);
+  }, [question, asking, chat, dirty, save, id]);
 
   // ---- publish ----
   const [publishing, setPublishing] = useState(false);
@@ -2499,32 +2571,73 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
           )}
 
           {tab === 'test' && (
-            <>
-              <Subtitle2>Test chat (live, grounded)</Subtitle2>
-              <Caption1>Each question runs against the live AOAI deployment on the Foundry hub, grounded on the sources + instructions above.</Caption1>
-              <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, minHeight: 220, maxHeight: 420, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {chat.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Ask a question to start a thread.</Caption1>}
+            <div className={s.chatShell}>
+              <div className={s.chatHead}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Subtitle2>Test chat</Subtitle2>
+                  <Badge appearance="tint" color="brand">live · grounded</Badge>
+                  <div style={{ flex: 1 }} />
+                  <Button size="small" appearance="subtle" onClick={() => { setChat([]); setQuestion(''); }} disabled={asking || (chat.length === 0 && !question)}>+ New thread</Button>
+                </div>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Each turn runs against the live AOAI deployment on the Foundry hub, grounded on the {sources.length} source{sources.length === 1 ? '' : 's'} + instructions in Build.
+                </Caption1>
+                {sources.length === 0 && (
+                  <MessageBar intent="warning"><MessageBarBody>No data sources attached yet — answers will be ungrounded. Add at least one source in the <strong>Build</strong> tab for real grounded responses.</MessageBarBody></MessageBar>
+                )}
+              </div>
+
+              <div ref={threadRef} className={s.chatThread} aria-live="polite">
+                {chat.length === 0 && !asking && (
+                  <div style={{ margin: 'auto', textAlign: 'center', color: tokens.colorNeutralForeground3 }}>
+                    <Body1 style={{ display: 'block', marginBottom: 4 }}>Ask the agent a question to start a thread.</Body1>
+                    <Caption1>e.g. “What was total revenue by region last quarter?”</Caption1>
+                  </div>
+                )}
                 {chat.map((m, i) => (
-                  <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '85%' }}>
-                    <div style={{ padding: '8px 12px', borderRadius: 8, background: m.role === 'user' ? tokens.colorBrandBackground2 : m.error ? tokens.colorPaletteRedBackground2 : tokens.colorNeutralBackground3, whiteSpace: 'pre-wrap' }}>
-                      {m.content}
+                  <div key={i} className={m.role === 'user' ? s.chatRowUser : s.chatRowBot}>
+                    <span className={s.chatMeta}>{m.role === 'user' ? 'You' : m.error ? 'Agent · error' : 'Agent'}{m.sourceUsed && !m.error ? ` · ${m.sourceUsed}` : ''}</span>
+                    <div className={m.role === 'user' ? s.bubbleUser : m.error ? s.bubbleErr : s.bubbleBot}>
+                      {m.content || (m.error ? 'Unknown error' : '')}
                     </div>
                     {m.query && (
-                      <details style={{ marginTop: 4 }}>
-                        <summary style={{ cursor: 'pointer', fontSize: 12 }}>Generated query{m.sourceUsed ? ` · ${m.sourceUsed}` : ''}</summary>
-                        <pre style={{ fontFamily: 'monospace', fontSize: 12, background: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, overflowX: 'auto' }}>{m.query}</pre>
+                      <details style={{ marginTop: 2 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground2 }}>Generated query{m.sourceUsed ? ` · ${m.sourceUsed}` : ''}</summary>
+                        <pre className={s.chatSource}>{m.query}</pre>
                       </details>
                     )}
                   </div>
                 ))}
+                {asking && (
+                  <div className={s.chatRowBot}>
+                    <span className={s.chatMeta}>Agent</span>
+                    <div className={s.bubbleBot} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Spinner size="tiny" /> Thinking…
+                    </div>
+                  </div>
+                )}
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Input value={question} onChange={(_, d) => setQuestion(d.value)} placeholder="Ask the agent…" style={{ flex: 1 }}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !asking) ask(); }} />
-                <Button appearance="primary" onClick={ask} disabled={asking || !question.trim()}>{asking ? 'Thinking…' : 'Send'}</Button>
-                <Button onClick={() => setChat([])} disabled={asking || chat.length === 0}>New thread</Button>
+
+              <div className={s.chatComposer}>
+                <Textarea
+                  value={question}
+                  onChange={(_, d) => setQuestion(d.value)}
+                  placeholder="Ask the agent…  (Enter to send · Shift+Enter for a new line)"
+                  resize="none"
+                  rows={2}
+                  textarea={{ style: { maxHeight: 120, overflowY: 'auto' } }}
+                  style={{ flex: 1 }}
+                  disabled={asking}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (canSend) ask();
+                    }
+                  }}
+                />
+                <Button appearance="primary" onClick={ask} disabled={!canSend}>{asking ? 'Sending…' : 'Send'}</Button>
               </div>
-            </>
+            </div>
           )}
 
           {tab === 'publish' && (

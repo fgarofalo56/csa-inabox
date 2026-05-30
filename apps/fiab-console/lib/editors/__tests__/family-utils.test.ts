@@ -24,6 +24,7 @@ import {
   computeGeoBbox, bboxToZoom,
   parseUdfFunctions,
   normalizeDaSources, guessDaSourceType,
+  shapeDaHistory, canSendDaQuestion,
 } from '../_family-utils';
 
 // ============================================================
@@ -353,5 +354,77 @@ describe('normalizeDaSources', () => {
     const out = normalizeDaSources(['just-a-string', null, { name: 'wh' }]);
     expect(out).toHaveLength(1);
     expect(out[0].name).toBe('wh');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// shapeDaHistory / canSendDaQuestion  [DataAgentEditor test chat]
+// ---------------------------------------------------------------------------
+
+describe('shapeDaHistory', () => {
+  it('keeps only role+content for user/assistant turns', () => {
+    const out = shapeDaHistory([
+      { role: 'user', content: 'hi', error: false },
+      { role: 'assistant', content: 'hello', query: 'SELECT 1' } as any,
+    ]);
+    expect(out).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+    ]);
+  });
+
+  it('excludes error bubbles so a failed turn never poisons grounding', () => {
+    const out = shapeDaHistory([
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: '503 no deployment', error: true },
+      { role: 'user', content: 'q2' },
+    ]);
+    expect(out.map((t) => t.content)).toEqual(['q1', 'q2']);
+  });
+
+  it('drops blank / non-string content', () => {
+    const out = shapeDaHistory([
+      { role: 'user', content: '   ' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'real' },
+    ]);
+    expect(out).toEqual([{ role: 'user', content: 'real' }]);
+  });
+
+  it('caps to the last N turns (default 10)', () => {
+    const many = Array.from({ length: 14 }, (_, i) => ({ role: 'user' as const, content: `m${i}` }));
+    const out = shapeDaHistory(many);
+    expect(out).toHaveLength(10);
+    expect(out[0].content).toBe('m4');
+    expect(out[9].content).toBe('m13');
+  });
+
+  it('honours a custom max and an unbounded max=0', () => {
+    const turns = [
+      { role: 'user' as const, content: 'a' },
+      { role: 'assistant' as const, content: 'b' },
+      { role: 'user' as const, content: 'c' },
+    ];
+    expect(shapeDaHistory(turns, 2).map((t) => t.content)).toEqual(['b', 'c']);
+    expect(shapeDaHistory(turns, 0)).toHaveLength(3);
+  });
+
+  it('tolerates a non-array input', () => {
+    expect(shapeDaHistory(undefined as any)).toEqual([]);
+    expect(shapeDaHistory(null as any)).toEqual([]);
+  });
+});
+
+describe('canSendDaQuestion', () => {
+  it('is true only for a non-blank question when not asking', () => {
+    expect(canSendDaQuestion('hello', false)).toBe(true);
+    expect(canSendDaQuestion('  hi  ', false)).toBe(true);
+  });
+
+  it('is false when empty / whitespace / asking', () => {
+    expect(canSendDaQuestion('', false)).toBe(false);
+    expect(canSendDaQuestion('   ', false)).toBe(false);
+    expect(canSendDaQuestion('hello', true)).toBe(false);
+    expect(canSendDaQuestion(undefined as any, false)).toBe(false);
   });
 });
