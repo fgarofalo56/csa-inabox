@@ -32,6 +32,17 @@ function host(): string {
   return h.replace(/^https?:\/\//, '').replace(/\/$/, '');
 }
 
+/**
+ * Honest config gate for the workspace-level Databricks routes. Returns the
+ * exact missing env var so each BFF route can 503 with a precise MessageBar
+ * (`code: 'not_configured'`) instead of a generic 500. Returns null when the
+ * workspace hostname is set. Mirrors synapseConfigGate / the ADF factory gate.
+ */
+export function databricksConfigGate(): { missing: string } | null {
+  if (!process.env.LOOM_DATABRICKS_HOSTNAME) return { missing: 'LOOM_DATABRICKS_HOSTNAME' };
+  return null;
+}
+
 async function dbxToken(): Promise<string> {
   const t = await credential.getToken(DBX_SCOPE);
   if (!t?.token) throw new Error('Failed to acquire Databricks AAD token');
@@ -103,6 +114,44 @@ export async function stopWarehouse(id: string): Promise<void> {
   if (!res.ok && res.status !== 200) {
     throw new Error(`stopWarehouse failed ${res.status}: ${await res.text()}`);
   }
+}
+
+export interface WarehouseCreateSpec {
+  name: string;
+  cluster_size?: string;          // '2X-Small' … '4X-Large'
+  min_num_clusters?: number;
+  max_num_clusters?: number;
+  auto_stop_mins?: number;
+  warehouse_type?: 'CLASSIC' | 'PRO';
+  enable_serverless_compute?: boolean;
+}
+
+/** Create a SQL Warehouse. POST /api/2.0/sql/warehouses → { id }. */
+export async function createWarehouse(spec: WarehouseCreateSpec): Promise<{ id: string }> {
+  const payload: Record<string, unknown> = {
+    name: spec.name,
+    cluster_size: spec.cluster_size ?? 'X-Small',
+    warehouse_type: spec.warehouse_type ?? 'PRO',
+    min_num_clusters: spec.min_num_clusters ?? 1,
+    max_num_clusters: spec.max_num_clusters ?? 1,
+    auto_stop_mins: spec.auto_stop_mins ?? 10,
+  };
+  if (typeof spec.enable_serverless_compute === 'boolean') {
+    payload.enable_serverless_compute = spec.enable_serverless_compute;
+  }
+  const res = await dbxFetch('/api/2.0/sql/warehouses', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return asJsonOrThrow<{ id: string }>(res, 'createWarehouse');
+}
+
+/** Permanently delete a SQL Warehouse. DELETE /api/2.0/sql/warehouses/{id}. */
+export async function deleteWarehouse(id: string): Promise<void> {
+  const res = await dbxFetch(`/api/2.0/sql/warehouses/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+  await asJsonOrThrow<unknown>(res, 'deleteWarehouse');
 }
 
 export interface WarehouseScaleSpec {
@@ -1023,5 +1072,57 @@ export async function listUcTables(catalogName: string, schemaName: string): Pro
   const res = await dbxFetch(`/api/2.1/unity-catalog/tables?${params.toString()}`);
   const body = await asJsonOrThrow<{ tables?: UcTable[] }>(res, `listUcTables(${catalogName}.${schemaName})`);
   return body.tables || [];
+}
+
+// ============================================================
+// Repos / Git folders  (api/2.0/repos)
+//
+// Databricks Git folders link a workspace path to a remote Git repo. The REST
+// surface: list, create (must link a remote repo + provider), get, update
+// (checkout branch/tag), delete. Mirrors `databricks repos` CLI group.
+// ============================================================
+export interface Repo {
+  id: number;
+  url?: string;
+  provider?: string;
+  path?: string;
+  branch?: string;
+  head_commit_id?: string;
+}
+
+export async function listRepos(pathPrefix?: string): Promise<Repo[]> {
+  // /api/2.0/repos is paginated (next_page_token). Walk all pages so counts are real.
+  const out: Repo[] = [];
+  let token: string | undefined;
+  do {
+    const params = new URLSearchParams();
+    if (pathPrefix) params.set('path_prefix', pathPrefix);
+    if (token) params.set('next_page_token', token);
+    const qs = params.toString();
+    const res = await dbxFetch(`/api/2.0/repos${qs ? `?${qs}` : ''}`);
+    const body = await asJsonOrThrow<{ repos?: Repo[]; next_page_token?: string }>(res, 'listRepos');
+    out.push(...(body.repos || []));
+    token = body.next_page_token;
+  } while (token);
+  return out;
+}
+
+export interface RepoCreateSpec {
+  url: string;
+  provider: string;   // gitHub | gitLab | azureDevOpsServices | bitbucketCloud | …
+  path?: string;      // /Repos/<user>/<name> ; server derives one when omitted
+}
+
+export async function createRepo(spec: RepoCreateSpec): Promise<Repo> {
+  const res = await dbxFetch('/api/2.0/repos', {
+    method: 'POST',
+    body: JSON.stringify(spec),
+  });
+  return asJsonOrThrow<Repo>(res, 'createRepo');
+}
+
+export async function deleteRepo(repoId: number): Promise<void> {
+  const res = await dbxFetch(`/api/2.0/repos/${repoId}`, { method: 'DELETE' });
+  await asJsonOrThrow<unknown>(res, 'deleteRepo');
 }
 
