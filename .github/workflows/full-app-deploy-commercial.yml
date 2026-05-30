@@ -214,9 +214,9 @@ jobs:
           echo "::notice::ACR ${{ needs.resolve.outputs.acr_name }} re-locked (private endpoint only, no admin user)."
 
   redeploy-with-apps:
-    name: Re-deploy Bicep with deployAppsEnabled=true
+    name: Roll Container Apps to new image
     needs: [resolve, close-acr]
-    if: always() && inputs.enable_apps_after && needs.close-acr.result == 'success'
+    if: always() && inputs.enable_apps_after && (needs.close-acr.result == 'success' || inputs.skip_build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -230,22 +230,31 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
-      - name: Setup Bicep
-        run: az bicep install
-      - name: Deploy with apps enabled
+      # Roll each Container App directly to the freshly-built image. This
+      # deliberately does NOT run `az deployment sub create` (full main.bicep):
+      # the live env is already provisioned, and re-running the template fights
+      # pre-existing drift (RoleAssignmentExists, private-DNS vnet-link Conflict,
+      # firewall-policy churn) — none of which has anything to do with rolling
+      # an image. `az containerapp update --image` creates a new revision that
+      # pulls the updated tag, which is all the app-roll needs.
+      - name: Roll Container Apps
         run: |
           set -e
-          DEPLOY_NAME="csa-loom-apps-${{ github.run_id }}"
-          az deployment sub create \
-            --name "$DEPLOY_NAME" \
-            --location "$AZURE_LOCATION" \
-            --template-file platform/fiab/bicep/main.bicep \
-            --parameters platform/fiab/bicep/params/commercial.bicepparam \
-            --parameters adminEntraGroupId='${{ secrets.FIAB_ADMIN_GROUP_ID }}' \
-            --parameters deployAppsEnabled=true \
-            --parameters skipRoleGrants=true
-          CONSOLE_URL=$(az deployment sub show --name "$DEPLOY_NAME" --query "properties.outputs.consoleUrl.value" -o tsv 2>/dev/null || echo "")
-          echo "::notice::Apps deployed. Console URL: $CONSOLE_URL"
+          RG='${{ needs.resolve.outputs.rg }}'
+          ACR='${{ needs.resolve.outputs.acr_login_server }}'
+          TAG='${{ inputs.tag || 'v0.1' }}'
+          APPS=(loom-console loom-mcp loom-setup-orchestrator loom-activator loom-mirroring loom-direct-lake-shim)
+          for app in "${APPS[@]}"; do
+            if az containerapp show -g "$RG" -n "$app" -o none 2>/dev/null; then
+              echo "::group::roll $app -> $ACR/$app:$TAG"
+              az containerapp update -g "$RG" -n "$app" --image "$ACR/$app:$TAG" -o none
+              echo "::endgroup::"
+            else
+              echo "::warning::container app $app not found in $RG — skipping"
+            fi
+          done
+          CONSOLE_FQDN=$(az containerapp show -g "$RG" -n loom-console --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "")
+          echo "::notice::Apps rolled to :$TAG. Console: https://$CONSOLE_FQDN"
       - name: From-cluster app health
         run: bash .github/scripts/fiab-post-provision-validate.sh
         env:
