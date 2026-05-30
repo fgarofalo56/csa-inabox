@@ -472,6 +472,68 @@ export async function getSubscription(
   return j ? shapeSubscription(j) : null;
 }
 
+/**
+ * Build the fully-qualified ARM scope string a subscription requires.
+ * APIM accepts an absolute ARM id; the portal sends the absolute id, so we
+ * mirror that. Scope kinds:
+ *   product:{id}  → .../products/{id}
+ *   api:{id}      → .../apis/{id}
+ *   allApis       → .../apis   (all APIs)
+ */
+export function subscriptionScope(target: { product?: string; api?: string; allApis?: boolean }): string {
+  const base = apimBase().replace('https://management.azure.com', '');
+  if (target.product) return `${base}/products/${encodeURIComponent(target.product)}`;
+  if (target.api) return `${base}/apis/${encodeURIComponent(target.api)}`;
+  return `${base}/apis`;
+}
+
+export function slugSid(s: string): string {
+  const base = s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 200);
+  return base ? `sub-${base}` : `sub-${Date.now()}`;
+}
+
+export interface CreateSubscriptionInput {
+  /** Subscription entity id (sid). Generated from displayName when omitted. */
+  sid?: string;
+  displayName: string;
+  /** One of product / api / allApis must be provided. */
+  product?: string;
+  api?: string;
+  allApis?: boolean;
+  /** /users/{id} relative path; the owner the subscription is created for. */
+  ownerId?: string;
+  /**
+   * Initial state. APIM defaults to 'submitted' (pending approval). A
+   * marketplace where the caller is an admin may pass 'active' to auto-grant.
+   */
+  state?: 'submitted' | 'active';
+  allowTracing?: boolean;
+}
+
+/**
+ * PUT /subscriptions/{sid} — request/create a subscription to a product or API.
+ * Mirrors the developer-portal "Subscribe" flow. When the product has
+ * approvalRequired=true and the request is created with 'submitted' state, the
+ * subscription stays pending until an administrator approves it. Returns the
+ * shaped subscription (keys are NOT returned here — use getSubscriptionKeys).
+ */
+export async function createSubscription(input: CreateSubscriptionInput): Promise<ApimSubscriptionSummary> {
+  const sid = input.sid || slugSid(input.displayName);
+  const scope = subscriptionScope({ product: input.product, api: input.api, allApis: input.allApis });
+  const properties: any = { displayName: input.displayName, scope };
+  if (input.ownerId) properties.ownerId = input.ownerId;
+  if (input.state) properties.state = input.state;
+  if (typeof input.allowTracing === 'boolean') properties.allowTracing = input.allowTracing;
+  const res = await apimFetch(`/subscriptions/${encodeURIComponent(sid)}`, {
+    method: 'PUT',
+    query: { notify: 'true' },
+    body: JSON.stringify({ properties }),
+  });
+  const j = await readJson<any>(res);
+  if (!j) throw new ApimError(404, null, 'PUT apim subscription returned null');
+  return shapeSubscription(j);
+}
+
 // ---------------- API revisions + releases ----------------
 
 export interface ApimApiRevision {
