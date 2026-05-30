@@ -244,10 +244,28 @@ jobs:
           ACR='${{ needs.resolve.outputs.acr_login_server }}'
           TAG='${{ inputs.tag || 'v0.1' }}'
           APPS=(loom-console loom-mcp loom-setup-orchestrator loom-activator loom-mirroring loom-direct-lake-shim)
+          # Retry the update on the transient ContainerAppOperationInProgress
+          # error (a prior provisioning op on the app is still settling). Up to
+          # 6 attempts, 30s apart (~3 min), per app.
+          roll() {
+            local app="$1" attempt
+            for attempt in 1 2 3 4 5 6; do
+              if az containerapp update -g "$RG" -n "$app" --image "$ACR/$app:$TAG" -o none 2>/tmp/roll.err; then
+                return 0
+              fi
+              if grep -qi "OperationInProgress\|active provisioning operation" /tmp/roll.err; then
+                echo "::warning::$app busy (attempt $attempt/6) — waiting 30s for the in-progress op to finish"
+                sleep 30
+                continue
+              fi
+              cat /tmp/roll.err >&2; return 1
+            done
+            echo "::error::$app still busy after retries"; return 1
+          }
           for app in "${APPS[@]}"; do
             if az containerapp show -g "$RG" -n "$app" -o none 2>/dev/null; then
               echo "::group::roll $app -> $ACR/$app:$TAG"
-              az containerapp update -g "$RG" -n "$app" --image "$ACR/$app:$TAG" -o none
+              roll "$app"
               echo "::endgroup::"
             else
               echo "::warning::container app $app not found in $RG — skipping"
