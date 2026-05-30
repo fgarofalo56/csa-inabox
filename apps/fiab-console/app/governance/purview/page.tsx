@@ -1,95 +1,92 @@
 'use client';
 
-import { GovernanceShell } from '@/lib/components/governance-shell';
-import {
-  Body1, Caption1, Subtitle2, Badge, Button, Input,
-  makeStyles, tokens,
-} from '@fluentui/react-components';
-import { Open24Regular } from '@fluentui/react-icons';
-import { useState } from 'react';
-
 /**
- * Purview integration page — passthrough embed of Microsoft Purview's
- * web portal inside Loom. When PURVIEW_ACCOUNT is configured, we embed
- * the Unified Catalog via iframe; otherwise we render configuration
- * UI so the operator can wire the connection.
+ * /governance/purview — Microsoft Purview connection status + portal launch.
  *
- * Why iframe instead of API stitching: Purview's full Atlas catalog
- * UX is huge (search, lineage, glossary, business terms, mass-edit).
- * Replicating all of it in Loom would take months. The integration
- * pattern: native experience in Loom for top-N workflows (catalog
- * browse, classifications, labels, scans, policies), embed Purview
- * for everything else.
+ * Driven by the real /api/governance/purview/status probe (no fake iframe
+ * placeholder). When Purview is wired in this deployment we confirm the
+ * connection and surface every native Loom governance surface that now runs
+ * against it, plus a deep-link to the full Purview portal (which sets
+ * X-Frame-Options: deny, so a launch button is the honest, working embed).
+ * When it isn't wired (or is cross-cloud), the honest gate explains the
+ * one-time fix.
  */
 
+import { GovernanceShell } from '@/lib/components/governance-shell';
+import { PurviewGate, usePurviewStatus } from '@/lib/components/purview-gate';
+import {
+  Body1, Caption1, Subtitle2, Title3, Badge, Button,
+  makeStyles, tokens,
+} from '@fluentui/react-components';
+import { Open24Regular, ShieldCheckmark24Regular } from '@fluentui/react-icons';
+import Link from 'next/link';
+
 const useStyles = makeStyles({
-  shell: { display: 'flex', flexDirection: 'column', gap: 12 },
-  config: {
-    padding: 16, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  card: {
+    padding: 20, border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: 8, backgroundColor: tokens.colorNeutralBackground1,
-    display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 640,
+    display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16,
   },
-  frame: {
-    width: '100%', height: '70vh',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  placeholder: {
-    width: '100%', height: '60vh',
-    border: `2px dashed ${tokens.colorNeutralStroke2}`, borderRadius: 8,
-    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    color: tokens.colorNeutralForeground3, gap: 12, textAlign: 'center', padding: 24,
+  row: { display: 'flex', alignItems: 'center', gap: 8 },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8, marginTop: 8 },
+  link: {
+    padding: '8px 12px', borderRadius: 6, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    color: tokens.colorBrandForeground1, textDecoration: 'none', fontSize: 13,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
 });
 
+const NATIVE_SURFACES = [
+  { href: '/governance/catalog', label: 'Data catalog' },
+  { href: '/catalog/domains', label: 'Governance domains' },
+  { href: '/governance/scans', label: 'Scans & sources' },
+  { href: '/governance/lineage', label: 'Lineage' },
+  { href: '/governance/classifications', label: 'Classifications' },
+  { href: '/governance/sensitivity', label: 'Sensitivity labels' },
+  { href: '/governance/policies', label: 'Access policies' },
+  { href: '/governance/insights', label: 'Insights & reports' },
+];
+
 export default function PurviewPage() {
   const s = useStyles();
-  const [account, setAccount] = useState('');
-  const [embedded, setEmbedded] = useState(false);
+  const { status: purview, reload: reloadStatus } = usePurviewStatus();
+  const live = purview.configured && purview.reason === 'live';
+  const portal = purview.purviewPortal || 'https://purview.microsoft.com/';
 
   return (
-    <GovernanceShell sectionTitle="Microsoft Purview" sectionBadge="Embedded">
+    <GovernanceShell sectionTitle="Microsoft Purview" sectionBadge="Connection">
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
-        Purview&apos;s full Unified Catalog, Atlas lineage explorer, glossary, and business terms — embedded inside Loom. Single-sign-on via the same Entra ID session you used to enter Loom.
+        Loom&apos;s governance surfaces run natively against your Microsoft Purview account&apos;s data plane —
+        Unified Catalog, Data Map, glossary, lineage, classifications, and policies. For the workflows Loom
+        doesn&apos;t reproduce natively (bulk import, advanced Atlas editing), launch the Purview portal.
       </Body1>
-      {!embedded ? (
-        <div className={s.shell}>
-          <div className={s.config}>
-            <Subtitle2>Connect a Purview account</Subtitle2>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-              Loom will deep-link into your existing Purview account and route the user&apos;s OBO token. No data copies — your existing scans, glossary, and policies stay where they are.
-            </Caption1>
-            <div>
-              <Caption1>Purview account name</Caption1>
-              <Input value={account} onChange={(_, d) => setAccount(d.value)} placeholder="contoso-purview" />
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Button appearance="primary" disabled={!account.trim()} onClick={() => setEmbedded(true)}>
-                Embed Purview
-              </Button>
-              <Button appearance="secondary" as="a" href="https://web.purview.azure.com" target="_blank" rel="noreferrer" icon={<Open24Regular />}>
-                Open in new tab
-              </Button>
-            </div>
-            <div>
-              <Badge appearance="outline" color="brand">Tip</Badge>
-              <span style={{ marginLeft: 8, color: tokens.colorNeutralForeground3 }}>
-                If your Purview account is private (private endpoint), Loom routes the iframe through its BFF. Public Purview accounts embed directly.
-              </span>
+
+      <PurviewGate status={purview} surface="Microsoft Purview" reload={reloadStatus} />
+
+      {live && (
+        <div className={s.card}>
+          <div className={s.row}>
+            <ShieldCheckmark24Regular style={{ color: tokens.colorPaletteGreenForeground1 }} />
+            <Subtitle2>Connected</Subtitle2>
+            <Badge appearance="tint" color="success" size="small">live</Badge>
+          </div>
+          <Caption1>
+            Account <code>{purview.account}</code> · data plane{' '}
+            <code>{purview.account}-api.purview.azure.com</code>
+          </Caption1>
+          <div>
+            <Title3 as="h3" style={{ fontSize: 14, marginBottom: 4 }}>Native surfaces running on this account</Title3>
+            <div className={s.grid}>
+              {NATIVE_SURFACES.map((x) => (
+                <Link key={x.href} href={x.href} className={s.link}>{x.label}</Link>
+              ))}
             </div>
           </div>
-          <div className={s.placeholder} role="region" aria-label="Purview embed preview">
-            <Subtitle2>Purview portal preview</Subtitle2>
-            <Caption1>Will load <code>https://web.purview.azure.com/resource/{'{account}'}</code> once connected.</Caption1>
+          <div className={s.row}>
+            <Button appearance="primary" as="a" href={portal} target="_blank" rel="noreferrer" icon={<Open24Regular />}>
+              Open Microsoft Purview portal
+            </Button>
           </div>
-        </div>
-      ) : (
-        // In real impl: <iframe src={`https://web.purview.azure.com/resource/${account}`} sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
-        <div className={s.placeholder}>
-          <Subtitle2>Purview portal would render here</Subtitle2>
-          <Body1>Account: <code>{account}</code></Body1>
-          <Caption1>The real iframe needs Purview&apos;s X-Frame-Options to allow loom-console-* origin, which is set when the operator runs <code>az purview account update --frame-ancestors</code>.</Caption1>
-          <Button appearance="secondary" onClick={() => setEmbedded(false)}>Reconfigure</Button>
         </div>
       )}
     </GovernanceShell>
