@@ -22,6 +22,9 @@ param subnetName string = 'snet-workloads'
 @description('Admin Entra group object ID for jumpbox AAD SSH login')
 param adminEntraGroupId string
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Compliance tags')
 param complianceTags object = {
   'csa-loom': 'uat-jumpbox'
@@ -127,7 +130,7 @@ resource aadssh 'Microsoft.Compute/virtualMachines/extensions@2024-11-01' = {
 // Grant admin group VM Administrator Login role
 var vmAdminLoginRoleId = '1c0163c0-47e6-4577-8991-ea5c82e286e4'
 
-resource aadRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adminEntraGroupId)) {
+resource aadRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adminEntraGroupId) && !skipRoleGrants) {
   scope: vm
   name: guid(vm.id, adminEntraGroupId, vmAdminLoginRoleId)
   properties: {

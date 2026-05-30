@@ -23,6 +23,9 @@ param domainName string = 'default'
 @description('Loom Console UAMI principal ID — granted Data Factory Contributor so the BFF can CRUD pipelines/datasets/triggers and trigger runs.')
 param consolePrincipalId string
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Spoke private-endpoint subnet ID (snet-private-endpoints).')
 param privateEndpointSubnetId string
 
@@ -89,9 +92,9 @@ resource peAdfDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@
 // (built-in role: 673868aa-7521-48a0-acc6-0f60742d39f5)
 // =====================================================================
 
-resource consoleAdfContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource consoleAdfContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
   scope: adf
-  name: guid(adf.id, consolePrincipalId, 'adf-contributor')
+  name: guid(adf.id, consolePrincipalId, '673868aa-7521-48a0-acc6-0f60742d39f5')
   properties: {
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'

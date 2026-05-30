@@ -90,6 +90,9 @@ param spokeVnetCidr string = '10.100.0.0/16'
 @description('Compliance tags')
 param complianceTags object
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 // =====================================================================
 // 1. Spoke VNet (peered to Admin Plane hub)
 // =====================================================================
@@ -159,6 +162,7 @@ module synapse 'synapse.bicep' = {
     consoleUamiName: consoleUamiName
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     synapseSqlPrivateDnsZoneId: synapseSqlPrivateDnsZoneId
   }
@@ -176,6 +180,7 @@ module synapseAutoPause 'synapse-auto-pause.bicep' = {
     synapseWorkspaceName: synapse.outputs.synapseWorkspaceName
     dedicatedPoolName: synapse.outputs.dedicatedPoolName
     complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
   }
 }
 
@@ -253,6 +258,7 @@ module streamAnalytics 'stream-analytics.bicep' = if (enableStreamAnalytics && !
     consolePrincipalId: consolePrincipalId
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
   }
 }
 
@@ -277,6 +283,7 @@ module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(
     adfPrivateDnsZoneId: adfPrivateDnsZoneId
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
   }
 }
 
@@ -307,6 +314,7 @@ module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnab
     workspaceId: adminPlaneLawId
     consolePrincipalId: consolePrincipalId
     complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
   }
 }
 

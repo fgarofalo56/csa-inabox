@@ -29,6 +29,9 @@ param domainName string = 'default'
 @description('Loom Console UAMI principal ID — granted Stream Analytics Contributor on this RG so the BFF can list, save transformations, start, and stop.')
 param consolePrincipalId string
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Starting streaming units (SU). 1, 3, 6, 12, 18, 24, 30, 36, 42, 48, …')
 @allowed([ 1, 3, 6, 12, 18, 24, 30, 36, 42, 48 ])
 param startingStreamingUnits int = 3
@@ -80,9 +83,9 @@ resource transformation 'Microsoft.StreamAnalytics/streamingjobs/transformations
 // Built-in role: 65cb152a-1b39-4f9d-aafa-1f49f88b1f5b
 // =====================================================================
 
-resource consoleAsaContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource consoleAsaContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
   scope: resourceGroup()
-  name: guid(resourceGroup().id, consolePrincipalId, 'asa-contributor')
+  name: guid(resourceGroup().id, consolePrincipalId, '65cb152a-1b39-4f9d-aafa-1f49f88b1f5b')
   properties: {
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'

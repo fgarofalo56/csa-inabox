@@ -114,6 +114,9 @@ param hubVnetCidr string = '10.0.0.0/16'
 @description('Compliance tags applied to every resource')
 param complianceTags object
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Deploy Loom apps (Container Apps for Console/MCP/etc.). Requires container images in ACR — set false on initial provision, then true after CI image-build pipeline runs (PRP-16).')
 param deployAppsEnabled bool = false
 
@@ -201,6 +204,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     adminEntraGroupId: adminEntraGroupId
     hubVnetCidr: hubVnetCidr
     complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: aiFoundryEnabled
     apimEnabled: apimEnabled
@@ -265,6 +269,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
     complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
   }
 }
 
@@ -299,6 +304,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     storageRequireCmk: storageRequireCmk
     powerBiSku: powerBiSku
     complianceTags: complianceTags
+    skipRoleGrants: skipRoleGrants
   }
 }]
 
