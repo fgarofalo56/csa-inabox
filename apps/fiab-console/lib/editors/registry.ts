@@ -119,14 +119,18 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
 
   // v3 — Azure SQL family (Microsoft.Sql/servers + databases + MI + SQL 2025 vector index)
   'azure-sql-server':            reg(() => import('./azure-sql-editors'),      'AzureSqlServerEditor'),
-  'azure-sql-database':          reg(() => import('./azure-sql-editors'),      'AzureSqlDatabaseEditor'),
+  // The unified "SQL database" surface is backed by REAL Azure database
+  // services (Azure SQL DB / SQL MI / PostgreSQL Flexible Server) — tenant
+  // inventory + connect + provision + query + schema + OneLake/Purview
+  // catalog. Replaces the old Fabric-SQL framing entirely.
+  'azure-sql-database':          reg(() => import('./unified-sql-database-editor'), 'UnifiedSqlDatabaseEditor'),
   'azure-sql-managed-instance':  reg(() => import('./azure-sql-editors'),      'SqlManagedInstanceEditor'),
   'sql-server-2025-vector-index':reg(() => import('./azure-sql-editors'),      'SqlServer2025VectorIndexEditor'),
-  // Fabric SQL database (Microsoft.Fabric SQLDatabase REST type).
-  // Dedicated editor (sql-database-editor.tsx) that talks to Fabric REST
-  // /v1/workspaces/{ws}/SqlDatabases plus T-SQL via the Azure SQL engine
-  // (since Fabric SQL DBs share the engine).
-  'sql-database':                reg(() => import('./sql-database-editor'),    'SqlDatabaseEditor'),
+  // The generic "SQL database" catalog slug now maps to the same unified
+  // Azure-database surface (NOT Fabric SQL "no workspace attached"). Whole
+  // point of CSA Loom: Fabric isn't available, so SQL = Azure SQL/PG/MI.
+  'postgres-flexible-server':    reg(() => import('./unified-sql-database-editor'), 'UnifiedSqlDatabaseEditor'),
+  'sql-database':                reg(() => import('./unified-sql-database-editor'), 'UnifiedSqlDatabaseEditor'),
 
   // v3 — Geoanalytics (Azure Maps + lakehouse geometry + H3/S2 + spatial T-SQL/KQL)
   'geo-map':                     reg(() => import('./geo-editors'),            'GeoMapEditor'),
