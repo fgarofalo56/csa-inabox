@@ -69,4 +69,12 @@ paths = [
     # resource identifiers. Real credentials are pulled via
     # ${{ secrets.AZURE_CLIENT_SECRET }} GitHub Actions secret.
     '''\.github/workflows/csa-loom-post-deploy-bootstrap\.yml''',
+
+    # Vitest/Jest backend contract tests set FAKE Azure resource *names* and
+    # zero/example GUIDs (e.g. LOOM_APIM_NAME='apim-csa-loom-eastus2',
+    # LOOM_SUBSCRIPTION_ID='00000000-0000-0000-0000-000000000000') to exercise
+    # the provisioned vs not-provisioned honest gates. These are non-secret
+    # resource identifiers in test code, never real credentials.
+    '''apps/fiab-console/.*/__tests__/.*\.(ts|tsx)$''',
+    '''apps/fiab-console/.*\.(test|spec)\.(ts|tsx)$''',
 ]
