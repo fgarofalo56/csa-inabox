@@ -77,4 +77,10 @@ paths = [
     # resource identifiers in test code, never real credentials.
     '''apps/fiab-console/.*/__tests__/.*\.(ts|tsx)$''',
     '''apps/fiab-console/.*\.(test|spec)\.(ts|tsx)$''',
+
+    # Per-editor parity docs (docs/fiab/parity/*.md) document the real Azure
+    # resource NAMES + env-var names each control calls (e.g. "Backend APIM:
+    # apim-csa-loom-eastus2 (override LOOM_APIM_NAME)"). Non-secret resource
+    # identifiers in generated inventory tables; trip the entropy heuristic.
+    '''docs/fiab/parity/.*\.md$''',
 ]
