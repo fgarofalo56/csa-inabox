@@ -26,13 +26,21 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
+  // Bounded-height grid (rows = minmax(0,1fr)) so the three columns scroll
+  // INTERNALLY instead of growing the page. This breaks the scrollbar-race
+  // flicker: previously `minHeight: calc(100vh - 220px)` on an unbounded
+  // wrapper let the page height sit at the viewport threshold, so any content
+  // change toggled the AppShell scrollbar (width change -> reflow -> toggle
+  // again = constant twitch). Fixed-bound layout + min-height:0 children fixes it.
   shell: {
     display: 'grid',
     gridTemplateColumns: '260px 1fr 320px',
+    gridTemplateRows: 'minmax(0, 1fr)',
     gap: 12,
-    minHeight: 'calc(100vh - 220px)',
     flex: 1,
     minWidth: 0,
+    minHeight: 0,
+    overflow: 'hidden',
   },
   rail: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -43,6 +51,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: 8,
+    minHeight: 0,
   },
   main: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -51,6 +60,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     minWidth: 0,
+    minHeight: 0,
   },
   promptBar: {
     padding: 12,
@@ -66,6 +76,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: 8,
+    minHeight: 0,
   },
   step: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -580,8 +591,11 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
   );
 
   if (embedded) return body;
+  // Bounded-height column so {body} (flex:1, min-height:0) fills the remaining
+  // space and its panels scroll internally — the page itself never grows past
+  // the viewport, so the AppShell scrollbar never toggles (no flicker).
   return (
-    <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12, height: 'calc(100vh - 52px)', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box' }}>
       <Title2>Loom Copilot</Title2>
       <Caption1>Orchestrate across every wired service from a single natural-language prompt.</Caption1>
       {body}
