@@ -1,27 +1,53 @@
 /**
- * GET  /api/admin/domains — list tenant domains
- * POST /api/admin/domains   body: { id, name, description?, color? }
- * Per-domain delete lives at /api/admin/domains/[id]
+ * What a "domain" is in Loom
+ * --------------------------
+ * A domain is a governance-scoped, labeled grouping of data products and
+ * workspaces (Finance, Operations, Mission-Ops…). It carries owners, a
+ * description, and a color, and is the unit Loom uses to organize the
+ * tenant's data estate — the same concept Microsoft Purview calls a
+ * "business domain" and Fabric calls a "domain". Adding a domain here
+ * creates that grouping in the Loom Cosmos store immediately; workspaces
+ * tag themselves to it via their `domain` field, and the governance layer
+ * (Purview) can mirror it as a business domain when Purview is provisioned.
+ *
+ * GET  /api/admin/domains — list tenant domains (+ Purview link status when configured)
+ * POST /api/admin/domains   body: { id, name, description?, color?, owners? }
+ * DELETE /api/admin/domains?id=...
  *
  * Backed by Cosmos tenant-settings container under id="domains:<tenantId>"
- * to avoid spinning up a new container for a low-cardinality list.
+ * to avoid spinning up a new container for a low-cardinality list. The
+ * Purview business-domain mirror is honest-gated: when LOOM_PURVIEW_ACCOUNT
+ * is unset we still return the Cosmos domains and a `purview.gated` flag
+ * explaining the one-time provisioning step.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { listBusinessDomains, PurviewNotConfiguredError } from '@/lib/azure/purview-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+interface DomainItem {
+  id: string;
+  name: string;
+  description?: string;
+  color?: string;
+  owners?: string[];
+  purviewDomainId?: string;
+  createdAt: string;
+  createdBy: string;
+}
 
 interface DomainsDoc {
   id: string;
   tenantId: string;
   kind: 'domains';
-  items: Array<{ id: string; name: string; description?: string; color?: string; createdAt: string; createdBy: string }>;
+  items: DomainItem[];
   updatedAt: string;
 }
 
-async function loadOrSeed(tenantId: string, who: string): Promise<DomainsDoc> {
+async function loadOrSeed(tenantId: string, _who: string): Promise<DomainsDoc> {
   const c = await tenantSettingsContainer();
   const docId = `domains:${tenantId}`;
   try {
@@ -36,16 +62,63 @@ async function loadOrSeed(tenantId: string, who: string): Promise<DomainsDoc> {
   return seed;
 }
 
+/**
+ * Resolve the Purview business-domain mirror state. Returns either the list
+ * of Purview business-domain names (so the UI can show which Cosmos domains
+ * are also governed in Purview) or an honest gate describing the one-time
+ * provisioning step. Never throws — Purview is optional.
+ */
+async function purviewStatus(): Promise<
+  | { configured: true; domains: Array<{ id?: string; name: string }> }
+  | { configured: false; gated: true; hint: string }
+> {
+  try {
+    const domains = await listBusinessDomains();
+    return {
+      configured: true,
+      domains: (domains || []).map((d: any) => ({ id: d.id, name: d.name || d.displayName })),
+    };
+  } catch (e: any) {
+    if (e instanceof PurviewNotConfiguredError) {
+      return {
+        configured: false,
+        gated: true,
+        hint:
+          'Microsoft Purview is not provisioned in this deployment. Domains created here live in the Loom Cosmos store and organize workspaces today. To also govern them as Purview business domains, set LOOM_PURVIEW_ACCOUNT (admin-plane/main.bicep apps[] env), deploy platform/fiab/bicep/modules/purview/purview.bicep, and grant the Loom UAMI the Purview data-plane roles.',
+      };
+    }
+    // Any other Purview error (auth, transient) is still non-fatal here.
+    return {
+      configured: false,
+      gated: true,
+      hint: `Purview business domains unavailable: ${e?.message || String(e)}`,
+    };
+  }
+}
+
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const tenantId = s.claims.oid;
   try {
     const doc = await loadOrSeed(tenantId, s.claims.upn || tenantId);
-    return NextResponse.json({ ok: true, domains: doc.items, updatedAt: doc.updatedAt });
+    const purview = await purviewStatus();
+    return NextResponse.json({ ok: true, domains: doc.items, updatedAt: doc.updatedAt, purview });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
+}
+
+function normalizeOwners(raw: unknown): string[] | undefined {
+  if (Array.isArray(raw)) {
+    const out = raw.map((o) => String(o).trim()).filter(Boolean);
+    return out.length ? out : undefined;
+  }
+  if (typeof raw === 'string') {
+    const out = raw.split(/[,;\n]/).map((o) => o.trim()).filter(Boolean);
+    return out.length ? out : undefined;
+  }
+  return undefined;
 }
 
 export async function POST(req: NextRequest) {
@@ -67,6 +140,7 @@ export async function POST(req: NextRequest) {
       id, name,
       description: body?.description || undefined,
       color: body?.color || undefined,
+      owners: normalizeOwners(body?.owners),
       createdAt: new Date().toISOString(),
       createdBy: s.claims.upn || tenantId,
     });
