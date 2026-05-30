@@ -68,10 +68,34 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
       executedBy: session.claims.upn,
     });
   } catch (e: any) {
+    // Sanitize: never surface a raw HTML error body to the UI (a firewall /
+    // gateway 403 returns an XHTML page). Strip tags + collapse whitespace.
+    const raw = (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const is403 = /\b403\b|forbidden|not allowed|denied/i.test(raw);
+    if (is403) {
+      // Auth-or-firewall denial: the endpoint is provisioned but the Console
+      // identity can't reach/authorize against it. Honest gate, no HTML dump.
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'synapse_access_denied',
+          error:
+            'Access denied to the Synapse Serverless SQL endpoint ' +
+            `(${process.env.LOOM_SYNAPSE_WORKSPACE}-ondemand.sql.azuresynapse.net). ` +
+            'Two grants are required and one is missing in this deployment: ' +
+            '(1) the Console UAMI must have CONNECT + db_datareader on the serverless DB ' +
+            '(run: CREATE LOGIN/USER FROM EXTERNAL PROVIDER for the UAMI + GRANT), and ' +
+            '(2) the Container App must be allowed through the Synapse SQL firewall ' +
+            '(add its outbound IP / a managed private endpoint). ' +
+            'See docs/fiab/v3-tenant-bootstrap.md.',
+        },
+        { status: 502 },
+      );
+    }
     return NextResponse.json(
       {
         ok: false,
-        error: e?.message || String(e),
+        error: raw.slice(0, 400),
         code: e?.code,
         sqlState: e?.originalError?.info?.state,
         sqlNumber: e?.number,
