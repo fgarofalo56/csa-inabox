@@ -64,7 +64,7 @@ param powerBiSku = 'F64'
 // re-provisioning an environment that already has the RBAC grants, so
 // ARM doesn't fail with RoleAssignmentExists. Defaults false for fresh
 // deploys.
-param skipRoleGrants = readEnvironmentVariable('LOOM_SKIP_ROLE_GRANTS', 'false') == 'true'
+param skipRoleGrants = true  // TEMP: drifted live re-provision — skip grants (live UAMI already holds them); revert after.
 
 // Network
 param hubVnetCidr = '10.0.0.0/16'
