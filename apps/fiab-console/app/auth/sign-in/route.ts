@@ -13,7 +13,15 @@ import { getMsalClient } from '@/lib/auth/msal';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const SCOPES = ['openid', 'profile', 'email', 'offline_access', 'User.Read'];
+// Base login scopes (Graph audience for the session) + the delegated Azure
+// Service Management scope. Requesting ARM user_impersonation at consent time
+// means that after callback we can silently obtain an ARM-audience token for
+// the user and cache it (lib/azure/user-token-store) — enabling per-user RBAC
+// in the cross-subscription resource picker. If this scope isn't admin-
+// consented, AAD simply omits it and login still succeeds (MSAL won't fail the
+// code exchange for the base scopes).
+const ARM_SCOPE = 'https://management.azure.com/user_impersonation';
+const SCOPES = ['openid', 'profile', 'email', 'offline_access', 'User.Read', ARM_SCOPE];
 
 function redirectUri(req: NextRequest): string {
   const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'localhost:3000';

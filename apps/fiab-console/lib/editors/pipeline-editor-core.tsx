@@ -41,6 +41,7 @@ import {
 } from '@/lib/components/pipeline/types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { safePipelineJson } from './pipeline-fetch';
+import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -94,6 +95,12 @@ export function PipelineEditorCore({
   const [newName, setNewName] = useState<string>('');       // create-new input
   const [bindBusy, setBindBusy] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
+
+  // Cross-subscription factory selection (ADF only). Lets the operator point
+  // this pipeline item at WHICH Data Factory — across every subscription they
+  // have RBAC for — before binding to one of its pipelines.
+  const isAdf = config.slug === 'adf-pipeline';
+  const [factory, setFactory] = useState<{ id: string; name: string; subscriptionId: string; resourceGroup: string } | null>(null);
 
   // ---- Spec / run state ----
   const [spec, setSpec] = useState<string>('');
@@ -446,6 +453,35 @@ export function PipelineEditorCore({
           ) : !bound ? (
             <div className={s.gate}>
               {bindGate}
+              {isAdf && (
+                <div>
+                  <Subtitle2>Select a Data Factory (any subscription)</Subtitle2>
+                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                    Pick which Azure Data Factory backs this pipeline — across every subscription your account can see (Azure Resource Graph, your RBAC).
+                  </Body1>
+                  <div style={{ marginTop: 8 }}>
+                    <AzureResourcePicker
+                      type="Microsoft.DataFactory/factories"
+                      label="Data Factory"
+                      placeholder="Select a factory across all subscriptions"
+                      value={factory?.id}
+                      onChange={(r) => setFactory(r)}
+                    />
+                  </div>
+                  {factory && (
+                    <MessageBar intent="info" style={{ marginTop: 8 }}>
+                      <MessageBarBody>
+                        <MessageBarTitle>Factory selected: {factory.name}</MessageBarTitle>
+                        Pipeline binding below lists pipelines from the deployment-default factory
+                        (LOOM_ADF_NAME / LOOM_DLZ_RG). If <strong>{factory.name}</strong> is a different
+                        factory, grant the Loom UAMI &quot;Data Factory Contributor&quot; on it and set
+                        LOOM_ADF_NAME / LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID to point at it, or use the
+                        MountedDataFactory editor which targets an external factory by reference.
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+                </div>
+              )}
               <div>
                 <Subtitle2>Bind to an existing pipeline</Subtitle2>
                 <div className={s.row} style={{ marginTop: 8 }}>
