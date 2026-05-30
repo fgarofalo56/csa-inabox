@@ -22,6 +22,9 @@ param dailyCapGb int = 50
 @maxValue(730)
 param retentionDays int = 90
 
+@description('Console UAMI principalId — granted Log Analytics Reader so the /monitor Logs (KQL) tab can query this workspace. Empty string skips the grant.')
+param consolePrincipalId string = ''
+
 // =====================================================================
 // Log Analytics Workspace
 // =====================================================================
@@ -142,6 +145,24 @@ AppRequests
     tactics: ['Impact']
   }
   dependsOn: [ sentinel ]
+}
+
+// =====================================================================
+// /monitor observability — Console UAMI gets Log Analytics Reader on the
+// LAW so the Logs (KQL) tab can run queries against it. (Monitoring Reader
+// for metrics / activity log / resource health / alerts is granted at
+// subscription scope outside this RG-scoped module.)
+// =====================================================================
+
+// Log Analytics Reader — 73c42c96-874c-492b-b04d-ab87d138a893
+resource consoleLaReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId)) {
+  name: guid(law.id, consolePrincipalId, 'log-analytics-reader')
+  scope: law
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
 }
 
 // =====================================================================
