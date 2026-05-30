@@ -857,3 +857,193 @@ export async function deleteFabricSqlDatabase(workspaceId: string, id: string): 
     { method: 'DELETE' },
   );
 }
+
+// ============================================================
+// Deployment Pipelines (Fabric CI/CD)
+//
+// The Fabric Deployment Pipelines experience — dev → test → prod stages,
+// each bound to a Fabric workspace, with content promotion between stages.
+//
+// Docs:
+//   https://learn.microsoft.com/rest/api/fabric/core/deployment-pipelines
+//   https://learn.microsoft.com/fabric/cicd/deployment-pipelines/pipeline-automation-fabric
+//
+// Surface:
+//   GET  /v1/deploymentPipelines                          → list pipelines
+//   GET  /v1/deploymentPipelines/{id}                     → get one pipeline
+//   GET  /v1/deploymentPipelines/{id}/stages              → list stages
+//   GET  /v1/deploymentPipelines/{id}/stages/{sid}/items  → items in a stage
+//   POST /v1/deploymentPipelines/{id}/deploy              → deploy stage→stage (LRO)
+//   GET  /v1/deploymentPipelines/{id}/operations          → deployment history
+//
+// Auth + gating identical to the rest of this client: Console UAMI needs an
+// *admin* deployment-pipelines role and contributor on the stage workspaces.
+// 401/403 surface the same FabricError hint so the BFF can show the gate.
+// ============================================================
+
+export interface DeploymentPipeline {
+  id: string;
+  displayName: string;
+  description?: string;
+}
+
+export interface DeploymentPipelineStage {
+  id: string;
+  order: number;
+  displayName: string;
+  description?: string;
+  /** Assigned workspace id — only present when a workspace is assigned. */
+  workspaceId?: string;
+  /** Assigned workspace name — only present when assigned + visible to caller. */
+  workspaceName?: string;
+  isPublic?: boolean;
+}
+
+export interface DeploymentPipelineStageItem {
+  itemId: string;
+  itemDisplayName: string;
+  itemType: string;
+  sourceItemId?: string;
+  targetItemId?: string;
+  lastDeploymentTime?: string;
+}
+
+export interface DeploymentPipelineOperation {
+  id: string;
+  type?: string;            // 'Deploy'
+  status?: string;          // NotStarted | Running | Succeeded | Failed
+  sourceStageId?: string;
+  targetStageId?: string;
+  executionStartTime?: string;
+  executionEndTime?: string;
+  lastUpdatedTime?: string;
+  note?: string;
+  performedBy?: string;
+}
+
+export interface DeployItemRef {
+  sourceItemId: string;
+  itemType: string;
+}
+
+export interface DeployStageRequest {
+  sourceStageId: string;
+  targetStageId: string;
+  /** Optional selective list; when omitted Fabric deploys all supported items. */
+  items?: DeployItemRef[];
+  note?: string;
+  /** Required only when the target stage has no assigned workspace. */
+  createdWorkspaceDetails?: { name: string; capacityId?: string };
+}
+
+/** GET /v1/deploymentPipelines — every pipeline the UAMI can see. Paginates. */
+export async function listDeploymentPipelines(): Promise<DeploymentPipeline[]> {
+  const out: DeploymentPipeline[] = [];
+  let token: string | undefined;
+  let guard = 0;
+  do {
+    guard++;
+    const j = await call<{ value: DeploymentPipeline[]; continuationToken?: string }>(
+      '/deploymentPipelines',
+      { query: token ? { continuationToken: token } : undefined },
+    );
+    for (const p of j.value || []) out.push(p);
+    token = j.continuationToken;
+  } while (token && guard < 50);
+  return out;
+}
+
+/** GET /v1/deploymentPipelines/{id} — pipeline metadata. */
+export async function getDeploymentPipeline(id: string): Promise<DeploymentPipeline> {
+  return call<DeploymentPipeline>(`/deploymentPipelines/${encodeURIComponent(id)}`);
+}
+
+/** GET /v1/deploymentPipelines/{id}/stages — ordered stages (dev/test/prod). */
+export async function listDeploymentPipelineStages(id: string): Promise<DeploymentPipelineStage[]> {
+  const out: DeploymentPipelineStage[] = [];
+  let token: string | undefined;
+  let guard = 0;
+  do {
+    guard++;
+    const j = await call<{ value: DeploymentPipelineStage[]; continuationToken?: string }>(
+      `/deploymentPipelines/${encodeURIComponent(id)}/stages`,
+      { query: token ? { continuationToken: token } : undefined },
+    );
+    for (const s of j.value || []) out.push(s);
+    token = j.continuationToken;
+  } while (token && guard < 50);
+  out.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return out;
+}
+
+/**
+ * GET /v1/deploymentPipelines/{id}/stages/{stageId}/items — the supported
+ * items in the workspace assigned to a stage. Returns [] when the stage has
+ * no assigned workspace (Fabric 400s on an empty stage; we treat that as
+ * empty rather than an error).
+ */
+export async function listDeploymentPipelineStageItems(
+  id: string,
+  stageId: string,
+): Promise<DeploymentPipelineStageItem[]> {
+  const j = await call<{ value: DeploymentPipelineStageItem[] }>(
+    `/deploymentPipelines/${encodeURIComponent(id)}/stages/${encodeURIComponent(stageId)}/items`,
+  );
+  return j.value || [];
+}
+
+/**
+ * POST /v1/deploymentPipelines/{id}/deploy — promote content from the source
+ * stage to the (consecutive) target stage. Long-running: returns a 202 with a
+ * Location/operation handle, surfaced here as { _accepted, location }.
+ */
+export async function deployStageContent(
+  id: string,
+  req: DeployStageRequest,
+): Promise<{ _accepted: true; location?: string } | DeploymentPipelineOperation> {
+  if (!req?.sourceStageId) throw new FabricError('sourceStageId is required', 400);
+  if (!req?.targetStageId) throw new FabricError('targetStageId is required', 400);
+  const body: Record<string, unknown> = {
+    sourceStageId: req.sourceStageId,
+    targetStageId: req.targetStageId,
+  };
+  if (req.items && req.items.length) body.items = req.items;
+  if (req.note) body.note = req.note;
+  if (req.createdWorkspaceDetails) body.createdWorkspaceDetails = req.createdWorkspaceDetails;
+  return call(
+    `/deploymentPipelines/${encodeURIComponent(id)}/deploy`,
+    { method: 'POST', body, acceptLongRunning: true },
+  );
+}
+
+/** GET /v1/deploymentPipelines/{id}/operations — deployment history. Paginates. */
+export async function listDeploymentPipelineOperations(
+  id: string,
+): Promise<DeploymentPipelineOperation[]> {
+  const out: DeploymentPipelineOperation[] = [];
+  let token: string | undefined;
+  let guard = 0;
+  do {
+    guard++;
+    const j = await call<{ value: any[]; continuationToken?: string }>(
+      `/deploymentPipelines/${encodeURIComponent(id)}/operations`,
+      { query: token ? { continuationToken: token } : undefined },
+    );
+    for (const o of j.value || []) {
+      out.push({
+        id: o.id,
+        type: o.type,
+        status: o.status,
+        sourceStageId: o.sourceStageId,
+        targetStageId: o.targetStageId,
+        executionStartTime: o.executionStartTime,
+        executionEndTime: o.executionEndTime,
+        lastUpdatedTime: o.lastUpdatedTime,
+        note: typeof o.note === 'string' ? o.note : o.note?.content,
+        performedBy: o.performedBy?.displayName || o.performedBy?.userDetails?.userPrincipalName,
+      });
+    }
+    token = j.continuationToken;
+  } while (token && guard < 50);
+  return out;
+}

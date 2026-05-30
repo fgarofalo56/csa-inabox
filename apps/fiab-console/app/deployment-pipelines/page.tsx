@@ -1,16 +1,13 @@
 import { PageShell } from '@/lib/components/page-shell';
-import { ItemsByTypePane } from '@/lib/components/items-by-type-pane';
+import { DeploymentPipelinesPane } from '@/lib/components/deployment/deployment-pipelines-pane';
 
 export default function DeploymentPipelinesPage() {
   return (
     <PageShell
       title="Deployment pipelines"
-      subtitle="Promote items across Development → Test → Production. Lists every data-pipeline, ADF pipeline, Synapse pipeline, and copy job in your tenant."
+      subtitle="Promote Fabric content across Development → Test → Production using real Fabric deployment pipelines, and review the platform's own ARM / bicep rollouts. Every action calls the live Fabric REST (deploymentPipelines) or Azure ARM (Microsoft.Resources/deployments)."
     >
-      <ItemsByTypePane
-        types={['data-pipeline', 'synapse-pipeline', 'adf-pipeline', 'copy-job', 'dbt-job', 'airflow-job']}
-        emptyHint="No pipeline items in this tenant yet."
-      />
+      <DeploymentPipelinesPane />
     </PageShell>
   );
 }
