@@ -31,6 +31,7 @@ import {
   Clock20Regular, Link20Regular, Add20Regular, Settings20Regular,
 } from '@fluentui/react-icons';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
+import { SynapseWorkspaceTree } from '@/lib/components/pipeline/synapse-workspace-tree';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { extractActivities, writeActivitiesToSpec, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
@@ -118,6 +119,9 @@ export function PipelineEditorCore({
 
   // ---- Manage (factory resources) dialog state — ADF only ----
   const [manageOpen, setManageOpen] = useState(false);
+  // Bump to force the Synapse Workspace Resources navigator to re-list after a
+  // bind/create mutates the workspace.
+  const [workspaceRefreshKey, setWorkspaceRefreshKey] = useState(0);
 
   // ---- Triggers dialog state ----
   const [triggersOpen, setTriggersOpen] = useState(false);
@@ -162,6 +166,7 @@ export function PipelineEditorCore({
       if (!ok || !data) { setBindError(e || 'bind failed'); return; }
       setBound(data.bound);
       setNewName('');
+      setWorkspaceRefreshKey((k) => k + 1);
       await loadBinding();
     } catch (e: any) {
       setBindError(e?.message || String(e));
@@ -440,23 +445,36 @@ export function PipelineEditorCore({
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div style={{ padding: 8 }}>
-          <Tree aria-label="Pipelines" defaultOpenItems={['p']}>
-            <TreeItem itemType="branch" value="p">
-              <TreeItemLayout iconBefore={<Server20Regular />}>Pipelines ({available.length})</TreeItemLayout>
-              <Tree>
-                {available.map((p) => (
-                  <TreeItem key={p.name} itemType="leaf" value={`pl-${p.name}`} onClick={() => bindTo(p.name, false)}>
-                    <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{p.name} {bound === p.name && '·'}</TreeItemLayout>
-                  </TreeItem>
-                ))}
-              </Tree>
-            </TreeItem>
-          </Tree>
-          <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
-            Click a pipeline to bind this item to it.
-          </Caption1>
-        </div>
+        !isAdf ? (
+          // Synapse Studio Workspace Resources navigator — typed groups
+          // (Pipelines, Datasets, Data flows, Notebooks, SQL scripts, Triggers,
+          // Linked services, Spark/SQL pools) with live counts + ＋ New + delete,
+          // all real Synapse dev-plane REST. Selecting a pipeline binds + opens
+          // it on the existing React Flow canvas (the existing bind flow).
+          <SynapseWorkspaceTree
+            boundPipeline={bound}
+            onOpenPipeline={(name) => bindTo(name, false)}
+            refreshKey={workspaceRefreshKey}
+          />
+        ) : (
+          <div style={{ padding: 8 }}>
+            <Tree aria-label="Pipelines" defaultOpenItems={['p']}>
+              <TreeItem itemType="branch" value="p">
+                <TreeItemLayout iconBefore={<Server20Regular />}>Pipelines ({available.length})</TreeItemLayout>
+                <Tree>
+                  {available.map((p) => (
+                    <TreeItem key={p.name} itemType="leaf" value={`pl-${p.name}`} onClick={() => bindTo(p.name, false)}>
+                      <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{p.name} {bound === p.name && '·'}</TreeItemLayout>
+                    </TreeItem>
+                  ))}
+                </Tree>
+              </TreeItem>
+            </Tree>
+            <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+              Click a pipeline to bind this item to it.
+            </Caption1>
+          </div>
+        )
       }
       main={
         <div className={s.pad}>
