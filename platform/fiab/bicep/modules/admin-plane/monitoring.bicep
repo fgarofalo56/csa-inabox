@@ -61,6 +61,19 @@ resource sentinel 'Microsoft.OperationsManagement/solutions@2015-11-01-preview' 
   }
 }
 
+// Onboard the workspace to Microsoft Sentinel via the MODERN OnboardingStates
+// API. The legacy OperationsManagement 'SecurityInsights' solution above is no
+// longer sufficient (especially in Azure Government): creating Sentinel content
+// (alert rules, data connectors) fails with "Workspace is not onboarded to
+// Microsoft Sentinel" unless the workspace has a SecurityInsights/onboardingStates
+// 'default' resource first, and all Sentinel content dependsOn it.
+resource sentinelOnboarding 'Microsoft.SecurityInsights/onboardingStates@2024-03-01' = {
+  scope: law
+  name: 'default'
+  properties: {}
+  dependsOn: [ sentinel ]
+}
+
 // =====================================================================
 // Application Insights (workspace-based)
 // =====================================================================
@@ -117,7 +130,7 @@ AppRequests
     suppressionDuration: 'PT1H'
     tactics: ['InitialAccess']
   }
-  dependsOn: [ sentinel ]
+  dependsOn: [ sentinelOnboarding ]
 }
 
 resource sentinelAiAbuseQuota 'Microsoft.SecurityInsights/alertRules@2024-09-01' = if (!defenderForAIEnabled) {
@@ -144,7 +157,7 @@ AppRequests
     suppressionDuration: 'PT1H'
     tactics: ['Impact']
   }
-  dependsOn: [ sentinel ]
+  dependsOn: [ sentinelOnboarding ]
 }
 
 // =====================================================================
