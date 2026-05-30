@@ -396,29 +396,41 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     } },
 
   // Databases
-  { slug: 'sql-database', displayName: 'SQL database', restType: 'SQLDatabase', category: 'Databases',
-    description: 'Azure SQL Database surface inside Fabric with auto-mirroring to OneLake.',
+  { slug: 'sql-database', displayName: 'SQL database', restType: 'AzureDatabase', category: 'Databases',
+    description: 'Unified Azure database surface — Azure SQL DB, SQL Managed Instance, or PostgreSQL Flexible Server. Tenant inventory, provision, query, schema, and OneLake/Purview catalog.',
     learnContent: {
-      "overview": "A SQL database is an Azure SQL Database surface inside Fabric with auto-mirroring to OneLake. In Loom it defaults to Azure SQL Database and can target Managed Instance or SQL Server 2025 features depending on the workload.",
+      "overview": "In CSA Loom the SQL database surface is backed by real Azure database services — Azure SQL Database, SQL Managed Instance, and Azure Database for PostgreSQL Flexible Server — not Fabric SQL. It lists existing deployments across the subscription via ARM, lets you connect to one, provision new ones (ARM PUT), run SQL over the live TDS path, browse the schema, and register the database as a governed OneLake/Purview catalog asset.",
       "steps": [
         {
-          "title": "Run T-SQL",
-          "body": "Use the query editor to issue T-SQL against the database over TDS with AAD auth."
+          "title": "Connect to existing",
+          "body": "Browse the tenant inventory of Azure SQL servers, SQL Managed Instances, and PostgreSQL flexible servers (ARM list) and bind one to this item."
         },
         {
-          "title": "Use OneLake mirroring",
-          "body": "Data auto-mirrors to OneLake so analytics queries don't load the transactional database."
+          "title": "Provision new",
+          "body": "Create an Azure SQL database on an existing server, or a new PostgreSQL flexible server, via ARM PUT — or get an honest role/quota gate."
         },
         {
-          "title": "Manage schema",
-          "body": "Create tables, indexes, and stored procedures directly from the editor."
+          "title": "Run SQL",
+          "body": "Execute T-SQL over TDS + AAD against the selected Azure SQL database; PostgreSQL and MI query paths surface honest infra-gates."
         },
         {
-          "title": "Pick the right tier",
-          "body": "For low cost choose the serverless General Purpose tier with auto-pause, billed in vCore-seconds."
+          "title": "Register in the catalog",
+          "body": "Surface the database as a OneLake/Purview catalog asset so it shows up alongside lakehouses and warehouses."
         }
       ],
-      "docsUrl": "https://learn.microsoft.com/fabric/database/sql/overview"
+      "docsUrl": "https://learn.microsoft.com/azure/azure-sql/database/sql-database-paas-overview"
+    } },
+  { slug: 'postgres-flexible-server', displayName: 'PostgreSQL Flexible Server', restType: 'PostgresFlexibleServer', category: 'Databases',
+    description: 'Azure Database for PostgreSQL Flexible Server — list/provision via ARM, databases + firewall, schema browser, catalog registration.',
+    learnContent: {
+      "overview": "Azure Database for PostgreSQL Flexible Server (Microsoft.DBforPostgreSQL/flexibleServers) is a fully-managed PostgreSQL service. In CSA Loom you list existing servers across the subscription, provision new ones via ARM PUT, manage databases + firewall rules, browse schema, and register the server as a OneLake/Purview catalog asset. In-database query execution is an honest infra-gate until the pg driver + LOOM_POSTGRES_QUERY_LIVE are wired.",
+      "steps": [
+        { "title": "List servers", "body": "Inventory PostgreSQL flexible servers across the subscription via ARM." },
+        { "title": "Provision", "body": "Create a new flexible server (SKU, tier, version, admin) via ARM PUT." },
+        { "title": "Manage firewall", "body": "Review and upsert Microsoft.DBforPostgreSQL/flexibleServers/firewallRules." },
+        { "title": "Register in the catalog", "body": "Surface the server as a Purview/OneLake catalog asset." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/postgresql/flexible-server/overview"
     } },
 
   // Real-Time Intelligence
