@@ -15,7 +15,7 @@
  * Validate affordance (ADF only) differ.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Dropdown, Option, Field,
   Tab, TabList, Spinner,
@@ -33,7 +33,12 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { extractActivities, writeActivitiesToSpec, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
-import { PipelineDesigner } from '@/lib/components/pipeline/pipeline-designer';
+import { PipelineDesigner, type PipelineDesignerHandle } from '@/lib/components/pipeline/pipeline-designer';
+import { ParametersPane, VariablesPane, SettingsPane } from '@/lib/components/pipeline/pipeline-config-panes';
+import {
+  paramsFromSpec, paramsToSpec, varsFromSpec, varsToSpec,
+  type PipelineParameter, type PipelineVariable, type PipelineSpec,
+} from '@/lib/components/pipeline/types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { safePipelineJson } from './pipeline-fetch';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -96,8 +101,9 @@ export function PipelineEditorCore({
   const [runs, setRuns] = useState<PipelineRunDTO[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<'graph' | 'json' | 'runs'>('graph');
+  const [tab, setTab] = useState<'graph' | 'parameters' | 'variables' | 'settings' | 'json' | 'runs'>('graph');
   const [validation, setValidation] = useState<{ ok: boolean; message: string } | null>(null);
+  const designerRef = useRef<PipelineDesignerHandle>(null);
 
   const [runsAfterDays, setRunsAfterDays] = useState<number>(7);
   const [runsStatus, setRunsStatus] = useState<string>('');
@@ -304,34 +310,58 @@ export function PipelineEditorCore({
   }, [apiBase, newTriggerName, newTriggerHour, newTriggerMinute, loadTriggers]);
 
   // ------------------------------------------------------------------
-  // Activity palette
+  // Activities — extracted from the spec; the designer (palette + canvas)
+  // owns adding/removing/wiring them and writes back via onActivitiesChange.
   // ------------------------------------------------------------------
   const activities = extractActivities(spec);
   const activityCount = activities.length;
 
-  const nextActivityName = useCallback((prefix: string): string => {
-    let max = 0;
-    for (const a of activities) {
-      const name = a.name || '';
-      if (!name.startsWith(prefix)) continue;
-      const tail = name.slice(prefix.length);
-      if (!/^\d+$/.test(tail)) continue;
-      const n = parseInt(tail, 10);
-      if (Number.isFinite(n) && n > max) max = n;
+  // ------------------------------------------------------------------
+  // Pipeline-level config model (Parameters / Variables / Settings) — these
+  // round-trip the spec's `properties.parameters|variables|concurrency|
+  // annotations|description` without touching activities. Each editor maps to
+  // the ADF "pipeline configurations pane".
+  // ------------------------------------------------------------------
+  const specModel = useMemo<PipelineSpec>(() => {
+    try {
+      const obj = JSON.parse(spec || '{}');
+      if (!obj.properties) obj.properties = { activities: [] };
+      if (!Array.isArray(obj.properties.activities)) obj.properties.activities = [];
+      return obj as PipelineSpec;
+    } catch {
+      return { properties: { activities: [] } };
     }
-    return `${prefix}${max + 1}`;
-  }, [activities]);
+  }, [spec]);
 
-  const addActivity = useCallback((activity: PipelineActivity) => {
+  const pipelineParameters = useMemo(() => paramsFromSpec(specModel), [specModel]);
+  const pipelineVariables = useMemo(() => varsFromSpec(specModel), [specModel]);
+
+  const patchSpecProperties = useCallback((patch: (props: PipelineSpec['properties']) => void) => {
     setSpec((prev) => {
       let parsed: any;
       try { parsed = JSON.parse(prev || '{"properties":{}}'); } catch { return prev; }
       if (!parsed.properties || typeof parsed.properties !== 'object') parsed.properties = {};
       if (!Array.isArray(parsed.properties.activities)) parsed.properties.activities = [];
-      parsed.properties.activities.push(activity);
+      patch(parsed.properties);
       return JSON.stringify(parsed, null, 2);
     });
   }, []);
+
+  const setPipelineParameters = useCallback((next: PipelineParameter[]) => {
+    patchSpecProperties((p) => { p.parameters = paramsToSpec(next); });
+  }, [patchSpecProperties]);
+
+  const setPipelineVariables = useCallback((next: PipelineVariable[]) => {
+    patchSpecProperties((p) => { p.variables = varsToSpec(next); });
+  }, [patchSpecProperties]);
+
+  const setPipelineSettings = useCallback((next: { description?: string; concurrency?: number; annotations?: string[] }) => {
+    patchSpecProperties((p) => {
+      if ('description' in next) p.description = next.description;
+      if ('concurrency' in next) { if (next.concurrency == null) delete (p as any).concurrency; else p.concurrency = next.concurrency; }
+      if ('annotations' in next) p.annotations = next.annotations;
+    });
+  }, [patchSpecProperties]);
 
   // Ctrl+S to save
   useEffect(() => {
@@ -345,29 +375,34 @@ export function PipelineEditorCore({
     return () => window.removeEventListener('keydown', onKey);
   }, [bound, dirty, busy, save]);
 
+  // ADF Studio toolbar — Save · Validate · Debug · Run (trigger now) · Add
+  // trigger · canvas layout controls (auto-align / fit). Activities are added
+  // from the left palette pane in the designer, matching ADF Studio (no
+  // activity buttons in the toolbar).
   const ribbon: RibbonTab[] = useMemo(() => {
     const validateGroup: RibbonTab['groups'] = config.supportsValidate ? [{
       label: 'Validate', actions: [
-        { label: busy ? 'Validating…' : 'Validate', onClick: !busy && bound ? validate : undefined, disabled: busy || !bound, title: !bound ? 'Bind a pipeline first' : undefined },
+        { label: busy ? 'Validating…' : 'Validate', icon: <Checkmark20Regular />, onClick: !busy && bound ? validate : undefined, disabled: busy || !bound, title: !bound ? 'Bind a pipeline first' : undefined },
       ],
     }] : [];
     return [
       { id: 'home', label: 'Home', groups: [
-        { label: 'Activities', actions: config.palette.map((t) => ({
-          label: t.label,
-          onClick: bound ? () => addActivity(t.build(nextActivityName(t.prefix))) : undefined,
-          disabled: !bound,
-          title: !bound ? 'Bind a pipeline first' : undefined,
-        })) },
+        { label: 'Save', actions: [
+          { label: busy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: !busy && bound && dirty ? save : undefined, disabled: busy || !bound || !dirty, title: !bound ? 'Bind a pipeline first' : (!dirty ? 'No changes' : undefined) },
+        ] },
         ...validateGroup,
         { label: 'Run', actions: [
-          { label: busy ? 'Running…' : 'Run', icon: <Play20Regular />, onClick: !busy && bound && !dirty ? () => kick('run') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
-          { label: busy ? 'Debugging…' : 'Debug', onClick: !busy && bound && !dirty ? () => kick('debug') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
-          { label: 'Triggers', onClick: bound ? openTriggers : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : undefined },
+          { label: busy ? 'Running…' : 'Debug', icon: <Bug20Regular />, onClick: !busy && bound && !dirty ? () => kick('debug') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
+          { label: busy ? 'Running…' : 'Trigger now', icon: <Play20Regular />, onClick: !busy && bound && !dirty ? () => kick('run') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
+          { label: 'Add trigger', icon: <Clock20Regular />, onClick: bound ? openTriggers : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : undefined },
+        ] },
+        { label: 'Layout', actions: [
+          { label: 'Auto align', onClick: bound ? () => designerRef.current?.autoAlign() : undefined, disabled: !bound },
+          { label: 'Zoom to fit', onClick: bound ? () => designerRef.current?.fitToScreen() : undefined, disabled: !bound },
         ] },
       ] },
     ];
-  }, [config.palette, config.supportsValidate, addActivity, nextActivityName, busy, bound, dirty, kick, validate, openTriggers]);
+  }, [config.supportsValidate, busy, bound, dirty, save, kick, validate, openTriggers]);
 
   // ------------------------------------------------------------------
   // Render
@@ -454,36 +489,51 @@ export function PipelineEditorCore({
             </div>
           ) : (
             <>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Badge appearance="filled" color="brand">{bound}</Badge>
-                <Badge appearance="outline">{activityCount} activities</Badge>
+                <Badge appearance="outline">{activityCount} activit{activityCount === 1 ? 'y' : 'ies'}</Badge>
                 {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
                 {validation && <Badge appearance="filled" color={validation.ok ? 'success' : 'danger'}>{validation.ok ? 'Validated' : 'Invalid'}</Badge>}
-                <Button appearance="outline" icon={<Save20Regular />} disabled={busy || !dirty} onClick={save}>Save</Button>
-                {config.supportsValidate && (
-                  <Button appearance="outline" icon={<Checkmark20Regular />} disabled={busy} onClick={validate}>Validate</Button>
-                )}
-                <Button appearance="primary" icon={<Play20Regular />} disabled={busy || dirty} onClick={() => kick('run')}>Run</Button>
-                <Button appearance="outline" icon={<Bug20Regular />} disabled={busy || dirty} onClick={() => kick('debug')}>Debug</Button>
-                <Button appearance="outline" icon={<Clock20Regular />} onClick={openTriggers}>Triggers</Button>
-                <Button appearance="subtle" icon={<Link20Regular />} onClick={() => { setBound(null); loadBinding(); }}>Rebind</Button>
-                <Button appearance="outline" onClick={() => { loadPipeline(); loadRuns(); }} style={{ marginLeft: 'auto' }}>Refresh</Button>
+                <Button size="small" appearance="subtle" icon={<Link20Regular />} onClick={() => { setBound(null); loadBinding(); }}>Rebind</Button>
+                <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => { loadPipeline(); loadRuns(); }} style={{ marginLeft: 'auto' }}>Refresh</Button>
               </div>
               {error && (<BackendStateBar error={error} title="Pipeline API" />)}
               {validation && (
                 <MessageBar intent={validation.ok ? 'success' : 'error'}><MessageBarBody>{validation.message}</MessageBarBody></MessageBar>
               )}
+              {/* ADF Studio pipeline configurations tab row: the canvas
+                  ("Activities") plus the configuration panes. */}
               <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
-                <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'graph' | 'json' | 'runs')}>
-                  <Tab value="graph">Graph ({activityCount} act{activityCount === 1 ? '' : 's'})</Tab>
-                  <Tab value="json">Spec (JSON)</Tab>
-                  <Tab value="runs">Run history ({runs.length})</Tab>
+                <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+                  <Tab value="graph">Activities</Tab>
+                  <Tab value="parameters">Parameters ({pipelineParameters.length})</Tab>
+                  <Tab value="variables">Variables ({pipelineVariables.length})</Tab>
+                  <Tab value="settings">Settings</Tab>
+                  <Tab value="json">Code (JSON)</Tab>
+                  <Tab value="runs">Output ({runs.length})</Tab>
                 </TabList>
               </div>
               {tab === 'graph' && (
                 <PipelineDesigner
+                  ref={designerRef}
                   activities={activities as any}
+                  parameters={pipelineParameters}
+                  variables={pipelineVariables}
                   onActivitiesChange={(next) => setSpec((prev) => writeActivitiesToSpec(prev || '{"properties":{}}', next as any))}
+                />
+              )}
+              {tab === 'parameters' && (
+                <ParametersPane parameters={pipelineParameters} onChange={setPipelineParameters} />
+              )}
+              {tab === 'variables' && (
+                <VariablesPane variables={pipelineVariables} onChange={setPipelineVariables} />
+              )}
+              {tab === 'settings' && (
+                <SettingsPane
+                  description={specModel.properties.description || ''}
+                  concurrency={specModel.properties.concurrency}
+                  annotations={(specModel.properties.annotations as string[]) || []}
+                  onChange={setPipelineSettings}
                 />
               )}
               {tab === 'json' && (

@@ -6,8 +6,9 @@
  * activity name + type badge.
  */
 
-import { Badge, Caption1, tokens, makeStyles } from '@fluentui/react-components';
+import { Badge, Caption1, Tooltip, tokens, makeStyles } from '@fluentui/react-components';
 import { findByType } from './activity-catalog';
+import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
 import type { PipelineActivity } from './types';
 
 const useStyles = makeStyles({
@@ -40,29 +41,50 @@ const useStyles = makeStyles({
   body: { display: 'flex', gap: 8, alignItems: 'flex-start' },
   textCol: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 },
   // Connection handles — the small circular ports on a node's left (input)
-  // and right (output) edges. Dragging from an output port to another
-  // node's input port creates a success dependency (Fabric "green arrow").
+  // and right (output) edges. ADF Studio gives every activity four output
+  // ports stacked on the right edge, one per conditional path:
+  //   Upon Success (green) · Upon Failure (red) · Upon Completion (blue) ·
+  //   Upon Skip (gray). Dragging from a port to another node's input port
+  //   creates a dependsOn edge with that dependencyCondition.
   handle: {
     position: 'absolute',
-    top: '50%',
-    width: 14,
-    height: 14,
-    marginTop: -7,
+    width: 12,
+    height: 12,
     borderRadius: '50%',
     backgroundColor: tokens.colorNeutralBackground1,
-    border: `2px solid ${tokens.colorBrandStroke1}`,
     cursor: 'crosshair',
     zIndex: 2,
-    transitionProperty: 'transform, background-color',
+    transitionProperty: 'transform',
     transitionDuration: '100ms',
-    ':hover': {
-      transform: 'scale(1.3)',
-      backgroundColor: tokens.colorBrandBackground,
-    },
+    ':hover': { transform: 'scale(1.4)' },
   },
-  handleOut: { right: -8 },
-  handleIn: { left: -8 },
+  handleIn: {
+    left: -7,
+    top: '50%',
+    marginTop: -6,
+    border: `2px solid ${tokens.colorBrandStroke1}`,
+  },
+  // Output ports column on the right edge.
+  outPorts: {
+    position: 'absolute',
+    right: -7,
+    top: 0,
+    bottom: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    gap: 4,
+    zIndex: 2,
+  },
 });
+
+const OUTPUT_CONDITIONS: ConnectorCondition[] = ['Succeeded', 'Failed', 'Completed', 'Skipped'];
+const COND_LABEL: Record<ConnectorCondition, string> = {
+  Succeeded: 'Upon Success',
+  Failed: 'Upon Failure',
+  Completed: 'Upon Completion',
+  Skipped: 'Upon Skip',
+};
 
 export interface ActivityNodeProps {
   activity: PipelineActivity;
@@ -71,8 +93,8 @@ export interface ActivityNodeProps {
   selected?: boolean;
   onSelect?: () => void;
   onMouseDown?: (e: React.MouseEvent) => void;
-  /** Begin dragging a connector out of this node's output port. */
-  onConnectStart?: (e: React.MouseEvent) => void;
+  /** Begin dragging a connector out of this node's output port for `cond`. */
+  onConnectStart?: (cond: ConnectorCondition, e: React.MouseEvent) => void;
   /** Pointer entered this node's input port while a connector drag is live. */
   onConnectEnter?: () => void;
   onConnectLeave?: () => void;
@@ -111,13 +133,21 @@ export function ActivityNode({
         onMouseEnter={onConnectEnter}
         onMouseLeave={onConnectLeave}
       />
-      {/* Output port (right edge) — drag from here to wire a dependency */}
-      <div
-        className={`${s.handle} ${s.handleOut}`}
-        data-handle="out"
-        title="Drag to connect this activity's success output"
-        onMouseDown={(e) => { e.stopPropagation(); onConnectStart?.(e); }}
-      />
+      {/* Four output ports (right edge), one per conditional path. */}
+      <div className={s.outPorts}>
+        {OUTPUT_CONDITIONS.map((cond) => (
+          <Tooltip key={cond} content={COND_LABEL[cond]} relationship="label" positioning="after">
+            <div
+              className={s.handle}
+              data-handle="out"
+              data-handle-condition={cond}
+              style={{ position: 'relative', right: 0, border: `2px solid ${CONNECTOR_COLORS[cond]}` }}
+              aria-label={`${COND_LABEL[cond]} output — drag to connect`}
+              onMouseDown={(e) => { e.stopPropagation(); onConnectStart?.(cond, e); }}
+            />
+          </Tooltip>
+        ))}
+      </div>
       <div className={s.body}>
         <div className={s.swatch} style={{ backgroundColor: swatch }} />
         <div className={s.textCol}>
