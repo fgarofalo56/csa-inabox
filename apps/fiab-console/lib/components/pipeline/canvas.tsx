@@ -27,13 +27,14 @@ import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
   useReactFlow, useNodesState,
   ConnectionMode, MarkerType, Position,
   type Node, type Edge, type Connection, type NodeChange, type NodeTypes, type EdgeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Caption1, makeStyles, tokens } from '@fluentui/react-components';
+import { Button, Caption1, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
+import { Organization20Regular, FullScreenMaximize20Regular } from '@fluentui/react-icons';
 import { FlowActivityNode, FLOW_NODE_W, type ActivityNodeData } from './flow-activity-node';
 import { LoomBezierEdge, type LoomEdgeData } from './loom-bezier-edge';
 import { elkLayout, topoFallback, type XY } from './flow-layout';
@@ -259,6 +260,16 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         deleteKeyCode={null}
       >
         {showGrid && <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />}
+        <Panel position="top-right">
+          <div style={{ display: 'flex', gap: 4, background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 2 }}>
+            <Tooltip content="Auto-align (ELK layout)" relationship="label">
+              <Button size="small" appearance="subtle" icon={<Organization20Regular />} onClick={autoAlign}>Auto-align</Button>
+            </Tooltip>
+            <Tooltip content="Zoom to fit" relationship="label">
+              <Button size="small" appearance="subtle" icon={<FullScreenMaximize20Regular />} aria-label="Zoom to fit" onClick={fitToScreen} />
+            </Tooltip>
+          </div>
+        </Panel>
         <Controls showInteractive={false} />
         <MiniMap
           pannable

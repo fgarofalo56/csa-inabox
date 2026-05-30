@@ -26,7 +26,8 @@
  */
 
 import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Caption1, makeStyles, tokens } from '@fluentui/react-components';
+import { Button, Caption1, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
+import { PanelLeftContract20Regular, PanelLeftExpand20Regular } from '@fluentui/react-icons';
 import { ActivityPalette } from './palette';
 import { PipelineCanvas, type CanvasHandle } from './canvas';
 import { PropertiesPanel } from './properties-panel';
@@ -51,6 +52,23 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     overflow: 'hidden',
     display: 'flex',
+    flexDirection: 'column',
+  },
+  paletteHeader: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '4px 6px 4px 10px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    fontWeight: 600, fontSize: 12,
+  },
+  paletteRail: {
+    flexShrink: 0, width: 36, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+    paddingTop: 4,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  railLabel: {
+    writingMode: 'vertical-rl', transform: 'rotate(180deg)',
+    color: tokens.colorNeutralForeground3, fontSize: 12, userSelect: 'none', marginTop: 4,
   },
   // The canvas + bottom dock stack — this is the ADF "authoring canvas + the
   // panel at the bottom of the canvas" arrangement.
@@ -110,6 +128,7 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
   }, [onSelectedNameChange, controlledSelected]);
   const [snapToGrid] = useState(true);
   const [showGrid] = useState(true);
+  const [paletteCollapsed, setPaletteCollapsed] = useState(false);
 
   useImperativeHandle(ref, () => ({
     fitToScreen: () => canvasRef.current?.fitToScreen(),
@@ -188,9 +207,26 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
 
   return (
     <div className={s.shell} data-pipeline-designer>
-      <div className={s.paletteCol}>
-        <ActivityPalette onInsert={insertActivity} />
-      </div>
+      {paletteCollapsed ? (
+        <div className={s.paletteRail}>
+          <Tooltip content="Expand activities" relationship="label">
+            <Button appearance="subtle" size="small" icon={<PanelLeftExpand20Regular />}
+              aria-label="Expand activities" onClick={() => setPaletteCollapsed(false)} />
+          </Tooltip>
+          <span className={s.railLabel}>Activities</span>
+        </div>
+      ) : (
+        <div className={s.paletteCol}>
+          <div className={s.paletteHeader}>
+            <span>Activities</span>
+            <Tooltip content="Collapse activities" relationship="label">
+              <Button appearance="subtle" size="small" icon={<PanelLeftContract20Regular />}
+                aria-label="Collapse activities" onClick={() => setPaletteCollapsed(true)} />
+            </Tooltip>
+          </div>
+          <ActivityPalette onInsert={insertActivity} />
+        </div>
+      )}
       <div className={s.centerCol}>
         <div className={s.canvasWrap}>
           <PipelineCanvas

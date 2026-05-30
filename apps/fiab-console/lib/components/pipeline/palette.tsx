@@ -20,6 +20,7 @@ import {
   ACTIVITY_CATALOG, byCategory, ACTIVITY_CATEGORY_ORDER,
   type ActivityCategory, type ActivityTypeDef,
 } from './activity-catalog';
+import { activityIcon } from './activity-icons';
 
 const useStyles = makeStyles({
   root: {
@@ -46,7 +47,7 @@ const useStyles = makeStyles({
     transitionDuration: '120ms',
     ':hover': {
       backgroundColor: tokens.colorNeutralBackground1Hover,
-      borderColor: tokens.colorBrandStroke1,
+      border: `1px solid ${tokens.colorBrandStroke1}`,
     },
     ':active': { cursor: 'grabbing' },
   },
@@ -122,6 +123,7 @@ export function ActivityPalette({ onInsert }: PaletteProps) {
                   }}
                 >
                   <div className={s.swatch} style={{ backgroundColor: d.color }} />
+                  <span style={{ flexShrink: 0, color: d.color, display: 'inline-flex', alignItems: 'center' }} aria-hidden="true">{activityIcon(d.type)}</span>
                   <div className={s.labelCol}>
                     <span className={s.labelText}>{d.label}</span>
                     <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{d.type}</Caption1>

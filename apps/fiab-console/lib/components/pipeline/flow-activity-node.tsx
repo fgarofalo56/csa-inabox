@@ -23,6 +23,7 @@ import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { Badge, Caption1, Tooltip, tokens } from '@fluentui/react-components';
 import { findByType } from './activity-catalog';
+import { activityIcon } from './activity-icons';
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
 import type { PipelineActivity } from './types';
 
@@ -112,6 +113,11 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         <div style={{ width: 6, alignSelf: 'stretch', borderRadius: 2, background: swatch }} />
+        <div style={{
+          flexShrink: 0, width: 28, height: 28, borderRadius: 6,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: `${swatch}1a`, color: swatch,
+        }} aria-hidden="true">{activityIcon(activity.type)}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
           <div
             style={{
