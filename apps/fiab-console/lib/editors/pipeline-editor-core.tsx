@@ -28,8 +28,9 @@ import {
 import {
   DocumentTable20Regular, Play20Regular, Server20Regular,
   ArrowSync20Regular, Save20Regular, Bug20Regular, Checkmark20Regular,
-  Clock20Regular, Link20Regular, Add20Regular,
+  Clock20Regular, Link20Regular, Add20Regular, Settings20Regular,
 } from '@fluentui/react-icons';
+import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { extractActivities, writeActivitiesToSpec, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
@@ -41,6 +42,7 @@ import {
 } from '@/lib/components/pipeline/types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { safePipelineJson } from './pipeline-fetch';
+import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -95,6 +97,12 @@ export function PipelineEditorCore({
   const [bindBusy, setBindBusy] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
 
+  // Cross-subscription factory selection (ADF only). Lets the operator point
+  // this pipeline item at WHICH Data Factory — across every subscription they
+  // have RBAC for — before binding to one of its pipelines.
+  const isAdf = config.slug === 'adf-pipeline';
+  const [factory, setFactory] = useState<{ id: string; name: string; subscriptionId: string; resourceGroup: string } | null>(null);
+
   // ---- Spec / run state ----
   const [spec, setSpec] = useState<string>('');
   const [origSpec, setOrigSpec] = useState<string>('');
@@ -107,6 +115,9 @@ export function PipelineEditorCore({
 
   const [runsAfterDays, setRunsAfterDays] = useState<number>(7);
   const [runsStatus, setRunsStatus] = useState<string>('');
+
+  // ---- Manage (factory resources) dialog state — ADF only ----
+  const [manageOpen, setManageOpen] = useState(false);
 
   // ---- Triggers dialog state ----
   const [triggersOpen, setTriggersOpen] = useState(false);
@@ -385,12 +396,20 @@ export function PipelineEditorCore({
         { label: busy ? 'Validating…' : 'Validate', icon: <Checkmark20Regular />, onClick: !busy && bound ? validate : undefined, disabled: busy || !bound, title: !bound ? 'Bind a pipeline first' : undefined },
       ],
     }] : [];
+    // Manage hub (factory-level: linked services / datasets / integration
+    // runtimes) — ADF only, available regardless of pipeline binding.
+    const manageGroup: RibbonTab['groups'] = isAdf ? [{
+      label: 'Manage', actions: [
+        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services, datasets and integration runtimes' },
+      ],
+    }] : [];
     return [
       { id: 'home', label: 'Home', groups: [
         { label: 'Save', actions: [
           { label: busy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: !busy && bound && dirty ? save : undefined, disabled: busy || !bound || !dirty, title: !bound ? 'Bind a pipeline first' : (!dirty ? 'No changes' : undefined) },
         ] },
         ...validateGroup,
+        ...manageGroup,
         { label: 'Run', actions: [
           { label: busy ? 'Running…' : 'Debug', icon: <Bug20Regular />, onClick: !busy && bound && !dirty ? () => kick('debug') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
           { label: busy ? 'Running…' : 'Trigger now', icon: <Play20Regular />, onClick: !busy && bound && !dirty ? () => kick('run') : undefined, disabled: busy || !bound || dirty, title: dirty ? 'Save the spec first' : (!bound ? 'Bind a pipeline first' : undefined) },
@@ -402,7 +421,7 @@ export function PipelineEditorCore({
         ] },
       ] },
     ];
-  }, [config.supportsValidate, busy, bound, dirty, save, kick, validate, openTriggers]);
+  }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers]);
 
   // ------------------------------------------------------------------
   // Render
@@ -446,6 +465,35 @@ export function PipelineEditorCore({
           ) : !bound ? (
             <div className={s.gate}>
               {bindGate}
+              {isAdf && (
+                <div>
+                  <Subtitle2>Select a Data Factory (any subscription)</Subtitle2>
+                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                    Pick which Azure Data Factory backs this pipeline — across every subscription your account can see (Azure Resource Graph, your RBAC).
+                  </Body1>
+                  <div style={{ marginTop: 8 }}>
+                    <AzureResourcePicker
+                      type="Microsoft.DataFactory/factories"
+                      label="Data Factory"
+                      placeholder="Select a factory across all subscriptions"
+                      value={factory?.id}
+                      onChange={(r) => setFactory(r)}
+                    />
+                  </div>
+                  {factory && (
+                    <MessageBar intent="info" style={{ marginTop: 8 }}>
+                      <MessageBarBody>
+                        <MessageBarTitle>Factory selected: {factory.name}</MessageBarTitle>
+                        Pipeline binding below lists pipelines from the deployment-default factory
+                        (LOOM_ADF_NAME / LOOM_DLZ_RG). If <strong>{factory.name}</strong> is a different
+                        factory, grant the Loom UAMI &quot;Data Factory Contributor&quot; on it and set
+                        LOOM_ADF_NAME / LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID to point at it, or use the
+                        MountedDataFactory editor which targets an external factory by reference.
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
+                </div>
+              )}
               <div>
                 <Subtitle2>Bind to an existing pipeline</Subtitle2>
                 <div className={s.row} style={{ marginTop: 8 }}>
@@ -591,6 +639,8 @@ export function PipelineEditorCore({
               )}
             </>
           )}
+
+          {isAdf && <ManagePanel open={manageOpen} onOpenChange={setManageOpen} />}
 
           <Dialog open={triggersOpen} onOpenChange={(_, d) => setTriggersOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '760px', width: '90vw' }}>

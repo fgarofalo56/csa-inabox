@@ -7,8 +7,9 @@
  * docs/fiab/fabric-feature-inventory.md §3.
  */
 
-import { ReactNode } from 'react';
-import { Badge, makeStyles, tokens } from '@fluentui/react-components';
+import { ReactNode, useState } from 'react';
+import { Badge, Button, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
+import { PanelLeftContract20Regular, PanelLeftExpand20Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { Ribbon, type RibbonTab } from '@/lib/components/ribbon';
 import { ItemSidePanel } from '@/lib/components/item-side-panel';
@@ -17,11 +18,12 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 
 const useStyles = makeStyles({
   meta: { display: 'flex', gap: '8px', alignItems: 'center' },
-  layout: { display: 'flex', flexDirection: 'column', gap: '12px', minHeight: '70vh' },
+  // Fill the window: the editor body grows to the viewport instead of a fixed
+  // 70vh / 400px, so the canvas gets the room ADF/Fabric give it.
+  layout: { display: 'flex', flexDirection: 'column', gap: '8px', height: 'calc(100vh - 112px)', minHeight: '520px' },
   body: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(220px, 280px) 1fr',
-    gap: '12px',
+    gap: '8px',
     flex: 1,
     minHeight: 0,
   },
@@ -30,14 +32,22 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: '4px',
     overflow: 'auto',
-    minHeight: '400px',
+    minHeight: 0,
   },
+  // Thin rail shown when the left panel is collapsed — a single expand button.
+  collapsedRail: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 4,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '4px',
+  },
+  collapseToggle: { alignSelf: 'flex-end' },
   mainPanel: {
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: '4px',
     overflow: 'auto',
-    minHeight: '400px',
+    minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
   },
@@ -46,7 +56,8 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: '4px',
     overflow: 'auto',
-    minHeight: '400px',
+    minHeight: 0,
+    flex: 1,
     padding: '16px',
   },
 });
@@ -65,8 +76,15 @@ interface Props {
 
 export function ItemEditorChrome({ item, id, ribbon, leftPanel, main }: Props) {
   const styles = useStyles();
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
   const isNew = id === 'new';
   const title = isNew ? `New ${item.displayName.toLowerCase()}` : `${item.displayName} (${id.substring(0, 8)})`;
+
+  // When a left panel exists, allow collapsing it to a thin rail so the canvas
+  // gets the full width (ADF/Fabric let you hide the factory-resources pane).
+  const bodyStyle: React.CSSProperties | undefined = leftPanel
+    ? { gridTemplateColumns: leftCollapsed ? '32px 1fr' : 'minmax(220px, 280px) 1fr' }
+    : undefined;
 
   return (
     <PageShell
@@ -83,8 +101,26 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main }: Props) {
       <div className={styles.layout}>
         <Ribbon tabs={ribbon} />
         <BundleContentBar itemType={item.slug} itemId={id} />
-        <div className={leftPanel ? styles.body : ''}>
-          {leftPanel && <div className={styles.leftPanel}>{leftPanel}</div>}
+        <div className={leftPanel ? styles.body : ''} style={bodyStyle}>
+          {leftPanel && (
+            leftCollapsed ? (
+              <div className={styles.collapsedRail}>
+                <Tooltip content="Expand panel" relationship="label">
+                  <Button appearance="subtle" size="small" icon={<PanelLeftExpand20Regular />}
+                    aria-label="Expand panel" onClick={() => setLeftCollapsed(false)} />
+                </Tooltip>
+              </div>
+            ) : (
+              <div className={styles.leftPanel}>
+                <Tooltip content="Collapse panel" relationship="label">
+                  <Button className={styles.collapseToggle} appearance="subtle" size="small"
+                    icon={<PanelLeftContract20Regular />} aria-label="Collapse panel"
+                    onClick={() => setLeftCollapsed(true)} style={{ float: 'right', margin: 2 }} />
+                </Tooltip>
+                {leftPanel}
+              </div>
+            )
+          )}
           {leftPanel ? <div className={styles.mainPanel}>{main}</div> : <div className={styles.singlePanel}>{main}</div>}
         </div>
       </div>

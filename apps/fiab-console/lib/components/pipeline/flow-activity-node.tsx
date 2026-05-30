@@ -21,9 +21,12 @@
 
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Badge, Caption1, Tooltip, tokens } from '@fluentui/react-components';
+import { Badge, Button, Caption1, Tooltip, tokens } from '@fluentui/react-components';
+import { Edit16Regular } from '@fluentui/react-icons';
 import { findByType } from './activity-catalog';
+import { activityIcon } from './activity-icons';
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
+import { isContainerType, totalInnerCount } from './drill-path';
 import type { PipelineActivity } from './types';
 
 export const FLOW_NODE_W = 200;
@@ -46,6 +49,11 @@ const PORT_TOP: Record<ConnectorCondition, string> = {
 /** The data carried on a React Flow node of type `activity`. */
 export interface ActivityNodeData {
   activity: PipelineActivity;
+  /**
+   * Drill into this container's inner sub-canvas. Wired by the canvas; only
+   * present (and rendered) for control-flow container activities.
+   */
+  onDrill?: (name: string) => void;
   [key: string]: unknown;
 }
 
@@ -58,9 +66,12 @@ const HANDLE_BASE: React.CSSProperties = {
 };
 
 function FlowActivityNodeImpl({ data, selected }: NodeProps) {
-  const activity = (data as ActivityNodeData).activity;
+  const nodeData = data as ActivityNodeData;
+  const activity = nodeData.activity;
   const def = findByType(activity.type);
   const swatch = def?.color || tokens.colorBrandBackground;
+  const isContainer = isContainerType(activity.type);
+  const innerCount = isContainer ? totalInnerCount(activity) : 0;
 
   return (
     <div
@@ -110,24 +121,65 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
         </Tooltip>
       ))}
 
+      {/* Pencil drill button — only on control-flow container nodes. Clicking
+          it opens that container's inner-activities sub-canvas (ADF parity).
+          ForEach/Until additionally drill on double-click (handled in the
+          canvas), but the pencil works for every container type. */}
+      {isContainer && nodeData.onDrill && (
+        <Tooltip content={`Edit ${def?.label || activity.type} activities`} relationship="label">
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<Edit16Regular />}
+            aria-label={`Edit ${activity.name} inner activities`}
+            data-drill-into={activity.name}
+            className="nodrag"
+            onClick={(e) => { e.stopPropagation(); nodeData.onDrill!(activity.name); }}
+            style={{
+              position: 'absolute', top: 4, right: 4, zIndex: 4,
+              minWidth: 24, width: 24, height: 24, padding: 0,
+            }}
+          />
+        </Tooltip>
+      )}
+
       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
         <div style={{ width: 6, alignSelf: 'stretch', borderRadius: 2, background: swatch }} />
+        <div style={{
+          flexShrink: 0, width: 28, height: 28, borderRadius: 6,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: `${swatch}1a`, color: swatch,
+        }} aria-hidden="true">{activityIcon(activity.type)}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
           <div
             style={{
               fontWeight: 600, fontSize: 13, color: tokens.colorNeutralForeground1,
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              paddingRight: isContainer ? 22 : 0,
             }}
           >
             {activity.name}
           </div>
-          <Badge
-            appearance="filled"
-            size="small"
-            style={{ backgroundColor: swatch, color: def?.fg || '#fff', alignSelf: 'flex-start' }}
-          >
-            {def?.label || activity.type || 'Unknown'}
-          </Badge>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Badge
+              appearance="filled"
+              size="small"
+              style={{ backgroundColor: swatch, color: def?.fg || '#fff' }}
+            >
+              {def?.label || activity.type || 'Unknown'}
+            </Badge>
+            {isContainer && (
+              <Badge
+                appearance="tint"
+                size="small"
+                color="informative"
+                data-inner-count={innerCount}
+                title="Inner activities — double-click or use the pencil to edit"
+              >
+                Activities ({innerCount})
+              </Badge>
+            )}
+          </div>
           {activity.description && (
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{activity.description as string}</Caption1>
           )}

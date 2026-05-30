@@ -19,6 +19,7 @@ import {
   Tab, TabList, Input, Field, Textarea, Caption1, Button, Subtitle2,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, Badge, makeStyles, tokens, Select, Switch,
+  Dropdown, Option,
 } from '@fluentui/react-components';
 import { Add20Regular, Delete20Regular } from '@fluentui/react-icons';
 import { findByType } from './activity-catalog';
@@ -90,6 +91,24 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
   const [tab, setTab] = useState<TabId>('general');
   const [typePropsText, setTypePropsText] = useState('');
   const [typePropsErr, setTypePropsErr] = useState<string | null>(null);
+
+  // Factory datasets — backs the Source/Sink input/output dataset pickers.
+  // Best-effort: on Synapse (or unconfigured factory) the route gates and the
+  // dropdowns simply render empty, never blocking the raw JSON editors below.
+  const [datasets, setDatasets] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch('/api/adf/datasets');
+        const body = await res.json().catch(() => ({}));
+        if (alive && body?.ok && Array.isArray(body.datasets)) {
+          setDatasets(body.datasets.map((d: any) => d.name).filter(Boolean));
+        }
+      } catch { /* leave empty — raw JSON editors still work */ }
+    })();
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     if (!activity) return;
@@ -202,6 +221,46 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
 
         {tab === 'source-sink' && hasSourceSink && (
           <>
+            {(() => {
+              const inputName = ((activity.inputs as any[]) || [])[0]?.referenceName as string | undefined;
+              const outputName = ((activity.outputs as any[]) || [])[0]?.referenceName as string | undefined;
+              const refOrEmpty = (name: string) => name
+                ? [{ referenceName: name, type: 'DatasetReference', parameters: {} }]
+                : [];
+              return (
+                <>
+                  <Caption1>
+                    Bind a factory dataset to this activity. Selecting a source/sink dataset sets the
+                    activity&apos;s <code>inputs</code>/<code>outputs</code> DatasetReference. Manage datasets
+                    in the ribbon&apos;s <strong>Manage</strong> hub. {datasets.length === 0 && '(No datasets found — create one in Manage, or the factory isn’t configured.)'}
+                  </Caption1>
+                  <Field label="Source dataset (inputs[0])">
+                    <Dropdown
+                      placeholder={datasets.length ? 'Select a dataset' : 'No datasets available'}
+                      value={inputName || ''}
+                      selectedOptions={inputName ? [inputName] : []}
+                      disabled={!datasets.length}
+                      onOptionSelect={(_, d) => onPatch({ inputs: refOrEmpty(d.optionValue || '') })}
+                    >
+                      <Option value="" text="(none)">(none)</Option>
+                      {datasets.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Sink dataset (outputs[0])">
+                    <Dropdown
+                      placeholder={datasets.length ? 'Select a dataset' : 'No datasets available'}
+                      value={outputName || ''}
+                      selectedOptions={outputName ? [outputName] : []}
+                      disabled={!datasets.length}
+                      onOptionSelect={(_, d) => onPatch({ outputs: refOrEmpty(d.optionValue || '') })}
+                    >
+                      <Option value="" text="(none)">(none)</Option>
+                      {datasets.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
+                    </Dropdown>
+                  </Field>
+                </>
+              );
+            })()}
             <Caption1>Source / sink JSON. Wire up datasets via the Lookup or Copy reference list — these fields are surfaced raw so power users can target any connector type.</Caption1>
             <Field label="source">
               <textarea

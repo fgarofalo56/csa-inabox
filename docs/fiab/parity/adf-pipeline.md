@@ -33,6 +33,7 @@ Source: `author-visually#authoring-canvas` + `concepts-pipelines-activities#crea
 | **Authoring canvas** — cards, drag-to-add, drag-to-move, select | ✅ built — `PipelineCanvas` + `ActivityNode`: absolute-positioned cards, palette drag-drop, node reposition, pan/zoom, minimap | spec from `GET .../pipelines/{name}` |
 | **4 dependency conditions** (success/failure/completion/skip) | ✅ built — each card has 4 coloured output ports; drag a port → another card draws a `dependsOn` edge with that `dependencyCondition`; SVG arrows colour-coded | persisted in `dependsOn[]` on Save |
 | **Bottom configuration panel** for selected activity | ✅ built — `PropertiesPanel layout="dock"`: General / Source-Sink / Settings (policy: timeout, retry, retryInterval, secureOutput) / Parameters / User properties tabs | `PUT .../pipelines/{name}` |
+| **Nested control-flow sub-canvases** (ForEach / Until / If / Switch drill-in) | ✅ built — pencil button on every container node + "Activities (n)" count; ForEach/Until also double-click to drill; breadcrumb trail (`Pipeline > ForEach1 > True`) pops back to any ancestor; the same palette / drag-drop / connect / properties operate on inner activities; If/Switch branch tabs (True/False, Default + add/remove cases); ADF nesting limits enforced (If/Switch not inside If/Switch; single-level loop nesting) with disabled palette tiles + tooltips | inner activities round-trip in `typeProperties.activities` / `ifTrue|ifFalseActivities` / `defaultActivities` / `cases[].activities` on the same `PUT .../pipelines/{name}` |
 | **Pipeline Parameters pane** | ✅ built — `ParametersPane`: add/type/default/delete | round-trips `properties.parameters` on PUT |
 | **Pipeline Variables pane** | ✅ built — `VariablesPane`: add/type/default/delete | round-trips `properties.variables` on PUT |
 | **Pipeline Settings pane** (concurrency, annotations, description) | ✅ built — `SettingsPane` | round-trips `properties.{concurrency,annotations,description}` on PUT |
@@ -47,7 +48,20 @@ Source: `author-visually#authoring-canvas` + `concepts-pipelines-activities#crea
 | Deep activity config needing a linked service / dataset that isn't provisioned | ⚠️ honest-gate — Source/Sink + dataset reference fields render; the `referenceName` is empty with guidance; Fabric-only activities (Dataflow Gen2, Office 365) marked Save-only with remediation | n/a |
 | Infra-gate when factory not provisioned | ⚠️ honest-gate — bind picker shows `listError` (e.g. "Missing env var: LOOM_ADF_NAME"); full UI still renders | n/a |
 
-Zero ❌. Zero stub banners. The cards/edges ⇄ `properties.activities[]`/`dependsOn[]` round-trip, the palette catalog, the per-type default `typeProperties`, and the 4-condition connect/merge are covered by `lib/components/pipeline/__tests__/activities-roundtrip.test.ts` (Vitest).
+Zero ❌. Zero stub banners. The cards/edges ⇄ `properties.activities[]`/`dependsOn[]` round-trip, the palette catalog, the per-type default `typeProperties`, and the 4-condition connect/merge are covered by `lib/components/pipeline/__tests__/activities-roundtrip.test.ts` (Vitest). The nested control-flow drill model (branch read/write, level walk, immutable tree write-back, ADF nesting limits) is covered by `lib/components/pipeline/__tests__/drill-path.test.ts` (16 tests).
+
+## Nested control-flow sub-canvases (ADF concepts-nested-activities)
+
+Source: `concepts-nested-activities`. ADF container activities edit their inner
+activities on an **inner canvas** reached via a **pencil icon** on the node
+(ForEach/Until also drill on **double-click**), with a **breadcrumb** back to
+ancestors. Loom mirrors this exactly:
+
+- **Inner-activity storage (ADF JSON shape):** ForEach/Until → `typeProperties.activities`; IfCondition → `typeProperties.ifTrueActivities` / `ifFalseActivities`; Switch → `typeProperties.defaultActivities` + `typeProperties.cases[].activities`.
+- **Drill state:** `PipelineDesigner` holds a `drillPath: Array<{ name; branch? }>`. `getLevelActivities(tree, path)` walks to the current level; `setLevelActivities(tree, path, next)` rebuilds the container chain immutably and emits the **full top-level tree** via `onActivitiesChange` — so `PipelineEditorCore`'s `properties.activities[]` ⇄ JSON contract is unchanged.
+- **Branch UI:** IfCondition shows True/False tabs; Switch shows Default + a tab per case with inline add/remove case (real JSON mutation).
+- **Nesting limits** (`drill-path.ts#canAddTypeAtLevel`): If/Switch can be used inside ForEach/Until but **not** inside another If/Switch; ForEach/Until support a **single** level of nesting. Disallowed palette tiles are disabled (no drag, no click) with an explanatory tooltip, and the canvas drop handler enforces the same gate.
+- **No new backend.** Inner activities serialise inside the same pipeline definition; Save still does one `PUT factories/{f}/pipelines/{name}`. No new route, env var, role, Cosmos container, or bicep change.
 
 ## Backend per control
 

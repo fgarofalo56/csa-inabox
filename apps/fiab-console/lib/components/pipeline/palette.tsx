@@ -20,6 +20,7 @@ import {
   ACTIVITY_CATALOG, byCategory, ACTIVITY_CATEGORY_ORDER,
   type ActivityCategory, type ActivityTypeDef,
 } from './activity-catalog';
+import { activityIcon } from './activity-icons';
 
 const useStyles = makeStyles({
   root: {
@@ -63,9 +64,18 @@ export interface PaletteProps {
    * inserting it into the pipeline spec.
    */
   onInsert: (def: ActivityTypeDef) => void;
+  /**
+   * Optional per-type nesting gate. When the designer is drilled into a
+   * container, some container types can't be added (ADF nesting limits):
+   * If/Switch can't nest inside If/Switch; ForEach/Until can't nest inside
+   * ForEach/Until. A disallowed tile is disabled (no drag, no click) and its
+   * tooltip explains why. When omitted (or `allowed: true`), the tile is
+   * fully interactive.
+   */
+  addRuleFor?: (type: string) => { allowed: boolean; reason?: string };
 }
 
-export function ActivityPalette({ onInsert }: PaletteProps) {
+export function ActivityPalette({ onInsert, addRuleFor }: PaletteProps) {
   const s = useStyles();
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Record<ActivityCategory, boolean>>({
@@ -98,40 +108,53 @@ export function ActivityPalette({ onInsert }: PaletteProps) {
         </div>
         {open && (
           <div className={s.list}>
-            {items.map((d) => (
-              <Tooltip
-                key={d.key}
-                content={d.description + (d.runnable ? '' : ` — ${d.remediation || 'not runnable on this backing'}`)}
-                relationship="description"
-                positioning="after"
-              >
-                <div
-                  className={s.tile}
-                  draggable
-                  role="button"
-                  tabIndex={0}
-                  data-palette-key={d.key}
-                  data-runnable={d.runnable ? 'true' : 'false'}
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData('application/x-fiab-activity', d.key);
-                    e.dataTransfer.effectAllowed = 'copy';
-                  }}
-                  onClick={() => onInsert(d)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onInsert(d); }
-                  }}
+            {items.map((d) => {
+              const rule = addRuleFor?.(d.type);
+              const blocked = rule ? !rule.allowed : false;
+              const tip = blocked
+                ? (rule?.reason || 'Not allowed at this nesting level')
+                : d.description + (d.runnable ? '' : ` — ${d.remediation || 'not runnable on this backing'}`);
+              return (
+                <Tooltip
+                  key={d.key}
+                  content={tip}
+                  relationship="description"
+                  positioning="after"
                 >
-                  <div className={s.swatch} style={{ backgroundColor: d.color }} />
-                  <div className={s.labelCol}>
-                    <span className={s.labelText}>{d.label}</span>
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{d.type}</Caption1>
+                  <div
+                    className={s.tile}
+                    draggable={!blocked}
+                    role="button"
+                    tabIndex={0}
+                    aria-disabled={blocked || undefined}
+                    data-palette-key={d.key}
+                    data-runnable={d.runnable ? 'true' : 'false'}
+                    data-blocked={blocked ? 'true' : 'false'}
+                    style={blocked ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}
+                    onDragStart={(e) => {
+                      if (blocked) { e.preventDefault(); return; }
+                      e.dataTransfer.setData('application/x-fiab-activity', d.key);
+                      e.dataTransfer.effectAllowed = 'copy';
+                    }}
+                    onClick={() => { if (!blocked) onInsert(d); }}
+                    onKeyDown={(e) => {
+                      if (blocked) return;
+                      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onInsert(d); }
+                    }}
+                  >
+                    <div className={s.swatch} style={{ backgroundColor: d.color }} />
+                    <span style={{ flexShrink: 0, color: d.color, display: 'inline-flex', alignItems: 'center' }} aria-hidden="true">{activityIcon(d.type)}</span>
+                    <div className={s.labelCol}>
+                      <span className={s.labelText}>{d.label}</span>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{d.type}</Caption1>
+                    </div>
+                    {!d.runnable && (
+                      <Badge size="small" appearance="outline" color="warning">!</Badge>
+                    )}
                   </div>
-                  {!d.runnable && (
-                    <Badge size="small" appearance="outline" color="warning">!</Badge>
-                  )}
-                </div>
-              </Tooltip>
-            ))}
+                </Tooltip>
+              );
+            })}
           </div>
         )}
       </div>

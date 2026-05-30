@@ -7,12 +7,38 @@
 import { NextRequest } from 'next/server';
 import { getMsalClient } from '@/lib/auth/msal';
 import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS } from '@/lib/auth/session';
+import { saveUserToken } from '@/lib/azure/user-token-store';
 import type { UserClaims } from '@/lib/auth/msal';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const SCOPES = ['openid', 'profile', 'email', 'offline_access', 'User.Read'];
+// Delegated Azure Resource Manager scope — used to obtain an ARM-audience token
+// for the user so the cross-subscription resource picker can query with the
+// user's own RBAC. Captured best-effort after the session token exchange.
+const ARM_SCOPE = 'https://management.azure.com/user_impersonation';
+
+/**
+ * Best-effort capture of the user's ARM access token. Wrapped so that ANY
+ * failure (scope not consented, silent-acquire fails, Cosmos unavailable) is
+ * swallowed — login MUST proceed unchanged. The token is never logged and is
+ * encrypted at rest by the store.
+ */
+async function captureUserArmToken(
+  client: ReturnType<typeof getMsalClient>,
+  account: import('@azure/msal-node').AccountInfo,
+  oid: string,
+): Promise<void> {
+  try {
+    const arm = await client.acquireTokenSilent({ account, scopes: [ARM_SCOPE] });
+    if (arm?.accessToken) {
+      await saveUserToken(oid, arm.accessToken, arm.expiresOn ?? null);
+    }
+  } catch {
+    // ARM scope not consented / not available — picker falls back to UAMI.
+  }
+}
 
 function origin(req: NextRequest): string {
   const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'localhost:3000';
@@ -76,6 +102,9 @@ export async function GET(req: NextRequest) {
       exp: Math.floor((result.expiresOn?.getTime() ?? Date.now() + 3600_000) / 1000),
     });
     console.log('[auth/callback] session encoded for', claims.upn, '— cookie length', cookieValue.length);
+    // Additive + non-breaking: capture the user's ARM token for per-user RBAC.
+    // Never await-throws into the login path (the helper swallows all errors).
+    await captureUserArmToken(client, account, claims.oid);
     return htmlRedirect('/', cookieValue);
   } catch (e) {
     const msg = (e as Error).message ?? 'unknown';
