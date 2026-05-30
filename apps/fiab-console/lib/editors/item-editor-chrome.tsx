@@ -20,7 +20,7 @@ const useStyles = makeStyles({
   meta: { display: 'flex', gap: '8px', alignItems: 'center' },
   // Fill the window: the editor body grows to the viewport instead of a fixed
   // 70vh / 400px, so the canvas gets the room ADF/Fabric give it.
-  layout: { display: 'flex', flexDirection: 'column', gap: '8px', height: 'calc(100vh - 132px)', minHeight: '520px' },
+  layout: { display: 'flex', flexDirection: 'column', gap: '8px', height: 'calc(100vh - 112px)', minHeight: '520px' },
   body: {
     display: 'grid',
     gap: '8px',
