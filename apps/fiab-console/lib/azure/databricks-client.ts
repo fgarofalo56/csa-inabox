@@ -79,6 +79,9 @@ export interface Warehouse {
   cluster_size?: string;
   warehouse_type?: string;
   enable_serverless_compute?: boolean;
+  min_num_clusters?: number;
+  max_num_clusters?: number;
+  auto_stop_mins?: number;
 }
 
 export async function listWarehouses(): Promise<Warehouse[]> {

@@ -143,6 +143,21 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const [importBusy, setImportBusy] = useState(false);
   const [importErr, setImportErr] = useState<string | null>(null);
 
+  // Import-from-OpenAPI dialog — self-contained "Create from definition →
+  // OpenAPI" parity. Collects API id + display name + path + format + spec and
+  // POSTs to /api/apim/import (real ARM PUT). Unlike the Import-API dialog
+  // above (which patches the *current* API), this can mint a brand-new API
+  // from a spec in one shot, then navigates to it.
+  const [oasOpen, setOasOpen] = useState(false);
+  const [oasApiId, setOasApiId] = useState('');
+  const [oasDisplayName, setOasDisplayName] = useState('');
+  const [oasPath, setOasPath] = useState('');
+  const [oasFormat, setOasFormat] = useState<'openapi+json' | 'openapi-link'>('openapi+json');
+  const [oasValue, setOasValue] = useState('');
+  const [oasBusy, setOasBusy] = useState(false);
+  const [oasErr, setOasErr] = useState<string | null>(null);
+  const [oasGate, setOasGate] = useState<string | null>(null);
+
   // Test console — pick an operation, edit method/template/headers/body, send.
   const [testOpName, setTestOpName] = useState<string>('');
   const [testMethod, setTestMethod] = useState('GET');
@@ -332,6 +347,55 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     finally { setImportBusy(false); }
   }, [id, importKind, importValue, displayName, path, protocols, subscriptionRequired, serviceUrl, loadOps, loadSpec]);
 
+  // ---- Import from OpenAPI (dedicated /api/apim/import) ----
+  const openOas = useCallback(() => {
+    // Seed from the current editor so importing onto an existing API is a
+    // one-click default; on the new-API form everything starts blank.
+    setOasApiId(isNew ? '' : id);
+    setOasDisplayName(displayName || '');
+    setOasPath(path || '');
+    setOasFormat('openapi+json');
+    setOasValue('');
+    setOasErr(null);
+    setOasGate(null);
+    setOasOpen(true);
+  }, [isNew, id, displayName, path]);
+
+  const runOasImport = useCallback(async () => {
+    const apiIdTrim = oasApiId.trim();
+    const pathTrim = oasPath.trim();
+    if (!apiIdTrim) { setOasErr('API id is required.'); return; }
+    if (!pathTrim) { setOasErr('URL path is required.'); return; }
+    if (!oasValue.trim()) { setOasErr(oasFormat === 'openapi-link' ? 'Spec URL is required.' : 'OpenAPI document is required.'); return; }
+    if (oasFormat === 'openapi+json') {
+      try { JSON.parse(oasValue); }
+      catch (e: any) { setOasErr(`Inline OpenAPI is not valid JSON: ${e?.message || String(e)}`); return; }
+    }
+    setOasBusy(true); setOasErr(null); setOasGate(null);
+    try {
+      const r = await fetch('/api/apim/import', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          apiId: apiIdTrim,
+          displayName: oasDisplayName.trim() || undefined,
+          path: pathTrim,
+          format: oasFormat,
+          value: oasValue,
+        }),
+      });
+      const j = await r.json();
+      if (r.status === 503 && j?.code === 'not_configured') { setOasGate(j.missing || j.error || 'APIM not configured'); return; }
+      if (!j.ok) { setOasErr(j.error || `HTTP ${r.status}`); return; }
+      setOasOpen(false);
+      setStatus({ kind: 'ok', msg: `Imported ${j.api.displayName || j.api.name} (${j.api.name}) at path /${j.api.path}` });
+      // Navigate to the created/updated API so its operations + spec render.
+      if (j.api?.name && j.api.name !== id) router.push(`/items/apim-api/${encodeURIComponent(j.api.name)}`);
+      else { load(); loadOps(); loadSpec(); }
+    } catch (e: any) { setOasErr(e?.message || String(e)); }
+    finally { setOasBusy(false); }
+  }, [oasApiId, oasPath, oasValue, oasFormat, oasDisplayName, id, router, load, loadOps, loadSpec]);
+
   // ---- Test console ----
   const sendTest = useCallback(async () => {
     setTestBusy(true); setTestErr(null); setTestResp(null);
@@ -402,7 +466,8 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
         { label: 'Reload', onClick: !isNew ? () => { load(); loadOps(); loadSpec(); } : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
       { label: 'Definition', actions: [
-        { label: 'Import API', onClick: () => { setImportErr(null); setImportOpen(true); }, title: 'Import OpenAPI / WSDL / GraphQL' },
+        { label: 'Import from OpenAPI', onClick: openOas, title: 'Create or replace an API from an OpenAPI definition (inline or URL)' },
+        { label: 'Import API', onClick: () => { setImportErr(null); setImportOpen(true); }, title: 'Import OpenAPI / WSDL / GraphQL into the current API' },
         { label: 'Edit OpenAPI', onClick: !isNew ? openSpecEditor : undefined, disabled: isNew, title: isNew ? 'Save the API first, then edit the spec' : undefined },
         { label: 'Copy spec', onClick: spec.data?.value ? copySpec : undefined, disabled: !spec.data?.value, title: !spec.data?.value ? 'No spec attached to this API' : undefined },
       ]},
@@ -414,7 +479,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
         { label: 'Open policy editor', onClick: !isNew ? () => router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=api&apiId=${encodeURIComponent(id)}`) : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
     ]},
-  ], [status.kind, isNew, dirty, displayName, path, save, load, loadOps, loadSpec, spec.data, openSpecEditor, router, id]);
+  ], [status.kind, isNew, dirty, displayName, path, save, load, loadOps, loadSpec, spec.data, openSpecEditor, openOas, router, id]);
 
   const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
@@ -448,6 +513,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
             <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving' || (!isNew && !dirty)}>
               {status.kind === 'saving' ? 'Saving…' : isNew ? 'Create' : 'Save'}
             </Button>
+            <Button appearance="outline" icon={<CloudArrowUp20Regular />} onClick={openOas}>Import from OpenAPI</Button>
             <Button appearance="outline" icon={<ArrowImport20Regular />} onClick={() => { setImportErr(null); setImportOpen(true); }}>Import</Button>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => { load(); loadOps(); loadSpec(); }}>
               Reload
@@ -650,6 +716,68 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                 <DialogActions>
                   <Button onClick={() => setImportOpen(false)}>Cancel</Button>
                   <Button appearance="primary" onClick={runImport} disabled={importBusy || !importValue.trim()}>{importBusy ? 'Importing…' : 'Import'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Import from OpenAPI dialog — dedicated /api/apim/import (real ARM PUT) */}
+          <Dialog open={oasOpen} onOpenChange={(_, d) => { if (!d.open) setOasOpen(false); }}>
+            <DialogSurface style={{ maxWidth: '90vw', width: 760 }}>
+              <DialogBody>
+                <DialogTitle>Import from OpenAPI</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Body1>
+                      Creates or replaces an API from an OpenAPI definition. APIM parses the spec
+                      into operations and schemas — the same as the portal's <em>Create from definition → OpenAPI</em>.
+                    </Body1>
+                    <div className={s.form}>
+                      <Field label="API id" required hint="Resource name (lowercase, e.g. 'petstore')">
+                        <Input value={oasApiId} onChange={(_, d) => setOasApiId(d.value)} placeholder="petstore" />
+                      </Field>
+                      <Field label="Display name" hint="Defaults to the spec's info.title">
+                        <Input value={oasDisplayName} onChange={(_, d) => setOasDisplayName(d.value)} placeholder="Pet Store" />
+                      </Field>
+                      <Field label="URL path" required hint="Suffix after the gateway hostname, e.g. 'petstore'">
+                        <Input value={oasPath} onChange={(_, d) => setOasPath(d.value)} placeholder="petstore" />
+                      </Field>
+                      <Field label="Source">
+                        <Dropdown
+                          value={oasFormat === 'openapi-link' ? 'OpenAPI (link to spec URL)' : 'OpenAPI (inline JSON)'}
+                          selectedOptions={[oasFormat]}
+                          onOptionSelect={(_, d) => d.optionValue && setOasFormat(d.optionValue as typeof oasFormat)}
+                        >
+                          <Option value="openapi+json">OpenAPI (inline JSON)</Option>
+                          <Option value="openapi-link">OpenAPI (link to spec URL)</Option>
+                        </Dropdown>
+                      </Field>
+                    </div>
+                    {oasFormat === 'openapi-link' ? (
+                      <Field label="Spec URL" required>
+                        <Input value={oasValue} onChange={(_, d) => setOasValue(d.value)} placeholder="https://petstore3.swagger.io/api/v3/openapi.json" />
+                      </Field>
+                    ) : (
+                      <Field label="OpenAPI document (JSON)" required>
+                        <MonacoTextarea value={oasValue} onChange={setOasValue} language="json" height={300} minHeight={220} ariaLabel="OpenAPI document to import" />
+                      </Field>
+                    )}
+                    {oasGate && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>APIM not configured</MessageBarTitle>
+                          This deployment has no target APIM service. Set <code>{oasGate}</code> on the Console app, then retry.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {oasErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Import failed</MessageBarTitle>{oasErr}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setOasOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={runOasImport} disabled={oasBusy || !oasApiId.trim() || !oasPath.trim() || !oasValue.trim()}>
+                    {oasBusy ? 'Importing…' : 'Import'}
+                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>

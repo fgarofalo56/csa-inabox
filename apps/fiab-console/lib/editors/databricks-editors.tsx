@@ -104,6 +104,9 @@ interface WarehouseState {
   cluster_size?: string;
   warehouse_type?: string;
   serverless?: boolean;
+  min_num_clusters?: number;
+  max_num_clusters?: number;
+  auto_stop_mins?: number;
   error?: string;
 }
 
@@ -213,6 +216,17 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [warehousesError, setWarehousesError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
+  // ---- Edit / scale dialog (POST /api/2.0/sql/warehouses/{id}/edit) ----
+  const [editOpen, setEditOpen] = useState(false);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editSize, setEditSize] = useState('X-Small');
+  const [editMinClusters, setEditMinClusters] = useState(1);
+  const [editMaxClusters, setEditMaxClusters] = useState(1);
+  const [editAutoStop, setEditAutoStop] = useState(10);
+  const [editType, setEditType] = useState<'PRO' | 'CLASSIC'>('PRO');
+  const [editServerless, setEditServerless] = useState(false);
+
   // ---- Initial: load warehouses, pick first, fetch state ----
   useEffect(() => {
     let cancelled = false;
@@ -321,6 +335,55 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     refreshState();
   }, [id, warehouseId, refreshState]);
 
+  // ---- Edit / scale: pre-fill from the live warehouse, then POST /edit ----
+  const openEdit = useCallback(async () => {
+    if (!warehouseId) return;
+    setEditError(null);
+    // Pull current size/scaling/type/serverless so the dialog starts from
+    // the real warehouse config (state route surfaces these).
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/state?warehouseId=${encodeURIComponent(warehouseId)}`);
+      const j = (await r.json()) as WarehouseState;
+      if (j.ok) {
+        if (j.cluster_size) setEditSize(j.cluster_size);
+        if (typeof j.min_num_clusters === 'number') setEditMinClusters(j.min_num_clusters);
+        if (typeof j.max_num_clusters === 'number') setEditMaxClusters(j.max_num_clusters);
+        if (typeof j.auto_stop_mins === 'number') setEditAutoStop(j.auto_stop_mins);
+        setEditType(j.warehouse_type === 'CLASSIC' ? 'CLASSIC' : 'PRO');
+        setEditServerless(!!j.serverless);
+      }
+    } catch { /* dialog still opens with defaults */ }
+    setEditOpen(true);
+  }, [id, warehouseId]);
+
+  const saveEdit = useCallback(async () => {
+    if (!warehouseId) return;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/edit?warehouseId=${encodeURIComponent(warehouseId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          cluster_size: editSize,
+          min_num_clusters: editMinClusters,
+          max_num_clusters: editMaxClusters,
+          auto_stop_mins: editAutoStop,
+          warehouse_type: editType,
+          enable_serverless_compute: editServerless,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setEditError(j.error || `HTTP ${r.status}`); return; }
+      setEditOpen(false);
+      await refreshState();
+    } catch (e: any) {
+      setEditError(e?.message || String(e));
+    } finally {
+      setEditBusy(false);
+    }
+  }, [id, warehouseId, editSize, editMinClusters, editMaxClusters, editAutoStop, editType, editServerless, refreshState]);
+
   // ---- Run query ----
   const run = useCallback(async () => {
     if (!warehouseId) {
@@ -419,10 +482,11 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       { label: 'Warehouse', actions: [
         { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart },
         { label: 'Stop', onClick: canStop ? stop : undefined, disabled: !canStop },
+        { label: 'Edit', onClick: warehouseId ? openEdit : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless' },
         { label: 'Refresh', onClick: warehouseId ? refreshAll : undefined, disabled: !warehouseId },
       ]},
     ]},
-  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory]);
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit]);
 
   return (
     <ItemEditorChrome
@@ -549,6 +613,9 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => {
               refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
             }}>Refresh</Button>
+            <Button appearance="outline" icon={<Save20Regular />} disabled={!warehouseId} onClick={openEdit}>
+              Edit
+            </Button>
             <Button
               appearance="primary"
               icon={<Play20Regular />}
@@ -598,6 +665,75 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               </Body1>
             </div>
           )}
+
+          {/* Edit / scale dialog — POST /api/2.0/sql/warehouses/{id}/edit */}
+          <Dialog open={editOpen} onOpenChange={(_, d) => setEditOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '560px' }}>
+              <DialogBody>
+                <DialogTitle>Edit warehouse — {selectedWarehouse?.name || warehouseId}</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {editError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Edit failed</MessageBarTitle>{editError}</MessageBarBody></MessageBar>
+                    )}
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        Changes apply via <code>POST /api/2.0/sql/warehouses/&#123;id&#125;/edit</code>. A running
+                        warehouse may briefly restart to take a new size; scaling (min/max clusters) and auto-stop
+                        apply live.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <Field label="Cluster size">
+                      <Dropdown
+                        value={editSize}
+                        selectedOptions={[editSize]}
+                        onOptionSelect={(_, d) => d.optionValue && setEditSize(d.optionValue)}
+                      >
+                        {['2X-Small', 'X-Small', 'Small', 'Medium', 'Large', 'X-Large', '2X-Large', '3X-Large', '4X-Large'].map((sz) => (
+                          <Option key={sz} value={sz} text={sz}>{sz}</Option>
+                        ))}
+                      </Dropdown>
+                    </Field>
+                    <div style={{ display: 'flex', gap: 12 }}>
+                      <Field label="Min clusters" style={{ flex: 1 }} hint="Scaling floor (1–30)">
+                        <Input type="number" value={String(editMinClusters)}
+                          onChange={(_, d) => setEditMinClusters(Math.max(1, Number(d.value) || 1))} />
+                      </Field>
+                      <Field label="Max clusters" style={{ flex: 1 }} hint="Scaling ceiling (1–30)">
+                        <Input type="number" value={String(editMaxClusters)}
+                          onChange={(_, d) => setEditMaxClusters(Math.max(1, Number(d.value) || 1))} />
+                      </Field>
+                    </div>
+                    <Field label="Auto-stop (minutes)" hint="0 disables auto-stop">
+                      <Input type="number" value={String(editAutoStop)}
+                        onChange={(_, d) => setEditAutoStop(Math.max(0, Number(d.value) || 0))} />
+                    </Field>
+                    <Field label="Warehouse type">
+                      <Dropdown
+                        value={editType}
+                        selectedOptions={[editType]}
+                        onOptionSelect={(_, d) => d.optionValue && setEditType(d.optionValue as 'PRO' | 'CLASSIC')}
+                      >
+                        <Option value="PRO" text="PRO">PRO</Option>
+                        <Option value="CLASSIC" text="CLASSIC">CLASSIC</Option>
+                      </Dropdown>
+                    </Field>
+                    <Switch
+                      checked={editServerless}
+                      label="Serverless compute"
+                      onChange={(_, d) => setEditServerless(!!d.checked)}
+                    />
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setEditOpen(false)} disabled={editBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={saveEdit} disabled={editBusy}>
+                    {editBusy ? 'Saving…' : 'Save changes'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           <Dialog open={qhOpen} onOpenChange={(_, d) => setQhOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '1080px', width: '95vw' }}>
@@ -2835,15 +2971,38 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
         setClusterId(j.cluster_id);
         await selectCluster(j.cluster_id);
       } else {
-        // edit not exposed at top-level path; surface info
-        setSaveMessage('Cluster edit via REST is not yet wired in this editor — recreate to change spec.');
+        // Edit an existing cluster via POST /api/2.0/clusters/edit. Databricks
+        // only allows edit while the cluster is RUNNING or TERMINATED; any
+        // other state returns 400 INVALID_STATE, which we surface verbatim.
+        const r = await fetch(`/api/items/databricks-cluster/${id}?clusterId=${encodeURIComponent(clusterId)}`, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ spec }),
+        });
+        const ct = r.headers.get('content-type') || '';
+        const j = ct.includes('application/json') ? await r.json().catch(() => null) : null;
+        if (!j || !j.ok) {
+          const rawErr = j?.error || (await r.text().catch(() => ''))?.slice(0, 240) || `HTTP ${r.status}`;
+          if (/INVALID_STATE/i.test(rawErr) || /Clusters in state/i.test(rawErr)) {
+            setSaveError(
+              `Databricks rejected the edit: ${rawErr}. A cluster can only be edited while it is ` +
+              `RUNNING or TERMINATED. Stop (terminate) the cluster, edit it, then Start — or edit ` +
+              `while it is fully RUNNING.`,
+            );
+          } else {
+            setSaveError(rawErr);
+          }
+          return;
+        }
+        setSaveMessage(`Saved cluster ${clusterId} at ${new Date().toLocaleTimeString()}`);
+        await loadClusters();
+        await selectCluster(clusterId);
       }
     } catch (e: any) {
       setSaveError(e?.message || String(e));
     } finally {
       setSaving(false);
     }
-  }, [clusterId, buildSpec, loadClusters, selectCluster]);
+  }, [id, clusterId, buildSpec, loadClusters, selectCluster]);
 
   const doState = useCallback(async (action: 'start' | 'stop' | 'restart') => {
     if (!clusterId) return;
@@ -2874,19 +3033,19 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     await loadClusters();
   }, [id, clusterId, loadClusters]);
 
-  // Ctrl/Cmd+S to save when not already busy. Only meaningful for the
-  // create flow (clusterId === null); edit-after-create is gated by the
-  // Databricks REST surface, but matching the family-wide muscle memory.
+  // Ctrl/Cmd+S to save when not already busy — works for both create
+  // (clusterId === null → /clusters/create) and edit (existing cluster →
+  // /clusters/edit), matching the family-wide muscle memory.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        if (!saving && !clusterId) save();
+        if (!saving) save();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [saving, clusterId, save]);
+  }, [saving, save]);
 
   const state = cluster?.state || (clusterId ? 'UNKNOWN' : 'NEW');
 
@@ -2949,7 +3108,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
             <Badge appearance="filled" color={clusterStateColor(state)}>{state}</Badge>
             {cluster?.state_message && <Caption1>{cluster.state_message}</Caption1>}
             <Button appearance="primary" icon={<Save20Regular />} disabled={saving} onClick={save}>
-              {saving ? 'Saving…' : clusterId ? 'Save (recreate to change spec)' : 'Create'}
+              {saving ? 'Saving…' : clusterId ? 'Save changes' : 'Create'}
             </Button>
             {clusterId && (
               <>
@@ -2975,8 +3134,19 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
           </MessageBarBody></MessageBar>}
           {saveMessage && <MessageBar intent="success"><MessageBarBody>{saveMessage}</MessageBarBody></MessageBar>}
 
+          {clusterId && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>Editing an existing cluster</MessageBarTitle>
+                Change the name, node type, runtime, autoscale / workers, or autotermination, then click
+                <strong> Save</strong> to call <code>POST /api/2.0/clusters/edit</code>. Databricks only allows
+                edits while the cluster is <strong>RUNNING</strong> or <strong>TERMINATED</strong>; in any other
+                state it returns INVALID_STATE.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <Field label="Cluster name">
-            <Input value={name} onChange={(_, d) => setName(d.value)} disabled={!!clusterId} />
+            <Input value={name} onChange={(_, d) => setName(d.value)} />
           </Field>
           <div style={{ display: 'flex', gap: 12 }}>
             <Field label="Node type" style={{ flex: 1 }}>
@@ -2984,7 +3154,6 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
                 value={nodeType}
                 selectedOptions={nodeType ? [nodeType] : []}
                 onOptionSelect={(_, d) => d.optionValue && setNodeType(d.optionValue)}
-                disabled={!!clusterId}
               >
                 {nodeTypes.slice(0, 80).map((n) => (
                   <Option key={n.node_type_id} value={n.node_type_id} text={n.node_type_id}>
@@ -2998,7 +3167,6 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
                 value={sparkVersions.find((v) => v.key === sparkVersion)?.name || sparkVersion}
                 selectedOptions={sparkVersion ? [sparkVersion] : []}
                 onOptionSelect={(_, d) => d.optionValue && setSparkVersion(d.optionValue)}
-                disabled={!!clusterId}
               >
                 {sparkVersions.slice(0, 80).map((v) => (
                   <Option key={v.key} value={v.key} text={v.name}>{v.name}</Option>
@@ -3007,26 +3175,26 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
             </Field>
           </div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
-            <Switch checked={autoscale} onChange={(_, d) => setAutoscale(!!d.checked)} label="Autoscale" disabled={!!clusterId} />
+            <Switch checked={autoscale} onChange={(_, d) => setAutoscale(!!d.checked)} label="Autoscale" />
             {autoscale ? (
               <>
                 <Field label="Min workers">
-                  <Input type="number" value={String(minWorkers)} disabled={!!clusterId}
+                  <Input type="number" value={String(minWorkers)}
                     onChange={(_, d) => setMinWorkers(Number(d.value) || 1)} />
                 </Field>
                 <Field label="Max workers">
-                  <Input type="number" value={String(maxWorkers)} disabled={!!clusterId}
+                  <Input type="number" value={String(maxWorkers)}
                     onChange={(_, d) => setMaxWorkers(Number(d.value) || 1)} />
                 </Field>
               </>
             ) : (
               <Field label="Workers">
-                <Input type="number" value={String(numWorkers)} disabled={!!clusterId}
+                <Input type="number" value={String(numWorkers)}
                   onChange={(_, d) => setNumWorkers(Number(d.value) || 1)} />
               </Field>
             )}
             <Field label="Autotermination (min)">
-              <Input type="number" value={String(autoterm)} disabled={!!clusterId}
+              <Input type="number" value={String(autoterm)}
                 onChange={(_, d) => setAutoterm(Number(d.value) || 0)} />
             </Field>
           </div>

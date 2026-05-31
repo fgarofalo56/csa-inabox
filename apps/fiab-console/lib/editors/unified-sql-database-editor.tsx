@@ -11,11 +11,15 @@
  *   - postgres         → Microsoft.DBforPostgreSQL/flexibleServers (PG query — honest gate)
  *
  * Tabs:
- *   - Connect   : tenant inventory across all 3 families; pick + bind to item state
- *   - Provision : create a new Azure SQL DB (ARM PUT) or PostgreSQL flex server (ARM PUT)
- *   - Query     : Monaco SQL editor → /query (TDS for SQL; honest 501 gate for MI/PG)
- *   - Schema    : INFORMATION_SCHEMA browser via the live query path
- *   - Catalog   : register the DB as a Purview/OneLake catalog asset
+ *   - Connect    : tenant inventory across all 3 families; pick + bind to item state
+ *   - Provision  : create a new Azure SQL DB (ARM PUT) or PostgreSQL flex server (ARM PUT)
+ *   - Query      : Monaco SQL editor → /query (TDS for SQL; honest 501 gate for MI/PG)
+ *   - Schema     : rich sys.* object navigator (SqlDbTree over live TDS) +
+ *                  INFORMATION_SCHEMA fallback grid
+ *   - Server admin: firewall rules, Microsoft Entra admin, and active
+ *                  geo-replication — all calling the existing azure-sql-database
+ *                  [id]/firewall · /aad-admin · /replication ARM routes
+ *   - Catalog    : register the DB as a Purview/OneLake catalog asset
  *
  * Every control calls a real BFF route; every fetch is content-type guarded.
  * The only non-functional states are honest Fluent MessageBar infra-gates
@@ -32,10 +36,11 @@ import {
 } from '@fluentui/react-components';
 import {
   Database20Regular, Play20Regular, Add20Regular, PlugConnected20Regular,
-  Table20Regular, BookDatabase20Regular,
+  Table20Regular, BookDatabase20Regular, ShieldKeyhole20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -54,6 +59,11 @@ const useStyles = makeStyles({
     background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1,
   },
   card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
+  treeWrap: {
+    flex: 1, minHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '4px', overflow: 'hidden',
+  },
+  ruleGrid: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '12px', alignItems: 'end' },
 });
 
 // ---- content-type guarded fetch ----------------------------------------
@@ -145,6 +155,236 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
   );
 }
 
+// ---- Server admin panel (Firewall + Entra admin + Geo-replication) -------
+// Every control calls a real, pre-existing BFF route:
+//   - Firewall    GET/POST/DELETE /api/items/azure-sql-database/[id]/firewall
+//   - Entra admin GET/PUT         /api/items/azure-sql-database/[id]/aad-admin
+//   - Geo-repl.   POST            /api/items/azure-sql-database/[id]/replication
+// For PostgreSQL we honest-gate to the dedicated PG firewall route; SQL MI
+// admin is an honest gate (no public ARM admin surface wired). No mocks.
+interface FirewallRule { name: string; startIpAddress: string; endIpAddress: string }
+interface AadAdminState { login: string; sid: string; tenantId?: string; azureADOnlyAuthentication?: boolean }
+
+function SqlServerAdminPanel({
+  id, family, server, database, servers,
+}: {
+  id: string; family: Family; server: string; database: string;
+  servers: { name: string; location: string }[];
+}) {
+  const s = useStyles();
+
+  // Firewall
+  const [fwRules, setFwRules] = useState<FirewallRule[]>([]);
+  const [fwBusy, setFwBusy] = useState(false);
+  const [fwError, setFwError] = useState<string | null>(null);
+  const [fwName, setFwName] = useState('');
+  const [fwStart, setFwStart] = useState('');
+  const [fwEnd, setFwEnd] = useState('');
+
+  // Entra (AAD) admin
+  const [aad, setAad] = useState<AadAdminState | null>(null);
+  const [aadLogin, setAadLogin] = useState('');
+  const [aadSid, setAadSid] = useState('');
+  const [aadTenantId, setAadTenantId] = useState('');
+  const [aadBusy, setAadBusy] = useState(false);
+  const [aadMsg, setAadMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Geo-replication
+  const [replicaServer, setReplicaServer] = useState('');
+  const [replicaDb, setReplicaDb] = useState('');
+  const [replicaLocation, setReplicaLocation] = useState('eastus2');
+  const [replicaSku, setReplicaSku] = useState('');
+  const [geoBusy, setGeoBusy] = useState(false);
+  const [geoMsg, setGeoMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const fwBase = family === 'postgres'
+    ? `/api/items/postgres-flexible-server/${encodeURIComponent(id)}/firewall`
+    : `/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall`;
+
+  const loadFirewall = useCallback(async () => {
+    if (!server) return;
+    setFwBusy(true); setFwError(null);
+    const j = await fetchJson(`${fwBase}?server=${encodeURIComponent(server)}`);
+    if (!j.ok) setFwError(j.error || 'firewall list failed');
+    else setFwRules(j.rules || []);
+    setFwBusy(false);
+  }, [fwBase, server]);
+
+  const addRule = useCallback(async () => {
+    if (!server || !fwName.trim() || !fwStart.trim() || !fwEnd.trim()) return;
+    setFwBusy(true); setFwError(null);
+    const j = await fetchJson(fwBase, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ server, name: fwName.trim(), startIpAddress: fwStart.trim(), endIpAddress: fwEnd.trim() }),
+    });
+    if (!j.ok) setFwError(j.error || 'add rule failed');
+    else { setFwName(''); setFwStart(''); setFwEnd(''); await loadFirewall(); }
+    setFwBusy(false);
+  }, [fwBase, server, fwName, fwStart, fwEnd, loadFirewall]);
+
+  const deleteRule = useCallback(async (rule: string) => {
+    if (!server) return;
+    setFwBusy(true); setFwError(null);
+    const j = await fetchJson(`${fwBase}?server=${encodeURIComponent(server)}&rule=${encodeURIComponent(rule)}`, { method: 'DELETE' });
+    if (!j.ok) setFwError(j.error || 'delete rule failed');
+    else await loadFirewall();
+    setFwBusy(false);
+  }, [fwBase, server, loadFirewall]);
+
+  const loadAad = useCallback(async () => {
+    if (!server || family !== 'azure-sql') return;
+    setAadBusy(true); setAadMsg(null);
+    const j = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin?server=${encodeURIComponent(server)}`);
+    if (!j.ok) setAadMsg({ ok: false, text: j.error || 'load admin failed' });
+    else {
+      setAad(j.admin || null);
+      if (j.admin) { setAadLogin(j.admin.login || ''); setAadSid(j.admin.sid || ''); setAadTenantId(j.admin.tenantId || ''); }
+    }
+    setAadBusy(false);
+  }, [id, server, family]);
+
+  const saveAad = useCallback(async () => {
+    if (!server || !aadLogin.trim() || !aadSid.trim()) return;
+    setAadBusy(true); setAadMsg(null);
+    const j = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ server, login: aadLogin.trim(), sid: aadSid.trim(), tenantId: aadTenantId.trim() || undefined }),
+    });
+    if (!j.ok) setAadMsg({ ok: false, text: j.error || 'set admin failed' });
+    else { setAad(j.admin || null); setAadMsg({ ok: true, text: `Microsoft Entra admin set to ${aadLogin.trim()}.` }); }
+    setAadBusy(false);
+  }, [id, server, aadLogin, aadSid, aadTenantId]);
+
+  const submitGeo = useCallback(async () => {
+    if (!server || !database) { setGeoMsg({ ok: false, text: 'select a server + database first' }); return; }
+    if (!replicaServer || !replicaLocation) { setGeoMsg({ ok: false, text: 'replica server + region required' }); return; }
+    setGeoBusy(true); setGeoMsg(null);
+    const j = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/replication`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ server, database, replicaServer, replicaDatabaseName: replicaDb || database, location: replicaLocation, skuName: replicaSku || undefined }),
+    });
+    setGeoMsg(j.ok
+      ? { ok: true, text: `Geo-replica request accepted on ${replicaServer} / ${replicaDb || database}. ARM provisioning continues async.` }
+      : { ok: false, text: j.error || 'geo-replication failed' });
+    setGeoBusy(false);
+  }, [id, server, database, replicaServer, replicaDb, replicaLocation, replicaSku]);
+
+  useEffect(() => { if (server) { loadFirewall(); loadAad(); } }, [server, loadFirewall, loadAad]);
+
+  if (family === 'managed-instance') {
+    return (
+      <MessageBar intent="warning">
+        <MessageBarBody>
+          <MessageBarTitle>Server admin is managed on the SQL MI resource</MessageBarTitle>
+          SQL Managed Instance uses VNet-scoped networking (NSG / route table on the delegated subnet) and
+          instance-level Microsoft Entra admin rather than the public <code>firewallRules</code> / server
+          <code> administrators</code> ARM surfaces. Wire <code>Microsoft.Sql/managedInstances/administrators</code>
+          + a private endpoint to manage these from Loom. Until then this is an honest gate, not a fake form.
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+
+  if (!server) {
+    return <Caption1>Pick a server on the <strong>Connect</strong> tab (or in the left pane) to manage firewall, Microsoft Entra admin, and geo-replication.</Caption1>;
+  }
+
+  return (
+    <>
+      {/* Firewall rules — Microsoft.Sql/servers/firewallRules (or PG equivalent) */}
+      <div className={s.card}>
+        <Subtitle2><ShieldKeyhole20Regular style={{ verticalAlign: 'middle' }} /> Firewall rules — {server}</Subtitle2>
+        <MessageBar intent="info"><MessageBarBody>
+          <MessageBarTitle>{family === 'postgres' ? 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules' : 'Microsoft.Sql/servers/firewallRules'}</MessageBarTitle>
+          Inline ARM upsert/delete of server firewall rules. Requires the console UAMI to hold <code>Contributor</code> (or SQL Server Contributor) on the server's resource group; otherwise ARM returns 403 and it surfaces here.
+        </MessageBarBody></MessageBar>
+        {fwError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Firewall API error</MessageBarTitle>{fwError}</MessageBarBody></MessageBar>}
+        <div className={s.tableWrap}>
+          <Table size="small" aria-label="Firewall rules">
+            <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Start IP</TableHeaderCell><TableHeaderCell>End IP</TableHeaderCell><TableHeaderCell>Action</TableHeaderCell></TableRow></TableHeader>
+            <TableBody>
+              {fwRules.length === 0 && <TableRow><TableCell colSpan={4}><Caption1>{fwBusy ? 'Loading…' : 'No firewall rules.'}</Caption1></TableCell></TableRow>}
+              {fwRules.map((r) => (
+                <TableRow key={r.name}>
+                  <TableCell><strong>{r.name}</strong></TableCell>
+                  <TableCell><code style={{ fontSize: 11 }}>{r.startIpAddress}</code></TableCell>
+                  <TableCell><code style={{ fontSize: 11 }}>{r.endIpAddress}</code></TableCell>
+                  <TableCell><Button size="small" appearance="subtle" disabled={fwBusy} onClick={() => deleteRule(r.name)}>Delete</Button></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <div className={s.ruleGrid}>
+          <Field label="Rule name"><Input value={fwName} onChange={(_, d) => setFwName(d.value)} placeholder="allow-corp-vpn" /></Field>
+          <Field label="Start IP"><Input value={fwStart} onChange={(_, d) => setFwStart(d.value)} placeholder="0.0.0.0" /></Field>
+          <Field label="End IP"><Input value={fwEnd} onChange={(_, d) => setFwEnd(d.value)} placeholder="0.0.0.0" /></Field>
+          <Button appearance="primary" disabled={fwBusy || !fwName.trim() || !fwStart.trim() || !fwEnd.trim()} onClick={addRule}>{fwBusy ? 'Saving…' : 'Add rule'}</Button>
+        </div>
+      </div>
+
+      {/* Microsoft Entra admin — Microsoft.Sql/servers/administrators (Azure SQL only) */}
+      {family === 'azure-sql' ? (
+        <div className={s.card}>
+          <Subtitle2>Microsoft Entra admin — {server}</Subtitle2>
+          <MessageBar intent="info"><MessageBarBody>
+            <MessageBarTitle>Microsoft.Sql/servers/administrators</MessageBarTitle>
+            Sets the server's Microsoft Entra (Azure AD) admin via ARM. The console UAMI itself must be the Entra admin (or a member of the admin group) for the TDS query path to authenticate.
+          </MessageBarBody></MessageBar>
+          {aad && <Caption1>Current: <strong>{aad.login}</strong>{aad.sid ? <> (<code>{aad.sid.slice(0, 8)}…</code>)</> : null}{aad.azureADOnlyAuthentication ? ' · Entra-only auth enabled' : ''}</Caption1>}
+          <div className={s.formGrid}>
+            <Field label="Login (UPN or group name)" required><Input value={aadLogin} onChange={(_, d) => setAadLogin(d.value)} placeholder="user@contoso.com" /></Field>
+            <Field label="Object id (sid)" required><Input value={aadSid} onChange={(_, d) => setAadSid(d.value)} placeholder="11111111-2222-3333-4444-555555555555" /></Field>
+            <Field label="Tenant id (optional)"><Input value={aadTenantId} onChange={(_, d) => setAadTenantId(d.value)} placeholder="leave blank for the server's tenant" /></Field>
+          </div>
+          {aadMsg && <MessageBar intent={aadMsg.ok ? 'success' : 'error'}><MessageBarBody><MessageBarTitle>{aadMsg.ok ? 'Entra admin updated' : 'Entra admin update failed'}</MessageBarTitle>{aadMsg.text}</MessageBarBody></MessageBar>}
+          <Button appearance="primary" disabled={aadBusy || !aadLogin.trim() || !aadSid.trim()} onClick={saveAad}>{aadBusy ? 'Saving…' : 'Set Microsoft Entra admin'}</Button>
+        </div>
+      ) : (
+        <div className={s.card}>
+          <Subtitle2>Microsoft Entra admin</Subtitle2>
+          <MessageBar intent="warning"><MessageBarBody>
+            <MessageBarTitle>Entra auth on PostgreSQL is principal-based</MessageBarTitle>
+            PostgreSQL flexible servers don't expose a single server-level <code>administrators</code> ARM resource; Entra principals are created in-engine via <code>pgaadauth_create_principal</code>. Wire that to the PG query path (set <code>LOOM_POSTGRES_QUERY_LIVE=true</code>) to manage it from Loom. Honest gate — not a fake form.
+          </MessageBarBody></MessageBar>
+        </div>
+      )}
+
+      {/* Geo-replication — createMode=Secondary (Azure SQL only) */}
+      {family === 'azure-sql' ? (
+        <div className={s.card}>
+          <Subtitle2>Active geo-replication — {database || '(select a database)'}</Subtitle2>
+          <MessageBar intent="info"><MessageBarBody>
+            <MessageBarTitle>Microsoft.Sql/servers/databases · createMode=Secondary</MessageBarTitle>
+            Creates a readable geo-secondary of the selected database on a replica server via ARM REST. Long-running; ARM continues async after acceptance.
+          </MessageBarBody></MessageBar>
+          <div className={s.formGrid}>
+            <Field label="Replica server" required>
+              <select className={s.select} value={replicaServer} onChange={(e) => setReplicaServer(e.target.value)}>
+                <option value="">Select a replica server…</option>
+                {servers.filter((x) => x.name !== server).map((x) => <option key={x.name} value={x.name}>{x.name} · {x.location}</option>)}
+              </select>
+            </Field>
+            <Field label="Replica DB name"><Input value={replicaDb} onChange={(_, d) => setReplicaDb(d.value)} placeholder={database || 'same as primary'} /></Field>
+            <Field label="Replica region" required><Input value={replicaLocation} onChange={(_, d) => setReplicaLocation(d.value)} placeholder="eastus2" /></Field>
+            <Field label="SKU (optional)"><Input value={replicaSku} onChange={(_, d) => setReplicaSku(d.value)} placeholder="match primary" /></Field>
+          </div>
+          {geoMsg && <MessageBar intent={geoMsg.ok ? 'success' : 'error'}><MessageBarBody><MessageBarTitle>{geoMsg.ok ? 'Geo-replica accepted' : 'Geo-replication failed'}</MessageBarTitle>{geoMsg.text}</MessageBarBody></MessageBar>}
+          <Button appearance="primary" icon={<Add20Regular />} disabled={geoBusy || !database || !replicaServer || !replicaLocation} onClick={submitGeo}>{geoBusy ? 'Creating…' : 'Create geo-replica'}</Button>
+        </div>
+      ) : (
+        <div className={s.card}>
+          <Subtitle2>Geo-replication</Subtitle2>
+          <MessageBar intent="warning"><MessageBarBody>
+            <MessageBarTitle>PostgreSQL read replicas use a distinct ARM surface</MessageBarTitle>
+            PG flexible-server read replicas are created via <code>Microsoft.DBforPostgreSQL/flexibleServers</code> with <code>createMode=Replica</code> + <code>sourceServerResourceId</code>, not the Azure SQL secondary-database path. Wire a PG replica route to manage it here. Honest gate.
+          </MessageBarBody></MessageBar>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
 
@@ -207,7 +447,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, [id, family, server, database]);
 
   // ---- query ----
-  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'catalog'>('connect');
+  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'catalog'>('connect');
   const dialect = family === 'postgres' ? 'sql' : 'tsql';
   const [sqlText, setSqlText] = useState(
     `-- ${family === 'postgres' ? 'PostgreSQL' : 'Azure SQL'} smoke query\nSELECT 1 AS smoke;`,
@@ -232,6 +472,13 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     setQResult(j);
     setQLoading(false);
   }, [queryUrl, server, database, family, sqlText]);
+
+  // Load a statement from the object navigator into the Query tab (SELECT
+  // TOP 1000, EXEC, CREATE templates) — matches the SSMS / portal flow.
+  const openInQuery = useCallback((sql: string) => {
+    setSqlText(sql);
+    setTab('query');
+  }, []);
 
   // ---- schema browser (INFORMATION_SCHEMA via the live query path) ----
   const [schema, setSchema] = useState<QueryResponse | null>(null);
@@ -339,7 +586,12 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
         { label: qLoading ? 'Running…' : 'Run', onClick: !qLoading ? () => run() : undefined, disabled: qLoading || !server },
       ]},
       { label: 'Schema', actions: [
-        { label: 'Browse tables', onClick: server ? () => { setTab('schema'); loadSchema(); } : undefined, disabled: !server },
+        { label: 'Browse objects', onClick: server ? () => { setTab('schema'); loadSchema(); } : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Open the sys.* object navigator' },
+      ]},
+      { label: 'Server admin', actions: [
+        { label: 'Firewall', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Manage firewall rules' },
+        { label: 'Entra admin', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Set the Microsoft Entra admin' },
+        { label: 'Geo-replication', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Create a geo-secondary' },
       ]},
       { label: 'Catalog', actions: [
         { label: 'Register in Purview', onClick: serverFqdn ? () => { setTab('catalog'); } : undefined, disabled: !serverFqdn },
@@ -395,6 +647,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             <Tab value="provision" icon={<Add20Regular />}>Provision</Tab>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="schema" icon={<Table20Regular />}>Schema</Tab>
+            <Tab value="admin" icon={<ShieldKeyhole20Regular />}>Server admin</Tab>
             <Tab value="catalog" icon={<BookDatabase20Regular />}>Catalog</Tab>
           </TabList>
 
@@ -553,15 +806,65 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             </>
           )}
 
-          {/* ---------------- Schema ---------------- */}
+          {/* ---------------- Schema (rich sys.* object navigator) ---------------- */}
           {tab === 'schema' && (
             <>
-              <div className={s.toolbar}>
-                <Caption1>INFORMATION_SCHEMA.TABLES on <strong>{database || server || 'not set'}</strong></Caption1>
-                <Button size="small" appearance="outline" onClick={loadSchema} disabled={schemaLoading || !server}>Refresh</Button>
-              </div>
-              <ResultsPanel result={schema} loading={schemaLoading} />
+              {!server ? (
+                <Caption1>Pick a server on the <strong>Connect</strong> tab (or left pane) to browse database objects.</Caption1>
+              ) : family === 'azure-sql' ? (
+                <>
+                  <div className={s.toolbar}>
+                    <Badge appearance="filled" color="brand" icon={<Database20Regular />}>sys.* object navigator</Badge>
+                    <Caption1>Tables, views, procedures, functions, table types, schemas over live TDS · double-click an action to load it into the Query tab.</Caption1>
+                  </div>
+                  {/* Real SqlDbTree wired to the SAME sys.*-over-TDS backend the
+                      Fabric SQL editor uses, targeting the user-selected Azure
+                      SQL server/database via the new server/database override. */}
+                  <div className={s.treeWrap}>
+                    <SqlDbTree
+                      // No Fabric workspace here — the explicit server/database
+                      // override drives resolution, so workspaceId is unused.
+                      workspaceId=""
+                      itemId={id}
+                      server={server}
+                      database={database}
+                      onOpenQuery={openInQuery}
+                    />
+                  </div>
+                </>
+              ) : family === 'postgres' ? (
+                <MessageBar intent="warning"><MessageBarBody>
+                  <MessageBarTitle>PostgreSQL object navigator is gated</MessageBarTitle>
+                  The sys.* navigator is T-SQL-specific. The PostgreSQL catalog browser (information_schema / pg_catalog over the <code>pg</code> wire protocol) lights up once the <code>pg</code> driver is added and <code>LOOM_POSTGRES_QUERY_LIVE=true</code>. Use the INFORMATION_SCHEMA query below in the meantime.
+                </MessageBarBody></MessageBar>
+              ) : (
+                <MessageBar intent="warning"><MessageBarBody>
+                  <MessageBarTitle>SQL MI object navigator requires a private endpoint</MessageBarTitle>
+                  SQL Managed Instance has no public TDS gateway; provision <code>Microsoft.Network/privateEndpoints</code> into the MI subnet and grant the console UAMI <code>db_datareader</code>, then the same sys.* navigator the Azure SQL surface uses applies.
+                </MessageBarBody></MessageBar>
+              )}
+              {/* INFORMATION_SCHEMA fallback grid (works for any reachable engine via the query path). */}
+              {server && (
+                <>
+                  <div className={s.toolbar} style={{ marginTop: 8 }}>
+                    <Caption1>INFORMATION_SCHEMA.TABLES on <strong>{database || server || 'not set'}</strong></Caption1>
+                    <Button size="small" appearance="outline" onClick={loadSchema} disabled={schemaLoading || !server}>Refresh</Button>
+                  </div>
+                  <ResultsPanel result={schema} loading={schemaLoading} />
+                </>
+              )}
             </>
+          )}
+
+          {/* ---------------- Server admin (firewall / Entra / geo-replication) ---------------- */}
+          {tab === 'admin' && (
+            <SqlServerAdminPanel
+              id={id}
+              family={family}
+              server={server}
+              database={database}
+              servers={(inv?.sql.servers || []).map((x) => ({ name: x.name, location: x.location }))}
+            />
           )}
 
           {/* ---------------- Catalog ---------------- */}

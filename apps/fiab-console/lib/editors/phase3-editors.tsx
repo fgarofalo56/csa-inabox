@@ -39,6 +39,7 @@ import {
   MathFormula20Regular, Table20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
+import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
@@ -90,6 +91,7 @@ const useStyles = makeStyles({
 interface KqlResult {
   ok: boolean;
   columns?: string[];
+  columnTypes?: string[];
   rows?: unknown[][];
   rowCount?: number;
   executionMs?: number;
@@ -378,20 +380,13 @@ function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loadin
       ) : viz !== 'table' ? (
         <ResultChart columns={columns} rows={rows} kind={viz} />
       ) : (
-        <div className={s.tableWrap}>
-          <Table aria-label="KQL results" size="small">
-            <TableHeader>
-              <TableRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((row, i) => (
-                <TableRow key={i}>
-                  {columns.map((_, j) => <TableCell key={j} className={s.cell}>{fmtCell(row[j])}</TableCell>)}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <KustoResultsGrid
+          columns={columns}
+          columnTypes={result.columnTypes}
+          rows={rows}
+          totalRowCount={result.rowCount}
+          exportName={`kql-${result.database || 'results'}`}
+        />
       )}
     </div>
   );

@@ -26,7 +26,7 @@ const REQUIRED_ROUTES: Record<string, string[]> = {
   'databricks-notebook':         ['list', '[id]', '[id]/run', '[id]/runs', '[id]/command', '[id]/context'],
   'databricks-job':              ['', '[id]', '[id]/run', '[id]/runs', '[id]/run-output'],
   'databricks-cluster':          ['', '[id]', '[id]/state', '[id]/events'],
-  'databricks-sql-warehouse':    ['[id]/query', '[id]/schema', '[id]/state', '[id]/warehouses'],
+  'databricks-sql-warehouse':    ['[id]/query', '[id]/schema', '[id]/state', '[id]/warehouses', '[id]/edit'],
   'adf-pipeline':                ['', '[id]', '[id]/run', '[id]/runs', '[id]/bind'],
   'adf-dataset':                 ['', '[id]'],
   'adf-trigger':                 ['', '[id]', '[id]/state'],

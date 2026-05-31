@@ -12,6 +12,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { cosmosConfigGate, CosmosArmError } from '@/lib/azure/cosmos-account-client';
+import { CosmosDataError, CosmosDataPlaneRbacError } from '@/lib/azure/cosmos-data-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,6 +36,31 @@ export function gateResponse(): NextResponse | null {
 
 /** Map a thrown error (ARM or otherwise) to a structured { ok:false } JSON. */
 export function errorResponse(e: unknown): NextResponse {
+  // Data-plane 403 → the UAMI has control-plane access but is missing the
+  // Cosmos DB *data-plane* RBAC role. Honest-gate with the exact role to grant
+  // (per no-vaporware.md), not a fake document. Surfaced as 403 so the UI can
+  // render its data-plane MessageBar (full Data Explorer still renders).
+  if (e instanceof CosmosDataPlaneRbacError) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'dataplane_rbac',
+        error: e.message,
+        role: e.role,
+        hint: e.hint,
+        status: 403,
+        substatus: e.substatus,
+      },
+      { status: 403 },
+    );
+  }
+  if (e instanceof CosmosDataError) {
+    const status = e.status >= 400 && e.status < 600 ? e.status : 502;
+    return NextResponse.json(
+      { ok: false, error: e.message, status: e.status, substatus: e.substatus },
+      { status },
+    );
+  }
   if (e instanceof CosmosArmError) {
     // 403 from ARM almost always means the UAMI lacks the Cosmos role.
     const hint = e.status === 403
