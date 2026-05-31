@@ -23,7 +23,7 @@ import {
   aiStateLabel, aiStatusLabel,
   computeGeoBbox, bboxToZoom,
   parseUdfFunctions,
-  normalizeDaSources, guessDaSourceType,
+  normalizeDaSources, guessDaSourceType, daSupportsExampleQueries,
   shapeDaHistory, canSendDaQuestion,
 } from '../_family-utils';
 
@@ -312,20 +312,35 @@ describe('guessDaSourceType', () => {
     expect(guessDaSourceType('ldn-gold-lakehouse')).toBe('lakehouse');
     expect(guessDaSourceType('telemetry kql db')).toBe('kql');
     expect(guessDaSourceType('docs ai search index')).toBe('ai-search');
+    expect(guessDaSourceType('ontology-finance')).toBe('ontology');
+    expect(guessDaSourceType('supply-chain graph model')).toBe('graph');
+    expect(guessDaSourceType('routes gql')).toBe('graph');
   });
   it('defaults unknown names to warehouse', () => {
-    expect(guessDaSourceType('ontology-finance')).toBe('warehouse');
+    expect(guessDaSourceType('mystery-thing')).toBe('warehouse');
+  });
+});
+
+describe('daSupportsExampleQueries', () => {
+  it('allows few-shot for lakehouse / warehouse / kql / graph / ai-search (per Fabric Learn)', () => {
+    for (const t of ['warehouse', 'lakehouse', 'kql', 'graph', 'ai-search'] as const) {
+      expect(daSupportsExampleQueries(t)).toBe(true);
+    }
+  });
+  it('disallows few-shot for semantic-model and ontology (per Fabric Learn)', () => {
+    expect(daSupportsExampleQueries('semantic-model')).toBe(false);
+    expect(daSupportsExampleQueries('ontology')).toBe(false);
   });
 });
 
 describe('normalizeDaSources', () => {
   it('parses the confirmed legacy comma-separated STRING without throwing', () => {
-    const legacy = 'fin-warehouse, orders semantic model, ldn-gold-lakehouse, ontology-finance';
+    const legacy = 'fin-warehouse, orders semantic model, ldn-gold-lakehouse, mystery-source';
     const out = normalizeDaSources(legacy);
     expect(Array.isArray(out)).toBe(true);
     expect(out).toHaveLength(4);
     expect(out.map((s) => s.type)).toEqual(['warehouse', 'semantic-model', 'lakehouse', 'warehouse']);
-    expect(out.map((s) => s.name)).toEqual(['fin-warehouse', 'orders semantic model', 'ldn-gold-lakehouse', 'ontology-finance']);
+    expect(out.map((s) => s.name)).toEqual(['fin-warehouse', 'orders semantic model', 'ldn-gold-lakehouse', 'mystery-source']);
     // Migrated sources carry stable legacy ids + the instruction template.
     expect(out[0].id).toBe('warehouse:fin-warehouse:legacy');
     expect(out.every((s) => typeof s.instructions === 'string' && Array.isArray(s.examples))).toBe(true);

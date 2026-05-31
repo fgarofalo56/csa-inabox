@@ -30,15 +30,23 @@ const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
 
 export { NoAoaiDeploymentError };
 
-export type DataAgentSourceType = 'warehouse' | 'lakehouse' | 'kql' | 'semantic-model' | 'ai-search';
+export type DataAgentSourceType =
+  | 'warehouse'
+  | 'lakehouse'
+  | 'kql'
+  | 'semantic-model'
+  | 'ai-search'
+  | 'ontology'
+  | 'graph';
 
 export interface DataAgentSource {
   id: string;
   type: DataAgentSourceType;
   name: string;          // resolved item / resource name
-  tables?: string;       // comma-separated selected tables / model name
+  tables?: string;       // comma-separated selected tables / views / functions / model name (schema selection)
+  description?: string;  // routing description — helps the agent decide if this source answers a question
   instructions?: string; // per-source grounding (## General knowledge / ## Table descriptions / ## When asked about)
-  examples?: { question: string; query: string }[]; // few-shot pairs
+  examples?: { question: string; query: string }[]; // few-shot pairs (lakehouse/warehouse/kql/graph/ai-search only)
 }
 
 export interface DataAgentConfig {
@@ -53,6 +61,8 @@ const QUERY_LANG: Record<DataAgentSourceType, string> = {
   kql: 'KQL',
   'semantic-model': 'DAX',
   'ai-search': 'an Azure AI Search query',
+  ontology: 'an ontology / Fabric IQ semantic query',
+  graph: 'a GQL / Cypher graph traversal',
 };
 
 function composeSystemPrompt(cfg: DataAgentConfig): string {
@@ -70,7 +80,8 @@ function composeSystemPrompt(cfg: DataAgentConfig): string {
     lines.push('(none attached yet — explain that no sources are configured and ask the author to attach at least one.)');
   }
   for (const src of cfg.sources) {
-    lines.push(`### ${src.name} — ${src.type} (queries expressed as ${QUERY_LANG[src.type]})`);
+    lines.push(`### ${src.name} — ${src.type} (queries expressed as ${QUERY_LANG[src.type] ?? 'the source-native query language'})`);
+    if (src.description?.trim()) lines.push(`When to use this source: ${src.description.trim()}`);
     if (src.tables?.trim()) lines.push(`Selected tables / model: ${src.tables.trim()}`);
     if (src.instructions?.trim()) {
       lines.push('Grounding instructions:');
@@ -149,6 +160,8 @@ export function sourcesToFoundryTools(sources: DataAgentSource[]): Array<Record<
     type: s.type,
     name: s.name,
     tables: s.tables || undefined,
+    description: s.description || undefined,
     instructions: s.instructions || undefined,
+    examples: s.examples && s.examples.length ? s.examples : undefined,
   }));
 }
