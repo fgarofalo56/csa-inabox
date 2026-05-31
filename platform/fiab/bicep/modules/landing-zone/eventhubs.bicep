@@ -34,6 +34,12 @@ param privateDnsZoneServicebusId string
 @description('Log Analytics workspace ID for diagnostic settings')
 param workspaceId string
 
+@description('Loom Console UAMI principal ID — granted Azure Event Hubs Data Owner (data plane) + Contributor (ARM control plane) on the namespace so the Eventstream editor\'s Event Hubs navigator can create/list/delete hubs, consumer groups, and schema groups. Empty skips the grants.')
+param consolePrincipalId string = ''
+
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -112,6 +118,32 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
     metrics: [
       { category: 'AllMetrics', enabled: true }
     ]
+  }
+}
+
+// Console UAMI grants so the Event Hubs navigator can manage entities.
+// Azure Event Hubs Data Owner — data plane (send/receive + entity ownership).
+resource ehDataOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: ns
+  name: guid(ns.id, consolePrincipalId, 'f526a384-b230-433a-b45c-95f59c4a2dec')
+  properties: {
+    // Azure Event Hubs Data Owner
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'f526a384-b230-433a-b45c-95f59c4a2dec')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Contributor (namespace scope only) — ARM control-plane CRUD of event hubs,
+// consumer groups, schema groups, and authorization rules.
+resource ehContributorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: ns
+  name: guid(ns.id, consolePrincipalId, 'b24988ac-6180-42a0-ab88-20f7382dd24c')
+  properties: {
+    // Contributor
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
   }
 }
 

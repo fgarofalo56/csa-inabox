@@ -196,6 +196,8 @@ module eventhubs 'eventhubs.bicep' = {
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     privateDnsZoneServicebusId: adminPlanePrivateDnsZoneIds.servicebus
     workspaceId: adminPlaneLawId
+    consolePrincipalId: consolePrincipalId
+    skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }
 }
@@ -232,6 +234,8 @@ module cosmos 'cosmos.bicep' = {
     privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
     privateDnsZoneCosmosId: adminPlanePrivateDnsZoneIds.cosmos
     workspaceId: adminPlaneLawId
+    consolePrincipalId: consolePrincipalId
+    skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }
 }
