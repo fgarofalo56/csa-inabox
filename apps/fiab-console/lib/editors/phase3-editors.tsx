@@ -39,6 +39,7 @@ import {
   MathFormula20Regular, Table20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
+import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -3626,20 +3627,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Datasets</Subtitle2>
-          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
-          {datasets && datasets.length === 0 && <Caption1>No datasets in this workspace.</Caption1>}
-          <Tree aria-label="Datasets">
-            {(datasets || []).map((d) => (
-              <TreeItem key={d.id} itemType="leaf" value={d.id} onClick={() => setDatasetId(d.id)}>
-                <TreeItemLayout iconBefore={<Database20Regular />}>
-                  {datasetId === d.id ? <strong>{d.name}</strong> : d.name}
-                </TreeItemLayout>
-              </TreeItem>
-            ))}
-          </Tree>
-        </div>
+        <PowerBiTree
+          workspaceId={workspaceId}
+          selectedDatasetId={datasetId}
+          onOpenDataset={(dsId) => { setDatasetId(dsId); setTab('tables'); }}
+          onNewDataset={focusBuild}
+          onOpenReport={(r) => { if (r.webUrl) { try { window.open(r.webUrl, '_blank', 'noreferrer'); } catch { /* popup blocked */ } } }}
+          onOpenDashboard={(d) => { if (d.webUrl) { try { window.open(d.webUrl, '_blank', 'noreferrer'); } catch { /* popup blocked */ } } }}
+        />
       }
       main={
         <>
