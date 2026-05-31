@@ -841,6 +841,29 @@ export async function getFabricSqlDatabase(workspaceId: string, id: string): Pro
   return call<FabricItem>(`/workspaces/${encodeURIComponent(workspaceId)}/SqlDatabases/${encodeURIComponent(id)}`);
 }
 
+/**
+ * Resolve the TDS connection (server FQDN + database name) of a Fabric SQL
+ * database. Fabric returns `properties.connectionString` (the SQL server,
+ * `<id>.database.fabric.microsoft.com`) and `properties.databaseName`
+ * (`<displayName>-<id>`). The same `mssql`/`tedious` engine the Azure SQL
+ * client uses connects here with the `https://database.windows.net/.default`
+ * AAD token. Returns `null` when Fabric hasn't surfaced the connection yet
+ * (newly-provisioned DB), so the navigator shows the honest gate.
+ */
+export async function getFabricSqlDatabaseConnection(
+  workspaceId: string,
+  id: string,
+): Promise<{ server: string; database: string } | null> {
+  const item = await call<any>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/SqlDatabases/${encodeURIComponent(id)}`,
+  );
+  const props = item?.properties || {};
+  const server = String(props.serverFqdn || props.connectionString || '').trim();
+  const database = String(props.databaseName || item?.displayName || '').trim();
+  if (!server || !database) return null;
+  return { server, database };
+}
+
 export async function createFabricSqlDatabase(
   workspaceId: string,
   body: { displayName: string; description?: string; definition?: FabricItemDefinition },
