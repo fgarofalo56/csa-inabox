@@ -137,12 +137,18 @@ describe('listSchemas / listTables', () => {
 
 describe('grantPrivilegesSQL', () => {
   it('issues a real GRANT statement via the statement executor', async () => {
+    // executeStatement is in databricks-client; it builds the request URL from
+    // host() -> LOOM_DATABRICKS_HOSTNAME, so the hostname must be set even
+    // though fetch is mocked (beforeEach clears it for the federation tests).
+    process.env.LOOM_DATABRICKS_HOSTNAME = 'wh-host.azuredatabricks.net';
     // executeStatement is in databricks-client; it should POST to /api/2.0/sql/statements.
     let bodySql = '';
     let warehouseInBody = '';
+    let statementUrl = '';
     mockFetch((url, init) => {
       const body = init?.body ? JSON.parse(init.body as string) : {};
       if (url.includes('/api/2.0/sql/statements')) {
+        statementUrl = url;
         bodySql = body.statement;
         warehouseInBody = body.warehouse_id;
         return { statement_id: 'stmt-1', status: { state: 'SUCCEEDED' }, manifest: { schema: { columns: [] }, total_row_count: 0 }, result: { data_array: [] } };
@@ -152,6 +158,9 @@ describe('grantPrivilegesSQL', () => {
     await grantPrivilegesSQL('wh-1', ['SELECT', 'USE_SCHEMA'], 'TABLE', 'main.bronze.customers', 'alice@contoso.com');
     expect(bodySql).toBe('GRANT SELECT, USE_SCHEMA ON TABLE main.bronze.customers TO `alice@contoso.com`');
     expect(warehouseInBody).toBe('wh-1');
+    // The grant must go through the real databricks-client statement executor,
+    // i.e. POST to the configured workspace host's /api/2.0/sql/statements.
+    expect(statementUrl).toBe('https://wh-host.azuredatabricks.net/api/2.0/sql/statements');
   });
 });
 

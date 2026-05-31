@@ -8,7 +8,7 @@
  *   - pre-save id === 'new' gate suppresses the fetch
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 import { KqlDatabaseEditor } from '../phase3-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
@@ -44,7 +44,11 @@ describe('KqlDatabaseEditor', () => {
     calls = m.calls;
   });
 
-  afterEach(() => { vi.restoreAllMocks(); });
+  // globals:false in vitest.config means @testing-library's auto-afterEach
+  // cleanup never registers, so each render() would otherwise pile up in the
+  // same jsdom document.body — making getByRole(/^Run/) find duplicate Run
+  // buttons across tests. Unmount explicitly between tests.
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('fetches DB details + table list on mount', async () => {
     render(<KqlDatabaseEditor item={makeItem('kql-database', 'KQL Database')} id="kqldb-fixture" />);
