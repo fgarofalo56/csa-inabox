@@ -160,8 +160,8 @@ no function) · 🟡 partial (exists but incomplete/rough) · ❌ MISSING.
 | B2 | Consumer groups — list / create / delete | ✅ built | nested branch lazy-loaded per hub; ＋New → real `PUT`; trash (hidden for `$Default`) → real `DELETE`. `userMetadata` is accepted by the route but **not exposed in the create dialog**. |
 | B3 | **Capture** configuration | ⚠️ honest-gate | "Not yet wired" row names `PUT …/eventhubs/{eh}` captureDescription. A `capture` badge shows enabled state read-only. No On/Off, no windows, no storage picker, no Avro/Parquet. |
 | B4 | Per-hub Shared access policies | 🟡 partial | List supported by client (`listEventHubAuthRules`) + route (`?eventHub=`), but the **tree never renders per-hub auth rules** — only namespace-level. Create/keys = MISSING. |
-| B6 | **Data Explorer — Send events** | ❌ MISSING | No send surface. (Also blocked at runtime: bicep `disableLocalAuth:true`.) |
-| B6 | **Data Explorer — View events** (partition/position/grid/download) | ❌ MISSING | No view surface. |
+| B6 | **Data Explorer — Send events** | ✅ built | Per-hub Data Explorer dialog (Data Usage button on each hub leaf) → **Send events** tab: body editor (text/JSON) + custom properties (UserProperties) + partition key + repeat-N, POSTs `op:'send'` to `/api/eventhubs/data-explorer` → real HTTPS data-plane REST `POST https://{ns}.servicebus.windows.net/{hub}/messages` with an **Entra** Bearer token (namespace has `disableLocalAuth:true`, so SAS is not used). Missing Data role → the real 401/403 is shown verbatim. |
+| B6 | **Data Explorer — View events** (partition/position/grid) | ⚠️ honest-gate | Same dialog → **View events** tab: partition + max-events + latest/earliest position controls + Peek button + a results grid (seq#/offset/enqueued-time/expandable body) all render. Peek calls `op:'peek'`; Event Hubs has **no HTTPS REST receive** (receive is AMQP-only via `@azure/event-hubs`, which is not bundled), so it returns a precise warning MessageBar naming the dependency to add (`@azure/event-hubs`) + env var (`LOOM_EVENTHUB_RECEIVE_ENABLED`). Never fabricates events. |
 | B7 | Partition IDs view | ❌ MISSING | `partitionIds` is fetched in the client shape but never displayed. |
 | B9 | Edit retention / cleanup policy / dynamic partitions | ❌ MISSING | Retention is set only at create; no edit. |
 
@@ -181,7 +181,8 @@ no function) · 🟡 partial (exists but incomplete/rough) · ❌ MISSING.
 | Geo-DR pairing / failover | — | `PUT/DELETE …/disasterRecoveryConfigs/{alias}` + `…/failover` | ❌ not wired |
 | Networking IP/VNet/PE edit | — | `PUT …/networkRuleSets/default`, `Microsoft.Network/privateEndpoints` | ❌ not wired |
 | Encryption / Identity | — | `PATCH …/namespaces/{ns}` (encryption, identity) | ❌ not wired |
-| Data Explorer send/view | — | AMQP/Kafka data plane (`{ns}.servicebus.windows.net`) | ❌ not wired |
+| Data Explorer **send** | `/api/eventhubs/data-explorer` (op=send) | `POST https://{ns}.servicebus.windows.net/{hub}/messages` (Entra Bearer, single=atom-entry / batch=servicebus-json, PartitionKey via BrokerProperties header) | ✅ real data-plane REST |
+| Data Explorer **view/peek** | `/api/eventhubs/data-explorer` (op=peek) | AMQP receive (`@azure/event-hubs`) — not bundled | ⚠️ honest dependency-gate (501 `receive_unavailable`; full View UI renders) |
 | IAM / Tags / Locks / Metrics / Alerts / Diagnostics | — | ARM `roleAssignments`, `tags`, `locks`, Azure Monitor | ❌ not wired |
 
 Every route is session-guarded (`getSession()` → 401), 503s via
