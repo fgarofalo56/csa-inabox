@@ -46,11 +46,29 @@ jobs:
         env:
           LOOM_URL: ${{ inputs.loom_url }}
         run: |
-          set -euo pipefail
-          SS=$(az containerapp secret list -g "$ADMIN_RG" -n loom-console \
-                --query "[?name=='session-secret'].value | [0]" -o tsv 2>/dev/null || true)
+          set -uo pipefail
+          echo "Container App secret names:"
+          az containerapp secret list -g "$ADMIN_RG" -n loom-console --query "[].name" -o tsv || true
+          # Resolve the session secret name (session-secret / loom-session-secret / SESSION_SECRET)
+          SNAME=$(az containerapp secret list -g "$ADMIN_RG" -n loom-console \
+                  --query "[?contains(name,'session') || contains(name,'SESSION')].name | [0]" -o tsv 2>/dev/null || true)
+          SS=""
+          if [[ -n "$SNAME" ]]; then
+            echo "Reading secret '$SNAME' via 'secret show'..."
+            SS=$(az containerapp secret show -g "$ADMIN_RG" -n loom-console --secret-name "$SNAME" --query value -o tsv 2>/dev/null || true)
+          fi
+          # Fallback: the bicep also stores the session secret in Key Vault.
           if [[ -z "$SS" ]]; then
-            echo "::error::Could not read 'session-secret' from loom-console — cannot mint a session."
+            KV=$(az keyvault list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>/dev/null || true)
+            if [[ -n "$KV" ]]; then
+              for KVS in loom-session-secret session-secret; do
+                SS=$(az keyvault secret show --vault-name "$KV" --name "$KVS" --query value -o tsv 2>/dev/null || true)
+                [[ -n "$SS" ]] && { echo "Read session secret from Key Vault $KV/$KVS"; break; }
+              done
+            fi
+          fi
+          if [[ -z "$SS" ]]; then
+            echo "::error::Could not read the session secret (tried container-app secret '$SNAME' + Key Vault). Cannot mint a session."
             exit 1
           fi
           echo "::add-mask::$SS"

@@ -81,6 +81,13 @@ if [[ -n "$SEARCH_NAME" ]]; then
   SEARCH_SCOPE="/subscriptions/$SUB/resourceGroups/$ADMIN_RG/providers/Microsoft.Search/searchServices/$SEARCH_NAME"
   grant "$SEARCH_CONTRIB" "$SEARCH_SCOPE" "Search Service Contributor ($SEARCH_NAME)"
   grant "$SEARCH_DATA"    "$SEARCH_SCOPE" "Search Index Data Contributor ($SEARCH_NAME)"
+  # A keys-only search service returns 403 to the UAMI's AAD bearer token even
+  # with the data-plane role assigned. Enable AAD (RBAC) auth alongside keys so
+  # the token is accepted. Additive + reversible (aadOrApiKey keeps API keys).
+  echo "  search auth before: $(q search service show -n "$SEARCH_NAME" -g "$ADMIN_RG" --query "{authOptions:authOptions, disableLocalAuth:disableLocalAuth}" -o json)"
+  MSYS_NO_PATHCONV=1 az search service update -n "$SEARCH_NAME" -g "$ADMIN_RG" \
+    --auth-options aadOrApiKey --aad-auth-failure-mode http403 -o none 2>&1 | tail -3 || true
+  echo "  ✓ AI Search AAD (RBAC) data-plane auth enabled ($SEARCH_NAME)"
 else
   echo "  - AI Search service not found in $ADMIN_RG — skipping (navigator stays gated)"
 fi
