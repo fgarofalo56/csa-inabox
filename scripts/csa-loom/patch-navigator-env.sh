@@ -80,9 +80,10 @@ if [[ -n "$KUSTO_NAME" ]]; then
   add LOOM_KUSTO_CLUSTER_NAME "$KUSTO_NAME"
   add LOOM_KUSTO_RG           "$KUSTO_RG"
   add LOOM_KUSTO_LOCATION     "$LOCATION"
-  # default database — prefer a loomdb-* db, else the first non-system db
+  # default database — prefer a loomdb-* db, else the first non-system db.
+  # ADX `database list` returns names as "<cluster>/<db>", so strip the prefix.
   KUSTO_DB="$(q kusto database list --cluster-name "$KUSTO_NAME" -g "$KUSTO_RG" \
-      --query "[?contains(name,'loomdb')].name | [0]" -o tsv)"
+      --query "[?contains(name,'loomdb')].name | [0]" -o tsv | sed 's#.*/##')"
   [[ -z "$KUSTO_DB" ]] && KUSTO_DB="$(q kusto database list --cluster-name "$KUSTO_NAME" -g "$KUSTO_RG" --query "[0].name" -o tsv | sed 's#.*/##')"
   add LOOM_KUSTO_DEFAULT_DB   "${KUSTO_DB:-loomdb-default}"
 else

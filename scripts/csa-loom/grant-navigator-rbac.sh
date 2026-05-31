@@ -94,16 +94,16 @@ else
   echo "  - AOAI/AIServices account not found in $ADMIN_RG — skipping"
 fi
 
-# ADX cluster — KQL management requires a cluster principal assignment, NOT an
-# ARM role. AllDatabasesAdmin lets the navigator run .show/.create/.drop.
+# ADX cluster — KQL management requires a Kusto cluster principal assignment,
+# NOT an ARM role. AllDatabasesAdmin lets the navigator run .show/.create/.drop
+# across every database. Use a deterministic ARM PUT (the `az kusto` CLI is
+# experimental and mis-reports on the idempotent path). principalId is the
+# UAMI's OBJECT id with principalType App — matching adx-db-inner.bicep.
 KUSTO_NAME="$(q kusto cluster list -g "$ADMIN_RG" --query "[0].name" -o tsv)"
 if [[ -n "$KUSTO_NAME" ]]; then
-  echo "  ADX cluster $KUSTO_NAME: AllDatabasesAdmin principal assignment for Console UAMI"
-  MSYS_NO_PATHCONV=1 az kusto cluster-principal-assignment create \
-    --cluster-name "$KUSTO_NAME" -g "$ADMIN_RG" \
-    --principal-assignment-name "loom-console-alladmin" \
-    --principal-id "$UAMI_CLIENT" --principal-type App \
-    --role AllDatabasesAdmin --tenant-id "$TENANT_ID" -o none 2>&1 \
+  PA_URL="https://management.azure.com/subscriptions/$SUB/resourceGroups/$ADMIN_RG/providers/Microsoft.Kusto/clusters/$KUSTO_NAME/principalAssignments/loom-console-alladmin?api-version=2024-04-13"
+  PA_BODY="{\"properties\":{\"principalId\":\"$UAMI_PRINCIPAL\",\"principalType\":\"App\",\"role\":\"AllDatabasesAdmin\",\"tenantId\":\"$TENANT_ID\"}}"
+  MSYS_NO_PATHCONV=1 az rest --method put --url "$PA_URL" --body "$PA_BODY" -o none 2>&1 \
     | grep -vi "already\|exists\|Conflict" || true
   echo "  ✓ ADX AllDatabasesAdmin ($KUSTO_NAME)"
 else
