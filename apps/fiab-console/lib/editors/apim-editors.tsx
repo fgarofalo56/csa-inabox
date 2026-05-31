@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Switch, Dropdown, Option, Field,
-  Tree, TreeItem, TreeItemLayout, Tab, TabList,
+  Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -30,6 +30,7 @@ import {
   ArrowImport20Regular, Add20Regular, Delete20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ApimTree } from '@/lib/components/apim/apim-tree';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -55,7 +56,6 @@ const useStyles = makeStyles({
   },
   cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
   card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 },
-  treePad: { padding: 8 },
   protocolRow: { display: 'flex', gap: 12, flexWrap: 'wrap' },
 });
 
@@ -424,32 +424,19 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
       id={id}
       ribbon={ribbon}
       leftPanel={
-        <div className={s.treePad}>
-          <Tree aria-label="API operations" defaultOpenItems={['operations']}>
-            <TreeItem itemType="branch" value="operations">
-              <TreeItemLayout iconBefore={<Code20Regular />}>
-                Operations ({ops.data?.length ?? 0})
-              </TreeItemLayout>
-              <Tree>
-                {ops.loading && (
-                  <TreeItem itemType="leaf" value="loading"><TreeItemLayout>Loading…</TreeItemLayout></TreeItem>
-                )}
-                {!ops.loading && (ops.data?.length ?? 0) === 0 && (
-                  <TreeItem itemType="leaf" value="empty">
-                    <TreeItemLayout>{ops.error || (isNew ? 'Save the API to add operations' : 'No operations yet')}</TreeItemLayout>
-                  </TreeItem>
-                )}
-                {(ops.data || []).map((op) => (
-                  <TreeItem key={op.id || op.name} itemType="leaf" value={`op-${op.name}`}>
-                    <TreeItemLayout iconBefore={<Document20Regular />}>
-                      <strong>{op.method}</strong> {op.urlTemplate} <Caption1>· {op.displayName}</Caption1>
-                    </TreeItemLayout>
-                  </TreeItem>
-                ))}
-              </Tree>
-            </TreeItem>
-          </Tree>
-        </div>
+        // Full Azure API Management service navigator (parity with the ADF /
+        // Synapse / Databricks resource panes): typed groups for APIs (expand →
+        // operations) / Products / Named values / Backends / Subscriptions /
+        // Gateways with live counts, ＋New, filter, create dialog and inline
+        // delete — all on real ARM REST through /api/apim/*. Selecting an API
+        // opens it here; "New API" resets this editor to the new-API form;
+        // selecting a product opens the product editor.
+        <ApimTree
+          selectedApiName={isNew ? null : id}
+          onOpenApi={(apiName) => { if (apiName !== id) router.push(`/items/apim-api/${encodeURIComponent(apiName)}`); }}
+          onNewApi={() => router.push(`/items/apim-api/new`)}
+          onOpenProduct={(productName) => router.push(`/items/apim-product/${encodeURIComponent(productName)}`)}
+        />
       }
       main={
         <div className={s.pad}>

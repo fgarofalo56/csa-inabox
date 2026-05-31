@@ -47,6 +47,32 @@ function apimBase(): string {
   return `https://management.azure.com/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.ApiManagement/service/${name}`;
 }
 
+/**
+ * Honest infra-gate: the APIM navigator/editor requires LOOM_SUBSCRIPTION_ID +
+ * a target APIM service. Sub is hard-required (no default); RG + name fall back
+ * to the deployment defaults but are surfaced here so the UI can name them.
+ * Returns the precise missing env var, or null when configured. Mirrors
+ * databricksConfigGate / synapseConfigGate so BFF routes can 503 cleanly.
+ */
+export function apimConfigGate(): { missing: string } | null {
+  if (!process.env.LOOM_SUBSCRIPTION_ID) return { missing: 'LOOM_SUBSCRIPTION_ID' };
+  // RG + name have deployment defaults; only flag when neither default nor
+  // override resolves (defaults always resolve, so this is future-proofing for
+  // deployments that null them out explicitly).
+  if (process.env.LOOM_APIM_NAME === '') return { missing: 'LOOM_APIM_NAME' };
+  if (process.env.LOOM_APIM_RG === '') return { missing: 'LOOM_APIM_RG' };
+  return null;
+}
+
+/** The resolved APIM target, for surfacing in the UI. */
+export function apimTarget(): { subscriptionId?: string; resourceGroup: string; name: string } {
+  return {
+    subscriptionId: process.env.LOOM_SUBSCRIPTION_ID,
+    resourceGroup: process.env.LOOM_APIM_RG || 'rg-csa-loom-admin-eastus2',
+    name: process.env.LOOM_APIM_NAME || 'apim-csa-loom-eastus2',
+  };
+}
+
 export class ApimError extends Error {
   status: number;
   body: unknown;
@@ -534,6 +560,15 @@ export async function createSubscription(input: CreateSubscriptionInput): Promis
   return shapeSubscription(j);
 }
 
+export async function deleteSubscription(sid: string): Promise<void> {
+  const res = await apimFetch(`/subscriptions/${encodeURIComponent(sid)}`, {
+    method: 'DELETE',
+    headers: { 'If-Match': '*' },
+  });
+  if (res.status === 404 || res.ok || res.status === 204) return;
+  await readJson<unknown>(res);
+}
+
 // ---------------- API revisions + releases ----------------
 
 export interface ApimApiRevision {
@@ -728,6 +763,189 @@ export async function testApiCall(args: {
 }
 
 // ---------------- Service / health ----------------
+
+// ---------------- Named values ----------------
+
+export interface ApimNamedValueSummary {
+  id: string;
+  name: string;
+  displayName: string;
+  secret?: boolean;
+  /** Present only for non-secret values (GET omits secret values). */
+  value?: string;
+  tags?: string[];
+}
+
+export interface ApimNamedValueBody {
+  displayName: string;
+  value: string;
+  secret?: boolean;
+  tags?: string[];
+}
+
+function shapeNamedValue(raw: any): ApimNamedValueSummary {
+  const p = raw?.properties || {};
+  return {
+    id: raw?.id,
+    name: raw?.name,
+    displayName: p.displayName,
+    secret: p.secret,
+    value: p.value,          // null on secret GETs — use listSecrets to reveal
+    tags: p.tags,
+  };
+}
+
+export async function listNamedValues(): Promise<ApimNamedValueSummary[]> {
+  const res = await apimFetch(`/namedValues`);
+  const j = await readJson<{ value: any[] }>(res);
+  return (j?.value || []).map(shapeNamedValue);
+}
+
+export async function getNamedValue(id: string): Promise<ApimNamedValueSummary | null> {
+  const res = await apimFetch(`/namedValues/${encodeURIComponent(id)}`);
+  const j = await readJson<any>(res);
+  return j ? shapeNamedValue(j) : null;
+}
+
+/**
+ * PUT /namedValues/{id} — create or update a named value (APIM "property").
+ * displayName must match ^[A-Za-z0-9-._]+$. When secret=true the value is
+ * encrypted at rest and not returned on subsequent GETs.
+ */
+export async function upsertNamedValue(
+  id: string,
+  body: ApimNamedValueBody,
+): Promise<ApimNamedValueSummary> {
+  const properties: any = {
+    displayName: body.displayName,
+    value: body.value,
+    secret: body.secret ?? false,
+  };
+  if (body.tags && body.tags.length) properties.tags = body.tags;
+  const res = await apimFetch(`/namedValues/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ properties }),
+  });
+  const j = await readJson<any>(res);
+  if (!j) throw new ApimError(404, null, 'PUT apim namedValue returned null');
+  return shapeNamedValue(j);
+}
+
+export async function deleteNamedValue(id: string): Promise<void> {
+  // APIM requires an If-Match header for namedValue delete; '*' = any ETag.
+  const res = await apimFetch(`/namedValues/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { 'If-Match': '*' },
+  });
+  if (res.status === 404 || res.ok || res.status === 204) return;
+  await readJson<unknown>(res);
+}
+
+/** POST /namedValues/{id}/listValue — reveal a secret named value's plaintext. */
+export async function getNamedValueSecret(id: string): Promise<{ value?: string }> {
+  const res = await apimFetch(`/namedValues/${encodeURIComponent(id)}/listValue`, { method: 'POST' });
+  const j = await readJson<any>(res);
+  return { value: j?.value };
+}
+
+// ---------------- Backends ----------------
+
+export interface ApimBackendSummary {
+  id: string;
+  name: string;
+  url: string;
+  protocol: 'http' | 'soap' | string;
+  title?: string;
+  description?: string;
+  resourceId?: string;
+}
+
+export interface ApimBackendBody {
+  url: string;
+  protocol?: 'http' | 'soap';
+  title?: string;
+  description?: string;
+  resourceId?: string;
+}
+
+function shapeBackend(raw: any): ApimBackendSummary {
+  const p = raw?.properties || {};
+  return {
+    id: raw?.id,
+    name: raw?.name,
+    url: p.url,
+    protocol: p.protocol || 'http',
+    title: p.title,
+    description: p.description,
+    resourceId: p.resourceId,
+  };
+}
+
+export async function listBackends(): Promise<ApimBackendSummary[]> {
+  const res = await apimFetch(`/backends`);
+  const j = await readJson<{ value: any[] }>(res);
+  return (j?.value || []).map(shapeBackend);
+}
+
+export async function getBackend(id: string): Promise<ApimBackendSummary | null> {
+  const res = await apimFetch(`/backends/${encodeURIComponent(id)}`);
+  const j = await readJson<any>(res);
+  return j ? shapeBackend(j) : null;
+}
+
+/**
+ * PUT /backends/{id} — create or update a backend. url + protocol are required
+ * for a Single backend; protocol defaults to 'http'.
+ */
+export async function upsertBackend(
+  id: string,
+  body: ApimBackendBody,
+): Promise<ApimBackendSummary> {
+  const properties: any = {
+    url: body.url,
+    protocol: body.protocol || 'http',
+  };
+  if (body.title) properties.title = body.title;
+  if (body.description) properties.description = body.description;
+  if (body.resourceId) properties.resourceId = body.resourceId;
+  const res = await apimFetch(`/backends/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ properties }),
+  });
+  const j = await readJson<any>(res);
+  if (!j) throw new ApimError(404, null, 'PUT apim backend returned null');
+  return shapeBackend(j);
+}
+
+export async function deleteBackend(id: string): Promise<void> {
+  const res = await apimFetch(`/backends/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { 'If-Match': '*' },
+  });
+  if (res.status === 404 || res.ok || res.status === 204) return;
+  await readJson<unknown>(res);
+}
+
+// ---------------- Gateways (self-hosted gateways — read-only here) ----------------
+
+export interface ApimGatewaySummary {
+  id: string;
+  name: string;
+  description?: string;
+  region?: string;
+}
+
+/** GET /gateways — self-hosted gateway registrations. Read-only in the navigator. */
+export async function listGateways(): Promise<ApimGatewaySummary[]> {
+  const res = await apimFetch(`/gateways`);
+  const j = await readJson<{ value: any[] }>(res);
+  return (j?.value || []).map((r) => ({
+    id: r.id,
+    name: r.name,
+    description: r.properties?.description,
+    region: r.properties?.locationData?.name,
+  }));
+}
 
 export async function getServiceInfo(): Promise<{
   name: string;

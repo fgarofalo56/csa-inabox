@@ -53,6 +53,7 @@ import {
   type TransformNode as VisualTransformNode,
   type SinkNode as VisualSinkNode,
 } from '@/lib/components/eventstream/visual-designer';
+import { EventHubsNamespaceTree } from '@/lib/components/eventhubs/eventhubs-tree';
 
 const useStyles = makeStyles({
   monaco: {
@@ -2435,7 +2436,23 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      leftPanel={
+        // Azure Event Hubs namespace navigator (parity wave 5): the underlying
+        // Azure service that feeds Fabric Eventstream sources. Typed groups for
+        // Event hubs / Consumer groups (per hub) / Schema groups / Authorization
+        // rules / Networking / Geo-recovery with live counts, ＋New, filter, and
+        // inline delete — all on real Microsoft.EventHub ARM REST. Picking an
+        // event hub copies its name for use as an Eventstream source.
+        <EventHubsNamespaceTree
+          onSelectEventHub={(eh) => {
+            if (typeof navigator !== 'undefined' && navigator.clipboard) {
+              void navigator.clipboard.writeText(eh).catch(() => { /* clipboard may be blocked */ });
+            }
+          }}
+        />
+      }
+      main={
       <div className={s.pad}>
         <MessageBar intent="info">
           <MessageBarBody>

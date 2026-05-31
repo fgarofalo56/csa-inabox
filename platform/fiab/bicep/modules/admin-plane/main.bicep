@@ -139,6 +139,15 @@ param loomAsaRg string = ''
 @description('Loom Stream Analytics subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
 param loomAsaSub string = ''
 
+@description('Loom Event Hubs namespace name (backs the Event Hubs namespace navigator in the Eventstream editor). Empty omits the env var and the navigator surfaces a config gate.')
+param loomEventHubNamespace string = ''
+
+@description('Loom Event Hubs resource group. Empty defaults to LOOM_DLZ_RG.')
+param loomEventHubRg string = ''
+
+@description('Loom Event Hubs subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
+param loomEventHubSub string = ''
+
 @description('Loom Storage account name (for ADLS Gen2 lake URLs). When empty, env vars omitted and the Lakehouse editor surfaces a config message.')
 param loomStorageAccount string = ''
 
@@ -511,6 +520,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // when ASA lives in a different RG / sub than the DLZ.
             { name: 'LOOM_ASA_RG', value: loomAsaRg }
             { name: 'LOOM_ASA_SUB', value: loomAsaSub }
+            // Event Hubs namespace navigator (Eventstream editor left pane) —
+            // defaults RG/sub to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID when unset.
+            { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
+            { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
+            { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
             { name: 'AZURE_CLOUD', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud' }
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
