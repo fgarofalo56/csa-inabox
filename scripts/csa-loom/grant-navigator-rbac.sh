@@ -71,6 +71,18 @@ COSMOS_ACCT="$(q cosmosdb list -g "$DLZ_RG" --query "[?starts_with(name,'cosmos-
 if [[ -n "$COSMOS_ACCT" ]]; then
   COSMOS_SCOPE="/subscriptions/$SUB/resourceGroups/$DLZ_RG/providers/Microsoft.DocumentDB/databaseAccounts/$COSMOS_ACCT"
   grant "$COSMOS_CONTRIB" "$COSMOS_SCOPE" "DocumentDB Account Contributor ($COSMOS_ACCT)"
+  # DATA-plane role for the Items Data Explorer (query/CRUD documents). The
+  # control-plane role above does NOT grant data access (Cosmos returns 403
+  # substatus 5300). Assign the built-in "Cosmos DB Built-in Data Contributor"
+  # (00000000-0000-0000-0000-000000000002) at account scope "/" via the Cosmos
+  # SQL role-assignment surface (sqlRoleAssignments — distinct from Azure RBAC).
+  echo "  Cosmos data-plane: Built-in Data Contributor for the Console UAMI"
+  MSYS_NO_PATHCONV=1 az cosmosdb sql role assignment create \
+    --account-name "$COSMOS_ACCT" -g "$DLZ_RG" \
+    --role-definition-id "00000000-0000-0000-0000-000000000002" \
+    --principal-id "$UAMI_PRINCIPAL" --scope "/" -o none 2>&1 \
+    | grep -vi "already\|exists\|Conflict" || true
+  echo "  ✓ Cosmos DB Built-in Data Contributor ($COSMOS_ACCT)"
 else
   echo "  - Cosmos account not found in $DLZ_RG — skipping"
 fi
