@@ -5,7 +5,7 @@
  * the workspace picker is populated.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { NotebookEditor } from '../notebook-editor';
 import { makeItem, installFetchMock } from './test-helpers';
 
@@ -27,7 +27,11 @@ describe('NotebookEditor', () => {
       }),
     });
   });
-  afterEach(() => { vi.restoreAllMocks(); });
+  // vitest.config.ts sets globals:false, so RTL does not auto-register
+  // afterEach(cleanup). Without an explicit cleanup the first render's DOM
+  // tree stays mounted, so the second test sees two [data-testid="chrome"]
+  // nodes and getByTestId throws "Found multiple elements". Unmount here.
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('renders and lists Loom workspaces', async () => {
     render(<NotebookEditor item={makeItem('notebook', 'Notebook')} id="new" />);

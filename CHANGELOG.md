@@ -25,6 +25,69 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.20.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.19.0...csa-inabox-v0.20.0) (2026-05-31)
+
+
+### Features
+
+* **csa-loom-monitor:** real Azure-Monitor observability surface ([#496](https://github.com/fgarofalo56/csa-inabox/issues/496)) ([902a52e](https://github.com/fgarofalo56/csa-inabox/commit/902a52efadcb7c946eb50463638b3ac4b18ff6e8))
+* **csa-loom-rti:** real KQL Dashboard builder (Fabric Real-Time Dashboard parity) ([#490](https://github.com/fgarofalo56/csa-inabox/issues/490)) ([6d7c8d7](https://github.com/fgarofalo56/csa-inabox/commit/6d7c8d7070efd42bccb9cde1289250cf0eb1630b))
+* **csa-loom:** ADF Studio Factory Resources navigator for the pipeline editor ([#516](https://github.com/fgarofalo56/csa-inabox/issues/516)) ([1afa966](https://github.com/fgarofalo56/csa-inabox/commit/1afa966cf0d6caefcd14ca8e7e60994a309d1825))
+* **csa-loom:** admin portal audit + domains owners/Purview gate + backend contract tests ([#500](https://github.com/fgarofalo56/csa-inabox/issues/500)) ([1b33a7c](https://github.com/fgarofalo56/csa-inabox/commit/1b33a7c91fd7d9ceead5c9b6b91588531c659a0b))
+* **csa-loom:** ADX/KQL + AI Search navigators (parity waves 3-4) ([#519](https://github.com/fgarofalo56/csa-inabox/issues/519)) ([a3fcbef](https://github.com/fgarofalo56/csa-inabox/commit/a3fcbef7d7b5a6ad195a7bec9a4748ef27f96999))
+* **csa-loom:** atlas-diag-style React Flow drag-drop editors (Bezier) + deployment planner + ADF icon scraper ([#511](https://github.com/fgarofalo56/csa-inabox/issues/511)) ([3fc480e](https://github.com/fgarofalo56/csa-inabox/commit/3fc480e08eca2b60745b017beca6cc839dc54118))
+* **csa-loom:** build Real-Time Hub into a real Fabric-parity surface ([#495](https://github.com/fgarofalo56/csa-inabox/issues/495)) ([0b6f49e](https://github.com/fgarofalo56/csa-inabox/commit/0b6f49e3ce418c83c2cf0045550b64356d3d020e))
+* **csa-loom:** canvas + shell overhaul, control-flow sub-canvases, cross-sub resource picker ([#513](https://github.com/fgarofalo56/csa-inabox/issues/513)) ([bc40c7f](https://github.com/fgarofalo56/csa-inabox/commit/bc40c7f7ac54372b88eb9c6e398a772dcc2eaca8))
+* **csa-loom:** Cosmos DB + Azure SQL navigators (parity waves 7-8) ([#521](https://github.com/fgarofalo56/csa-inabox/issues/521)) ([d02942e](https://github.com/fgarofalo56/csa-inabox/commit/d02942e9d4854d96c66e835af8c6847132a14bd9))
+* **csa-loom:** data-agent editor parity with Fabric Data Agent ([#526](https://github.com/fgarofalo56/csa-inabox/issues/526)) ([c29aa33](https://github.com/fgarofalo56/csa-inabox/commit/c29aa338032cc6c136509f5151bbdd27e862fbda))
+* **csa-loom:** Databricks workspace navigator — parity wave 2 ([#518](https://github.com/fgarofalo56/csa-inabox/issues/518)) ([122fde5](https://github.com/fgarofalo56/csa-inabox/commit/122fde522513b95b18632127d9a3b4906215304a))
+* **csa-loom:** Event Hubs + APIM navigators (parity waves 5-6) ([#520](https://github.com/fgarofalo56/csa-inabox/issues/520)) ([80ffa16](https://github.com/fgarofalo56/csa-inabox/commit/80ffa16e1cc48b3fbc311fbd1c99f85db2bec569))
+* **csa-loom:** functional API Marketplace — APIM consumer/catalog surface ([#497](https://github.com/fgarofalo56/csa-inabox/issues/497)) ([e674779](https://github.com/fgarofalo56/csa-inabox/commit/e674779247243962b2ddbb2bf9c9926a9af3c498))
+* **csa-loom:** governance framework + unified catalog — honest Purview gate, real Data Map, overview ([#503](https://github.com/fgarofalo56/csa-inabox/issues/503)) ([953f43d](https://github.com/fgarofalo56/csa-inabox/commit/953f43dc2da4aa8378601cce602041721091cb1c))
+* **csa-loom:** live validation harness + cross-sub discovery + navigator script fixes ([#528](https://github.com/fgarofalo56/csa-inabox/issues/528)) ([34e8aa4](https://github.com/fgarofalo56/csa-inabox/commit/34e8aa44926786b45282a11ed31e2c073653d2e8))
+* **csa-loom:** Power BI + AI Foundry navigators (parity waves 9-10) ([#522](https://github.com/fgarofalo56/csa-inabox/issues/522)) ([4f7f734](https://github.com/fgarofalo56/csa-inabox/commit/4f7f73480f8d44773cca6399571ecc29b0e2dc43))
+* **csa-loom:** Power Platform environment navigator (parity wave 11) ([#524](https://github.com/fgarofalo56/csa-inabox/issues/524)) ([3e19ab4](https://github.com/fgarofalo56/csa-inabox/commit/3e19ab4b87569012df45c05c5e37bb59721d8f86))
+* **csa-loom:** real Azure AI Search index management (resource-binding) ([#489](https://github.com/fgarofalo56/csa-inabox/issues/489)) ([ffd287c](https://github.com/fgarofalo56/csa-inabox/commit/ffd287cd836275a1902e063a44c7d8a155264d68))
+* **csa-loom:** real Azure database services for the SQL surface ([#488](https://github.com/fgarofalo56/csa-inabox/issues/488)) ([e57a319](https://github.com/fgarofalo56/csa-inabox/commit/e57a3193b21b6eec9604bbc44ba655ec8626f9d2))
+* **csa-loom:** rebuild ADF/Synapse pipeline canvas to ADF-Studio parity ([#506](https://github.com/fgarofalo56/csa-inabox/issues/506)) ([bbef6dd](https://github.com/fgarofalo56/csa-inabox/commit/bbef6dd0304422ea078f10948f950278d9440e5f))
+* **csa-loom:** rebuild Deployment Pipelines as real Fabric CI/CD + ARM history ([#501](https://github.com/fgarofalo56/csa-inabox/issues/501)) ([7ca197f](https://github.com/fgarofalo56/csa-inabox/commit/7ca197f1aba8f1fc830b8acb817cd28aa3893635))
+* **csa-loom:** redesign Workload hub with spaced, homepage-style cards ([#504](https://github.com/fgarofalo56/csa-inabox/issues/504)) ([9184cf3](https://github.com/fgarofalo56/csa-inabox/commit/9184cf3940376aeb3e1b3e6eccdb236b5c479b42))
+* **csa-loom:** Synapse Studio Workspace Resources navigator for the pipeline editor ([#517](https://github.com/fgarofalo56/csa-inabox/issues/517)) ([13d4e8b](https://github.com/fgarofalo56/csa-inabox/commit/13d4e8bffe02f6057c499926f1cf0d3698571c36))
+
+
+### Bug Fixes
+
+* **bicep:** onboard LAW to Sentinel via OnboardingStates before alert rules ([#502](https://github.com/fgarofalo56/csa-inabox/issues/502)) ([074a233](https://github.com/fgarofalo56/csa-inabox/commit/074a23340fcc627efbce80f8e279168fd028b852))
+* **bicep:** Sentinel AI alert-rule KQL — Properties not CustomDimensions ([#510](https://github.com/fgarofalo56/csa-inabox/issues/510)) ([18fb0b3](https://github.com/fgarofalo56/csa-inabox/commit/18fb0b37adfbd9bfd5f411435437248410112f02))
+* **csa-loom-copilot:** kill /copilot tab flicker — smooth-scroll storm + theme churn ([#487](https://github.com/fgarofalo56/csa-inabox/issues/487)) ([4a8d3e6](https://github.com/fgarofalo56/csa-inabox/commit/4a8d3e65bcaf18d6ed155f6d45a1f275f0239a5d))
+* **csa-loom-deploy:** retry container-app roll on transient OperationInProgress ([#515](https://github.com/fgarofalo56/csa-inabox/issues/515)) ([97cd368](https://github.com/fgarofalo56/csa-inabox/commit/97cd3682cb7fff29d6bd419306403381e2a2f4dd))
+* **csa-loom-deploy:** roll Container Apps via az containerapp update (drift-proof app-roll) ([#512](https://github.com/fgarofalo56/csa-inabox/issues/512)) ([4b2b999](https://github.com/fgarofalo56/csa-inabox/commit/4b2b999b5a8f2eb77a032090d217ffe39c91a2bc))
+* **csa-loom:** Copilot tab flicker (scrollbar-race) + lakehouse SQL 403 honest gate ([#499](https://github.com/fgarofalo56/csa-inabox/issues/499)) ([c7bf912](https://github.com/fgarofalo56/csa-inabox/commit/c7bf912b972d2696447c4b2b8eeeffa293733355))
+* **csa-loom:** make Data Agent test chat usable — pinned composer + content-type-guarded send ([#493](https://github.com/fgarofalo56/csa-inabox/issues/493)) ([eef3338](https://github.com/fgarofalo56/csa-inabox/commit/eef3338ddd27cf4dd647a6cc82da1966ed52887a))
+* **csa-loom:** recover gitignored-out route files + harden .gitignore ([#492](https://github.com/fgarofalo56/csa-inabox/issues/492)) ([dc23eba](https://github.com/fgarofalo56/csa-inabox/commit/dc23eba87e468509491100a4cad7747f93a75d7e))
+* **csa-loom:** setup wizard — add subscription selection + harden deploy gate ([#494](https://github.com/fgarofalo56/csa-inabox/issues/494)) ([5b6fba3](https://github.com/fgarofalo56/csa-inabox/commit/5b6fba3a9ed068f072abba7f3502271ab0e1d667))
+* **csa-loom:** validate workflow secret-read + AI Search RBAC auth (live 34/34 GREEN) ([#529](https://github.com/fgarofalo56/csa-inabox/issues/529)) ([91a8a57](https://github.com/fgarofalo56/csa-inabox/commit/91a8a5701ed764b841f6bbbc5dfe61ec22ec3eed))
+* **csa-loom:** wire service navigators to real Azure backing (bicep env-sync + live RBAC/env bridge) ([#527](https://github.com/fgarofalo56/csa-inabox/issues/527)) ([40421bc](https://github.com/fgarofalo56/csa-inabox/commit/40421bc33b7395cc97afaaaeef07c874904e706a))
+* **fiab-bicep:** drift-safe role-assignment grants ([#507](https://github.com/fgarofalo56/csa-inabox/issues/507)) ([b9b2ee4](https://github.com/fgarofalo56/csa-inabox/commit/b9b2ee492f04544308908caf53a0067a1d264d44))
+
+
+### Documentation
+
+* **assets:** add loom logo image ([#523](https://github.com/fgarofalo56/csa-inabox/issues/523)) ([8f1ebfa](https://github.com/fgarofalo56/csa-inabox/commit/8f1ebfa8c6049dbc156abe7674227bff76ca7e9c))
+* finish competitor legal pass — de-name identity products in multi-cloud whitepaper ([#525](https://github.com/fgarofalo56/csa-inabox/issues/525)) ([e13d0bf](https://github.com/fgarofalo56/csa-inabox/commit/e13d0bfa6e502fbcdccb62ff10360d7f2426451c))
+
+
+### Continuous Integration
+
+* **gitleaks:** allowlist test-fixture files (unblocks [#495](https://github.com/fgarofalo56/csa-inabox/issues/495)/[#496](https://github.com/fgarofalo56/csa-inabox/issues/496)/[#497](https://github.com/fgarofalo56/csa-inabox/issues/497)) ([#498](https://github.com/fgarofalo56/csa-inabox/issues/498)) ([1d14115](https://github.com/fgarofalo56/csa-inabox/commit/1d141159d01b3f539ab155de0dd23fa4975eea80))
+
+
+### Miscellaneous
+
+* **bicep:** enable Commercial Purview (purviewEnabled=true) ([#505](https://github.com/fgarofalo56/csa-inabox/issues/505)) ([760e397](https://github.com/fgarofalo56/csa-inabox/commit/760e3974841eba6ac7c099f26bd13b2c1be8ffce))
+* **bicep:** revert TEMP skipRoleGrants flip — back to env-var default ([#509](https://github.com/fgarofalo56/csa-inabox/issues/509)) ([9e2110c](https://github.com/fgarofalo56/csa-inabox/commit/9e2110c15fed9d5d63e1e6b153e0f99f834d5c1f))
+* **bicep:** TEMP skipRoleGrants=true for drifted live Commercial re-provision ([#508](https://github.com/fgarofalo56/csa-inabox/issues/508)) ([5b2b769](https://github.com/fgarofalo56/csa-inabox/commit/5b2b769e9d16ea0f76da4285ca80f29f822d7c82))
+
 ## [0.19.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.18.2...csa-inabox-v0.19.0) (2026-05-29)
 
 

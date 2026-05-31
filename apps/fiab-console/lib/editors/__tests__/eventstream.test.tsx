@@ -5,7 +5,10 @@
  * responses and confirms:
  *   - workspace list fetch fires
  *   - pipeline config GET fires on mount
- *   - the "Publish to Fabric" guidance MessageBar renders (no-vaporware: honest disclosure)
+ *   - the "Design here, publish to Fabric" guidance MessageBar renders AND a
+ *     real, enabled "Publish to Fabric" action is wired (no-vaporware: the
+ *     editor now ships a live publish workflow — info MessageBar + ribbon
+ *     button + toolbar button + dialog — not a passive disclosure banner)
  *   - pre-save id === 'new' gate skips the config fetch
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -45,11 +48,24 @@ describe('EventstreamEditor', () => {
     });
   });
 
-  it('surfaces the publish-to-Fabric guidance MessageBar (no-vaporware honest disclosure)', async () => {
+  it('surfaces the publish-to-Fabric guidance MessageBar + a live, enabled Publish action (no-vaporware)', async () => {
     render(<EventstreamEditor item={makeItem('eventstream', 'Eventstream')} id="es-fixture" />);
+    // The editor mounts and shows the honest guidance MessageBar whose title is
+    // the exact current copy. (The bare /publish to fabric/i text now matches in
+    // several spots — info banner, ribbon button, toolbar button, dialog title —
+    // so we anchor on the MessageBar title instead. ItemEditorChrome renders the
+    // main content in more than one layout tree, so the title node appears more
+    // than once; assert at least one is present.)
     await waitFor(() => {
-      expect(screen.getByText(/publish to fabric/i)).toBeInTheDocument();
+      expect(screen.getAllByText('Design here, publish to Fabric').length).toBeGreaterThan(0);
     });
+    // …and the publish workflow is real, not a passive banner: a "Publish to
+    // Fabric" button is rendered and enabled (it opens the publish dialog that
+    // POSTs to the real Fabric definition REST route). Both the ribbon and the
+    // toolbar expose it, so assert at least one enabled instance exists.
+    const publishButtons = screen.getAllByRole('button', { name: /^publish to fabric$/i });
+    expect(publishButtons.length).toBeGreaterThan(0);
+    expect(publishButtons.some((b) => !(b as HTMLButtonElement).disabled)).toBe(true);
   });
 
   it('skips the config fetch when id is "new" (pre-save gate)', () => {

@@ -160,6 +160,41 @@ param loomCosmosAccountRg string = ''
 @description('Loom Databricks workspace hostname (e.g. adb-1234567890123456.7.azuredatabricks.net) backing the Databricks navigator (jobs/clusters/notebooks/SQL warehouses + Unity Catalog). The real hostname embeds a non-deterministic workspace id, so it is NOT hard-coded — it is patched onto the Console post-deploy from the DLZ databricks workspaceUrl output (scripts/csa-loom/patch-navigator-env.sh). Empty surfaces the navigator config gate.')
 param loomDatabricksHostname string = ''
 
+// =====================================================================
+// Bring-your-own existing services (reuse instead of provision-new).
+//
+// When an existing<Service> name is set, the matching admin-plane module is
+// NOT deployed and the Console wires its env to the existing resource (in any
+// RG/sub). Empty → provision new per the *Enabled flag. Reuse-first deploys
+// set these via readEnvironmentVariable('EXISTING_*', '') in the .bicepparam.
+// Role grants for reused resources are applied post-deploy (reuse-first,
+// cross-sub) by scripts/csa-loom/grant-navigator-rbac.sh; the live env-var
+// values (esp. cross-region ADX URI) are reconciled by patch-navigator-env.sh.
+// See docs/fiab/bring-your-own-services.md.
+// =====================================================================
+@description('Reuse an existing Azure AI Search service (name) instead of provisioning one. Empty → provision new when aiSearchEnabled.')
+param existingAiSearchService string = ''
+@description('Resource group of the existing AI Search service. Empty defaults to this admin RG.')
+param existingAiSearchRg string = ''
+@description('Reuse an existing API Management service (name) instead of provisioning one. Empty → provision new when apimEnabled.')
+param existingApimName string = ''
+@description('Resource group of the existing APIM service. Empty defaults to this admin RG.')
+param existingApimRg string = ''
+@description('Reuse an existing ADX/Kusto cluster (name) instead of provisioning one. Empty → provision new when adxEnabled.')
+param existingAdxClusterName string = ''
+@description('Resource group of the existing ADX cluster. Empty defaults to this admin RG.')
+param existingAdxClusterRg string = ''
+@description('Reuse an existing AI Foundry / AOAI (AIServices) account (name) instead of provisioning the Foundry hub. Empty → provision new when aiFoundryEnabled.')
+param existingFoundryAccountName string = ''
+@description('Resource group of the existing Foundry/AOAI account. Empty defaults to this admin RG.')
+param existingFoundryRg string = ''
+
+// Effective "reuse-or-new" identities used for Console env wiring below.
+var byoAiSearchRg = !empty(existingAiSearchRg) ? existingAiSearchRg : resourceGroup().name
+var byoApimRg     = !empty(existingApimRg) ? existingApimRg : resourceGroup().name
+var byoAdxRg      = !empty(existingAdxClusterRg) ? existingAdxClusterRg : resourceGroup().name
+var byoFoundryRg  = !empty(existingFoundryRg) ? existingFoundryRg : resourceGroup().name
+
 // CSA Loom family sweep (Power Platform / ML / Geo / Graph): the DLZ
 // orchestrator emits Cosmos Gremlin + NoSQL Vector endpoints when
 // `cosmosGraphVectorEnabled = true`. Pass them through here so the
@@ -200,9 +235,9 @@ param loomMsalClientId string = ''
 @secure()
 param loomMsalClientSecret string = ''
 
-@description('Session cookie secret (HKDF input). Stored in Key Vault as "loom-session-secret". When empty, a fresh GUID is generated PER DEPLOY — this invalidates all existing sessions. Pass a stable value via env var to preserve sign-ins across deploys.')
+@description('Session cookie secret (HKDF input). When empty, a STABLE per-RG GUID is derived (guid(rg.id, ...)) so sign-ins survive redeploys; pass an explicit value (LOOM_SESSION_SECRET) for a tenant-managed secret. newGuid() cannot be used here because this param is also assignable from a .bicepparam, where newGuid() is invalid (BCP065).')
 @secure()
-param loomSessionSecret string = newGuid()
+param loomSessionSecret string = ''
 
 // =====================================================================
 // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
@@ -320,7 +355,7 @@ module containerPlatformModule 'container-platform.bicep' = {
 // 7. AI Search
 // =====================================================================
 
-module aiSearch 'ai-search.bicep' = if (aiSearchEnabled) {
+module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearchService)) {
   name: 'ai-search'
   params: {
     location: location
@@ -340,7 +375,7 @@ module aiSearch 'ai-search.bicep' = if (aiSearchEnabled) {
 // Storage account for the AI Foundry Hub workspace (required dependency).
 // Plain LRS Standard_v2, geo-redundancy off (matches DLZ policy), public
 // network disabled, only the Foundry MI gets access via system role assignment.
-resource foundryHubStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (aiFoundryEnabled) {
+resource foundryHubStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (aiFoundryEnabled && empty(existingFoundryAccountName)) {
   name: take('safoundryhub${uniqueString(resourceGroup().id)}', 24)
   location: location
   tags: complianceTags
@@ -359,7 +394,7 @@ resource foundryHubStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (
   }
 }
 
-module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled) {
+module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoundryAccountName)) {
   name: 'ai-foundry'
   params: {
     location: location
@@ -385,7 +420,7 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled) {
 // 9. APIM (Premium V2 or classic Premium per boundary)
 // =====================================================================
 
-module apim 'apim.bicep' = if (apimEnabled) {
+module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
   name: 'apim'
   params: {
     location: location
@@ -403,7 +438,7 @@ module apim 'apim.bicep' = if (apimEnabled) {
 // 9b. Shared ADX cluster (admin-plane scope). DLZ databases attach here.
 // =====================================================================
 
-module adxCluster 'adx-cluster.bicep' = if (adxEnabled) {
+module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClusterName)) {
   name: 'adx-cluster'
   params: {
     location: location
@@ -510,7 +545,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
-            { name: 'LOOM_AI_SEARCH_RG', value: resourceGroup().name }
+            { name: 'LOOM_AI_SEARCH_RG', value: byoAiSearchRg }
             { name: 'LOOM_ACA_RG', value: resourceGroup().name }
             { name: 'LOOM_DLZ_RG', value: loomDlzRg }
             // /monitor observability surface — Log Analytics workspace GUID
@@ -546,20 +581,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // ADX / Kusto navigator + KQL editors. bicep formerly set only the
             // bare LOOM_KUSTO_CLUSTER (read nowhere); the client reads the URI,
             // name, RG, location, and default database.
-            { name: 'LOOM_KUSTO_CLUSTER_URI',  value: adxEnabled ? adxCluster!.outputs.clusterUri : '' }
-            { name: 'LOOM_KUSTO_CLUSTER_NAME', value: adxEnabled ? adxCluster!.outputs.clusterName : '' }
-            { name: 'LOOM_KUSTO_RG',           value: adxEnabled ? resourceGroup().name : '' }
-            { name: 'LOOM_KUSTO_LOCATION',     value: adxEnabled ? location : '' }
+            // Each prefers a reused existing<Service> (any RG/sub) over the
+            // provisioned module output, and is '' when neither → honest gate.
+            { name: 'LOOM_KUSTO_CLUSTER_URI',  value: !empty(existingAdxClusterName) ? 'https://${existingAdxClusterName}.${location}.kusto.windows.net' : (adxEnabled ? adxCluster!.outputs.clusterUri : '') }
+            { name: 'LOOM_KUSTO_CLUSTER_NAME', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
+            { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
+            { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
             // Per-DLZ ADX database is named loomdb-<domain>; the single-sub DLZ
-            // uses domain "default" → loomdb-default (modules/landing-zone/adx.bicep).
-            { name: 'LOOM_KUSTO_DEFAULT_DB',   value: adxEnabled ? 'loomdb-default' : '' }
+            // uses domain "default" → loomdb-default. For a reused cluster the real
+            // default DB is reconciled post-deploy by patch-navigator-env.sh.
+            { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb-default' : '' }
             // AI Search navigator + the loom-items grounding index + help copilot.
-            // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID; only
-            // the service NAME was missing.
-            { name: 'LOOM_AI_SEARCH_SERVICE',  value: aiSearchEnabled ? aiSearch!.outputs.searchName : '' }
+            // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
+            { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
             // APIM navigator (apis/products/named-values/backends/subscriptions) + marketplace.
-            { name: 'LOOM_APIM_NAME',          value: apimEnabled ? apim!.outputs.apimName : '' }
-            { name: 'LOOM_APIM_RG',            value: apimEnabled ? resourceGroup().name : '' }
+            { name: 'LOOM_APIM_NAME',          value: !empty(existingApimName) ? existingApimName : (apimEnabled ? apim!.outputs.apimName : '') }
+            { name: 'LOOM_APIM_RG',            value: !empty(existingApimName) ? byoApimRg : (apimEnabled ? resourceGroup().name : '') }
             // Cosmos DB control-plane navigator (databases/containers/sprocs). This
             // is the USER-navigated account (distinct from Loom's own store at
             // LOOM_COSMOS_ENDPOINT) and lives in the DLZ RG. Requires the Console
@@ -581,8 +618,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_COSMOS_VECTOR_DATABASE',   value: loomCosmosVectorDatabase }
             { name: 'LOOM_COSMOS_VECTOR_CONTAINER',  value: loomCosmosVectorContainer }
             { name: 'LOOM_AZURE_MAPS_ACCOUNT',       value: loomAzureMapsAccount }
-            { name: 'LOOM_KUSTO_CLUSTER',            value: adxEnabled ? adxCluster!.outputs.clusterName : '' }
-            { name: 'NEXT_PUBLIC_LOOM_KUSTO_CLUSTER', value: adxEnabled ? adxCluster!.outputs.clusterName : '' }
+            { name: 'LOOM_KUSTO_CLUSTER',            value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
+            { name: 'NEXT_PUBLIC_LOOM_KUSTO_CLUSTER', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
             { name: 'LOOM_TENANT_ADMIN_GROUP_ID', value: loomTenantAdminGroupId }
             { name: 'LOOM_TENANT_ADMIN_OID', value: loomTenantAdminOid }
@@ -667,20 +704,20 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // AI Foundry model-hosting account — used by the hub editor's
             // Models / Quota / Keys / Networking / RBAC tabs and the
             // data-agent test chat. Empty when AI Foundry isn't deployed.
-            { name: 'LOOM_FOUNDRY_RG', value: resourceGroup().name }
-            { name: 'LOOM_FOUNDRY_NAME', value: aiFoundryEnabled ? aiFoundry!.outputs.hubName : '' }
-            { name: 'LOOM_AOAI_ACCOUNT', value: aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '' }
+            { name: 'LOOM_FOUNDRY_RG', value: byoFoundryRg }
+            { name: 'LOOM_FOUNDRY_NAME', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '' }
+            { name: 'LOOM_AOAI_ACCOUNT', value: !empty(existingFoundryAccountName) ? existingFoundryAccountName : (aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '') }
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).
-            { name: 'LOOM_AOAI_RG', value: resourceGroup().name }
+            { name: 'LOOM_AOAI_RG', value: byoFoundryRg }
             // Foundry region — foundry-client.ts reads this for region-scoped
             // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
             { name: 'LOOM_FOUNDRY_REGION', value: location }
             // Foundry Agent Service (data-plane) — backs the data-agent Publish flow +
             // the Foundry agent editor. Project endpoint + workspace GUID come from the
             // Foundry project created in ai-foundry.bicep. Empty when AI Foundry is off.
-            { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: aiFoundryEnabled ? aiFoundry!.outputs.projectEndpoint : '' }
-            { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: aiFoundryEnabled ? aiFoundry!.outputs.projectId : '' }
+            { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectEndpoint : '' }
+            { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectId : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
@@ -689,7 +726,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         secrets: concat(
           !empty(loomMsalClientId) ? [
             { name: 'loom-msal-client-secret', value: loomMsalClientSecret }
-            { name: 'session-secret', value: loomSessionSecret }
+            { name: 'session-secret', value: empty(loomSessionSecret) ? guid(resourceGroup().id, 'loom-session-secret-v1') : loomSessionSecret }
           ] : [],
           !empty(loomAzureMapsAccount) ? [
             // Read from KV at deploy time. The azure-maps module wrote the
