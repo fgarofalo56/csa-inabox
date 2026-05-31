@@ -25,6 +25,24 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.21.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.20.0...csa-inabox-v0.21.0) (2026-05-31)
+
+
+### Features
+
+* **csa-loom:** bring-your-own-or-new service parameterization + fix push-button param file ([#533](https://github.com/fgarofalo56/csa-inabox/issues/533)) ([fca53b3](https://github.com/fgarofalo56/csa-inabox/commit/fca53b336ca0ba984a4e3b6c8fc6e06d93ab3d61))
+* **csa-loom:** data-agent run-steps inspector (closes the last parity ❌) ([#535](https://github.com/fgarofalo56/csa-inabox/issues/535)) ([ee15a76](https://github.com/fgarofalo56/csa-inabox/commit/ee15a76bb22f6d45c8d9d20fba95fe183ca473dd))
+
+
+### Bug Fixes
+
+* **csa-loom:** honest empty-state for tier/version-gated navigator sub-tabs ([#531](https://github.com/fgarofalo56/csa-inabox/issues/531)) ([33d9e3d](https://github.com/fgarofalo56/csa-inabox/commit/33d9e3dca78c55be3947f2215d630988f35fba1c))
+
+
+### Miscellaneous
+
+* gitignore all tsconfig.tsbuildinfo + untrack the tracked ones ([#530](https://github.com/fgarofalo56/csa-inabox/issues/530)) ([1a0a205](https://github.com/fgarofalo56/csa-inabox/commit/1a0a205a0d8bf805b24b11b44d2423146ec56a5a))
+
 ## [0.20.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.19.0...csa-inabox-v0.20.0) (2026-05-31)
 
 
