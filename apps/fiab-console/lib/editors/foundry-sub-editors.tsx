@@ -30,6 +30,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { AiSearchServiceTree } from '@/lib/components/ai-search/ai-search-tree';
 import { PromptFlowBuilder } from '@/lib/prompt-flow/flow-builder';
 import {
   type FlowDag, parseFlowDag, serializeFlowDag, starterFlow, emptyFlow,
@@ -814,13 +815,34 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const s = useStyles();
   const isNew = id === 'new' || id === 'create';
 
+  // Navigator-selected index (by real name, service-scoped). When set, the
+  // editor surfaces THAT index — independent of any Loom item binding — so the
+  // left service navigator behaves like clicking an index in the portal.
+  const [navIndex, setNavIndex] = useState<string | null>(null);
+  const [treeRefresh, setTreeRefresh] = useState(0);
+
   // Catalog list mode (no specific item) — list every index on the service.
-  const [list, reloadList] = useApi<{ indexes: any[] }>(isNew ? '/api/items/ai-search-index' : null);
+  const [list, reloadList] = useApi<{ indexes: any[] }>(isNew && !navIndex ? '/api/items/ai-search-index' : null);
+
+  // Navigator detail — resolve the selected index by NAME (def + stats).
+  const [navDetail, reloadNavDetail] = useApi<{ index: any; stats?: any }>(
+    navIndex ? `/api/ai-search/indexes/${encodeURIComponent(navIndex)}` : null, [navIndex],
+  );
 
   // Item mode — resolve the bound index (def + stats). 412 → unbound → picker.
-  const [detail, reloadDetail] = useApi<{ index: any; stats?: any; boundTo?: string; code?: string }>(
-    isNew ? null : `/api/items/ai-search-index/${encodeURIComponent(id)}`, [id],
+  const [itemDetail, reloadItemDetail] = useApi<{ index: any; stats?: any; boundTo?: string; code?: string }>(
+    isNew || navIndex ? null : `/api/items/ai-search-index/${encodeURIComponent(id)}`, [id],
   );
+
+  // Active detail = navigator selection wins, else the bound item.
+  const detail = navIndex ? navDetail : itemDetail;
+  const reloadDetail = navIndex ? reloadNavDetail : reloadItemDetail;
+
+  // The route used for index-scoped actions (search/analyze/schema/indexers).
+  // Navigator mode hits the by-name service routes; item mode the item routes.
+  const indexBase = navIndex
+    ? `/api/ai-search/indexes/${encodeURIComponent(navIndex)}`
+    : `/api/items/ai-search-index/${encodeURIComponent(id)}`;
 
   const [tab, setTab] = useState<'schema' | 'search' | 'stats' | 'indexers'>('schema');
 
@@ -864,7 +886,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
 
   const runSearch = async () => {
     setSearching(true); setHits(null);
-    const j = await postJson(`/api/items/ai-search-index/${encodeURIComponent(id)}/search`, {
+    const j = await postJson(`${indexBase}/search`, {
       search, filter: filter || undefined, select: select || undefined, top, count: true,
     });
     setHits(j); setSearching(false);
@@ -872,7 +894,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
 
   const runAnalyze = async () => {
     setAnalyzeRes(null);
-    const j = await postJson(`/api/items/ai-search-index/${encodeURIComponent(id)}/analyze`, { text: analyzeTxt, analyzer });
+    const j = await postJson(`${indexBase}/analyze`, { text: analyzeTxt, analyzer });
     setAnalyzeRes(j);
   };
 
@@ -880,44 +902,64 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
     let definition: any;
     try { definition = JSON.parse(schemaText); } catch (e: any) { setSchemaMsg({ intent: 'error', text: `Invalid JSON: ${e?.message}` }); return; }
     setSavingSchema(true); setSchemaMsg(null);
-    const r = await fetch(`/api/items/ai-search-index/${encodeURIComponent(id)}`, {
+    // Navigator mode PUTs the by-name index route; item mode PUTs the item route.
+    const r = await fetch(indexBase, {
       method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ definition }),
     });
     const ct = r.headers.get('content-type') || '';
     const j = ct.includes('json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
     setSavingSchema(false);
     if (!j.ok) setSchemaMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` });
-    else { setSchemaMsg({ intent: 'success', text: 'Index definition updated.' }); setSchemaDirty(false); reloadDetail(); }
+    else { setSchemaMsg({ intent: 'success', text: 'Index definition updated.' }); setSchemaDirty(false); reloadDetail(); setTreeRefresh((n) => n + 1); }
   };
 
   const loadIndexers = useCallback(async () => {
     setIndexersLoading(true);
-    const r = await fetch(`/api/items/ai-search-index/${encodeURIComponent(id)}/indexers`);
+    // Navigator mode lists the whole service's indexers; item mode scopes to the bound index.
+    const url = navIndex ? '/api/ai-search/indexers' : `/api/items/ai-search-index/${encodeURIComponent(id)}/indexers`;
+    const r = await fetch(url);
     const ct = r.headers.get('content-type') || '';
     setIndexerData(ct.includes('json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` });
     setIndexersLoading(false);
-  }, [id]);
+  }, [id, navIndex]);
 
-  useEffect(() => { if (tab === 'indexers' && !indexerData && idx) loadIndexers(); }, [tab, indexerData, idx, loadIndexers]);
+  // reload indexers whenever the tab is active and the active index changes
+  useEffect(() => { if (tab === 'indexers' && idx) loadIndexers(); }, [tab, idx, loadIndexers]);
 
   const indexerAction = async (action: 'run' | 'reset', indexer: string) => {
-    await postJson(`/api/items/ai-search-index/${encodeURIComponent(id)}/indexers`, { action, indexer });
+    const url = navIndex ? '/api/ai-search/indexers' : `/api/items/ai-search-index/${encodeURIComponent(id)}/indexers`;
+    await postJson(url, { action, indexer });
     loadIndexers();
   };
 
-  // -------- Catalog list mode --------
-  if (isNew) {
-    return <Shell item={item} id={id} ribbon={ribbon}>
+  // The AI Search service navigator — always the left pane (parity with the
+  // ADF / Synapse / Databricks resource trees). Selecting an index opens it
+  // by name in this editor; ＋ New per group creates real objects via REST.
+  const serviceTree = (
+    <AiSearchServiceTree
+      selectedIndex={navIndex}
+      refreshKey={treeRefresh}
+      onOpenIndex={(name) => { setNavIndex(name); setTab('schema'); setHits(null); setAnalyzeRes(null); setIndexerData(null); }}
+      onNewIndex={() => { setNavIndex(null); /* fall back to the create dialog within the tree */ }}
+    />
+  );
+  const chrome = (main: ReactNode) => (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={serviceTree} main={main} />
+  );
+
+  // -------- Catalog list mode (no item, no navigator selection) --------
+  if (isNew && !navIndex) {
+    return chrome(
       <div className={s.pad}>
         <Subtitle2>Azure AI Search indexes</Subtitle2>
-        <Caption1>Every index on the bound search service. Open an AI Search item to manage one.</Caption1>
+        <Caption1>Pick an index from the service navigator on the left to manage its schema, run queries, and drive its indexers — or use ＋ New to create indexes, indexers, data sources, skillsets, synonym maps and aliases.</Caption1>
         {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
           <div className={s.tableWrap}>
             <Table size="small">
               <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Fields</TableHeaderCell><TableHeaderCell>Vector</TableHeaderCell></TableRow></TableHeader>
               <TableBody>
                 {(list.data?.indexes || []).map((i: any) => (
-                  <TableRow key={i.name}>
+                  <TableRow key={i.name} onClick={() => { setNavIndex(i.name); setTab('schema'); }} style={{ cursor: 'pointer' }}>
                     <TableCell className={s.cell}><strong>{i.name}</strong></TableCell>
                     <TableCell className={s.cell}>{i.fieldCount ?? (i.fields || []).length}</TableCell>
                     <TableCell className={s.cell}>{i.vectorEnabled ? <Badge color="brand">vector</Badge> : ''}</TableCell>
@@ -928,18 +970,19 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
           </div>
         )}
       </div>
-    </Shell>;
+    );
   }
 
   // -------- Item mode: unbound / not-deployed → bind picker (full UI gate) --------
-  const unbound = detail.error && (detail as any).data == null && (detail.notDeployed || /not bound|unbound/i.test(detail.error || '') || (detail as any).code === 'unbound');
-  if (!detail.loading && (unbound || detail.notDeployed)) {
-    return <Shell item={item} id={id} ribbon={ribbon}>
+  // (skipped entirely in navigator mode — the navigator selected a real index by name)
+  const unbound = !navIndex && detail.error && (detail as any).data == null && (detail.notDeployed || /not bound|unbound/i.test(detail.error || '') || (detail as any).code === 'unbound');
+  if (!navIndex && !detail.loading && (unbound || detail.notDeployed)) {
+    return chrome(
       <div className={s.pad}>
         <Subtitle2>{item.displayName} — AI Search index</Subtitle2>
         <AiSearchBindPicker id={id} onBound={reloadDetail} />
       </div>
-    </Shell>;
+    );
   }
 
   const docs: any[] = hits?.ok ? (hits.result?.value || []) : [];
@@ -947,12 +990,12 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const totalCount = hits?.ok ? hits.result?.['@odata.count'] : undefined;
   const retrievable = fields.filter((f) => f.retrievable !== false).slice(0, 6);
 
-  return <Shell item={item} id={id} ribbon={ribbon}>
+  return chrome(
     <div className={s.pad}>
       {detail.loading ? <Spinner size="small" /> : detail.error ? (
         <>
           <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} />
-          <AiSearchBindPicker id={id} onBound={reloadDetail} />
+          {!navIndex && <AiSearchBindPicker id={id} onBound={reloadDetail} />}
         </>
       ) : idx && (
         <>
@@ -1150,7 +1193,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
         </>
       )}
     </div>
-  </Shell>;
+  );
 }
 
 // =====================================================================
