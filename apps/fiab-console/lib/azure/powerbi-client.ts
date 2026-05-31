@@ -194,12 +194,156 @@ export interface FabricScorecard {
 }
 
 // ============================================================
+// Config gate
+// ============================================================
+
+/**
+ * powerbiConfigGate — honest infra-gate for the Power BI workspace navigator.
+ *
+ * Power BI REST has no single "endpoint" env var the way Databricks/Synapse do
+ * (the base is always api.powerbi.com); reachability is gated by the Power BI
+ * *tenant* admin enabling service-principal API access and adding the Console
+ * UAMI to each workspace. Those failures surface at call-time as 401/403 and
+ * are passed through verbatim by the routes.
+ *
+ * The one thing the *console* must have to authenticate at all is a managed
+ * identity / credential. When `LOOM_UAMI_CLIENT_ID` is unset AND no ambient
+ * Azure credential is available (i.e. neither MI nor `az login`), the token
+ * acquisition fails. We expose that as a structured gate so the navigator can
+ * render the precise remediation instead of a raw 401.
+ *
+ * Returns `null` when the console is configured to *attempt* a real call.
+ */
+export function powerbiConfigGate(): { missing: string; detail: string } | null {
+  const hasUami = !!process.env.LOOM_UAMI_CLIENT_ID;
+  // In a deployed Container App the UAMI client id is always set. Locally,
+  // DefaultAzureCredential (az login / VS auth) can still mint a token, so we
+  // only hard-gate when neither is present.
+  const hasLocalCred =
+    !!process.env.AZURE_CLIENT_ID ||
+    !!process.env.AZURE_TENANT_ID ||
+    !!process.env.AZURE_FEDERATED_TOKEN_FILE ||
+    process.env.NODE_ENV !== 'production';
+  if (!hasUami && !hasLocalCred) {
+    return {
+      missing: 'LOOM_UAMI_CLIENT_ID',
+      detail:
+        'No Azure credential is available to call Power BI. Set LOOM_UAMI_CLIENT_ID ' +
+        'to the Console user-assigned managed identity client id (or run `az login` ' +
+        'for local dev). The UAMI service principal must also be (1) granted Power BI ' +
+        'tenant access via "Service principals can use Fabric APIs" and (2) added as ' +
+        'Member/Contributor to each target workspace.',
+    };
+  }
+  return null;
+}
+
+/**
+ * The remediation string surfaced verbatim by the navigator routes when Power
+ * BI returns 401/403 (SP not authorized in the tenant or not a workspace member).
+ */
+export const POWERBI_SP_HINT =
+  'The Console service principal is not authorized for Power BI. A Power BI admin must ' +
+  '(1) enable "Service principals can use Fabric APIs" (or the Power BI subset) in the ' +
+  'tenant settings and add the Console UAMI to that security group, and ' +
+  '(2) add the UAMI as Member or Contributor on each target workspace.';
+
+// ============================================================
 // Workspaces (groups)
 // ============================================================
 
 export async function listWorkspaces(): Promise<PbiWorkspace[]> {
   const j = await call<{ value: PbiWorkspace[] }>('/groups');
   return j.value || [];
+}
+
+// ============================================================
+// Dataflows  (GET/POST/DELETE /groups/{ws}/dataflows[/{id}/refreshes])
+//
+// Docs: https://learn.microsoft.com/rest/api/power-bi/dataflows
+// ============================================================
+
+export interface PbiDataflow {
+  objectId: string;
+  name: string;
+  description?: string;
+  modelUrl?: string;
+  configuredBy?: string;
+}
+
+export async function listDataflows(workspaceId: string): Promise<PbiDataflow[]> {
+  const j = await call<{ value: PbiDataflow[] }>(
+    `/groups/${encodeURIComponent(workspaceId)}/dataflows`,
+  );
+  return j.value || [];
+}
+
+/**
+ * POST /groups/{ws}/dataflows/{id}/refreshes — trigger an on-demand dataflow
+ * refresh. Power BI requires the notifyOption body. 200/202 on success.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/dataflows/refresh-dataflow
+ */
+export async function refreshDataflow(
+  workspaceId: string,
+  dataflowId: string,
+  notifyOption: 'MailOnCompletion' | 'MailOnFailure' | 'NoNotification' = 'NoNotification',
+): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/dataflows/${encodeURIComponent(dataflowId)}/refreshes`,
+    { method: 'POST', body: { notifyOption } },
+  );
+  return { ok: true };
+}
+
+/**
+ * GET /groups/{ws}/dataflows/{id}/transactions — dataflow refresh history.
+ * Falls back to [] on 404 so the navigator renders an honest empty state.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/dataflows/get-dataflow-transactions
+ */
+export interface PbiDataflowTransaction {
+  id?: string;
+  refreshType?: string;
+  startTime?: string;
+  endTime?: string;
+  status?: string;
+}
+
+export async function listDataflowTransactions(
+  workspaceId: string,
+  dataflowId: string,
+): Promise<PbiDataflowTransaction[]> {
+  try {
+    const j = await call<{ value: PbiDataflowTransaction[] }>(
+      `/groups/${encodeURIComponent(workspaceId)}/dataflows/${encodeURIComponent(dataflowId)}/transactions`,
+    );
+    return j.value || [];
+  } catch (e) {
+    if (e instanceof PowerBiError && (e.status === 404 || e.status === 400)) return [];
+    throw e;
+  }
+}
+
+export async function deleteDataflow(workspaceId: string, dataflowId: string): Promise<void> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/dataflows/${encodeURIComponent(dataflowId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+export async function deleteDashboard(workspaceId: string, dashboardId: string): Promise<void> {
+  // Power BI exposes dashboard delete only via the admin group; the
+  // user-scoped REST surface does not support DELETE on a dashboard. We keep
+  // this honest: the navigator routes DELETE for dashboards to a 501 with a
+  // clear message rather than pretending. (No fake success.)
+  throw new PowerBiError(
+    'Power BI REST does not support deleting a dashboard via the workspace API. ' +
+      'Delete it from the Power BI service UI.',
+    501,
+    undefined,
+    `/groups/${workspaceId}/dashboards/${dashboardId}`,
+  );
 }
 
 // ============================================================
@@ -307,17 +451,149 @@ export async function listDatasetTables(workspaceId: string, datasetId: string):
   return j.value || [];
 }
 
-export async function listDatasetRelationships(workspaceId: string, datasetId: string): Promise<any[]> {
-  // /datasets/{id}/relationships is not supported in Power BI REST; surface the
-  // model via /datasets/{id}/sources for now. Editors render whatever this returns.
+export interface PbiRelationship {
+  name?: string;
+  fromTable?: string;
+  fromColumn?: string;
+  toTable?: string;
+  toColumn?: string;
+  crossFilteringBehavior?: string;
+}
+
+/**
+ * GET /groups/{ws}/datasets/{id}/relationships — list the model's table
+ * relationships. This IS a real Power BI REST endpoint (push-dataset
+ * relationships are returned here, and imported models expose their
+ * relationship graph the same way). Falls back to an empty list on 404/400 so
+ * the editor renders an honest "no relationships" state rather than erroring.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/push-datasets/datasets-post-dataset-in-group
+ */
+export async function listDatasetRelationships(workspaceId: string, datasetId: string): Promise<PbiRelationship[]> {
   try {
-    const j = await call<{ value: any[] }>(
-      `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/datasources`,
+    const j = await call<{ value: PbiRelationship[] }>(
+      `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/relationships`,
     );
     return j.value || [];
-  } catch {
-    return [];
+  } catch (e) {
+    if (e instanceof PowerBiError && (e.status === 404 || e.status === 400)) return [];
+    throw e;
   }
+}
+
+// ============================================================
+// Push datasets (real model authoring via Power BI REST)
+//
+// Power BI REST genuinely supports BUILDING a semantic model — creating a
+// "push" dataset with tables, typed columns, measures, and relationships —
+// without the XMLA endpoint. This is the supported REST authoring path
+// (Microsoft.PowerBI.Api PostDataset). Imported / Direct Lake models still
+// require XMLA / Desktop for table/measure writes; that stays honestly gated.
+//
+// Docs: https://learn.microsoft.com/rest/api/power-bi/push-datasets/datasets-post-dataset-in-group
+// ============================================================
+
+export type PushColumnType =
+  | 'Int64' | 'Double' | 'Boolean' | 'DateTime' | 'String' | 'Decimal';
+
+export interface PushColumn {
+  name: string;
+  dataType: PushColumnType;
+  /** Optional format string (e.g. "0.00", "yyyy-mm-dd"). */
+  formatString?: string;
+}
+
+export interface PushMeasure {
+  name: string;
+  expression: string;
+  formatString?: string;
+}
+
+export interface PushTable {
+  name: string;
+  columns: PushColumn[];
+  measures?: PushMeasure[];
+}
+
+export interface PushRelationship {
+  name: string;
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+  /** "OneDirection" (default) | "BothDirections" | "Automatic". */
+  crossFilteringBehavior?: 'OneDirection' | 'BothDirections' | 'Automatic';
+}
+
+export interface CreatePushDatasetRequest {
+  name: string;
+  tables: PushTable[];
+  relationships?: PushRelationship[];
+  /** Push (default) | PushStreaming | Streaming. */
+  defaultMode?: 'Push' | 'PushStreaming' | 'Streaming' | 'AsAzure' | 'AsOnPrem';
+}
+
+/**
+ * POST /groups/{ws}/datasets — create a real push dataset (semantic model)
+ * with tables, typed columns, measures, and relationships. Returns the new
+ * dataset id. The Console UAMI must be a Member/Contributor on the workspace.
+ */
+export async function createPushDataset(
+  workspaceId: string,
+  body: CreatePushDatasetRequest,
+  retentionPolicy: 'None' | 'basicFIFO' = 'None',
+): Promise<{ id: string; name: string }> {
+  return call<{ id: string; name: string }>(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets`,
+    {
+      method: 'POST',
+      query: retentionPolicy !== 'None' ? { defaultRetentionPolicy: retentionPolicy } : undefined,
+      body: {
+        name: body.name,
+        defaultMode: body.defaultMode || 'Push',
+        tables: body.tables,
+        relationships: body.relationships,
+      },
+    },
+  );
+}
+
+/**
+ * PUT /groups/{ws}/datasets/{id}/tables/{tableName} — replace a push table's
+ * schema (the REST path to add/edit measures + columns on an existing push
+ * dataset without XMLA).
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/push-datasets/datasets-put-table-in-group
+ */
+export async function putPushTable(
+  workspaceId: string,
+  datasetId: string,
+  table: PushTable,
+): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/tables/${encodeURIComponent(table.name)}`,
+    { method: 'PUT', body: { name: table.name, columns: table.columns, measures: table.measures } },
+  );
+  return { ok: true };
+}
+
+/**
+ * POST /groups/{ws}/datasets/{id}/tables/{tableName}/rows — push rows into a
+ * push table so the model is immediately queryable (real data, not a mock).
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/push-datasets/datasets-post-rows-in-group
+ */
+export async function postPushRows(
+  workspaceId: string,
+  datasetId: string,
+  tableName: string,
+  rows: Array<Record<string, unknown>>,
+): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/tables/${encodeURIComponent(tableName)}/rows`,
+    { method: 'POST', body: { rows } },
+  );
+  return { ok: true };
 }
 
 export async function refreshDataset(

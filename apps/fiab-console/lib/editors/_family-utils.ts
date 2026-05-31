@@ -217,19 +217,51 @@ export function bboxToZoom(bbox: BBox | null): number {
 // Data Agent source normalization (phase4-editors.tsx — DataAgentEditor)
 // ============================================================
 
-export type DaSourceType = 'warehouse' | 'lakehouse' | 'kql' | 'semantic-model' | 'ai-search';
+export type DaSourceType =
+  | 'warehouse'
+  | 'lakehouse'
+  | 'kql'
+  | 'semantic-model'
+  | 'ai-search'
+  | 'ontology'
+  | 'graph';
 
 export interface DaSource {
   id: string;
   type: DaSourceType;
   name: string;
+  /** Selected tables / views / functions / model — comma separated (schema selection). */
   tables?: string;
+  /** Per-source NL2X grounding instructions (## General knowledge / ## Table descriptions / …). */
   instructions?: string;
+  /** Per-source description the agent uses to ROUTE a question to this source (Fabric "Data source description"). */
+  description?: string;
   examples?: { question: string; query: string }[];
 }
 
 const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n\n## When asked about\n';
-const DA_SOURCE_TYPE_VALUES: DaSourceType[] = ['warehouse', 'lakehouse', 'kql', 'semantic-model', 'ai-search'];
+const DA_SOURCE_TYPE_VALUES: DaSourceType[] = [
+  'warehouse',
+  'lakehouse',
+  'kql',
+  'semantic-model',
+  'ai-search',
+  'ontology',
+  'graph',
+];
+
+/**
+ * Whether a given source type supports few-shot example query/answer pairs.
+ *
+ * Grounded in Microsoft Learn (Fabric data agent "Example queries" matrix):
+ *   Lakehouse ✅, Warehouse ✅, Eventhouse/KQL ✅, GQL/Graph ✅, AI Search ✅
+ *   Semantic model ❌ (use Power BI "Prep for AI" Verified Answers instead)
+ *   Ontology ❌
+ * See https://learn.microsoft.com/fabric/data-science/data-agent-example-queries
+ */
+export function daSupportsExampleQueries(type: DaSourceType): boolean {
+  return type !== 'semantic-model' && type !== 'ontology';
+}
 
 /** Guess a DaSourceType from a free-text legacy source name. */
 export function guessDaSourceType(name: string): DaSourceType {
@@ -238,6 +270,8 @@ export function guessDaSourceType(name: string): DaSourceType {
   if (/lakehouse|\blh\b|delta|gold|silver|bronze/.test(n)) return 'lakehouse';
   if (/kql|kusto|eventhouse|adx/.test(n)) return 'kql';
   if (/ai\s*search|search\s*index|\bindex\b|vector/.test(n)) return 'ai-search';
+  if (/ontolog/.test(n)) return 'ontology';
+  if (/\bgraph\b|gql|cypher|node|edge/.test(n)) return 'graph';
   if (/warehouse|\bdw\b|\bwh\b|synapse/.test(n)) return 'warehouse';
   return 'warehouse';
 }
@@ -266,15 +300,40 @@ export function normalizeDaSources(raw: unknown): DaSource[] {
           name,
           tables: typeof x.tables === 'string' ? x.tables : '',
           instructions: typeof x.instructions === 'string' ? x.instructions : DA_INSTRUCTION_TEMPLATE,
-          examples: Array.isArray(x.examples) ? x.examples : [],
+          description: typeof x.description === 'string' ? x.description : '',
+          examples: Array.isArray(x.examples) && daSupportsExampleQueries(type) ? x.examples : [],
         };
       });
   }
   if (typeof raw === 'string' && raw.trim()) {
     return raw.split(',').map((tok) => tok.trim()).filter(Boolean).map((name): DaSource => {
       const type = guessDaSourceType(name);
-      return { id: `${type}:${slugify(name, 'src')}:legacy`, type, name, tables: '', instructions: DA_INSTRUCTION_TEMPLATE, examples: [] };
+      return { id: `${type}:${slugify(name, 'src')}:legacy`, type, name, tables: '', instructions: DA_INSTRUCTION_TEMPLATE, description: '', examples: [] };
     });
   }
   return [];
+}
+
+export interface DaChatTurn { role: 'user' | 'assistant'; content: string }
+
+/**
+ * Shape an in-memory chat thread into the `history` array the chat BFF expects:
+ * only `{role, content}` for user/assistant turns with non-empty string content,
+ * capped to the last `max` turns (default 10) to bound the prompt. Error bubbles
+ * (assistant turns flagged `error`) are excluded so a failed turn never poisons
+ * the next request's grounding. Pure + unit-tested (no Fluent UI dependency).
+ */
+export function shapeDaHistory(
+  chat: { role: 'user' | 'assistant'; content: string; error?: boolean }[],
+  max = 10,
+): DaChatTurn[] {
+  const turns = (Array.isArray(chat) ? chat : [])
+    .filter((m) => m && !m.error && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim().length > 0)
+    .map((m) => ({ role: m.role, content: m.content }));
+  return max > 0 ? turns.slice(-max) : turns;
+}
+
+/** Send is enabled only when there is a non-blank question and no turn is in flight. */
+export function canSendDaQuestion(question: string, asking: boolean): boolean {
+  return !asking && typeof question === 'string' && question.trim().length > 0;
 }

@@ -33,6 +33,12 @@ regexes = [
     '''b24988ac-6180-42a0-ab88-20f7382dd24c''',  # Contributor
     '''8ebe5a00-799e-43f5-a45b-b3b502350a71''',  # Search Index Data Reader
     '''1407120a-92aa-4202-b7e9-c0e197c71c8f''',  # Search Index Data Contributor
+
+    # Fake/example values (tests, parity docs, code defaults) that trip the
+    # generic-api-key entropy heuristic but are NON-secret identifiers:
+    '''0{8}-0{4}-0{4}-0{4}-0{12}''',                          # all-zeros example subscription/tenant GUID
+    '''[a-z]+-csa-loom-[a-z0-9]+''',                          # CSA Loom Azure resource names (apim-csa-loom-eastus2)
+    '''(syn|adf|dbx|kv|st|cosmos|fd|acr|loom)-?loom[a-z0-9-]*-[a-z0-9]+''',  # other Loom resource-name shapes
 ]
 
 paths = [
@@ -69,4 +75,18 @@ paths = [
     # resource identifiers. Real credentials are pulled via
     # ${{ secrets.AZURE_CLIENT_SECRET }} GitHub Actions secret.
     '''\.github/workflows/csa-loom-post-deploy-bootstrap\.yml''',
+
+    # Vitest/Jest backend contract tests set FAKE Azure resource *names* and
+    # zero/example GUIDs (e.g. LOOM_APIM_NAME='apim-csa-loom-eastus2',
+    # LOOM_SUBSCRIPTION_ID='00000000-0000-0000-0000-000000000000') to exercise
+    # the provisioned vs not-provisioned honest gates. These are non-secret
+    # resource identifiers in test code, never real credentials.
+    '''apps/fiab-console/.*/__tests__/.*\.(ts|tsx)$''',
+    '''apps/fiab-console/.*\.(test|spec)\.(ts|tsx)$''',
+
+    # Per-editor parity docs (docs/fiab/parity/*.md) document the real Azure
+    # resource NAMES + env-var names each control calls (e.g. "Backend APIM:
+    # apim-csa-loom-eastus2 (override LOOM_APIM_NAME)"). Non-secret resource
+    # identifiers in generated inventory tables; trip the entropy heuristic.
+    '''docs/fiab/parity/.*\.md$''',
 ]

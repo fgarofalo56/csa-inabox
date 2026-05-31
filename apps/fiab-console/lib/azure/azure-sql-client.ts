@@ -187,6 +187,61 @@ export async function listManagedInstances(subscriptionId?: string): Promise<Man
   }));
 }
 
+// ============================================================
+// Database provisioning (ARM PUT — Microsoft.Sql/servers/databases)
+// ============================================================
+
+export interface CreateDatabaseSpec {
+  /** Existing logical server name or ARM id to create the DB on. */
+  server: string;
+  /** New database name. */
+  name: string;
+  /** Region — defaults to the server's region when omitted. */
+  location?: string;
+  /** Service objective / SKU name (e.g. GP_S_Gen5_2, S0, Basic). */
+  skuName?: string;
+  /** Tier (Basic | Standard | Premium | GeneralPurpose | BusinessCritical | Hyperscale). */
+  tier?: string;
+  /** Sample schema to seed (AdventureWorksLT). */
+  sampleName?: string;
+  /** Zone redundancy. */
+  zoneRedundant?: boolean;
+  maxSizeBytes?: number;
+}
+
+export async function createDatabase(
+  spec: CreateDatabaseSpec,
+): Promise<{ ok: true; id: string; status?: string } | { ok: false; error: string; status: number }> {
+  if (!spec.server || !spec.name) {
+    return { ok: false, error: 'server and name are required', status: 400 };
+  }
+  try {
+    const scope = spec.server.startsWith('/') ? spec.server : await defaultServerScope(spec.server);
+    // Resolve the server's region if the caller did not provide one.
+    let location = spec.location;
+    if (!location) {
+      const servers = await listServers();
+      location = servers.find((s) => s.id === scope || s.name === spec.server)?.location;
+    }
+    if (!location) return { ok: false, error: 'location could not be resolved for the target server', status: 400 };
+    const path = `${scope}/databases/${encodeURIComponent(spec.name)}?api-version=${SQL_API_VERSION}`;
+    const body: any = {
+      location,
+      properties: {
+        ...(spec.sampleName ? { sampleName: spec.sampleName } : {}),
+        ...(typeof spec.zoneRedundant === 'boolean' ? { zoneRedundant: spec.zoneRedundant } : {}),
+        ...(spec.maxSizeBytes ? { maxSizeBytes: spec.maxSizeBytes } : {}),
+      },
+      ...(spec.skuName ? { sku: { name: spec.skuName, ...(spec.tier ? { tier: spec.tier } : {}) } } : {}),
+    };
+    const res = await armRequest<any>(path, { method: 'PUT', body: JSON.stringify(body) });
+    return { ok: true, id: res?.id || path, status: res?.properties?.status };
+  } catch (e: any) {
+    const status = e instanceof AzureSqlError ? e.status : 502;
+    return { ok: false, error: e?.message || String(e), status };
+  }
+}
+
 async function defaultServerScope(serverName: string): Promise<string> {
   // Resolve a bare server name to a full ARM scope via a subscription-level
   // list. Cached per process for the session lifetime.
@@ -261,6 +316,25 @@ export async function executeQuery(server: string, database: string, sqlText: st
     executionMs: Date.now() - started,
     truncated: recordset.length > MAX_ROWS,
   };
+}
+
+/**
+ * Parameterized query — returns the raw recordset (array of row objects) so
+ * the object navigator can read named catalog columns. Inputs are bound as
+ * `@p0`, `@p1`, … so no string-injection path exists for the catalog reads.
+ * Used only by the sql-objects navigator (`sys.*` catalog queries).
+ */
+export async function executeParameterized<T = Record<string, unknown>>(
+  server: string,
+  database: string,
+  sqlText: string,
+  params: Array<string | number | boolean> = [],
+): Promise<T[]> {
+  const pool = await getPool(server, database);
+  const request = pool.request();
+  params.forEach((v, i) => request.input(`p${i}`, v));
+  const result = await request.query(sqlText);
+  return (result.recordset || []) as T[];
 }
 
 // ============================================================

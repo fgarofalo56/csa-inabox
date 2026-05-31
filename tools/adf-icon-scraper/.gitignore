@@ -1,0 +1,7 @@
+# Persistent browser profile — contains your authenticated ADF/Entra session.
+# NEVER commit this.
+.adf-profile/
+node_modules/
+# Inspection dumps + raw network catch-all are regenerated each run.
+icons/_inspect/
+icons/_unmatched/

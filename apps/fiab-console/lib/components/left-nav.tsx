@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { makeStyles, tokens } from '@fluentui/react-components';
+import { makeStyles, tokens, Tooltip } from '@fluentui/react-components';
 import { PinnedSection } from './pinned-section';
 import {
   Home24Regular,
@@ -65,9 +65,11 @@ const useStyles = makeStyles({
   itemHover: {
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
+  // Icon-only rail when the shell nav is collapsed.
+  itemCollapsed: { justifyContent: 'center', padding: '10px 0', gap: 0 },
 });
 
-export function LeftNav() {
+export function LeftNav({ collapsed = false }: { collapsed?: boolean }) {
   const styles = useStyles();
   const pathname = usePathname();
   return (
@@ -75,19 +77,23 @@ export function LeftNav() {
       {navItems.map((item) => {
         const Icon = item.icon;
         const active = pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href));
-        return (
+        const link = (
           <Link
             key={item.href}
             href={item.href}
-            className={`${styles.item} ${active ? styles.itemActive : styles.itemHover}`}
+            className={`${styles.item} ${collapsed ? styles.itemCollapsed : ''} ${active ? styles.itemActive : styles.itemHover}`}
             aria-current={active ? 'page' : undefined}
+            aria-label={collapsed ? item.label : undefined}
           >
             <Icon />
-            <span>{item.label}</span>
+            {!collapsed && <span>{item.label}</span>}
           </Link>
         );
+        return collapsed
+          ? <Tooltip key={item.href} content={item.label} relationship="label" positioning="after">{link}</Tooltip>
+          : link;
       })}
-      <PinnedSection />
+      {!collapsed && <PinnedSection />}
     </nav>
   );
 }

@@ -31,6 +31,9 @@ param sku string = 'S1'
 @description('Console UAMI principal ID — granted Azure Maps Data Reader.')
 param consolePrincipalId string
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Key Vault resource ID for storing the primary key (SPA tile preview path).')
 param keyVaultId string
 
@@ -58,8 +61,8 @@ resource mapsAccount 'Microsoft.Maps/accounts@2024-07-01-preview' = if (boundary
 
 // Console UAMI → Azure Maps Data Reader on the account
 // Role: Azure Maps Data Reader (423170ca-a8f6-4b0f-8487-9e4eb8f49bfa)
-resource mapsDataReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if ((boundary == 'Commercial' || boundary == 'GCC') && !empty(consolePrincipalId)) {
-  name: guid(mapsAccount.id, consolePrincipalId, 'maps-data-reader')
+resource mapsDataReaderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if ((boundary == 'Commercial' || boundary == 'GCC') && !empty(consolePrincipalId) && !skipRoleGrants) {
+  name: guid(mapsAccount.id, consolePrincipalId, '423170ca-a8f6-4b0f-8487-9e4eb8f49bfa')
   scope: mapsAccount
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '423170ca-a8f6-4b0f-8487-9e4eb8f49bfa')

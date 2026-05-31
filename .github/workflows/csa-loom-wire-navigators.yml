@@ -1,0 +1,74 @@
+name: csa-loom-wire-navigators
+
+# Wire the live Loom Console to its real Azure service backends:
+#   1. grant-navigator-rbac.sh  — per-resource UAMI roles (Event Hubs, Cosmos,
+#      ADX, AI Search, AOAI) the 12 navigators need.
+#   2. patch-navigator-env.sh   — set the discovered resource names/URIs as
+#      LOOM_* env vars on the loom-console Container App (a new revision rolls).
+#
+# Both are idempotent and reuse-first: only resources that actually exist get
+# wired; everything else stays behind its honest config-gate. All calls are
+# ARM management-plane (no private-endpoint / public-access toggling needed).
+#
+# Runs as the limitlessdata_deploy SP. Dispatch after a deploy, or any time the
+# navigator wiring drifts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_rbac:
+        description: 'Skip the RBAC grants (env patch only)'
+        type: boolean
+        default: false
+      skip_env:
+        description: 'Skip the env patch (RBAC only)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+  ADMIN_RG: rg-csa-loom-admin-eastus2
+  DLZ_RG: rg-csa-loom-dlz-single-eastus2
+  LOCATION: eastus2
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login (limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Grant navigator RBAC
+        if: ${{ !inputs.skip_rbac }}
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: bash scripts/csa-loom/grant-navigator-rbac.sh
+
+      - name: Wait for AAD role propagation
+        if: ${{ !inputs.skip_rbac }}
+        run: sleep 60
+
+      - name: Patch navigator env vars onto loom-console
+        if: ${{ !inputs.skip_env }}
+        run: bash scripts/csa-loom/patch-navigator-env.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "== csa-loom-wire-navigators complete =="
+          CONSOLE_FQDN=$(az containerapp show -g "$ADMIN_RG" -n loom-console --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null || echo "")
+          echo "Console: https://${CONSOLE_FQDN}"
+          echo "Navigators whose backing resource exists now return real data;"
+          echo "the rest remain honestly gated until provisioned."

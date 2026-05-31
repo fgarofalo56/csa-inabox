@@ -34,6 +34,12 @@ describe('KqlDatabaseEditor', () => {
         tables: [{ name: 'Events' }, { name: 'Alerts' }],
         tableCount: 2,
       }),
+      // AdxDatabaseTree (left navigator) — real /api/adx/* routes.
+      '/api/adx/tables': () => ({ ok: true, database: 'loomdb-default', tables: [{ name: 'Events', totalRowCount: 12 }, { name: 'Alerts', totalRowCount: 3 }] }),
+      '/api/adx/functions': () => ({ ok: true, database: 'loomdb-default', functions: [] }),
+      '/api/adx/materialized-views': () => ({ ok: true, database: 'loomdb-default', materializedViews: [] }),
+      '/api/adx/ingestion-mappings': () => ({ ok: true, database: 'loomdb-default', mappings: [] }),
+      '/api/adx/overview': () => ({ ok: true, database: 'loomdb-default', schema: null, continuousExports: [] }),
     });
     calls = m.calls;
   });

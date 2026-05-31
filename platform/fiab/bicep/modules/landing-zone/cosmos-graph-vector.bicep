@@ -38,6 +38,9 @@ param workspaceId string
 @description('Console UAMI principal ID for Cosmos data plane RBAC')
 param consolePrincipalId string
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -95,9 +98,9 @@ resource defaultGraph 'Microsoft.DocumentDB/databaseAccounts/gremlinDatabases/gr
 // Console UAMI → Cosmos DB Built-in Data Contributor on Gremlin account
 // (00000000-0000-0000-0000-000000000002) so the gremlin npm client can
 // fetch AAD tokens (the BFF does this — see app/api/items/cosmos-gremlin-graph).
-resource gremlinDataRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = if (!empty(consolePrincipalId)) {
+resource gremlinDataRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   parent: gremlinAccount
-  name: guid(gremlinAccount.id, consolePrincipalId, 'data-contributor')
+  name: guid(gremlinAccount.id, consolePrincipalId, '00000000-0000-0000-0000-000000000002')
   properties: {
     roleDefinitionId: '${gremlinAccount.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
     principalId: consolePrincipalId
@@ -204,9 +207,9 @@ resource defaultVectorContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDataba
 }
 
 // Console UAMI → data contributor on the vector account
-resource vectorDataRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = if (!empty(consolePrincipalId)) {
+resource vectorDataRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   parent: vectorAccount
-  name: guid(vectorAccount.id, consolePrincipalId, 'data-contributor')
+  name: guid(vectorAccount.id, consolePrincipalId, '00000000-0000-0000-0000-000000000002')
   properties: {
     roleDefinitionId: '${vectorAccount.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
     principalId: consolePrincipalId

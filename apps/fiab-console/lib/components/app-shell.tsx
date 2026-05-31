@@ -18,6 +18,7 @@ import {
 import {
   SignOut24Regular, Settings24Regular, Person24Regular,
   Sparkle24Regular, Question24Regular, ChatHelp24Regular,
+  Navigation24Regular,
 } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { LeftNav } from './left-nav';
@@ -101,14 +102,33 @@ const useStyles = makeStyles({
   main: {
     gridColumn: '2', gridRow: '2',
     overflow: 'auto',
-    padding: 'var(--loom-space-5) var(--loom-space-5) var(--loom-space-6)',
+    // Tighter top padding so the page header sits closer to the topbar
+    // (less wasted vertical real estate).
+    padding: 'var(--loom-space-3) var(--loom-space-5) var(--loom-space-5)',
     backgroundColor: 'var(--loom-app-bg)',
   },
+  navToggle: {
+    color: 'white', flexShrink: 0,
+    ':hover': { backgroundColor: 'rgba(255,255,255,0.10)' },
+  },
 });
+
+const NAV_COLLAPSE_KEY = 'loom.navCollapsed';
 
 export function AppShell({ children }: { children: ReactNode }) {
   const styles = useStyles();
   const [me, setMe] = useState<MeResponse | null>(null);
+  const [navCollapsed, setNavCollapsed] = useState(false);
+
+  // Restore the operator's nav preference.
+  useEffect(() => {
+    try { setNavCollapsed(localStorage.getItem(NAV_COLLAPSE_KEY) === '1'); } catch { /* SSR / no storage */ }
+  }, []);
+  const toggleNav = () => setNavCollapsed((v) => {
+    const next = !v;
+    try { localStorage.setItem(NAV_COLLAPSE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+    return next;
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -118,13 +138,23 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
+  // Override the nav-width grid track when collapsed → icon rail.
+  const rootStyle = navCollapsed
+    ? ({ ['--loom-nav-width' as string]: '52px' } as React.CSSProperties)
+    : undefined;
+
   return (
-    <div className={styles.root}>
+    <div className={styles.root} style={rootStyle}>
       <header className={styles.topbar} role="banner">
+        <Tooltip content={navCollapsed ? 'Expand navigation' : 'Collapse navigation'} relationship="label">
+          <Button appearance="transparent" className={styles.navToggle} icon={<Navigation24Regular />}
+            onClick={toggleNav} aria-label={navCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            aria-expanded={!navCollapsed} />
+        </Tooltip>
         <Tooltip content="CSA Loom — Cloud Scale Analytics · Weaving every Azure data service into one experience" relationship="label">
           <Link href="/" className={styles.brand} aria-label="CSA Loom (Cloud Scale Analytics) — home">
-            <LoomLogo variant="icon" size={32} />
-            <span className={styles.wordmark}>CSA Loom</span>
+            <LoomLogo variant="icon" size={28} />
+            {!navCollapsed && <span className={styles.wordmark}>CSA Loom</span>}
           </Link>
         </Tooltip>
         <AppLauncher />
@@ -173,12 +203,15 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
       <nav className={styles.nav}>
-        <div className={styles.navMain}><LeftNav /></div>
+        <div className={styles.navMain}><LeftNav collapsed={navCollapsed} /></div>
         <div className={styles.navFooter}>
-          <Button appearance="subtle" className={styles.navFooterBtn}
-            icon={<ChatHelp24Regular />} onClick={openFeedback}>
-            Send feedback
-          </Button>
+          <Tooltip content="Send feedback" relationship="label">
+            <Button appearance="subtle" className={styles.navFooterBtn}
+              icon={<ChatHelp24Regular />} onClick={openFeedback}
+              aria-label="Send feedback">
+              {navCollapsed ? undefined : 'Send feedback'}
+            </Button>
+          </Tooltip>
         </div>
       </nav>
       <main className={`${styles.main} loom-app-grid-bg`}>
