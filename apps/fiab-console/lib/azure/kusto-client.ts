@@ -319,6 +319,46 @@ export async function listContinuousExports(db: string): Promise<KustoContinuous
   }));
 }
 
+export interface KustoDatabasePolicy {
+  /** Policy name: retention | caching | sharding | mergepolicy | streamingingestion. */
+  kind: string;
+  /** Parsed policy object (or the raw string if it didn't parse as JSON). */
+  policy: unknown;
+  /** The raw policy JSON string as returned by Kusto. */
+  raw: string;
+}
+
+/**
+ * `.show database <db> policy <kind>` for each read-only database policy.
+ *
+ * Issues one real management command per policy via {@link executeMgmtCommand},
+ * each wrapped in try/catch so a policy that is unset / unsupported on this
+ * cluster is simply skipped (NOT surfaced as an error). Each command returns a
+ * row with a "Policy" column holding the policy JSON string; we parse it for
+ * `policy` and keep the original string in `raw`. Only policies that actually
+ * returned a row are included. No mocks — every value comes from the live
+ * cluster. Read-only: the navigator never alters these.
+ */
+export async function showDatabasePolicies(db: string): Promise<KustoDatabasePolicy[]> {
+  const kinds = ['retention', 'caching', 'sharding', 'mergepolicy', 'streamingingestion'];
+  const out: KustoDatabasePolicy[] = [];
+  for (const kind of kinds) {
+    try {
+      const r = await executeMgmtCommand(db, `.show database ${qName(db)} policy ${kind}`);
+      if (!r.rows.length) continue;
+      const polIdx = r.columns.indexOf('Policy');
+      const idx = polIdx >= 0 ? polIdx : r.columns.length - 1;
+      const raw = String(r.rows[0][idx] ?? '');
+      let policy: unknown = raw;
+      try { policy = JSON.parse(raw); } catch { policy = raw; }
+      out.push({ kind, policy, raw });
+    } catch {
+      // Missing / unsupported policy on this database — skip, not an error.
+    }
+  }
+  return out;
+}
+
 /** `.show database <db> schema as json` — flat read-only schema object. */
 export async function getDatabaseSchemaJson(db: string): Promise<unknown> {
   const r = await executeMgmtCommand(db, `.show database ${qName(db)} schema as json`);

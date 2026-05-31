@@ -20,6 +20,7 @@
  *   - Ingestion mappings  → /api/adx/ingestion-mappings   (.show ingestion mappings / .create-or-alter ... mapping / .drop)
  *   - Database schema     → /api/adx/overview             (.show database schema as json — read-only)
  *   - Continuous export   → /api/adx/overview             (.show continuous-exports — read-only)
+ *   - Database policies   → /api/adx/policies             (.show database <db> policy <kind> — read-only)
  *
  * Capabilities the ADX/Fabric UI exposes that we don't yet *author* (update
  * policies, retention/caching policies, row-level security, external tables,
@@ -44,7 +45,7 @@ import {
   Add20Regular, ArrowSync16Regular, Delete16Regular,
   DocumentTable20Regular, Table20Regular, MathFormula20Regular,
   ArrowImport20Regular, Open16Regular, Search20Regular, Warning20Regular,
-  Database20Regular, DataUsage20Regular,
+  Database20Regular, DataUsage20Regular, ShieldKeyhole20Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -67,6 +68,7 @@ interface FnRow { name: string; parameters?: string; folder?: string }
 interface MvRow { name: string; sourceTable?: string }
 interface MapRow { name: string; kind: string; table?: string; mapping?: string }
 interface ExportRow { name: string; externalTableName?: string; isRunning?: boolean; isDisabled?: boolean; lastRunResult?: string }
+interface PolicyRow { kind: string; policy?: unknown; raw?: string }
 
 type CreatableGroup = 'table' | 'function' | 'mv' | 'mapping';
 
@@ -89,6 +91,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
   const MVIEWS = `/api/adx/materialized-views?${idq}`;
   const MAPPINGS = `/api/adx/ingestion-mappings?${idq}`;
   const OVERVIEW = `/api/adx/overview?${idq}`;
+  const POLICIES = `/api/adx/policies?${idq}`;
 
   const [filter, setFilter] = useState('');
   const [gate, setGate] = useState<{ missing: string } | null>(null);
@@ -102,6 +105,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
   const [mviews, setMviews] = useState<MvRow[]>([]);
   const [mappings, setMappings] = useState<MapRow[]>([]);
   const [exports, setExports] = useState<ExportRow[]>([]);
+  const [policies, setPolicies] = useState<PolicyRow[]>([]);
 
   // ---- create dialog ----
   const [createGroup, setCreateGroup] = useState<CreatableGroup | null>(null);
@@ -122,14 +126,15 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const [tr, fr, mr, ir, or] = await Promise.all([
+      const [tr, fr, mr, ir, or, pr] = await Promise.all([
         fetch(TABLES).then(readJson),
         fetch(FUNCTIONS).then(readJson),
         fetch(MVIEWS).then(readJson),
         fetch(MAPPINGS).then(readJson),
         fetch(OVERVIEW).then(readJson),
+        fetch(POLICIES).then(readJson),
       ]);
-      for (const b of [tr, fr, mr, ir, or]) { if (applyGate(b)) { setLoading(false); return; } }
+      for (const b of [tr, fr, mr, ir, or, pr]) { if (applyGate(b)) { setLoading(false); return; } }
       setGate(null);
       if (tr.ok) { setTables(tr.tables || []); setDatabase(tr.database || ''); }
       else setError(tr.error || 'failed to list tables');
@@ -137,12 +142,13 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
       if (mr.ok) setMviews(mr.materializedViews || []);
       if (ir.ok) setMappings(ir.mappings || []);
       if (or.ok) setExports(or.continuousExports || []);
+      if (pr.ok) setPolicies(pr.policies || []);
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
       setLoading(false);
     }
-  }, [TABLES, FUNCTIONS, MVIEWS, MAPPINGS, OVERVIEW]);
+  }, [TABLES, FUNCTIONS, MVIEWS, MAPPINGS, OVERVIEW, POLICIES]);
 
   useEffect(() => { loadAll(); }, [loadAll, refreshKey]);
 
@@ -204,6 +210,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
   const fMvs = useMemo(() => mviews.filter((x) => match(x.name)), [mviews, f]);
   const fMaps = useMemo(() => mappings.filter((x) => match(x.name)), [mappings, f]);
   const fExports = useMemo(() => exports.filter((x) => match(x.name)), [exports, f]);
+  const fPolicies = useMemo(() => policies.filter((x) => match(x.kind)), [policies, f]);
 
   const openQuery = (kql: string) => onOpenQuery?.(kql);
 
@@ -413,6 +420,37 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
             </Tree>
           </TreeItem>
 
+          {/* Database policies (read-only) */}
+          <TreeItem itemType="branch" value="g-policies">
+            {groupHeader('Policies', <ShieldKeyhole20Regular />, policies.length, undefined)}
+            <Tree>
+              {fPolicies.length === 0 && (
+                <TreeItem itemType="leaf" value="pol-empty">
+                  <Tooltip content="Database policies are read from .show database <db> policy <kind> (retention, caching, sharding, mergepolicy, streamingingestion). Altering a policy needs Database Admin (.alter database <db> policy ...) and is not wired here. Listed read-only." relationship="description">
+                    <TreeItemLayout iconBefore={<Warning20Regular />}>
+                      <span style={{ color: tokens.colorNeutralForeground3 }}>{f ? 'No matches' : 'No policies set'}</span>{' '}
+                      <Badge size="small" appearance="tint" color="warning">read-only</Badge>
+                    </TreeItemLayout>
+                  </Tooltip>
+                </TreeItem>
+              )}
+              {fPolicies.map((p) => (
+                <TreeItem key={p.kind} itemType="leaf" value={`pol-${p.kind}`}>
+                  <Tooltip content={p.raw || JSON.stringify(p.policy ?? {})} relationship="description">
+                    <TreeItemLayout iconBefore={<ShieldKeyhole20Regular />}>
+                      <span className={s.leafRow}>
+                        <span>{p.kind}</span>
+                        <span className={s.leafActions}>
+                          <Badge size="small" appearance="tint" color="informative">read-only</Badge>
+                        </span>
+                      </span>
+                    </TreeItemLayout>
+                  </Tooltip>
+                </TreeItem>
+              ))}
+            </Tree>
+          </TreeItem>
+
           {/* Database schema (read-only export to the query editor) */}
           <TreeItem itemType="branch" value="g-schema">
             <TreeItemLayout iconBefore={<Database20Regular />}>Database schema</TreeItemLayout>
@@ -434,7 +472,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, refreshKey = 0 }: AdxData
             <Tree>
               {[
                 ['Update policies', '.alter table T policy update — transform-on-ingest pipelines; authored from the KQL database ribbon (New → Update policy), not from this navigator yet.'],
-                ['Retention / caching policies', '.alter table T policy retention / .alter database policy caching — per-table & per-db hot-cache + soft-delete tuning; surfaced read-only in the database details, authoring not wired.'],
+                ['Retention / caching policy authoring', '.alter table T policy retention / .alter database policy caching — per-table & per-db hot-cache + soft-delete tuning. Database policies are surfaced read-only in the Policies group above (.show database <db> policy <kind>); authoring (.alter …) needs Database Admin and is not wired.'],
                 ['Row-level security', '.alter table T policy row_level_security — RLS predicate per table; requires Database Admin, not wired.'],
                 ['External tables', '.create external table — Blob/ADLS/SQL external tables (continuous-export targets); list/create not wired yet.'],
                 ['Continuous-export authoring', '.create-or-alter continuous-export over an external table; needs an external table + Database Admin. Listed read-only above.'],
