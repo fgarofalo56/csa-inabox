@@ -21,9 +21,12 @@ _archived/**/.svelte-kit/
 # ---------------------------
 portal/react-webapp/.next/
 portal/react-webapp/next-env.d.ts
-portal/react-webapp/tsconfig.tsbuildinfo
 portal/react-webapp/coverage/
 portal/react-webapp/out/
+
+# TypeScript incremental build info — never commit (perpetually dirty)
+**/tsconfig.tsbuildinfo
+*.tsbuildinfo
 
 # ---------------------------
 # Portal persistence data (JSON store)
