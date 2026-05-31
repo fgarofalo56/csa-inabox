@@ -46,6 +46,7 @@ import {
   bboxToZoom,
   parseUdfFunctions,
   normalizeDaSources,
+  daSupportsExampleQueries,
   shapeDaHistory,
   canSendDaQuestion,
   type VarType,
@@ -2356,7 +2357,20 @@ const DA_SOURCE_TYPES: { value: DaSourceType; label: string; itemType: string }[
   { value: 'kql', label: 'KQL database', itemType: 'kql-database' },
   { value: 'semantic-model', label: 'Semantic model', itemType: 'semantic-model' },
   { value: 'ai-search', label: 'AI Search', itemType: 'ai-search-index' },
+  { value: 'ontology', label: 'Ontology', itemType: 'ontology' },
+  { value: 'graph', label: 'Graph model', itemType: 'graph-model' },
 ];
+// Schema-selection label per type (Fabric exposes Tables/Views/Functions for
+// SQL + Eventhouse, model name for semantic models, none for graph/ontology).
+const DA_SCHEMA_LABEL: Record<DaSourceType, string> = {
+  warehouse: 'Tables / views / functions in scope (comma-separated)',
+  lakehouse: 'Tables in scope (comma-separated)',
+  kql: 'Tables / materialized views / functions in scope (comma-separated)',
+  'semantic-model': 'Tables / model in scope (comma-separated)',
+  'ai-search': 'Index fields in scope (optional, comma-separated)',
+  ontology: 'Ontology is queried whole — no table scoping',
+  graph: 'Graph is queried whole — no node/edge scoping',
+};
 const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n\n## When asked about\n';
 
 // `normalizeDaSources` / `guessDaSourceType` / DaSource(Type) are imported from
@@ -2402,7 +2416,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
         id: `${pickerType}:${pickSel}:${Date.now()}`,
         type: pickerType,
         name: chosen?.name || pickSel,
-        tables: '', instructions: DA_INSTRUCTION_TEMPLATE, examples: [],
+        tables: '', description: '', instructions: DA_INSTRUCTION_TEMPLATE, examples: [],
       }],
     }));
     setPickSel('');
@@ -2548,19 +2562,37 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     <div style={{ flex: 1 }} />
                     <Button size="small" onClick={() => removeSource(src.id)}>Remove</Button>
                   </div>
-                  <Caption1 style={{ marginTop: 6 }}>Selected tables / model (comma-separated)</Caption1>
-                  <Input value={src.tables || ''} onChange={(_, d) => updateSource(src.id, { tables: d.value })} placeholder="dim_date, fact_sales" />
+                  <Caption1 style={{ marginTop: 6 }}>Data source description (helps the agent route questions to this source)</Caption1>
+                  <Input value={src.description || ''} onChange={(_, d) => updateSource(src.id, { description: d.value })} placeholder="Finance facts: revenue, margin, bookings by region & quarter." />
+                  <Caption1 style={{ marginTop: 6 }}>{DA_SCHEMA_LABEL[src.type]}</Caption1>
+                  {src.type === 'ontology' || src.type === 'graph' ? (
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Fabric does not scope {src.type === 'graph' ? 'graphs to specific nodes/edges' : 'ontologies to subsets'}; the whole source is queried.
+                    </Caption1>
+                  ) : (
+                    <Input value={src.tables || ''} onChange={(_, d) => updateSource(src.id, { tables: d.value })} placeholder="dim_date, fact_sales" />
+                  )}
                   <Caption1 style={{ marginTop: 6 }}>Data source instructions</Caption1>
                   <Textarea value={src.instructions || ''} rows={4} onChange={(_, d) => updateSource(src.id, { instructions: d.value })} />
-                  <Caption1 style={{ marginTop: 6 }}>Example question → query pairs</Caption1>
-                  {arr<{ question: string; query: string }>(src.examples).map((ex, i) => (
-                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6, marginBottom: 4 }}>
-                      <Input value={ex.question} placeholder="question" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, question: d.value } : e))} />
-                      <Input value={ex.query} placeholder="SQL / KQL / DAX" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, query: d.value } : e))} />
-                      <Button size="small" onClick={() => updateSourceExamples(src.id, (arr) => arr.filter((_, j) => j !== i))}>×</Button>
-                    </div>
-                  ))}
-                  <Button size="small" onClick={() => addExample(src.id)}>+ Example</Button>
+                  {daSupportsExampleQueries(src.type) ? (
+                    <>
+                      <Caption1 style={{ marginTop: 6 }}>Example question → query pairs (few-shot)</Caption1>
+                      {arr<{ question: string; query: string }>(src.examples).map((ex, i) => (
+                        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6, marginBottom: 4 }}>
+                          <Input value={ex.question} placeholder="question" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, question: d.value } : e))} />
+                          <Input value={ex.query} placeholder="SQL / KQL / GQL" onChange={(_, d) => updateSourceExamples(src.id, (arr) => arr.map((e, j) => j === i ? { ...e, query: d.value } : e))} />
+                          <Button size="small" onClick={() => updateSourceExamples(src.id, (arr) => arr.filter((_, j) => j !== i))}>×</Button>
+                        </div>
+                      ))}
+                      <Button size="small" onClick={() => addExample(src.id)}>+ Example</Button>
+                    </>
+                  ) : (
+                    <Caption1 style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>
+                      {src.type === 'semantic-model'
+                        ? 'Fabric does not support example queries for semantic models — author Verified Answers via Power BI “Prep for AI” instead.'
+                        : 'Fabric does not support example queries for ontologies.'}
+                    </Caption1>
+                  )}
                 </div>
               ))}
               {sources.length === 0 && (
