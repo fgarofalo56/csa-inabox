@@ -161,9 +161,33 @@ resource aiServices 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   identity: { type: 'SystemAssigned' }
   properties: {
     customSubDomainName: 'aoai-csa-loom-${location}'
+    // Enable Microsoft Foundry project management on this AIServices account so
+    // the Foundry Agent Service (data-agent Publish + Foundry agent editor) has a
+    // real project endpoint to target (foundry-agent-client.ts). The property is
+    // valid on the runtime API; the bundled bicep type lib is behind, hence the
+    // suppression below.
+    #disable-next-line BCP037
+    allowProjectManagement: true
     publicNetworkAccess: boundary == 'Commercial' ? 'Enabled' : 'Disabled'
     networkAcls: { defaultAction: boundary == 'Commercial' ? 'Allow' : 'Deny' }
     disableLocalAuth: false
+  }
+}
+
+// Microsoft Foundry project (child of the AIServices account). Backs the
+// Foundry Agent Service endpoint shaped
+//   https://<account-subdomain>.services.ai.azure.com/api/projects/<project>
+// which foundry-agent-client.ts targets. The project's internalId is the
+// workspace GUID downstream Foundry / Copilot Studio connections paste in.
+resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-04-01-preview' = {
+  parent: aiServices
+  name: 'loom'
+  location: location
+  tags: complianceTags
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    displayName: 'CSA Loom'
+    description: 'CSA Loom default Foundry project — Data Agents runtime + agent grounding'
   }
 }
 
@@ -188,3 +212,11 @@ output hubKind string = workspaceKind
 output hubManagedIdentityPrincipalId string = foundryHub.identity.principalId
 output aiServicesAccountName string = aiServices.name
 output aiServicesEndpoint string = aiServices.properties.endpoint
+
+// Foundry Agent Service project wiring (LOOM_FOUNDRY_PROJECT_ENDPOINT / _ID).
+output projectName string = foundryProject.name
+output projectEndpoint string = 'https://${aiServices.properties.customSubDomainName}.services.ai.azure.com/api/projects/${foundryProject.name}'
+// The CognitiveServices project type doesn't surface a bare workspace GUID in
+// bicep; the ARM resource id is the real, stable identifier the Foundry agent
+// editor surfaces for downstream connection wiring.
+output projectId string = foundryProject.id

@@ -139,8 +139,8 @@ param loomAsaRg string = ''
 @description('Loom Stream Analytics subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
 param loomAsaSub string = ''
 
-@description('Loom Event Hubs namespace name (backs the Event Hubs namespace navigator in the Eventstream editor). Empty omits the env var and the navigator surfaces a config gate.')
-param loomEventHubNamespace string = ''
+@description('Loom Event Hubs namespace name (backs the Event Hubs namespace navigator in the Eventstream editor). Defaults to the single-sub DLZ convention evhns-loom-default-<region> emitted by modules/landing-zone/eventhubs.bicep; override for multi-domain deployments. Empty surfaces the navigator config gate.')
+param loomEventHubNamespace string = 'evhns-loom-default-${location}'
 
 @description('Loom Event Hubs resource group. Empty defaults to LOOM_DLZ_RG.')
 param loomEventHubRg string = ''
@@ -153,6 +153,12 @@ param loomStorageAccount string = ''
 
 @description('Loom Cosmos account name. When empty, Cosmos env vars omitted.')
 param loomCosmosAccount string = ''
+
+@description('Loom Cosmos DB account resource group for the control-plane navigator (databases/containers/sprocs). Empty defaults to LOOM_DLZ_RG, where the single-sub DLZ Cosmos account lives.')
+param loomCosmosAccountRg string = ''
+
+@description('Loom Databricks workspace hostname (e.g. adb-1234567890123456.7.azuredatabricks.net) backing the Databricks navigator (jobs/clusters/notebooks/SQL warehouses + Unity Catalog). The real hostname embeds a non-deterministic workspace id, so it is NOT hard-coded — it is patched onto the Console post-deploy from the DLZ databricks workspaceUrl output (scripts/csa-loom/patch-navigator-env.sh). Empty surfaces the navigator config gate.')
+param loomDatabricksHostname string = ''
 
 // CSA Loom family sweep (Power Platform / ML / Geo / Graph): the DLZ
 // orchestrator emits Cosmos Gremlin + NoSQL Vector endpoints when
@@ -525,6 +531,41 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_EVENTHUB_NAMESPACE', value: loomEventHubNamespace }
             { name: 'LOOM_EVENTHUB_RG', value: loomEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: loomEventHubSub }
+            // ----------------------------------------------------------------
+            // Service-navigator control-plane wiring (parity program #209).
+            // Each editor's left-pane navigator (ADF Studio-style) reads these
+            // to target the real Azure resource. When the backing resource is
+            // not deployed (its *Enabled flag is false) the value is '' and the
+            // navigator renders its honest config-gate MessageBar — never a fake.
+            // ----------------------------------------------------------------
+            // Databricks navigator (jobs/clusters/notebooks/SQL warehouses). The
+            // singular hostname is what databricks-client.ts reads; the real
+            // value embeds a non-deterministic workspace id so it is patched
+            // post-deploy from the DLZ workspaceUrl (see loomDatabricksHostname).
+            { name: 'LOOM_DATABRICKS_HOSTNAME', value: loomDatabricksHostname }
+            // ADX / Kusto navigator + KQL editors. bicep formerly set only the
+            // bare LOOM_KUSTO_CLUSTER (read nowhere); the client reads the URI,
+            // name, RG, location, and default database.
+            { name: 'LOOM_KUSTO_CLUSTER_URI',  value: adxEnabled ? adxCluster!.outputs.clusterUri : '' }
+            { name: 'LOOM_KUSTO_CLUSTER_NAME', value: adxEnabled ? adxCluster!.outputs.clusterName : '' }
+            { name: 'LOOM_KUSTO_RG',           value: adxEnabled ? resourceGroup().name : '' }
+            { name: 'LOOM_KUSTO_LOCATION',     value: adxEnabled ? location : '' }
+            // Per-DLZ ADX database is named loomdb-<domain>; the single-sub DLZ
+            // uses domain "default" → loomdb-default (modules/landing-zone/adx.bicep).
+            { name: 'LOOM_KUSTO_DEFAULT_DB',   value: adxEnabled ? 'loomdb-default' : '' }
+            // AI Search navigator + the loom-items grounding index + help copilot.
+            // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID; only
+            // the service NAME was missing.
+            { name: 'LOOM_AI_SEARCH_SERVICE',  value: aiSearchEnabled ? aiSearch!.outputs.searchName : '' }
+            // APIM navigator (apis/products/named-values/backends/subscriptions) + marketplace.
+            { name: 'LOOM_APIM_NAME',          value: apimEnabled ? apim!.outputs.apimName : '' }
+            { name: 'LOOM_APIM_RG',            value: apimEnabled ? resourceGroup().name : '' }
+            // Cosmos DB control-plane navigator (databases/containers/sprocs). This
+            // is the USER-navigated account (distinct from Loom's own store at
+            // LOOM_COSMOS_ENDPOINT) and lives in the DLZ RG. Requires the Console
+            // UAMI to hold "DocumentDB Account Contributor" (granted in cosmos.bicep).
+            { name: 'LOOM_COSMOS_ACCOUNT',     value: loomCosmosAccount }
+            { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: !empty(loomCosmosAccountRg) ? loomCosmosAccountRg : loomDlzRg }
             { name: 'AZURE_CLOUD', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'AzureUSGovernment' : 'AzureCloud' }
             { name: 'AZURE_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
@@ -588,7 +629,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],
           catalogPrimary == 'unity-catalog-managed' || databricksUnityCatalogEnabled ? [
-            { name: 'LOOM_DATABRICKS_HOSTNAMES', value: 'adb-csa-loom-${location}.azuredatabricks.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'net'}' }
+            // Unity Catalog federation hostname list. Uses the REAL workspace
+            // hostname (same source as the singular LOOM_DATABRICKS_HOSTNAME) —
+            // NOT a synthesized adb-csa-loom-* name, which never resolves
+            // (Databricks workspace URLs embed a non-deterministic id). Empty
+            // until patched post-deploy from the DLZ workspaceUrl, so UC gates
+            // honestly rather than calling a phantom host (per no-vaporware.md).
+            { name: 'LOOM_DATABRICKS_HOSTNAMES', value: loomDatabricksHostname }
           ] : [],
           // Fabric API base is always set — the runtime gates on UAMI authz.
           [
@@ -623,6 +670,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_FOUNDRY_RG', value: resourceGroup().name }
             { name: 'LOOM_FOUNDRY_NAME', value: aiFoundryEnabled ? aiFoundry!.outputs.hubName : '' }
             { name: 'LOOM_AOAI_ACCOUNT', value: aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '' }
+            // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
+            // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).
+            { name: 'LOOM_AOAI_RG', value: resourceGroup().name }
+            // Foundry region — foundry-client.ts reads this for region-scoped
+            // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
+            { name: 'LOOM_FOUNDRY_REGION', value: location }
+            // Foundry Agent Service (data-plane) — backs the data-agent Publish flow +
+            // the Foundry agent editor. Project endpoint + workspace GUID come from the
+            // Foundry project created in ai-foundry.bicep. Empty when AI Foundry is off.
+            { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: aiFoundryEnabled ? aiFoundry!.outputs.projectEndpoint : '' }
+            { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: aiFoundryEnabled ? aiFoundry!.outputs.projectId : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
