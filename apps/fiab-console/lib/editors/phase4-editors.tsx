@@ -2386,7 +2386,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     sources: [],
     description: '',
   });
-  const [tab, setTab] = useState<'build' | 'test' | 'publish'>('build');
+  const [tab, setTab] = useState<'build' | 'test' | 'publish' | 'inspect'>('build');
 
   // ---- source picker data (real Loom items) ----
   const [pickerType, setPickerType] = useState<DaSourceType>('warehouse');
@@ -2489,6 +2489,32 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     finally { setPublishing(false); }
   }, [id, save, reload, state.description]);
 
+  // ---- run-steps inspector (debug a PUBLISHED agent via the Foundry Agent Service) ----
+  const [inspectAgent, setInspectAgent] = useState('');
+  const [inspectQuestion, setInspectQuestion] = useState('');
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectResult, setInspectResult] = useState<any>(null);
+  const [inspectGate, setInspectGate] = useState<string | null>(null);
+  // Prefill the agent name from the last publish (artifactId) when available.
+  useEffect(() => {
+    if (publishResult?.artifactId && !inspectAgent) setInspectAgent(String(publishResult.artifactId));
+  }, [publishResult, inspectAgent]);
+  const runInspect = useCallback(async () => {
+    const agent = inspectAgent.trim(); const q = inspectQuestion.trim();
+    if (!agent || !q || inspecting) return;
+    setInspecting(true); setInspectResult(null); setInspectGate(null);
+    try {
+      const r = await fetch('/api/data-agent/run-steps', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ agent, question: q }),
+      });
+      const j = await r.json();
+      if (r.status === 501 || j?.code === 'not_configured') { setInspectGate(j?.hint || j?.error || 'Foundry Agent Service not configured.'); return; }
+      setInspectResult(j);
+    } catch (e: any) { setInspectResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setInspecting(false); }
+  }, [inspectAgent, inspectQuestion, inspecting]);
+
   // One-time migration: if a legacy record persisted `sources` as a string (or
   // any non-array shape), rewrite state to a clean DaSource[] so the agent both
   // renders AND can be re-saved in the new schema. Runs after load settles.
@@ -2510,6 +2536,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Build', onClick: () => setTab('build') },
         { label: 'Test chat', onClick: () => setTab('test') },
         { label: 'Publish', onClick: () => setTab('publish') },
+        { label: 'Run inspector', onClick: () => setTab('inspect') },
       ]},
     ]},
   ], [save, saving, dirty]);
@@ -2522,6 +2549,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
             <Tab value="build">Build ({sources.length}/5 sources)</Tab>
             <Tab value="test">Test chat</Tab>
             <Tab value="publish">Publish</Tab>
+            <Tab value="inspect">Run inspector</Tab>
           </TabList>
         </div>
         <div className={s.pad}>
@@ -2710,6 +2738,62 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     {publishResult.hint && <div style={{ marginTop: 4 }}><em>Hint:</em> {publishResult.hint}</div>}
                   </MessageBarBody>
                 </MessageBar>
+              )}
+            </>
+          )}
+
+          {tab === 'inspect' && (
+            <>
+              <Subtitle2>Run-steps inspector</Subtitle2>
+              <Caption1>Run a question through a PUBLISHED Foundry agent and trace the run steps it executed (tool calls / queries / message creation). Requires the agent to be published and LOOM_FOUNDRY_PROJECT_ENDPOINT configured.</Caption1>
+              {inspectGate && (
+                <MessageBar intent="warning" style={{ marginTop: 8 }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>Foundry Agent Service not configured</MessageBarTitle>
+                    <div>{inspectGate}</div>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
+                <Field label="Published agent (name / artifact id)">
+                  <Input value={inspectAgent} onChange={(_, d) => setInspectAgent(d.value)} placeholder="from Publish (artifact-id)" style={{ minWidth: 300 }} />
+                </Field>
+              </div>
+              <Textarea value={inspectQuestion} rows={2} onChange={(_, d) => setInspectQuestion(d.value)} placeholder="Ask a question to trace through the agent…" style={{ marginTop: 8 }} />
+              <div style={{ marginTop: 8 }}>
+                <Button appearance="primary" onClick={runInspect} disabled={inspecting || !inspectAgent.trim() || !inspectQuestion.trim()}>{inspecting ? 'Running…' : 'Run + inspect'}</Button>
+              </div>
+              {inspectResult && inspectResult.ok && inspectResult.data && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Badge appearance="filled" color={inspectResult.data.status === 'completed' ? 'success' : inspectResult.data.status === 'failed' ? 'danger' : 'warning'}>{inspectResult.data.status}</Badge>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>run {inspectResult.data.runId}</Caption1>
+                  </div>
+                  {inspectResult.data.lastError && <MessageBar intent="error" style={{ marginTop: 6 }}><MessageBarBody>{inspectResult.data.lastError}</MessageBarBody></MessageBar>}
+                  {inspectResult.data.answer && (
+                    <div style={{ marginTop: 8 }}><Subtitle2>Answer</Subtitle2><div style={{ whiteSpace: 'pre-wrap' }}>{inspectResult.data.answer}</div></div>
+                  )}
+                  <Subtitle2 style={{ marginTop: 10 }}>Run steps ({inspectResult.data.steps?.length || 0})</Subtitle2>
+                  {(inspectResult.data.steps || []).map((st: any, i: number) => (
+                    <div key={st.id || i} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, marginTop: 6 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <Badge appearance="outline">{st.type}</Badge>
+                        <Badge appearance="filled" color={st.status === 'completed' ? 'success' : st.status === 'failed' ? 'danger' : 'informative'}>{st.status}</Badge>
+                      </div>
+                      {(st.toolCalls || []).map((tc: any, j: number) => (
+                        <div key={j} style={{ marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}>
+                          <div><strong>{tc.type}{tc.name ? ` · ${tc.name}` : ''}</strong></div>
+                          {tc.input && <div style={{ whiteSpace: 'pre-wrap', color: tokens.colorNeutralForeground3 }}>{tc.input}</div>}
+                          {tc.output && <div style={{ whiteSpace: 'pre-wrap' }}>{tc.output}</div>}
+                        </div>
+                      ))}
+                      {st.error && <div style={{ color: tokens.colorPaletteRedForeground1, marginTop: 4 }}>{st.error}</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {inspectResult && !inspectResult.ok && !inspectGate && (
+                <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{inspectResult.error || 'Run failed'}</MessageBarBody></MessageBar>
               )}
             </>
           )}
