@@ -27,6 +27,9 @@ param atlasOnAksEnabled bool
 @description('Admin Entra group object ID')
 param adminEntraGroupId string
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Private endpoint subnet ID. Reserved for v3.x — Purview private endpoint wiring is deferred; today catalog uses managed endpoints.')
 #disable-next-line no-unused-params
 param privateEndpointSubnetId string
@@ -57,9 +60,9 @@ resource purview 'Microsoft.Purview/accounts@2024-04-01-preview' = if (purviewEn
   }
 }
 
-resource purviewAdminRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (purviewEnabled) {
+resource purviewAdminRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (purviewEnabled && !skipRoleGrants) {
   scope: purview
-  name: guid(purview.id, adminEntraGroupId, 'purview-admin')
+  name: guid(purview.id, adminEntraGroupId, '8a3c2885-9b38-4fd2-9d99-91af537c1347')
   properties: {
     // Purview Data Curator role
     roleDefinitionId: subscriptionResourceId(

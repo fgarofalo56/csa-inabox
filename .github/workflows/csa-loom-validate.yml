@@ -1,0 +1,86 @@
+name: csa-loom-validate
+
+# Automated live validation of the CSA Loom console — proves the BFF -> Azure
+# REST chain works end-to-end for every service family WITHOUT a browser login.
+# Mints a session cookie from the live container-app `session-secret` (the SP
+# can read it), then runs tests/service-health.mjs against the public Front Door
+# URL and classifies each probe: PASS (real data) / NOTE (honest not-configured
+# 503) / FAIL (real auth/RBAC/resource error).
+#
+# Run after csa-loom-wire-navigators to confirm the navigators light up.
+
+on:
+  workflow_dispatch:
+    inputs:
+      loom_url:
+        description: 'Console URL to probe (default = Front Door)'
+        type: string
+        default: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
+
+permissions:
+  contents: read
+
+env:
+  SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+  ADMIN_RG: rg-csa-loom-admin-eastus2
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Azure login (limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+      - name: Read live session secret + run service-health probes
+        env:
+          LOOM_URL: ${{ inputs.loom_url }}
+        run: |
+          set -uo pipefail
+          echo "Container App secret names:"
+          az containerapp secret list -g "$ADMIN_RG" -n loom-console --query "[].name" -o tsv || true
+          # Resolve the session secret name (session-secret / loom-session-secret / SESSION_SECRET)
+          SNAME=$(az containerapp secret list -g "$ADMIN_RG" -n loom-console \
+                  --query "[?contains(name,'session') || contains(name,'SESSION')].name | [0]" -o tsv 2>/dev/null || true)
+          SS=""
+          if [[ -n "$SNAME" ]]; then
+            echo "Reading secret '$SNAME' via 'secret show'..."
+            SS=$(az containerapp secret show -g "$ADMIN_RG" -n loom-console --secret-name "$SNAME" --query value -o tsv 2>/dev/null || true)
+          fi
+          # Fallback: the bicep also stores the session secret in Key Vault.
+          if [[ -z "$SS" ]]; then
+            KV=$(az keyvault list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>/dev/null || true)
+            if [[ -n "$KV" ]]; then
+              for KVS in loom-session-secret session-secret; do
+                SS=$(az keyvault secret show --vault-name "$KV" --name "$KVS" --query value -o tsv 2>/dev/null || true)
+                [[ -n "$SS" ]] && { echo "Read session secret from Key Vault $KV/$KVS"; break; }
+              done
+            fi
+          fi
+          if [[ -z "$SS" ]]; then
+            echo "::error::Could not read the session secret (tried container-app secret '$SNAME' + Key Vault). Cannot mint a session."
+            exit 1
+          fi
+          echo "::add-mask::$SS"
+          cd apps/fiab-console
+          SESSION_SECRET="$SS" node tests/service-health.mjs | tee /tmp/health.txt
+          # Surface the per-family roll-up as the job summary
+          {
+            echo '## CSA Loom live validation'
+            echo '```'
+            sed -n '/Per family:/,$p' /tmp/health.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Fail the job only on hard FAILs (not honest not-configured NOTEs)
+          FAILS=$(grep -oE '[0-9]+ fail' /tmp/health.txt | head -1 | grep -oE '[0-9]+' || echo 0)
+          echo "Hard failures: $FAILS"

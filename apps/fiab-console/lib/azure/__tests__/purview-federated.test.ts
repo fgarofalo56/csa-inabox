@@ -78,7 +78,8 @@ describe('deleteBusinessDomain', () => {
     let method = '';
     mockFetch((_url, init) => {
       method = (init?.method as string) || 'GET';
-      return new Response('', { status: 204 });
+      // 204 must carry a null body — undici rejects `''` with a non-null body.
+      return new Response(null, { status: 204 });
     });
     await deleteBusinessDomain('d1');
     expect(method).toBe('DELETE');
@@ -162,7 +163,8 @@ describe('createAtlasGlossaryTerm + applyGlossaryTerm', () => {
       if (u.includes('/glossary/term') && !u.includes('assignedEntities')) {
         return { guid: 'term-1', name: 'PII' };
       }
-      return new Response('', { status: 204 });
+      // 204 must carry a null body — undici rejects `''` with a non-null body.
+      return new Response(null, { status: 204 });
     });
     const term = await createAtlasGlossaryTerm({ name: 'PII', longDescription: 'Personally identifiable info' });
     expect(term.guid).toBe('term-1');

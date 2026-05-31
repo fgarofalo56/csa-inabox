@@ -18,16 +18,28 @@ import { useState, useEffect } from 'react';
 import {
   Tab, TabList, Input, Field, Textarea, Caption1, Button, Subtitle2,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle, Badge, makeStyles, tokens, Select,
+  MessageBar, MessageBarBody, MessageBarTitle, Badge, makeStyles, tokens, Select, Switch,
+  Dropdown, Option,
 } from '@fluentui/react-components';
 import { Add20Regular, Delete20Regular } from '@fluentui/react-icons';
 import { findByType } from './activity-catalog';
 import type { PipelineActivity, PipelineParameter, PipelineParameterType, PipelineVariable } from './types';
 
 const useStyles = makeStyles({
+  // Right-rail layout (legacy callers).
   root: {
     display: 'flex', flexDirection: 'column',
     width: 380, minWidth: 320,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  // Bottom-dock layout (ADF Studio parity) — full width, fixed height,
+  // header + horizontal tab strip + scrollable body.
+  dockRoot: {
+    display: 'flex', flexDirection: 'column',
+    width: '100%', height: 260,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: 4,
@@ -67,15 +79,36 @@ export interface PropertiesPanelProps {
   onPatch: (patch: Partial<PipelineActivity>) => void;
   /** Delete the currently-selected activity. */
   onDelete: () => void;
+  /** 'rail' = right-side panel (legacy); 'dock' = bottom dock (ADF parity). */
+  layout?: 'rail' | 'dock';
 }
 
 type TabId = 'general' | 'source-sink' | 'settings' | 'parameters' | 'user-props';
 
-export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete }: PropertiesPanelProps) {
+export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail' }: PropertiesPanelProps) {
   const s = useStyles();
+  const rootClass = layout === 'dock' ? s.dockRoot : s.root;
   const [tab, setTab] = useState<TabId>('general');
   const [typePropsText, setTypePropsText] = useState('');
   const [typePropsErr, setTypePropsErr] = useState<string | null>(null);
+
+  // Factory datasets — backs the Source/Sink input/output dataset pickers.
+  // Best-effort: on Synapse (or unconfigured factory) the route gates and the
+  // dropdowns simply render empty, never blocking the raw JSON editors below.
+  const [datasets, setDatasets] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch('/api/adf/datasets');
+        const body = await res.json().catch(() => ({}));
+        if (alive && body?.ok && Array.isArray(body.datasets)) {
+          setDatasets(body.datasets.map((d: any) => d.name).filter(Boolean));
+        }
+      } catch { /* leave empty — raw JSON editors still work */ }
+    })();
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     if (!activity) return;
@@ -89,9 +122,9 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
 
   if (!activity) {
     return (
-      <div className={s.root}>
+      <div className={rootClass} data-properties-dock={layout === 'dock' ? '' : undefined}>
         <div className={s.empty}>
-          <Caption1>Select an activity to edit its properties.</Caption1>
+          <Caption1>Select an activity on the canvas to edit its properties (General, Source/Sink, Settings, Parameters, User properties).</Caption1>
         </div>
       </div>
     );
@@ -101,7 +134,7 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
   const hasSourceSink = !!(activity.typeProperties && ('source' in activity.typeProperties || 'sink' in activity.typeProperties));
 
   return (
-    <div className={s.root}>
+    <div className={rootClass} data-properties-dock={layout === 'dock' ? '' : undefined}>
       <div className={s.header}>
         <Subtitle2>{activity.name}</Subtitle2>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -188,6 +221,46 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
 
         {tab === 'source-sink' && hasSourceSink && (
           <>
+            {(() => {
+              const inputName = ((activity.inputs as any[]) || [])[0]?.referenceName as string | undefined;
+              const outputName = ((activity.outputs as any[]) || [])[0]?.referenceName as string | undefined;
+              const refOrEmpty = (name: string) => name
+                ? [{ referenceName: name, type: 'DatasetReference', parameters: {} }]
+                : [];
+              return (
+                <>
+                  <Caption1>
+                    Bind a factory dataset to this activity. Selecting a source/sink dataset sets the
+                    activity&apos;s <code>inputs</code>/<code>outputs</code> DatasetReference. Manage datasets
+                    in the ribbon&apos;s <strong>Manage</strong> hub. {datasets.length === 0 && '(No datasets found — create one in Manage, or the factory isn’t configured.)'}
+                  </Caption1>
+                  <Field label="Source dataset (inputs[0])">
+                    <Dropdown
+                      placeholder={datasets.length ? 'Select a dataset' : 'No datasets available'}
+                      value={inputName || ''}
+                      selectedOptions={inputName ? [inputName] : []}
+                      disabled={!datasets.length}
+                      onOptionSelect={(_, d) => onPatch({ inputs: refOrEmpty(d.optionValue || '') })}
+                    >
+                      <Option value="" text="(none)">(none)</Option>
+                      {datasets.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Sink dataset (outputs[0])">
+                    <Dropdown
+                      placeholder={datasets.length ? 'Select a dataset' : 'No datasets available'}
+                      value={outputName || ''}
+                      selectedOptions={outputName ? [outputName] : []}
+                      disabled={!datasets.length}
+                      onOptionSelect={(_, d) => onPatch({ outputs: refOrEmpty(d.optionValue || '') })}
+                    >
+                      <Option value="" text="(none)">(none)</Option>
+                      {datasets.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
+                    </Dropdown>
+                  </Field>
+                </>
+              );
+            })()}
             <Caption1>Source / sink JSON. Wire up datasets via the Lookup or Copy reference list — these fields are surfaced raw so power users can target any connector type.</Caption1>
             <Field label="source">
               <textarea
@@ -235,16 +308,32 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
                 }}
               />
             </Field>
-            <Field label="policy.timeout">
+            <Subtitle2>Activity policy</Subtitle2>
+            <Caption1>Run-time behaviour (ADF activity policy). Defaults: timeout 7 days, retry 0, retry interval 30s.</Caption1>
+            <Field label="Timeout (D.HH:MM:SS)">
               <Input
                 value={(activity.policy as any)?.timeout || ''}
-                placeholder="0.12:00:00"
+                placeholder="7.00:00:00"
                 onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), timeout: d.value } })}
               />
             </Field>
-            <Field label="policy.retry">
-              <Input type="number" value={String((activity.policy as any)?.retry ?? 0)}
-                onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), retry: parseInt(d.value, 10) || 0 } })}
+            <div style={{ display: 'flex', gap: 12 }}>
+              <Field label="Retry">
+                <Input type="number" min={0} value={String((activity.policy as any)?.retry ?? 0)}
+                  onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), retry: Math.max(0, parseInt(d.value, 10) || 0) } })}
+                />
+              </Field>
+              <Field label="Retry interval (s)">
+                <Input type="number" min={30} max={86400} value={String((activity.policy as any)?.retryIntervalInSeconds ?? 30)}
+                  onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), retryIntervalInSeconds: Math.max(30, Math.min(86400, parseInt(d.value, 10) || 30)) } })}
+                />
+              </Field>
+            </div>
+            <Field label="Secure output">
+              <Switch
+                checked={!!(activity.policy as any)?.secureOutput}
+                label="Don't log output for monitoring"
+                onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), secureOutput: d.checked } })}
               />
             </Field>
           </>

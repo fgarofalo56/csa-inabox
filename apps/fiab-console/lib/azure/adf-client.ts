@@ -44,6 +44,19 @@ function base(): string {
   return `https://management.azure.com/subscriptions/${sub()}/resourceGroups/${rg()}/providers/Microsoft.DataFactory/factories/${adfName()}`;
 }
 
+/**
+ * Honest config gate for the factory-level Manage routes (linked services,
+ * datasets, integration runtimes). Returns the exact missing env var so the
+ * BFF can 503 with a precise MessageBar instead of a generic 500. Returns null
+ * when fully configured.
+ */
+export function adfConfigGate(): { missing: string } | null {
+  for (const k of ['LOOM_SUBSCRIPTION_ID', 'LOOM_DLZ_RG', 'LOOM_ADF_NAME']) {
+    if (!process.env[k]) return { missing: k };
+  }
+  return null;
+}
+
 async function call(url: string, init?: RequestInit): Promise<Response> {
   const tok = await credential.getToken(ARM_SCOPE);
   if (!tok?.token) throw new Error('Failed to acquire ARM token');
@@ -332,6 +345,59 @@ export async function deleteDataset(name: string): Promise<void> {
 }
 
 // ============================================================
+// Data flows (ADF Mapping Data Flows)
+//
+// A data flow is a visually-designed, Spark-executed transformation that a
+// pipeline invokes via an ExecuteDataFlow activity. It is a child resource of
+// the factory (Microsoft.DataFactory/factories/dataflows). Its `properties`
+// carries a `type` ("MappingDataFlow" | "Flowlet" | "WranglingDataFlow") and a
+// `typeProperties` with sources/sinks/transformations/script. We list/create/
+// delete via real ARM REST; the create payload is the structured data-flow
+// definition the caller supplies (or a minimal empty MappingDataFlow).
+// ============================================================
+
+export interface AdfDataFlow {
+  id?: string;
+  name: string;
+  type?: string;
+  etag?: string;
+  properties: {
+    type: 'MappingDataFlow' | 'Flowlet' | 'WranglingDataFlow' | string;
+    description?: string;
+    annotations?: unknown[];
+    folder?: { name: string };
+    typeProperties?: Record<string, unknown>;
+  };
+}
+
+export async function listDataFlows(): Promise<AdfDataFlow[]> {
+  const r = await call(`${base()}/dataflows?api-version=${API}`);
+  const body = await jsonOrThrow<{ value: AdfDataFlow[] }>(r, 'listDataFlows');
+  return body.value || [];
+}
+
+export async function getDataFlow(name: string): Promise<AdfDataFlow> {
+  const r = await call(`${base()}/dataflows/${encodeURIComponent(name)}?api-version=${API}`);
+  return jsonOrThrow<AdfDataFlow>(r, `getDataFlow(${name})`);
+}
+
+export async function upsertDataFlow(name: string, spec: AdfDataFlow): Promise<AdfDataFlow> {
+  const body = { name: spec.name || name, properties: spec.properties };
+  const r = await call(`${base()}/dataflows/${encodeURIComponent(name)}?api-version=${API}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<AdfDataFlow>(r, `upsertDataFlow(${name})`);
+}
+
+export async function deleteDataFlow(name: string): Promise<void> {
+  const r = await call(`${base()}/dataflows/${encodeURIComponent(name)}?api-version=${API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 200 && r.status !== 204) {
+    throw new Error(`deleteDataFlow failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+// ============================================================
 // Triggers
 // ============================================================
 
@@ -415,6 +481,104 @@ export async function listLinkedServices(): Promise<AdfLinkedService[]> {
   const r = await call(`${base()}/linkedservices?api-version=${API}`);
   const body = await jsonOrThrow<{ value: AdfLinkedService[] }>(r, 'listLinkedServices');
   return body.value || [];
+}
+
+export async function getLinkedService(name: string): Promise<AdfLinkedService> {
+  const r = await call(`${base()}/linkedservices/${encodeURIComponent(name)}?api-version=${API}`);
+  return jsonOrThrow<AdfLinkedService>(r, `getLinkedService(${name})`);
+}
+
+export async function upsertLinkedService(name: string, spec: AdfLinkedService): Promise<AdfLinkedService> {
+  const body = { name: spec.name || name, properties: spec.properties };
+  const r = await call(`${base()}/linkedservices/${encodeURIComponent(name)}?api-version=${API}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<AdfLinkedService>(r, `upsertLinkedService(${name})`);
+}
+
+export async function deleteLinkedService(name: string): Promise<void> {
+  const r = await call(`${base()}/linkedservices/${encodeURIComponent(name)}?api-version=${API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 200 && r.status !== 204) {
+    throw new Error(`deleteLinkedService failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+// ============================================================
+// Integration runtimes
+//
+// IRs are the compute that backs activities (Managed = Azure-hosted, the
+// AutoResolveIntegrationRuntime is one; SelfHosted = an on-prem/VM gateway).
+// The Manage hub lists them, shows status, can create Managed/SelfHosted, and
+// start/stop a SelfHosted node set. All real ARM REST.
+// ============================================================
+
+export interface AdfIntegrationRuntime {
+  id?: string;
+  name: string;
+  type?: string;
+  etag?: string;
+  properties: {
+    type: 'Managed' | 'SelfHosted' | string;
+    description?: string;
+    typeProperties?: Record<string, unknown>;
+  };
+}
+
+export interface AdfIntegrationRuntimeStatus {
+  name?: string;
+  properties?: {
+    type?: string;
+    state?: 'Initial' | 'Stopped' | 'Started' | 'Starting' | 'Stopping' | 'NeedRegistration' | 'Online' | 'Limited' | 'Offline' | 'AccessDenied' | string;
+    dataFactoryName?: string;
+    typeProperties?: Record<string, unknown>;
+  };
+}
+
+export async function listIntegrationRuntimes(): Promise<AdfIntegrationRuntime[]> {
+  const r = await call(`${base()}/integrationruntimes?api-version=${API}`);
+  const body = await jsonOrThrow<{ value: AdfIntegrationRuntime[] }>(r, 'listIntegrationRuntimes');
+  return body.value || [];
+}
+
+export async function getIntegrationRuntime(name: string): Promise<AdfIntegrationRuntime> {
+  const r = await call(`${base()}/integrationruntimes/${encodeURIComponent(name)}?api-version=${API}`);
+  return jsonOrThrow<AdfIntegrationRuntime>(r, `getIntegrationRuntime(${name})`);
+}
+
+export async function getIntegrationRuntimeStatus(name: string): Promise<AdfIntegrationRuntimeStatus> {
+  const r = await call(`${base()}/integrationruntimes/${encodeURIComponent(name)}/getStatus?api-version=${API}`, { method: 'POST' });
+  return jsonOrThrow<AdfIntegrationRuntimeStatus>(r, `getIntegrationRuntimeStatus(${name})`);
+}
+
+export async function upsertIntegrationRuntime(name: string, spec: AdfIntegrationRuntime): Promise<AdfIntegrationRuntime> {
+  const body = { name: spec.name || name, properties: spec.properties };
+  const r = await call(`${base()}/integrationruntimes/${encodeURIComponent(name)}?api-version=${API}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<AdfIntegrationRuntime>(r, `upsertIntegrationRuntime(${name})`);
+}
+
+export async function startIntegrationRuntime(name: string): Promise<void> {
+  const r = await call(`${base()}/integrationruntimes/${encodeURIComponent(name)}/start?api-version=${API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`startIntegrationRuntime failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function stopIntegrationRuntime(name: string): Promise<void> {
+  const r = await call(`${base()}/integrationruntimes/${encodeURIComponent(name)}/stop?api-version=${API}`, { method: 'POST' });
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`stopIntegrationRuntime failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function deleteIntegrationRuntime(name: string): Promise<void> {
+  const r = await call(`${base()}/integrationruntimes/${encodeURIComponent(name)}?api-version=${API}`, { method: 'DELETE' });
+  if (!r.ok && r.status !== 200 && r.status !== 204) {
+    throw new Error(`deleteIntegrationRuntime failed ${r.status}: ${await r.text()}`);
+  }
 }
 
 // ============================================================

@@ -1,0 +1,533 @@
+/**
+ * Azure Monitor observability client — the real backend behind the Loom
+ * /monitor surface. Calls live Azure REST only; no mocks, no sample data.
+ *
+ * Surfaces (each maps to a Monitor tab):
+ *   - Resource inventory: ARM "list resources in RG" across the Loom RGs.
+ *   - Resource health:    Microsoft.ResourceHealth availabilityStatuses
+ *                         (per-subscription list).
+ *   - Metrics:            Azure Monitor metrics REST
+ *                         (GET .../providers/microsoft.insights/metrics).
+ *   - Logs (KQL):         Log Analytics query API
+ *                         (POST https://api.loganalytics.azure.com/v1/workspaces/{id}/query).
+ *   - Activity log:       ARM Activity Log REST
+ *                         (GET .../Microsoft.Insights/eventtypes/management/values).
+ *   - Alerts:             Azure Monitor metricAlerts list
+ *                         (GET .../Microsoft.Insights/metricAlerts).
+ *
+ * Auth: ChainedTokenCredential(UAMI, DefaultAzureCredential), identical to
+ * every other Loom ARM client. The UAMI needs "Monitoring Reader" on the
+ * Loom subscription/RGs (and "Log Analytics Reader" on the LA workspace) to
+ * read metrics, activity log, resource health, and run KQL. When the
+ * Log-Analytics workspace id isn't configured, the logs section returns an
+ * honest gate naming the exact env var to set; the rest of the surface
+ * still renders.
+ */
+
+import {
+  ChainedTokenCredential,
+  DefaultAzureCredential,
+  ManagedIdentityCredential,
+} from '@azure/identity';
+
+const ARM = 'https://management.azure.com';
+const ARM_SCOPE = 'https://management.azure.com/.default';
+const LA_ENDPOINT = process.env.LOOM_LOG_ANALYTICS_ENDPOINT || 'https://api.loganalytics.azure.com';
+const LA_SCOPE = `${LA_ENDPOINT}/.default`;
+
+// API versions (stable unless noted).
+const ARM_RESOURCES_API = '2021-04-01';
+const METRICS_API = '2023-10-01';
+const ACTIVITY_LOG_API = '2015-04-01';
+const RESOURCE_HEALTH_API = '2023-10-01-preview';
+const METRIC_ALERTS_API = '2018-03-01';
+
+const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
+const credential = uamiClientId
+  ? new ChainedTokenCredential(
+      new ManagedIdentityCredential({ clientId: uamiClientId }),
+      new DefaultAzureCredential(),
+    )
+  : new DefaultAzureCredential();
+
+export class MonitorError extends Error {
+  status: number;
+  body?: unknown;
+  constructor(message: string, status: number, body?: unknown) {
+    super(message);
+    this.name = 'MonitorError';
+    this.status = status;
+    this.body = body;
+  }
+}
+
+export class MonitorNotConfiguredError extends Error {
+  constructor(public missing: string[]) {
+    super(`Monitor not configured. Missing env: ${missing.join(', ')}`);
+    this.name = 'MonitorNotConfiguredError';
+  }
+}
+
+// ----------------------------------------------------------------------------
+// config
+// ----------------------------------------------------------------------------
+
+export interface MonitorConfig {
+  subscriptionId: string;
+  /** Distinct RGs the Loom platform deploys into. */
+  resourceGroups: string[];
+}
+
+/** Read the subscription + the set of Loom resource groups from env. */
+export function readMonitorConfig(): MonitorConfig {
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
+  if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
+  const rgs = new Set<string>();
+  for (const v of [
+    process.env.LOOM_ADMIN_RG,
+    process.env.LOOM_ACA_RG,
+    process.env.LOOM_DLZ_RG,
+    process.env.LOOM_AI_SEARCH_RG,
+    process.env.LOOM_KUSTO_RG,
+    process.env.LOOM_APIM_RG,
+    process.env.LOOM_FOUNDRY_RG,
+    process.env.LOOM_AOAI_RG,
+  ]) {
+    if (v && v.trim()) rgs.add(v.trim());
+  }
+  if (rgs.size === 0) throw new MonitorNotConfiguredError(['LOOM_ADMIN_RG (or any Loom *_RG)']);
+  return { subscriptionId, resourceGroups: Array.from(rgs) };
+}
+
+/** Log Analytics workspace GUID, or null when unconfigured (→ honest gate). */
+export function logAnalyticsWorkspaceId(): string | null {
+  const v = process.env.LOOM_LOG_ANALYTICS_WORKSPACE_ID;
+  return v && v.trim() ? v.trim() : null;
+}
+
+// ----------------------------------------------------------------------------
+// token + fetch helpers
+// ----------------------------------------------------------------------------
+
+async function token(scope: string): Promise<string> {
+  const t = await credential.getToken(scope);
+  if (!t?.token) throw new MonitorError(`Failed to acquire token for ${scope}`, 401);
+  return t.token;
+}
+
+async function armGet(path: string): Promise<any> {
+  const tk = await token(ARM_SCOPE);
+  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const res = await fetch(url, {
+    headers: { authorization: `Bearer ${tk}`, accept: 'application/json' },
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok) {
+    const msg = (json?.error?.message || text || `ARM GET failed (${res.status})`).toString();
+    throw new MonitorError(msg, res.status, json || text);
+  }
+  return json;
+}
+
+// ----------------------------------------------------------------------------
+// 1) Resource inventory — ARM list resources across the Loom RGs
+// ----------------------------------------------------------------------------
+
+export interface LoomResource {
+  id: string;
+  name: string;
+  type: string;
+  location: string;
+  resourceGroup: string;
+  kind?: string;
+  sku?: string;
+}
+
+function rgFromId(id: string): string {
+  const m = /\/resourceGroups\/([^/]+)/i.exec(id);
+  return m ? m[1] : '';
+}
+
+/** List every Azure resource the Loom platform deployed across its RGs. */
+export async function listResources(): Promise<LoomResource[]> {
+  const cfg = readMonitorConfig();
+  const all: LoomResource[] = [];
+  await Promise.all(
+    cfg.resourceGroups.map(async (rg) => {
+      const j = await armGet(
+        `/subscriptions/${cfg.subscriptionId}/resourceGroups/${rg}/resources?api-version=${ARM_RESOURCES_API}`,
+      );
+      for (const r of j?.value || []) {
+        all.push({
+          id: r.id,
+          name: r.name,
+          type: r.type,
+          location: r.location,
+          resourceGroup: rgFromId(r.id) || rg,
+          kind: r.kind,
+          sku: r.sku?.name,
+        });
+      }
+    }),
+  );
+  // Stable sort by type then name for a predictable inventory grid.
+  all.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type.localeCompare(b.type)));
+  return all;
+}
+
+// ----------------------------------------------------------------------------
+// 2) Resource health — Microsoft.ResourceHealth availabilityStatuses
+// ----------------------------------------------------------------------------
+
+export interface ResourceHealthStatus {
+  resourceId: string;
+  availabilityState: string; // Available | Unavailable | Degraded | Unknown
+  summary?: string;
+  reasonType?: string;
+  occurredTime?: string;
+}
+
+/**
+ * Current availability status for every resource in the subscription.
+ * ResourceHealth only emits statuses for resource types it monitors; we
+ * key results by resourceId so the inventory grid can join on them.
+ */
+export async function listResourceHealth(): Promise<Record<string, ResourceHealthStatus>> {
+  const cfg = readMonitorConfig();
+  const out: Record<string, ResourceHealthStatus> = {};
+  let next: string | null =
+    `/subscriptions/${cfg.subscriptionId}/providers/Microsoft.ResourceHealth/availabilityStatuses?api-version=${RESOURCE_HEALTH_API}`;
+  let guard = 0;
+  while (next && guard < 20) {
+    guard++;
+    const j: any = await armGet(next);
+    for (const s of j?.value || []) {
+      const props = s?.properties || {};
+      // availabilityStatuses id looks like {resourceId}/providers/Microsoft.ResourceHealth/availabilityStatuses/current
+      const resourceId = (s?.id || '').replace(
+        /\/providers\/Microsoft\.ResourceHealth\/availabilityStatuses\/.*/i,
+        '',
+      );
+      out[resourceId.toLowerCase()] = {
+        resourceId,
+        availabilityState: props.availabilityState || 'Unknown',
+        summary: props.summary,
+        reasonType: props.reasonType,
+        occurredTime: props.occurredTime,
+      };
+    }
+    next = j?.nextLink || null;
+  }
+  return out;
+}
+
+// ----------------------------------------------------------------------------
+// 3) Metrics — Azure Monitor metrics REST
+// ----------------------------------------------------------------------------
+
+export interface MetricSeriesPoint {
+  timeStamp: string;
+  value: number | null;
+}
+
+export interface MetricResult {
+  name: string;
+  unit: string;
+  aggregation: string;
+  points: MetricSeriesPoint[];
+}
+
+export interface FetchMetricsOpts {
+  resourceId: string;
+  metricNames: string[];
+  /** ISO duration window e.g. PT1H, P1D. Defaults to PT6H. */
+  timespan?: string;
+  /** ISO grain e.g. PT5M, PT1H. Defaults to PT15M. */
+  interval?: string;
+  /** Average | Total | Count | Minimum | Maximum. Defaults to Average. */
+  aggregation?: string;
+}
+
+/**
+ * Read platform metric time-series for one resource. The default
+ * aggregation column is picked from the response per metric.
+ */
+export async function fetchMetrics(opts: FetchMetricsOpts): Promise<MetricResult[]> {
+  if (!opts.resourceId) throw new MonitorError('resourceId required', 400);
+  if (!opts.metricNames?.length) throw new MonitorError('metricNames required', 400);
+  const aggregation = opts.aggregation || 'Average';
+  const timespanIso = opts.timespan || 'PT6H';
+  const interval = opts.interval || 'PT15M';
+  // timespan param needs start/end; convert ISO duration → window ending now.
+  const end = new Date();
+  const start = new Date(end.getTime() - isoDurationMs(timespanIso));
+  const timespan = `${start.toISOString()}/${end.toISOString()}`;
+
+  const qs = new URLSearchParams({
+    'api-version': METRICS_API,
+    metricnames: opts.metricNames.join(','),
+    aggregation,
+    timespan,
+    interval,
+  });
+  const j = await armGet(`${opts.resourceId}/providers/microsoft.insights/metrics?${qs.toString()}`);
+  const results: MetricResult[] = [];
+  for (const m of j?.value || []) {
+    const series = m?.timeseries?.[0]?.data || [];
+    const aggKey = aggregation.toLowerCase();
+    results.push({
+      name: m?.name?.value || m?.name || '',
+      unit: m?.unit || '',
+      aggregation,
+      points: series.map((d: any) => ({
+        timeStamp: d.timeStamp,
+        value: typeof d[aggKey] === 'number' ? d[aggKey] : null,
+      })),
+    });
+  }
+  return results;
+}
+
+/** Minimal ISO-8601 duration → milliseconds (supports PnDTnHnMnS / PTnHnM). */
+export function isoDurationMs(iso: string): number {
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(iso.trim());
+  if (!m) return 6 * 3600_000;
+  const [, d, h, min, s] = m;
+  return (
+    (Number(d || 0) * 86400 +
+      Number(h || 0) * 3600 +
+      Number(min || 0) * 60 +
+      Number(s || 0)) *
+    1000
+  );
+}
+
+// ----------------------------------------------------------------------------
+// 4) Logs — Log Analytics KQL query API
+// ----------------------------------------------------------------------------
+
+export interface LogQueryResult {
+  columns: string[];
+  rows: unknown[][];
+  rowCount: number;
+}
+
+/**
+ * Run a KQL query against the configured Log Analytics workspace.
+ * Throws MonitorNotConfiguredError when LOOM_LOG_ANALYTICS_WORKSPACE_ID is
+ * unset so the route can render an honest gate.
+ */
+export async function queryLogs(kql: string, timespan = 'P1D'): Promise<LogQueryResult> {
+  const workspaceId = logAnalyticsWorkspaceId();
+  if (!workspaceId) throw new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_WORKSPACE_ID']);
+  if (!kql?.trim()) throw new MonitorError('query required', 400);
+  const tk = await token(LA_SCOPE);
+  const url = `${LA_ENDPOINT}/v1/workspaces/${workspaceId}/query`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${tk}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      // Bump server-side timeout to the LA max.
+      prefer: 'wait=60',
+    },
+    body: JSON.stringify({ query: kql, timespan }),
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok) {
+    const msg = (json?.error?.message || json?.error?.innererror?.message || text || 'Log Analytics query failed').toString();
+    throw new MonitorError(msg, res.status, json || text);
+  }
+  const table = (json?.tables || [])[0];
+  if (!table) return { columns: [], rows: [], rowCount: 0 };
+  const columns = (table.columns || []).map((c: any) => c.name);
+  const rows = table.rows || [];
+  return { columns, rows, rowCount: rows.length };
+}
+
+// ----------------------------------------------------------------------------
+// 5) Activity log — ARM Activity Log REST
+// ----------------------------------------------------------------------------
+
+export interface ActivityLogEvent {
+  eventTimestamp: string;
+  operationName?: string;
+  status?: string;
+  level?: string;
+  resourceGroup?: string;
+  resourceId?: string;
+  resourceType?: string;
+  caller?: string;
+  category?: string;
+  correlationId?: string;
+}
+
+/**
+ * Recent ARM Activity Log events for the Loom RGs (deployments, role
+ * changes, scale ops). The activity log retains 90 days; default window
+ * is 7 days. We query per-RG (filter supports a single resourceGroupName)
+ * and merge.
+ */
+export async function listActivityLog(opts?: { days?: number; maxPerRg?: number }): Promise<ActivityLogEvent[]> {
+  const cfg = readMonitorConfig();
+  const days = Math.min(90, Math.max(1, opts?.days ?? 7));
+  const maxPerRg = Math.min(1000, Math.max(1, opts?.maxPerRg ?? 200));
+  const startTime = new Date(Date.now() - days * 86400_000).toISOString();
+  const endTime = new Date().toISOString();
+  const select = [
+    'eventTimestamp', 'operationName', 'status', 'level', 'resourceGroupName',
+    'resourceId', 'resourceType', 'caller', 'category', 'correlationId',
+  ].join(',');
+
+  const events: ActivityLogEvent[] = [];
+  await Promise.all(
+    cfg.resourceGroups.map(async (rg) => {
+      const filter =
+        `eventTimestamp ge '${startTime}' and eventTimestamp le '${endTime}' and resourceGroupName eq '${rg}'`;
+      const qs = new URLSearchParams({ 'api-version': ACTIVITY_LOG_API });
+      // $filter / $select OData params: encode values, leave the operators readable.
+      let next: string | null =
+        `/subscriptions/${cfg.subscriptionId}/providers/Microsoft.Insights/eventtypes/management/values?${qs.toString()}&$filter=${encodeURIComponent(filter)}&$select=${select}`;
+      let guard = 0;
+      let taken = 0;
+      while (next && guard < 10 && taken < maxPerRg) {
+        guard++;
+        const j: any = await armGet(next);
+        for (const e of j?.value || []) {
+          if (taken >= maxPerRg) break;
+          taken++;
+          events.push({
+            eventTimestamp: e.eventTimestamp,
+            operationName: e.operationName?.localizedValue || e.operationName?.value,
+            status: e.status?.localizedValue || e.status?.value,
+            level: e.level,
+            resourceGroup: e.resourceGroupName,
+            resourceId: e.resourceId,
+            resourceType: e.resourceType?.value || e.resourceType,
+            caller: e.caller,
+            category: e.category?.localizedValue || e.category?.value,
+            correlationId: e.correlationId,
+          });
+        }
+        next = j?.nextLink || null;
+      }
+    }),
+  );
+  events.sort((a, b) => new Date(b.eventTimestamp).getTime() - new Date(a.eventTimestamp).getTime());
+  return events;
+}
+
+// ----------------------------------------------------------------------------
+// 6) Alerts — Azure Monitor metricAlerts list
+// ----------------------------------------------------------------------------
+
+export interface AlertRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  severity?: number;
+  description?: string;
+  scopes?: string[];
+  resourceGroup?: string;
+}
+
+/** List metric alert rules in the subscription (Loom RGs included). */
+export async function listAlertRules(): Promise<AlertRule[]> {
+  const cfg = readMonitorConfig();
+  const j = await armGet(
+    `/subscriptions/${cfg.subscriptionId}/providers/Microsoft.Insights/metricAlerts?api-version=${METRIC_ALERTS_API}`,
+  );
+  const loomRgs = new Set(cfg.resourceGroups.map((r) => r.toLowerCase()));
+  const rules: AlertRule[] = [];
+  for (const a of j?.value || []) {
+    const rg = rgFromId(a.id || '');
+    // Keep alerts scoped to our RGs (the API returns the whole sub).
+    if (loomRgs.size && rg && !loomRgs.has(rg.toLowerCase())) {
+      // still include if any scope points at a Loom RG resource
+      const scopes: string[] = a?.properties?.scopes || [];
+      const touchesLoom = scopes.some((s) => loomRgs.has(rgFromId(s).toLowerCase()));
+      if (!touchesLoom) continue;
+    }
+    rules.push({
+      id: a.id,
+      name: a.name,
+      enabled: a?.properties?.enabled !== false,
+      severity: a?.properties?.severity,
+      description: a?.properties?.description,
+      scopes: a?.properties?.scopes,
+      resourceGroup: rg,
+    });
+  }
+  return rules;
+}
+
+// ----------------------------------------------------------------------------
+// metric catalog — the platform metrics Loom surfaces, keyed by resource type
+// ----------------------------------------------------------------------------
+
+/**
+ * Curated platform-metric catalog: for each Azure resource type the Loom
+ * platform deploys, the headline metrics + the right aggregation. Grounded
+ * in the Microsoft.Insights supported-metrics docs. Used by the Metrics tab
+ * to know which metrics to request per inventory resource.
+ */
+export const METRIC_CATALOG: Record<string, { metric: string; aggregation: string; label: string }[]> = {
+  'microsoft.app/containerapps': [
+    { metric: 'UsageNanoCores', aggregation: 'Average', label: 'CPU (nanocores)' },
+    { metric: 'WorkingSetBytes', aggregation: 'Average', label: 'Memory (bytes)' },
+    { metric: 'Requests', aggregation: 'Total', label: 'Requests' },
+    { metric: 'Replicas', aggregation: 'Maximum', label: 'Replicas' },
+  ],
+  'microsoft.documentdb/databaseaccounts': [
+    { metric: 'TotalRequestUnits', aggregation: 'Total', label: 'Request Units' },
+    { metric: 'TotalRequests', aggregation: 'Count', label: 'Requests' },
+    { metric: 'ServerSideLatency', aggregation: 'Average', label: 'Server latency (ms)' },
+  ],
+  'microsoft.search/searchservices': [
+    { metric: 'SearchLatency', aggregation: 'Average', label: 'Search latency (s)' },
+    { metric: 'SearchQueriesPerSecond', aggregation: 'Average', label: 'Queries / sec' },
+    { metric: 'ThrottledSearchQueriesPercentage', aggregation: 'Average', label: 'Throttled %' },
+  ],
+  'microsoft.kusto/clusters': [
+    { metric: 'CPU', aggregation: 'Average', label: 'CPU %' },
+    { metric: 'IngestionUtilization', aggregation: 'Average', label: 'Ingestion util %' },
+    { metric: 'KeepAlive', aggregation: 'Average', label: 'Keep-alive' },
+  ],
+  'microsoft.synapse/workspaces': [
+    { metric: 'IntegrationPipelineRunsEnded', aggregation: 'Total', label: 'Pipeline runs ended' },
+    { metric: 'IntegrationActivityRunsEnded', aggregation: 'Total', label: 'Activity runs ended' },
+  ],
+  'microsoft.datafactory/factories': [
+    { metric: 'PipelineSucceededRuns', aggregation: 'Total', label: 'Pipeline runs succeeded' },
+    { metric: 'PipelineFailedRuns', aggregation: 'Total', label: 'Pipeline runs failed' },
+    { metric: 'ActivityFailedRuns', aggregation: 'Total', label: 'Activity runs failed' },
+  ],
+  'microsoft.apimanagement/service': [
+    { metric: 'Requests', aggregation: 'Total', label: 'Requests' },
+    { metric: 'Duration', aggregation: 'Average', label: 'Duration (ms)' },
+  ],
+  'microsoft.insights/components': [
+    { metric: 'requests/count', aggregation: 'Count', label: 'Requests' },
+    { metric: 'requests/failed', aggregation: 'Count', label: 'Failed requests' },
+    { metric: 'requests/duration', aggregation: 'Average', label: 'Server response (ms)' },
+  ],
+  'microsoft.fabric/capacities': [
+    { metric: 'cu_percentage', aggregation: 'Average', label: 'CU %' },
+  ],
+  'microsoft.cognitiveservices/accounts': [
+    { metric: 'TotalCalls', aggregation: 'Total', label: 'Total calls' },
+    { metric: 'TotalTokens', aggregation: 'Total', label: 'Total tokens' },
+  ],
+};
+
+/** Metrics catalog entries for a resource type (lower-cased lookup). */
+export function metricsForType(type: string): { metric: string; aggregation: string; label: string }[] {
+  return METRIC_CATALOG[type.toLowerCase()] || [];
+}

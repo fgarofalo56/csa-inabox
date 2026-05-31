@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Spinner, Field,
+  Subtitle2, Caption1, Badge, Button, Input, Spinner, Field,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
@@ -38,6 +38,8 @@ import {
   Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
   MathFormula20Regular, Table20Regular,
 } from '@fluentui/react-icons';
+import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
+import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -52,6 +54,7 @@ import {
   type TransformNode as VisualTransformNode,
   type SinkNode as VisualSinkNode,
 } from '@/lib/components/eventstream/visual-designer';
+import { EventHubsNamespaceTree } from '@/lib/components/eventhubs/eventhubs-tree';
 
 const useStyles = makeStyles({
   monaco: {
@@ -104,18 +107,118 @@ function fmtCell(v: unknown): string {
 
 type ResultViz = 'table' | 'bar' | 'line';
 
+// Dashboard tile visual types — superset that matches the ADX `render`
+// operator visualizations exposed by Fabric Real-Time Dashboards.
+type TileViz = 'table' | 'timechart' | 'line' | 'bar' | 'column' | 'pie' | 'stat' | 'map';
+
+const PIE_COLORS = [
+  tokens.colorBrandBackground,
+  tokens.colorPaletteGreenBackground3,
+  tokens.colorPalettePurpleBackground2,
+  tokens.colorPaletteYellowBackground3,
+  tokens.colorPaletteRedBackground3,
+  tokens.colorPaletteBlueBackground2,
+  tokens.colorPaletteTealBackground2,
+  tokens.colorPaletteMarigoldBackground3,
+];
+
+function pickNumericCol(columns: string[], rows: unknown[][]): number {
+  for (let c = 0; c < columns.length; c++) {
+    if (rows.some((r) => typeof r[c] === 'number' || (!isNaN(Number(r[c])) && r[c] !== '' && r[c] !== null))) return c;
+  }
+  return -1;
+}
+
+/** Single big-number KPI card (ADX `card` / Fabric "stat" visual). */
+function StatCard({ columns, rows }: { columns: string[]; rows: unknown[][] }) {
+  const numericColIdx = pickNumericCol(columns, rows);
+  const cellIdx = numericColIdx >= 0 ? numericColIdx : 0;
+  const raw = rows[0]?.[cellIdx];
+  const num = Number(raw);
+  const display = Number.isFinite(num) && raw !== '' && raw !== null ? num.toLocaleString() : fmtCell(raw);
+  return (
+    <div role="img" aria-label="stat card" style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      padding: 16, minHeight: 120, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
+      background: tokens.colorNeutralBackground1,
+    }}>
+      <div style={{ fontSize: 40, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.1 }}>{display}</div>
+      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{columns[cellIdx] || 'value'}</Caption1>
+    </div>
+  );
+}
+
+/** Pie chart (ADX `piechart`). First category col + first numeric col. */
+function PieChart({ columns, rows }: { columns: string[]; rows: unknown[][] }) {
+  const numericColIdx = pickNumericCol(columns, rows);
+  if (numericColIdx < 0) return <Caption1>No numeric column to chart.</Caption1>;
+  const labelColIdx = columns.findIndex((_, c) => c !== numericColIdx);
+  const data = rows.slice(0, 12).map((r, i) => ({
+    label: labelColIdx >= 0 ? fmtCell(r[labelColIdx]) : String(i + 1),
+    value: Math.max(0, Number(r[numericColIdx]) || 0),
+  }));
+  const total = data.reduce((a, d) => a + d.value, 0) || 1;
+  const cx = 120, cy = 120, r = 100;
+  let acc = 0;
+  const arcs = data.map((d, i) => {
+    const start = (acc / total) * Math.PI * 2;
+    acc += d.value;
+    const end = (acc / total) * Math.PI * 2;
+    const large = end - start > Math.PI ? 1 : 0;
+    const x1 = cx + r * Math.sin(start), y1 = cy - r * Math.cos(start);
+    const x2 = cx + r * Math.sin(end), y2 = cy - r * Math.cos(end);
+    return { path: `M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large} 1 ${x2},${y2} Z`, color: PIE_COLORS[i % PIE_COLORS.length], ...d };
+  });
+  return (
+    <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+      <svg width={240} height={240} viewBox="0 0 240 240" role="img" aria-label="pie chart">
+        {arcs.map((a, i) => <path key={i} d={a.path} fill={a.color} stroke={tokens.colorNeutralBackground1} strokeWidth={1}><title>{`${a.label}: ${a.value.toLocaleString()}`}</title></path>)}
+      </svg>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {arcs.map((a, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 10, height: 10, background: a.color, borderRadius: 2, display: 'inline-block' }} />
+            <Caption1>{a.label}: {a.value.toLocaleString()} ({Math.round((a.value / total) * 100)}%)</Caption1>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Point map (ADX geo `scatterchart` / Fabric map visual). Plots
+ * latitude/longitude columns on an equirectangular projection. Honest: if no
+ * lat/long columns are present it shows a clear message rather than an empty box.
+ */
+function MapVisual({ columns, rows }: { columns: string[]; rows: unknown[][] }) {
+  const latIdx = columns.findIndex((c) => /lat(itude)?$/i.test(c));
+  const lonIdx = columns.findIndex((c) => /^(lon|lng|long(itude)?)$/i.test(c));
+  if (latIdx < 0 || lonIdx < 0) {
+    return <Caption1>Map needs `latitude`/`longitude` columns (got: {columns.join(', ') || 'none'}).</Caption1>;
+  }
+  const W = 480, H = 240;
+  const proj = (lat: number, lon: number) => ({ x: ((lon + 180) / 360) * W, y: ((90 - lat) / 180) * H });
+  const pts = rows.slice(0, 500)
+    .map((r) => ({ lat: Number(r[latIdx]), lon: Number(r[lonIdx]) }))
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="point map"
+      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, background: tokens.colorNeutralBackground2 }}>
+      <rect x={0} y={0} width={W} height={H} fill="none" stroke={tokens.colorNeutralStroke2} />
+      {pts.map((p, i) => { const { x, y } = proj(p.lat, p.lon); return <circle key={i} cx={x} cy={y} r={3} fill={tokens.colorBrandBackground} opacity={0.75}><title>{`${p.lat}, ${p.lon}`}</title></circle>; })}
+    </svg>
+  );
+}
+
 /**
  * Lightweight dependency-free SVG chart for KQL/dashboard results.
  * Picks the first string-ish column as the X axis (category) and the first
  * numeric column as the Y series — same default ADX "Render" applies.
+ * `kind`: 'bar' = horizontal bars, 'column' = vertical bars, 'line'/'timechart' = line.
  */
-function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown[][]; kind: 'bar' | 'line' }) {
-  const numericColIdx = useMemo(() => {
-    for (let c = 0; c < columns.length; c++) {
-      if (rows.some((r) => typeof r[c] === 'number' || (!isNaN(Number(r[c])) && r[c] !== '' && r[c] !== null))) return c;
-    }
-    return -1;
-  }, [columns, rows]);
+function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown[][]; kind: 'bar' | 'column' | 'line' | 'timechart' }) {
+  const numericColIdx = useMemo(() => pickNumericCol(columns, rows), [columns, rows]);
   const labelColIdx = useMemo(() => {
     for (let c = 0; c < columns.length; c++) { if (c !== numericColIdx) return c; }
     return numericColIdx === 0 ? -1 : 0;
@@ -124,11 +227,14 @@ function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown
   if (numericColIdx < 0) {
     return <Caption1>No numeric column to chart. Switch to the table view.</Caption1>;
   }
+  const isHorizontal = kind === 'bar';
+  const isVerticalBars = kind === 'column';
+  const isLine = kind === 'line' || kind === 'timechart';
   const data = rows.slice(0, 50).map((r, i) => ({
     label: labelColIdx >= 0 ? fmtCell(r[labelColIdx]) : String(i + 1),
     value: Number(r[numericColIdx]) || 0,
   }));
-  const W = 640, H = 240, padL = 48, padB = 36, padT = 12, padR = 12;
+  const W = 640, H = 240, padL = 64, padB = 36, padT = 12, padR = 12;
   const maxV = Math.max(1, ...data.map((d) => d.value));
   const minV = Math.min(0, ...data.map((d) => d.value));
   const plotW = W - padL - padR, plotH = H - padT - padB;
@@ -137,13 +243,34 @@ function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown
   const y = (v: number) => padT + plotH - ((v - minV) / (maxV - minV || 1)) * plotH;
   const barW = Math.max(2, (plotW / data.length) * 0.7);
 
+  // Horizontal bar layout (one row per category).
+  if (isHorizontal) {
+    const rowH = Math.max(10, Math.min(28, plotH / data.length));
+    const xVal = (v: number) => padL + ((v - minV) / (maxV - minV || 1)) * plotW;
+    return (
+      <svg width="100%" viewBox={`0 0 ${W} ${Math.max(H, padT + data.length * rowH + padB)}`} role="img" aria-label="bar chart"
+        style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, background: tokens.colorNeutralBackground1 }}>
+        {data.map((d, i) => (
+          <g key={i}>
+            <rect x={padL} y={padT + i * rowH + 2} width={Math.max(0, xVal(d.value) - padL)} height={rowH - 4} fill={tokens.colorBrandBackground}>
+              <title>{`${d.label}: ${d.value.toLocaleString()}`}</title>
+            </rect>
+            <text x={padL - 6} y={padT + i * rowH + rowH / 2 + 3} fontSize="9" textAnchor="end" fill={tokens.colorNeutralForeground3}>
+              {d.label.length > 12 ? d.label.slice(0, 12) + '…' : d.label}
+            </text>
+          </g>
+        ))}
+      </svg>
+    );
+  }
+
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${kind} chart`} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, background: tokens.colorNeutralBackground1 }}>
       <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} />
       <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} />
       <text x={padL - 6} y={y(maxV)} fontSize="10" textAnchor="end" fill={tokens.colorNeutralForeground3}>{maxV.toLocaleString()}</text>
       <text x={padL - 6} y={y(minV)} fontSize="10" textAnchor="end" fill={tokens.colorNeutralForeground3}>{minV.toLocaleString()}</text>
-      {kind === 'bar'
+      {isVerticalBars
         ? data.map((d, i) => (
             <rect key={i} x={xBar(i) + (plotW / data.length - barW) / 2} y={y(d.value)} width={barW}
               height={Math.max(0, padT + plotH - y(d.value))} fill={tokens.colorBrandBackground}>
@@ -154,14 +281,14 @@ function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown
           <polyline fill="none" stroke={tokens.colorBrandBackground} strokeWidth="2"
             points={data.map((d, i) => `${x(i)},${y(d.value)}`).join(' ')} />
         )}
-      {kind === 'line' && data.map((d, i) => (
+      {isLine && data.map((d, i) => (
         <circle key={i} cx={x(i)} cy={y(d.value)} r="3" fill={tokens.colorBrandBackground}>
           <title>{`${d.label}: ${d.value.toLocaleString()}`}</title>
         </circle>
       ))}
       {data.map((d, i) => (
         (data.length <= 12 || i % Math.ceil(data.length / 12) === 0) && (
-          <text key={`x${i}`} x={kind === 'bar' ? xBar(i) + (plotW / data.length) / 2 : x(i)} y={H - padB + 16}
+          <text key={`x${i}`} x={isVerticalBars ? xBar(i) + (plotW / data.length) / 2 : x(i)} y={H - padB + 16}
             fontSize="9" textAnchor="middle" fill={tokens.colorNeutralForeground3}>
             {d.label.length > 10 ? d.label.slice(0, 10) + '…' : d.label}
           </text>
@@ -169,6 +296,40 @@ function ResultChart({ columns, rows, kind }: { columns: string[]; rows: unknown
       ))}
     </svg>
   );
+}
+
+/** Render any tile result by its visual type — table / charts / stat / pie / map. */
+function TileVisual({ viz, result }: { viz: TileViz; result: KqlResult }) {
+  const columns = result.columns || [];
+  const rows = result.rows || [];
+  if (rows.length === 0) return <Caption1>No rows.</Caption1>;
+  switch (viz) {
+    case 'stat':
+      return <StatCard columns={columns} rows={rows} />;
+    case 'pie':
+      return <PieChart columns={columns} rows={rows} />;
+    case 'map':
+      return <MapVisual columns={columns} rows={rows} />;
+    case 'bar':
+    case 'column':
+    case 'line':
+    case 'timechart':
+      return <ResultChart columns={columns} rows={rows} kind={viz} />;
+    case 'table':
+    default:
+      return (
+        <div style={{ maxHeight: 200, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+          <Table aria-label="tile result" size="small">
+            <TableHeader><TableRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+            <TableBody>
+              {rows.slice(0, 100).map((row, i) => (
+                <TableRow key={i}>{columns.map((_, j) => <TableCell key={j} style={{ fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'nowrap' }}>{fmtCell(row[j])}</TableCell>)}</TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      );
+  }
 }
 
 function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loading: boolean }) {
@@ -679,6 +840,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [kql, setKql] = useState(SAMPLE_KQL_DB);
   const [result, setResult] = useState<KqlResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Bumped after a ribbon-wizard create so the AdxDatabaseTree re-lists objects.
+  const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   // Wizard dialog state — Fabric-parity create flows for table/MV/function/update-policy
   const [wizardKind, setWizardKind] = useState<KqlWizardKind | null>(null);
   const [wizName, setWizName] = useState('');
@@ -699,6 +862,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       const r = await fetch(`/api/items/kql-database/${id}`);
       const j = (await r.json()) as KqlDbInfo;
       setInfo(j);
+      // Re-list the navigator (ribbon wizards call load() after a create).
+      setTreeRefreshKey((k) => k + 1);
     } catch (e: any) {
       setInfo({ ok: false, error: e?.message || String(e) });
     }
@@ -722,11 +887,6 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       setLoading(false);
     }
   }, [id, kql]);
-
-  const sizeMb = useMemo(() => {
-    const v = info?.details?.OriginalSize as number | undefined;
-    return typeof v === 'number' ? (v / (1024 * 1024)).toFixed(1) : null;
-  }, [info]);
 
   const openWizard = useCallback((k: KqlWizardKind) => {
     setWizardKind(k); setWizError(null); setWizSuccess(null);
@@ -831,76 +991,29 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div className={s.treePad}>
-          <Tree aria-label="KQL DB explorer" defaultOpenItems={['tables', 'info']}>
-            <TreeItem itemType="branch" value="info">
-              <TreeItemLayout iconBefore={<Database20Regular />}>{info?.database || 'database'}</TreeItemLayout>
-              <Tree>
-                {sizeMb && <TreeItem itemType="leaf" value="size"><TreeItemLayout>Size: {sizeMb} MB</TreeItemLayout></TreeItem>}
-                {typeof info?.details?.HotCachePeriod === 'string' && (
-                  <TreeItem itemType="leaf" value="hot"><TreeItemLayout>Hot cache: {String(info.details.HotCachePeriod)}</TreeItemLayout></TreeItem>
-                )}
-                {typeof info?.details?.SoftDeletePeriod === 'string' && (
-                  <TreeItem itemType="leaf" value="soft"><TreeItemLayout>Soft-delete: {String(info.details.SoftDeletePeriod)}</TreeItemLayout></TreeItem>
-                )}
-              </Tree>
-            </TreeItem>
-            <TreeItem itemType="branch" value="tables">
-              <TreeItemLayout iconBefore={<DocumentTable20Regular />}>Tables ({info?.tableCount ?? 0})</TreeItemLayout>
-              <Tree>
-                {(info?.tables || []).map((t) => (
-                  <TreeItem
-                    key={t.name}
-                    itemType="leaf"
-                    value={`t-${t.name}`}
-                    onClick={() => setKql(`["${t.name}"]\n| take 100`)}
-                  >
-                    <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{t.name}</TreeItemLayout>
-                  </TreeItem>
-                ))}
-                {info?.ok && (info?.tableCount ?? 0) === 0 && (
-                  <TreeItem itemType="leaf" value="none"><TreeItemLayout>No tables yet. Use <code>.create table</code>.</TreeItemLayout></TreeItem>
-                )}
-              </Tree>
-            </TreeItem>
-            <TreeItem itemType="branch" value="mvs">
-              <TreeItemLayout iconBefore={<Table20Regular />}>Materialized views ({info?.materializedViewCount ?? 0})</TreeItemLayout>
-              <Tree>
-                {(info?.materializedViews || []).map((mv) => (
-                  <TreeItem
-                    key={mv.name}
-                    itemType="leaf"
-                    value={`mv-${mv.name}`}
-                    onClick={() => setKql(`["${mv.name}"]\n| take 100`)}
-                  >
-                    <TreeItemLayout iconBefore={<Table20Regular />}>{mv.name}{mv.sourceTable ? <Caption1> · on {mv.sourceTable}</Caption1> : null}</TreeItemLayout>
-                  </TreeItem>
-                ))}
-                {info?.ok && (info?.materializedViewCount ?? 0) === 0 && (
-                  <TreeItem itemType="leaf" value="mv-none"><TreeItemLayout>No materialized views. Use <code>.create materialized-view</code>.</TreeItemLayout></TreeItem>
-                )}
-              </Tree>
-            </TreeItem>
-            <TreeItem itemType="branch" value="functions">
-              <TreeItemLayout iconBefore={<MathFormula20Regular />}>Functions ({info?.functionCount ?? 0})</TreeItemLayout>
-              <Tree>
-                {(info?.functions || []).map((fn) => (
-                  <TreeItem
-                    key={fn.name}
-                    itemType="leaf"
-                    value={`fn-${fn.name}`}
-                    onClick={() => setKql(`${fn.name}(${(fn.parameters || '').trim()})`)}
-                  >
-                    <TreeItemLayout iconBefore={<MathFormula20Regular />}>{fn.name}{fn.parameters ? <Caption1> ({fn.parameters})</Caption1> : null}</TreeItemLayout>
-                  </TreeItem>
-                ))}
-                {info?.ok && (info?.functionCount ?? 0) === 0 && (
-                  <TreeItem itemType="leaf" value="fn-none"><TreeItemLayout>No functions. Use <code>.create function</code>.</TreeItemLayout></TreeItem>
-                )}
-              </Tree>
-            </TreeItem>
-          </Tree>
-        </div>
+        id && id !== 'new'
+          ? (
+            <AdxDatabaseTree
+              itemId={id}
+              refreshKey={treeRefreshKey}
+              onOpenQuery={(q) => {
+                setKql(q);
+                const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
+                el?.focus();
+              }}
+            />
+          )
+          : (
+            <div className={s.treePad}>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Save the KQL database first</MessageBarTitle>
+                  The object navigator (Tables, Functions, Materialized views, Ingestion mappings)
+                  appears once this database is saved and bound to a Kusto database.
+                </MessageBarBody>
+              </MessageBar>
+            </div>
+          )
       }
       main={
         <div className={s.pad}>
@@ -1401,87 +1514,168 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
   );
 }
 
-// ----- KQL Dashboard -----
-// Ribbon built inside the editor via useMemo so Add tile binds to the
-// existing inline addTile handler; the rest stay disabled with reasons.
+// ----- KQL Dashboard (Fabric Real-Time Dashboard parity) -----
+// A real dashboard builder: tile grid (add/remove/resize) where each tile has
+// a KQL query bound to a data source + a visual type, rendering its REAL Kusto
+// result; a data-sources panel; dashboard parameters (free-text / fixed /
+// query-based / time range) substituted into tile KQL; per-dashboard
+// auto-refresh + manual refresh; Save persists the full model to Cosmos.
+// Backed by /api/items/kql-dashboard/[id] (GET ?run=1 / PUT) + /run + /param-values.
 
-interface Tile {
+interface DashTile {
   title: string;
   kql: string;
-  viz: 'table' | 'line' | 'bar';
+  viz: TileViz;
+  dataSourceId?: string;
   database?: string;
+  w?: number; // grid column span 1..12
+  h?: number; // grid row units 1..8
   result?: KqlResult;
   error?: string;
+}
+
+interface DashDataSource { id: string; name: string; database: string; clusterUri?: string; }
+
+type DashParamType = 'freetext' | 'fixed' | 'multi' | 'query' | 'datasource' | 'duration';
+type DashParamDataType = 'string' | 'long' | 'int' | 'real' | 'datetime' | 'bool';
+
+interface DashParam {
+  variableName: string;
+  label?: string;
+  type: DashParamType;
+  dataType?: DashParamDataType;
+  values?: string[];
+  query?: string;
+  dataSourceId?: string;
+  value?: string | string[];
 }
 
 interface DashboardState {
   ok: boolean;
   database?: string;
   defaultDatabase?: string;
-  tiles?: Tile[];
+  tiles?: DashTile[];
+  dataSources?: DashDataSource[];
+  parameters?: DashParam[];
+  timeRange?: string;
+  autoRefreshMs?: number;
   error?: string;
 }
 
-type TimeRangeKey = 'last-15m' | 'last-1h' | 'last-24h' | 'last-7d' | 'last-30d' | 'all';
+type TimeRangeKey = 'last-15m' | 'last-1h' | 'last-4h' | 'last-24h' | 'last-7d' | 'last-30d' | 'all';
+const TIME_ORDER: TimeRangeKey[] = ['last-15m', 'last-1h', 'last-4h', 'last-24h', 'last-7d', 'last-30d', 'all'];
 
-const TIME_RANGE_TO_KQL: Record<TimeRangeKey, string> = {
-  'last-15m': 'ago(15m)',
-  'last-1h':  'ago(1h)',
-  'last-24h': 'ago(24h)',
-  'last-7d':  'ago(7d)',
-  'last-30d': 'ago(30d)',
-  'all':      'datetime(1970-01-01)',
-};
+const TILE_VIZ_OPTIONS: TileViz[] = ['table', 'timechart', 'line', 'column', 'bar', 'pie', 'stat', 'map'];
+
+function genId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  } catch { /* noop */ }
+  return 'ds-' + Math.random().toString(36).slice(2, 10);
+}
 
 export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [state, setState] = useState<DashboardState | null>(null);
-  const [tiles, setTiles] = useState<Tile[]>([]);
+  const [tiles, setTiles] = useState<DashTile[]>([]);
+  const [dataSources, setDataSources] = useState<DashDataSource[]>([]);
+  const [params, setParams] = useState<DashParam[]>([]);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonText, setJsonText] = useState('');
   const [jsonErr, setJsonErr] = useState<string | null>(null);
-  // Auto-refresh — interval in ms; 0 = off. Persisted to state via PUT.
   const [autoRefreshMs, setAutoRefreshMs] = useState(0);
-  // Time range — passed to /run as a query param so the BFF can substitute
-  // `_loomTimeFrom` placeholder in tile KQL when present.
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('last-24h');
-  // Dashboard params — k/v list of operator-supplied dashboard parameters,
-  // surfaced in tile KQL as `_loomParam_<name>`.
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [paramsOpen, setParamsOpen] = useState(false);
-  const [paramRows, setParamRows] = useState<Array<{ key: string; value: string }>>([]);
-  // Share dialog — copies the canonical URL + reminds the operator about RBAC.
   const [shareOpen, setShareOpen] = useState(false);
+  // Query-based param value caches: variableName → string[]
+  const [paramValueCache, setParamValueCache] = useState<Record<string, string[]>>({});
 
+  const defaultDb = state?.database || state?.defaultDatabase || 'loomdb-default';
+
+  // Build the live model the /run + /param-values + PUT routes consume.
+  const buildModel = useCallback(() => ({
+    tiles: tiles.map(({ result, error, ...t }) => t),
+    dataSources,
+    parameters: params,
+    timeRange,
+    autoRefreshMs,
+  }), [tiles, dataSources, params, timeRange, autoRefreshMs]);
+
+  // Load the saved model (GET). When runTiles, GET ?run=1 executes every tile.
   const load = useCallback(async (runTiles = false) => {
-    // Pre-save gate: /items/kql-dashboard/new fires this before any record exists.
     if (!id || id === 'new') return;
-    const params = new URLSearchParams();
-    if (runTiles) params.set('run', '1');
-    if (runTiles) params.set('time', timeRange);
-    for (const r of paramRows) {
-      if (r.key.trim()) params.set(`param.${r.key.trim()}`, r.value);
+    const sp = new URLSearchParams();
+    if (runTiles) { sp.set('run', '1'); sp.set('time', timeRange); }
+    for (const p of params) {
+      if (!p.variableName) continue;
+      if (Array.isArray(p.value)) p.value.forEach((v) => sp.append(`param.${p.variableName}`, v));
+      else if (p.value !== undefined && p.value !== '') sp.set(`param.${p.variableName}`, String(p.value));
     }
-    const qs = params.toString();
+    const qs = sp.toString();
     try {
       const r = await fetch(`/api/items/kql-dashboard/${id}${qs ? '?' + qs : ''}`);
-      const j = (await r.json()) as DashboardState;
-      setState(j); setTiles(j.tiles || []); setDirty(false);
+      const ct = r.headers.get('content-type') || '';
+      const j: DashboardState = ct.includes('application/json')
+        ? await r.json()
+        : { ok: false, error: `HTTP ${r.status}` };
+      setState(j);
+      if (j.ok) {
+        setTiles(j.tiles || []);
+        setDataSources(j.dataSources || []);
+        setParams(j.parameters || []);
+        if (typeof j.autoRefreshMs === 'number') setAutoRefreshMs(j.autoRefreshMs);
+        if (j.timeRange && TIME_ORDER.includes(j.timeRange as TimeRangeKey)) setTimeRange(j.timeRange as TimeRangeKey);
+        setDirty(false);
+      }
     } catch (e: any) {
       setState({ ok: false, error: e?.message || String(e) });
     }
-  }, [id, timeRange, paramRows]);
+  }, [id, timeRange, params]);
 
-  useEffect(() => { load(true); }, [load]);
+  // Run the CURRENT (possibly unsaved) builder model live via POST /run.
+  const runAll = useCallback(async () => {
+    if (tiles.length === 0) return;
+    setRunning(true); setSaveErr(null);
+    try {
+      const r = await fetch(`/api/items/kql-dashboard/${id}/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(buildModel()),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      if (!j.ok) { setSaveErr(j.error || `run failed (HTTP ${r.status})`); return; }
+      // Merge results back onto tiles by index (order preserved by /run).
+      setTiles((prev) => prev.map((t, i) => ({
+        ...t,
+        result: j.tiles?.[i]?.result,
+        error: j.tiles?.[i]?.error,
+      })));
+    } catch (e: any) {
+      setSaveErr(e?.message || String(e));
+    } finally {
+      setRunning(false);
+    }
+  }, [id, tiles.length, buildModel]);
+
+  // Initial load: fetch the saved model, then run it live so tiles render real data.
+  useEffect(() => { load(false); /* eslint-disable-next-line */ }, [id]);
+  useEffect(() => { if (state?.ok && tiles.length > 0) runAll(); /* eslint-disable-next-line */ }, [state?.ok]);
 
   const addTile = useCallback(() => {
-    // Phase 4.5 — functional setter so rapid clicks each create a new tile.
     setTiles((prev) => {
-      const next: Tile[] = [...prev, { title: `Tile ${prev.length + 1}`, kql: 'print value = 1', viz: 'table' }];
+      const next: DashTile[] = [...prev, {
+        title: `Tile ${prev.length + 1}`,
+        kql: `// KQL for this tile. Use parameters (_startTime, _endTime, or your own _vars).\nprint value = 1`,
+        viz: 'table', w: 4, h: 2,
+      }];
       setExpandedIdx(next.length - 1);
       return next;
     });
@@ -1494,24 +1688,41 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     setExpandedIdx((cur) => (cur === idx ? null : cur));
   }, []);
 
-  const updateTile = useCallback((idx: number, patch: Partial<Tile>) => {
-    // Phase 4.5 — functional setter prevents one keystroke from clobbering
-    // another when the user types fast in the inline editor.
+  const updateTile = useCallback((idx: number, patch: Partial<DashTile>) => {
     setTiles((prev) => prev.map((t, i) => i === idx ? { ...t, ...patch } : t));
     setDirty(true);
   }, []);
 
+  // Run a single tile live (the tile-editor "Run" button — Fabric parity).
+  const runTile = useCallback(async (idx: number) => {
+    const t = tiles[idx];
+    if (!t) return;
+    updateTile(idx, { error: undefined });
+    try {
+      const r = await fetch(`/api/items/kql-dashboard/${id}/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...buildModel(), tiles: [{ title: t.title, kql: t.kql, viz: t.viz, dataSourceId: t.dataSourceId, database: t.database }] }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      if (!j.ok) { updateTile(idx, { error: j.error || `run failed (HTTP ${r.status})`, result: undefined }); return; }
+      updateTile(idx, { result: j.tiles?.[0]?.result, error: j.tiles?.[0]?.error });
+    } catch (e: any) {
+      updateTile(idx, { error: e?.message || String(e) });
+    }
+  }, [id, tiles, buildModel, updateTile]);
+
   const save = useCallback(async () => {
     setSaving(true); setSaveErr(null); setSaveMsg('Saving…');
-    // Pin tiles snapshot at click time. Strip runtime-only fields.
-    const payload = tiles.map(({ result, error, ...t }) => t);
     try {
       const r = await fetch(`/api/items/kql-dashboard/${id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ tiles: payload }),
+        body: JSON.stringify(buildModel()),
       });
-      const j = await r.json();
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
       if (j.ok) {
         setDirty(false);
         setSaveMsg(`Saved at ${new Date().toLocaleTimeString()}`);
@@ -1525,7 +1736,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     } finally {
       setSaving(false);
     }
-  }, [id, tiles]);
+  }, [id, buildModel]);
 
   // Ctrl+S
   useEffect(() => {
@@ -1539,217 +1750,422 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, saving, save]);
 
+  // Auto-refresh — re-run the live model every N ms.
+  useEffect(() => {
+    if (!autoRefreshMs || autoRefreshMs <= 0) return;
+    const t = setInterval(() => { runAll(); }, autoRefreshMs);
+    return () => clearInterval(t);
+  }, [autoRefreshMs, runAll]);
+
+  // --- Data sources ---
+  const addDataSource = useCallback(() => {
+    setDataSources((prev) => [...prev, { id: genId(), name: `Source ${prev.length + 1}`, database: defaultDb }]);
+    setDirty(true);
+  }, [defaultDb]);
+  const updateDataSource = useCallback((idx: number, patch: Partial<DashDataSource>) => {
+    setDataSources((prev) => prev.map((d, i) => i === idx ? { ...d, ...patch } : d));
+    setDirty(true);
+  }, []);
+  const removeDataSource = useCallback((idx: number) => {
+    setDataSources((prev) => prev.filter((_, i) => i !== idx));
+    setDirty(true);
+  }, []);
+
+  // --- Parameters ---
+  const addParam = useCallback(() => {
+    setParams((prev) => [...prev, { variableName: `_param${prev.length + 1}`, label: `Parameter ${prev.length + 1}`, type: 'freetext', dataType: 'string', value: '' }]);
+    setDirty(true);
+  }, []);
+  const updateParam = useCallback((idx: number, patch: Partial<DashParam>) => {
+    setParams((prev) => prev.map((p, i) => i === idx ? { ...p, ...patch } : p));
+    setDirty(true);
+  }, []);
+  const removeParam = useCallback((idx: number) => {
+    setParams((prev) => prev.filter((_, i) => i !== idx));
+    setDirty(true);
+  }, []);
+
+  // Resolve a query-based parameter's dropdown values from the real cluster.
+  const loadParamValues = useCallback(async (p: DashParam) => {
+    if (p.type !== 'query' || !p.query?.trim()) return;
+    try {
+      const r = await fetch(`/api/items/kql-dashboard/${id}/param-values`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query: p.query, dataSourceId: p.dataSourceId, dataSources }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false };
+      if (j.ok) setParamValueCache((prev) => ({ ...prev, [p.variableName]: j.values || [] }));
+    } catch { /* surfaced lazily; dropdown just stays empty */ }
+  }, [id, dataSources]);
+
   const openJson = useCallback(() => {
-    setJsonText(JSON.stringify(tiles.map(({ result, error, ...t }) => t), null, 2));
+    setJsonText(JSON.stringify(buildModel(), null, 2));
     setJsonErr(null);
     setJsonOpen(true);
-  }, [tiles]);
+  }, [buildModel]);
 
   const applyJson = useCallback(() => {
     try {
       const parsed = JSON.parse(jsonText);
-      if (!Array.isArray(parsed)) {
-        setJsonErr('JSON root must be an array of tiles');
-        return;
-      }
-      setTiles(parsed); setDirty(true); setJsonOpen(false); setJsonErr(null);
+      const model = Array.isArray(parsed) ? { tiles: parsed } : parsed;
+      if (Array.isArray(model.tiles)) setTiles(model.tiles);
+      if (Array.isArray(model.dataSources)) setDataSources(model.dataSources);
+      if (Array.isArray(model.parameters)) setParams(model.parameters);
+      if (typeof model.timeRange === 'string' && TIME_ORDER.includes(model.timeRange)) setTimeRange(model.timeRange);
+      setDirty(true); setJsonOpen(false); setJsonErr(null);
     } catch (e: any) {
       setJsonErr(e?.message || 'invalid JSON');
     }
   }, [jsonText]);
 
-  // Auto-refresh — when enabled, re-runs every tile every N ms.
-  useEffect(() => {
-    if (!autoRefreshMs || autoRefreshMs <= 0) return;
-    const t = setInterval(() => { load(true); }, autoRefreshMs);
-    return () => clearInterval(t);
-  }, [autoRefreshMs, load]);
+  const cycleTime = useCallback(() => {
+    const i = TIME_ORDER.indexOf(timeRange);
+    const next = TIME_ORDER[(i + 1) % TIME_ORDER.length];
+    setTimeRange(next);
+    setTimeout(() => runAll(), 0);
+  }, [timeRange, runAll]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Edit', actions: [
         { label: 'Add tile', onClick: addTile },
-        { label: 'Add data source', disabled: true, title: 'multi-cluster data source picker pending — single Loom shared cluster only today' },
+        { label: 'Data sources', onClick: () => setSourcesOpen(true) },
         { label: 'Parameters', onClick: () => setParamsOpen(true) },
+        { label: 'Edit JSON', onClick: openJson },
       ]},
       { label: 'View', actions: [
-        { label: autoRefreshMs ? `Auto-refresh: ${autoRefreshMs/1000}s (click to cycle)` : 'Auto-refresh: off', onClick: () => {
-          // cycle: off → 15s → 30s → 60s → 300s → off
+        { label: running ? 'Refreshing…' : 'Refresh all', onClick: running ? undefined : runAll, disabled: running },
+        { label: autoRefreshMs ? `Auto-refresh: ${autoRefreshMs / 1000}s` : 'Auto-refresh: off', onClick: () => {
           const cycle = [0, 15000, 30000, 60000, 300000];
           const idx = cycle.indexOf(autoRefreshMs);
-          setAutoRefreshMs(cycle[(idx + 1) % cycle.length]);
+          setAutoRefreshMs(cycle[(idx + 1) % cycle.length]); setDirty(true);
         } },
-        { label: `Time: ${timeRange}`, onClick: () => {
-          const order: TimeRangeKey[] = ['last-15m', 'last-1h', 'last-24h', 'last-7d', 'last-30d', 'all'];
-          const i = order.indexOf(timeRange);
-          setTimeRange(order[(i + 1) % order.length]);
-          // After cycling, re-run with new time range.
-          load(true);
-        } },
+        { label: `Time: ${timeRange}`, onClick: cycleTime },
+      ]},
+      { label: 'Manage', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: saving ? undefined : save, disabled: saving },
         { label: 'Share', onClick: () => setShareOpen(true) },
       ]},
     ]},
-  ], [addTile, autoRefreshMs, timeRange, load]);
+  ], [addTile, openJson, running, runAll, autoRefreshMs, timeRange, cycleTime, saving, save]);
 
-  return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
-      <div className={s.pad}>
-        <div className={s.toolbar}>
-          <Badge appearance="filled" color="brand">KQL Dashboard</Badge>
-          <Caption1>db: <strong>{state?.database || 'loomdb-default'}</strong> · {tiles.length} tiles</Caption1>
-          {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
-          <Button appearance="outline" icon={<Add20Regular />} onClick={addTile}>Add tile</Button>
-          <Button appearance="outline" onClick={openJson}>Edit JSON</Button>
-          <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => load(true)}>Re-run all</Button>
-          <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty} style={{ marginLeft: 'auto' }}>
-            {saving ? 'Saving…' : 'Save (Ctrl+S)'}
-          </Button>
-        </div>
+  const main = (
+    <div className={s.pad}>
+      <div className={s.toolbar}>
+        <Badge appearance="filled" color="brand">Real-Time Dashboard</Badge>
+        <Caption1>db: <strong>{defaultDb}</strong> · {tiles.length} tiles · {dataSources.length} sources · {params.length} params</Caption1>
+        {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addTile}>Add tile</Button>
+        <Button size="small" appearance="outline" icon={<Database20Regular />} onClick={() => setSourcesOpen(true)}>Data sources</Button>
+        <Button size="small" appearance="outline" icon={<MathFormula20Regular />} onClick={() => setParamsOpen(true)}>Parameters</Button>
+        <Button size="small" appearance="outline" onClick={openJson}>Edit JSON</Button>
+        <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={runAll} disabled={running}>{running ? 'Refreshing…' : 'Refresh all'}</Button>
+        <Button size="small" appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty} style={{ marginLeft: 'auto' }}>
+          {saving ? 'Saving…' : 'Save (Ctrl+S)'}
+        </Button>
+      </div>
 
-        {saveMsg && !saveErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
-        {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
-        {state && !state.ok && <MessageBar intent="error"><MessageBarBody>{state.error}</MessageBarBody></MessageBar>}
-
-        <div className={s.cardGrid}>
-          {tiles.map((t, i) => (
-            <div key={i} className={s.card}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{t.viz.toUpperCase()}</Caption1>
-                <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => deleteTile(i)} aria-label="Delete tile" />
-              </div>
-              <div style={{ fontSize: 16, fontWeight: 600, marginTop: 4 }}>{t.title}</div>
-              {t.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{t.error}</Caption1>}
-              {t.result && t.result.ok && (t.viz === 'bar' || t.viz === 'line') && (t.result.rows?.length ?? 0) > 0 && (
-                <div style={{ marginTop: 8 }}>
-                  <ResultChart columns={t.result.columns || []} rows={t.result.rows || []} kind={t.viz} />
-                </div>
-              )}
-              {t.result && t.result.ok && t.viz === 'table' && (
-                <div style={{ marginTop: 8, maxHeight: 120, overflow: 'auto', fontSize: 11, fontFamily: 'Consolas, monospace' }}>
-                  {(t.result.rows || []).slice(0, 5).map((row, ri) => (
-                    <div key={ri}>{(row as unknown[]).map(fmtCell).join(' | ')}</div>
-                  ))}
-                  {(t.result.rowCount ?? 0) > 5 && <Caption1>+ {(t.result.rowCount ?? 0) - 5} more rows</Caption1>}
-                </div>
-              )}
-              <Button size="small" appearance="subtle" onClick={() => setExpandedIdx(expandedIdx === i ? null : i)} style={{ marginTop: 8 }}>
-                {expandedIdx === i ? 'Collapse' : 'Edit'}
-              </Button>
-              {expandedIdx === i && (
-                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <Input value={t.title} onChange={(_: unknown, d: any) => updateTile(i, { title: d.value })} placeholder="Title" />
-                  <Select value={t.viz} onChange={(_: unknown, d: any) => updateTile(i, { viz: d.value as Tile['viz'] })}>
-                    <option value="table">table</option>
-                    <option value="line">line</option>
-                    <option value="bar">bar</option>
-                  </Select>
-                  <Textarea
-                    value={t.kql}
-                    onChange={(_: unknown, d: any) => updateTile(i, { kql: d.value })}
-                    placeholder="KQL"
-                    style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
-                    rows={4}
-                  />
-                </div>
+      {/* Parameter filter bar — Fabric renders selected dashboard params here. */}
+      {params.length > 0 && (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', padding: '4px 0' }}>
+          {params.map((p, i) => (
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 160 }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{p.label || p.variableName}</Caption1>
+              {p.type === 'fixed' || p.type === 'datasource' ? (
+                <Select value={(p.value as string) || ''} onChange={(_: unknown, d: any) => { updateParam(i, { value: d.value }); }} onBlur={runAll}>
+                  <option value="">(all)</option>
+                  {(p.type === 'datasource' ? dataSources.map((d) => d.name) : (p.values || [])).map((v) => <option key={v} value={v}>{v}</option>)}
+                </Select>
+              ) : p.type === 'query' ? (
+                <Select value={(p.value as string) || ''}
+                  onFocus={() => { if (!paramValueCache[p.variableName]) loadParamValues(p); }}
+                  onChange={(_: unknown, d: any) => { updateParam(i, { value: d.value }); }} onBlur={runAll}>
+                  <option value="">(all)</option>
+                  {(paramValueCache[p.variableName] || []).map((v) => <option key={v} value={v}>{v}</option>)}
+                </Select>
+              ) : p.type === 'multi' ? (
+                <Input placeholder="comma,separated,values"
+                  value={Array.isArray(p.value) ? p.value.join(',') : ''}
+                  onChange={(_: unknown, d: any) => updateParam(i, { value: d.value.split(',').map((x: string) => x.trim()).filter(Boolean) })}
+                  onBlur={runAll} />
+              ) : (
+                <Input value={Array.isArray(p.value) ? '' : (p.value || '')}
+                  onChange={(_: unknown, d: any) => updateParam(i, { value: d.value })} onBlur={runAll} />
               )}
             </div>
           ))}
-          {tiles.length === 0 && <Caption1>No tiles yet. Click <strong>Add tile</strong>.</Caption1>}
+          <Button size="small" appearance="primary" icon={<Play20Regular />} onClick={runAll} disabled={running}>Apply</Button>
         </div>
+      )}
 
-        <Dialog open={jsonOpen} onOpenChange={(_: unknown, d: any) => setJsonOpen(d.open)}>
-          <DialogSurface>
-            <DialogBody>
-              <DialogTitle>Edit tiles JSON</DialogTitle>
-              <DialogContent>
-                <Textarea
-                  value={jsonText}
-                  onChange={(_: unknown, d: any) => { setJsonText(d.value); setJsonErr(null); }}
-                  rows={20}
-                  style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }}
-                />
-                {jsonErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody><MessageBarTitle>JSON parse error</MessageBarTitle>{jsonErr}</MessageBarBody></MessageBar>}
-              </DialogContent>
-              <DialogActions>
-                <Button appearance="secondary" onClick={() => setJsonOpen(false)}>Cancel</Button>
-                <Button appearance="primary" onClick={applyJson}>Apply</Button>
-              </DialogActions>
-            </DialogBody>
-          </DialogSurface>
-        </Dialog>
+      {saveMsg && !saveErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
+      {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
+      {state && !state.ok && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Dashboard data source not ready</MessageBarTitle>
+            {state.error || 'unknown'} — the dashboard still renders; bind tiles to a KQL database
+            (via Data sources) on the Loom shared ADX cluster. If no Eventhouse / KQL DB is provisioned,
+            create one in the Eventhouse editor first (ARM Microsoft.Kusto/clusters/databases).
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
-        <Dialog open={paramsOpen} onOpenChange={(_: unknown, d: any) => setParamsOpen(d.open)}>
-          <DialogSurface>
-            <DialogBody>
-              <DialogTitle>Dashboard parameters</DialogTitle>
-              <DialogContent>
-                <Caption1>
-                  Define parameters that the dashboard substitutes into tile KQL. Use{' '}
-                  <code>_loomParam_&lt;name&gt;</code> in your KQL where you want the value.
-                </Caption1>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-                  {paramRows.map((row, idx) => (
-                    <div key={idx} style={{ display: 'flex', gap: 8 }}>
-                      <Input
-                        value={row.key}
-                        placeholder="name (alphanumeric)"
-                        onChange={(_: unknown, d: any) => setParamRows((rows) => rows.map((r, i) => i === idx ? { ...r, key: d.value } : r))}
-                      />
-                      <Input
-                        value={row.value}
-                        placeholder="value"
-                        onChange={(_: unknown, d: any) => setParamRows((rows) => rows.map((r, i) => i === idx ? { ...r, value: d.value } : r))}
-                      />
-                      <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => setParamRows((rows) => rows.filter((_, i) => i !== idx))} aria-label="Remove parameter" />
+      {/* Tile grid — 12-col CSS grid; each tile spans its w/h. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: 12, gridAutoRows: 'minmax(120px, auto)' }}>
+        {tiles.map((t, i) => {
+          const span = Math.max(1, Math.min(12, t.w || 4));
+          const rowSpan = Math.max(1, Math.min(8, t.h || 2));
+          const dsName = t.dataSourceId ? (dataSources.find((d) => d.id === t.dataSourceId)?.name || t.dataSourceId) : (t.database || defaultDb);
+          return (
+            <div key={i} className={s.card} style={{ gridColumn: `span ${span}`, gridRow: `span ${rowSpan}`, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{t.viz.toUpperCase()} · {dsName}</Caption1>
+                  <div style={{ fontSize: 15, fontWeight: 600 }}>{t.title}</div>
+                </div>
+                <div style={{ display: 'flex', gap: 2 }}>
+                  <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => runTile(i)} aria-label="Run tile" title="Run this tile" />
+                  <Button size="small" appearance="subtle" onClick={() => setExpandedIdx(expandedIdx === i ? null : i)} aria-label={expandedIdx === i ? 'Collapse tile editor' : 'Edit tile'}>
+                    {expandedIdx === i ? 'Done' : 'Edit'}
+                  </Button>
+                  <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => deleteTile(i)} aria-label="Delete tile" />
+                </div>
+              </div>
+
+              {t.error && <MessageBar intent="error" style={{ marginTop: 6 }}><MessageBarBody>{t.error}</MessageBarBody></MessageBar>}
+              {t.result && t.result.ok && (
+                <div style={{ marginTop: 8, flex: 1, minHeight: 0 }}>
+                  <TileVisual viz={t.viz} result={t.result} />
+                </div>
+              )}
+              {!t.result && !t.error && <Caption1 style={{ marginTop: 8, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
+
+              {expandedIdx === i && (
+                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6, borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8 }}>
+                  <Input value={t.title} onChange={(_: unknown, d: any) => updateTile(i, { title: d.value })} placeholder="Title" aria-label="Tile title" />
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: 120 }}>
+                      <Caption1>Visual</Caption1>
+                      <Select value={t.viz} onChange={(_: unknown, d: any) => updateTile(i, { viz: d.value as TileViz })} aria-label="Tile visual type">
+                        {TILE_VIZ_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+                      </Select>
                     </div>
-                  ))}
-                  <Button appearance="outline" icon={<Add20Regular />} onClick={() => setParamRows((rows) => [...rows, { key: '', value: '' }])}>
-                    Add parameter
-                  </Button>
+                    <div style={{ flex: 1, minWidth: 120 }}>
+                      <Caption1>Data source</Caption1>
+                      <Select value={t.dataSourceId || ''} onChange={(_: unknown, d: any) => updateTile(i, { dataSourceId: d.value || undefined })} aria-label="Tile data source">
+                        <option value="">{`(dashboard default: ${defaultDb})`}</option>
+                        {dataSources.map((ds) => <option key={ds.id} value={ds.id}>{ds.name} → {ds.database}</option>)}
+                      </Select>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <div style={{ flex: 1 }}>
+                      <Caption1>Width (1–12)</Caption1>
+                      <Input type="number" value={String(t.w || 4)} onChange={(_: unknown, d: any) => updateTile(i, { w: Math.max(1, Math.min(12, parseInt(d.value, 10) || 4)) })} aria-label="Tile width" />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <Caption1>Height (1–8)</Caption1>
+                      <Input type="number" value={String(t.h || 2)} onChange={(_: unknown, d: any) => updateTile(i, { h: Math.max(1, Math.min(8, parseInt(d.value, 10) || 2)) })} aria-label="Tile height" />
+                    </div>
+                  </div>
+                  <Caption1>KQL query</Caption1>
+                  <MonacoTextarea
+                    value={t.kql}
+                    onChange={(v) => updateTile(i, { kql: v })}
+                    language="kql"
+                    height={160}
+                    minHeight={120}
+                    ariaLabel={`Tile ${i + 1} KQL`}
+                  />
+                  <Button size="small" appearance="primary" icon={<Play20Regular />} onClick={() => runTile(i)}>Run tile</Button>
                 </div>
-              </DialogContent>
-              <DialogActions>
-                <Button appearance="secondary" onClick={() => setParamsOpen(false)}>Close</Button>
-                <Button appearance="primary" onClick={() => { setParamsOpen(false); load(true); }}>Apply &amp; re-run</Button>
-              </DialogActions>
-            </DialogBody>
-          </DialogSurface>
-        </Dialog>
-
-        <Dialog open={shareOpen} onOpenChange={(_: unknown, d: any) => setShareOpen(d.open)}>
-          <DialogSurface>
-            <DialogBody>
-              <DialogTitle>Share dashboard</DialogTitle>
-              <DialogContent>
-                <Caption1>Anyone with access to this Loom item can view it. Permissions are managed via the workspace item ACL.</Caption1>
-                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <Caption1>Canonical URL</Caption1>
-                  <Input value={typeof window !== 'undefined' ? window.location.href : ''} readOnly />
-                  <Button
-                    appearance="outline"
-                    onClick={() => {
-                      if (typeof navigator !== 'undefined' && navigator.clipboard) {
-                        navigator.clipboard.writeText(window.location.href).catch(() => {});
-                      }
-                    }}
-                  >
-                    Copy URL
-                  </Button>
-                  <Caption1>
-                    To grant another user access, add them to this item via the workspace permissions
-                    page (Loom RBAC). Tenant-wide sharing is not enabled in this deployment.
-                  </Caption1>
-                </div>
-              </DialogContent>
-              <DialogActions>
-                <Button appearance="primary" onClick={() => setShareOpen(false)}>Close</Button>
-              </DialogActions>
-            </DialogBody>
-          </DialogSurface>
-        </Dialog>
+              )}
+            </div>
+          );
+        })}
+        {tiles.length === 0 && <Caption1 style={{ gridColumn: 'span 12' }}>No tiles yet. Click <strong>Add tile</strong> to start building.</Caption1>}
       </div>
-    } />
+
+      {/* Data sources dialog */}
+      <Dialog open={sourcesOpen} onOpenChange={(_: unknown, d: any) => setSourcesOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 620 }}>
+          <DialogBody>
+            <DialogTitle>Data sources</DialogTitle>
+            <DialogContent>
+              <Caption1>Bind the dashboard to one or more KQL databases on the Loom shared ADX cluster. Tiles select a source; query-based parameters can run against a source.</Caption1>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                {dataSources.map((ds, idx) => (
+                  <div key={ds.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                    <div style={{ flex: 1 }}>
+                      <Caption1>Name</Caption1>
+                      <Input value={ds.name} onChange={(_: unknown, d: any) => updateDataSource(idx, { name: d.value })} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <Caption1>KQL database</Caption1>
+                      <Input value={ds.database} onChange={(_: unknown, d: any) => updateDataSource(idx, { database: d.value })} placeholder="loomdb-default" />
+                    </div>
+                    <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => removeDataSource(idx)} aria-label="Remove data source" />
+                  </div>
+                ))}
+                {dataSources.length === 0 && <Caption1>No explicit data sources — tiles use the dashboard default database <strong>{defaultDb}</strong>.</Caption1>}
+                <Button appearance="outline" icon={<Add20Regular />} onClick={addDataSource}>Add data source</Button>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="primary" onClick={() => setSourcesOpen(false)}>Done</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Parameters dialog — free-text / fixed / multi / query / datasource / duration */}
+      <Dialog open={paramsOpen} onOpenChange={(_: unknown, d: any) => setParamsOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 720 }}>
+          <DialogBody>
+            <DialogTitle>Dashboard parameters</DialogTitle>
+            <DialogContent>
+              <Caption1>
+                Parameters substitute into tile KQL by their variable name (Fabric convention, e.g. <code>_eventType</code>).
+                Time range exposes <code>_startTime</code>/<code>_endTime</code>; <code>_loomTimeFrom</code> is also supported.
+                <code> multi</code> renders as <code>dynamic([...])</code> for <code>x in (_var)</code> filters.
+              </Caption1>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>
+                {params.map((p, idx) => (
+                  <div key={idx} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ flex: 1 }}>
+                        <Caption1>Variable name</Caption1>
+                        <Input value={p.variableName} onChange={(_: unknown, d: any) => updateParam(idx, { variableName: d.value })} placeholder="_eventType" />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <Caption1>Label</Caption1>
+                        <Input value={p.label || ''} onChange={(_: unknown, d: any) => updateParam(idx, { label: d.value })} />
+                      </div>
+                      <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => removeParam(idx)} aria-label="Remove parameter" />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ flex: 1 }}>
+                        <Caption1>Type</Caption1>
+                        <Select value={p.type} onChange={(_: unknown, d: any) => updateParam(idx, { type: d.value as DashParamType })}>
+                          <option value="freetext">Free text</option>
+                          <option value="fixed">Fixed values (single)</option>
+                          <option value="multi">Multi-select</option>
+                          <option value="query">Query-based</option>
+                          <option value="datasource">Data source</option>
+                          <option value="duration">Duration (time range)</option>
+                        </Select>
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <Caption1>Data type</Caption1>
+                        <Select value={p.dataType || 'string'} onChange={(_: unknown, d: any) => updateParam(idx, { dataType: d.value as DashParamDataType })}>
+                          <option value="string">string</option>
+                          <option value="long">long</option>
+                          <option value="int">int</option>
+                          <option value="real">real</option>
+                          <option value="datetime">datetime</option>
+                          <option value="bool">bool</option>
+                        </Select>
+                      </div>
+                    </div>
+                    {(p.type === 'fixed' || p.type === 'multi') && (
+                      <div>
+                        <Caption1>Allowed values (comma-separated)</Caption1>
+                        <Input value={(p.values || []).join(',')} onChange={(_: unknown, d: any) => updateParam(idx, { values: d.value.split(',').map((x: string) => x.trim()).filter(Boolean) })} />
+                      </div>
+                    )}
+                    {p.type === 'query' && (
+                      <>
+                        <Caption1>Values query (returns one column)</Caption1>
+                        <Textarea value={p.query || ''} onChange={(_: unknown, d: any) => updateParam(idx, { query: d.value })} rows={2} style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }} placeholder="StormEvents | distinct State" />
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                          <div style={{ flex: 1 }}>
+                            <Caption1>Run against source</Caption1>
+                            <Select value={p.dataSourceId || ''} onChange={(_: unknown, d: any) => updateParam(idx, { dataSourceId: d.value || undefined })}>
+                              <option value="">{`(default: ${defaultDb})`}</option>
+                              {dataSources.map((ds) => <option key={ds.id} value={ds.id}>{ds.name}</option>)}
+                            </Select>
+                          </div>
+                          <Button size="small" appearance="outline" onClick={() => loadParamValues(p)}>Preview values</Button>
+                        </div>
+                        {paramValueCache[p.variableName] && <Caption1>{paramValueCache[p.variableName].length} values loaded.</Caption1>}
+                      </>
+                    )}
+                  </div>
+                ))}
+                <Button appearance="outline" icon={<Add20Regular />} onClick={addParam}>Add parameter</Button>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setParamsOpen(false)}>Close</Button>
+              <Button appearance="primary" onClick={() => { setParamsOpen(false); runAll(); }}>Apply &amp; re-run</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Edit JSON model dialog */}
+      <Dialog open={jsonOpen} onOpenChange={(_: unknown, d: any) => setJsonOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Edit dashboard model (JSON)</DialogTitle>
+            <DialogContent>
+              <Caption1>Full model: <code>{`{ tiles, dataSources, parameters, timeRange }`}</code>. An array root is accepted as just the tiles.</Caption1>
+              <Textarea
+                value={jsonText}
+                onChange={(_: unknown, d: any) => { setJsonText(d.value); setJsonErr(null); }}
+                rows={20}
+                style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12, marginTop: 8 }}
+                aria-label="Dashboard JSON model"
+              />
+              {jsonErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody><MessageBarTitle>JSON parse error</MessageBarTitle>{jsonErr}</MessageBarBody></MessageBar>}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setJsonOpen(false)}>Cancel</Button>
+              <Button appearance="primary" onClick={applyJson}>Apply</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Share dialog */}
+      <Dialog open={shareOpen} onOpenChange={(_: unknown, d: any) => setShareOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Share dashboard</DialogTitle>
+            <DialogContent>
+              <Caption1>Anyone with access to this Loom item can view it. Permissions are managed via the workspace item ACL.</Caption1>
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <Caption1>Canonical URL</Caption1>
+                <Input value={typeof window !== 'undefined' ? window.location.href : ''} readOnly />
+                <Button appearance="outline" onClick={() => { if (typeof navigator !== 'undefined' && navigator.clipboard) navigator.clipboard.writeText(window.location.href).catch(() => {}); }}>Copy URL</Button>
+                <Caption1>To grant another user access, add them to this item via the workspace permissions page (Loom RBAC). Tenant-wide sharing is not enabled in this deployment.</Caption1>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="primary" onClick={() => setShareOpen(false)}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </div>
   );
+
+  // On /new there is no Cosmos record yet, so Save (PUT) / Run (POST) would
+  // 404/operate without persistence. Mirror the Eventstream/Activator pattern:
+  // an ENABLED create surface mints a Cosmos kql-dashboard item, then routes to
+  // this live editor where Add tile + Run + Save + parameters all work against
+  // the real Kusto cluster + Cosmos.
+  if (id === 'new') {
+    return (
+      <NewItemCreateGate item={item} createLabel="New Real-Time Dashboard"
+        intro="A Real-Time (KQL) Dashboard is a collection of tiles — each a KQL query bound to a KQL database, rendered as a table, time chart, bar/column, pie, stat card, or map. Bind data sources, add dashboard parameters (free-text, fixed, query-based, time range) that substitute into tile KQL, set auto-refresh, and Save. Create it, then build tiles that run live against the Loom shared ADX cluster." />
+    );
+  }
+
+  return <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={main} />;
 }
 
 // ----- Eventstream -----
@@ -1837,8 +2253,9 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     if (!id || id === 'new') return;
     try {
       const r = await fetch(`/api/items/eventstream/${id}`);
-      const j = (await r.json()) as EventstreamState;
+      const j = (await r.json()) as EventstreamState & { fabricEventstreamId?: string | null };
       setState(j);
+      if (j.fabricEventstreamId) setPublishedId(j.fabricEventstreamId);
       const cfg = j.config && (j.config.source || j.config.sink || (j.config.transforms?.length ?? 0) > 0)
         ? j.config
         : DEFAULT_ES_CFG;
@@ -1927,6 +2344,32 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     }
   }, [fabricWsId, dirty, save, id, load]);
 
+  // Pull the LIVE topology back from the published Fabric Eventstream item
+  // (real getDefinition REST), decode it, and load it into the designer. This
+  // closes the round-trip: design → publish → pull-back-and-edit.
+  const [pullBusy, setPullBusy] = useState(false);
+  const pullFromFabric = useCallback(async () => {
+    setPullBusy(true); setSaveErr(null); setSaveMsg('Pulling live topology from Fabric…');
+    try {
+      const qs = fabricWsId.trim() ? `?fabricWorkspaceId=${encodeURIComponent(fabricWsId.trim())}` : '';
+      const r = await fetch(`/api/items/eventstream/${id}/definition${qs}`);
+      const j = await r.json();
+      if (!j.ok) {
+        setSaveErr(j.error || `HTTP ${r.status}`);
+        setSaveMsg(j.hint ? `${j.error} — ${j.hint}` : (j.error || 'pull failed'));
+        return;
+      }
+      setCfgText(JSON.stringify(j.config, null, 2));
+      setDirty(true);
+      setActiveTab('designer');
+      setSaveMsg('Pulled the live Fabric topology into the designer. Save to persist locally.');
+    } catch (e: any) {
+      setSaveErr(e?.message || String(e));
+    } finally {
+      setPullBusy(false);
+    }
+  }, [id, fabricWsId]);
+
   const canSave = !saving && dirty;
 
   // Ribbon-driven add/transform helpers. They mutate cfgText (the on-wire
@@ -1975,12 +2418,42 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       { label: 'Publish', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
         { label: 'Publish to Fabric', onClick: () => setPublishOpen(true) },
+        { label: pullBusy ? 'Pulling…' : 'Pull from Fabric', onClick: pullBusy ? undefined : pullFromFabric, disabled: pullBusy,
+          title: 'Reload the live topology from the published Fabric Eventstream (getDefinition REST)' },
       ]},
     ]},
-  ], [saving, canSave, save, ribbonAdd, cfgText, onDesignerChange]);
+  ], [saving, canSave, save, ribbonAdd, cfgText, onDesignerChange, pullBusy, pullFromFabric]);
+
+  // On /new there is no Cosmos record yet, so Save (PUT) would 404 — the
+  // designer rendered but couldn't persist (the "wonky / not functional"
+  // verdict). Mirror the Activator pattern: an ENABLED create surface mints a
+  // Cosmos eventstream item and routes to the live editor below, where Save +
+  // Publish-to-Fabric + Pull-from-Fabric all work against the real backend.
+  if (id === 'new') {
+    return (
+      <NewItemCreateGate item={item} createLabel="New eventstream"
+        intro="An Eventstream is a streaming topology: sources (Event Hubs, IoT Hub, Kafka, sample data) → operators (filter, aggregate, group-by, join) → destinations (Eventhouse/KQL, Lakehouse, Activator, custom endpoint). Create it, then design the topology on the visual canvas and Publish to Fabric to create the live Eventstream item via the Fabric definition REST API." />
+    );
+  }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      leftPanel={
+        // Azure Event Hubs namespace navigator (parity wave 5): the underlying
+        // Azure service that feeds Fabric Eventstream sources. Typed groups for
+        // Event hubs / Consumer groups (per hub) / Schema groups / Authorization
+        // rules / Networking / Geo-recovery with live counts, ＋New, filter, and
+        // inline delete — all on real Microsoft.EventHub ARM REST. Picking an
+        // event hub copies its name for use as an Eventstream source.
+        <EventHubsNamespaceTree
+          onSelectEventHub={(eh) => {
+            if (typeof navigator !== 'undefined' && navigator.clipboard) {
+              void navigator.clipboard.writeText(eh).catch(() => { /* clipboard may be blocked */ });
+            }
+          }}
+        />
+      }
+      main={
       <div className={s.pad}>
         <MessageBar intent="info">
           <MessageBarBody>
@@ -2000,6 +2473,11 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
           {publishedId && <Badge appearance="filled" color="success">published</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
           <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Reload</Button>
+          {publishedId && (
+            <Button appearance="outline" onClick={pullFromFabric} disabled={pullBusy}>
+              {pullBusy ? 'Pulling…' : 'Pull from Fabric'}
+            </Button>
+          )}
           <Button appearance="outline" onClick={() => setPublishOpen(true)} style={{ marginLeft: 'auto' }}>Publish to Fabric</Button>
           <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={saving || !dirty}>
             {saving ? 'Saving…' : 'Save (Ctrl+S)'}
@@ -2914,7 +3392,24 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshes, setRefreshes] = useState<RefreshLite[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'refresh' | 'config'>('tables');
+  const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config'>('tables');
+
+  // --- Model builder (real Power BI push-dataset authoring) ---------------
+  // Builds a NEW semantic model with tables/typed-columns/measures/relationships
+  // via POST /api/items/semantic-model/build → Power BI Push Datasets REST.
+  const PBI_COL_TYPES = ['String', 'Int64', 'Double', 'Decimal', 'Boolean', 'DateTime'] as const;
+  type BuilderColumn = { name: string; dataType: typeof PBI_COL_TYPES[number] };
+  type BuilderMeasure = { name: string; expression: string };
+  type BuilderTable = { name: string; columns: BuilderColumn[]; measures: BuilderMeasure[] };
+  type BuilderRel = { name: string; fromTable: string; fromColumn: string; toTable: string; toColumn: string; crossFilteringBehavior: 'OneDirection' | 'BothDirections' };
+  const [bModelName, setBModelName] = useState('');
+  const [bTables, setBTables] = useState<BuilderTable[]>([
+    { name: 'Sales', columns: [{ name: 'OrderId', dataType: 'Int64' }, { name: 'Amount', dataType: 'Double' }, { name: 'OrderDate', dataType: 'DateTime' }], measures: [{ name: 'TotalSales', expression: 'SUM(Sales[Amount])' }] },
+  ]);
+  const [bRels, setBRels] = useState<BuilderRel[]>([]);
+  const [bBusy, setBBusy] = useState(false);
+  const [bMsg, setBMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   // DAX measure validator — name + table dropdown + Monaco DAX editor + Test
   // button. Persistence is XMLA-only (Premium / Fabric capacity feature) so
@@ -2957,6 +3452,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
       const j = await r.json();
       if (!j.ok) { setDetailErr(j.error); return; }
       setDetail({ dataset: j.dataset, tables: j.tables || [], refreshSchedule: j.refreshSchedule });
+      setRelationships(Array.isArray(j.relationships) ? j.relationships : []);
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
 
@@ -3068,6 +3564,39 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!measureName) setMeasureName('MyMeasure');
   }, [measureTable, measureName, detail?.tables]);
 
+  // Build a REAL new semantic model (push dataset) via the Power BI Push
+  // Datasets REST API. After a successful build we refresh the dataset list
+  // and select the new model so the user lands in its detail view.
+  const buildModel = useCallback(async () => {
+    if (!workspaceId || !bModelName.trim() || bTables.length === 0) return;
+    setBBusy(true); setBMsg(null);
+    try {
+      const r = await fetch(`/api/items/semantic-model/build?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: bModelName.trim(),
+          tables: bTables.map((t) => ({
+            name: t.name.trim(),
+            columns: t.columns.filter((c) => c.name.trim()).map((c) => ({ name: c.name.trim(), dataType: c.dataType })),
+            measures: t.measures.filter((m) => m.name.trim() && m.expression.trim()).map((m) => ({ name: m.name.trim(), expression: m.expression.trim() })),
+          })),
+          relationships: bRels.filter((rl) => rl.fromTable && rl.fromColumn && rl.toTable && rl.toColumn),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setBMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
+      setBMsg({ ok: true, text: `Created semantic model "${j.name}" (id ${String(j.datasetId).slice(0, 8)}…). Reloading workspace…` });
+      await loadList(workspaceId);
+      if (j.datasetId) { setDatasetId(j.datasetId); setTab('tables'); }
+    } catch (e: any) { setBMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setBBusy(false); }
+  }, [workspaceId, bModelName, bTables, bRels, loadList]);
+
+  const focusBuild = useCallback(() => {
+    setTab('build');
+    if (!bModelName) setBModelName('My semantic model');
+  }, [bModelName]);
+
   const canRefresh = !!datasetId && !refreshing && detail?.dataset?.isRefreshable !== false;
   const openInPbi = useCallback(() => {
     if (workspaceId && datasetId) {
@@ -3080,6 +3609,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   // Measures-tab MessageBar instead. See no-vaporware.md.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
+      { label: 'Model', actions: [
+        { label: 'Build model', onClick: workspaceId ? focusBuild : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'Create a new semantic model with tables, columns, measures & relationships via Power BI REST (push dataset)' },
+      ]},
       { label: 'Measures', actions: [
         { label: 'New measure (DAX)', onClick: datasetId ? focusNewMeasure : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'Open the Measures tab to author + validate DAX against the live model' },
       ]},
@@ -3090,25 +3622,19 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
         { label: 'Open in Power BI', onClick: datasetId ? openInPbi : undefined, disabled: !datasetId, title: !datasetId ? 'select a dataset first' : 'opens the dataset in Power BI — author RLS roles, perspectives & Direct Lake there' },
       ]},
     ]},
-  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi]);
+  ], [refreshing, canRefresh, refreshNow, datasetId, detail?.dataset?.isRefreshable, focusNewMeasure, openInPbi, workspaceId, focusBuild]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Datasets</Subtitle2>
-          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
-          {datasets && datasets.length === 0 && <Caption1>No datasets in this workspace.</Caption1>}
-          <Tree aria-label="Datasets">
-            {(datasets || []).map((d) => (
-              <TreeItem key={d.id} itemType="leaf" value={d.id} onClick={() => setDatasetId(d.id)}>
-                <TreeItemLayout iconBefore={<Database20Regular />}>
-                  {datasetId === d.id ? <strong>{d.name}</strong> : d.name}
-                </TreeItemLayout>
-              </TreeItem>
-            ))}
-          </Tree>
-        </div>
+        <PowerBiTree
+          workspaceId={workspaceId}
+          selectedDatasetId={datasetId}
+          onOpenDataset={(dsId) => { setDatasetId(dsId); setTab('tables'); }}
+          onNewDataset={focusBuild}
+          onOpenReport={(r) => { if (r.webUrl) { try { window.open(r.webUrl, '_blank', 'noreferrer'); } catch { /* popup blocked */ } } }}
+          onOpenDashboard={(d) => { if (d.webUrl) { try { window.open(d.webUrl, '_blank', 'noreferrer'); } catch { /* popup blocked */ } } }}
+        />
       }
       main={
         <>
@@ -3117,13 +3643,13 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
               <Badge appearance="filled" color="brand">Semantic model</Badge>
               <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
               <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+              <Button appearance="outline" icon={<Add20Regular />} onClick={focusBuild} disabled={!workspaceId} title={!workspaceId ? 'select a workspace first' : 'Build a new semantic model (push dataset) via Power BI REST'} style={{ marginLeft: 'auto' }}>Build model</Button>
               <Button
                 appearance="primary"
                 icon={<Play20Regular />}
                 disabled={!datasetId || refreshing || detail?.dataset?.isRefreshable === false}
                 onClick={refreshNow}
                 title={detail?.dataset?.isRefreshable === false ? 'Dataset is not refreshable (e.g. push dataset or DirectQuery without gateway).' : undefined}
-                style={{ marginLeft: 'auto' }}
               >
                 {refreshing ? 'Queuing…' : 'Refresh dataset'}
               </Button>
@@ -3139,13 +3665,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
               </div>
             )}
           </div>
-          {datasetId && (
+          {(datasetId || tab === 'build') && (
             <>
               <div className={s.tabBar}>
                 <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value as any)}>
                   <Tab value="tables">Tables ({detail?.tables?.length ?? 0})</Tab>
-                  <Tab value="relationships">Relationships</Tab>
+                  <Tab value="relationships">Relationships ({relationships.length})</Tab>
                   <Tab value="measures">Measures (DAX)</Tab>
+                  <Tab value="build">Build model</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
                   <Tab value="config">Configuration</Tab>
                 </TabList>
@@ -3172,7 +3699,111 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   </div>
                 )}
                 {tab === 'relationships' && (
-                  <Body1>Power BI REST returns relationships only via the XMLA endpoint (TMSL). Click <strong>Refresh dataset</strong> to validate metadata; full TMSL graph rendering lands in v2.2.</Body1>
+                  <>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Table relationships from <code>GET /datasets/{'{'}id{'}'}/relationships</code> (Power BI REST). Editing relationships
+                      on an imported model requires XMLA / Desktop; push datasets accept relationships at create time via the <strong>Build model</strong> tab.
+                    </Caption1>
+                    {relationships.length === 0 ? (
+                      <Caption1 style={{ marginTop: 8 }}>No relationships returned for this model.</Caption1>
+                    ) : (
+                      <div className={s.tableWrap} style={{ marginTop: 8 }}>
+                        <Table aria-label="Relationships" size="small">
+                          <TableHeader><TableRow>
+                            <TableHeaderCell>Name</TableHeaderCell>
+                            <TableHeaderCell>From</TableHeaderCell>
+                            <TableHeaderCell>To</TableHeaderCell>
+                            <TableHeaderCell>Cross-filter</TableHeaderCell>
+                          </TableRow></TableHeader>
+                          <TableBody>
+                            {relationships.map((r, i) => (
+                              <TableRow key={r.name || i}>
+                                <TableCell>{r.name || '—'}</TableCell>
+                                <TableCell className={s.cell}>{r.fromTable}[{r.fromColumn}]</TableCell>
+                                <TableCell className={s.cell}>{r.toTable}[{r.toColumn}]</TableCell>
+                                <TableCell>{r.crossFilteringBehavior || '—'}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
+                  </>
+                )}
+                {tab === 'build' && (
+                  <>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>Build a semantic model (push dataset)</MessageBarTitle>
+                        Define tables, typed columns, DAX measures, and relationships, then <strong>Create model</strong> —
+                        this calls the Power BI <code>POST /groups/{'{'}ws{'}'}/datasets</code> push-dataset REST API to author a
+                        real semantic model. Imported / Direct Lake model edits still require the XMLA endpoint
+                        (<code>LOOM_POWERBI_XMLA_ENDPOINT</code>) or Power BI Desktop.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <Field label="Model name" required style={{ maxWidth: 420, marginTop: 8 }}>
+                      <Input value={bModelName} onChange={(_, d) => setBModelName(d.value)} placeholder="My semantic model" />
+                    </Field>
+                    {bTables.map((t, ti) => (
+                      <div key={ti} className={s.card} style={{ marginTop: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <Field label="Table" style={{ minWidth: 220 }}>
+                            <Input value={t.name} onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, name: d.value } : x))} />
+                          </Field>
+                          <Button appearance="subtle" icon={<Delete20Regular />} aria-label="Remove table"
+                            onClick={() => setBTables((p) => p.filter((_, i) => i !== ti))} style={{ marginTop: 22 }} />
+                        </div>
+                        <Caption1 style={{ marginTop: 6 }}>Columns</Caption1>
+                        {t.columns.map((c, ci) => (
+                          <div key={ci} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+                            <Input value={c.name} placeholder="column" onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: x.columns.map((y, j) => j === ci ? { ...y, name: d.value } : y) } : x))} />
+                            <Select value={c.dataType} onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: x.columns.map((y, j) => j === ci ? { ...y, dataType: d.value as BuilderColumn['dataType'] } : y) } : x))}>
+                              {PBI_COL_TYPES.map((tp) => <option key={tp} value={tp}>{tp}</option>)}
+                            </Select>
+                            <Button appearance="subtle" icon={<Delete20Regular />} aria-label="Remove column"
+                              onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: x.columns.filter((_, j) => j !== ci) } : x))} />
+                          </div>
+                        ))}
+                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 4 }}
+                          onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, columns: [...x.columns, { name: '', dataType: 'String' }] } : x))}>Add column</Button>
+                        <Caption1 style={{ marginTop: 8 }}>Measures (DAX)</Caption1>
+                        {t.measures.map((m, mi) => (
+                          <div key={mi} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4 }}>
+                            <Input value={m.name} placeholder="MeasureName" onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: x.measures.map((y, j) => j === mi ? { ...y, name: d.value } : y) } : x))} />
+                            <Input value={m.expression} placeholder="SUM(Sales[Amount])" style={{ flex: 1, fontFamily: 'Consolas, monospace' }} onChange={(_, d) => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: x.measures.map((y, j) => j === mi ? { ...y, expression: d.value } : y) } : x))} />
+                            <Button appearance="subtle" icon={<Delete20Regular />} aria-label="Remove measure"
+                              onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: x.measures.filter((_, j) => j !== mi) } : x))} />
+                          </div>
+                        ))}
+                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 4 }}
+                          onClick={() => setBTables((p) => p.map((x, i) => i === ti ? { ...x, measures: [...x.measures, { name: '', expression: '' }] } : x))}>Add measure</Button>
+                      </div>
+                    ))}
+                    <Button appearance="outline" icon={<Add20Regular />} style={{ marginTop: 8 }}
+                      onClick={() => setBTables((p) => [...p, { name: `Table${p.length + 1}`, columns: [{ name: 'Id', dataType: 'Int64' }], measures: [] }])}>Add table</Button>
+
+                    <Subtitle2 style={{ marginTop: 16 }}>Relationships</Subtitle2>
+                    {bRels.map((rl, ri) => (
+                      <div key={ri} style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}>
+                        <Input value={rl.fromTable} placeholder="fromTable" onChange={(_, d) => setBRels((p) => p.map((x, i) => i === ri ? { ...x, fromTable: d.value } : x))} style={{ width: 140 }} />
+                        <Input value={rl.fromColumn} placeholder="fromColumn" onChange={(_, d) => setBRels((p) => p.map((x, i) => i === ri ? { ...x, fromColumn: d.value } : x))} style={{ width: 140 }} />
+                        <ArrowSync20Regular />
+                        <Input value={rl.toTable} placeholder="toTable" onChange={(_, d) => setBRels((p) => p.map((x, i) => i === ri ? { ...x, toTable: d.value } : x))} style={{ width: 140 }} />
+                        <Input value={rl.toColumn} placeholder="toColumn" onChange={(_, d) => setBRels((p) => p.map((x, i) => i === ri ? { ...x, toColumn: d.value } : x))} style={{ width: 140 }} />
+                        <Button appearance="subtle" icon={<Delete20Regular />} aria-label="Remove relationship" onClick={() => setBRels((p) => p.filter((_, i) => i !== ri))} />
+                      </div>
+                    ))}
+                    <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: 4 }}
+                      onClick={() => setBRels((p) => [...p, { name: `rel-${p.length + 1}`, fromTable: '', fromColumn: '', toTable: '', toColumn: '', crossFilteringBehavior: 'OneDirection' }])}>Add relationship</Button>
+
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 16 }}>
+                      <Button appearance="primary" icon={<Save20Regular />} disabled={bBusy || !workspaceId || !bModelName.trim()} onClick={buildModel}>
+                        {bBusy ? 'Creating…' : 'Create model'}
+                      </Button>
+                      {!workspaceId && <Caption1>Select a workspace first.</Caption1>}
+                    </div>
+                    {bMsg && <MessageBar intent={bMsg.ok ? 'success' : 'error'} style={{ marginTop: 8 }}><MessageBarBody>{bMsg.text}</MessageBarBody></MessageBar>}
+                  </>
                 )}
                 {tab === 'measures' && (
                   <>
@@ -3508,6 +4139,19 @@ function ReportLikeEditor({
     catch (e: any) { setViewerErr(e?.message || String(e)); }
   }, []);
 
+  // Bookmark slideshow — drives bookmarksManager.play (the Power BI web
+  // viewer "View → Bookmarks → View" slideshow). On = cycle bookmarks; Off =
+  // stop. Real powerbi-client API; surfaces engine errors verbatim.
+  const [slideshow, setSlideshow] = useState(false);
+  const toggleSlideshow = useCallback(async () => {
+    const next = !slideshow;
+    setSlideshow(next); setViewerErr(null);
+    try {
+      // models.BookmarksPlayMode: On = 0, Off = 1.
+      await embedRef.current?.bookmarksManager?.play?.(next ? 0 : 1);
+    } catch (e: any) { setViewerErr(e?.message || String(e)); setSlideshow(!next); }
+  }, [slideshow]);
+
   const captureBookmark = useCallback(async () => {
     setViewerErr(null);
     try {
@@ -3563,9 +4207,10 @@ function ReportLikeEditor({
         { label: 'Refresh visuals', onClick: hasReport ? refreshVisuals : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'reload the embedded report visuals (report.refresh)' },
         { label: editMode ? 'Switch to View' : 'Switch to Edit', onClick: hasReport ? toggleEditMode : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'toggle the embedded report between View and Edit modes' },
         { label: 'Capture bookmark', onClick: hasReport ? captureBookmark : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'capture the current visual + filter state as a personal bookmark' },
+        { label: slideshow ? 'Stop slideshow' : 'Play bookmarks', onClick: hasReport ? toggleSlideshow : undefined, disabled: !hasReport, title: !hasReport ? 'select a report first' : 'play the report bookmarks as a slideshow (bookmarksManager.play)' },
       ]}]),
     ]},
-  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark]);
+  ], [kind, canRefresh, refreshSelected, openInDesktop, copyReportLink, report?.webUrl, hasReport, refreshBusy, refreshData, exportBusy, exportReport, refreshVisuals, editMode, toggleEditMode, captureBookmark, slideshow, toggleSlideshow]);
 
   // Mint a per-report embed token whenever the selected report changes.
   // Paginated reports use a different SDK (`pbi-paginated`) that we don't
@@ -3687,7 +4332,10 @@ function ReportLikeEditor({
                           <Button key={b.name} size="small" appearance="subtle" onClick={() => applyBookmark(b.name)} style={{ justifyContent: 'flex-start' }}>{b.displayName || b.name}</Button>
                         ))}
                       </div>
-                      <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={captureBookmark} style={{ marginTop: 6 }}>Capture</Button>
+                      <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={captureBookmark}>Capture</Button>
+                        <Button size="small" appearance={slideshow ? 'primary' : 'outline'} icon={<Play20Regular />} onClick={toggleSlideshow}>{slideshow ? 'Stop' : 'Play'}</Button>
+                      </div>
                     </div>
                   </div>
                   <div style={{ flex: '1 1 auto', minWidth: 0 }}>

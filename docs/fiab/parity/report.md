@@ -19,6 +19,7 @@ Embed: `apps/fiab-console/lib/components/embed/powerbi-embed.tsx`
 | 8 | Refresh underlying data (semantic model) | Dataset -> Refresh now |
 | 9 | Open in Power BI / copy link | More options |
 | 10 | Filter pane | Right pane |
+| 11 | Bookmark slideshow (View) | View -> Bookmarks -> View (play) |
 
 ## Loom coverage
 
@@ -34,6 +35,7 @@ Embed: `apps/fiab-console/lib/components/embed/powerbi-embed.tsx`
 | 8 | built | Refresh data -> POST /api/items/report/[id]/refresh (resolves datasetId, queues dataset refresh) |
 | 9 | built | Open in Power BI + Copy link from report.webUrl |
 | 10 | built | Filter pane visible in the embed config |
+| 11 | built (NEW) | Play/Stop bookmarks slideshow -> report.bookmarksManager.play(On/Off) (embed JS API); ribbon View group + bookmarks panel button |
 
 ## Backend per control
 - Pages -> Power BI REST GET /groups/{ws}/reports/{id}/pages (getReportPages).

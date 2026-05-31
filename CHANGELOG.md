@@ -25,6 +25,21 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.19.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.18.2...csa-inabox-v0.19.0) (2026-05-29)
+
+
+### Features
+
+* **csa-loom:** functional Eventstream, Semantic Model & Report editors ([#480](https://github.com/fgarofalo56/csa-inabox/issues/480)) ([cb0d812](https://github.com/fgarofalo56/csa-inabox/commit/cb0d81262768d61bedac460f4caf4bfdc8cce583))
+* **csa-loom:** real Databricks Jobs parity for DatabricksJobEditor ([#477](https://github.com/fgarofalo56/csa-inabox/issues/477)) ([1afbe1c](https://github.com/fgarofalo56/csa-inabox/commit/1afbe1cb0f7d92d4404d46615724417dd6f28417))
+* **csa-loom:** real visual prompt-flow builder (DAG canvas + flow.dag.yaml + run) ([#482](https://github.com/fgarofalo56/csa-inabox/issues/482)) ([824c182](https://github.com/fgarofalo56/csa-inabox/commit/824c182192c56888fa107c53a16f7137052cea89))
+
+
+### Bug Fixes
+
+* **csa-loom-ml-model:** resource-binding model backed by Azure ML ([#478](https://github.com/fgarofalo56/csa-inabox/issues/478)) ([6247008](https://github.com/fgarofalo56/csa-inabox/commit/6247008d66db776bbc3c9822a45756a741a3ab14))
+* **csa-loom:** Power App editor — real resource-binding embed + publish, no 404 ([#479](https://github.com/fgarofalo56/csa-inabox/issues/479)) ([9949eca](https://github.com/fgarofalo56/csa-inabox/commit/9949eca0510e72ab8ff1e7acdf485aabb2c31323))
+
 ## [0.18.2](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.18.1...csa-inabox-v0.18.2) (2026-05-29)
 
 

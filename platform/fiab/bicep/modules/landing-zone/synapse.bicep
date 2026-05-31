@@ -33,6 +33,9 @@ param consolePrincipalId string = ''
 @description('Loom Console UAMI client ID — used for the SQL admin login name (must be valid AAD object).')
 param consoleUamiName string = ''
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Managed VNet enabled')
 param managedVnet bool = true
 
@@ -272,9 +275,9 @@ resource groupAadAdmin 'Microsoft.Synapse/workspaces/administrators@2021-06-01' 
 // Console UAMI needs ARM Contributor on the workspace so the BFF can
 // call /sqlPools/<pool>/pause and /resume (and read pool state) for
 // the resume-on-demand UX from the Dedicated editor.
-resource consoleArmContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId)) {
+resource consoleArmContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: synapseWs
-  name: guid(synapseWs.id, consolePrincipalId, 'contributor')
+  name: guid(synapseWs.id, consolePrincipalId, 'b24988ac-6180-42a0-ab88-20f7382dd24c')
   properties: {
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'

@@ -23,6 +23,10 @@ import {
   getRefreshSchedule,
   patchRefreshSchedule,
   takeOverDataset,
+  listDatasetRelationships,
+  createPushDataset,
+  putPushTable,
+  postPushRows,
   PowerBiError,
 } from '../powerbi-client';
 
@@ -112,5 +116,80 @@ describe('takeOverDataset', () => {
   it('propagates a 403 as PowerBiError (caller cannot take over)', async () => {
     mockFetch(() => ({ _status: 403, error: { message: 'PowerBINotAuthorizedException' } }));
     await expect(takeOverDataset('ws-1', 'ds-1')).rejects.toBeInstanceOf(PowerBiError);
+  });
+});
+
+describe('listDatasetRelationships', () => {
+  it('GETs the real groupId-scoped /datasets/{id}/relationships endpoint', async () => {
+    let url = '';
+    mockFetch((u) => { url = u; return { value: [{ name: 'rel1', fromTable: 'Sales', fromColumn: 'CustId', toTable: 'Customer', toColumn: 'Id' }] }; });
+    const rels = await listDatasetRelationships('ws-1', 'ds-1');
+    expect(url).toContain('/groups/ws-1/datasets/ds-1/relationships');
+    expect(rels).toHaveLength(1);
+    expect(rels[0].fromTable).toBe('Sales');
+  });
+
+  it('returns [] on 404/400 instead of throwing', async () => {
+    mockFetch(() => ({ _status: 404, error: { message: 'not found' } }));
+    await expect(listDatasetRelationships('ws-1', 'ds-1')).resolves.toEqual([]);
+  });
+});
+
+describe('createPushDataset', () => {
+  it('POSTs /groups/{ws}/datasets with tables, measures, relationships and defaultMode', async () => {
+    let url = ''; let method = ''; let body: any;
+    mockFetch((u, init) => {
+      url = u; method = (init?.method as string) || 'GET';
+      body = JSON.parse((init?.body as string) || '{}');
+      return { id: 'new-ds-1', name: body.name };
+    });
+    const out = await createPushDataset('ws-1', {
+      name: 'My model',
+      tables: [{ name: 'Sales', columns: [{ name: 'Amount', dataType: 'Double' }], measures: [{ name: 'Total', expression: 'SUM(Sales[Amount])' }] }],
+      relationships: [{ name: 'r1', fromTable: 'Sales', fromColumn: 'CustId', toTable: 'Customer', toColumn: 'Id' }],
+    });
+    expect(url).toContain('/groups/ws-1/datasets');
+    expect(method).toBe('POST');
+    expect(body.name).toBe('My model');
+    expect(body.defaultMode).toBe('Push');
+    expect(body.tables[0].columns[0].dataType).toBe('Double');
+    expect(body.tables[0].measures[0].expression).toBe('SUM(Sales[Amount])');
+    expect(body.relationships[0].toTable).toBe('Customer');
+    expect(out.id).toBe('new-ds-1');
+  });
+
+  it('appends defaultRetentionPolicy when basicFIFO is requested', async () => {
+    let url = '';
+    mockFetch((u) => { url = u; return { id: 'x', name: 'n' }; });
+    await createPushDataset('ws-1', { name: 'n', tables: [{ name: 'T', columns: [{ name: 'c', dataType: 'String' }] }] }, 'basicFIFO');
+    expect(url).toContain('defaultRetentionPolicy=basicFIFO');
+  });
+
+  it('surfaces a 401 as PowerBiError (SP not registered in PBI tenant)', async () => {
+    mockFetch(() => ({ _status: 401, error: { message: 'Unauthorized' } }));
+    await expect(createPushDataset('ws-1', { name: 'n', tables: [{ name: 'T', columns: [{ name: 'c', dataType: 'String' }] }] }))
+      .rejects.toBeInstanceOf(PowerBiError);
+  });
+});
+
+describe('putPushTable / postPushRows', () => {
+  it('PUTs the table schema to /datasets/{id}/tables/{name}', async () => {
+    let url = ''; let method = ''; let body: any;
+    mockFetch((u, init) => { url = u; method = (init?.method as string) || 'GET'; body = JSON.parse((init?.body as string) || '{}'); return undefined; });
+    const out = await putPushTable('ws-1', 'ds-1', { name: 'Sales', columns: [{ name: 'Amount', dataType: 'Double' }], measures: [{ name: 'Total', expression: 'SUM(Sales[Amount])' }] });
+    expect(url).toContain('/groups/ws-1/datasets/ds-1/tables/Sales');
+    expect(method).toBe('PUT');
+    expect(body.measures[0].name).toBe('Total');
+    expect(out).toEqual({ ok: true });
+  });
+
+  it('POSTs rows to /datasets/{id}/tables/{name}/rows', async () => {
+    let url = ''; let method = ''; let body: any;
+    mockFetch((u, init) => { url = u; method = (init?.method as string) || 'GET'; body = JSON.parse((init?.body as string) || '{}'); return undefined; });
+    await postPushRows('ws-1', 'ds-1', 'Sales', [{ Amount: 10 }, { Amount: 20 }]);
+    expect(url).toContain('/groups/ws-1/datasets/ds-1/tables/Sales/rows');
+    expect(method).toBe('POST');
+    expect(body.rows).toHaveLength(2);
+    expect(body.rows[1].Amount).toBe(20);
   });
 });

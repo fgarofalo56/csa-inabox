@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Field, Dropdown, Option,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Tab, TabList,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -29,6 +30,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { AiSearchServiceTree } from '@/lib/components/ai-search/ai-search-tree';
 import { PromptFlowBuilder } from '@/lib/prompt-flow/flow-builder';
 import {
   type FlowDag, parseFlowDag, serializeFlowDag, starterFlow, emptyFlow,
@@ -720,49 +722,247 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
 // 6. AiSearchIndexEditor
 // =====================================================================
 
+// Helper: post JSON to a route, content-type-guarded so an HTML error page from
+// a proxy never throws an opaque "Unexpected token <" in the editor.
+async function postJson(url: string, body?: unknown): Promise<any> {
+  const r = await fetch(url, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('json')) {
+    const t = await r.text();
+    return { ok: false, error: `HTTP ${r.status}: ${t.slice(0, 200) || r.statusText}` };
+  }
+  return r.json();
+}
+
+/**
+ * Bind picker — renders whenever the item is unbound (412), AI Search isn't
+ * provisioned (notDeployed), or the operator explicitly re-binds. Lists REAL
+ * indexes on the service for "bind to existing"; supports "create new + bind".
+ * The full editor surface still renders below this; this is an HONEST gate.
+ */
+function AiSearchBindPicker({ id, onBound }: { id: string; onBound: () => void }) {
+  const s = useStyles();
+  const [state, reload] = useApi<{ bound: string | null; service: string | null; indexes: { name: string; fieldCount: number }[]; listError?: string; notDeployed?: boolean }>(
+    `/api/items/ai-search-index/${encodeURIComponent(id)}/bind`,
+  );
+  const [pick, setPick] = useState('');
+  const [newName, setNewName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  const bindExisting = async () => {
+    if (!pick) { setMsg({ intent: 'error', text: 'Pick an index to bind.' }); return; }
+    setBusy(true); setMsg(null);
+    const j = await postJson(`/api/items/ai-search-index/${encodeURIComponent(id)}/bind`, { indexName: pick });
+    setBusy(false);
+    if (!j.ok) setMsg({ intent: 'error', text: j.error || 'Bind failed' });
+    else { setMsg({ intent: 'success', text: `Bound to index ${pick}` }); onBound(); }
+  };
+
+  const createAndBind = async () => {
+    if (!newName) { setMsg({ intent: 'error', text: 'Enter a new index name.' }); return; }
+    setBusy(true); setMsg(null);
+    const j = await postJson(`/api/items/ai-search-index/${encodeURIComponent(id)}/bind`, { create: true, indexName: newName });
+    setBusy(false);
+    if (!j.ok) setMsg({ intent: 'error', text: j.error || 'Create failed' });
+    else { setMsg({ intent: 'success', text: `Created + bound index ${newName}` }); onBound(); }
+  };
+
+  const indexes = state.data?.indexes || [];
+  return (
+    <div className={s.card}>
+      <Subtitle2>Bind this item to an Azure AI Search index</Subtitle2>
+      <Caption1>
+        A Loom AI Search item maps to one real index on your search service
+        {state.data?.service ? <> (<code>{state.data.service}</code>)</> : null}. Pick an existing
+        index or create a new one — every tab below then manages that real index.
+      </Caption1>
+      {state.data?.notDeployed && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Azure AI Search not provisioned</MessageBarTitle>
+            {state.data.listError || 'Set LOOM_AI_SEARCH_SERVICE to a deployed Microsoft.Search/searchServices name and grant the Loom UAMI the "Search Index Data Contributor" + "Search Service Contributor" roles (bicep: platform/fiab/bicep/modules/admin-plane/ai-search.bicep).'}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {state.data?.listError && !state.data?.notDeployed && <ErrorBar msg={state.data.listError} />}
+      <div className={s.toolbar} style={{ marginTop: 8 }}>
+        <Field label="Existing index">
+          <Dropdown value={pick} selectedOptions={pick ? [pick] : []}
+            placeholder={state.loading ? 'Loading…' : (indexes.length ? 'Select an index' : 'No indexes on service')}
+            onOptionSelect={(_, d) => d.optionValue && setPick(d.optionValue)}>
+            {indexes.map((i) => (<Option key={i.name} value={i.name}>{i.name} ({i.fieldCount} fields)</Option>))}
+          </Dropdown>
+        </Field>
+        <Button appearance="primary" disabled={busy || !pick} onClick={bindExisting}>Bind</Button>
+        <Button onClick={reload} disabled={busy}>Refresh list</Button>
+      </div>
+      <div className={s.toolbar}>
+        <Field label="Or create new index">
+          <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder="my-index (lowercase, dashes)" />
+        </Field>
+        <Button disabled={busy || !newName} onClick={createAndBind}>Create + bind</Button>
+      </div>
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+    </div>
+  );
+}
+
 export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const isNew = id === 'new' || id === 'create';
-  const [list, reloadList] = useApi<{ indexes: any[] }>(isNew ? '/api/items/ai-search-index' : null);
-  const [detail, reloadDetail] = useApi<{ index: any }>(isNew ? null : `/api/items/ai-search-index/${encodeURIComponent(id)}`, [id]);
-  const [query, setQuery] = useState('*');
-  const [hits, setHits] = useState<any>(null);
-  const [busy, setBusy] = useState(false);
 
-  // Deep-link to the index blade when we have an ARM id on the index payload;
-  // fall back to the generic portal landing page otherwise.
+  // Navigator-selected index (by real name, service-scoped). When set, the
+  // editor surfaces THAT index — independent of any Loom item binding — so the
+  // left service navigator behaves like clicking an index in the portal.
+  const [navIndex, setNavIndex] = useState<string | null>(null);
+  const [treeRefresh, setTreeRefresh] = useState(0);
+
+  // Catalog list mode (no specific item) — list every index on the service.
+  const [list, reloadList] = useApi<{ indexes: any[] }>(isNew && !navIndex ? '/api/items/ai-search-index' : null);
+
+  // Navigator detail — resolve the selected index by NAME (def + stats).
+  const [navDetail, reloadNavDetail] = useApi<{ index: any; stats?: any }>(
+    navIndex ? `/api/ai-search/indexes/${encodeURIComponent(navIndex)}` : null, [navIndex],
+  );
+
+  // Item mode — resolve the bound index (def + stats). 412 → unbound → picker.
+  const [itemDetail, reloadItemDetail] = useApi<{ index: any; stats?: any; boundTo?: string; code?: string }>(
+    isNew || navIndex ? null : `/api/items/ai-search-index/${encodeURIComponent(id)}`, [id],
+  );
+
+  // Active detail = navigator selection wins, else the bound item.
+  const detail = navIndex ? navDetail : itemDetail;
+  const reloadDetail = navIndex ? reloadNavDetail : reloadItemDetail;
+
+  // The route used for index-scoped actions (search/analyze/schema/indexers).
+  // Navigator mode hits the by-name service routes; item mode the item routes.
+  const indexBase = navIndex
+    ? `/api/ai-search/indexes/${encodeURIComponent(navIndex)}`
+    : `/api/items/ai-search-index/${encodeURIComponent(id)}`;
+
+  const [tab, setTab] = useState<'schema' | 'search' | 'stats' | 'indexers'>('schema');
+
+  // Search/query state.
+  const [search, setSearch] = useState('*');
+  const [filter, setFilter] = useState('');
+  const [select, setSelect] = useState('');
+  const [top, setTop] = useState(25);
+  const [hits, setHits] = useState<any>(null);
+  const [searching, setSearching] = useState(false);
+
+  // Analyze state.
+  const [analyzeTxt, setAnalyzeTxt] = useState('');
+  const [analyzer, setAnalyzer] = useState('standard.lucene');
+  const [analyzeRes, setAnalyzeRes] = useState<any>(null);
+
+  // Schema-edit state.
+  const [schemaText, setSchemaText] = useState('');
+  const [schemaDirty, setSchemaDirty] = useState(false);
+  const [savingSchema, setSavingSchema] = useState(false);
+  const [schemaMsg, setSchemaMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // Indexers state.
+  const [indexerData, setIndexerData] = useState<any>(null);
+  const [indexersLoading, setIndexersLoading] = useState(false);
+
+  const idx = detail.data?.index;
+  const fields: any[] = idx?.fields || [];
+
+  useEffect(() => {
+    if (idx) { setSchemaText(JSON.stringify(idx, null, 2)); setSchemaDirty(false); }
+  }, [idx]);
+
   const ribbon = useMemo(() => {
-    const armId = detail.data?.index?.id || detail.data?.index?.armId;
+    const armId = idx?.id || idx?.armId;
     const portalUrl = armId
       ? `https://portal.azure.com/#@/resource${armId}/overview`
       : 'https://portal.azure.com/';
     return buildBaseRibbon(isNew ? reloadList : reloadDetail, portalUrl);
-  }, [isNew, reloadList, reloadDetail, detail.data]);
+  }, [isNew, reloadList, reloadDetail, idx]);
 
   const runSearch = async () => {
-    setBusy(true); setHits(null);
-    const r = await fetch(`/api/items/ai-search-index/${encodeURIComponent(id)}/search`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ query, top: 25 }),
+    setSearching(true); setHits(null);
+    const j = await postJson(`${indexBase}/search`, {
+      search, filter: filter || undefined, select: select || undefined, top, count: true,
     });
-    const j = await r.json();
-    setHits(j);
-    setBusy(false);
+    setHits(j); setSearching(false);
   };
 
-  if (isNew) {
-    return <Shell item={item} id={id} ribbon={ribbon}>
+  const runAnalyze = async () => {
+    setAnalyzeRes(null);
+    const j = await postJson(`${indexBase}/analyze`, { text: analyzeTxt, analyzer });
+    setAnalyzeRes(j);
+  };
+
+  const saveSchema = async () => {
+    let definition: any;
+    try { definition = JSON.parse(schemaText); } catch (e: any) { setSchemaMsg({ intent: 'error', text: `Invalid JSON: ${e?.message}` }); return; }
+    setSavingSchema(true); setSchemaMsg(null);
+    // Navigator mode PUTs the by-name index route; item mode PUTs the item route.
+    const r = await fetch(indexBase, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ definition }),
+    });
+    const ct = r.headers.get('content-type') || '';
+    const j = ct.includes('json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+    setSavingSchema(false);
+    if (!j.ok) setSchemaMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` });
+    else { setSchemaMsg({ intent: 'success', text: 'Index definition updated.' }); setSchemaDirty(false); reloadDetail(); setTreeRefresh((n) => n + 1); }
+  };
+
+  const loadIndexers = useCallback(async () => {
+    setIndexersLoading(true);
+    // Navigator mode lists the whole service's indexers; item mode scopes to the bound index.
+    const url = navIndex ? '/api/ai-search/indexers' : `/api/items/ai-search-index/${encodeURIComponent(id)}/indexers`;
+    const r = await fetch(url);
+    const ct = r.headers.get('content-type') || '';
+    setIndexerData(ct.includes('json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` });
+    setIndexersLoading(false);
+  }, [id, navIndex]);
+
+  // reload indexers whenever the tab is active and the active index changes
+  useEffect(() => { if (tab === 'indexers' && idx) loadIndexers(); }, [tab, idx, loadIndexers]);
+
+  const indexerAction = async (action: 'run' | 'reset', indexer: string) => {
+    const url = navIndex ? '/api/ai-search/indexers' : `/api/items/ai-search-index/${encodeURIComponent(id)}/indexers`;
+    await postJson(url, { action, indexer });
+    loadIndexers();
+  };
+
+  // The AI Search service navigator — always the left pane (parity with the
+  // ADF / Synapse / Databricks resource trees). Selecting an index opens it
+  // by name in this editor; ＋ New per group creates real objects via REST.
+  const serviceTree = (
+    <AiSearchServiceTree
+      selectedIndex={navIndex}
+      refreshKey={treeRefresh}
+      onOpenIndex={(name) => { setNavIndex(name); setTab('schema'); setHits(null); setAnalyzeRes(null); setIndexerData(null); }}
+      onNewIndex={() => { setNavIndex(null); /* fall back to the create dialog within the tree */ }}
+    />
+  );
+  const chrome = (main: ReactNode) => (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={serviceTree} main={main} />
+  );
+
+  // -------- Catalog list mode (no item, no navigator selection) --------
+  if (isNew && !navIndex) {
+    return chrome(
       <div className={s.pad}>
         <Subtitle2>Azure AI Search indexes</Subtitle2>
+        <Caption1>Pick an index from the service navigator on the left to manage its schema, run queries, and drive its indexers — or use ＋ New to create indexes, indexers, data sources, skillsets, synonym maps and aliases.</Caption1>
         {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
           <div className={s.tableWrap}>
             <Table size="small">
-              <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Fields</TableHeaderCell></TableRow></TableHeader>
+              <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Fields</TableHeaderCell><TableHeaderCell>Vector</TableHeaderCell></TableRow></TableHeader>
               <TableBody>
                 {(list.data?.indexes || []).map((i: any) => (
-                  <TableRow key={i.name}>
+                  <TableRow key={i.name} onClick={() => { setNavIndex(i.name); setTab('schema'); }} style={{ cursor: 'pointer' }}>
                     <TableCell className={s.cell}><strong>{i.name}</strong></TableCell>
-                    <TableCell className={s.cell}>{(i.fields || []).length}</TableCell>
+                    <TableCell className={s.cell}>{i.fieldCount ?? (i.fields || []).length}</TableCell>
+                    <TableCell className={s.cell}>{i.vectorEnabled ? <Badge color="brand">vector</Badge> : ''}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -770,106 +970,230 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
           </div>
         )}
       </div>
-    </Shell>;
+    );
   }
 
-  const idx = detail.data?.index;
-  const fields: any[] = idx?.fields || [];
-  const docs: any[] = hits?.ok ? (hits.result?.value || hits.result?.['value'] || []) : [];
+  // -------- Item mode: unbound / not-deployed → bind picker (full UI gate) --------
+  // (skipped entirely in navigator mode — the navigator selected a real index by name)
+  const unbound = !navIndex && detail.error && (detail as any).data == null && (detail.notDeployed || /not bound|unbound/i.test(detail.error || '') || (detail as any).code === 'unbound');
+  if (!navIndex && !detail.loading && (unbound || detail.notDeployed)) {
+    return chrome(
+      <div className={s.pad}>
+        <Subtitle2>{item.displayName} — AI Search index</Subtitle2>
+        <AiSearchBindPicker id={id} onBound={reloadDetail} />
+      </div>
+    );
+  }
 
-  return <Shell item={item} id={id} ribbon={ribbon}>
+  const docs: any[] = hits?.ok ? (hits.result?.value || []) : [];
+  const facets: Record<string, any[]> = hits?.ok ? (hits.result?.['@search.facets'] || {}) : {};
+  const totalCount = hits?.ok ? hits.result?.['@odata.count'] : undefined;
+  const retrievable = fields.filter((f) => f.retrievable !== false).slice(0, 6);
+
+  return chrome(
     <div className={s.pad}>
-      {detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : idx && (
+      {detail.loading ? <Spinner size="small" /> : detail.error ? (
         <>
-          <Subtitle2>Index: {idx.name}</Subtitle2>
+          <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} />
+          {!navIndex && <AiSearchBindPicker id={id} onBound={reloadDetail} />}
+        </>
+      ) : idx && (
+        <>
           <div className={s.toolbar}>
-            <Field label="Search query"><Input value={query} onChange={(_, d) => setQuery(d.value)} /></Field>
-            <Button appearance="primary" onClick={runSearch} disabled={busy}>{busy ? 'Searching…' : 'Search'}</Button>
+            <Subtitle2>Index: {idx.name}</Subtitle2>
+            {idx.vectorSearch && <Badge color="brand">vector</Badge>}
+            {idx.semantic && <Badge color="success">semantic</Badge>}
           </div>
-          <Subtitle2 style={{ marginTop: 12 }}>Fields ({fields.length})</Subtitle2>
-          <div className={s.tableWrap}>
-            <Table size="small" aria-label="Index fields">
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell>Name</TableHeaderCell>
-                  <TableHeaderCell>Type</TableHeaderCell>
-                  <TableHeaderCell>Key</TableHeaderCell>
-                  <TableHeaderCell>Searchable</TableHeaderCell>
-                  <TableHeaderCell>Filterable</TableHeaderCell>
-                  <TableHeaderCell>Sortable</TableHeaderCell>
-                  <TableHeaderCell>Facetable</TableHeaderCell>
-                  <TableHeaderCell>Retrievable</TableHeaderCell>
-                  <TableHeaderCell>Dims</TableHeaderCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {fields.map((f: any) => (
-                  <TableRow key={f.name}>
-                    <TableCell className={s.cell}><strong>{f.name}</strong></TableCell>
-                    <TableCell className={s.cell}><code>{f.type}</code></TableCell>
-                    <TableCell className={s.cell}>{f.key ? '✓' : ''}</TableCell>
-                    <TableCell className={s.cell}>{f.searchable ? '✓' : ''}</TableCell>
-                    <TableCell className={s.cell}>{f.filterable ? '✓' : ''}</TableCell>
-                    <TableCell className={s.cell}>{f.sortable ? '✓' : ''}</TableCell>
-                    <TableCell className={s.cell}>{f.facetable ? '✓' : ''}</TableCell>
-                    <TableCell className={s.cell}>{f.retrievable !== false ? '✓' : ''}</TableCell>
-                    <TableCell className={s.cell}>{f.dimensions || ''}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-          {idx.vectorSearch && (
-            <Caption1 style={{ marginTop: 8 }}>
-              Vector search enabled · profiles: {(idx.vectorSearch?.profiles || []).map((p: any) => p.name).join(', ') || '—'}
-            </Caption1>
-          )}
-          {hits && !hits.ok && (
-            <ErrorBar msg={hits.error} hint={hits.hint} notDeployed={hits.notDeployed} />
-          )}
-          {hits?.ok && (
+
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+            <Tab value="schema">Schema ({fields.length})</Tab>
+            <Tab value="search">Search</Tab>
+            <Tab value="stats">Statistics</Tab>
+            <Tab value="indexers">Indexers</Tab>
+          </TabList>
+
+          {/* ---- Schema tab ---- */}
+          {tab === 'schema' && (
             <>
-              <Subtitle2 style={{ marginTop: 12 }}>Results ({docs.length})</Subtitle2>
-              {docs.length === 0 ? (
-                <Caption1>No documents matched.</Caption1>
-              ) : (
-                <div className={s.tableWrap}>
-                  <Table size="small" aria-label="Search results">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHeaderCell>Score</TableHeaderCell>
-                        {/* Show all retrievable fields; cap at 6 to keep the grid readable. */}
-                        {fields.filter(f => f.retrievable !== false).slice(0, 6).map((f) => (
-                          <TableHeaderCell key={f.name}>{f.name}</TableHeaderCell>
-                        ))}
+              <div className={s.tableWrap}>
+                <Table size="small" aria-label="Index fields">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
+                      <TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Searchable</TableHeaderCell>
+                      <TableHeaderCell>Filterable</TableHeaderCell><TableHeaderCell>Sortable</TableHeaderCell>
+                      <TableHeaderCell>Facetable</TableHeaderCell><TableHeaderCell>Retrievable</TableHeaderCell>
+                      <TableHeaderCell>Analyzer</TableHeaderCell><TableHeaderCell>Dims</TableHeaderCell>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {fields.map((f: any) => (
+                      <TableRow key={f.name}>
+                        <TableCell className={s.cell}><strong>{f.name}</strong></TableCell>
+                        <TableCell className={s.cell}><code>{f.type}</code></TableCell>
+                        <TableCell className={s.cell}>{f.key ? '✓' : ''}</TableCell>
+                        <TableCell className={s.cell}>{f.searchable ? '✓' : ''}</TableCell>
+                        <TableCell className={s.cell}>{f.filterable ? '✓' : ''}</TableCell>
+                        <TableCell className={s.cell}>{f.sortable ? '✓' : ''}</TableCell>
+                        <TableCell className={s.cell}>{f.facetable ? '✓' : ''}</TableCell>
+                        <TableCell className={s.cell}>{f.retrievable !== false ? '✓' : ''}</TableCell>
+                        <TableCell className={s.cell}>{f.analyzer || ''}</TableCell>
+                        <TableCell className={s.cell}>{f.dimensions || ''}</TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {docs.map((d, i) => (
-                        <TableRow key={i}>
-                          <TableCell className={s.cell}>{(d['@search.score'] || 0).toFixed(3)}</TableCell>
-                          {fields.filter(f => f.retrievable !== false).slice(0, 6).map((f) => (
-                            <TableCell key={f.name} className={s.cell}>
-                              {(() => {
-                                const v = d[f.name];
-                                if (v === undefined || v === null) return '—';
-                                const s = typeof v === 'string' ? v : JSON.stringify(v);
-                                return s.length > 80 ? s.slice(0, 80) + '…' : s;
-                              })()}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              {idx.vectorSearch && (
+                <Caption1>Vector search · profiles: {(idx.vectorSearch?.profiles || []).map((p: any) => p.name).join(', ') || '—'} · algorithms: {(idx.vectorSearch?.algorithms || []).map((a: any) => `${a.name}(${a.kind})`).join(', ') || '—'}</Caption1>
               )}
+              <div className={s.card}>
+                <Subtitle2>Edit definition (JSON)</Subtitle2>
+                <Caption1>Full index definition. Save issues a real PUT /indexes/{idx.name}. Note: Azure rejects breaking field changes on a populated index.</Caption1>
+                <MonacoTextarea value={schemaText} onChange={(v) => { setSchemaText(v); setSchemaDirty(true); }} language="json" minHeight={260} />
+                <div className={s.toolbar} style={{ marginTop: 8 }}>
+                  <Button appearance="primary" disabled={savingSchema || !schemaDirty} onClick={saveSchema}>{savingSchema ? 'Saving…' : 'Save definition'}</Button>
+                  <Button onClick={() => { setSchemaText(JSON.stringify(idx, null, 2)); setSchemaDirty(false); setSchemaMsg(null); }} disabled={!schemaDirty}>Revert</Button>
+                  {schemaDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
+                </div>
+                {schemaMsg && <MessageBar intent={schemaMsg.intent}><MessageBarBody>{schemaMsg.text}</MessageBarBody></MessageBar>}
+              </div>
+            </>
+          )}
+
+          {/* ---- Search tab ---- */}
+          {tab === 'search' && (
+            <>
+              <div className={s.card}>
+                <div className={s.formRow}>
+                  <span>Search text</span><Input value={search} onChange={(_, d) => setSearch(d.value)} placeholder="* (match all)" />
+                  <span>Filter (OData)</span><Input value={filter} onChange={(_, d) => setFilter(d.value)} placeholder="e.g. category eq 'docs'" />
+                  <span>Select fields</span><Input value={select} onChange={(_, d) => setSelect(d.value)} placeholder="comma,separated (blank = all)" />
+                  <span>Top</span><Input type="number" value={String(top)} onChange={(_, d) => setTop(Number(d.value) || 25)} />
+                </div>
+                <div className={s.toolbar} style={{ marginTop: 8 }}>
+                  <Button appearance="primary" onClick={runSearch} disabled={searching}>{searching ? 'Searching…' : 'Run query'}</Button>
+                </div>
+              </div>
+              {hits && !hits.ok && <ErrorBar msg={hits.error} hint={hits.hint} notDeployed={hits.notDeployed} />}
+              {hits?.ok && (
+                <>
+                  <Subtitle2>Results ({docs.length}{totalCount !== undefined ? ` of ${totalCount}` : ''})</Subtitle2>
+                  {Object.keys(facets).length > 0 && (
+                    <Caption1>Facets: {Object.entries(facets).map(([k, vs]) => `${k} [${(vs as any[]).map((v) => `${v.value}:${v.count}`).join(', ')}]`).join('  ·  ')}</Caption1>
+                  )}
+                  {docs.length === 0 ? <Caption1>No documents matched.</Caption1> : (
+                    <div className={s.tableWrap}>
+                      <Table size="small" aria-label="Search results">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHeaderCell>Score</TableHeaderCell>
+                            {retrievable.map((f) => (<TableHeaderCell key={f.name}>{f.name}</TableHeaderCell>))}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {docs.map((d, i) => (
+                            <TableRow key={i}>
+                              <TableCell className={s.cell}>{(d['@search.score'] || 0).toFixed(3)}</TableCell>
+                              {retrievable.map((f) => (
+                                <TableCell key={f.name} className={s.cell}>
+                                  {(() => {
+                                    const v = d[f.name];
+                                    if (v === undefined || v === null) return '—';
+                                    const str = typeof v === 'string' ? v : JSON.stringify(v);
+                                    return str.length > 80 ? str.slice(0, 80) + '…' : str;
+                                  })()}
+                                </TableCell>
+                              ))}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </>
+              )}
+              <div className={s.card}>
+                <Subtitle2>Analyze text</Subtitle2>
+                <Caption1>Run text through an analyzer to see the tokens it produces (POST /analyze).</Caption1>
+                <div className={s.formRow}>
+                  <span>Text</span><Input value={analyzeTxt} onChange={(_, d) => setAnalyzeTxt(d.value)} placeholder="The quick brown fox" />
+                  <span>Analyzer</span><Input value={analyzer} onChange={(_, d) => setAnalyzer(d.value)} placeholder="standard.lucene" />
+                </div>
+                <Button appearance="primary" style={{ marginTop: 8 }} onClick={runAnalyze} disabled={!analyzeTxt}>Analyze</Button>
+                {analyzeRes && (analyzeRes.ok
+                  ? <Caption1 style={{ marginTop: 8 }}>Tokens: {(analyzeRes.result?.tokens || []).map((t: any) => t.token).join(' · ') || '—'}</Caption1>
+                  : <ErrorBar msg={analyzeRes.error} hint={analyzeRes.hint} notDeployed={analyzeRes.notDeployed} />)}
+              </div>
+            </>
+          )}
+
+          {/* ---- Statistics tab ---- */}
+          {tab === 'stats' && (
+            <div className={s.card}>
+              <Subtitle2>Index statistics</Subtitle2>
+              {detail.data?.stats ? (
+                <div className={s.formRow}>
+                  <span>Document count</span><span>{detail.data.stats.documentCount?.toLocaleString?.() ?? detail.data.stats.documentCount}</span>
+                  <span>Storage size</span><span>{((detail.data.stats.storageSize || 0) / 1048576).toFixed(2)} MB ({detail.data.stats.storageSize?.toLocaleString?.()} bytes)</span>
+                  {detail.data.stats.vectorIndexSize !== undefined && (<>
+                    <span>Vector index size</span><span>{((detail.data.stats.vectorIndexSize || 0) / 1048576).toFixed(2)} MB</span>
+                  </>)}
+                </div>
+              ) : <Caption1>Statistics not available (collected every few minutes; reload to refresh).</Caption1>}
+              <Button style={{ marginTop: 8 }} onClick={reloadDetail}>Reload statistics</Button>
+            </div>
+          )}
+
+          {/* ---- Indexers tab ---- */}
+          {tab === 'indexers' && (
+            <>
+              {indexersLoading ? <Spinner size="small" /> : indexerData && !indexerData.ok ? (
+                <ErrorBar msg={indexerData.error} hint={indexerData.hint} notDeployed={indexerData.notDeployed} />
+              ) : indexerData?.ok ? (
+                <>
+                  <Subtitle2>Indexers ({(indexerData.indexers || []).length})</Subtitle2>
+                  {(indexerData.indexers || []).length === 0 ? <Caption1>No indexers on this service.</Caption1> : (
+                    <div className={s.tableWrap}>
+                      <Table size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Target index</TableHeaderCell>
+                          <TableHeaderCell>Data source</TableHeaderCell><TableHeaderCell>Skillset</TableHeaderCell><TableHeaderCell></TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {(indexerData.indexers || []).map((ix: any) => (
+                            <TableRow key={ix.name}>
+                              <TableCell className={s.cell}><strong>{ix.name}</strong>{ix.targetsThisIndex && <Badge color="brand" style={{ marginLeft: 6 }}>this index</Badge>}</TableCell>
+                              <TableCell className={s.cell}>{ix.targetIndexName || '—'}</TableCell>
+                              <TableCell className={s.cell}>{ix.dataSourceName || '—'}</TableCell>
+                              <TableCell className={s.cell}>{ix.skillsetName || '—'}</TableCell>
+                              <TableCell>
+                                <Button size="small" onClick={() => indexerAction('run', ix.name)}>Run</Button>{' '}
+                                <Button size="small" onClick={() => indexerAction('reset', ix.name)}>Reset</Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                  <Subtitle2 style={{ marginTop: 12 }}>Data sources ({(indexerData.dataSources || []).length})</Subtitle2>
+                  {(indexerData.dataSources || []).length === 0 ? <Caption1>No data sources.</Caption1> : (
+                    <Caption1>{(indexerData.dataSources || []).map((d: any) => `${d.name}${d.type ? ` (${d.type})` : ''}`).join(' · ')}</Caption1>
+                  )}
+                  <Subtitle2 style={{ marginTop: 12 }}>Skillsets ({(indexerData.skillsets || []).length})</Subtitle2>
+                  {(indexerData.skillsets || []).length === 0 ? <Caption1>No skillsets.</Caption1> : (
+                    <Caption1>{(indexerData.skillsets || []).map((sk: any) => `${sk.name} (${sk.skillCount} skills)`).join(' · ')}</Caption1>
+                  )}
+                  <Button style={{ marginTop: 8 }} onClick={loadIndexers}>Reload</Button>
+                </>
+              ) : <Spinner size="small" />}
             </>
           )}
         </>
       )}
     </div>
-  </Shell>;
+  );
 }
 
 // =====================================================================

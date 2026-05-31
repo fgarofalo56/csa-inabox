@@ -29,6 +29,7 @@ import {
   Save20Regular, Delete20Regular, Add20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -1734,6 +1735,8 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
   const [jobId, setJobId] = useState<number | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [creatorByJob, setCreatorByJob] = useState<Record<number, string>>({});
+  // Bumped after a save/delete so the left Workspace navigator re-lists.
+  const [navRefresh, setNavRefresh] = useState(0);
 
   // ---- Honest infra gate: which workspace will run jobs (LOOM_DATABRICKS_HOSTNAME) ----
   const [workspaceHost, setWorkspaceHost] = useState<string | null>(null);
@@ -1939,6 +1942,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
         setJobId(j.job_id);
         setSaveMessage(`Created job ${j.job_id} at ${new Date().toLocaleTimeString()}`);
         await loadJobs();
+        setNavRefresh((n) => n + 1);
         setDirty(false);
       } else {
         const r = await fetch(`/api/items/databricks-job/${id}?jobId=${jobId}`, {
@@ -1948,6 +1952,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
         const j = await r.json();
         if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); return; }
         setSaveMessage(`Saved job ${jobId} at ${new Date().toLocaleTimeString()}`);
+        setNavRefresh((n) => n + 1);
         setDirty(false);
       }
     } catch (e: any) {
@@ -1963,6 +1968,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     await fetch(`/api/items/databricks-job/${id}?jobId=${jobId}`, { method: 'DELETE' });
     resetForNew();
     await loadJobs();
+    setNavRefresh((n) => n + 1);
   }, [id, jobId, loadJobs, resetForNew]);
 
   const refreshRuns = useCallback(async () => {
@@ -2101,35 +2107,18 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       id={id}
       ribbon={ribbonJob}
       leftPanel={
-        <div className={s.treePad}>
-          <div style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'center' }}>
-            <Subtitle2 style={{ flex: 1 }}>Jobs ({jobs.length})</Subtitle2>
-            <Button size="small" icon={<Add20Regular />} aria-label="New job" onClick={resetForNew} />
-            <Button size="small" icon={<ArrowSync20Regular />} aria-label="Refresh jobs" onClick={loadJobs} />
-          </div>
-          {listError && (
-            <MessageBar intent="error"><MessageBarBody>{listError}</MessageBarBody></MessageBar>
-          )}
-          {jobId === null && (
-            <div style={{ padding: 6, borderRadius: 3, background: tokens.colorNeutralBackground2Selected }}>
-              <Body1>{name || '(new job)'}</Body1>
-              <Caption1>unsaved · {tasks.length} task(s)</Caption1>
-            </div>
-          )}
-          {jobs.map((j) => (
-            <div
-              key={j.job_id}
-              onClick={() => selectJob(j.job_id)}
-              style={{
-                padding: 6, cursor: 'pointer', borderRadius: 3,
-                background: jobId === j.job_id ? tokens.colorNeutralBackground2Selected : undefined,
-              }}
-            >
-              <Body1>{j.settings?.name || `job-${j.job_id}`}</Body1>
-              <Caption1>id={j.job_id} · {j.settings?.tasks?.length || 0} task(s)</Caption1>
-            </div>
-          ))}
-        </div>
+        // Full Databricks Workspace navigator (parity with the ADF Factory
+        // Resources / Synapse Workspace Resources panes): typed groups for
+        // Jobs / Notebooks / Clusters / SQL Warehouses / Repos / Unity Catalog
+        // with live counts, ＋New, filter, inline run/start/stop/delete — all on
+        // real Databricks REST. Selecting a Job opens it here; "New job" opens
+        // the new-job form (Databricks jobs need ≥1 task, authored below).
+        <DatabricksWorkspaceTree
+          selectedJobId={jobId}
+          onOpenJob={(jid) => void selectJob(jid)}
+          onNewJob={resetForNew}
+          refreshKey={navRefresh}
+        />
       }
       main={
         <div className={s.pad}>
