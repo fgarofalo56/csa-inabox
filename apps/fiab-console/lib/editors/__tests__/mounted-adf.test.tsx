@@ -2,7 +2,7 @@
  * MountedAdfEditor — vitest render + ribbon assertion.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { MountedAdfEditor } from '../mounted-adf-editor';
 import { makeItem, installFetchMock } from './test-helpers';
 
@@ -17,7 +17,11 @@ describe('MountedAdfEditor', () => {
       }),
     });
   });
-  afterEach(() => { vi.restoreAllMocks(); });
+  // globals:false in vitest.config means @testing-library's auto-afterEach
+  // cleanup never registers, so each render() would otherwise pile up in the
+  // same jsdom document.body — making getByTestId('ribbon') find duplicates.
+  // Unmount explicitly between tests.
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('renders editor chrome', async () => {
     render(<MountedAdfEditor item={makeItem('mounted-adf', 'Mounted Data Factory')} id="new" />);

@@ -10,7 +10,7 @@
  *   - reflex list fetch fires once the user selects a workspace
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, cleanup } from '@testing-library/react';
 import { ActivatorEditor } from '../phase3-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
@@ -38,7 +38,12 @@ describe('ActivatorEditor', () => {
     calls = m.calls;
   });
 
-  afterEach(() => { vi.restoreAllMocks(); });
+  // vitest.config has globals:false, so @testing-library/react does NOT
+  // auto-register afterEach(cleanup). Without this each render() left its tree
+  // mounted in document.body, so by the 2nd/3rd test there were multiple
+  // editor copies — getByText/getByRole then threw "found multiple elements".
+  // Unmount explicitly so every test asserts against a single fresh tree.
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('fetches Loom workspaces on mount + renders the picker', async () => {
     render(<ActivatorEditor item={makeItem('activator', 'Activator')} id="act-fixture" />);
@@ -58,10 +63,11 @@ describe('ActivatorEditor', () => {
   });
 
   it('loads reflexes after a workspace is selected', async () => {
-    render(<ActivatorEditor item={makeItem('activator', 'Activator')} id="act-fixture" />);
+    const { container } = render(<ActivatorEditor item={makeItem('activator', 'Activator')} id="act-fixture" />);
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/loom/workspaces'))).toBe(true));
-    // Pick the workspace by changing the Select value.
-    const select = screen.getByRole('combobox');
+    // Pick the workspace by changing the WorkspacePicker's Select value. Scope
+    // to this render's container so the query is unambiguous.
+    const select = within(container).getByRole('combobox');
     fireEvent.change(select, { target: { value: 'ws-1' } });
     await waitFor(() => {
       expect(calls.some((c) => c.url.includes('/api/items/activator?workspaceId=ws-1'))).toBe(true);

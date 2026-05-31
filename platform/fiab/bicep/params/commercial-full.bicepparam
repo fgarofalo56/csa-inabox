@@ -80,8 +80,9 @@ param appImageTags = {
 // MSAL — passed from env vars (don't commit secrets to disk)
 param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '9844c28c-3b3a-4949-8d63-9eefa3b50a9d')
 param loomMsalClientSecret = readEnvironmentVariable('LOOM_MSAL_CLIENT_SECRET', '')
-// Stable session secret — pass via env to preserve sign-ins across deploys
-param loomSessionSecret = readEnvironmentVariable('LOOM_SESSION_SECRET', newGuid())
+// Stable session secret — pass via env to preserve sign-ins; empty → admin-plane
+// derives a stable per-RG GUID (newGuid() is invalid in a .bicepparam, BCP065).
+param loomSessionSecret = readEnvironmentVariable('LOOM_SESSION_SECRET', '')
 
 // Multi-sub mode (empty for single-sub)
 param dlzSubscriptionIds = []
@@ -97,6 +98,22 @@ param aiSearchEnabled = false
 param adxEnabled = true
 param vpnGatewayEnabled = true
 param appGatewayEnabled = true
+
+// ---------- Bring-your-own existing services (reuse instead of provision-new) ----------
+// Set the EXISTING_* env var (or edit here) to point Loom at an EXISTING resource
+// in ANY resource group / subscription instead of provisioning a new one. When set,
+// the matching module is skipped and the Console wires to the existing resource;
+// run scripts/csa-loom/grant-navigator-rbac.sh post-deploy to grant the UAMI roles.
+// Empty → provision new per the *Enabled flag above. See docs/fiab/bring-your-own-services.md.
+// Discover reuse candidates across your subs: bash scripts/csa-loom/discover-services.sh
+param existingAiSearchService    = readEnvironmentVariable('EXISTING_AI_SEARCH_SERVICE', '')
+param existingAiSearchRg         = readEnvironmentVariable('EXISTING_AI_SEARCH_RG', '')
+param existingApimName           = readEnvironmentVariable('EXISTING_APIM', '')
+param existingApimRg             = readEnvironmentVariable('EXISTING_APIM_RG', '')
+param existingAdxClusterName     = readEnvironmentVariable('EXISTING_KUSTO_CLUSTER', '')
+param existingAdxClusterRg       = readEnvironmentVariable('EXISTING_KUSTO_RG', '')
+param existingFoundryAccountName = readEnvironmentVariable('EXISTING_AOAI', '')
+param existingFoundryRg          = readEnvironmentVariable('EXISTING_AOAI_RG', '')
 param frontDoorEnabled = true
 
 // Tags

@@ -33,6 +33,18 @@ export async function GET() {
     return NextResponse.json({ ok: true, gateways: await listGateways() });
   } catch (e: any) {
     const status = e instanceof ApimError ? e.status : 502;
+    // Self-hosted gateways are a Premium/Developer-tier feature. Basic/Standard/
+    // Consumption tiers return 400 MethodNotAllowedInPricingTier — that is an
+    // honest "not available on this tier" state, not an error: show an empty
+    // group with a note instead of breaking the navigator tab.
+    const msg = `${e?.message || ''} ${JSON.stringify(e?.body || '')}`;
+    if (status === 400 && /pricing tier|MethodNotAllowedInPricingTier/i.test(msg)) {
+      return NextResponse.json({
+        ok: true,
+        gateways: [],
+        note: 'Self-hosted gateways require APIM Premium or Developer tier; the current tier does not expose them.',
+      });
+    }
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
 }

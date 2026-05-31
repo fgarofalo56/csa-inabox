@@ -2,7 +2,7 @@
  * CopyJobEditor — vitest render + interaction.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { CopyJobEditor } from '../phase2-misc-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
@@ -34,7 +34,13 @@ describe('CopyJobEditor', () => {
       }),
     });
   });
-  afterEach(() => { vi.restoreAllMocks(); });
+  // vitest runs with globals:false, so React Testing Library's automatic
+  // afterEach(cleanup) is never registered. Without an explicit cleanup the
+  // first test's mounted tree persists into the next test, so the second
+  // render leaves two <CopyJobEditor> trees in the DOM — getByTestId('ribbon')
+  // then throws "Found multiple elements" and the waitFor times out. Unmount
+  // explicitly so each test starts from a clean DOM.
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('renders editor chrome', async () => {
     render(<CopyJobEditor item={makeItem('copy-job', 'Copy Job')} id="cj-1" />);
