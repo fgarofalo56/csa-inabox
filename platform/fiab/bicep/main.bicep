@@ -132,6 +132,27 @@ param aiSearchEnabled bool = false
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
 param adxEnabled bool = true
 
+// ---------- Bring-your-own existing services (reuse instead of provision-new) ----------
+// Set any of these (via params/<boundary>.bicepparam readEnvironmentVariable('EXISTING_*',''))
+// to reuse an EXISTING resource in any RG/sub instead of provisioning a new one.
+// Empty → provision new per the matching *Enabled flag. See docs/fiab/bring-your-own-services.md.
+@description('Reuse an existing AI Search service (name) instead of provisioning one.')
+param existingAiSearchService string = ''
+@description('Resource group of the existing AI Search service.')
+param existingAiSearchRg string = ''
+@description('Reuse an existing APIM service (name) instead of provisioning one.')
+param existingApimName string = ''
+@description('Resource group of the existing APIM service.')
+param existingApimRg string = ''
+@description('Reuse an existing ADX/Kusto cluster (name) instead of provisioning one.')
+param existingAdxClusterName string = ''
+@description('Resource group of the existing ADX cluster.')
+param existingAdxClusterRg string = ''
+@description('Reuse an existing AI Foundry / AOAI (AIServices) account (name) instead of provisioning the Foundry hub.')
+param existingFoundryAccountName string = ''
+@description('Resource group of the existing Foundry/AOAI account.')
+param existingFoundryRg string = ''
+
 // ---------- User access patterns ----------
 
 @description('Deploy a P2S VPN Gateway (AAD-auth, OpenVPN) in the hub VNet. ~30 min provisioning, ~$30/mo. Default off.')
@@ -149,6 +170,10 @@ param loomMsalClientId string = ''
 @description('Entra app client secret for Loom Console MSAL. Stored in Container App secret store.')
 @secure()
 param loomMsalClientSecret string = ''
+
+@description('Session cookie secret (HKDF input). Empty → admin-plane derives a stable per-RG GUID so sign-ins survive redeploys; set LOOM_SESSION_SECRET for a tenant-managed secret.')
+@secure()
+param loomSessionSecret string = ''
 
 @description('Loom version label shown in the UI + on /api/version.')
 param loomVersion string = 'v0.1'
@@ -210,6 +235,14 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     apimEnabled: apimEnabled
     aiSearchEnabled: aiSearchEnabled
     adxEnabled: adxEnabled
+    existingAiSearchService: existingAiSearchService
+    existingAiSearchRg: existingAiSearchRg
+    existingApimName: existingApimName
+    existingApimRg: existingApimRg
+    existingAdxClusterName: existingAdxClusterName
+    existingAdxClusterRg: existingAdxClusterRg
+    existingFoundryAccountName: existingFoundryAccountName
+    existingFoundryRg: existingFoundryRg
     vpnGatewayEnabled: vpnGatewayEnabled
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
@@ -220,6 +253,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     loomDlpEnabled: loomDlpEnabled
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
+    loomSessionSecret: loomSessionSecret
     loomVersion: loomVersion
     appImageTags: appImageTags
   }
