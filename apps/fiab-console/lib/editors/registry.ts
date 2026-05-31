@@ -138,6 +138,11 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'geo-query':                   reg(() => import('./geo-editors'),            'GeoQueryEditor'),
   'geo-pipeline':                reg(() => import('./geo-editors'),            'GeoPipelineEditor'),
 
+  // v3 — Azure Cosmos DB account navigator (SQL/NoSQL API — parity wave 7).
+  // Real ARM control plane (Microsoft.DocumentDB/databaseAccounts) for the
+  // env-pinned LOOM_COSMOS_ACCOUNT, distinct from Loom's own internal store.
+  'azure-cosmos-account':        reg(() => import('./cosmos-account-editor'),   'CosmosAccountEditor'),
+
   // v3 — Graph + Vector knowledge stores (Cosmos Gremlin, Cypher, GQL, vector store)
   'cosmos-gremlin-graph':        reg(() => import('./graph-editors'),          'CosmosGremlinGraphEditor'),
   'cypher-graph':                reg(() => import('./graph-editors'),          'CypherGraphEditor'),
