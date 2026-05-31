@@ -25,6 +25,7 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { PowerPlatformTree } from '@/lib/components/powerplatform/powerplatform-tree';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -195,9 +196,40 @@ export function PowerPlatformEnvironmentEditor({ item, id }: { item: FabricItemT
 
   const current = env.envs.find((e) => e.name === env.selected);
   const ribbon = baseRibbon(env.reload, 'https://admin.powerplatform.microsoft.com/environments');
+  const [navRefresh, setNavRefresh] = useState(0);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome
+      item={item}
+      id={id}
+      ribbon={ribbon}
+      leftPanel={
+        // Full Power Platform environment navigator (parity wave 11 — parity
+        // with the Power Platform admin centre / make.powerapps.com left rail):
+        // Environments → Apps / Cloud flows / Connections / Connectors /
+        // Dataverse tables with live counts, filter, open (editor or maker),
+        // delete, and flow turn-on/off — all on real Power Platform REST.
+        // Selecting an environment drives the detail view on the right; opening
+        // a table/app/flow deep-links to its existing Loom editor.
+        <PowerPlatformTree
+          selectedEnvId={env.selected}
+          onSelectEnv={(envId) => env.setSelected(envId)}
+          onOpenTable={(envId, logical) => {
+            env.setSelected(envId);
+            window.open(`https://make.powerapps.com/environments/${encodeURIComponent(envId)}/entities/${encodeURIComponent(logical)}`, '_blank', 'noreferrer');
+          }}
+          onOpenApp={(envId) => {
+            env.setSelected(envId);
+            window.open(`https://make.powerapps.com/environments/${encodeURIComponent(envId)}/apps`, '_blank', 'noreferrer');
+          }}
+          onOpenFlow={(envId, flowId) => {
+            env.setSelected(envId);
+            window.open(`https://make.powerautomate.com/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(flowId)}/details`, '_blank', 'noreferrer');
+          }}
+          refreshKey={navRefresh}
+        />
+      }
+      main={
       <div className={s.pad}>
         {id === 'new' && (
           <MessageBar intent="warning">
@@ -211,7 +243,7 @@ export function PowerPlatformEnvironmentEditor({ item, id }: { item: FabricItemT
         )}
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
-          <Button appearance="secondary" onClick={env.reload} disabled={env.loading}>Reload</Button>
+          <Button appearance="secondary" onClick={() => { env.reload(); setNavRefresh((n) => n + 1); }} disabled={env.loading}>Reload</Button>
         </div>
         {env.loading && <Spinner size="small" label="Loading environments…" labelPosition="after" />}
         {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
