@@ -290,6 +290,48 @@ export async function deleteApi(apiId: string): Promise<void> {
   await readJson<unknown>(res);
 }
 
+/**
+ * Import (create or replace) an API from an OpenAPI / Swagger definition —
+ * the "Create from definition → OpenAPI" flow in the Azure portal's APIM blade.
+ *
+ * Does a real ARM PUT to
+ *   .../service/{apim}/apis/{apiId}?api-version=2024-06-01-preview
+ * with the standard APIM import body:
+ *   { properties: { format, value, path, displayName? } }
+ *
+ * `format` selects how APIM interprets `value`:
+ *   - 'openapi' / 'openapi+json' → `value` is the INLINE spec document (YAML/JSON)
+ *   - 'swagger-link-json' / 'openapi-link' → `value` is a URL APIM fetches
+ *
+ * APIM parses the spec and materialises the API's operations + schemas. The
+ * resolves to the shaped, created/updated API (id, name, path, displayName,…).
+ * Honors apimConfigGate (throws the same Error other methods would when the
+ * service is unconfigured) and surfaces APIM's own validation via ApimError.
+ */
+export async function importApiFromOpenApi(opts: {
+  apiId: string;
+  displayName?: string;
+  path: string;
+  format: 'openapi' | 'openapi+json' | 'swagger-link-json' | 'openapi-link';
+  value: string;
+}): Promise<ApimApiSummary> {
+  const gate = apimConfigGate();
+  if (gate) throw new Error(`APIM service not configured: set ${gate.missing}.`);
+  const properties: any = {
+    format: opts.format,
+    value: opts.value,
+    path: opts.path,
+  };
+  if (opts.displayName) properties.displayName = opts.displayName;
+  const res = await apimFetch(`/apis/${encodeURIComponent(opts.apiId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ properties }),
+  });
+  const j = await readJson<any>(res);
+  if (!j) throw new ApimError(404, null, 'import OpenAPI returned null');
+  return shapeApi(j);
+}
+
 export interface ApimOperation {
   id: string;
   name: string;
