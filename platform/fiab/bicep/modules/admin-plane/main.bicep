@@ -629,7 +629,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],
           catalogPrimary == 'unity-catalog-managed' || databricksUnityCatalogEnabled ? [
-            { name: 'LOOM_DATABRICKS_HOSTNAMES', value: 'adb-csa-loom-${location}.azuredatabricks.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'net'}' }
+            // Unity Catalog federation hostname list. Uses the REAL workspace
+            // hostname (same source as the singular LOOM_DATABRICKS_HOSTNAME) —
+            // NOT a synthesized adb-csa-loom-* name, which never resolves
+            // (Databricks workspace URLs embed a non-deterministic id). Empty
+            // until patched post-deploy from the DLZ workspaceUrl, so UC gates
+            // honestly rather than calling a phantom host (per no-vaporware.md).
+            { name: 'LOOM_DATABRICKS_HOSTNAMES', value: loomDatabricksHostname }
           ] : [],
           // Fabric API base is always set — the runtime gates on UAMI authz.
           [
@@ -667,6 +673,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).
             { name: 'LOOM_AOAI_RG', value: resourceGroup().name }
+            // Foundry region — foundry-client.ts reads this for region-scoped
+            // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
+            { name: 'LOOM_FOUNDRY_REGION', value: location }
             // Foundry Agent Service (data-plane) — backs the data-agent Publish flow +
             // the Foundry agent editor. Project endpoint + workspace GUID come from the
             // Foundry project created in ai-foundry.bicep. Empty when AI Foundry is off.
