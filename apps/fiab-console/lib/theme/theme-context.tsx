@@ -7,7 +7,7 @@
  * styles (gradients, custom colors) can branch on theme.
  */
 
-import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import { FluentProvider, webLightTheme, webDarkTheme, Theme } from '@fluentui/react-components';
 
 export type ThemeMode = 'light' | 'dark';
@@ -82,10 +82,20 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
   const toggle = useCallback(() => setMode(mode === 'light' ? 'dark' : 'light'), [mode, setMode]);
 
-  const theme = mode === 'dark' ? brandedDark() : brandedLight();
+  // Stabilize the theme object identity. brandedDark()/brandedLight() build a
+  // brand-new Theme object on every render; passing a fresh-identity `theme`
+  // to FluentProvider forces it to recompute + re-inject its CSS-variable block
+  // on every commit. Memoizing on `mode` means the provider only reprocesses
+  // the theme when the user actually toggles light/dark — eliminating the
+  // re-paint churn that amplified the Copilot page's render storm.
+  const theme = useMemo(() => (mode === 'dark' ? brandedDark() : brandedLight()), [mode]);
+
+  // Likewise memoize the context value so consumers (useTheme) don't re-render
+  // from a new {mode,setMode,toggle} object identity on unrelated re-renders.
+  const ctxValue = useMemo(() => ({ mode, setMode, toggle }), [mode, setMode, toggle]);
 
   return (
-    <Ctx.Provider value={{ mode, setMode, toggle }}>
+    <Ctx.Provider value={ctxValue}>
       <FluentProvider theme={theme}>{children}</FluentProvider>
     </Ctx.Provider>
   );

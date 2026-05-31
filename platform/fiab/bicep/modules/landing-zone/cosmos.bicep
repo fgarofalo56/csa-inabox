@@ -25,6 +25,12 @@ param privateDnsZoneCosmosId string
 @description('Log Analytics workspace ID for diagnostic settings')
 param workspaceId string
 
+@description('Loom Console UAMI principal ID — granted "DocumentDB Account Contributor" on this account so the Cosmos DB control-plane navigator (databases/containers/stored-procs) can CRUD via ARM. The account sets disableLocalAuth=true, so AAD RBAC is the only path. Empty skips the grant.')
+param consolePrincipalId string = ''
+
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -164,6 +170,19 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
     metrics: [
       { category: 'Requests', enabled: true }
     ]
+  }
+}
+
+// Console UAMI — DocumentDB Account Contributor for the control-plane navigator
+// (databases / containers / stored-procedure listing via ARM).
+resource cosmosNavRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: account
+  name: guid(account.id, consolePrincipalId, '5bd9cd88-fe45-4216-938b-f97437e15450')
+  properties: {
+    // DocumentDB Account Contributor
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5bd9cd88-fe45-4216-938b-f97437e15450')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
   }
 }
 

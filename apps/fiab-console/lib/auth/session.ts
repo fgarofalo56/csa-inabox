@@ -72,3 +72,42 @@ export function getSession(): SessionPayload | null {
 export function clearSessionCookieHeader(): string {
   return `${COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 }
+
+// ---------------------------------------------------------------------------
+// Reusable AES-256-GCM helpers for encrypting sensitive values AT REST
+// (e.g. a cached user ARM token in Cosmos). These derive a DISTINCT key from
+// SESSION_SECRET via a different HKDF `info` label than the session cookie, so
+// a leaked at-rest blob can never be replayed as a session cookie and vice
+// versa. Both still require SESSION_SECRET to decode — no new secret needed.
+// ---------------------------------------------------------------------------
+
+function getAtRestKey(): Buffer {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) throw new Error('SESSION_SECRET is not configured');
+  const ab = crypto.hkdfSync('sha256', Buffer.from(secret, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-at-rest-v1'), 32);
+  return Buffer.from(ab as ArrayBuffer);
+}
+
+/** Encrypt an arbitrary UTF-8 string for storage at rest. Returns base64url. */
+export function encryptAtRest(plaintext: string): string {
+  const iv = crypto.randomBytes(IV_LEN);
+  const cipher = crypto.createCipheriv(ALG, getAtRestKey(), iv);
+  const enc = Buffer.concat([cipher.update(Buffer.from(plaintext, 'utf-8')), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, enc]).toString('base64url');
+}
+
+/** Decrypt a value produced by {@link encryptAtRest}. Returns null on tamper/format error. */
+export function decryptAtRest(encoded: string): string | null {
+  try {
+    const raw = Buffer.from(encoded, 'base64url');
+    const iv = raw.subarray(0, IV_LEN);
+    const tag = raw.subarray(IV_LEN, IV_LEN + TAG_LEN);
+    const enc = raw.subarray(IV_LEN + TAG_LEN);
+    const decipher = crypto.createDecipheriv(ALG, getAtRestKey(), iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf-8');
+  } catch {
+    return null;
+  }
+}

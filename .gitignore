@@ -349,3 +349,14 @@ temp/atlas-tools/__pycache__/
 # Next.js build artifacts in apps/
 apps/*/.next/
 apps/*/node_modules/
+
+# --- Next.js App Router route segments must never be ignored by the generic
+# build/dist/runs/stats artifact rules above (they are real source route dirs). ---
+!apps/fiab-console/app/**/build/
+!apps/fiab-console/app/**/build/**
+!apps/fiab-console/app/**/runs/
+!apps/fiab-console/app/**/runs/**
+!apps/fiab-console/app/**/stats/
+!apps/fiab-console/app/**/stats/**
+!apps/fiab-console/app/**/dist/
+!apps/fiab-console/app/**/dist/**

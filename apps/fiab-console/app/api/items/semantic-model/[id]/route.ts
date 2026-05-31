@@ -1,6 +1,6 @@
 /**
  * GET /api/items/semantic-model/[id]?workspaceId=...
- * Returns dataset metadata + tables + relationships (datasources fallback).
+ * Returns dataset metadata + tables + the model's table relationships.
  * The [id] segment is the Power BI dataset id.
  */
 
@@ -19,13 +19,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   try {
-    const [dataset, tables, sources, schedule] = await Promise.all([
-      getDataset(workspaceId, (await ctx.params).id),
-      listDatasetTables(workspaceId, (await ctx.params).id).catch(() => []),
-      listDatasetRelationships(workspaceId, (await ctx.params).id).catch(() => []),
-      getRefreshSchedule(workspaceId, (await ctx.params).id).catch(() => null),
+    const id = (await ctx.params).id;
+    const [dataset, tables, relationships, schedule] = await Promise.all([
+      getDataset(workspaceId, id),
+      listDatasetTables(workspaceId, id).catch(() => []),
+      listDatasetRelationships(workspaceId, id).catch(() => []),
+      getRefreshSchedule(workspaceId, id).catch(() => null),
     ]);
-    return NextResponse.json({ ok: true, workspaceId, dataset, tables, datasources: sources, refreshSchedule: schedule });
+    return NextResponse.json({ ok: true, workspaceId, dataset, tables, relationships, refreshSchedule: schedule });
   } catch (e: any) {
     const status = e instanceof PowerBiError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });

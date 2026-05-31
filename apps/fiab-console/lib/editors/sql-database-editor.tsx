@@ -32,6 +32,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -160,6 +161,11 @@ WHERE is_ms_shipped = 0;`,
     finally { setSqlBusy(false); }
   }, [dbId, sqlText]);
 
+  const openInQuery = useCallback((sql: string) => {
+    setSqlText(sql);
+    setTab('query');
+  }, []);
+
   const del = useCallback(async () => {
     if (!workspaceId || !dbId) return;
     if (typeof window !== 'undefined' && !window.confirm('Delete this Fabric SQL database?')) return;
@@ -261,13 +267,14 @@ WHERE is_ms_shipped = 0;`,
             {tab === 'tables' && (
               <>
                 {!dbId && <Caption1>Select a SQL database from the left panel.</Caption1>}
-                {dbId && (
-                  <MessageBar intent="info">
-                    <MessageBarBody>
-                      <MessageBarTitle>Table list runs via T-SQL</MessageBarTitle>
-                      Use the <strong>Query</strong> tab to list tables (<code>SELECT * FROM sys.tables</code>). Live schema browsing lands when the Fabric Lakehouse SQL endpoint exposes a schemas REST.
-                    </MessageBarBody>
-                  </MessageBar>
+                {dbId && workspaceId && (
+                  <div style={{ flex: 1, minHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, overflow: 'hidden' }}>
+                    <SqlDbTree
+                      workspaceId={workspaceId}
+                      itemId={dbId}
+                      onOpenQuery={openInQuery}
+                    />
+                  </div>
                 )}
               </>
             )}

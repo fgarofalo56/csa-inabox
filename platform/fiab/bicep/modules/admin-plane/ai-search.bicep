@@ -36,6 +36,9 @@ param workspaceId string
 @description('Admin Entra group object ID (Search Service Contributor)')
 param adminEntraGroupId string
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -65,9 +68,9 @@ resource search 'Microsoft.Search/searchServices@2025-02-01-preview' = {
 }
 
 // Search Service Contributor role to admin group
-resource roleAssign 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource roleAssign 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
   scope: search
-  name: guid(search.id, adminEntraGroupId, 'search-contributor')
+  name: guid(search.id, adminEntraGroupId, '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
   properties: {
     // Search Service Contributor
     roleDefinitionId: subscriptionResourceId(

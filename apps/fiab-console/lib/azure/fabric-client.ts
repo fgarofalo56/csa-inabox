@@ -597,6 +597,141 @@ export async function deleteEventstream(workspaceId: string, id: string): Promis
 }
 
 // ============================================================
+// Real-Time Hub — Microsoft / Fabric / Azure source connectors
+//
+// The Fabric Real-Time Hub is the tenant-wide place to discover all
+// streaming data and connect to Microsoft sources. There is no separate
+// "Real-Time Hub REST API"; the hub is composed on top of the Eventstream
+// REST surface (create an Eventstream item whose topology includes the
+// chosen source) plus per-workspace item listing.
+//
+// `RTH_SOURCE_TYPES` mirrors the documented Fabric Eventstream source
+// `type` enum exactly:
+//   AmazonKinesis, AmazonMSKKafka, ApacheKafka, AzureCosmosDBCDC,
+//   AzureBlobStorageEvents, AzureEventHub, AzureIoTHub, AzureSQLDBCDC,
+//   AzureSQLMIDBCDC, ConfluentCloud, CustomEndpoint,
+//   FabricCapacityUtilizationEvents, GooglePubSub, MySQLCDC, PostgreSQLCDC,
+//   SampleData, FabricWorkspaceItemEvents, FabricJobEvents, FabricOneLakeEvents
+//
+// Docs:
+//   https://learn.microsoft.com/fabric/real-time-hub/real-time-hub-overview
+//   https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/eventstream-rest-api
+// ============================================================
+
+/** Canonical Fabric Eventstream source `type` enum (Real-Time Hub connectors). */
+export const RTH_SOURCE_TYPES = [
+  'AzureEventHub',
+  'AzureIoTHub',
+  'AzureServiceBus',
+  'AzureSQLDBCDC',
+  'AzureSQLMIDBCDC',
+  'AzureCosmosDBCDC',
+  'PostgreSQLCDC',
+  'MySQLCDC',
+  'AzureBlobStorageEvents',
+  'AmazonKinesis',
+  'AmazonMSKKafka',
+  'ApacheKafka',
+  'ConfluentCloud',
+  'GooglePubSub',
+  'SampleData',
+  'CustomEndpoint',
+  'FabricWorkspaceItemEvents',
+  'FabricJobEvents',
+  'FabricOneLakeEvents',
+  'FabricCapacityUtilizationEvents',
+] as const;
+
+export type RthSourceType = (typeof RTH_SOURCE_TYPES)[number];
+
+export function isRthSourceType(t: string): t is RthSourceType {
+  return (RTH_SOURCE_TYPES as readonly string[]).includes(t);
+}
+
+/**
+ * Build a single-source Eventstream topology in the documented Fabric
+ * shape { sources[], destinations[], operators[], streams[] }. The source
+ * `type` MUST be one of `RTH_SOURCE_TYPES`; `properties` carries the
+ * source-specific connection settings (e.g. dataConnectionId,
+ * consumerGroupName for AzureEventHub). A DefaultStream is always emitted
+ * so the new stream shows up in Real-Time Hub's All-data-streams list.
+ */
+export function buildSourceTopology(input: {
+  displayName: string;
+  sourceName: string;
+  sourceType: RthSourceType;
+  properties?: Record<string, unknown>;
+}): {
+  sources: Array<{ name: string; type: string; properties: Record<string, unknown> }>;
+  destinations: never[];
+  operators: never[];
+  streams: Array<{ name: string; type: string; properties: Record<string, unknown> }>;
+  compatibilityLevel: string;
+} {
+  const streamName = `${input.sourceName}-stream`;
+  return {
+    sources: [{ name: input.sourceName, type: input.sourceType, properties: input.properties || {} }],
+    destinations: [],
+    operators: [],
+    streams: [{ name: streamName, type: 'DefaultStream', properties: { inputNodes: [{ name: input.sourceName }] } }],
+    compatibilityLevel: '1.0',
+  };
+}
+
+/**
+ * Real-Time Hub "Connect source" — creates a REAL Fabric Eventstream item
+ * carrying the chosen Microsoft/Fabric/Azure source. Backed by
+ * POST /workspaces/{ws}/eventstreams with a Base64 eventstream.json part
+ * (the same definition REST API the Eventstream editor publishes through).
+ */
+export async function connectEventstreamSource(
+  fabricWorkspaceId: string,
+  input: {
+    displayName: string;
+    description?: string;
+    sourceName: string;
+    sourceType: RthSourceType;
+    properties?: Record<string, unknown>;
+  },
+): Promise<FabricItem | { _accepted: true; location?: string }> {
+  if (!fabricWorkspaceId) throw new FabricError('fabricWorkspaceId is required', 400);
+  if (!input?.displayName) throw new FabricError('displayName is required', 400);
+  if (!isRthSourceType(input.sourceType)) {
+    throw new FabricError(`Unsupported source type "${input.sourceType}". Allowed: ${RTH_SOURCE_TYPES.join(', ')}`, 400);
+  }
+  const topology = buildSourceTopology({
+    displayName: input.displayName,
+    sourceName: input.sourceName || 'source-1',
+    sourceType: input.sourceType,
+    properties: input.properties,
+  });
+  const definition = buildEventstreamDefinition(topology);
+  return call(
+    `/workspaces/${encodeURIComponent(fabricWorkspaceId)}/eventstreams`,
+    {
+      method: 'POST',
+      body: { displayName: input.displayName, description: input.description, definition },
+      acceptLongRunning: true,
+    },
+  );
+}
+
+// ============================================================
+// KQL Databases (Real-Time Intelligence) — for Real-Time Hub
+// "All data streams" KQL-table rows. Listed per workspace.
+// ============================================================
+
+export async function listKqlDatabases(workspaceId: string): Promise<FabricItem[]> {
+  const j = await call<{ value: FabricItem[] }>(`/workspaces/${encodeURIComponent(workspaceId)}/kqlDatabases`);
+  return j.value || [];
+}
+
+export async function listEventhouses(workspaceId: string): Promise<FabricItem[]> {
+  const j = await call<{ value: FabricItem[] }>(`/workspaces/${encodeURIComponent(workspaceId)}/eventhouses`);
+  return j.value || [];
+}
+
+// ============================================================
 // Job instances (history)
 // ============================================================
 
@@ -706,6 +841,29 @@ export async function getFabricSqlDatabase(workspaceId: string, id: string): Pro
   return call<FabricItem>(`/workspaces/${encodeURIComponent(workspaceId)}/SqlDatabases/${encodeURIComponent(id)}`);
 }
 
+/**
+ * Resolve the TDS connection (server FQDN + database name) of a Fabric SQL
+ * database. Fabric returns `properties.connectionString` (the SQL server,
+ * `<id>.database.fabric.microsoft.com`) and `properties.databaseName`
+ * (`<displayName>-<id>`). The same `mssql`/`tedious` engine the Azure SQL
+ * client uses connects here with the `https://database.windows.net/.default`
+ * AAD token. Returns `null` when Fabric hasn't surfaced the connection yet
+ * (newly-provisioned DB), so the navigator shows the honest gate.
+ */
+export async function getFabricSqlDatabaseConnection(
+  workspaceId: string,
+  id: string,
+): Promise<{ server: string; database: string } | null> {
+  const item = await call<any>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/SqlDatabases/${encodeURIComponent(id)}`,
+  );
+  const props = item?.properties || {};
+  const server = String(props.serverFqdn || props.connectionString || '').trim();
+  const database = String(props.databaseName || item?.displayName || '').trim();
+  if (!server || !database) return null;
+  return { server, database };
+}
+
 export async function createFabricSqlDatabase(
   workspaceId: string,
   body: { displayName: string; description?: string; definition?: FabricItemDefinition },
@@ -721,4 +879,194 @@ export async function deleteFabricSqlDatabase(workspaceId: string, id: string): 
     `/workspaces/${encodeURIComponent(workspaceId)}/SqlDatabases/${encodeURIComponent(id)}`,
     { method: 'DELETE' },
   );
+}
+
+// ============================================================
+// Deployment Pipelines (Fabric CI/CD)
+//
+// The Fabric Deployment Pipelines experience — dev → test → prod stages,
+// each bound to a Fabric workspace, with content promotion between stages.
+//
+// Docs:
+//   https://learn.microsoft.com/rest/api/fabric/core/deployment-pipelines
+//   https://learn.microsoft.com/fabric/cicd/deployment-pipelines/pipeline-automation-fabric
+//
+// Surface:
+//   GET  /v1/deploymentPipelines                          → list pipelines
+//   GET  /v1/deploymentPipelines/{id}                     → get one pipeline
+//   GET  /v1/deploymentPipelines/{id}/stages              → list stages
+//   GET  /v1/deploymentPipelines/{id}/stages/{sid}/items  → items in a stage
+//   POST /v1/deploymentPipelines/{id}/deploy              → deploy stage→stage (LRO)
+//   GET  /v1/deploymentPipelines/{id}/operations          → deployment history
+//
+// Auth + gating identical to the rest of this client: Console UAMI needs an
+// *admin* deployment-pipelines role and contributor on the stage workspaces.
+// 401/403 surface the same FabricError hint so the BFF can show the gate.
+// ============================================================
+
+export interface DeploymentPipeline {
+  id: string;
+  displayName: string;
+  description?: string;
+}
+
+export interface DeploymentPipelineStage {
+  id: string;
+  order: number;
+  displayName: string;
+  description?: string;
+  /** Assigned workspace id — only present when a workspace is assigned. */
+  workspaceId?: string;
+  /** Assigned workspace name — only present when assigned + visible to caller. */
+  workspaceName?: string;
+  isPublic?: boolean;
+}
+
+export interface DeploymentPipelineStageItem {
+  itemId: string;
+  itemDisplayName: string;
+  itemType: string;
+  sourceItemId?: string;
+  targetItemId?: string;
+  lastDeploymentTime?: string;
+}
+
+export interface DeploymentPipelineOperation {
+  id: string;
+  type?: string;            // 'Deploy'
+  status?: string;          // NotStarted | Running | Succeeded | Failed
+  sourceStageId?: string;
+  targetStageId?: string;
+  executionStartTime?: string;
+  executionEndTime?: string;
+  lastUpdatedTime?: string;
+  note?: string;
+  performedBy?: string;
+}
+
+export interface DeployItemRef {
+  sourceItemId: string;
+  itemType: string;
+}
+
+export interface DeployStageRequest {
+  sourceStageId: string;
+  targetStageId: string;
+  /** Optional selective list; when omitted Fabric deploys all supported items. */
+  items?: DeployItemRef[];
+  note?: string;
+  /** Required only when the target stage has no assigned workspace. */
+  createdWorkspaceDetails?: { name: string; capacityId?: string };
+}
+
+/** GET /v1/deploymentPipelines — every pipeline the UAMI can see. Paginates. */
+export async function listDeploymentPipelines(): Promise<DeploymentPipeline[]> {
+  const out: DeploymentPipeline[] = [];
+  let token: string | undefined;
+  let guard = 0;
+  do {
+    guard++;
+    const j = await call<{ value: DeploymentPipeline[]; continuationToken?: string }>(
+      '/deploymentPipelines',
+      { query: token ? { continuationToken: token } : undefined },
+    );
+    for (const p of j.value || []) out.push(p);
+    token = j.continuationToken;
+  } while (token && guard < 50);
+  return out;
+}
+
+/** GET /v1/deploymentPipelines/{id} — pipeline metadata. */
+export async function getDeploymentPipeline(id: string): Promise<DeploymentPipeline> {
+  return call<DeploymentPipeline>(`/deploymentPipelines/${encodeURIComponent(id)}`);
+}
+
+/** GET /v1/deploymentPipelines/{id}/stages — ordered stages (dev/test/prod). */
+export async function listDeploymentPipelineStages(id: string): Promise<DeploymentPipelineStage[]> {
+  const out: DeploymentPipelineStage[] = [];
+  let token: string | undefined;
+  let guard = 0;
+  do {
+    guard++;
+    const j = await call<{ value: DeploymentPipelineStage[]; continuationToken?: string }>(
+      `/deploymentPipelines/${encodeURIComponent(id)}/stages`,
+      { query: token ? { continuationToken: token } : undefined },
+    );
+    for (const s of j.value || []) out.push(s);
+    token = j.continuationToken;
+  } while (token && guard < 50);
+  out.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return out;
+}
+
+/**
+ * GET /v1/deploymentPipelines/{id}/stages/{stageId}/items — the supported
+ * items in the workspace assigned to a stage. Returns [] when the stage has
+ * no assigned workspace (Fabric 400s on an empty stage; we treat that as
+ * empty rather than an error).
+ */
+export async function listDeploymentPipelineStageItems(
+  id: string,
+  stageId: string,
+): Promise<DeploymentPipelineStageItem[]> {
+  const j = await call<{ value: DeploymentPipelineStageItem[] }>(
+    `/deploymentPipelines/${encodeURIComponent(id)}/stages/${encodeURIComponent(stageId)}/items`,
+  );
+  return j.value || [];
+}
+
+/**
+ * POST /v1/deploymentPipelines/{id}/deploy — promote content from the source
+ * stage to the (consecutive) target stage. Long-running: returns a 202 with a
+ * Location/operation handle, surfaced here as { _accepted, location }.
+ */
+export async function deployStageContent(
+  id: string,
+  req: DeployStageRequest,
+): Promise<{ _accepted: true; location?: string } | DeploymentPipelineOperation> {
+  if (!req?.sourceStageId) throw new FabricError('sourceStageId is required', 400);
+  if (!req?.targetStageId) throw new FabricError('targetStageId is required', 400);
+  const body: Record<string, unknown> = {
+    sourceStageId: req.sourceStageId,
+    targetStageId: req.targetStageId,
+  };
+  if (req.items && req.items.length) body.items = req.items;
+  if (req.note) body.note = req.note;
+  if (req.createdWorkspaceDetails) body.createdWorkspaceDetails = req.createdWorkspaceDetails;
+  return call(
+    `/deploymentPipelines/${encodeURIComponent(id)}/deploy`,
+    { method: 'POST', body, acceptLongRunning: true },
+  );
+}
+
+/** GET /v1/deploymentPipelines/{id}/operations — deployment history. Paginates. */
+export async function listDeploymentPipelineOperations(
+  id: string,
+): Promise<DeploymentPipelineOperation[]> {
+  const out: DeploymentPipelineOperation[] = [];
+  let token: string | undefined;
+  let guard = 0;
+  do {
+    guard++;
+    const j = await call<{ value: any[]; continuationToken?: string }>(
+      `/deploymentPipelines/${encodeURIComponent(id)}/operations`,
+      { query: token ? { continuationToken: token } : undefined },
+    );
+    for (const o of j.value || []) {
+      out.push({
+        id: o.id,
+        type: o.type,
+        status: o.status,
+        sourceStageId: o.sourceStageId,
+        targetStageId: o.targetStageId,
+        executionStartTime: o.executionStartTime,
+        executionEndTime: o.executionEndTime,
+        lastUpdatedTime: o.lastUpdatedTime,
+        note: typeof o.note === 'string' ? o.note : o.note?.content,
+        performedBy: o.performedBy?.displayName || o.performedBy?.userDetails?.userPrincipalName,
+      });
+    }
+    token = j.continuationToken;
+  } while (token && guard < 50);
+  return out;
 }

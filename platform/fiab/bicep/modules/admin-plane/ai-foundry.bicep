@@ -47,6 +47,9 @@ param adminEntraGroupId string
 @description('Console UAMI principal ID — granted Cognitive Services Contributor on the model-hosting account so the BFF can deploy models / read quota / read keys. Empty skips the role assignment.')
 param consolePrincipalId string = ''
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Compliance tags')
 param complianceTags object
 
@@ -82,9 +85,9 @@ resource foundryHub 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = 
 }
 
 // Azure ML Owner role to admin group
-resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource hubOwnerRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
   scope: foundryHub
-  name: guid(foundryHub.id, adminEntraGroupId, 'aml-owner')
+  name: guid(foundryHub.id, adminEntraGroupId, 'f6c7c914-8db3-469d-8ca1-694a8f32e121')
   properties: {
     // AzureML Data Scientist
     roleDefinitionId: subscriptionResourceId(
@@ -158,17 +161,41 @@ resource aiServices 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   identity: { type: 'SystemAssigned' }
   properties: {
     customSubDomainName: 'aoai-csa-loom-${location}'
+    // Enable Microsoft Foundry project management on this AIServices account so
+    // the Foundry Agent Service (data-agent Publish + Foundry agent editor) has a
+    // real project endpoint to target (foundry-agent-client.ts). The property is
+    // valid on the runtime API; the bundled bicep type lib is behind, hence the
+    // suppression below.
+    #disable-next-line BCP037
+    allowProjectManagement: true
     publicNetworkAccess: boundary == 'Commercial' ? 'Enabled' : 'Disabled'
     networkAcls: { defaultAction: boundary == 'Commercial' ? 'Allow' : 'Deny' }
     disableLocalAuth: false
   }
 }
 
+// Microsoft Foundry project (child of the AIServices account). Backs the
+// Foundry Agent Service endpoint shaped
+//   https://<account-subdomain>.services.ai.azure.com/api/projects/<project>
+// which foundry-agent-client.ts targets. The project's internalId is the
+// workspace GUID downstream Foundry / Copilot Studio connections paste in.
+resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-04-01-preview' = {
+  parent: aiServices
+  name: 'loom'
+  location: location
+  tags: complianceTags
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    displayName: 'CSA Loom'
+    description: 'CSA Loom default Foundry project — Data Agents runtime + agent grounding'
+  }
+}
+
 // Grant the Console UAMI Cognitive Services Contributor so the BFF can
 // deploy models, read quota, read keys, and toggle public access.
-resource aiServicesUamiRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId)) {
+resource aiServicesUamiRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
   scope: aiServices
-  name: guid(aiServices.id, consolePrincipalId, 'cs-contributor')
+  name: guid(aiServices.id, consolePrincipalId, '25fbc0a9-bd7c-42a3-aa1a-3b75d497ee68')
   properties: {
     // Cognitive Services Contributor
     roleDefinitionId: subscriptionResourceId(
@@ -185,3 +212,11 @@ output hubKind string = workspaceKind
 output hubManagedIdentityPrincipalId string = foundryHub.identity.principalId
 output aiServicesAccountName string = aiServices.name
 output aiServicesEndpoint string = aiServices.properties.endpoint
+
+// Foundry Agent Service project wiring (LOOM_FOUNDRY_PROJECT_ENDPOINT / _ID).
+output projectName string = foundryProject.name
+output projectEndpoint string = 'https://${aiServices.properties.customSubDomainName}.services.ai.azure.com/api/projects/${foundryProject.name}'
+// The CognitiveServices project type doesn't surface a bare workspace GUID in
+// bicep; the ARM resource id is the real, stable identifier the Foundry agent
+// editor surfaces for downstream connection wiring.
+output projectId string = foundryProject.id

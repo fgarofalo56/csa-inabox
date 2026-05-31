@@ -15,6 +15,9 @@ param tenantId string = subscription().tenantId
 @description('Admin Entra group object ID')
 param adminEntraGroupId string
 
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 @description('Private endpoints subnet ID')
 param privateEndpointSubnetId string
 
@@ -57,7 +60,7 @@ var keyVaultAdministratorRoleId = '00482a5a-887f-4fb3-b363-3b7fe8e74483'
 // Role assignment skipped when adminEntraGroupId not configured —
 // operator runs `scripts/csa-loom/grant-admin-kv-access.sh` post-
 // deploy once they've identified the admin group.
-resource adminKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adminEntraGroupId)) {
+resource adminKvRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adminEntraGroupId) && !skipRoleGrants) {
   scope: keyVault
   name: guid(keyVault.id, adminEntraGroupId, keyVaultAdministratorRoleId)
   properties: {

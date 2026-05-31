@@ -58,6 +58,21 @@ export function defaultDatabase(): string {
   return DEFAULT_DB;
 }
 
+/**
+ * Honest config gate for the ADX navigator. The data-plane cluster URI has a
+ * built-in default (the Loom shared cluster), but a deployment that hasn't
+ * provisioned ADX should set `LOOM_KUSTO_CLUSTER_URI` explicitly. When neither
+ * the explicit URI nor a default database is configured we surface the gate so
+ * the UI shows a precise MessageBar instead of erroring against a phantom
+ * cluster. Returns `{ missing }` when not configured, else `null`.
+ */
+export function kustoConfigGate(): { missing: string } | null {
+  if (!process.env.LOOM_KUSTO_CLUSTER_URI) {
+    return { missing: 'LOOM_KUSTO_CLUSTER_URI' };
+  }
+  return null;
+}
+
 async function getToken(): Promise<string> {
   const scope = `${CLUSTER_URI}/.default`;
   const t = await credential.getToken(scope);
@@ -199,6 +214,196 @@ export async function getTableSchema(db: string, table: string): Promise<unknown
   const schemaIdx = r.columns.indexOf('Schema');
   const raw = r.rows[0][schemaIdx >= 0 ? schemaIdx : 1];
   try { return JSON.parse(String(raw)); } catch { return raw; }
+}
+
+// ============================================================
+// kusto-mgmt-client surface — typed list/create/delete for the
+// ADX/KQL database navigator (adx-database-tree).
+//
+// Every call below issues a real Kusto control command to
+// `/v1/rest/mgmt` via {@link executeMgmtCommand}. No mocks.
+// Grounded in Microsoft Learn (Kusto management commands):
+//   .show tables details / .show functions / .show materialized-views
+//   .show ingestion mappings / .show continuous-exports
+//   .show database schema as json
+//   .create table / .create-or-alter function / .create materialized-view
+//   .create-or-alter table ... ingestion <kind> mapping
+//   .drop table / .drop function / .drop materialized-view
+//   .drop <table|database> ... ingestion <kind> mapping
+// ============================================================
+
+/** Safe-quote a KQL entity name as a bracketed string literal: `["name"]`. */
+function qName(name: string): string {
+  return `["${name.replace(/"/g, '\\"')}"]`;
+}
+
+export interface KustoTableDetail {
+  name: string;
+  folder?: string;
+  docString?: string;
+  totalRowCount?: number;
+  totalExtentSizeMb?: number;
+  hotExtentSizeMb?: number;
+}
+
+/** `.show tables details` — tables with row counts + size (navigator counts). */
+export async function listTableDetails(db: string): Promise<KustoTableDetail[]> {
+  const r = await executeMgmtCommand(db, '.show tables details');
+  const idx = (c: string) => r.columns.indexOf(c);
+  const nameIdx = idx('TableName');
+  const folderIdx = idx('Folder');
+  const docIdx = idx('DocString');
+  const rowsIdx = idx('TotalRowCount');
+  const totSizeIdx = idx('TotalExtentSize');
+  const hotSizeIdx = idx('HotExtentSize');
+  const toMb = (v: unknown) => (typeof v === 'number' ? v / (1024 * 1024) : undefined);
+  return r.rows.map((row) => ({
+    name: String(row[nameIdx >= 0 ? nameIdx : 0]),
+    folder: folderIdx >= 0 ? (row[folderIdx] as string) : undefined,
+    docString: docIdx >= 0 ? (row[docIdx] as string) : undefined,
+    totalRowCount: rowsIdx >= 0 ? (row[rowsIdx] as number) : undefined,
+    totalExtentSizeMb: totSizeIdx >= 0 ? toMb(row[totSizeIdx]) : undefined,
+    hotExtentSizeMb: hotSizeIdx >= 0 ? toMb(row[hotSizeIdx]) : undefined,
+  }));
+}
+
+export interface KustoIngestionMapping {
+  name: string;
+  kind: string; // csv | json | avro | parquet | orc | w3clogfile
+  table?: string; // empty/undefined → database-scoped mapping
+  mapping?: string; // the JSON definition
+}
+
+/** `.show ingestion mappings` — every mapping (all kinds, db + table scope). */
+export async function listIngestionMappings(db: string): Promise<KustoIngestionMapping[]> {
+  const r = await executeMgmtCommand(db, '.show ingestion mappings');
+  const idx = (c: string) => r.columns.indexOf(c);
+  const nameIdx = idx('Name');
+  const kindIdx = idx('Kind');
+  const tableIdx = idx('Table');
+  const mapIdx = idx('Mapping');
+  return r.rows.map((row) => ({
+    name: String(row[nameIdx >= 0 ? nameIdx : 0]),
+    kind: kindIdx >= 0 ? String(row[kindIdx] || '') : '',
+    table: tableIdx >= 0 ? (row[tableIdx] as string) || undefined : undefined,
+    mapping: mapIdx >= 0 ? (row[mapIdx] as string) : undefined,
+  }));
+}
+
+export interface KustoContinuousExport {
+  name: string;
+  externalTableName?: string;
+  isRunning?: boolean;
+  isDisabled?: boolean;
+  lastRunResult?: string;
+  exportedTo?: string;
+}
+
+/** `.show continuous-exports` — read-only continuous export jobs. */
+export async function listContinuousExports(db: string): Promise<KustoContinuousExport[]> {
+  const r = await executeMgmtCommand(db, '.show continuous-exports');
+  const idx = (c: string) => r.columns.indexOf(c);
+  const nameIdx = idx('Name');
+  const extIdx = idx('ExternalTableName');
+  const runIdx = idx('IsRunning');
+  const disIdx = idx('IsDisabled');
+  const resIdx = idx('LastRunResult');
+  const expIdx = idx('ExportedTo');
+  return r.rows.map((row) => ({
+    name: String(row[nameIdx >= 0 ? nameIdx : 0]),
+    externalTableName: extIdx >= 0 ? (row[extIdx] as string) : undefined,
+    isRunning: runIdx >= 0 ? Boolean(row[runIdx]) : undefined,
+    isDisabled: disIdx >= 0 ? Boolean(row[disIdx]) : undefined,
+    lastRunResult: resIdx >= 0 ? (row[resIdx] as string) : undefined,
+    exportedTo: expIdx >= 0 ? (row[expIdx] as string | undefined)?.toString() : undefined,
+  }));
+}
+
+/** `.show database <db> schema as json` — flat read-only schema object. */
+export async function getDatabaseSchemaJson(db: string): Promise<unknown> {
+  const r = await executeMgmtCommand(db, `.show database ${qName(db)} schema as json`);
+  if (!r.rows.length) return null;
+  const schemaIdx = r.columns.findIndex((c) => /schema/i.test(c));
+  const raw = r.rows[0][schemaIdx >= 0 ? schemaIdx : r.columns.length - 1];
+  try { return JSON.parse(String(raw)); } catch { return raw; }
+}
+
+/** `.create table T (schema)` — schema is `col:type, col:type`. */
+export async function createTable(db: string, name: string, schema: string): Promise<KustoQueryResult> {
+  const cols = schema.trim();
+  if (!cols) throw new KustoError('createTable: schema is required (e.g. "ts:datetime, value:long")', 400);
+  return executeMgmtCommand(db, `.create table ${qName(name)} (${cols})`);
+}
+
+/** `.drop table T ifexists`. */
+export async function dropTable(db: string, name: string): Promise<KustoQueryResult> {
+  return executeMgmtCommand(db, `.drop table ${qName(name)} ifexists`);
+}
+
+/** `.create-or-alter function NAME(args) { body }`. */
+export async function createFunction(
+  db: string, name: string, args: string, body: string,
+): Promise<KustoQueryResult> {
+  const b = body.trim();
+  if (!b) throw new KustoError('createFunction: body is required', 400);
+  return executeMgmtCommand(
+    db,
+    `.create-or-alter function with (folder = "Loom", docstring = "Created via CSA Loom") ${name}(${args.trim()}) { ${b} }`,
+  );
+}
+
+/** `.drop function NAME ifexists`. */
+export async function dropFunction(db: string, name: string): Promise<KustoQueryResult> {
+  return executeMgmtCommand(db, `.drop function ${name} ifexists`);
+}
+
+/** `.create materialized-view NAME on table SRC { query }`. */
+export async function createMaterializedView(
+  db: string, name: string, sourceTable: string, query: string,
+): Promise<KustoQueryResult> {
+  if (!sourceTable.trim() || !query.trim()) {
+    throw new KustoError('createMaterializedView: source table and query are required', 400);
+  }
+  return executeMgmtCommand(
+    db,
+    `.create materialized-view ${name} on table ${qName(sourceTable.trim())} { ${query.trim()} }`,
+  );
+}
+
+/** `.drop materialized-view NAME ifexists`. */
+export async function dropMaterializedView(db: string, name: string): Promise<KustoQueryResult> {
+  return executeMgmtCommand(db, `.drop materialized-view ${name} ifexists`);
+}
+
+/**
+ * `.create-or-alter table T ingestion <kind> mapping "NAME" 'json'`.
+ * `mappingJson` is the mapping definition formatted as a JSON value.
+ */
+export async function createIngestionMapping(
+  db: string, table: string, kind: string, name: string, mappingJson: string,
+): Promise<KustoQueryResult> {
+  const k = kind.trim().toLowerCase();
+  if (!table.trim()) throw new KustoError('createIngestionMapping: table is required', 400);
+  if (!/^(csv|json|avro|parquet|orc|w3clogfile)$/.test(k)) {
+    throw new KustoError(`createIngestionMapping: unsupported kind "${kind}"`, 400);
+  }
+  let json = mappingJson.trim();
+  try { JSON.parse(json); } catch { throw new KustoError('createIngestionMapping: mapping must be valid JSON', 400); }
+  // Single-quote the JSON literal; escape embedded single quotes the KQL way.
+  json = json.replace(/'/g, "\\'");
+  return executeMgmtCommand(
+    db,
+    `.create-or-alter table ${qName(table.trim())} ingestion ${k} mapping "${name}" '${json}'`,
+  );
+}
+
+/** `.drop <table|database> ... ingestion <kind> mapping "NAME"`. */
+export async function dropIngestionMapping(
+  db: string, kind: string, name: string, table?: string,
+): Promise<KustoQueryResult> {
+  const k = kind.trim().toLowerCase();
+  const scope = table && table.trim() ? `table ${qName(table.trim())}` : `database ${qName(db)}`;
+  return executeMgmtCommand(db, `.drop ${scope} ingestion ${k} mapping "${name}"`);
 }
 
 /**

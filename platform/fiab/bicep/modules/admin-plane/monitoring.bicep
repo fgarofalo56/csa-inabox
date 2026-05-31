@@ -22,6 +22,12 @@ param dailyCapGb int = 50
 @maxValue(730)
 param retentionDays int = 90
 
+@description('Console UAMI principalId — granted Log Analytics Reader so the /monitor Logs (KQL) tab can query this workspace. Empty string skips the grant.')
+param consolePrincipalId string = ''
+
+@description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
+param skipRoleGrants bool = false
+
 // =====================================================================
 // Log Analytics Workspace
 // =====================================================================
@@ -56,6 +62,19 @@ resource sentinel 'Microsoft.OperationsManagement/solutions@2015-11-01-preview' 
   properties: {
     workspaceResourceId: law.id
   }
+}
+
+// Onboard the workspace to Microsoft Sentinel via the MODERN OnboardingStates
+// API. The legacy OperationsManagement 'SecurityInsights' solution above is no
+// longer sufficient (especially in Azure Government): creating Sentinel content
+// (alert rules, data connectors) fails with "Workspace is not onboarded to
+// Microsoft Sentinel" unless the workspace has a SecurityInsights/onboardingStates
+// 'default' resource first, and all Sentinel content dependsOn it.
+resource sentinelOnboarding 'Microsoft.SecurityInsights/onboardingStates@2024-03-01' = {
+  scope: law
+  name: 'default'
+  properties: {}
+  dependsOn: [ sentinel ]
 }
 
 // =====================================================================
@@ -93,7 +112,7 @@ resource sentinelAiPromptInjection 'Microsoft.SecurityInsights/alertRules@2024-0
     query: '''
 AppRequests
 | where Name contains "openai" or Name contains "/chat/completions"
-| extend prompt = tostring(CustomDimensions.prompt)
+| extend prompt = tostring(Properties.prompt)
 | where prompt has_any (
     "ignore previous instructions",
     "ignore the above",
@@ -114,7 +133,7 @@ AppRequests
     suppressionDuration: 'PT1H'
     tactics: ['InitialAccess']
   }
-  dependsOn: [ sentinel ]
+  dependsOn: [ sentinelOnboarding ]
 }
 
 resource sentinelAiAbuseQuota 'Microsoft.SecurityInsights/alertRules@2024-09-01' = if (!defenderForAIEnabled) {
@@ -129,7 +148,7 @@ resource sentinelAiAbuseQuota 'Microsoft.SecurityInsights/alertRules@2024-09-01'
     query: '''
 AppRequests
 | where Name contains "openai" or Name contains "/chat/completions"
-| extend principal = tostring(CustomDimensions.user_oid)
+| extend principal = tostring(Properties.user_oid)
 | summarize requestCount = count() by principal, bin(TimeGenerated, 5m)
 | where requestCount > 200
 '''
@@ -141,7 +160,25 @@ AppRequests
     suppressionDuration: 'PT1H'
     tactics: ['Impact']
   }
-  dependsOn: [ sentinel ]
+  dependsOn: [ sentinelOnboarding ]
+}
+
+// =====================================================================
+// /monitor observability — Console UAMI gets Log Analytics Reader on the
+// LAW so the Logs (KQL) tab can run queries against it. (Monitoring Reader
+// for metrics / activity log / resource health / alerts is granted at
+// subscription scope outside this RG-scoped module.)
+// =====================================================================
+
+// Log Analytics Reader — 73c42c96-874c-492b-b04d-ab87d138a893
+resource consoleLaReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  name: guid(law.id, consolePrincipalId, '73c42c96-874c-492b-b04d-ab87d138a893')
+  scope: law
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '73c42c96-874c-492b-b04d-ab87d138a893')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
 }
 
 // =====================================================================

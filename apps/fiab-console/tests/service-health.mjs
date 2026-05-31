@@ -70,6 +70,21 @@ const PROBES = [
   ['Loom Search Index', '/api/admin/reindex-items',          'POST', {}],
 
   ['ARM',       '/api/admin/azure-resources',                'GET'],
+
+  // --- Service-navigator control-plane probes (parity program #209) ---
+  // Bare list paths: each gates on config first, then lists. 503 = honest
+  // not-configured (NOTE); real data = PASS; auth/RBAC error = FAIL.
+  ['Databricks nav',     '/api/databricks/clusters',          'GET'],
+  ['Databricks nav',     '/api/databricks/jobs',              'GET'],
+  ['ADX nav',            '/api/adx/overview',                 'GET'],
+  ['ADX nav',            '/api/adx/tables',                   'GET'],
+  ['AI Search nav',      '/api/ai-search/indexes',            'GET', null, true],
+  ['Event Hubs nav',     '/api/eventhubs/hubs',               'GET'],
+  ['APIM nav',           '/api/apim/instances',               'GET', null, true],
+  ['APIM nav',           '/api/apim/apis',                    'GET', null, true],
+  ['Cosmos nav',         '/api/cosmos/databases',             'GET'],
+  ['Foundry nav',        '/api/foundry/model-deployments',    'GET', null, true],
+  ['Power BI nav',       '/api/powerbi/workspaces',           'GET', null, true],
 ];
 
 const SUMMARY = { pass: 0, fail: 0, note: 0 };

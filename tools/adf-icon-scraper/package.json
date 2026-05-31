@@ -1,0 +1,16 @@
+{
+  "name": "adf-icon-scraper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Scrape Azure Data Factory Studio canvas icons (pipeline activities, mapping data flow transformations, data wrangling) to named SVG/PNG files for a draw.io / CSA Loom shape library.",
+  "type": "module",
+  "scripts": {
+    "scrape": "tsx scrape.ts",
+    "scrape:dry": "tsx scrape.ts --dry-run",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0",
+    "tsx": "^4.19.2"
+  }
+}

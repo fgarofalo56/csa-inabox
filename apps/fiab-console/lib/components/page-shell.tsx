@@ -8,21 +8,23 @@
  */
 
 import { ReactNode } from 'react';
-import { LargeTitle, Body1, makeStyles, tokens } from '@fluentui/react-components';
+import { Title2, Body1, makeStyles, tokens } from '@fluentui/react-components';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 'var(--loom-space-4)' },
+  // Tighter header: less gap + a smaller title so the page header stops
+  // eating vertical real estate above the content / canvas.
+  root: { display: 'flex', flexDirection: 'column', gap: 'var(--loom-space-3)' },
   header: {
     display: 'flex',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 'var(--loom-space-4)',
-    paddingBottom: 'var(--loom-space-3)',
+    paddingBottom: 'var(--loom-space-2)',
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  titleCol: { display: 'flex', flexDirection: 'column', gap: 'var(--loom-space-1)', flex: 1, minWidth: 0 },
-  title: { fontFamily: 'var(--loom-font-display)', letterSpacing: '-0.01em' },
-  subtitle: { color: tokens.colorNeutralForeground2, maxWidth: '900px' },
-  actions: { display: 'flex', alignItems: 'center', gap: 'var(--loom-space-2)', paddingTop: 'var(--loom-space-1)' },
+  titleCol: { display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, minWidth: 0 },
+  title: { fontFamily: 'var(--loom-font-display)', letterSpacing: '-0.01em', lineHeight: 1.2 },
+  subtitle: { color: tokens.colorNeutralForeground2, maxWidth: '900px', fontSize: '13px' },
+  actions: { display: 'flex', alignItems: 'center', gap: 'var(--loom-space-2)' },
   body: { flex: 1, minHeight: 0 },
 });
 
@@ -39,7 +41,7 @@ export function PageShell({ title, subtitle, actions, children }: Props) {
     <div className={styles.root}>
       <header className={styles.header}>
         <div className={styles.titleCol}>
-          <LargeTitle as="h1" className={styles.title}>{title}</LargeTitle>
+          <Title2 as="h1" className={styles.title}>{title}</Title2>
           {subtitle && <Body1 className={styles.subtitle}>{subtitle}</Body1>}
         </div>
         {actions && <div className={styles.actions}>{actions}</div>}

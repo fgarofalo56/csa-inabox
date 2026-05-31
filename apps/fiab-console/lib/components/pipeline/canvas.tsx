@@ -1,34 +1,51 @@
 'use client';
 
 /**
- * PipelineCanvas — center pane of the Fabric-style pipeline editor.
+ * PipelineCanvas — center pane of the Fabric / ADF / Synapse pipeline editor,
+ * rebuilt on React Flow (@xyflow/react) — the same canvas engine atlas-diag
+ * uses. Only the Loom Fluent-v9 theme differs from ADF Studio.
  *
- * Features:
- *   - Drag from palette → drop on canvas creates a new activity at the
- *     drop coordinates.
- *   - Click activity → fires onSelect (parent opens properties panel).
- *   - Background click clears selection.
- *   - Pan + zoom via wheel + middle-drag (or shift+drag).
- *   - Fit-to-screen + reset-zoom imperative methods exposed via ref.
- *   - Snap-to-grid toggle (default on).
- *   - Minimap in the bottom-right.
- *   - SVG overlay draws all dependsOn[] edges in Fabric's 4 colours.
+ * What React Flow gives us (replacing the old hand-rolled SVG canvas):
+ *   - Drag from palette → drop on canvas at the cursor (HTML5 DnD +
+ *     screenToFlowPosition).
+ *   - Drag a node to reposition; pan + wheel-zoom; fit-to-screen.
+ *   - Bezier dependency connectors in ADF's 4 colours (success/failure/
+ *     completion/skip) — see loom-bezier-edge.tsx.
+ *   - Four coloured output Handles + one input Handle per node — see
+ *     flow-activity-node.tsx. The source handle id IS the dependency
+ *     condition, so onConnect maps straight to a dependsOn edge.
+ *   - MiniMap + zoom Controls.
  *
- * Coordinates: each activity stores x/y in a sibling Map managed by the
- * canvas. When the canvas mounts, any activity without a stored position
- * gets one from the topo-layout algorithm. Positions are NOT persisted
- * in the ADF JSON (ADF doesn't have a viewport concept) — they're
- * computed deterministically from `dependsOn[]` so re-opening shows the
- * same layout.
+ * Coordinates are canvas-internal (ADF/Synapse/Fabric JSON has no viewport
+ * concept). New nodes are placed at the drop point; "Auto align" re-runs ELK
+ * layout over the dependsOn DAG. The public contract (PipelineCanvasProps +
+ * CanvasHandle) is unchanged, so PipelineDesigner / PipelineEditorCore and all
+ * consumers are untouched.
  */
 
 import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 } from 'react';
-import { Caption1, makeStyles, tokens } from '@fluentui/react-components';
-import { ActivityNode } from './activity-node';
-import { Connector, ConnectorMarkers, type ConnectorCondition } from './connector';
+import {
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  useReactFlow, useNodesState,
+  ConnectionMode, MarkerType, Position,
+  type Node, type Edge, type Connection, type NodeChange, type NodeTypes, type EdgeTypes,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import { Button, Caption1, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
+import { Organization20Regular, FullScreenMaximize20Regular } from '@fluentui/react-icons';
+import { FlowActivityNode, FLOW_NODE_W, type ActivityNodeData } from './flow-activity-node';
+import { LoomBezierEdge, type LoomEdgeData } from './loom-bezier-edge';
+import { elkLayout, topoFallback, type XY } from './flow-layout';
+import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
+import { isContainerType } from './drill-path';
 import type { PipelineActivity } from './types';
+
+const NODE_H = 84;
+
+const nodeTypes: NodeTypes = { activity: FlowActivityNode };
+const edgeTypes: EdgeTypes = { loom: LoomBezierEdge };
 
 const useStyles = makeStyles({
   shell: {
@@ -40,43 +57,21 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: 4,
   },
-  viewport: {
-    position: 'absolute',
-    top: 0, left: 0,
-    width: '100%', height: '100%',
-    overflow: 'hidden',
-  },
-  inner: {
-    position: 'absolute',
-    transformOrigin: '0 0',
-    width: 4000,
-    height: 3000,
-  },
-  grid: {
-    position: 'absolute',
-    inset: 0,
-    backgroundImage: `radial-gradient(${tokens.colorNeutralStroke2} 1px, transparent 1px)`,
-    backgroundSize: '20px 20px',
-    pointerEvents: 'none',
-  },
-  svg: {
-    position: 'absolute',
-    inset: 0,
-    pointerEvents: 'none',
-    overflow: 'visible',
-  },
-  minimap: {
-    position: 'absolute',
-    right: 12,
-    bottom: 12,
-    width: 160, height: 100,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
-    overflow: 'hidden',
-    pointerEvents: 'none',
-  },
   hint: {
+    position: 'absolute',
+    left: 12, bottom: 12,
+    maxWidth: '55%',
+    zIndex: 5,
+    pointerEvents: 'none',
+  },
+  hintText: {
+    color: tokens.colorNeutralForeground3,
+    backgroundColor: tokens.colorNeutralBackground1,
+    padding: '2px 6px',
+    borderRadius: 4,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  empty: {
     position: 'absolute',
     inset: 0,
     display: 'flex',
@@ -84,22 +79,16 @@ const useStyles = makeStyles({
     justifyContent: 'center',
     pointerEvents: 'none',
     color: tokens.colorNeutralForeground3,
-  },
-  dropping: {
-    outline: `2px dashed ${tokens.colorBrandStroke1}`,
-    outlineOffset: -2,
+    zIndex: 1,
   },
 });
-
-const NODE_W = 200;
-const NODE_H = 80;
-const COL_GAP = 80;
-const ROW_GAP = 40;
-const GRID = 20;
 
 export interface CanvasHandle {
   fitToScreen: () => void;
   resetZoom: () => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  autoAlign: () => void;
 }
 
 export interface PipelineCanvasProps {
@@ -110,375 +99,231 @@ export interface PipelineCanvasProps {
   onDropPaletteKey: (key: string, atX: number, atY: number) => void;
   /**
    * Fired when the user drags a connector from one node's output port to
-   * another node's input port. Parent should add a `dependsOn` edge.
+   * another node's input port. Parent adds a `dependsOn` edge carrying the
+   * dependency condition the source port represents.
    */
-  onConnect?: (fromName: string, toName: string) => void;
+  onConnect?: (fromName: string, toName: string, cond: ConnectorCondition) => void;
+  /**
+   * Drill into a control-flow container's inner sub-canvas. Fired by the
+   * pencil button on a container node, and (for ForEach / Until) by a
+   * double-click on the node — matching ADF / Synapse Studio. The designer
+   * pushes a drill step and re-renders the canvas at the inner level.
+   */
+  onDrillInto?: (name: string) => void;
   /** Whether the snap-to-grid toggle is on. */
   snapToGrid?: boolean;
   /** Whether the dot grid is visible. */
   showGrid?: boolean;
+  /** Bubble zoom changes up so a toolbar can show the % readout. */
+  onZoomChange?: (zoom: number) => void;
 }
 
-interface Pos { x: number; y: number; }
-
-function computeRanks(activities: PipelineActivity[]): Map<string, number> {
-  const ranks = new Map<string, number>();
-  for (const a of activities) ranks.set(a.name, 0);
-  const max = activities.length;
-  for (let pass = 0; pass < max; pass++) {
-    let changed = false;
-    for (const a of activities) {
-      const ds = a.dependsOn || [];
-      let r = 0;
-      for (const dep of ds) {
-        const dr = ranks.get(dep.activity);
-        if (dr !== undefined && dr + 1 > r) r = dr + 1;
-      }
-      if (r !== ranks.get(a.name)) { ranks.set(a.name, r); changed = true; }
-    }
-    if (!changed) break;
-  }
-  return ranks;
-}
-
-function autoLayout(activities: PipelineActivity[], existing: Map<string, Pos>): Map<string, Pos> {
-  const ranks = computeRanks(activities);
-  const cols = new Map<number, PipelineActivity[]>();
+// --- edge derivation: one Bezier edge per (from, condition) pair ---------
+function buildEdges(activities: PipelineActivity[]): Edge[] {
+  const edges: Edge[] = [];
   for (const a of activities) {
-    const r = ranks.get(a.name) ?? 0;
-    if (!cols.has(r)) cols.set(r, []);
-    cols.get(r)!.push(a);
+    for (const dep of a.dependsOn || []) {
+      const conds = (dep.dependencyConditions || []) as ConnectorCondition[];
+      const list = conds.length ? conds : (['Succeeded'] as ConnectorCondition[]);
+      for (const c of list) {
+        const color = CONNECTOR_COLORS[c] || '#888888';
+        edges.push({
+          id: `${dep.activity}->${a.name}:${c}`,
+          source: dep.activity,
+          target: a.name,
+          sourceHandle: c,
+          targetHandle: 'in',
+          type: 'loom',
+          data: { condition: c } as LoomEdgeData,
+          markerEnd: { type: MarkerType.ArrowClosed, color, width: 16, height: 16 },
+        });
+      }
+    }
   }
-  const out = new Map<string, Pos>();
-  const orderedCols = [...cols.entries()].sort((a, b) => a[0] - b[0]);
-  for (const [rank, list] of orderedCols) {
-    list.forEach((a, idx) => {
-      // Keep existing position if user already moved this node.
-      const prev = existing.get(a.name);
-      if (prev) { out.set(a.name, prev); return; }
-      out.set(a.name, {
-        x: 40 + rank * (NODE_W + COL_GAP),
-        y: 40 + idx * (NODE_H + ROW_GAP),
-      });
-    });
-  }
-  return out;
+  return edges;
 }
 
-export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvas(
-  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, snapToGrid = true, showGrid = true },
+const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvasInner(
+  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, snapToGrid = true, showGrid = true, onZoomChange },
   ref,
 ) {
   const s = useStyles();
-  const shellRef = useRef<HTMLDivElement>(null);
-  const innerRef = useRef<HTMLDivElement>(null);
-  const positionsRef = useRef<Map<string, Pos>>(new Map());
-  const [, force] = useState({});
-  const tick = () => force({});
+  const rf = useReactFlow();
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const positionsRef = useRef<Map<string, XY>>(new Map());
+  const pendingDropRef = useRef<XY | null>(null);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
 
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [dropping, setDropping] = useState(false);
-
-  // Live connector-drag state. While the user drags from a node's output
-  // port we draw a rubber-band line to the cursor; on mouse-up over a
-  // target node's input port we fire onConnect.
-  const [connectDrag, setConnectDrag] = useState<{ from: string; x: number; y: number } | null>(null);
-  const hoverTargetRef = useRef<string | null>(null);
-
-  // Sync layout whenever activities change. Existing positions kept; new
-  // nodes get autoLayout slots.
-  useEffect(() => {
-    const next = autoLayout(activities, positionsRef.current);
-    positionsRef.current = next;
-    tick();
-  }, [activities]);
-
-  const fitToScreen = useCallback(() => {
-    const shell = shellRef.current;
-    if (!shell || activities.length === 0) return;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  // Build the RF node list from activities, preserving any positions the user
+  // dragged (positionsRef) and placing brand-new activities either at the drop
+  // point (pendingDropRef) or via the deterministic topo fallback.
+  const syncNodes = useCallback(() => {
+    const fallback = topoFallback(activities, FLOW_NODE_W, NODE_H);
+    const nextPos = new Map<string, XY>();
     for (const a of activities) {
-      const p = positionsRef.current.get(a.name);
-      if (!p) continue;
-      minX = Math.min(minX, p.x);
-      minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x + NODE_W);
-      maxY = Math.max(maxY, p.y + NODE_H);
+      let p = positionsRef.current.get(a.name);
+      if (!p) {
+        if (pendingDropRef.current) { p = pendingDropRef.current; pendingDropRef.current = null; }
+        else p = fallback.get(a.name) || { x: 40, y: 40 };
+      }
+      nextPos.set(a.name, p);
     }
-    if (!Number.isFinite(minX)) return;
-    const w = shell.clientWidth, h = shell.clientHeight;
-    const bw = maxX - minX + 80, bh = maxY - minY + 80;
-    const z = Math.min(1, Math.min(w / bw, h / bh));
-    setZoom(z);
-    setPan({ x: -minX * z + 40, y: -minY * z + 40 });
-  }, [activities]);
+    positionsRef.current = nextPos;
+    setNodes(activities.map((a) => ({
+      id: a.name,
+      type: 'activity',
+      position: nextPos.get(a.name) || { x: 40, y: 40 },
+      data: {
+        activity: a,
+        // Only container activities get a drill handler (→ the pencil button
+        // renders). Non-containers leave it undefined.
+        onDrill: onDrillInto && isContainerType(a.type) ? onDrillInto : undefined,
+      } as ActivityNodeData,
+      selected: selectedName === a.name,
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
+    })));
+  }, [activities, selectedName, setNodes, onDrillInto]);
 
-  const resetZoom = useCallback(() => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
-  }, []);
+  // Re-sync when the activity set / their deps change.
+  useEffect(() => { syncNodes(); }, [syncNodes]);
 
-  useImperativeHandle(ref, () => ({ fitToScreen, resetZoom }), [fitToScreen, resetZoom]);
+  const edges = useMemo(() => buildEdges(activities), [activities]);
 
-  // Drag/drop from palette
-  const onDragOver = (e: React.DragEvent) => {
+  // onNodesChange (from useNodesState) already applies changes to node state;
+  // we just additionally capture position changes so a later activities-driven
+  // re-sync preserves where the user dragged each node.
+  const handleNodesChange = useCallback((changes: NodeChange[]) => {
+    onNodesChange(changes);
+    for (const c of changes) {
+      if (c.type === 'position' && c.position) positionsRef.current.set(c.id, c.position);
+    }
+  }, [onNodesChange]);
+
+  const handleConnect = useCallback((conn: Connection) => {
+    if (!conn.source || !conn.target || conn.source === conn.target) return;
+    const cond = (conn.sourceHandle as ConnectorCondition) || 'Succeeded';
+    onConnect?.(conn.source, conn.target, cond);
+  }, [onConnect]);
+
+  // ADF/Synapse parity: ForEach and Until ALSO drill on double-click (not just
+  // the pencil). If/Switch use the pencil only (they have multiple branches,
+  // so the designer prompts which branch — no implicit double-click target).
+  const handleNodeDoubleClick = useCallback((_: React.MouseEvent, node: Node) => {
+    const a = (node.data as ActivityNodeData)?.activity;
+    if (!a || !onDrillInto) return;
+    if (a.type === 'ForEach' || a.type === 'Until') onDrillInto(a.name);
+  }, [onDrillInto]);
+
+  // --- palette drag-drop ----------------------------------------------------
+  const onDragOver = useCallback((e: React.DragEvent) => {
     if (e.dataTransfer.types.includes('application/x-fiab-activity')) {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
-      setDropping(true);
     }
-  };
-  const onDragLeave = () => setDropping(false);
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDropping(false);
-    const key = e.dataTransfer.getData('application/x-fiab-activity');
-    if (!key) return;
-    const shell = shellRef.current;
-    if (!shell) return;
-    const rect = shell.getBoundingClientRect();
-    const localX = (e.clientX - rect.left - pan.x) / zoom;
-    const localY = (e.clientY - rect.top - pan.y) / zoom;
-    const x = snapToGrid ? Math.round(localX / GRID) * GRID : localX;
-    const y = snapToGrid ? Math.round(localY / GRID) * GRID : localY;
-    onDropPaletteKey(key, x, y);
-  };
-
-  // Pan with shift+drag (or middle button); zoom with wheel (ctrl+wheel
-  // for desktop precision; bare wheel still scrolls but on canvas we
-  // override to zoom for Fabric parity).
-  const onWheel = (e: React.WheelEvent) => {
-    if (!e.ctrlKey && !e.metaKey) return; // bare wheel reserved for scroll-passthrough
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-    setZoom((z) => Math.max(0.25, Math.min(2, z + delta)));
-  };
-  const panStateRef = useRef<{ panning: boolean; lastX: number; lastY: number }>({ panning: false, lastX: 0, lastY: 0 });
-  const onMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
-      e.preventDefault();
-      panStateRef.current = { panning: true, lastX: e.clientX, lastY: e.clientY };
-    } else if (e.button === 0 && e.target === e.currentTarget) {
-      onSelect(null);
-    }
-  };
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (!panStateRef.current.panning) return;
-      const dx = e.clientX - panStateRef.current.lastX;
-      const dy = e.clientY - panStateRef.current.lastY;
-      panStateRef.current.lastX = e.clientX;
-      panStateRef.current.lastY = e.clientY;
-      setPan((p) => ({ x: p.x + dx, y: p.y + dy }));
-    };
-    const onUp = () => { panStateRef.current.panning = false; };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   }, []);
 
-  // Node drag-to-reposition
-  const draggingNodeRef = useRef<{ name: string; offsetX: number; offsetY: number } | null>(null);
-  const onNodeMouseDown = (name: string) => (e: React.MouseEvent) => {
-    if (e.button !== 0 || e.shiftKey) return;
-    e.stopPropagation();
-    const pos = positionsRef.current.get(name);
-    if (!pos) return;
-    const shell = shellRef.current;
-    if (!shell) return;
-    const rect = shell.getBoundingClientRect();
-    const localX = (e.clientX - rect.left - pan.x) / zoom;
-    const localY = (e.clientY - rect.top - pan.y) / zoom;
-    draggingNodeRef.current = { name, offsetX: localX - pos.x, offsetY: localY - pos.y };
-  };
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      const dragging = draggingNodeRef.current;
-      if (!dragging) return;
-      const shell = shellRef.current;
-      if (!shell) return;
-      const rect = shell.getBoundingClientRect();
-      const localX = (e.clientX - rect.left - pan.x) / zoom;
-      const localY = (e.clientY - rect.top - pan.y) / zoom;
-      let x = localX - dragging.offsetX;
-      let y = localY - dragging.offsetY;
-      if (snapToGrid) { x = Math.round(x / GRID) * GRID; y = Math.round(y / GRID) * GRID; }
-      positionsRef.current.set(dragging.name, { x: Math.max(0, x), y: Math.max(0, y) });
-      tick();
-    };
-    const onUp = () => { draggingNodeRef.current = null; };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-  }, [pan.x, pan.y, zoom, snapToGrid]);
-
-  // Connector drag — start from a node's output port, track the cursor in
-  // local (canvas) coordinates, finish when released over a target node's
-  // input port (tracked via hoverTargetRef set by node onConnectEnter).
-  const toLocal = useCallback((clientX: number, clientY: number): Pos => {
-    const shell = shellRef.current;
-    if (!shell) return { x: 0, y: 0 };
-    const rect = shell.getBoundingClientRect();
-    return {
-      x: (clientX - rect.left - pan.x) / zoom,
-      y: (clientY - rect.top - pan.y) / zoom,
-    };
-  }, [pan.x, pan.y, zoom]);
-
-  const onConnectStart = useCallback((name: string) => (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
+  const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    const local = toLocal(e.clientX, e.clientY);
-    hoverTargetRef.current = null;
-    setConnectDrag({ from: name, x: local.x, y: local.y });
-  }, [toLocal]);
+    const key = e.dataTransfer.getData('application/x-fiab-activity');
+    if (!key) return;
+    const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    // Offset so the cursor lands roughly on the node centre.
+    pendingDropRef.current = { x: pos.x - FLOW_NODE_W / 2, y: pos.y - NODE_H / 2 };
+    onDropPaletteKey(key, pendingDropRef.current.x, pendingDropRef.current.y);
+  }, [rf, onDropPaletteKey]);
 
-  useEffect(() => {
-    if (!connectDrag) return;
-    const onMove = (e: MouseEvent) => {
-      const local = toLocal(e.clientX, e.clientY);
-      setConnectDrag((prev) => (prev ? { ...prev, x: local.x, y: local.y } : prev));
-    };
-    const onUp = () => {
-      const from = connectDrag.from;
-      const to = hoverTargetRef.current;
-      if (to && to !== from && onConnect) onConnect(from, to);
-      hoverTargetRef.current = null;
-      setConnectDrag(null);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-  }, [connectDrag, toLocal, onConnect]);
-
-  // Build edges from dependsOn — one path per (from, cond) pair.
-  const edges = useMemo(() => {
-    const list: Array<{ from: string; to: string; cond?: ConnectorCondition; key: string }> = [];
-    for (const a of activities) {
-      for (const dep of a.dependsOn || []) {
-        const conds = dep.dependencyConditions || [];
-        if (conds.length === 0) {
-          list.push({ from: dep.activity, to: a.name, key: `${dep.activity}->${a.name}` });
-        } else {
-          for (const c of conds) {
-            list.push({ from: dep.activity, to: a.name, cond: c as ConnectorCondition, key: `${dep.activity}->${a.name}:${c}` });
-          }
-        }
-      }
+  // --- imperative handle ----------------------------------------------------
+  const fitToScreen = useCallback(() => { rf.fitView({ padding: 0.2, duration: 200 }); }, [rf]);
+  const resetZoom = useCallback(() => { rf.setViewport({ x: 0, y: 0, zoom: 1 }, { duration: 200 }); }, [rf]);
+  const zoomIn = useCallback(() => { rf.zoomIn({ duration: 120 }); }, [rf]);
+  const zoomOut = useCallback(() => { rf.zoomOut({ duration: 120 }); }, [rf]);
+  const autoAlign = useCallback(async () => {
+    const laid = await elkLayout(activities, FLOW_NODE_W, NODE_H);
+    if (laid.size) {
+      positionsRef.current = laid;
+      setNodes((prev) => prev.map((n) => ({ ...n, position: laid.get(n.id) || n.position })));
+      setTimeout(() => rf.fitView({ padding: 0.2, duration: 200 }), 0);
     }
-    return list;
-  }, [activities]);
+  }, [activities, rf, setNodes]);
 
-  // Minimap — single SVG that maps the whole inner space into 160x100.
-  const minimapBounds = useMemo(() => {
-    let maxX = 200, maxY = 200;
-    for (const p of positionsRef.current.values()) {
-      maxX = Math.max(maxX, p.x + NODE_W);
-      maxY = Math.max(maxY, p.y + NODE_H);
-    }
-    return { w: maxX + 40, h: maxY + 40 };
-  // recompute when activities change
-  }, [activities, force]);
+  useImperativeHandle(ref, () => ({ fitToScreen, resetZoom, zoomIn, zoomOut, autoAlign }),
+    [fitToScreen, resetZoom, zoomIn, zoomOut, autoAlign]);
 
   return (
     <div
-      ref={shellRef}
-      className={`${s.shell} ${dropping ? s.dropping : ''}`}
+      ref={wrapRef}
+      className={s.shell}
       onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
       onDrop={onDrop}
-      onWheel={onWheel}
-      onMouseDown={onMouseDown}
       data-testid="pipeline-canvas"
       data-canvas="pipeline"
       aria-label="Pipeline design canvas"
     >
-      <div className={s.viewport}>
-        <div
-          ref={innerRef}
-          className={s.inner}
-          style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
-        >
-          {showGrid && <div className={s.grid} />}
-          <svg className={s.svg} width="100%" height="100%" aria-hidden="true">
-            <ConnectorMarkers />
-            {edges.map((e) => {
-              const fp = positionsRef.current.get(e.from);
-              const tp = positionsRef.current.get(e.to);
-              if (!fp || !tp) return null;
-              const sx = fp.x + NODE_W;
-              const sy = fp.y + NODE_H / 2;
-              const ex = tp.x;
-              const ey = tp.y + NODE_H / 2;
-              return <Connector key={e.key} id={e.key} sx={sx} sy={sy} ex={ex} ey={ey} condition={e.cond} />;
-            })}
-            {/* Live rubber-band connector while dragging from an output port */}
-            {connectDrag && (() => {
-              const fp = positionsRef.current.get(connectDrag.from);
-              if (!fp) return null;
-              const sx = fp.x + NODE_W;
-              const sy = fp.y + NODE_H / 2;
-              return (
-                <Connector
-                  key="__live__"
-                  id="__live__"
-                  sx={sx} sy={sy}
-                  ex={connectDrag.x} ey={connectDrag.y}
-                  condition="Succeeded"
-                  selected
-                />
-              );
-            })()}
-          </svg>
-          {activities.map((a) => {
-            const p = positionsRef.current.get(a.name);
-            if (!p) return null;
-            return (
-              <ActivityNode
-                key={a.name}
-                activity={a}
-                x={p.x}
-                y={p.y}
-                selected={selectedName === a.name}
-                onSelect={() => onSelect(a.name)}
-                onMouseDown={onNodeMouseDown(a.name)}
-                onConnectStart={onConnectStart(a.name)}
-                onConnectEnter={() => { if (connectDrag) hoverTargetRef.current = a.name; }}
-                onConnectLeave={() => { if (hoverTargetRef.current === a.name) hoverTargetRef.current = null; }}
-              />
-            );
-          })}
-          {activities.length === 0 && (
-            <div className={s.hint}>
-              <Caption1>Drag an activity from the left palette onto the canvas to begin.</Caption1>
-            </div>
-          )}
-        </div>
-      </div>
-      {activities.length > 0 && (
-        <div className={s.minimap} aria-hidden="true">
-          <svg viewBox={`0 0 ${minimapBounds.w} ${minimapBounds.h}`} width="160" height="100" preserveAspectRatio="xMidYMid meet">
-            {activities.map((a) => {
-              const p = positionsRef.current.get(a.name);
-              if (!p) return null;
-              return (
-                <rect
-                  key={a.name}
-                  x={p.x} y={p.y}
-                  width={NODE_W} height={NODE_H}
-                  fill={selectedName === a.name ? tokens.colorBrandBackground : tokens.colorNeutralForeground3}
-                />
-              );
-            })}
-          </svg>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        onNodesChange={handleNodesChange}
+        onConnect={handleConnect}
+        onNodeClick={(_, n) => onSelect(n.id)}
+        onNodeDoubleClick={handleNodeDoubleClick}
+        onPaneClick={() => onSelect(null)}
+        onMove={(_, vp) => onZoomChange?.(vp.zoom)}
+        connectionMode={ConnectionMode.Loose}
+        snapToGrid={snapToGrid}
+        snapGrid={[16, 16]}
+        defaultEdgeOptions={{ type: 'loom' }}
+        minZoom={0.25}
+        maxZoom={2}
+        fitView
+        fitViewOptions={{ padding: 0.2 }}
+        proOptions={{ hideAttribution: true }}
+        deleteKeyCode={null}
+      >
+        {showGrid && <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />}
+        <Panel position="top-right">
+          <div style={{ display: 'flex', gap: 4, background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 2 }}>
+            <Tooltip content="Auto-align (ELK layout)" relationship="label">
+              <Button size="small" appearance="subtle" icon={<Organization20Regular />} onClick={autoAlign}>Auto-align</Button>
+            </Tooltip>
+            <Tooltip content="Zoom to fit" relationship="label">
+              <Button size="small" appearance="subtle" icon={<FullScreenMaximize20Regular />} aria-label="Zoom to fit" onClick={fitToScreen} />
+            </Tooltip>
+          </div>
+        </Panel>
+        <Controls showInteractive={false} />
+        <MiniMap
+          pannable
+          zoomable
+          nodeColor={(n) => (n.selected ? tokens.colorBrandBackground : tokens.colorNeutralForeground3)}
+          style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+        />
+      </ReactFlow>
+
+      {activities.length === 0 && (
+        <div className={s.empty}>
+          <Caption1>Drag an activity from the left palette onto the canvas to begin.</Caption1>
         </div>
       )}
-      <div style={{ position: 'absolute', left: 12, bottom: 12 }}>
-        <Caption1 style={{ color: tokens.colorNeutralForeground3, backgroundColor: tokens.colorNeutralBackground1, padding: '2px 6px', borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
-          {Math.round(zoom * 100)}% · shift+drag to pan · ctrl+wheel to zoom · drag a node's right port to connect
+      <div className={s.hint}>
+        <Caption1 className={s.hintText}>
+          drag to pan · wheel to zoom · drag a coloured output port (success / failure / completion / skip) to connect
         </Caption1>
       </div>
     </div>
+  );
+});
+
+/**
+ * Public component — wraps the inner canvas in a ReactFlowProvider so
+ * useReactFlow() works, and forwards the imperative handle through.
+ */
+export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvas(props, ref) {
+  return (
+    <ReactFlowProvider>
+      <PipelineCanvasInner {...props} ref={ref} />
+    </ReactFlowProvider>
   );
 });
