@@ -2119,6 +2119,32 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/azure/data-factory/concepts-pipelines-activities"
     } },
 
+  // --- v3 — Azure Cosmos DB account navigator (SQL / NoSQL API — parity wave 7) ---
+  { slug: 'azure-cosmos-account',        displayName: 'Azure Cosmos DB account',     restType: 'CosmosDbAccount',           category: 'Databases',
+    description: 'Cosmos DB for NoSQL — a live Data Explorer over databases, containers, throughput, and server-side scripts.',
+    learnContent: {
+      "overview": "An Azure Cosmos DB account (NoSQL / Core SQL API) is a globally-distributed, multi-model database. In Loom the editor is a live Data Explorer over the env-pinned account (LOOM_COSMOS_ACCOUNT) — databases → containers → stored procedures / triggers / UDFs — driven by the real ARM control plane (Microsoft.DocumentDB/databaseAccounts, api-version 2024-11-15). Create/delete databases and containers (with partition key + manual/autoscale RU/s) run real ARM PUT/DELETE calls.",
+      "steps": [
+        {
+          "title": "Configure the navigator account",
+          "body": "Set LOOM_COSMOS_ACCOUNT, LOOM_COSMOS_ACCOUNT_RG, and LOOM_SUBSCRIPTION_ID, and grant the Console UAMI the Cosmos DB Operator (or DocumentDB Account Contributor) role at the account scope. This account is distinct from Loom's own internal store."
+        },
+        {
+          "title": "Browse the Data Explorer",
+          "body": "Expand Databases → a database → Containers → a container to see its partition key, throughput, and the stored procedures / triggers / UDFs registered on it. Counts come from real ARM list calls."
+        },
+        {
+          "title": "Create a database or container",
+          "body": "Use the ＋ New menu to create a database (optional shared throughput) or a container (partition key + manual/autoscale RU/s). The create issues a real ARM PUT and the tree refreshes."
+        },
+        {
+          "title": "Mind the honest gates",
+          "body": "The item document grid, indexing-policy editor, and conflict-resolution policy are disclosed as 'coming' rows under Not yet wired — never faked. Script authoring is read-only for now."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/templates/microsoft.documentdb/2024-11-15/databaseaccounts"
+    } },
+
   // --- v3 — Graph + knowledge stores (Cosmos Gremlin, ADX graph, Cypher, GQL, vector stores) ---
   { slug: 'cosmos-gremlin-graph',        displayName: 'Cosmos Gremlin graph',        restType: 'CosmosGremlinGraph',        category: 'Azure Graph + Vector',
     description: 'Cosmos DB for Apache Gremlin — graph traversal queries over property graphs.',

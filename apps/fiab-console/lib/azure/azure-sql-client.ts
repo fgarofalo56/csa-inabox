@@ -318,6 +318,25 @@ export async function executeQuery(server: string, database: string, sqlText: st
   };
 }
 
+/**
+ * Parameterized query — returns the raw recordset (array of row objects) so
+ * the object navigator can read named catalog columns. Inputs are bound as
+ * `@p0`, `@p1`, … so no string-injection path exists for the catalog reads.
+ * Used only by the sql-objects navigator (`sys.*` catalog queries).
+ */
+export async function executeParameterized<T = Record<string, unknown>>(
+  server: string,
+  database: string,
+  sqlText: string,
+  params: Array<string | number | boolean> = [],
+): Promise<T[]> {
+  const pool = await getPool(server, database);
+  const request = pool.request();
+  params.forEach((v, i) => request.input(`p${i}`, v));
+  const result = await request.query(sqlText);
+  return (result.recordset || []) as T[];
+}
+
 // ============================================================
 // Mirroring (Fabric Mirror to OneLake)
 // ============================================================
