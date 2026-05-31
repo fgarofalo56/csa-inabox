@@ -32,6 +32,7 @@ function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
       type: s.type,
       name: String(s.name || ''),
       tables: s.tables ? String(s.tables) : undefined,
+      description: s.description ? String(s.description) : undefined,
       instructions: s.instructions ? String(s.instructions) : undefined,
       examples: Array.isArray(s.examples) ? s.examples : undefined,
     })),
