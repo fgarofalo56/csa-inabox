@@ -95,11 +95,18 @@ function throughputLabel(t?: ThroughputInfo): string | null {
 
 type CreateKind = 'database' | 'container';
 
+export interface CosmosSelection {
+  db: string;
+  container?: string;
+  /** Partition-key path of the selected container (e.g. "/tenantId"), when known. */
+  partitionKey?: string;
+}
+
 export interface CosmosTreeProps {
   /** Increment to force a refresh from the parent (e.g. after a save/create). */
   refreshKey?: number;
   /** Notify the host when a database/container is selected (for the main pane). */
-  onSelect?: (sel: { db: string; container?: string }) => void;
+  onSelect?: (sel: CosmosSelection) => void;
 }
 
 /**
@@ -454,8 +461,8 @@ export function CosmosTree({ refreshKey = 0, onSelect }: CosmosTreeProps) {
                                     <span
                                       role="button" tabIndex={0}
                                       style={{ cursor: 'pointer' }}
-                                      onClick={() => onSelect?.({ db: db.name, container: c.name })}
-                                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect?.({ db: db.name, container: c.name }); } }}
+                                      onClick={() => onSelect?.({ db: db.name, container: c.name, partitionKey: c.partitionKey })}
+                                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect?.({ db: db.name, container: c.name, partitionKey: c.partitionKey }); } }}
                                     >
                                       {c.name}
                                     </span>
@@ -535,7 +542,6 @@ export function CosmosTree({ refreshKey = 0, onSelect }: CosmosTreeProps) {
             <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
             <Tree>
               {[
-                ['Item / document data explorer', 'Browse + edit JSON documents via the Cosmos data plane (dbs/{db}/colls/{c}/docs). Requires the data-plane SDK + partition-aware paging; not wired yet.'],
                 ['Indexing policy editor', 'Edit includedPaths/excludedPaths/composite indexes on the container resource (properties.resource.indexingPolicy); read/write not wired yet.'],
                 ['Conflict resolution policy', 'Last-Writer-Wins vs custom stored-procedure conflict resolution for multi-region writes; not wired yet.'],
                 ['Stored procedure / trigger / UDF authoring', 'Create/edit/execute script bodies (data-plane JS editor); the navigator lists existing scripts read-only for now.'],
