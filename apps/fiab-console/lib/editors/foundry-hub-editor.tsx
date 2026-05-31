@@ -39,6 +39,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ModelCatalogPanel, ChatPlaygroundPanel, PlaygroundsLandingPanel } from './foundry-playground';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
+import { FoundryAccountTree } from '@/lib/components/foundry/foundry-tree';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -866,8 +867,21 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
     ]},
   ], [portalUrl]);
 
+  const [selectedDeployment, setSelectedDeployment] = useState<string | null>(null);
+  const onOpenDeployment = useCallback((name: string) => { setSelectedDeployment(name); setTab('models'); }, []);
+
+  // Left navigator — the AI Foundry account tree, driven by the selected account.
+  const leftPanel = (
+    <FoundryAccountTree
+      account={acct}
+      selectedDeployment={selectedDeployment}
+      onOpenDeployment={onOpenDeployment}
+      refreshKey={nonce}
+    />
+  );
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={leftPanel} main={
       <>
         <AccountPickerBar acct={acct} onSelect={onSelectAccount} onHub={onHub} />
         {crossSubHub && (
