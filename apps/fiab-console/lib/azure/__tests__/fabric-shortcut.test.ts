@@ -67,7 +67,10 @@ describe('deleteOneLakeShortcut', () => {
   it('DELETEs the shortcut path', async () => {
     let method = '';
     let url = '';
-    mockFetch((u, init) => { url = u; method = (init?.method as string) || 'GET'; return new Response('', { status: 204 }); });
+    // A real Fabric DELETE returns 204 No Content. 204 is a null-body status,
+    // so the Response body MUST be null (passing '' makes the undici Response
+    // constructor throw "Invalid response status code 204").
+    mockFetch((u, init) => { url = u; method = (init?.method as string) || 'GET'; return new Response(null, { status: 204 }); });
     await deleteOneLakeShortcut('ws-1', 'lh-1', 'Files', 's1');
     expect(method).toBe('DELETE');
     expect(url).toContain('/workspaces/ws-1/items/lh-1/shortcuts/Files/s1');

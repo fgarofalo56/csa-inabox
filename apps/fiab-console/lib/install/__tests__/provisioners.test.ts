@@ -8,7 +8,17 @@
  *
  * No real Azure traffic.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+
+// Cold-transform budget. The kql-db provisioner (and the engine that imports it)
+// transitively pull in `@/lib/azure/kusto-client` → `@azure/cosmos`, a very large
+// SDK whose first vitest transform takes ~30-50s on a cold cache. That one-time
+// cost — NOT any logic in the provisioner — is what blew the default 5s
+// per-test timeout. The provisioner/engine logic itself runs in ~1ms once the
+// module graph is loaded (verified: runProvisioning(deploy=false) === 1ms after
+// import). We give the suites that touch that module graph a generous timeout so
+// the cold transform can finish; assertions below are unchanged.
+const COLD_TRANSFORM_TIMEOUT_MS = 120_000;
 
 const ENV_SHARED = {
   LOOM_DEFAULT_FABRIC_WORKSPACE: 'ws-fix-123',
@@ -203,6 +213,12 @@ describe('aiSearchProvisioner', () => {
 
 // ---- KQL DB ----
 describe('kqlDatabaseProvisioner', () => {
+  // Warm the heavy kusto-client → @azure/cosmos module graph once so the cold
+  // transform cost is absorbed here rather than inside the first `it`.
+  beforeAll(async () => {
+    await import('../provisioners/kql-db');
+  }, COLD_TRANSFORM_TIMEOUT_MS);
+
   it('hits ARM PUT then runs .create table mgmt commands', async () => {
     const { calls } = captureFetch([
       { status: 200, body: { properties: { provisioningState: 'Succeeded' }, id: '/subscriptions/sub/.../databases/MyDB' } },
@@ -224,7 +240,7 @@ describe('kqlDatabaseProvisioner', () => {
     expect(calls[1].url).toContain('/v1/rest/mgmt');
     const mgmtBody = JSON.parse(calls[1].init!.body as string);
     expect(mgmtBody.csl).toMatch(/\.create table Telemetry/);
-  });
+  }, COLD_TRANSFORM_TIMEOUT_MS);
 
   it('emits remediation when ARM 403', async () => {
     captureFetch([{ status: 403, body: { error: { message: 'forbidden' } } }]);
@@ -242,6 +258,12 @@ describe('kqlDatabaseProvisioner', () => {
 
 // ---- Engine aggregation ----
 describe('runProvisioning engine', () => {
+  // provisioning-engine imports every provisioner (incl. kql-db → @azure/cosmos),
+  // so warm that graph once before the suite's tests run.
+  beforeAll(async () => {
+    await import('../provisioning-engine');
+  }, COLD_TRANSFORM_TIMEOUT_MS);
+
   it('returns skipped for every item when deploy=false', async () => {
     const { runProvisioning } = await import('../provisioning-engine');
     const r = await runProvisioning(baseSession, 'app-test', 'ws-1', [
@@ -251,7 +273,7 @@ describe('runProvisioning engine', () => {
     expect(r.outcome).toBe('skipped');
     expect(r.steps).toHaveLength(2);
     expect(r.steps[0].result.status).toBe('skipped');
-  });
+  }, COLD_TRANSFORM_TIMEOUT_MS);
 
   it('reports partial when one provisioner remediates and another succeeds', async () => {
     captureFetch([
@@ -269,7 +291,7 @@ describe('runProvisioning engine', () => {
     expect(r.outcome).toBe('partial');
     expect(r.steps[0].result.status).toBe('created');
     expect(r.steps[1].result.status).toBe('remediation');
-  });
+  }, COLD_TRANSFORM_TIMEOUT_MS);
 
   it('marks unsupported itemType as skipped (Cosmos-only)', async () => {
     const { runProvisioning } = await import('../provisioning-engine');
