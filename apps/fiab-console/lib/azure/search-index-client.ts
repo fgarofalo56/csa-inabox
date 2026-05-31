@@ -75,6 +75,16 @@ export function isSearchConfigured(): boolean {
 }
 
 /**
+ * Honest infra-gate helper for the BFF routes. Returns `{ missing }` naming the
+ * exact env var to set when AI Search isn't wired, or `null` when configured.
+ * Mirrors `databricksConfigGate()` so the AI Search service routes share the
+ * same `{ ok:false, code:'not_configured', missing }` 503 shape.
+ */
+export function searchConfigGate(): { missing: string } | null {
+  return isSearchConfigured() ? null : { missing: 'LOOM_AI_SEARCH_SERVICE' };
+}
+
+/**
  * Resolve the search service name. An explicit `override` (from the item's
  * bound state) wins over the env default. Throws SearchNotDeployedError when
  * neither is set — callers surface that as the honest infra gate.
@@ -363,4 +373,158 @@ export async function listSkillsets(service?: string): Promise<Array<{ name: str
   const res = await call('/skillsets', { service });
   const j = await readJsonGuarded(res, 'list skillsets');
   return (j?.value || []).map((x: any) => ({ name: x.name, skillCount: (x.skills || []).length }));
+}
+
+// ----------------------------------------------------------------------------
+// Indexer create / delete  (PUT /indexers/{name}, DELETE /indexers/{name})
+// ----------------------------------------------------------------------------
+
+/**
+ * PUT /indexers/{name} — create-or-update an indexer. An indexer needs an
+ * existing data source + target index (and optionally a skillset). Per the
+ * Create Indexer reference, creating also runs it.
+ */
+export async function createIndexer(
+  def: { name: string; dataSourceName: string; targetIndexName: string; skillsetName?: string; schedule?: any; parameters?: any },
+  service?: string,
+): Promise<any> {
+  if (!def?.name) throw new SearchDataError(400, def, 'create indexer requires name');
+  if (!def?.dataSourceName) throw new SearchDataError(400, def, 'create indexer requires dataSourceName');
+  if (!def?.targetIndexName) throw new SearchDataError(400, def, 'create indexer requires targetIndexName');
+  const res = await call(`/indexers/${encodeURIComponent(def.name)}`, { service, method: 'PUT', body: def });
+  return readJsonGuarded(res, `create indexer ${def.name}`);
+}
+
+/** DELETE /indexers/{name}. */
+export async function deleteIndexer(name: string, service?: string): Promise<void> {
+  const res = await call(`/indexers/${encodeURIComponent(name)}`, { service, method: 'DELETE' });
+  if (res.status === 404 || res.status === 204) return;
+  await readJsonGuarded(res, `delete indexer ${name}`);
+}
+
+// ----------------------------------------------------------------------------
+// Data sources — full list / create / delete
+// ----------------------------------------------------------------------------
+
+/**
+ * PUT /datasources/{name} — create-or-update a data source connection.
+ * `type` is e.g. azureblob | azuretable | azuresql | cosmosdb | adlsgen2.
+ * `credentials.connectionString` carries the connection (or a ResourceId=…
+ * managed-identity connection string). `container.name` is required for blob.
+ */
+export async function createDataSource(
+  def: { name: string; type: string; credentials: { connectionString: string }; container: { name: string; query?: string }; description?: string },
+  service?: string,
+): Promise<any> {
+  if (!def?.name) throw new SearchDataError(400, def, 'create data source requires name');
+  if (!def?.type) throw new SearchDataError(400, def, 'create data source requires type');
+  const res = await call(`/datasources/${encodeURIComponent(def.name)}`, { service, method: 'PUT', body: def });
+  return readJsonGuarded(res, `create data source ${def.name}`);
+}
+
+/** DELETE /datasources/{name}. */
+export async function deleteDataSource(name: string, service?: string): Promise<void> {
+  const res = await call(`/datasources/${encodeURIComponent(name)}`, { service, method: 'DELETE' });
+  if (res.status === 404 || res.status === 204) return;
+  await readJsonGuarded(res, `delete data source ${name}`);
+}
+
+// ----------------------------------------------------------------------------
+// Skillsets — create (from JSON) / delete
+// ----------------------------------------------------------------------------
+
+/** PUT /skillsets/{name} — create-or-update a skillset from a full definition. */
+export async function createSkillset(def: any, service?: string): Promise<any> {
+  if (!def?.name) throw new SearchDataError(400, def, 'create skillset requires name');
+  if (!Array.isArray(def?.skills) || def.skills.length === 0) {
+    throw new SearchDataError(400, def, 'a skillset must define at least one skill');
+  }
+  const res = await call(`/skillsets/${encodeURIComponent(def.name)}`, { service, method: 'PUT', body: def });
+  return readJsonGuarded(res, `create skillset ${def.name}`);
+}
+
+/** DELETE /skillsets/{name}. */
+export async function deleteSkillset(name: string, service?: string): Promise<void> {
+  const res = await call(`/skillsets/${encodeURIComponent(name)}`, { service, method: 'DELETE' });
+  if (res.status === 404 || res.status === 204) return;
+  await readJsonGuarded(res, `delete skillset ${name}`);
+}
+
+// ----------------------------------------------------------------------------
+// Synonym maps — list / create / delete  (GET|PUT|DELETE /synonymmaps/{name})
+// ----------------------------------------------------------------------------
+
+/** GET /synonymmaps — list synonym maps (name, rule count). */
+export async function listSynonymMaps(service?: string): Promise<Array<{ name: string; ruleCount: number; format?: string }>> {
+  const res = await call('/synonymmaps', { service, query: { $select: 'name,format,synonyms' } });
+  const j = await readJsonGuarded(res, 'list synonym maps');
+  return (j?.value || []).map((x: any) => ({
+    name: x.name,
+    format: x.format,
+    ruleCount: typeof x.synonyms === 'string' ? x.synonyms.split('\n').filter((l: string) => l.trim()).length : 0,
+  }));
+}
+
+/**
+ * PUT /synonymmaps/{name} — create-or-update a synonym map. `synonyms` is the
+ * solr-format rule text (newline-separated), e.g. "USA, United States\nUK => United Kingdom".
+ */
+export async function createSynonymMap(
+  def: { name: string; synonyms: string; format?: string },
+  service?: string,
+): Promise<any> {
+  if (!def?.name) throw new SearchDataError(400, def, 'create synonym map requires name');
+  const body = { name: def.name, format: def.format || 'solr', synonyms: def.synonyms || '' };
+  const res = await call(`/synonymmaps/${encodeURIComponent(def.name)}`, { service, method: 'PUT', body });
+  return readJsonGuarded(res, `create synonym map ${def.name}`);
+}
+
+/** DELETE /synonymmaps/{name}. */
+export async function deleteSynonymMap(name: string, service?: string): Promise<void> {
+  const res = await call(`/synonymmaps/${encodeURIComponent(name)}`, { service, method: 'DELETE' });
+  if (res.status === 404 || res.status === 204) return;
+  await readJsonGuarded(res, `delete synonym map ${name}`);
+}
+
+// ----------------------------------------------------------------------------
+// Aliases — list / create / delete  (GET|PUT|DELETE /aliases/{name})
+//   An alias is a secondary name that maps to one index, letting you swap the
+//   backing index without changing query code. (api-version 2024-07-01+)
+// ----------------------------------------------------------------------------
+
+/** GET /aliases — list index aliases (name → indexes). */
+export async function listAliases(service?: string): Promise<Array<{ name: string; indexes: string[] }>> {
+  const res = await call('/aliases', { service });
+  const j = await readJsonGuarded(res, 'list aliases');
+  return (j?.value || []).map((x: any) => ({ name: x.name, indexes: x.indexes || [] }));
+}
+
+/** PUT /aliases/{name} — create-or-update an alias pointing at exactly one index. */
+export async function createAlias(
+  def: { name: string; indexes: string[] },
+  service?: string,
+): Promise<any> {
+  if (!def?.name) throw new SearchDataError(400, def, 'create alias requires name');
+  if (!Array.isArray(def?.indexes) || def.indexes.length !== 1) {
+    throw new SearchDataError(400, def, 'an alias must map to exactly one index');
+  }
+  const res = await call(`/aliases/${encodeURIComponent(def.name)}`, { service, method: 'PUT', body: { name: def.name, indexes: def.indexes } });
+  return readJsonGuarded(res, `create alias ${def.name}`);
+}
+
+/** DELETE /aliases/{name}. */
+export async function deleteAlias(name: string, service?: string): Promise<void> {
+  const res = await call(`/aliases/${encodeURIComponent(name)}`, { service, method: 'DELETE' });
+  if (res.status === 404 || res.status === 204) return;
+  await readJsonGuarded(res, `delete alias ${name}`);
+}
+
+// ----------------------------------------------------------------------------
+// Service statistics  (GET /servicestats — counters + quotas per object type)
+// ----------------------------------------------------------------------------
+
+/** GET /servicestats — counters & quotas (indexes, indexers, data sources, …). */
+export async function getServiceStats(service?: string): Promise<any> {
+  const res = await call('/servicestats', { service });
+  return readJsonGuarded(res, 'service stats');
 }
