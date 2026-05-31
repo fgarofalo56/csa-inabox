@@ -36,8 +36,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     top: typeof body?.top === 'number' ? body.top : 25,
     select: typeof body?.select === 'string' && body.select.trim() ? body.select : undefined,
     orderby: typeof body?.orderby === 'string' && body.orderby.trim() ? body.orderby : undefined,
+    searchFields: typeof body?.searchFields === 'string' && body.searchFields.trim() ? body.searchFields : undefined,
     facets: Array.isArray(body?.facets) ? body.facets : undefined,
     queryType: body?.queryType,
+    semanticConfiguration: typeof body?.semanticConfiguration === 'string' && body.semanticConfiguration.trim() ? body.semanticConfiguration : undefined,
+    answers: typeof body?.answers === 'string' && body.answers.trim() ? body.answers : undefined,
+    captions: typeof body?.captions === 'string' && body.captions.trim() ? body.captions : undefined,
     count: body?.count === true ? true : undefined,
     vectorQueries: Array.isArray(body?.vectorQueries) ? body.vectorQueries : undefined,
   };
