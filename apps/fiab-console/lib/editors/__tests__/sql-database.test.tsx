@@ -2,7 +2,7 @@
  * SqlDatabaseEditor (Fabric SQLDatabase) — vitest render + ribbon assertion.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { SqlDatabaseEditor } from '../sql-database-editor';
 import { makeItem, installFetchMock } from './test-helpers';
 
@@ -18,7 +18,12 @@ describe('SqlDatabaseEditor', () => {
       }),
     });
   });
-  afterEach(() => { vi.restoreAllMocks(); });
+  // vitest.config.ts runs with globals:false, so @testing-library/react never
+  // auto-registers afterEach(cleanup). With two it() blocks each render() would
+  // otherwise pile up in the document, so the second test sees two
+  // data-testid="ribbon" trees and getByTestId() throws "multiple elements".
+  // Explicit cleanup matches the sibling editor specs (activator, dataflow, …).
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('renders editor chrome', async () => {
     render(<SqlDatabaseEditor item={makeItem('sql-database', 'SQL database')} id="new" />);

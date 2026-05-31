@@ -5,7 +5,7 @@
  * surfaces job state, and exposes Start/Stop/Refresh/Save in the toolbar.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import { StreamAnalyticsJobEditor } from '../stream-analytics-editor';
 import { makeItem, installFetchMock } from './test-helpers';
 
@@ -36,7 +36,13 @@ describe('StreamAnalyticsJobEditor', () => {
     });
   });
 
-  afterEach(() => { vi.restoreAllMocks(); });
+  // vitest runs with globals:false, so @testing-library/react never registers
+  // its automatic afterEach(cleanup). Without an explicit cleanup the first
+  // test's mounted tree (showing the loaded job's query) survives into the
+  // second test, which then sees two `aria-label="ASA query"` textareas and
+  // breaks getByLabelText. Mirror the sibling editor specs (dataflow, dbt-job,
+  // etc.) and unmount between tests.
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
   it('lists ASA jobs and shows their state', async () => {
     render(<StreamAnalyticsJobEditor item={makeItem('stream-analytics-job', 'Stream Analytics job')} id="new" />);

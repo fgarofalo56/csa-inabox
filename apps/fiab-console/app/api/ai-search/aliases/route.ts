@@ -37,7 +37,20 @@ export async function GET() {
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const g = gate(); if (g) return g;
   try { return NextResponse.json({ ok: true, aliases: await listAliases() }); }
-  catch (e: any) { return fail(e); }
+  catch (e: any) {
+    // Index aliases require a newer Search API version than some (reused) services
+    // expose; that surfaces as 400 "The version indicated by the api-version query
+    // string parameter does not exist." Treat as an honest "not available" empty
+    // state rather than breaking the navigator tab.
+    if (e instanceof SearchDataError && e.status === 400 && /api-version/i.test(e?.message || '')) {
+      return NextResponse.json({
+        ok: true,
+        aliases: [],
+        note: 'Index aliases are not available on this Azure AI Search service API version.',
+      });
+    }
+    return fail(e);
+  }
 }
 
 export async function POST(req: NextRequest) {

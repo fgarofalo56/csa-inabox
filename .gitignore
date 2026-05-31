@@ -193,6 +193,10 @@ target/
 dbt_packages/
 dbt_modules/
 logs/
+# Un-ignore Next.js API routes literally named `logs` (the broad dbt `logs/`
+# rule above would otherwise swallow them, e.g. the Monitor Logs/KQL route).
+!apps/fiab-console/app/api/**/logs/
+!apps/fiab-console/app/api/**/logs/**
 
 # ---------------------------
 # Terraform / IaC State (if used)
