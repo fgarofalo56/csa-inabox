@@ -38,6 +38,7 @@ import {
   Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
   MathFormula20Regular, Table20Regular,
 } from '@fluentui/react-icons';
+import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -837,6 +838,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [kql, setKql] = useState(SAMPLE_KQL_DB);
   const [result, setResult] = useState<KqlResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Bumped after a ribbon-wizard create so the AdxDatabaseTree re-lists objects.
+  const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   // Wizard dialog state — Fabric-parity create flows for table/MV/function/update-policy
   const [wizardKind, setWizardKind] = useState<KqlWizardKind | null>(null);
   const [wizName, setWizName] = useState('');
@@ -857,6 +860,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       const r = await fetch(`/api/items/kql-database/${id}`);
       const j = (await r.json()) as KqlDbInfo;
       setInfo(j);
+      // Re-list the navigator (ribbon wizards call load() after a create).
+      setTreeRefreshKey((k) => k + 1);
     } catch (e: any) {
       setInfo({ ok: false, error: e?.message || String(e) });
     }
@@ -880,11 +885,6 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       setLoading(false);
     }
   }, [id, kql]);
-
-  const sizeMb = useMemo(() => {
-    const v = info?.details?.OriginalSize as number | undefined;
-    return typeof v === 'number' ? (v / (1024 * 1024)).toFixed(1) : null;
-  }, [info]);
 
   const openWizard = useCallback((k: KqlWizardKind) => {
     setWizardKind(k); setWizError(null); setWizSuccess(null);
@@ -989,76 +989,29 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div className={s.treePad}>
-          <Tree aria-label="KQL DB explorer" defaultOpenItems={['tables', 'info']}>
-            <TreeItem itemType="branch" value="info">
-              <TreeItemLayout iconBefore={<Database20Regular />}>{info?.database || 'database'}</TreeItemLayout>
-              <Tree>
-                {sizeMb && <TreeItem itemType="leaf" value="size"><TreeItemLayout>Size: {sizeMb} MB</TreeItemLayout></TreeItem>}
-                {typeof info?.details?.HotCachePeriod === 'string' && (
-                  <TreeItem itemType="leaf" value="hot"><TreeItemLayout>Hot cache: {String(info.details.HotCachePeriod)}</TreeItemLayout></TreeItem>
-                )}
-                {typeof info?.details?.SoftDeletePeriod === 'string' && (
-                  <TreeItem itemType="leaf" value="soft"><TreeItemLayout>Soft-delete: {String(info.details.SoftDeletePeriod)}</TreeItemLayout></TreeItem>
-                )}
-              </Tree>
-            </TreeItem>
-            <TreeItem itemType="branch" value="tables">
-              <TreeItemLayout iconBefore={<DocumentTable20Regular />}>Tables ({info?.tableCount ?? 0})</TreeItemLayout>
-              <Tree>
-                {(info?.tables || []).map((t) => (
-                  <TreeItem
-                    key={t.name}
-                    itemType="leaf"
-                    value={`t-${t.name}`}
-                    onClick={() => setKql(`["${t.name}"]\n| take 100`)}
-                  >
-                    <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{t.name}</TreeItemLayout>
-                  </TreeItem>
-                ))}
-                {info?.ok && (info?.tableCount ?? 0) === 0 && (
-                  <TreeItem itemType="leaf" value="none"><TreeItemLayout>No tables yet. Use <code>.create table</code>.</TreeItemLayout></TreeItem>
-                )}
-              </Tree>
-            </TreeItem>
-            <TreeItem itemType="branch" value="mvs">
-              <TreeItemLayout iconBefore={<Table20Regular />}>Materialized views ({info?.materializedViewCount ?? 0})</TreeItemLayout>
-              <Tree>
-                {(info?.materializedViews || []).map((mv) => (
-                  <TreeItem
-                    key={mv.name}
-                    itemType="leaf"
-                    value={`mv-${mv.name}`}
-                    onClick={() => setKql(`["${mv.name}"]\n| take 100`)}
-                  >
-                    <TreeItemLayout iconBefore={<Table20Regular />}>{mv.name}{mv.sourceTable ? <Caption1> · on {mv.sourceTable}</Caption1> : null}</TreeItemLayout>
-                  </TreeItem>
-                ))}
-                {info?.ok && (info?.materializedViewCount ?? 0) === 0 && (
-                  <TreeItem itemType="leaf" value="mv-none"><TreeItemLayout>No materialized views. Use <code>.create materialized-view</code>.</TreeItemLayout></TreeItem>
-                )}
-              </Tree>
-            </TreeItem>
-            <TreeItem itemType="branch" value="functions">
-              <TreeItemLayout iconBefore={<MathFormula20Regular />}>Functions ({info?.functionCount ?? 0})</TreeItemLayout>
-              <Tree>
-                {(info?.functions || []).map((fn) => (
-                  <TreeItem
-                    key={fn.name}
-                    itemType="leaf"
-                    value={`fn-${fn.name}`}
-                    onClick={() => setKql(`${fn.name}(${(fn.parameters || '').trim()})`)}
-                  >
-                    <TreeItemLayout iconBefore={<MathFormula20Regular />}>{fn.name}{fn.parameters ? <Caption1> ({fn.parameters})</Caption1> : null}</TreeItemLayout>
-                  </TreeItem>
-                ))}
-                {info?.ok && (info?.functionCount ?? 0) === 0 && (
-                  <TreeItem itemType="leaf" value="fn-none"><TreeItemLayout>No functions. Use <code>.create function</code>.</TreeItemLayout></TreeItem>
-                )}
-              </Tree>
-            </TreeItem>
-          </Tree>
-        </div>
+        id && id !== 'new'
+          ? (
+            <AdxDatabaseTree
+              itemId={id}
+              refreshKey={treeRefreshKey}
+              onOpenQuery={(q) => {
+                setKql(q);
+                const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
+                el?.focus();
+              }}
+            />
+          )
+          : (
+            <div className={s.treePad}>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Save the KQL database first</MessageBarTitle>
+                  The object navigator (Tables, Functions, Materialized views, Ingestion mappings)
+                  appears once this database is saved and bound to a Kusto database.
+                </MessageBarBody>
+              </MessageBar>
+            </div>
+          )
       }
       main={
         <div className={s.pad}>
