@@ -244,3 +244,141 @@ export async function deleteAgent(
     throw new FoundryAgentError(res.status, t, `Delete agent failed: ${t.slice(0, 240)}`);
   }
 }
+
+// ===========================================================================
+// Run-steps inspector — run a question through the agent (thread → message →
+// run → poll) and surface the run STEPS (tool calls / query executions /
+// message creation) so an operator can debug HOW the agent answered. The
+// Foundry Agent Service exposes the OpenAI Assistants-style threads/runs/steps
+// surface; everything below is real REST against the project endpoint. Gated
+// by requireConfig() (LOOM_FOUNDRY_PROJECT_ENDPOINT) like the rest of this file.
+// ===========================================================================
+
+export interface RunStepToolCall {
+  type: string;           // code_interpreter | function | file_search | ...
+  name?: string;          // function/tool name when present
+  input?: string;         // arguments / query (e.g. the SQL/KQL the agent ran)
+  output?: string;        // truncated result
+}
+
+export interface RunStep {
+  id: string;
+  type: string;           // 'message_creation' | 'tool_calls'
+  status: string;         // 'in_progress' | 'completed' | 'failed' | 'cancelled' | 'expired'
+  toolCalls: RunStepToolCall[];
+  createdAt?: number;
+  completedAt?: number;
+  error?: string | null;
+}
+
+export interface AgentRunInspection {
+  threadId: string;
+  runId: string;
+  status: string;         // terminal run status
+  answer: string;         // assistant's final text
+  steps: RunStep[];
+  usage?: Record<string, unknown> | null;
+  lastError?: string | null;
+}
+
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled', 'expired', 'requires_action']);
+
+function normalizeRunStep(s: any): RunStep {
+  const details = s?.step_details || {};
+  const toolCalls: RunStepToolCall[] = Array.isArray(details.tool_calls)
+    ? details.tool_calls.map((tc: any) => {
+        const inner = tc?.[tc?.type] || {};
+        return {
+          type: tc?.type || 'tool',
+          name: tc?.function?.name || inner?.name,
+          input: typeof tc?.function?.arguments === 'string' ? tc.function.arguments
+            : (typeof inner?.input === 'string' ? inner.input : (inner?.query || undefined)),
+          output: typeof inner?.output === 'string' ? inner.output.slice(0, 2000) : undefined,
+        };
+      })
+    : [];
+  return {
+    id: s?.id || '',
+    type: s?.type || details?.type || 'step',
+    status: s?.status || 'unknown',
+    toolCalls,
+    createdAt: s?.created_at,
+    completedAt: s?.completed_at,
+    error: s?.last_error?.message || null,
+  };
+}
+
+function extractAssistantText(messages: any): string {
+  const data: any[] = messages?.data || [];
+  // newest-first or oldest-first depending on order param; pick the latest assistant msg
+  const assistant = data.filter((m) => m?.role === 'assistant');
+  const msg = assistant[0] || data[0];
+  if (!msg) return '';
+  const parts: any[] = Array.isArray(msg.content) ? msg.content : [];
+  return parts
+    .map((p) => (p?.type === 'text' ? (p?.text?.value ?? '') : ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+/**
+ * Run `question` through the named agent and return the run + its steps for the
+ * inspector. Polls the run to a terminal status (bounded; defaults to ~45s).
+ * Throws FoundryAgentNotConfiguredError when the project endpoint isn't set so
+ * the route can render an honest gate.
+ */
+export async function runAgentAndInspect(
+  agentName: string,
+  question: string,
+  opts?: { maxPollMs?: number; intervalMs?: number },
+): Promise<AgentRunInspection> {
+  requireConfig(); // throws FoundryAgentNotConfiguredError when unconfigured
+  if (!agentName) throw new FoundryAgentError(400, undefined, 'agent name required');
+  if (!question?.trim()) throw new FoundryAgentError(400, undefined, 'question required');
+
+  const thread = await readJson<any>(await agentFetch('/threads', { method: 'POST', body: JSON.stringify({}) }));
+  const threadId: string = thread?.id;
+  if (!threadId) throw new FoundryAgentError(502, thread, 'Foundry Agent Service did not return a thread id');
+
+  await readJson(await agentFetch(`/threads/${encodeURIComponent(threadId)}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ role: 'user', content: question }),
+  }));
+
+  let run = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/runs`, {
+    method: 'POST',
+    body: JSON.stringify({ assistant_id: agentName }),
+  }));
+  const runId: string = run?.id;
+  if (!runId) throw new FoundryAgentError(502, run, 'Foundry Agent Service did not return a run id');
+
+  const maxPollMs = opts?.maxPollMs ?? 45_000;
+  const intervalMs = opts?.intervalMs ?? 1_500;
+  const startedAt = Date.now();
+  let status: string = run?.status || 'queued';
+  while (!TERMINAL_RUN_STATUSES.has(status) && Date.now() - startedAt < maxPollMs) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    run = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}`));
+    status = run?.status || status;
+  }
+
+  const stepsRes = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}/steps?order=asc`));
+  const steps: RunStep[] = Array.isArray(stepsRes?.data) ? stepsRes.data.map(normalizeRunStep) : [];
+
+  let answer = '';
+  if (status === 'completed') {
+    const msgs = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/messages?order=desc&limit=10`));
+    answer = extractAssistantText(msgs);
+  }
+
+  return {
+    threadId,
+    runId,
+    status,
+    answer,
+    steps,
+    usage: run?.usage ?? null,
+    lastError: run?.last_error?.message ?? null,
+  };
+}
