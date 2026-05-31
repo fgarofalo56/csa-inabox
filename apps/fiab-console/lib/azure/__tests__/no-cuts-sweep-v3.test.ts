@@ -182,6 +182,13 @@ describe('databricks-client — listQueryHistory', () => {
 });
 
 describe('adls-client — listKnownBlobDataRoles', () => {
+  // NOTE on timeout: this test body is trivial (a synchronous map over a 3-entry
+  // table), but `await import('../adls-client')` pulls in the heavy
+  // `@azure/storage-file-datalake` package, which vitest must transform/load on
+  // first import. Under the jsdom render harness that cold import can exceed the
+  // default 5s timeout (~30s observed on Windows), so we give this test room.
+  // The assertions below remain meaningful — they pin the exact role names and
+  // the stable Reader GUID emitted by adls-client.ts.
   it('exposes the three Storage Blob Data roles with their GUIDs', async () => {
     const { listKnownBlobDataRoles } = await import('../adls-client');
     const roles = listKnownBlobDataRoles();
@@ -191,7 +198,10 @@ describe('adls-client — listKnownBlobDataRoles', () => {
       'Storage Blob Data Owner',
       'Storage Blob Data Reader',
     ]);
-    // Reader GUID is well-known and stable.
-    expect(roles.find((r) => r.name === 'Storage Blob Data Reader')?.id).toBe('2a2b9908-6ea1-4ae2-8e65-a410df84e7d1');
-  });
+    // GUIDs are global across all Azure tenants — pin all three.
+    const byName = Object.fromEntries(roles.map((r) => [r.name, r.id]));
+    expect(byName['Storage Blob Data Reader']).toBe('2a2b9908-6ea1-4ae2-8e65-a410df84e7d1');
+    expect(byName['Storage Blob Data Contributor']).toBe('ba92f5b4-2d11-453d-a403-e96b0029c9fe');
+    expect(byName['Storage Blob Data Owner']).toBe('b7e6dc6d-f1e8-4753-8033-0f276bb0955b');
+  }, 60_000);
 });
