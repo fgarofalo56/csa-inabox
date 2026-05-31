@@ -76,6 +76,14 @@ export interface SqlDbTreeProps {
   workspaceId: string;
   /** The bound Fabric SqlDatabase item id (so routes resolve the right db). */
   itemId: string;
+  /**
+   * Explicit Azure SQL server FQDN override. When set, the navigator targets
+   * this server/database directly (the Unified Azure SQL editor passes the
+   * ARM-selected connection here) instead of resolving via the Fabric item.
+   */
+  server?: string;
+  /** Explicit database override paired with {@link server}. */
+  database?: string;
   /** Load a T-SQL statement into the editor's query tab. */
   onOpenQuery?: (sql: string) => void;
   /** Increment to force a refresh from the parent. */
@@ -116,15 +124,18 @@ RETURN (
 };
 
 /** A typed, SSMS/portal-faithful Azure SQL / Fabric SQL object navigator. */
-export function SqlDbTree({ workspaceId, itemId, onOpenQuery, refreshKey = 0 }: SqlDbTreeProps) {
+export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, refreshKey = 0 }: SqlDbTreeProps) {
   const s = useStyles();
 
   const q = useMemo(() => {
     const p = new URLSearchParams();
     if (itemId) p.set('id', itemId);
     if (workspaceId) p.set('workspaceId', workspaceId);
+    // Explicit Azure SQL connection override (takes precedence in the guard).
+    if (server) p.set('server', server);
+    if (database) p.set('database', database);
     return p.toString();
-  }, [itemId, workspaceId]);
+  }, [itemId, workspaceId, server, database]);
 
   const TABLES = `/api/sqldb/tables?${q}`;
   const VIEWS = `/api/sqldb/views?${q}`;
@@ -139,7 +150,7 @@ export function SqlDbTree({ workspaceId, itemId, onOpenQuery, refreshKey = 0 }: 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [database, setDatabase] = useState<string>('');
+  const [resolvedDb, setResolvedDb] = useState<string>('');
   const [tables, setTables] = useState<SqlObjectRow[]>([]);
   const [views, setViews] = useState<SqlObjectRow[]>([]);
   const [procs, setProcs] = useState<SqlObjectRow[]>([]);
@@ -170,7 +181,7 @@ export function SqlDbTree({ workspaceId, itemId, onOpenQuery, refreshKey = 0 }: 
       ]);
       for (const b of [tr, vr, pr, fr, sr, ttr]) { if (applyGate(b)) { setLoading(false); return; } }
       setGate(null);
-      if (tr.ok) { setTables(tr.tables || []); setDatabase(tr.database || ''); }
+      if (tr.ok) { setTables(tr.tables || []); setResolvedDb(tr.database || ''); }
       else setError(tr.error || 'failed to list tables');
       if (vr.ok) setViews(vr.views || []);
       if (pr.ok) setProcs(pr.procedures || []);
@@ -265,7 +276,7 @@ export function SqlDbTree({ workspaceId, itemId, onOpenQuery, refreshKey = 0 }: 
   return (
     <div className={s.root}>
       <div className={s.header}>
-        <span className={s.title}>{database ? <>Database · <code>{database}</code></> : 'SQL database objects'}</span>
+        <span className={s.title}>{resolvedDb ? <>Database · <code>{resolvedDb}</code></> : 'SQL database objects'}</span>
         <span style={{ display: 'flex', gap: 2 }}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
