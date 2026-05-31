@@ -60,6 +60,45 @@ const isDataverseScope = (scope: string) => /\.crm[0-9]*\.dynamics\.com\/\.defau
 /** Legacy alias — most call sites still reference `credential`. */
 const credential = uamiCredential;
 
+/**
+ * Honest config gate for the Power Platform navigator routes.
+ *
+ * Power Platform control-plane APIs (BAP / PowerApps / Flow) authenticate with
+ * the Console UAMI (LOOM_UAMI_CLIENT_ID) chained to DefaultAzureCredential.
+ * Without a UAMI client id AND outside a credentialed dev context there is no
+ * identity to mint a token with, so the navigator can't reach any API. We treat
+ * a missing UAMI client id as the honest "not configured" signal so each BFF
+ * route can 503 with `code: 'not_configured'` and a precise MessageBar (mirrors
+ * databricksConfigGate / synapseConfigGate). When LOOM_UAMI_CLIENT_ID is set we
+ * return null and let the real call surface any 401/403 with its remediation
+ * hint (SP not in the "Service principals can use Power Platform APIs" allow
+ * group, or not a Dataverse Application User).
+ *
+ * Note: in local dev DefaultAzureCredential (az login) can mint these tokens
+ * even without a UAMI, so callers may set LOOM_POWERPLATFORM_ASSUME_CRED=1 to
+ * bypass the gate and exercise the real APIs with the developer identity.
+ */
+export function powerPlatformConfigGate(): { missing: string } | null {
+  if (process.env.LOOM_UAMI_CLIENT_ID) return null;
+  if (process.env.LOOM_POWERPLATFORM_ASSUME_CRED === '1') return null;
+  return { missing: 'LOOM_UAMI_CLIENT_ID' };
+}
+
+/**
+ * Separate gate for Dataverse-scoped groups (tables). UAMI-issued tokens are
+ * NOT valid Dataverse Application Users (Microsoft platform restriction), so
+ * those groups additionally require the dedicated MSAL Web App SP
+ * (LOOM_DATAVERSE_CLIENT_ID / _CLIENT_SECRET / _TENANT_ID) registered as an
+ * Application User on the target environment. Returns the missing var so the
+ * Dataverse-tables group can render an honest sub-gate even when the control
+ * plane is reachable.
+ */
+export function dataverseConfigGate(): { missing: string } | null {
+  if (process.env.LOOM_DATAVERSE_CLIENT_ID && process.env.LOOM_DATAVERSE_CLIENT_SECRET) return null;
+  if (!process.env.LOOM_DATAVERSE_CLIENT_ID) return { missing: 'LOOM_DATAVERSE_CLIENT_ID' };
+  return { missing: 'LOOM_DATAVERSE_CLIENT_SECRET' };
+}
+
 export class PowerPlatformError extends Error {
   status: number;
   body?: unknown;
@@ -883,4 +922,141 @@ export async function predictAiBuilderModel(
     },
   );
   return { ok: true, result };
+}
+
+// ============================================================
+// Connections + custom connectors (Power Apps admin API)
+//
+// The Power Apps admin surface exposes per-environment API connections and
+// tenant/env custom connectors via the same powerapps.com control plane used
+// for apps (scope https://service.powerapps.com/.default). These back the
+// "Connections" tab under Dataverse in make.powerapps.com and are listed by
+// the "Power Apps for Admins" connector (Get-AdminPowerAppConnection /
+// Get-AdminPowerAppConnector). Real REST — no mocks.
+//   Connections : GET .../scopes/admin/environments/{env}/connections
+//   Connectors  : GET .../scopes/admin/environments/{env}/apis
+// ============================================================
+
+export interface PowerConnection {
+  name: string;               // connection id (GUID)
+  id?: string;
+  displayName: string;        // connector display name
+  connectorId?: string;       // e.g. shared_sharepointonline
+  status?: string;            // Connected / Error / etc.
+  createdBy?: string;
+  createdTime?: string;
+  lastModifiedTime?: string;
+  iconUri?: string;
+  testLinkError?: string;
+}
+
+export interface PowerConnector {
+  name: string;               // connector id (GUID for custom, shared_* for built-ins)
+  id?: string;
+  displayName: string;
+  description?: string;
+  isCustomApi?: boolean;
+  tier?: string;              // Standard / Premium
+  publisher?: string;
+  iconUri?: string;
+  createdTime?: string;
+}
+
+export async function listConnections(envId: string): Promise<PowerConnection[]> {
+  const j = await call<{ value: any[] }>(
+    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/connections`,
+    POWERAPPS_SCOPE,
+    { query: { 'api-version': APPS_API_VERSION } },
+  );
+  return (j.value || []).map((c: any) => {
+    const p = c.properties || {};
+    const statuses = Array.isArray(p.statuses) ? p.statuses : [];
+    return {
+      name: c.name,
+      id: c.id,
+      displayName: p.displayName || p.apiId?.split('/').pop() || c.name,
+      connectorId: (p.apiId || '').split('/').pop(),
+      status: statuses[0]?.status || (p.statuses?.length ? 'Unknown' : 'Connected'),
+      createdBy: p.createdBy?.displayName || p.createdBy?.userPrincipalName,
+      createdTime: p.createdTime,
+      lastModifiedTime: p.lastModifiedTime,
+      iconUri: p.iconUri,
+      testLinkError: statuses.find((s: any) => s?.error)?.error?.message,
+    } as PowerConnection;
+  });
+}
+
+export async function listConnectors(envId: string): Promise<PowerConnector[]> {
+  // The admin "apis" endpoint lists connectors visible in the environment.
+  // We surface CUSTOM connectors prominently (isCustomApi) but return all so
+  // the count + filter match the maker portal Connectors list.
+  const j = await call<{ value: any[] }>(
+    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apis`,
+    POWERAPPS_SCOPE,
+    { query: { 'api-version': APPS_API_VERSION, '$filter': "environment eq '" + envId + "'" } },
+  ).catch(async (e) => {
+    // Some tenants reject the $filter form; retry without it.
+    if (e instanceof PowerPlatformError && (e.status === 400 || e.status === 404)) {
+      return call<{ value: any[] }>(
+        `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apis`,
+        POWERAPPS_SCOPE,
+        { query: { 'api-version': APPS_API_VERSION } },
+      );
+    }
+    throw e;
+  });
+  return (j.value || []).map((a: any) => {
+    const p = a.properties || {};
+    return {
+      name: a.name,
+      id: a.id,
+      displayName: p.displayName || a.name,
+      description: p.description,
+      isCustomApi: !!p.isCustomApi,
+      tier: p.tier,
+      publisher: p.publisher,
+      iconUri: p.iconUri,
+      createdTime: p.createdTime,
+    } as PowerConnector;
+  });
+}
+
+/** Delete an API connection (real Power Apps admin REST). */
+export async function deleteConnection(envId: string, connectorId: string, connectionName: string): Promise<{ ok: true }> {
+  await call<any>(
+    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/connections/${encodeURIComponent(connectorId)}/${encodeURIComponent(connectionName)}`,
+    POWERAPPS_SCOPE,
+    { method: 'DELETE', query: { 'api-version': APPS_API_VERSION } },
+  );
+  return { ok: true };
+}
+
+/** Delete a Power App (real Power Apps admin REST). */
+export async function deletePowerApp(envId: string, name: string): Promise<{ ok: true }> {
+  await call<any>(
+    `${POWERAPPS_BASE}/providers/Microsoft.PowerApps/scopes/admin/environments/${encodeURIComponent(envId)}/apps/${encodeURIComponent(name)}`,
+    POWERAPPS_SCOPE,
+    { method: 'DELETE', query: { 'api-version': APPS_API_VERSION } },
+  );
+  return { ok: true };
+}
+
+/** Delete a cloud flow (real Power Automate admin REST). */
+export async function deleteFlow(envId: string, name: string): Promise<{ ok: true }> {
+  await call<any>(
+    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}`,
+    FLOW_SCOPE,
+    { method: 'DELETE', query: { 'api-version': FLOW_API_VERSION } },
+  );
+  return { ok: true };
+}
+
+/** Start/stop a cloud flow (real Power Automate admin REST: turnOn / turnOff). */
+export async function setFlowState(envId: string, name: string, on: boolean): Promise<{ ok: true }> {
+  await call<any>(
+    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows/${encodeURIComponent(name)}/${on ? 'start' : 'stop'}`,
+    FLOW_SCOPE,
+    { method: 'POST', query: { 'api-version': FLOW_API_VERSION }, body: {} },
+  );
+  return { ok: true };
 }
