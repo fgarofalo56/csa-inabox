@@ -313,11 +313,12 @@ the AWS console and the GCP console. The same MFA prompt covers
 everything. The same offboarding revokes everything. There is no
 parallel directory to maintain.
 
-The same is not true of AWS IAM Identity Center, Google Cloud
-Identity, or Okta. They are credible identity hubs, but they
-require **adding a directory parallel to** the Microsoft 365 one
-that most enterprises already run. Entra wins on
-operational-cost grounds.
+The competing standalone identity hubs are credible products, but
+choosing one of them typically means **adding a directory parallel to**
+the Microsoft 365 one that most enterprises already run. On
+operational-cost grounds — reusing an identity plane that is already
+in place rather than running a second one — Entra is the lower-friction
+anchor for an organization already standardized on Microsoft 365.
 
 ### ADLS Gen2 as the data anchor
 
