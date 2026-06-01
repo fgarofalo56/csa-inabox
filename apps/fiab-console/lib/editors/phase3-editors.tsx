@@ -703,7 +703,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       {getDataMode === 'file' && (
                         <div>
                           <Label>File</Label>
-                          <input type="file" onChange={(e) => setGetDataFile(e.target.files?.[0] || null)} />
+                          <input type="file" aria-label="Data file to ingest (CSV, JSON, or Parquet)" onChange={(e) => setGetDataFile(e.target.files?.[0] || null)} />
                           {getDataFile && (
                             <Caption1>{getDataFile.name} ({(getDataFile.size / 1024).toFixed(1)} KB)</Caption1>
                           )}
@@ -883,6 +883,25 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       setLoading(false);
     }
   }, [id, kql]);
+
+  // Shift+Enter runs the query (the "Run (Shift+Enter)" button label promises
+  // this). Only fires when focus is inside the KQL editor surface so it never
+  // hijacks the shortcut elsewhere on the page. Mirrors the Ctrl+S pattern
+  // used by the Queryset / Dashboard / Eventstream editors.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && e.shiftKey) {
+        const active = document.activeElement as HTMLElement | null;
+        const inEditor = !!active?.closest?.('[aria-label="KQL query editor"]');
+        if (inEditor && !loading && id && id !== 'new') {
+          e.preventDefault();
+          run();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [loading, id, run]);
 
   const openWizard = useCallback((k: KqlWizardKind) => {
     setWizardKind(k); setWizError(null); setWizSuccess(null);
@@ -1100,6 +1119,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                         <input
                           type="file"
                           accept=".csv,text/csv"
+                          aria-label="CSV file to ingest inline"
                           onChange={(e) => setWizIngestFile(e.target.files?.[0] || null)}
                         />
                         <Caption1>For larger files, use Eventhouse → Get data (configures Event Hub data-connection).</Caption1>
@@ -1592,6 +1612,10 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const [shareOpen, setShareOpen] = useState(false);
   // Query-based param value caches: variableName → string[]
   const [paramValueCache, setParamValueCache] = useState<Record<string, string[]>>({});
+  // Real KQL databases on the shared Loom ADX cluster — populates the data
+  // source database dropdown so binding a source defaults to a deployed DB
+  // instead of a blank free-text box (operator no-freeform mandate).
+  const [clusterDbs, setClusterDbs] = useState<string[]>([]);
 
   const defaultDb = state?.database || state?.defaultDatabase || 'loomdb-default';
 
@@ -1665,6 +1689,24 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   useEffect(() => { load(false); /* eslint-disable-next-line */ }, [id]);
   useEffect(() => { if (state?.ok && tiles.length > 0) runAll(); /* eslint-disable-next-line */ }, [state?.ok]);
 
+  // Fetch the real KQL databases on the shared cluster once, so data-source
+  // binding is a dropdown of deployed databases (not a blank text box). Best
+  // effort: if the cluster is unreachable the dialog falls back to free text.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/items/eventhouse/cluster');
+        const ct = r.headers.get('content-type') || '';
+        const j = ct.includes('application/json') ? await r.json() : { ok: false };
+        if (!cancelled && j.ok && Array.isArray(j.databases)) {
+          setClusterDbs(j.databases.map((d: { name: string }) => d.name).filter(Boolean));
+        }
+      } catch { /* dropdown falls back to free text */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const addTile = useCallback(() => {
     setTiles((prev) => {
       const next: DashTile[] = [...prev, {
@@ -1679,6 +1721,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   }, []);
 
   const deleteTile = useCallback((idx: number) => {
+    if (typeof window !== 'undefined' && !window.confirm('Delete this tile? This cannot be undone until you reload without saving.')) return;
     setTiles((prev) => prev.filter((_, i) => i !== idx));
     setDirty(true);
     setExpandedIdx((cur) => (cur === idx ? null : cur));
@@ -1755,9 +1798,12 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
 
   // --- Data sources ---
   const addDataSource = useCallback(() => {
-    setDataSources((prev) => [...prev, { id: genId(), name: `Source ${prev.length + 1}`, database: defaultDb }]);
+    // Default to a real deployed database (prefer the cluster default) rather
+    // than a blank box — operator no-freeform mandate.
+    const seedDb = clusterDbs.includes(defaultDb) ? defaultDb : (clusterDbs[0] || defaultDb);
+    setDataSources((prev) => [...prev, { id: genId(), name: `Source ${prev.length + 1}`, database: seedDb }]);
     setDirty(true);
-  }, [defaultDb]);
+  }, [defaultDb, clusterDbs]);
   const updateDataSource = useCallback((idx: number, patch: Partial<DashDataSource>) => {
     setDataSources((prev) => prev.map((d, i) => i === idx ? { ...d, ...patch } : d));
     setDirty(true);
@@ -2001,7 +2047,19 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     </div>
                     <div style={{ flex: 1 }}>
                       <Caption1>KQL database</Caption1>
-                      <Input value={ds.database} onChange={(_: unknown, d: any) => updateDataSource(idx, { database: d.value })} placeholder="loomdb-default" />
+                      {clusterDbs.length > 0 ? (
+                        <Select
+                          value={clusterDbs.includes(ds.database) ? ds.database : '__custom__'}
+                          onChange={(_: unknown, d: any) => { if (d.value !== '__custom__') updateDataSource(idx, { database: d.value }); }}
+                          aria-label="KQL database"
+                        >
+                          {clusterDbs.map((db) => <option key={db} value={db}>{db}</option>)}
+                          <option value="__custom__">Other (type below)…</option>
+                        </Select>
+                      ) : null}
+                      {(clusterDbs.length === 0 || !clusterDbs.includes(ds.database)) && (
+                        <Input value={ds.database} onChange={(_: unknown, d: any) => updateDataSource(idx, { database: d.value })} placeholder="loomdb-default" aria-label="KQL database (custom)" style={{ marginTop: clusterDbs.length > 0 ? 4 : 0 }} />
+                      )}
                     </div>
                     <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => removeDataSource(idx)} aria-label="Remove data source" />
                   </div>
