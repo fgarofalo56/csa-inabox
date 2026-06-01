@@ -56,16 +56,26 @@ function resolveAccountName(): string {
   throw new Error('No LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL configured — cannot resolve ADLS account.');
 }
 
-let serviceClient: DataLakeServiceClient | null = null;
+const serviceClients = new Map<string, DataLakeServiceClient>();
+
+/**
+ * Service client for a SPECIFIC storage account (used by Lakehouse shortcuts to
+ * reach EXTERNAL accounts — any account the Console UAMI has Storage Blob Data
+ * Reader on, in any sub/RG). Works for ADLS Gen2 (HNS) and blob-only accounts
+ * alike — the .dfs endpoint serves both via multi-protocol access.
+ */
+export function getServiceClientFor(account: string): DataLakeServiceClient {
+  const key = account.toLowerCase();
+  let c = serviceClients.get(key);
+  if (!c) {
+    c = new DataLakeServiceClient(`https://${account}.dfs.core.windows.net`, credential);
+    serviceClients.set(key, c);
+  }
+  return c;
+}
 
 export function getServiceClient(): DataLakeServiceClient {
-  if (serviceClient) return serviceClient;
-  const account = resolveAccountName();
-  serviceClient = new DataLakeServiceClient(
-    `https://${account}.dfs.core.windows.net`,
-    credential,
-  );
-  return serviceClient;
+  return getServiceClientFor(resolveAccountName());
 }
 
 export function getAccountName(): string {
@@ -106,8 +116,9 @@ export interface PathEntry {
   etag?: string;
 }
 
-function getFileSystem(container: string): DataLakeFileSystemClient {
-  return getServiceClient().getFileSystemClient(container);
+function getFileSystem(container: string, account?: string): DataLakeFileSystemClient {
+  const svc = account ? getServiceClientFor(account) : getServiceClient();
+  return svc.getFileSystemClient(container);
 }
 
 /**
@@ -118,8 +129,9 @@ export async function listPaths(
   container: string,
   prefix = '',
   maxResults = 200,
+  account?: string,
 ): Promise<PathEntry[]> {
-  const fs = getFileSystem(container);
+  const fs = getFileSystem(container, account);
   const cleanPrefix = prefix.replace(/^\/+|\/+$/g, '');
   const iter = fs.listPaths({
     path: cleanPrefix || undefined,
