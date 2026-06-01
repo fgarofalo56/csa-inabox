@@ -1,9 +1,11 @@
 /**
- * Unit tests for the Phase-2 Purview federated catalog surface:
- *   - listBusinessDomains
- *   - createBusinessDomain / deleteBusinessDomain
- *   - searchPurview
- *   - getLineageSubgraph
+ * Unit tests for the CLASSIC Data Map federated catalog surface:
+ *   - searchPurview          (POST /datamap/api/search/query — classic host)
+ *   - getLineageSubgraph     (GET  /datamap/api/atlas/v2/lineage)
+ *   - registerAtlasEntity    (POST /datamap/api/atlas/v2/entity)
+ *   - createAtlasGlossaryTerm / applyGlossaryTerm
+ *   - listCollections        (GET  /collections — account data plane)
+ *   - business domains       (HONEST GATE — unified-catalog-only on classic)
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -14,9 +16,9 @@ vi.mock('@azure/identity', () => {
 
 import {
   listBusinessDomains, createBusinessDomain, deleteBusinessDomain,
-  searchPurview, getLineageSubgraph,
+  searchPurview, getLineageSubgraph, listCollections,
   registerAtlasEntity, createAtlasGlossaryTerm, applyGlossaryTerm,
-  PurviewNotConfiguredError,
+  PurviewNotConfiguredError, PurviewUnifiedCatalogGateError,
 } from '../purview-client';
 
 const realFetch = global.fetch;
@@ -39,61 +41,57 @@ afterEach(() => {
 });
 
 describe('NotConfigured gate', () => {
-  it('throws PurviewNotConfiguredError when account is missing', async () => {
+  it('throws PurviewNotConfiguredError when account is missing (searchPurview)', async () => {
+    delete process.env.LOOM_PURVIEW_ACCOUNT;
+    await expect(searchPurview('x')).rejects.toBeInstanceOf(PurviewNotConfiguredError);
+  });
+});
+
+describe('business domains (unified-catalog-only honest gate)', () => {
+  it('listBusinessDomains throws the unified-catalog gate on a classic account', async () => {
+    await expect(listBusinessDomains()).rejects.toBeInstanceOf(PurviewUnifiedCatalogGateError);
+    // The gate is a subclass of PurviewNotConfiguredError so BFF catches render it.
+    await expect(listBusinessDomains()).rejects.toBeInstanceOf(PurviewNotConfiguredError);
+  });
+  it('createBusinessDomain / deleteBusinessDomain also gate (no fabricated data)', async () => {
+    await expect(createBusinessDomain({ name: 'X' })).rejects.toBeInstanceOf(PurviewUnifiedCatalogGateError);
+    await expect(deleteBusinessDomain('d1')).rejects.toBeInstanceOf(PurviewUnifiedCatalogGateError);
+  });
+  it('still throws NotConfigured (account-unset) before the unified-catalog gate', async () => {
     delete process.env.LOOM_PURVIEW_ACCOUNT;
     await expect(listBusinessDomains()).rejects.toBeInstanceOf(PurviewNotConfiguredError);
   });
 });
 
-describe('listBusinessDomains', () => {
-  it('hits /datagovernance/businessdomains and shapes the rows', async () => {
+describe('listCollections', () => {
+  it('GETs /collections (account data plane) and shapes the rows', async () => {
     let url = '';
     mockFetch((u) => {
       url = u;
-      return { value: [{ id: 'd1', name: 'Finance', description: 'Books' }] };
+      return { value: [{ name: 'abc123', friendlyName: 'Finance', description: 'Books', parentCollection: { referenceName: 'root' } }] };
     });
-    const out = await listBusinessDomains();
-    expect(url).toContain('/datagovernance/businessdomains');
-    expect(url).toContain('purview-test-api.purview.azure.com');
-    expect(out).toEqual([{ id: 'd1', name: 'Finance', description: 'Books', type: undefined, parentId: undefined, createdAt: undefined, updatedAt: undefined }]);
-  });
-});
-
-describe('createBusinessDomain', () => {
-  it('POSTs the name+description body verbatim', async () => {
-    let body: any;
-    mockFetch((_url, init) => {
-      body = JSON.parse((init?.body as string) || '{}');
-      return { id: 'd2', name: body.name };
-    });
-    await createBusinessDomain({ name: 'Sales', description: 'Pipeline' });
-    expect(body.name).toBe('Sales');
-    expect(body.description).toBe('Pipeline');
-    expect(body.type).toBe('BusinessDomain');
-  });
-});
-
-describe('deleteBusinessDomain', () => {
-  it('DELETE-es the domain and tolerates 204', async () => {
-    let method = '';
-    mockFetch((_url, init) => {
-      method = (init?.method as string) || 'GET';
-      // 204 must carry a null body — undici rejects `''` with a non-null body.
-      return new Response(null, { status: 204 });
-    });
-    await deleteBusinessDomain('d1');
-    expect(method).toBe('DELETE');
+    const out = await listCollections();
+    expect(url).toContain('/collections');
+    expect(url).toContain('purview-test.purview.azure.com');
+    expect(url).not.toContain('-api.purview.azure.com');
+    expect(url).toContain('api-version=2019-11-01-preview');
+    expect(out[0]).toMatchObject({ name: 'abc123', friendlyName: 'Finance', parentCollection: 'root' });
   });
 });
 
 describe('searchPurview', () => {
-  it('POSTs keywords and unwraps `value`', async () => {
+  it('POSTs keywords to /datamap/api/search/query and unwraps `value`', async () => {
     let body: any;
-    mockFetch((_url, init) => {
+    let url = '';
+    mockFetch((u, init) => {
+      url = u;
       body = JSON.parse((init?.body as string) || '{}');
       return { value: [{ id: 'e1', name: 'customers', entityType: 'Table' }] };
     });
     const hits = await searchPurview('customers');
+    expect(url).toContain('/datamap/api/search/query');
+    expect(url).toContain('purview-test.purview.azure.com');
+    expect(url).not.toContain('-api.purview.azure.com');
     expect(body.keywords).toBe('customers');
     expect(hits).toEqual([{ source: 'purview', id: 'e1', name: 'customers', qualifiedName: undefined, entityType: 'Table', classification: undefined, description: undefined, owner: undefined, domain: undefined, updatedAt: undefined }]);
   });

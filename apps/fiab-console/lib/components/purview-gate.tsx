@@ -36,7 +36,7 @@ export interface PurviewStatus {
   /** the resolved Purview account name (when configured). */
   account?: string;
   /** machine reason. */
-  reason: 'live' | 'not_configured' | 'cross_cloud' | 'upstream_error' | 'loading';
+  reason: 'live' | 'not_configured' | 'role_missing' | 'cross_cloud' | 'upstream_error' | 'loading';
   /** human message. */
   message?: string;
   /** structured remediation hint (env var, bicep, roles, follow-up). */
@@ -60,14 +60,14 @@ const DEFAULT_HINT: NonNullable<PurviewStatus['hint']> = {
   missingEnvVar: 'LOOM_PURVIEW_ACCOUNT',
   bicepModule: 'platform/fiab/bicep/modules/admin-plane/catalog.bicep',
   bicepStatus:
-    'catalog.bicep deploys Microsoft.Purview/accounts and wires LOOM_PURVIEW_ACCOUNT into the Console app when purviewEnabled = true.',
+    'purview.bicep deploys a CLASSIC Microsoft.Purview/accounts (Data Map) and a UAMI Data Map role assignment; set LOOM_PURVIEW_ACCOUNT to the deployed account short name.',
   rolesRequired: [
-    { name: 'Data Curator', scope: 'Governance domain (Purview portal — not ARM RBAC)', reason: 'Read business domains, glossary terms, and governed assets.' },
-    { name: 'Data Product Owner', scope: 'Governance domain (Purview portal — not ARM RBAC)', reason: 'Create / publish / update data products via the Unified Catalog plane.' },
-    { name: 'Data Reader', scope: 'Data Map collection (Purview portal — not ARM RBAC)', reason: 'Browse assets, lineage, scans, and classifications.' },
+    { name: 'Data Curator', scope: 'Root collection (Data Map metadata policy — not ARM RBAC)', reason: 'Read/write Atlas catalog: entities, glossary, lineage, classifications.' },
+    { name: 'Data Source Administrator', scope: 'Root collection (Data Map metadata policy — not ARM RBAC)', reason: 'Register data sources and run scans under /scan.' },
+    { name: 'Data Reader', scope: 'Root collection (Data Map metadata policy — not ARM RBAC)', reason: 'Read-only browse of assets, lineage, scans, and classifications.' },
   ],
   followUp:
-    'Set LOOM_PURVIEW_ACCOUNT to a Purview account in the SAME cloud as the Loom Console, grant the Console UAMI the three roles at the governance-domain level, then restart the Console app.',
+    'Set LOOM_PURVIEW_ACCOUNT to a classic Purview Data Map account, grant the Console UAMI a Data Map role on the root collection via scripts/csa-loom/grant-purview-datamap-role.sh, then restart the Console app.',
 };
 
 const useStyles = makeStyles({
@@ -105,6 +105,8 @@ export function usePurviewStatus(): { status: PurviewStatus; reload: () => void 
 
 function titleFor(reason: PurviewStatus['reason'], surface: string): string {
   switch (reason) {
+    case 'role_missing':
+      return `${surface}: the Console identity lacks a Purview Data Map role`;
     case 'cross_cloud':
       return `${surface} needs a Purview account in this cloud`;
     case 'upstream_error':
@@ -168,7 +170,15 @@ export function PurviewGate({
       <MessageBarBody>
         <MessageBarTitle>{titleFor(status.reason, surface)}</MessageBarTitle>
 
-        {crossCloud ? (
+        {status.reason === 'role_missing' ? (
+          <>
+            The Microsoft Purview Data Map account <code>{status.account}</code> is reachable, but the Loom Console
+            managed identity does not yet hold a Data Map data-plane role on it. These roles are granted in the Purview
+            collection metadata policy (not Azure RBAC). Grant <strong>Data Curator</strong> (read/write) or{' '}
+            <strong>Data Reader</strong> (read-only) on the root collection — see{' '}
+            <code>scripts/csa-loom/grant-purview-datamap-role.sh</code> — then recheck.
+          </>
+        ) : crossCloud ? (
           <>
             The only Microsoft Purview account in this tenant is in a different Azure cloud than the Loom Console
             (for example, Purview in <strong>US Gov</strong> while Loom runs in <strong>Commercial</strong>). Purview&apos;s

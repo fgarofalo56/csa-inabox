@@ -1,13 +1,13 @@
 /**
- * Vitest specs for the Phase-2 extensions to purview-client:
- *   - listDataSources / registerDataSource / deleteDataSource
- *   - listScansForSource / triggerScanRun / listScanRuns
- *   - listGlossaryTerms / createGlossaryTerm
- *   - listBusinessDomains / createBusinessDomain
- *   - listDataQualityRules
+ * Vitest specs for the CLASSIC Data Map purview-client surface:
+ *   - listDataSources / registerDataSource / deleteDataSource  (scan plane)
+ *   - listScansForSource / triggerScanRun / listScanRuns       (scan plane)
+ *   - listGlossaryTerms / createGlossaryTerm                   (Atlas v2)
+ *   - business domains / data products / data-quality          (HONEST GATE)
  *
- * Phase 1 (registerDataProduct/getDataProduct/listDataProducts) is
- * exercised by the items/data-product/register-purview route tests.
+ * The CLASSIC account uses host `{account}.purview.azure.com` (NOT -api).
+ * Business domains, data products and unified-catalog data-quality are
+ * new-experience-only concepts → they throw PurviewUnifiedCatalogGateError.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -22,7 +22,7 @@ vi.mock('@azure/identity', () => {
   };
 });
 
-describe('purview-client (Phase-2 extensions)', () => {
+describe('purview-client (classic Data Map)', () => {
   const ORIG_ENV = { ...process.env };
   let fetchMock: any;
 
@@ -45,7 +45,7 @@ describe('purview-client (Phase-2 extensions)', () => {
     await expect(mod.listDataSources()).rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
   });
 
-  it('lists registered data sources and shapes the response', async () => {
+  it('lists registered data sources from /scan/datasources on the classic host', async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({
       value: [
         { id: 'ds1', name: 'finance-sql', kind: 'AzureSqlDatabase', properties: { endpoint: 'https://x.database.windows.net', collection: { referenceName: 'finance' } } },
@@ -58,9 +58,10 @@ describe('purview-client (Phase-2 extensions)', () => {
     expect(sources[0]).toMatchObject({ id: 'ds1', name: 'finance-sql', kind: 'AzureSqlDatabase', endpoint: 'https://x.database.windows.net', collectionId: 'finance' });
     expect(sources[1]).toMatchObject({ name: 'lake-prod', kind: 'AzureDataLakeStorageGen2' });
     const [url] = fetchMock.mock.calls[0];
-    expect(url).toContain('purview-test-api.purview.azure.com');
+    expect(url).toContain('purview-test.purview.azure.com');
+    expect(url).not.toContain('-api.purview.azure.com');
     expect(url).toContain('/scan/datasources');
-    expect(url).toContain('api-version=');
+    expect(url).toContain('api-version=2022-07-01-preview');
   });
 
   it('PUTs a new data source and shapes the response on registerDataSource', async () => {
@@ -98,7 +99,7 @@ describe('purview-client (Phase-2 extensions)', () => {
     expect((init as any).method).toBe('PUT');
   });
 
-  it('listGlossaryTerms walks glossaries → terms when no guid is provided', async () => {
+  it('listGlossaryTerms walks Atlas v2 glossaries → terms when no guid is provided', async () => {
     // First call: list glossaries
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify([
       { guid: 'gloss-1', name: 'Enterprise' },
@@ -113,106 +114,55 @@ describe('purview-client (Phase-2 extensions)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(terms).toHaveLength(1);
     expect(terms[0]).toMatchObject({ guid: 't1', name: 'PII', status: 'Approved', glossaryGuid: 'gloss-1' });
+    const [glossariesUrl] = fetchMock.mock.calls[0];
+    // Live-verified: glossaries-list is the SINGULAR /glossary endpoint.
+    expect(glossariesUrl).toContain('/datamap/api/atlas/v2/glossary?');
   });
 
-  it('createGlossaryTerm posts an Atlas-shaped body', async () => {
+  it('createGlossaryTerm posts an Atlas-shaped body to /datamap/api/atlas/v2', async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({
       guid: 'new-term', name: 'PHI', status: 'Draft', longDescription: 'Protected health information',
     }), { status: 200 }));
     const mod = await import('../purview-client');
     const term = await mod.createGlossaryTerm({ name: 'PHI', glossaryGuid: 'gloss-1', longDescription: 'Protected health information' });
     expect(term.name).toBe('PHI');
-    const [_url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/datamap/api/atlas/v2/glossary/term');
     const body = JSON.parse((init as any).body);
     expect(body.anchor).toEqual({ glossaryGuid: 'gloss-1' });
     expect(body.name).toBe('PHI');
   });
 
-  it('listBusinessDomains shapes the unified-catalog response', async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({
-      value: [
-        { id: 'dom-1', name: 'Finance', type: 'Functional', description: 'Finance domain' },
-      ],
-    }), { status: 200 }));
+  // --- Honest gates: unified-catalog-only concepts on a classic account ---
+
+  it('listBusinessDomains throws the unified-catalog gate (no fabricated data, no HTTP call)', async () => {
     const mod = await import('../purview-client');
-    const domains = await mod.listBusinessDomains();
-    expect(domains).toHaveLength(1);
-    expect(domains[0]).toMatchObject({ id: 'dom-1', name: 'Finance', type: 'Functional' });
-  });
-
-  it('listDataQualityRules returns [] on 404 (preview not enabled)', async () => {
-    fetchMock.mockResolvedValue(new Response('', { status: 404 }));
-    const mod = await import('../purview-client');
-    const rules = await mod.listDataQualityRules();
-    expect(rules).toEqual([]);
-  });
-
-  // --- registerDataProduct: spec-compliant create body (2026-03-20-preview) ---
-
-  const VALID_DOMAIN = '4e74f902-62f5-49f4-8258-92ed2b8537ba';
-  const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-  it('registerDataProduct POSTs a spec-compliant body (required id, UPPERCASE status, contacts map)', async () => {
-    // Purview replies 201 Created with the resource echoing the id.
-    fetchMock.mockImplementation(async (_url: string, init: any) => {
-      const sent = JSON.parse(init.body);
-      return new Response(JSON.stringify({ ...sent, status: 'DRAFT' }), { status: 201 });
-    });
-    const mod = await import('../purview-client');
-    const dp = await mod.registerDataProduct({
-      displayName: 'Sales 360',
-      description: 'Curated revenue',
-      domain: VALID_DOMAIN,
-      owner: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', // AAD oid GUID
-    });
-
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toContain('/datagovernance/catalog/dataProducts');
-    expect(init.method).toBe('POST');
-    const body = JSON.parse(init.body);
-    // id is REQUIRED by the create contract and must be a GUID.
-    expect(GUID_RE.test(body.id)).toBe(true);
-    expect(body.name).toBe('Sales 360');
-    expect(body.domain).toBe(VALID_DOMAIN);
-    // status enum is UPPERCASE.
-    expect(body.status).toBe('DRAFT');
-    // contacts is a ContactsMap, not a flat array.
-    expect(Array.isArray(body.contacts)).toBe(false);
-    expect(body.contacts.owner[0].id).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
-    // The shaped result carries the created id.
-    expect(dp.id).toBe(body.id);
-  });
-
-  it('registerDataProduct drops a free-text (non-GUID) owner from contacts to avoid a 4xx', async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ id: VALID_DOMAIN }), { status: 201 }));
-    const mod = await import('../purview-client');
-    await mod.registerDataProduct({ displayName: 'X', domain: VALID_DOMAIN, owner: 'owner@contoso.com' });
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(body.contacts).toBeUndefined();
-  });
-
-  it('registerDataProduct reuses a caller-supplied id (re-register) instead of minting a new one', async () => {
-    fetchMock.mockImplementation(async (_url: string, init: any) =>
-      new Response(init.body, { status: 201 }));
-    const mod = await import('../purview-client');
-    const dp = await mod.registerDataProduct({ id: VALID_DOMAIN, displayName: 'X', domain: VALID_DOMAIN });
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).id).toBe(VALID_DOMAIN);
-    expect(dp.id).toBe(VALID_DOMAIN);
-  });
-
-  it('registerDataProduct rejects a non-GUID domain before calling Purview', async () => {
-    const mod = await import('../purview-client');
-    await expect(
-      mod.registerDataProduct({ displayName: 'X', domain: 'Finance' }),
-    ).rejects.toBeInstanceOf(mod.PurviewError);
+    await expect(mod.listBusinessDomains()).rejects.toBeInstanceOf(mod.PurviewUnifiedCatalogGateError);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('registerDataProduct throws PurviewError on an upstream 4xx (no fake success)', async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: { message: 'bad request' } }), { status: 400 }));
+  it('listDataQualityRules throws the unified-catalog gate (no fabricated data)', async () => {
     const mod = await import('../purview-client');
-    await expect(
-      mod.registerDataProduct({ displayName: 'X', domain: VALID_DOMAIN }),
-    ).rejects.toMatchObject({ status: 400 });
+    await expect(mod.listDataQualityRules()).rejects.toBeInstanceOf(mod.PurviewUnifiedCatalogGateError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('registerDataProduct / getDataProduct / listDataProducts gate on a classic account', async () => {
+    const mod = await import('../purview-client');
+    await expect(mod.registerDataProduct({ displayName: 'X', domain: 'd' })).rejects.toBeInstanceOf(mod.PurviewUnifiedCatalogGateError);
+    await expect(mod.getDataProduct('id')).rejects.toBeInstanceOf(mod.PurviewUnifiedCatalogGateError);
+    await expect(mod.listDataProducts()).rejects.toBeInstanceOf(mod.PurviewUnifiedCatalogGateError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('the unified-catalog gate is a subclass of PurviewNotConfiguredError (BFF catch compatibility)', async () => {
+    const mod = await import('../purview-client');
+    await expect(mod.listBusinessDomains()).rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
+  });
+
+  it('still throws NotConfigured (account unset) before the unified-catalog gate', async () => {
+    delete process.env.LOOM_PURVIEW_ACCOUNT;
+    const mod = await import('../purview-client');
+    await expect(mod.registerDataProduct({ displayName: 'X', domain: 'd' })).rejects.toBeInstanceOf(mod.PurviewNotConfiguredError);
   });
 });

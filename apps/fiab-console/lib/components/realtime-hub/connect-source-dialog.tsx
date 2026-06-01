@@ -13,7 +13,7 @@
  * or 202 accepted, or a verbatim FabricError) is shown inline.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Button, Input, Field, Badge, MessageBar, MessageBarBody, MessageBarTitle,
@@ -58,16 +58,36 @@ interface Props {
   defaultWorkspaceId?: string;
   /** Called after a successful connect so the parent can refresh the streams list. */
   onConnected?: () => void;
-  /** Trigger button (rendered by parent). */
-  trigger: React.ReactElement;
+  /** Trigger button (rendered by parent). Optional in controlled mode. */
+  trigger?: React.ReactElement;
+  /**
+   * Controlled-open mode (used by the on-page SourceGallery). When `open` is
+   * provided the dialog is parent-controlled; `onOpenChange` reports changes.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Pre-select this connector and jump straight to its connection form. */
+  initialConnector?: SourceConnector | null;
 }
 
-export function ConnectSourceDialog({ workspaces, defaultWorkspaceId, onConnected, trigger }: Props) {
+export function ConnectSourceDialog({
+  workspaces, defaultWorkspaceId, onConnected, trigger,
+  open: openProp, onOpenChange, initialConnector,
+}: Props) {
   const styles = useStyles();
-  const [open, setOpen] = useState(false);
+  const [openState, setOpenState] = useState(false);
+  const controlled = openProp !== undefined;
+  const open = controlled ? !!openProp : openState;
+  const setOpen = (v: boolean) => { if (controlled) onOpenChange?.(v); else setOpenState(v); };
   const [category, setCategory] = useState<SourceCategory>('Microsoft sources');
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<SourceConnector | null>(null);
+
+  // When opened with a pre-selected connector, jump straight to its form.
+  useEffect(() => {
+    if (open && initialConnector) pick(initialConnector);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialConnector]);
 
   const [displayName, setDisplayName] = useState('');
   const [workspaceId, setWorkspaceId] = useState(defaultWorkspaceId || '');
@@ -141,7 +161,7 @@ export function ConnectSourceDialog({ workspaces, defaultWorkspaceId, onConnecte
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) reset(); }}>
-      <span onClick={() => setOpen(true)}>{trigger}</span>
+      {trigger != null ? <span onClick={() => setOpen(true)}>{trigger}</span> : <></>}
       <DialogSurface className={styles.surface}>
         <DialogBody>
           <DialogTitle>{picked ? `Connect ${picked.name}` : 'Get events — connect a source'}</DialogTitle>

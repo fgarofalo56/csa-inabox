@@ -55,7 +55,9 @@ export async function GET() {
   // Purview — surface the configured account env var if present.
   const account = process.env.LOOM_PURVIEW_ACCOUNT;
   if (account) {
-    result.purview = { account, endpoint: `https://${account.replace(/^https?:\/\//, '').replace(/-api\.purview\.azure\.com.*$/, '')}-api.purview.azure.com` };
+    // CLASSIC Data Map host — {account}.purview.azure.com (NOT -api).
+    const shortName = account.replace(/^https?:\/\//, '').replace(/-api\.purview\.azure\.com.*$/, '').replace(/\.purview\.azure\.com.*$/, '');
+    result.purview = { account: shortName, endpoint: `https://${shortName}.purview.azure.com` };
   } else {
     result.purview = null;
     result.purviewError = 'LOOM_PURVIEW_ACCOUNT not configured';

@@ -17,7 +17,7 @@
 
 import type { Workspace } from '@/lib/types/workspace';
 import { assignWorkspaceToCapacity, FabricError } from './fabric-client';
-import { registerDataProduct, PurviewError, PurviewNotConfiguredError } from './purview-client';
+import { registerAtlasEntity, PurviewError, PurviewNotConfiguredError } from './purview-client';
 import { marketplaceListingsContainer } from './cosmos-client';
 
 export interface BindingResult {
@@ -98,22 +98,26 @@ export async function applyWorkspaceBindings(ws: Workspace): Promise<BindingResu
 
 async function tryRegisterInPurview(ws: Workspace): Promise<{ guid?: string; error?: string }> {
   try {
-    const product = await registerDataProduct({
-      name: ws.name,
-      domain: ws.domain || 'default',
-      description: ws.description || `Loom workspace ${ws.name}`,
+    // CLASSIC Data Map: register the workspace as an Atlas entity. (Data
+    // products are a unified-catalog-only concept and are not available on the
+    // classic Data Map account — see purview-client.ts.) Atlas dedupes on the
+    // qualifiedName, so re-creating a workspace with the same id is idempotent.
+    const upsert = await registerAtlasEntity({
+      typeName: 'fabric_workspace',
+      qualifiedName: `https://app.fabric.microsoft.com/groups/${ws.id}`,
+      displayName: ws.name,
+      comment: ws.description || `Loom workspace ${ws.name}`,
       owner: ws.createdBy,
-      sensitivity: 'Internal',
-      tags: ['loom-workspace', `domain:${ws.domain}`],
-      // The Purview client's registerDataProduct treats the asset as a
-      // data product entity; the workspace shows up as a registered
-      // asset under the chosen business domain.
-      sourceType: 'loom_workspace',
-      sourceId: ws.id,
-    } as any);
-    return { guid: (product as any)?.id || (product as any)?.guid };
+      attributes: {
+        loomDomain: ws.domain || 'default',
+        loomWorkspaceId: ws.id,
+      },
+    });
+    return { guid: upsert.primaryGuid };
   } catch (e: any) {
     if (e instanceof PurviewNotConfiguredError) {
+      // Also covers PurviewUnifiedCatalogGateError (a subclass) — though
+      // registerAtlasEntity is a classic Data Map call and won't gate.
       return {
         error:
           'Purview not configured (LOOM_PURVIEW_ACCOUNT env var unset). ' +
