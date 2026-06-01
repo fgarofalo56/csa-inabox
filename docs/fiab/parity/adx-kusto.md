@@ -177,15 +177,15 @@ Legend: **built ✅** (full 1:1 + real backend) · **partial ⚠️** (exists, i
 
 | # | Status | Loom location / notes |
 |---|--------|----------------------|
-| B1 | built ✅ | `KqlResultsPanel` Fluent `Table`, real rows from `/v1/rest/query`; 5,000-row truncation badge |
-| B2 | MISSING ❌ | No column sort |
-| B3 | MISSING ❌ | No column filter / operator builder |
+| B1 | built ✅ | `KustoResultsGrid` (`lib/components/adx/kusto-results-grid.tsx`) over real `{columns, columnTypes, rows}` from `/v1/rest/query`, wired into `phase3-editors.tsx:384`; sticky header, render cap with honest "capped at N" badge, "Showing N of M · total" readout |
+| B2 | built ✅ | **Column sort now built.** Header click cycles asc → desc → none; type-aware via `makeComparator` — numeric/datetime columns sort by value (epoch for datetime), strings case-insensitively, empties last (`kusto-results-grid.tsx:131-161`) |
+| B3 | built ✅ | **Per-column filter now built.** Filter-toggle reveals a per-column substring (case-insensitive) input row (`:625-635`); `activeColFilters` AND-combined |
 | B4 | MISSING ❌ | No group-by |
 | B5 | MISSING ❌ | No pivot mode |
-| B6 | MISSING ❌ | No in-grid search |
-| B7 | MISSING ❌ | No cell statistics |
-| B8 | MISSING ❌ | No cell-selection → filter insertion |
-| B9 | MISSING ❌ | No data profile / column insights |
+| B6 | built ✅ | **In-grid search now built.** Global "Search in grid" box filters rows + `HighlightedText` highlights matched substrings in cells (`:553-562`, `:346-363`) |
+| B7 | built ✅ | **Cell/column statistics now built.** Per-column stats popover (`ColumnStatsPopover`): count / nulls / distinct, and for numeric columns min / max / sum / avg; non-numeric → most-common value (`computeColumnStats`, `:368-434`) over the current (sorted+filtered) view |
+| B8 | MISSING ❌ | No cell-selection → filter insertion (Ctrl+Shift+Space) |
+| B9 | partial ⚠️ | Per-column stats popover (B7) doubles as quick column insights (distinct/nulls/most-common/numeric aggregates); not the full ADX per-column data-profile pane (type histogram / top-values bars) |
 | B10 | partial ⚠️ | Dependency-free SVG charts: table/bar/line in query panel; dashboard tiles add column/pie/stat/map/timechart. **Not** the KQL `render`-operator-driven viz; hand-rolled |
 | B11 | partial ⚠️ | Shows row count + execution ms only; no CPU/memory/data-scanned stats |
 | B12 | partial ⚠️ | Objects stringified via `JSON.stringify` in cell; no expandable JSON cell viewer |
@@ -195,8 +195,8 @@ Legend: **built ✅** (full 1:1 + real backend) · **partial ⚠️** (exists, i
 | # | Status | Loom location / notes |
 |---|--------|----------------------|
 | C1 | built ✅ | Queryset "Save to dashboard" → lists kql-dashboards, appends a tile, `PUT /api/items/kql-dashboard/[id]` (real Cosmos) |
-| C2 | MISSING ❌ | No copy query / copy results affordance |
-| C3 | MISSING ❌ | No export-to-CSV |
+| C2 | partial ⚠️ | **Copy results now built** — grid toolbar "Copy" writes the visible (sorted+filtered) rows as TSV to the clipboard, with a hidden-textarea fallback (`kusto-results-grid.tsx:524-540`). No separate copy-*query*-text affordance |
+| C3 | built ✅ | **Export-to-CSV now built** — grid toolbar "CSV" downloads the visible rows as an RFC-4180 CSV Blob (`buildCsv` + `downloadCsv`, `:214-222`, `:513-522`) |
 | C4 | MISSING ❌ | No Open-in-Excel |
 | C5 | MISSING ❌ | No Query-to-Power-BI export |
 | C6 | MISSING ❌ | No share-link |
@@ -223,9 +223,9 @@ Legend: **built ✅** (full 1:1 + real backend) · **partial ⚠️** (exists, i
 | E5 | built ✅ | New/drop MView → `/api/adx/materialized-views` → `.create materialized-view` / `.drop` (real) |
 | E6 | built ✅ | New/drop ingestion mapping → `/api/adx/ingestion-mappings` (real) |
 | E7 | partial ⚠️ | KQL-DB ribbon "New → Update policy" builds `.alter table T policy update @'[…]'` and POSTs via the query route (real). Navigator shows it as a "coming" row; no list/edit of existing update policies |
-| E8 | partial ⚠️ | Eventhouse "Data policies" dialog → `.alter database policy retention` (real, db-level only). Navigator "coming" row. No per-table, no list/read of current value in UI |
-| E9 | partial ⚠️ | Eventhouse "Data policies" dialog → `.alter database policy caching` (real, db-level only). Same limits as E8 |
-| E10 | MISSING ❌ | Row-level security — only a "coming" tooltip row, no backend |
+| E8 | partial ⚠️ | **Read now built too.** Navigator has a real **Policies group** listing db-level retention/caching/sharding/mergepolicy/streamingingestion via `GET /api/adx/policies` → `showDatabasePolicies()` → real `.show database <db> policy <kind>` (`kusto-client.ts:342`, tree `:423-440`). Authoring remains Eventhouse "Data policies" dialog → real `.alter database policy retention` (db-level). Still no per-table policy, and navigator policies are read-only (no inline `.alter`) |
+| E9 | partial ⚠️ | Same as E8 for caching: navigator now **lists** db caching policy read-only (real `.show … policy caching`); Eventhouse dialog **writes** it (real `.alter database policy caching`). Db-level only, no per-table |
+| E10 | MISSING ❌ | Row-level security — still only a "coming" tooltip row (`adx-database-tree.tsx:476`), no `.alter table policy row_level_security` backend wired |
 | E11 | MISSING ❌ | External tables — only a "coming" tooltip row, no list/create backend |
 | E12 | gated ⚠️ | OneLake availability toggle in Eventhouse policies → `.alter database policy OneLakeAvailability` only when `LOOM_KUSTO_FABRIC_MANAGED=true`; else honest skip-note. No OneLake-shortcut wizard |
 | E13 | partial ⚠️ | Continuous export **list** is real (`.show continuous-exports` via `/api/adx/overview`); create/enable/disable/drop are "coming" rows (no backend) |
@@ -277,6 +277,7 @@ Legend: **built ✅** (full 1:1 + real backend) · **partial ⚠️** (exists, i
 | Materialized views | `/api/adx/materialized-views` | `.show materialized-views` / `.create materialized-view` / `.drop` |
 | Ingestion mappings | `/api/adx/ingestion-mappings` | `.show ingestion mappings` / `.create-or-alter … mapping` / `.drop … mapping` |
 | Schema + continuous-export (read) | `/api/adx/overview` | `.show database … schema as json` / `.show continuous-exports` |
+| DB policies (read-only list) | `GET /api/adx/policies` | `.show database <db> policy <kind>` × {retention, caching, sharding, mergepolicy, streamingingestion} (`showDatabasePolicies`) |
 | DB details + object counts | `GET /api/items/kql-database/[id]` | `.show database details` + `.show tables/functions/materialized-views` |
 | Create database | `POST /api/items/eventhouse/[id]/database` | ARM `PUT Microsoft.Kusto/clusters/{c}/databases/{d}` |
 | Ingest file | `POST /api/items/eventhouse/[id]/ingest` (multipart) | `.ingest inline` |
@@ -294,16 +295,26 @@ All routes session-guard, apply the `LOOM_KUSTO_CLUSTER_URI` config gate (honest
 
 1. **Cluster lifecycle entirely absent in this surface** — no Stop/Start (F3), no scale-up (F4), no scale-out/autoscale (F5), no Overview/metrics (F2), no create/delete cluster (F1/F12). These are core portal verbs and are the biggest parity hole. (A separate `kusto-arm-client.ts` + admin-scaling surface exists in the repo but is not surfaced in the ADX editor.)
 2. **Permissions management missing** — no cluster (F7) or database (F8) RBAC principal assignment UI; the live UAMI runs as AllDatabasesAdmin and there's no way to grant/revoke from Loom.
-3. **Results grid is a static table** — no sort/filter/group/pivot/search/cell-stats/data-profile (B2–B9). This is a defining ADX web-UI experience and is essentially unbuilt.
-4. **Export/share missing** — no CSV / Open-in-Excel / Query-to-Power-BI / copy (C2–C6).
+3. ~~Results grid is a static table~~ — **largely RESOLVED (PR #545).** `KustoResultsGrid` now does sort (B2), per-column filter (B3), in-grid search+highlight (B6), and column statistics (B7). Still missing: group-by (B4), pivot (B5), cell-selection→filter (B8), full data-profile pane (B9).
+4. **Export/share partly built** — CSV download (C3) + copy-as-TSV (C2) now built in the grid; still no Open-in-Excel (C4) / Query-to-Power-BI (C5) / share-link (C6).
 5. **Table schema editing** — drop only; no edit-schema/rename/command-viewer (E3); RLS (E10) and external tables (E11) are tooltip-only "coming" rows with no backend.
 6. **Get-data wizards thin** — file inline + Event Hub (gated) + OneLake path only; no blob/ADLS wizard, no schema inference / mapping preview, no continuous-vs-one-time toggle (D2, D5).
 7. **No query tabs / recall / IntelliSense confirmation** (A3, A7, A8; A4 unverified).
 8. **Dashboards lack pages, file import/export, visual-formatting pane** (G7, G8, G10) — though tiles/params/data-sources/time-range/run are genuinely built ✅.
 
-## Grade: **C (functional but rough)**
+## Grade: **C+ (functional, rough in places; results grid now strong)**
 
-Justification: The **dashboard builder (G)** and the **KQL-database object navigator CRUD (E2/E4/E5/E6/E16) + query/mgmt execution (A6, B1)** are genuinely production-grade with real Kusto/ARM backends — no mocks, honest gates. That clears the floor above D. But measured against the *full* Azure Data Explorer service the operator named, the surface is missing entire pillars: **cluster lifecycle/scale/start-stop, RBAC permissions, the rich results grid, and export/share** are all MISSING ❌. The query "editor" is a single textarea + static results table, not the ADX web-UI experience. That ceiling is well below B (production parity) and far below A. The pre-existing `adx-kql-database.md`'s "Zero ❌ / A-grade" claim is only defensible by scoping to one left-pane tree; for the service as a whole it is over-stated.
+> **rev.2 — corrected against current code (PRs #536 / #545).** Two pillars the
+> rev.1 audit graded as essentially unbuilt are now real: (1) the **rich results
+> grid** — `KustoResultsGrid` adds sort (B2), per-column filter (B3), in-grid
+> search+highlight (B6), column statistics (B7), CSV export (C3) and copy-TSV
+> (C2), all client-side over the real query rows and wired into the KQL editors;
+> (2) **database policies read** — a real navigator Policies group lists
+> retention/caching/sharding/mergepolicy/streamingingestion via
+> `.show database <db> policy <kind>` (`/api/adx/policies`). RLS (E10) is still
+> tooltip-only. Grade raised C → C+.
+
+Justification: The **dashboard builder (G)**, the **KQL-database object navigator CRUD (E2/E4/E5/E6/E16) + query/mgmt execution (A6, B1)**, and now the **rich results grid (B2/B3/B6/B7 + CSV/copy C2/C3)** plus **read-only db policies (E8/E9 list)** are genuinely production-grade with real Kusto/ARM backends — no mocks, honest gates. That is solidly above D and the grid lift moves it past a flat C. But measured against the *full* Azure Data Explorer service the operator named, the surface is still missing entire pillars: **cluster lifecycle/scale/start-stop (F1–F5, F12), RBAC permissions (F7/F8), RLS (E10), and the heavier grid features (group-by B4 / pivot B5 / data-profile B9)** remain MISSING ❌, and Open-in-Excel / Power-BI / share-link (C4–C6) are absent. That ceiling is still below B (production parity) and far below A. The pre-existing `adx-kql-database.md`'s "Zero ❌ / A-grade" claim remains only defensible by scoping to one left-pane tree; for the service as a whole it is over-stated.
 
 ## Verification status
 

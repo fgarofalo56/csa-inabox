@@ -19,32 +19,49 @@
 
 ## Scorecard
 
-| Service | Grade | Built | Partial | Gated | Missing | Top gaps (highest-impact first) |
-|---|:--:|--:|--:|--:|--:|---|
-| Azure Databricks | **B** | 41 | 9 | 5 | 33 | Cluster EDIT unwired (client fn exists); SQL Warehouse edit/scale unwired; cluster Policy + Access-mode (UC gate); Job Repair-run; Unity Catalog is read-only (no create/GRANT/lineage); DLT/Lakeflow editor; Repos branch ops |
-| Azure API Management | **C** | 18 | 8 | 0 | 21 | Operations authoring (read-only today); form-based policy editor + effective-policy; subscription key reveal/regenerate + state transitions; Overview+Scale in-editor; named-value secret reveal; versions/version-sets; whole blades (Dev portal, Users, Groups, Certs, Monitoring, Networking) |
-| Power BI / Fabric semantic | **C** | 26 | 4 | 3 | 20 | Per-item ⋯ context menu (unlocks settings+governance); semantic-model gateway/credential binding; endorsement + sensitivity labels (0%); Manage-access on REAL PBI workspace ACL (today Cosmos-only); content grid w/ columns; Share/Subscribe; persist DAX measures |
-| Power Platform | **C** | 28 | 4 | 1 | 38 | Environment lifecycle command bar (New/Copy/Backup/Reset/Delete); Managed Environments + groups + tenant governance; Dataverse table authoring + row CRUD; all designers deep-linked out (forbidden); 6/8 admin-center areas missing; Power Apps Share; Solutions/ALM navigator |
-| Azure AI Foundry | **C** | 13 | 12 | 3 | 5 | Agents editor + playground (client exists, unwired — flagship); Fine-tuning; Connections CRUD (read-only); Guardrails/RAI authoring; observability dashboard + trace spans; lifecycle ops on read-only tabs; remaining playgrounds + templates gallery |
-| Azure Data Explorer (Kusto) | **C** | 17 | 21 | 2 | 24 | Cluster lifecycle (stop/start/scale/create) entirely absent; RBAC principal assignment; rich results grid (sort/filter/pivot/profile); export/share (CSV/Excel/Power BI); table schema editing + RLS + external tables; get-data wizards; query history/tabs/IntelliSense |
-| Azure AI Search | **C** | 17 | 3 | 4 | 16 | Visual index field designer (replaced by JSON textarea — forbidden); search-explorer query options (semantic/vector unreachable though backend supports); indexer scheduling + run history; semantic-config + vector-profile designers; Import-data wizard; service stats panel |
-| Azure Cosmos DB | **C** | 8 | 7 | 5 | 24 | Items data explorer (data-plane CRUD — biggest credibility gap); query editor + RU stats; Scale/Settings write path (reads exist, no PUT); stored-proc/trigger/UDF authoring; indexing + conflict-resolution editors; account blades (Keys/Geo/Consistency/Backup/Networking); typed-delete confirms; bicep env-sync |
-| Azure SQL Database | **C** | 6 | 7 | 0 | 31 | Wire existing rich SqlDbTree (real sys.* over TDS) into the registered editor; surface firewall/Entra-admin/geo-replication (backends exist, UI unmounted); compute & storage scale (no ARM PATCH route); backups/PITR/LTR; query-editor export/save-view; DB lifecycle (delete/copy/bacpac) |
-| Azure Data Factory | **C** | 11 | 4 | 2 | 11 | Mapping Data Flow visual designer (flagship, entirely absent); Copy Data Tool wizard; Add-Dynamic-Content expression builder (blocks most pipelines); source control / CI-CD; connector galleries + Test Connection; rich Copy activity form; advanced triggers; factory-wide Monitor hub |
-| Azure Synapse Analytics | **C** | 4 | 17 | 2 | 16 | Synapse notebook editor (marquee Develop surface, absent); unified Studio shell (Home/Data/Develop/Integrate/Monitor/Manage + Publish/Git); data-flow visual designer; data-hub lake browser + DB object tree; Monitor-hub drill grids; SQL results export/chart; Manage-hub surfaces; surface DWU scale |
-| Azure Event Hubs | **D** | 3 | 6 | 4 | 16 | Data Explorer (Send + View events — most-used surface, absent; needs Entra data-plane); SAS keys/connection strings (no way to get one out today); Capture config authoring; Scale/Auto-inflate; Overview blade w/ metrics; Networking editor; Geo-DR; whole mgmt blades (IAM/Tags/Locks/Diag/Metrics/Alerts/CMK/Identity) |
-| **TOTAL** | **C avg** | **192** | **102** | **31** | **255** | — |
+> **⚠️ rev.2 (2026-06-01) — grades re-audited UPWARD against current code.**
+> The rev.1 grades below the table's count columns predate a build wave that
+> shipped 12 parity features (Databricks cluster/warehouse edit, SQL navigator,
+> Cosmos Items Data Explorer, AI Search field designer + search explorer, ADX
+> results grid + DB policies, APIM OpenAPI import + operations authoring, Event
+> Hubs Send, AI Foundry Agents, Power BI governance, Power Platform env
+> lifecycle). Each per-service doc was re-read against the real editor on
+> 2026-06-01 and corrected (see each `<slug>.md` rev.2 note). **The Grade column
+> is current. The Built/Partial/Gated/Missing count cells are NOT yet
+> recomputed — trust the per-service docs for exact counts.** Two surfaces (AI
+> Search field designer + search explorer; Cosmos Items Data Explorer) were
+> additionally verified LIVE via Playwright against the deployed console with a
+> real authenticated session (real index fields; real `2.25 RU` Cosmos
+> data-plane request charge).
 
-**Distribution of capabilities (580 total inventoried across 12 services):**
+| Service | Grade (rev.2) | was | Top gaps still open (highest-impact first) |
+|---|:--:|:--:|---|
+| Azure Databricks | **A** | B | Unity Catalog is read-only (no create/GRANT/lineage); DLT/Lakeflow editor; Repos branch ops; cluster Policy + Access-mode (UC gate); Job Repair-run |
+| Azure AI Search | **B** | C | Indexer scheduling + run history + field/output mappings; semantic-config & vector-profile *designers* (JSON-only today); scoring-profile/analyzer designers; Import-data wizard; service-stats panel; Keys/Identity/Networking/Monitoring admin |
+| Azure Cosmos DB | **B-** | C | Stored-proc/trigger/UDF authoring + execute; account blades (Keys/Geo/Consistency/Backup/Networking); write-path Scale/Settings/Indexing editors; bulk upload; query save/multi-tab |
+| Power BI / Fabric semantic | **B-** | C | Workspace content grid + Lineage view; sensitivity labels (honestly omitted — no public apply REST); Subscriptions; App publishing/capacity; data-source credential sign-in; in-browser report authoring |
+| Azure API Management | **B-** | C | Form-based policy editor + effective-policy + fragments; subscription key reveal/regenerate + state; named-value secret reveal + KV refs; versions/version-sets; whole portal blades (Dev portal, Users, Groups, Certs, Monitoring, Networking) |
+| Azure AI Foundry | **C+** | C | Fine-tuning (submit/monitor/deploy); templates gallery; observability/trace dashboards; 7-of-8 playgrounds deep-link only; agent depth (knowledge/memory/guardrails attach, publish/versioning, evals) |
+| Azure Data Explorer (Kusto) | **C+** | C | Cluster lifecycle/scale/start-stop + create/delete; RBAC (cluster + database) principal mgmt; RLS authoring (tooltip-only); grid group-by/pivot/full-profile; Open-in-Excel / Query-to-Power-BI / share-link |
+| Azure SQL Database | **C+** | C | Compute & storage scale (no update route); backups/PITR/geo-restore/LTR; copy/export-import bacpac + results export; Networking/TDE/Defender/Auditing + monitoring; geo-replication failover (add-only today) |
+| Power Platform | **C** | C | Copy/Backup-Restore/Reset/Convert/History (honest admin-gates); Managed Environments + groups; 7-of-8 admin-center areas; all maker authoring (canvas/flow/Pages/table/connector — deep-linked, forbidden as parity); App Share |
+| Azure Data Factory | **C** | C | Mapping Data Flow visual designer (flagship, absent — the React Flow canvas is pipeline-only); Copy Data Tool wizard; Add-Dynamic-Content expression builder; source control/Publish/ARM; connector galleries + Test Connection; factory Monitor hub |
+| Azure Synapse Analytics | **C** | C | Synapse notebook authoring editor (absent); unified Studio shell + Publish/Git; data-flow visual designer; data-hub lake browser; Monitor-hub drill grids; SQL results export/chart; Manage-hub surfaces |
+| Azure Event Hubs | **C** | D | Data Explorer View/receive (honest AMQP dependency-gate — allowed); SAS keys/connection-string copy; Capture authoring; Scale/Auto-inflate; namespace Overview blade + metrics; IAM/Networking/Geo-DR |
 
-- **Built (real control + real backend): 192 — 33.1%**
-- **Partial (renders but thin / read-only): 102 — 17.6%**
-- **Gated (honest infra/preview MessageBar — allowed): 31 — 5.3%**
-- **Missing (no Loom surface at all): 255 — 44.0%**
+**Grade distribution (rev.2):** 1 × A, 4 × B/B-, 3 × C+, 4 × C. Zero D, zero F.
+Up from rev.1's 1 × B / 10 × C / 1 × D. The shift is real built code (every ✅
+flip was verified by reading the route handler back to a real Azure REST/data-
+plane call), not re-scoring — but **every service still has genuine missing
+breadth**, and no service is yet at the `ui-parity.md` A+ bar (full inventory
+built). The headline gaps that remain are the heavy designers: ADF/Synapse
+Mapping Data Flow + notebook authoring, Databricks Unity Catalog write surface,
+and the per-service admin blades.
 
-**Grade distribution:** 1 × B, 10 × C, 1 × D. Zero A-grade services. Zero F
-(no outright vaporware found — what exists is real, there's just far too little
-of it).
+> The rev.1 capability counts (192 built / 102 partial / 31 gated / 255 missing
+> across 580 inventoried) are preserved below for history but understate the
+> current built total by ~40–60 capabilities (the 12 shipped features). A full
+> recount is tracked as follow-up.
 
 ---
 

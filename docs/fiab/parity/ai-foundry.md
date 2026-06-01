@@ -1,15 +1,16 @@
 # ai-foundry — parity with Azure AI Foundry (Microsoft Foundry portal)
 
 **Audit date:** 2026-05-31 · **Auditor:** conservative 1:1 parity pass (no-vaporware.md + ui-parity.md)
-**Verdict:** **C** (functional but rough; the headline new-Foundry "Agents" experience is absent, several top-level surfaces are deep-links/gates only).
+**rev.2 — corrected against current code (2026-05-31):** the flagship **Agents** surface (A4) is now BUILT and wired (real Foundry Agent Service REST, honest 501 gate). Grade raised **C → C+**.
+**Verdict:** **C+** (functional but rough; the headline new-Foundry "Agents" experience is now built end-to-end, but fine-tuning, Templates, Observability dashboards, and most read-only-where-portal-is-CRUD tabs remain).
 
 > This is a brutally honest baseline. The prior self-grade of **A** in
 > `ai-foundry-hub.observed.md` covered ONLY the model catalog + chat playground +
-> ARM resource-management tabs. It does not reflect the flagship **Agents**
-> surface (the center of the *new* Foundry portal), the other 7 playgrounds, the
-> Templates gallery, the Observability/Monitoring dashboards, fine-tuning, or
-> guardrails authoring — all of which the live 2026-05-29 portal walk enumerated
-> as top-level surfaces. Grading those in drops the real score to C.
+> ARM resource-management tabs. As of rev.2 the flagship **Agents** surface (the
+> center of the *new* Foundry portal) is built and wired; the other 7 playgrounds,
+> the Templates gallery, the Observability/Monitoring dashboards, fine-tuning, and
+> guardrails authoring remain absent or shallow. With Agents built the real score
+> is C+ (one ❌ → ✅; 7 ❌ remain).
 
 ## Source UI
 
@@ -28,7 +29,8 @@
 - Catalog + chat playgrounds: `apps/fiab-console/lib/editors/foundry-playground.tsx`
 - Sub-editors: `apps/fiab-console/lib/editors/foundry-sub-editors.tsx` (Project / PromptFlow / Evaluation / ContentSafety / Tracing / AiSearchIndex / Compute / Dataset)
 - Left navigator: `apps/fiab-console/lib/components/foundry/foundry-tree.tsx`
-- Backends: `lib/azure/foundry-cs-client.ts` (CognitiveServices/AIServices data+management plane), `lib/azure/foundry-client.ts` (MLS hub), `lib/azure/foundry-agent-client.ts` (Agent Service data-plane — **present but NOT wired to any AI-Foundry agents UI**; consumed only by Loom/Fabric `data-agent` routes)
+- Backends: `lib/azure/foundry-cs-client.ts` (CognitiveServices/AIServices data+management plane), `lib/azure/foundry-client.ts` (MLS hub), `lib/azure/foundry-agent-client.ts` (Agent Service data-plane — **rev.2: now wired to the Agents editor** via `app/api/foundry/agents/*`; also consumed by the Loom/Fabric `data-agent` routes)
+- **rev.2 Agents surface:** UI `lib/components/foundry/foundry-agents.tsx` (`FoundryAgentsPanel`), routes `app/api/foundry/agents/route.ts` (GET list / POST create-or-update), `app/api/foundry/agents/[name]/route.ts` (GET / DELETE), `app/api/foundry/agents/run/route.ts` (POST run+inspect). Wired into `foundry-hub-editor.tsx` (Agents tab @ line ~898/915) and the navigator `foundry-tree.tsx` (g-agents leaf + New→Agent menu).
 - Editor registry: `lib/editors/registry.ts` (`ai-foundry-hub`, `ai-foundry-project`, `prompt-flow`, `evaluation`, `content-safety`, `tracing`, `ai-search-index`, `compute`, `dataset`)
 - BFF routes: `app/api/foundry/{accounts,workspace,connections,deployments,model-deployments,models-catalog,quota,networking,rbac,keys,activity,computes,datastores,chat}/route.ts` + `app/api/items/{ai-foundry-project,prompt-flow,evaluation,content-safety,tracing,ai-search-index}/...`
 
@@ -45,7 +47,7 @@ Legend: built ✅ = full 1:1 + real backend · partial ⚠️ = exists but incom
 | A1 | **Model catalog** (`/explore/models`) — search, 7 filters, leaderboards, compare, ~11.5k cards, model-card → detail → Deploy | built ✅ search + 7 filters + leaderboard strip + compare + paginated cards + detail + Deploy dialog | `GET /api/foundry/models-catalog` → CS `{account}/models` (account-deployable set, **not** the 11.5k AML-registry superset — that superset is deep-linked, not rendered) |
 | A2 | **Playgrounds — Chat** | built ✅ 3-pane Setup/Chat/Config, params, View code | `POST /api/foundry/chat` → AOAI `chat/completions` |
 | A3 | **Playgrounds — Images / Audio / Speech / Video / Language / Translator / Assistants** (7 more) | gated ⚠️ tiles that deep-link to ai.azure.com ("deploy a `<type>` model first"); none run in-Loom | none (deep-link only) |
-| A4 | **Agents** (build agent: model + instructions + tools + knowledge + memory + guardrails; Chat/YAML/Code tabs; threads; preview; publish; AgentOps traces/evals) — **the headline of new Foundry** | MISSING ❌ no agents editor, no `/api/foundry/agents` route, no navigator group (only a greyed "coming" tooltip row) | `foundry-agent-client.ts` exists (real `{project}/agents` REST) but is wired only to Loom `data-agent`, not to an AI-Foundry agents surface |
+| A4 | **Agents** (build agent: model + instructions + tools + knowledge + memory + guardrails; Chat/YAML/Code tabs; threads; preview; publish; AgentOps traces/evals) — **the headline of new Foundry** | built ✅ (rev.2) — `FoundryAgentsPanel` (`lib/components/foundry/foundry-agents.tsx`): builder (list + create/edit/delete; name, model-deployment picker, instructions, tools multi-select = code_interpreter/file_search/function) + playground (pick agent → ask → run with thread/run/**steps** inspector + answer). Wired as the hub **Agents** tab + navigator g-agents leaf. ⚠️ partial vs full portal: no knowledge/memory/guardrails attach, no YAML/Code tabs, no publish/versioning, no AgentOps eval dashboards — but the core build+test loop is real. | `GET/POST /api/foundry/agents` → `listAgents`/`createOrUpdateAgent` (Agent Service `{project}/agents` POST/PATCH/GET REST); `DELETE /api/foundry/agents/{name}`; `POST /api/foundry/agents/run` → `runAgentAndInspect` (threads→messages→runs→steps REST). Honest 501 gate on `LOOM_FOUNDRY_PROJECT_ENDPOINT` (the live state). |
 | A5 | **Templates** gallery (`/resource/build/templates` — code/solution starter templates) | MISSING ❌ | none |
 | A6 | **Monitoring / Observability — Application analytics** dashboard (token consumption, latency, exceptions, response quality via App Insights workbooks) | MISSING ❌ (only a raw trace table exists, see C-Tracing) | none |
 | A7 | **Project Overview** (endpoints & keys card, project details, getting-started steps) | partial ⚠️ Hub Overview tab shows workspace metadata; ProjectEditor shows project detail; no consolidated endpoints/keys/getting-started card per Foundry project | `GET /api/foundry/workspace`, `GET /api/items/ai-foundry-project/{id}` |
@@ -102,14 +104,14 @@ Legend: built ✅ = full 1:1 + real backend · partial ⚠️ = exists but incom
 
 ---
 
-## Summary counts (by inventory row, 44 graded)
+## Summary counts (by inventory row, 44 graded) — rev.2
 
-- **built ✅**: 16
+- **built ✅**: 17 (A4 Agents now built; the core is full 1:1 + real backend, broader portal agent features still partial)
 - **partial ⚠️**: 17
 - **gated ⚠️**: 3
-- **MISSING ❌**: 8
+- **MISSING ❌**: 7
 
-## The honest verdict — **C** (functional but rough)
+## The honest verdict — **C+** (functional but rough; flagship Agents now built)
 
 What's genuinely good (B/A-grade in isolation): the **model catalog + Deploy
 flow** and the **chat playground** are real and wired to live Azure REST /
@@ -120,13 +122,14 @@ honest gate when none exists. No mock arrays were found in the foundry routes.
 
 Why it is NOT A/B overall, per ui-parity.md ("feature completeness must match"):
 
-1. **Agents is entirely missing** (A4). This is *the* defining surface of the new
-   Foundry portal — build an agent from model + instructions + tools (code
-   interpreter, file search, web search, function calling) + knowledge + memory +
-   guardrails, test it in threads, then publish. The real backend client
-   (`foundry-agent-client.ts`, `{project}/agents` REST) already exists in the repo
-   but is wired only to the Fabric/Loom Data Agent, not to an AI-Foundry agents
-   editor. A greyed "coming" tooltip row is, per ui-parity.md, a forbidden stub.
+1. **Agents is now built** (A4, rev.2) — the defining surface of the new Foundry
+   portal is wired end-to-end: build an agent (model + instructions + tools =
+   code-interpreter/file-search/function), test it in the playground with a real
+   thread→run→**steps** inspector. `foundry-agent-client.ts` (`{project}/agents`
+   REST) drives `app/api/foundry/agents/*`; honest 501 gate on
+   `LOOM_FOUNDRY_PROJECT_ENDPOINT`. Still short of *full* portal parity (no
+   knowledge/memory/guardrails attach, no YAML/Code tabs, no publish/versioning,
+   no AgentOps eval dashboards) — so the broader agent experience remains partial.
 2. **Fine-tuning is missing** (C4) — no submit/monitor/deploy.
 3. **Templates gallery, Monitoring/Observability dashboards, Announcements** are
    missing (A5/A6/B8).
@@ -137,17 +140,18 @@ Why it is NOT A/B overall, per ui-parity.md ("feature completeness must match"):
 6. **Tracing is a flat table, not the span/trace-detail explorer**; **Content
    safety is ad-hoc moderation, not RAI-policy CRUD + per-deployment attach.**
 
-The mix (16 built / 17 partial / 3 gated / 8 missing) is squarely **C**: a real,
-working core with broad but shallow coverage and one flagship surface absent.
-A grade requires zero ❌ and zero stub rows; this has 8 ❌ plus "coming" tooltip
-stubs in the navigator.
+The mix (17 built / 17 partial / 3 gated / 7 missing) is **C+**: a real, working
+core — now including the flagship Agents build+test loop — with broad but shallow
+coverage. A grade requires zero ❌ and zero stub rows; this has 7 ❌ remaining and
+several read-only-where-portal-is-CRUD tabs.
 
 ## Highest-value gaps to build first
 
-1. **Agents editor + playground** (A4) — wire `foundry-agent-client.ts` into a new
-   `/api/foundry/agents` route + an AI-Foundry Agents editor: create/edit agent
-   (model picker, instructions, tools = code-interpreter/file-search/web-search/
-   function, knowledge sources, guardrails), threads/runs test pane, publish.
+1. ~~**Agents editor + playground** (A4)~~ — **DONE (rev.2)**. Built: create/edit/delete
+   agent (model picker, instructions, tools = code-interpreter/file-search/function)
+   + threads/runs/steps playground, real `/api/foundry/agents/*` REST, honest gate.
+   Remaining agent depth (knowledge/memory/guardrails attach, YAML/Code tabs,
+   publish/versioning, AgentOps eval dashboards) is the next agent increment.
 2. **Fine-tuning** (C4) — submit job (base model + data + hyperparams), loss/accuracy
    charts, deploy fine-tuned model (CS fine-tuning / AML jobs REST).
 3. **Connections CRUD** (C3) — create/edit/delete AOAI/AI-Search/Blob connections

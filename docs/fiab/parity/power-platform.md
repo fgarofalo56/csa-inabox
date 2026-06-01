@@ -158,6 +158,8 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ (exists, incomplet
 
 ## Honest verdict
 
+**rev.2 — corrected against current code (2026-05-31):** re-verified. This doc was authored in the same PR (#556) as the environment-lifecycle code, so its rows are already current. Confirmed against the live code: **New (A3) / Edit (A4) / Delete (A8)** are BUILT on real BAP REST (`POST/PATCH/DELETE …/scopes/admin/environments?api-version=2021-04-01` + async-op poll via `EnvironmentLifecycleBar` → `app/api/powerplatform/environments/*` → `createEnvironment`/`updateEnvironment`/`deleteEnvironment`/`getEnvironmentLifecycleOperation`). Copy/Backup-Restore/Reset/Convert/History (A5/A6/A7/A9/A10) remain honest ⚠️ admin-gates (no tenant-safe single BAP REST in the SP grant). No row changes; grade unchanged at **C**.
+
 **Grade: C (functional but far from parity).**
 
 What's genuinely strong (B/A-grade in isolation): every **read** path and the **per-object lifecycle run actions** are real, end-to-end, no mocks — list/inspect environments, apps, flows, connections, connectors, Dataverse tables (6 facets), Power Pages, AI Builder; plus publish-app, flow start/stop/run/run-history, app/flow/connection delete, AI train/publish/predict. The navigator is a faithful Fluent-v9 reimagining of the admin-center left rail with live counts and real inline actions. Gating is honest and precise. Vitest contract tests exist for all six editors.

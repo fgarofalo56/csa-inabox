@@ -53,8 +53,8 @@ Legend: **built ✅** = full 1:1 + real backend · **partial ⚠️** = exists, 
 | Settings tab — **subscription key header/query param names** | **MISSING ❌** | — |
 | Settings tab — **Diagnostics Logs / App Insights logger / sampling** | **MISSING ❌** | — |
 | Settings tab — API **URL scheme**, **API type**, **products**, **gateways** assignment | **partial ⚠️** products assigned from the *product* editor; per-API gateway/url-scheme not exposed | — |
-| **Design** tab — operations list | **partial ⚠️** read-only list (tree branch + editor test dropdown) | `listOperations` → ARM GET `/apis/{id}/operations` |
-| **Operations authoring** — add/edit/delete operation, method, URL template, query/template/header params, request/response representations & schemas, example bodies | **MISSING ❌** (self-described "coming" row in tree); operations only arrive via imported spec | — |
+| **Design** tab — operations list | **built ✅** Operations tab table (method + URL template) + tree branch | `listOperations` → ARM GET `/apis/{id}/operations` |
+| **Operations authoring** — add/edit/delete operation, method, URL template, query/template/header params, request/response representations & schemas, example bodies | **built ✅** (rev.2 — PR #552) Operations tab + "Add operation" ribbon → create/edit/delete dialog (method, URL template, template/query/header params, declared responses) writing real ARM | `upsertOperation` (PUT `/apis/{id}/operations/{opId}`) / `deleteOperation` / `getOperation` via `POST/PUT/DELETE /api/items/apim-api/[id]/operations` |
 | **OpenAPI spec** view (read-only) + **edit** (Monaco) + copy/refresh | **built ✅** | `getApiSpec` (ARM `format=openapi+json` export) + `upsertApi` |
 | **Test console** (pick op, method/template/headers/body, Send through gateway; key injected server-side) | **built ✅** | `testApiCall` → resolves gateway URL + `master` listSecrets, real gateway HTTP call |
 | Test console — **trace / request inspector** (Ocp-Apim-Trace) | **MISSING ❌** | — |
@@ -136,23 +136,33 @@ Legend: **built ✅** = full 1:1 + real backend · **partial ⚠️** = exists, 
 
 ## Verdict
 
+> **rev.2 — corrected against current code (2026-05-31).** Two rows that the
+> prior revision marked MISSING ❌ are now built: **OpenAPI/Swagger import**
+> (PR #545, `/api/apim/import` → `importApiFromOpenApi`, real ARM PUT
+> `format=openapi+json|openapi-link`) and **operations authoring** (PR #552,
+> Operations tab + "Add operation" → create/edit/delete dialog → real ARM
+> `upsertOperation`/`deleteOperation` PUT/DELETE `/apis/{id}/operations/{opId}`).
+> Both verified real-backend (no mocks). The Design-tab operations list is
+> therefore now full CRUD, not read-only.
+
 The three APIM editors + navigator are a **genuine, real-backend slice** of the APIM
 service blade — every control listed as built ✅ calls real ARM REST through a UAMI,
 with an honest 503 infra-gate when unconfigured (no mocks, no `return []`). The core
-publisher loop (import → design → policy → product → subscription → test) works
-end-to-end.
+publisher loop (import → design → **operations authoring** → policy → product →
+subscription → test) now works end-to-end including building operations by hand.
 
 But it is **far from one-for-one with the full portal service blade.** Whole
 first-class blades are absent (Developer portal, Users, Groups, Certificates,
 Monitoring/diagnostics, Networking, Workspaces, Custom domains, Identities). Within
-the blades that exist, the highest-impact gaps are: **operations authoring**
-(operations are read-only / import-only), the **form-based policy editor + effective
-policy + fragments**, **subscription key reveal/regenerate + state transitions in the
-editor** (today only in the marketplace surface), **named-value secret reveal + Key
-Vault references**, **backend credentials/circuit-breaker/pools**, and **version sets**.
-The service **Overview** and **Scale** are not in this editor at all (scale lives in a
-separate admin route).
+the blades that exist, the highest-impact remaining gaps are: the **form-based policy
+editor + effective policy + fragments**, **subscription key reveal/regenerate + state
+transitions in the editor** (today only in the marketplace surface), **named-value
+secret reveal + Key Vault references**, **backend credentials/circuit-breaker/pools**,
+and **version sets**. The service **Overview** and **Scale** are not in this editor at
+all (scale lives in a separate admin route).
 
-**Grade: C** (functional but rough; broad portal-blade gaps, several read-only/upsert-only
-surfaces, key cross-cutting blades missing). The build quality of what exists is B-grade;
-the *parity breadth* drags the surface to C.
+**Grade: C+ / B−** (rev.2 — up from C). Operations authoring + OpenAPI import close
+the two biggest within-API gaps, so the publisher loop is now complete. The build
+quality of what exists is B-grade; the *parity breadth* (whole missing portal blades:
+Developer portal, Users/Groups, Certificates, Monitoring, Networking) still holds the
+overall surface below B.
