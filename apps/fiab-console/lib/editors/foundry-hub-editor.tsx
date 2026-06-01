@@ -40,6 +40,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { ModelCatalogPanel, ChatPlaygroundPanel, PlaygroundsLandingPanel } from './foundry-playground';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
 import { FoundryAccountTree } from '@/lib/components/foundry/foundry-tree';
+import { FoundryAgentsPanel } from '@/lib/components/foundry/foundry-agents';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -857,6 +858,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
         { label: 'Open in Azure portal', onClick: () => window.open(portalUrl, '_blank', 'noopener,noreferrer') },
       ]},
       { label: 'Build', actions: [
+        { label: 'Agents', onClick: () => setTab('agents') },
         { label: 'Model catalog', onClick: () => setTab('catalog') },
         { label: 'Chat playground', onClick: () => setTab('chat') },
       ]},
@@ -876,6 +878,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
       account={acct}
       selectedDeployment={selectedDeployment}
       onOpenDeployment={onOpenDeployment}
+      onOpenAgents={() => setTab('agents')}
       refreshKey={nonce}
     />
   );
@@ -892,6 +895,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
         <div className={s.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
             <Tab value="overview">Overview</Tab>
+            <Tab value="agents">Agents</Tab>
             <Tab value="catalog">Model catalog</Tab>
             <Tab value="playgrounds">Playgrounds</Tab>
             <Tab value="chat">Chat</Tab>
@@ -908,6 +912,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
           </TabList>
         </div>
         {tab === 'overview' && <OverviewPanel nonce={nonce} onWorkspace={onWorkspace} />}
+        <FoundryAgentsPanel active={tab === 'agents'} nonce={nonce} acct={acct} />
         <ModelCatalogPanel active={tab === 'catalog'} nonce={nonce} acct={acct} />
         <PlaygroundsLandingPanel active={tab === 'playgrounds'} onOpenChat={() => setTab('chat')} />
         <ChatPlaygroundPanel active={tab === 'chat'} nonce={nonce} acct={acct} />
