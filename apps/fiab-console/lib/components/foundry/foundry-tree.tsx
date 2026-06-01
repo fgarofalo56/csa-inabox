@@ -43,6 +43,7 @@ import {
   Add20Regular, ArrowSync16Regular, Delete16Regular, Open16Regular,
   Search20Regular, Warning20Regular,
   BrainCircuit20Regular, Connector20Regular, Globe20Regular, AppsList20Regular,
+  Bot20Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -99,6 +100,8 @@ export interface FoundryAccountTreeProps {
   selectedDeployment?: string | null;
   /** Open / focus a deployment in the host editor (selecting a deployment). */
   onOpenDeployment?: (name: string) => void;
+  /** Open the Agents surface (the new-Foundry Agents editor + playground tab). */
+  onOpenAgents?: () => void;
   /** Increment to force a refresh from the parent (e.g. after a save/create elsewhere). */
   refreshKey?: number;
 }
@@ -113,7 +116,7 @@ function withAccount(url: string, a: FoundryTreeAccount | null): string {
 
 /** A typed, AI-Foundry-faithful account navigator. */
 export function FoundryAccountTree({
-  account, selectedDeployment = null, onOpenDeployment, refreshKey = 0,
+  account, selectedDeployment = null, onOpenDeployment, onOpenAgents, refreshKey = 0,
 }: FoundryAccountTreeProps) {
   const s = useStyles();
 
@@ -281,6 +284,7 @@ export function FoundryAccountTree({
             </MenuTrigger>
             <MenuPopover>
               <MenuList>
+                <MenuItem icon={<Bot20Regular />} onClick={() => onOpenAgents?.()} disabled={!onOpenAgents}>Agent</MenuItem>
                 <MenuItem icon={<BrainCircuit20Regular />} onClick={openDeploy}>Model deployment</MenuItem>
               </MenuList>
             </MenuPopover>
@@ -339,6 +343,29 @@ export function FoundryAccountTree({
                 </TreeItem>
               ))}
             </Tree>
+          </TreeItem>
+
+          {/* Agents (Foundry Agent Service — the flagship new-Foundry surface) */}
+          <TreeItem itemType="leaf" value="g-agents">
+            <TreeItemLayout iconBefore={<Bot20Regular />}>
+              <span className={s.leafRow}>
+                <span
+                  role="button" tabIndex={0}
+                  style={{ cursor: onOpenAgents ? 'pointer' : undefined, fontWeight: tokens.fontWeightSemibold }}
+                  onClick={() => onOpenAgents?.()}
+                  onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onOpenAgents) { e.preventDefault(); onOpenAgents(); } }}
+                >
+                  Agents
+                </span>
+                <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                  {onOpenAgents && (
+                    <Tooltip content="Open Agents (build + playground)" relationship="label">
+                      <Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenAgents()} aria-label="Open Agents" />
+                    </Tooltip>
+                  )}
+                </span>
+              </span>
+            </TreeItemLayout>
           </TreeItem>
 
           {/* Connections (hub workspace) */}
