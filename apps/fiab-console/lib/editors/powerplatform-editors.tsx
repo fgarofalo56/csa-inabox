@@ -19,11 +19,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Dropdown, Option,
-  Tab, TabList, Field, Textarea,
+  Tab, TabList, Field, Textarea, Input, Switch, Toolbar, ToolbarButton, ToolbarDivider,
+  Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import {
+  Add20Regular, Edit20Regular, Delete20Regular, Copy20Regular,
+  DatabaseArrowUp20Regular, ArrowReset20Regular, ArrowSync20Regular, History20Regular,
+} from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { PowerPlatformTree } from '@/lib/components/powerplatform/powerplatform-tree';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
@@ -46,7 +51,34 @@ const useStyles = makeStyles({
     cursor: 'pointer', color: tokens.colorBrandForegroundLink,
   },
   empty: { padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+  // Environment lifecycle command bar + dialog form — string-valued per the
+  // Griffel makeStyles convention used for all new Loom surfaces.
+  cmdBar: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px' },
+  dialogForm: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '420px' },
+  dvBox: {
+    display: 'flex', flexDirection: 'column', gap: '12px',
+    padding: '12px', borderRadius: '4px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  row2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' },
 });
+
+// SKU options the BAP create API accepts (Microsoft Learn: New-AdminPowerAppEnvironment
+// -EnvironmentSku — Trial | Sandbox | Production | SubscriptionBasedTrial | Teams | Developer).
+const ENV_SKUS = ['Production', 'Sandbox', 'Trial', 'Developer', 'SubscriptionBasedTrial', 'Teams'] as const;
+// Common Power Platform locations (Get-AdminPowerAppEnvironmentLocations). The
+// operator can type any valid location id; these are the frequent ones.
+const ENV_LOCATIONS = ['unitedstates', 'europe', 'asia', 'australia', 'canada', 'india', 'japan', 'unitedkingdom', 'unitedstatesfirstrelease'] as const;
+// Base-language LCIDs offered when provisioning Dataverse (most common set).
+const DV_LANGUAGES: Array<{ lcid: number; label: string }> = [
+  { lcid: 1033, label: 'English (1033)' },
+  { lcid: 1036, label: 'French (1036)' },
+  { lcid: 1031, label: 'German (1031)' },
+  { lcid: 3082, label: 'Spanish (3082)' },
+  { lcid: 1041, label: 'Japanese (1041)' },
+];
+const DV_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'INR'] as const;
 
 /**
  * Build the Home ribbon for a Power Platform editor. Both actions are wired —
@@ -180,6 +212,316 @@ function EnvPicker({
 }
 
 // ============================================================
+// Environment lifecycle command bar (New / Edit / Delete on real BAP REST;
+// honest gates for Copy / Backup-Restore / Reset / Convert / History).
+//
+// New     → POST   /api/powerplatform/environments        (async create + poll)
+// Edit    → PATCH  /api/powerplatform/environments        (rename / description)
+// Delete  → DELETE /api/powerplatform/environments?id=…   (async soft-delete + poll)
+// Poll    → GET    /api/powerplatform/environments/operation?url=…
+//
+// Copy / Backup & Restore / Reset / Convert-to-production / History have no
+// straightforward, scope-safe BAP REST in the Console SP's grant, so they
+// render an honest "requires a Power Platform admin operation" MessageBar
+// naming the requirement — NOT a fake button, NOT a deep-link-as-parity.
+// ============================================================
+
+interface LifecycleOp { status?: string; done: boolean; operationUrl?: string; error?: { code?: string; message?: string }; }
+
+/** Poll an async lifecycle operation until terminal (max ~2 min, 4s cadence). */
+async function pollLifecycle(operationUrl: string, onTick: (op: LifecycleOp) => void): Promise<LifecycleOp> {
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 4000));
+    try {
+      const r = await fetch(`/api/powerplatform/environments/operation?url=${encodeURIComponent(operationUrl)}`);
+      const { json: j } = await readJsonSafe(r);
+      if (j?.ok && j.operation) {
+        onTick(j.operation);
+        if (j.operation.done) return j.operation;
+      }
+    } catch { /* transient — keep polling */ }
+  }
+  return { done: false, status: 'Running' };
+}
+
+function EnvironmentLifecycleBar({
+  current, onChanged,
+}: {
+  current: { name: string; displayName: string; isDefault?: boolean } | undefined;
+  onChanged: () => void;
+}) {
+  const s = useStyles();
+  const [busy, setBusy] = useState(false);
+  const [opMsg, setOpMsg] = useState<{ kind: 'success' | 'error' | 'info'; text: string } | null>(null);
+
+  // ----- New environment dialog state -----
+  const [newOpen, setNewOpen] = useState(false);
+  const [nName, setNName] = useState('');
+  const [nSku, setNSku] = useState<string>('Sandbox');
+  const [nLoc, setNLoc] = useState<string>('unitedstates');
+  const [nDesc, setNDesc] = useState('');
+  const [nDataverse, setNDataverse] = useState(true);
+  const [nLang, setNLang] = useState<number>(1033);
+  const [nCurrency, setNCurrency] = useState<string>('USD');
+
+  // ----- Edit dialog state -----
+  const [editOpen, setEditOpen] = useState(false);
+  const [eName, setEName] = useState('');
+  const [eDesc, setEDesc] = useState('');
+
+  // ----- Delete dialog state -----
+  const [delOpen, setDelOpen] = useState(false);
+
+  const resetNew = () => {
+    setNName(''); setNSku('Sandbox'); setNLoc('unitedstates'); setNDesc('');
+    setNDataverse(true); setNLang(1033); setNCurrency('USD');
+  };
+
+  const createEnv = useCallback(async () => {
+    if (!nName.trim()) { setOpMsg({ kind: 'error', text: 'Display name is required.' }); return; }
+    setBusy(true); setOpMsg({ kind: 'info', text: `Creating environment "${nName}"…` });
+    try {
+      const r = await fetch('/api/powerplatform/environments', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          displayName: nName.trim(), environmentSku: nSku, location: nLoc,
+          description: nDesc.trim() || undefined,
+          dataverse: nDataverse ? { baseLanguage: nLang, currency: nCurrency } : undefined,
+        }),
+      });
+      const { json: j } = await readJsonSafe(r);
+      if (!j?.ok) { setOpMsg({ kind: 'error', text: `Create failed: ${j?.error || r.status}${j?.hint ? ` — ${j.hint}` : ''}` }); return; }
+      setNewOpen(false); resetNew();
+      const op: LifecycleOp = j.operation || { done: true };
+      if (op.operationUrl && !op.done) {
+        setOpMsg({ kind: 'info', text: `Provisioning "${nName}" — status ${op.status || 'Running'}…` });
+        const final = await pollLifecycle(op.operationUrl, (o) => setOpMsg({ kind: 'info', text: `Provisioning "${nName}" — status ${o.status || 'Running'}…` }));
+        if (final.status && final.status.toLowerCase() === 'failed') {
+          setOpMsg({ kind: 'error', text: `Provisioning failed: ${final.error?.message || final.status}` });
+        } else {
+          setOpMsg({ kind: 'success', text: `Environment "${nName}" provisioned.` });
+        }
+      } else {
+        setOpMsg({ kind: 'success', text: `Environment "${nName}" requested${op.status ? ` (status ${op.status})` : ''}.` });
+      }
+      onChanged();
+    } catch (e: any) {
+      setOpMsg({ kind: 'error', text: `Create failed: ${e?.message || String(e)}` });
+    } finally { setBusy(false); }
+  }, [nName, nSku, nLoc, nDesc, nDataverse, nLang, nCurrency, onChanged]);
+
+  const saveEdit = useCallback(async () => {
+    if (!current) return;
+    setBusy(true); setOpMsg({ kind: 'info', text: 'Saving…' });
+    try {
+      const r = await fetch('/api/powerplatform/environments', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: current.name, displayName: eName.trim() || undefined, description: eDesc.trim() || undefined }),
+      });
+      const { json: j } = await readJsonSafe(r);
+      if (!j?.ok) { setOpMsg({ kind: 'error', text: `Update failed: ${j?.error || r.status}${j?.hint ? ` — ${j.hint}` : ''}` }); return; }
+      setEditOpen(false);
+      setOpMsg({ kind: 'success', text: `Environment renamed to "${eName.trim()}".` });
+      onChanged();
+    } catch (e: any) {
+      setOpMsg({ kind: 'error', text: `Update failed: ${e?.message || String(e)}` });
+    } finally { setBusy(false); }
+  }, [current, eName, eDesc, onChanged]);
+
+  const deleteEnv = useCallback(async () => {
+    if (!current) return;
+    setBusy(true); setOpMsg({ kind: 'info', text: `Deleting "${current.displayName}"…` });
+    try {
+      const r = await fetch(`/api/powerplatform/environments?id=${encodeURIComponent(current.name)}`, { method: 'DELETE' });
+      const { json: j } = await readJsonSafe(r);
+      if (!j?.ok) { setOpMsg({ kind: 'error', text: `Delete failed: ${j?.error || r.status}${j?.hint ? ` — ${j.hint}` : ''}` }); return; }
+      setDelOpen(false);
+      const op: LifecycleOp = j.operation || { done: true };
+      if (op.operationUrl && !op.done) {
+        setOpMsg({ kind: 'info', text: `Deleting "${current.displayName}" — status ${op.status || 'Running'}…` });
+        const final = await pollLifecycle(op.operationUrl, (o) => setOpMsg({ kind: 'info', text: `Deleting "${current.displayName}" — status ${o.status || 'Running'}…` }));
+        setOpMsg(final.status?.toLowerCase() === 'failed'
+          ? { kind: 'error', text: `Delete failed: ${final.error?.message || final.status}` }
+          : { kind: 'success', text: `Environment "${current.displayName}" deleted (soft-delete, recoverable).` });
+      } else {
+        setOpMsg({ kind: 'success', text: `Environment "${current.displayName}" deletion requested (soft-delete, recoverable).` });
+      }
+      onChanged();
+    } catch (e: any) {
+      setOpMsg({ kind: 'error', text: `Delete failed: ${e?.message || String(e)}` });
+    } finally { setBusy(false); }
+  }, [current, onChanged]);
+
+  return (
+    <>
+      <Toolbar aria-label="Environment lifecycle" className={s.cmdBar}>
+        <ToolbarButton icon={<Add20Regular />} disabled={busy} onClick={() => { resetNew(); setNewOpen(true); }}>New</ToolbarButton>
+        <ToolbarButton icon={<Edit20Regular />} disabled={busy || !current} onClick={() => { if (current) { setEName(current.displayName); setEDesc(''); setEditOpen(true); } }}>Edit</ToolbarButton>
+        <ToolbarButton icon={<Delete20Regular />} disabled={busy || !current || !!current?.isDefault} onClick={() => current && setDelOpen(true)}>Delete</ToolbarButton>
+        <ToolbarDivider />
+        <ToolbarButton icon={<Copy20Regular />} disabled={busy || !current} onClick={() => setOpMsg({ kind: 'info', text: 'gate:copy' })}>Copy</ToolbarButton>
+        <ToolbarButton icon={<DatabaseArrowUp20Regular />} disabled={busy || !current} onClick={() => setOpMsg({ kind: 'info', text: 'gate:backup' })}>Backup &amp; restore</ToolbarButton>
+        <ToolbarButton icon={<ArrowReset20Regular />} disabled={busy || !current} onClick={() => setOpMsg({ kind: 'info', text: 'gate:reset' })}>Reset</ToolbarButton>
+        <ToolbarButton icon={<ArrowSync20Regular />} disabled={busy || !current} onClick={() => setOpMsg({ kind: 'info', text: 'gate:convert' })}>Convert to production</ToolbarButton>
+        <ToolbarButton icon={<History20Regular />} disabled={busy || !current} onClick={() => setOpMsg({ kind: 'info', text: 'gate:history' })}>History</ToolbarButton>
+      </Toolbar>
+
+      {busy && <Spinner size="tiny" label="Working…" labelPosition="after" />}
+
+      {opMsg && !opMsg.text.startsWith('gate:') && (
+        <MessageBar intent={opMsg.kind === 'info' ? 'info' : opMsg.kind}>
+          <MessageBarBody>{opMsg.text}</MessageBarBody>
+        </MessageBar>
+      )}
+      {opMsg?.text === 'gate:copy' && (
+        <MessageBar intent="warning"><MessageBarBody>
+          <MessageBarTitle>Copy requires a Power Platform admin operation</MessageBarTitle>
+          Environment <strong>Copy</strong> (Everything / customizations-only) is a long-running platform job that
+          requires the Power Platform Administrator role and a target environment, and is not exposed as a single
+          tenant-safe BAP REST call in the Console SP&apos;s grant. Use the Power Platform admin centre (Manage &rarr;
+          Environments &rarr; Copy) or <code>Copy-PowerAppEnvironment</code>. New / Edit / Delete above run live.
+        </MessageBarBody></MessageBar>
+      )}
+      {opMsg?.text === 'gate:backup' && (
+        <MessageBar intent="warning"><MessageBarBody>
+          <MessageBarTitle>Backup &amp; restore requires a Power Platform admin operation</MessageBarTitle>
+          System + manual backups and restore are managed by the platform (Dataverse-backed) and require the Power
+          Platform Administrator role; there is no single tenant-safe BAP REST surface wired here. Use the admin centre
+          (Backup &amp; restore) or <code>Restore-PowerAppEnvironment</code>.
+        </MessageBarBody></MessageBar>
+      )}
+      {opMsg?.text === 'gate:reset' && (
+        <MessageBar intent="warning"><MessageBarBody>
+          <MessageBarTitle>Reset requires a Power Platform admin operation</MessageBarTitle>
+          <strong>Reset</strong> deletes all data and re-provisions Dataverse — a destructive admin job gated behind the
+          Power Platform Administrator role. Run it from the admin centre (Reset) or <code>Reset-PowerAppEnvironment</code>.
+        </MessageBarBody></MessageBar>
+      )}
+      {opMsg?.text === 'gate:convert' && (
+        <MessageBar intent="warning"><MessageBarBody>
+          <MessageBarTitle>Convert to production requires a Power Platform admin operation</MessageBarTitle>
+          Converting a Sandbox/Trial environment to Production changes billing and retention. It requires the Power
+          Platform Administrator role; perform it in the admin centre (Convert to production).
+        </MessageBarBody></MessageBar>
+      )}
+      {opMsg?.text === 'gate:history' && (
+        <MessageBar intent="warning"><MessageBarBody>
+          <MessageBarTitle>History requires a Power Platform admin surface</MessageBarTitle>
+          The environment <strong>History</strong> timeline (action / initiator / start / end / status) is served by the
+          admin-centre operations feed, which requires the Power Platform Administrator role rather than the
+          &quot;use Power Platform APIs&quot; allow group this console authenticates with. View it in the admin centre.
+        </MessageBarBody></MessageBar>
+      )}
+
+      {/* ----- New environment dialog ----- */}
+      <Dialog open={newOpen} onOpenChange={(_, d) => setNewOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>New environment</DialogTitle>
+            <DialogContent>
+              <div className={s.dialogForm}>
+                <Field label="Display name" required>
+                  <Input value={nName} onChange={(_, d) => setNName(d.value)} placeholder="e.g. HQ Apps — Sandbox" />
+                </Field>
+                <div className={s.row2}>
+                  <Field label="Type (SKU)">
+                    <Dropdown value={nSku} selectedOptions={[nSku]} onOptionSelect={(_, d) => d.optionValue && setNSku(d.optionValue)}>
+                      {ENV_SKUS.map((k) => <Option key={k} value={k} text={k}>{k}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Region">
+                    <Dropdown value={nLoc} selectedOptions={[nLoc]} onOptionSelect={(_, d) => d.optionValue && setNLoc(d.optionValue)}>
+                      {ENV_LOCATIONS.map((k) => <Option key={k} value={k} text={k}>{k}</Option>)}
+                    </Dropdown>
+                  </Field>
+                </div>
+                <Field label="Description">
+                  <Input value={nDesc} onChange={(_, d) => setNDesc(d.value)} placeholder="Optional — intended purpose" />
+                </Field>
+                <Switch checked={nDataverse} onChange={(_, d) => setNDataverse(d.checked)} label="Create a Dataverse database" />
+                {nDataverse && (
+                  <div className={s.dvBox}>
+                    <Caption1>Dataverse requires a base language and currency (Microsoft Learn: ProvisionDatabase).</Caption1>
+                    <div className={s.row2}>
+                      <Field label="Base language">
+                        <Dropdown
+                          value={DV_LANGUAGES.find((l) => l.lcid === nLang)?.label || String(nLang)}
+                          selectedOptions={[String(nLang)]}
+                          onOptionSelect={(_, d) => d.optionValue && setNLang(Number(d.optionValue))}
+                        >
+                          {DV_LANGUAGES.map((l) => <Option key={l.lcid} value={String(l.lcid)} text={l.label}>{l.label}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Field label="Currency">
+                        <Dropdown value={nCurrency} selectedOptions={[nCurrency]} onOptionSelect={(_, d) => d.optionValue && setNCurrency(d.optionValue)}>
+                          {DV_CURRENCIES.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+                        </Dropdown>
+                      </Field>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Cancel</Button></DialogTrigger>
+              <Button appearance="primary" disabled={busy || !nName.trim()} onClick={() => { void createEnv(); }}>
+                {busy ? 'Creating…' : 'Create'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* ----- Edit (rename) dialog ----- */}
+      <Dialog open={editOpen} onOpenChange={(_, d) => setEditOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Edit environment</DialogTitle>
+            <DialogContent>
+              <div className={s.dialogForm}>
+                <Field label="Display name" required>
+                  <Input value={eName} onChange={(_, d) => setEName(d.value)} />
+                </Field>
+                <Field label="Description">
+                  <Input value={eDesc} onChange={(_, d) => setEDesc(d.value)} placeholder="Optional" />
+                </Field>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Cancel</Button></DialogTrigger>
+              <Button appearance="primary" disabled={busy || !eName.trim()} onClick={() => { void saveEdit(); }}>
+                {busy ? 'Saving…' : 'Save'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* ----- Delete confirm dialog ----- */}
+      <Dialog open={delOpen} onOpenChange={(_, d) => setDelOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Delete environment</DialogTitle>
+            <DialogContent>
+              <Body1>
+                Delete <strong>{current?.displayName}</strong>? This soft-deletes the environment and all its apps,
+                flows, and Dataverse data. It can be recovered from the admin centre during the retention window.
+              </Body1>
+            </DialogContent>
+            <DialogActions>
+              <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Cancel</Button></DialogTrigger>
+              <Button appearance="primary" disabled={busy} onClick={() => { void deleteEnv(); }}>
+                {busy ? 'Deleting…' : 'Delete'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </>
+  );
+}
+
+// ============================================================
 // 1. PowerPlatformEnvironmentEditor
 // ============================================================
 
@@ -231,16 +573,12 @@ export function PowerPlatformEnvironmentEditor({ item, id }: { item: FabricItemT
       }
       main={
       <div className={s.pad}>
-        {id === 'new' && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              <MessageBarTitle>Environments are provisioned out-of-band</MessageBarTitle>
-              Power Platform environments are created via the Power Platform admin center
-              (<code>admin.powerplatform.microsoft.com</code>) or the BAP REST API. This editor is a
-              read-only registry view — pick an existing environment from the dropdown below.
-            </MessageBarBody>
-          </MessageBar>
-        )}
+        {/* Full environment lifecycle command bar — New / Edit / Delete on real
+            BAP REST; Copy / Backup-restore / Reset / Convert / History honest-gated. */}
+        <EnvironmentLifecycleBar
+          current={current}
+          onChanged={() => { env.reload(); setNavRefresh((n) => n + 1); }}
+        />
         <div className={s.toolbar}>
           <EnvPicker envs={env.envs} selected={env.selected} setSelected={env.setSelected} />
           <Button appearance="secondary" onClick={() => { env.reload(); setNavRefresh((n) => n + 1); }} disabled={env.loading}>Reload</Button>
