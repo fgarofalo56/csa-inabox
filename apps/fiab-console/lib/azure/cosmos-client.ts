@@ -36,6 +36,7 @@ let _tenantThemes: Container | null = null;
 let _tenantSettings: Container | null = null;
 let _marketplaceListings: Container | null = null;
 let _featurePermissions: Container | null = null;
+let _lakehouseShortcuts: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -105,10 +106,16 @@ async function ensure() {
   // Phase 2 — Fabric-style RBAC: grant rows partitioned by tenant so
   // every per-request lookup hits a single physical partition.
   _featurePermissions = await mk('feature-permissions', '/tenantId');
+  // Lakehouse "Shortcuts" registry — Azure-native OneLake-shortcut parity.
+  // Partitioned by the lakehouse (container/item id) so every Explorer lookup
+  // hits a single physical partition. Created lazily so a fresh environment
+  // needs no extra ARM/Bicep step beyond the account+database.
+  _lakehouseShortcuts = await mk('lakehouse-shortcuts', '/lakehouseId');
   _ensured = true;
 }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
+export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
 
 export async function marketplaceListingsContainer(): Promise<Container> {
   await ensure();
@@ -166,6 +173,7 @@ const KNOWN_CONTAINER_IDS = [
   'shares', 'folders', 'downloads', 'search-history',
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
+  'feature-permissions', 'lakehouse-shortcuts',
 ];
 
 /** List all Loom containers with their current throughput shape. */
