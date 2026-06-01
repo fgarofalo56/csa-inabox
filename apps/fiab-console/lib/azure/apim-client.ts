@@ -332,12 +332,114 @@ export async function importApiFromOpenApi(opts: {
   return shapeApi(j);
 }
 
+/**
+ * An APIM URL-template / query / header parameter (ParameterContract). Mirrors
+ * https://learn.microsoft.com/rest/api/apimanagement/api-operation/create-or-update
+ * → properties.templateParameters[] / request.queryParameters[] / request.headers[].
+ */
+export interface ApimParameter {
+  name: string;
+  type?: string;          // 'string' | 'number' | 'integer' | 'boolean' | …
+  required?: boolean;
+  description?: string;
+  defaultValue?: string;
+  values?: string[];
+}
+
+/** A request/response body example by content type (RepresentationContract). */
+export interface ApimRepresentation {
+  contentType: string;            // e.g. 'application/json'
+  example?: string;               // sample payload (string; JSON serialised by caller)
+  schemaId?: string;
+  typeName?: string;
+}
+
+/** RequestContract — query/header params + representations for the operation. */
+export interface ApimOperationRequest {
+  description?: string;
+  queryParameters?: ApimParameter[];
+  headers?: ApimParameter[];
+  representations?: ApimRepresentation[];
+}
+
+/** ResponseContract — one declared HTTP status the operation can return. */
+export interface ApimOperationResponse {
+  statusCode: number;
+  description?: string;
+  representations?: ApimRepresentation[];
+  headers?: ApimParameter[];
+}
+
 export interface ApimOperation {
   id: string;
   name: string;
   displayName: string;
   method: string;
   urlTemplate: string;
+  description?: string;
+  templateParameters?: ApimParameter[];
+  request?: ApimOperationRequest;
+  responses?: ApimOperationResponse[];
+}
+
+/** Body accepted by upsertOperation — the authorable subset of OperationContract. */
+export interface ApimOperationBody {
+  displayName: string;
+  method: string;
+  urlTemplate: string;
+  description?: string;
+  templateParameters?: ApimParameter[];
+  request?: ApimOperationRequest;
+  responses?: ApimOperationResponse[];
+}
+
+function shapeParameter(raw: any): ApimParameter {
+  return {
+    name: raw?.name,
+    type: raw?.type,
+    required: raw?.required,
+    description: raw?.description,
+    defaultValue: raw?.defaultValue,
+    values: raw?.values,
+  };
+}
+
+function shapeRepresentation(raw: any): ApimRepresentation {
+  return {
+    contentType: raw?.contentType,
+    example: typeof raw?.example === 'string' ? raw.example : (raw?.example != null ? JSON.stringify(raw.example) : undefined),
+    schemaId: raw?.schemaId,
+    typeName: raw?.typeName,
+  };
+}
+
+function shapeOperation(raw: any): ApimOperation {
+  const p = raw?.properties || {};
+  return {
+    id: raw?.id,
+    name: raw?.name,
+    displayName: p.displayName,
+    method: p.method,
+    urlTemplate: p.urlTemplate,
+    description: p.description,
+    templateParameters: Array.isArray(p.templateParameters) ? p.templateParameters.map(shapeParameter) : [],
+    request: p.request
+      ? {
+          description: p.request.description,
+          queryParameters: (p.request.queryParameters || []).map(shapeParameter),
+          headers: (p.request.headers || []).map(shapeParameter),
+          representations: (p.request.representations || []).map(shapeRepresentation),
+        }
+      : undefined,
+    responses: Array.isArray(p.responses)
+      ? p.responses.map((r: any) => ({
+          statusCode: r.statusCode,
+          description: r.description,
+          representations: (r.representations || []).map(shapeRepresentation),
+          headers: (r.headers || []).map(shapeParameter),
+        }))
+      : [],
+  };
 }
 
 export async function listOperations(apiId: string): Promise<ApimOperation[]> {
@@ -349,7 +451,124 @@ export async function listOperations(apiId: string): Promise<ApimOperation[]> {
     displayName: r.properties?.displayName,
     method: r.properties?.method,
     urlTemplate: r.properties?.urlTemplate,
+    description: r.properties?.description,
   }));
+}
+
+/** GET a single operation with its full template/request/response detail. */
+export async function getOperation(apiId: string, operationId: string): Promise<ApimOperation | null> {
+  const res = await apimFetch(
+    `/apis/${encodeURIComponent(apiId)}/operations/${encodeURIComponent(operationId)}`,
+  );
+  const j = await readJson<any>(res);
+  return j ? shapeOperation(j) : null;
+}
+
+/**
+ * Build the ParameterContract / RepresentationContract / RequestContract /
+ * ResponseContract[] payload for an operation PUT, dropping empty arrays so we
+ * don't transmit noise APIM would reject (e.g. a representation with no
+ * contentType). Method is upper-cased — APIM stores GET/POST/… in caps.
+ */
+function operationProperties(body: ApimOperationBody): any {
+  const cleanParams = (params?: ApimParameter[]): ApimParameter[] | undefined => {
+    const out = (params || [])
+      .filter((p) => p.name && p.name.trim())
+      .map((p) => {
+        const o: ApimParameter = { name: p.name.trim(), type: p.type || 'string', required: !!p.required };
+        if (p.description) o.description = p.description;
+        if (p.defaultValue) o.defaultValue = p.defaultValue;
+        if (p.values && p.values.length) o.values = p.values;
+        return o;
+      });
+    return out.length ? out : undefined;
+  };
+  const cleanReps = (reps?: ApimRepresentation[]): ApimRepresentation[] | undefined => {
+    const out = (reps || [])
+      .filter((r) => r.contentType && r.contentType.trim())
+      .map((r) => {
+        const o: ApimRepresentation = { contentType: r.contentType.trim() };
+        if (r.example) o.example = r.example;
+        if (r.schemaId) o.schemaId = r.schemaId;
+        if (r.typeName) o.typeName = r.typeName;
+        return o;
+      });
+    return out.length ? out : undefined;
+  };
+
+  const properties: any = {
+    displayName: body.displayName,
+    method: (body.method || 'GET').toUpperCase(),
+    urlTemplate: body.urlTemplate || '/',
+  };
+  if (body.description) properties.description = body.description;
+
+  const tps = cleanParams(body.templateParameters);
+  // APIM requires a templateParameter entry for every {token} in urlTemplate.
+  properties.templateParameters = tps || [];
+
+  if (body.request) {
+    const request: any = {};
+    if (body.request.description) request.description = body.request.description;
+    const q = cleanParams(body.request.queryParameters);
+    const h = cleanParams(body.request.headers);
+    const r = cleanReps(body.request.representations);
+    if (q) request.queryParameters = q;
+    if (h) request.headers = h;
+    if (r) request.representations = r;
+    if (Object.keys(request).length) properties.request = request;
+  }
+
+  const responses = (body.responses || [])
+    .filter((r) => Number.isFinite(r.statusCode))
+    .map((r) => {
+      const o: any = { statusCode: r.statusCode };
+      if (r.description) o.description = r.description;
+      const reps = cleanReps(r.representations);
+      const hdrs = cleanParams(r.headers);
+      if (reps) o.representations = reps;
+      if (hdrs) o.headers = hdrs;
+      return o;
+    });
+  if (responses.length) properties.responses = responses;
+
+  return properties;
+}
+
+/**
+ * PUT /apis/{apiId}/operations/{operationId} — create or replace an API
+ * operation. Real ARM REST (api-version 2024-06-01-preview), mirroring the
+ * portal's API → Design → "+ Add operation" / edit-operation surface.
+ *
+ * Grounded in Microsoft Learn (OperationContract /
+ * OperationUpdateContractProperties): properties = { displayName, method,
+ * urlTemplate, description?, templateParameters[], request?, responses[] }.
+ */
+export async function upsertOperation(
+  apiId: string,
+  operationId: string,
+  body: ApimOperationBody,
+): Promise<ApimOperation> {
+  const res = await apimFetch(
+    `/apis/${encodeURIComponent(apiId)}/operations/${encodeURIComponent(operationId)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ properties: operationProperties(body) }),
+    },
+  );
+  const j = await readJson<any>(res);
+  if (!j) throw new ApimError(404, null, 'PUT apim operation returned null');
+  return shapeOperation(j);
+}
+
+/** DELETE /apis/{apiId}/operations/{operationId}. If-Match '*' = any ETag. */
+export async function deleteOperation(apiId: string, operationId: string): Promise<void> {
+  const res = await apimFetch(
+    `/apis/${encodeURIComponent(apiId)}/operations/${encodeURIComponent(operationId)}`,
+    { method: 'DELETE', headers: { 'If-Match': '*' } },
+  );
+  if (res.status === 404 || res.ok || res.status === 204) return;
+  await readJson<unknown>(res);
 }
 
 /**

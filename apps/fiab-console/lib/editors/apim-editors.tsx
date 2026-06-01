@@ -98,12 +98,91 @@ interface ApimApi {
   subscriptionRequired?: boolean;
 }
 
+interface ApimParameter {
+  name: string;
+  type?: string;
+  required?: boolean;
+  description?: string;
+}
+
+interface ApimRepresentation {
+  contentType: string;
+  example?: string;
+}
+
+interface ApimOperationResponse {
+  statusCode: number;
+  description?: string;
+}
+
 interface ApimOperation {
   id: string;
   name: string;
   displayName: string;
   method: string;
   urlTemplate: string;
+  description?: string;
+  templateParameters?: ApimParameter[];
+  request?: {
+    description?: string;
+    queryParameters?: ApimParameter[];
+    headers?: ApimParameter[];
+    representations?: ApimRepresentation[];
+  };
+  responses?: ApimOperationResponse[];
+}
+
+// Editable draft for the operation authoring dialog. Params/representations are
+// edited as newline/text blocks then parsed on save, keeping the form compact
+// while still round-tripping the real ParameterContract / ResponseContract shape.
+interface OperationDraft {
+  operationId: string;        // empty on a new op → server slugs from displayName
+  isNew: boolean;
+  displayName: string;
+  method: string;
+  urlTemplate: string;
+  description: string;
+  // "name:type:required" per line (type/required optional) for template + query + header params
+  templateParams: string;
+  queryParams: string;
+  headerParams: string;
+  // "contentType" per line for request representations
+  requestReps: string;
+  // "statusCode:description" per line
+  responses: string;
+}
+
+const EMPTY_OP_DRAFT: OperationDraft = {
+  operationId: '', isNew: true, displayName: '', method: 'GET', urlTemplate: '/',
+  description: '', templateParams: '', queryParams: '', headerParams: '', requestReps: '', responses: '200:OK',
+};
+
+// Parse "name:type:required" lines into ApimParameter[]. type defaults to
+// 'string'; a trailing ':required' / ':true' marks the param required.
+function parseParams(text: string): ApimParameter[] {
+  return text.split('\n').map((l) => l.trim()).filter(Boolean).map((line) => {
+    const [name, type, req] = line.split(':').map((x) => x.trim());
+    return { name, type: type || 'string', required: req === 'required' || req === 'true' };
+  }).filter((p) => p.name);
+}
+
+// Parse "statusCode:description" lines into responses.
+function parseResponses(text: string): ApimOperationResponse[] {
+  return text.split('\n').map((l) => l.trim()).filter(Boolean).map((line) => {
+    const ix = line.indexOf(':');
+    const code = parseInt(ix < 0 ? line : line.slice(0, ix), 10);
+    return { statusCode: code, description: ix < 0 ? undefined : line.slice(ix + 1).trim() || undefined };
+  }).filter((r) => Number.isFinite(r.statusCode));
+}
+
+function paramsToText(params?: ApimParameter[]): string {
+  return (params || []).map((p) => `${p.name}:${p.type || 'string'}${p.required ? ':required' : ''}`).join('\n');
+}
+function responsesToText(rs?: ApimOperationResponse[]): string {
+  return (rs || []).map((r) => `${r.statusCode}${r.description ? ':' + r.description : ''}`).join('\n');
+}
+function repsToText(reps?: ApimRepresentation[]): string {
+  return (reps || []).map((r) => r.contentType).join('\n');
 }
 
 const PROTOCOLS = ['https', 'http', 'ws', 'wss'] as const;
@@ -133,8 +212,16 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const [specSaving, setSpecSaving] = useState(false);
   const [specError, setSpecError] = useState<string | null>(null);
 
-  // Tab: Design | Test | Revisions
-  const [tab, setTab] = useState<'design' | 'test' | 'revisions'>('design');
+  // Tab: Design | Operations | Test | Revisions
+  const [tab, setTab] = useState<'design' | 'operations' | 'test' | 'revisions'>('design');
+
+  // Operations authoring — editor dialog over a single operation's contract.
+  const [opDialogOpen, setOpDialogOpen] = useState(false);
+  const [opDraft, setOpDraft] = useState<OperationDraft>(EMPTY_OP_DRAFT);
+  const [opBusy, setOpBusy] = useState(false);
+  const [opErr, setOpErr] = useState<string | null>(null);
+  const [opMsg, setOpMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const [opLoadingDetail, setOpLoadingDetail] = useState(false);
 
   // Import API dialog (OpenAPI / WSDL / GraphQL).
   const [importOpen, setImportOpen] = useState(false);
@@ -426,6 +513,93 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     if (op) { setTestMethod(op.method || 'GET'); setTestTemplate(op.urlTemplate || '/'); }
   }, [ops.data]);
 
+  // ---- Operations authoring ----
+  const openNewOp = useCallback(() => {
+    setOpDraft(EMPTY_OP_DRAFT);
+    setOpErr(null);
+    setOpDialogOpen(true);
+  }, []);
+
+  // Open the edit dialog for an existing operation — fetch full detail (the
+  // list only carries method/template/displayName) so template/query/header
+  // params and responses are populated for editing.
+  const openEditOp = useCallback(async (operationName: string) => {
+    setOpErr(null); setOpLoadingDetail(true);
+    setOpDraft({ ...EMPTY_OP_DRAFT, isNew: false, operationId: operationName });
+    setOpDialogOpen(true);
+    try {
+      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations?operationId=${encodeURIComponent(operationName)}`);
+      const j = await r.json();
+      if (!j.ok) { setOpErr(j.error || `HTTP ${r.status}`); return; }
+      const o: ApimOperation = j.operation;
+      setOpDraft({
+        operationId: o.name, isNew: false,
+        displayName: o.displayName || '', method: o.method || 'GET', urlTemplate: o.urlTemplate || '/',
+        description: o.description || '',
+        templateParams: paramsToText(o.templateParameters),
+        queryParams: paramsToText(o.request?.queryParameters),
+        headerParams: paramsToText(o.request?.headers),
+        requestReps: repsToText(o.request?.representations),
+        responses: responsesToText(o.responses) || '200:OK',
+      });
+    } catch (e: any) { setOpErr(e?.message || String(e)); }
+    finally { setOpLoadingDetail(false); }
+  }, [id]);
+
+  const saveOp = useCallback(async () => {
+    if (!opDraft.displayName.trim()) { setOpErr('Display name is required.'); return; }
+    if (!opDraft.urlTemplate.trim()) { setOpErr('URL template is required.'); return; }
+    setOpBusy(true); setOpErr(null); setOpMsg(null);
+    const repsList = opDraft.requestReps.split('\n').map((l) => l.trim()).filter(Boolean).map((contentType) => ({ contentType }));
+    const payload = {
+      operationId: opDraft.isNew ? undefined : opDraft.operationId,
+      displayName: opDraft.displayName.trim(),
+      method: opDraft.method,
+      urlTemplate: opDraft.urlTemplate.trim(),
+      description: opDraft.description.trim() || undefined,
+      templateParameters: parseParams(opDraft.templateParams),
+      request: {
+        queryParameters: parseParams(opDraft.queryParams),
+        headers: parseParams(opDraft.headerParams),
+        representations: repsList,
+      },
+      responses: parseResponses(opDraft.responses),
+    };
+    try {
+      // POST creates (server slugs the id); PUT replaces an existing op.
+      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations`, {
+        method: opDraft.isNew ? 'POST' : 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!j.ok) { setOpErr(j.error || `HTTP ${r.status}`); return; }
+      setOpDialogOpen(false);
+      setOpMsg({ intent: 'success', text: `${opDraft.isNew ? 'Created' : 'Updated'} operation ${j.operation.displayName} (${j.operation.method} ${j.operation.urlTemplate}).` });
+      loadOps();
+    } catch (e: any) { setOpErr(e?.message || String(e)); }
+    finally { setOpBusy(false); }
+  }, [id, opDraft, loadOps]);
+
+  const deleteOp = useCallback(async (operationName: string, label: string) => {
+    if (typeof window !== 'undefined' && !window.confirm(`Delete operation "${label}"? This cannot be undone.`)) return;
+    setOpBusy(true); setOpMsg(null);
+    try {
+      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations?operationId=${encodeURIComponent(operationName)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) { setOpMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setOpMsg({ intent: 'success', text: `Deleted operation ${label}.` });
+      loadOps();
+    } catch (e: any) { setOpMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setOpBusy(false); }
+  }, [id, loadOps]);
+
+  // Per-operation policy entry point — deep-links to the policy editor at
+  // operation scope (apis/{id}/operations/{opId}/policies/policy).
+  const openOpPolicy = useCallback((operationName: string) => {
+    router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=operation&apiId=${encodeURIComponent(id)}&operationId=${encodeURIComponent(operationName)}`);
+  }, [router, id]);
+
   // ---- Revisions ----
   const loadRevs = useCallback(async () => {
     if (isNew) return;
@@ -471,15 +645,19 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
         { label: 'Edit OpenAPI', onClick: !isNew ? openSpecEditor : undefined, disabled: isNew, title: isNew ? 'Save the API first, then edit the spec' : undefined },
         { label: 'Copy spec', onClick: spec.data?.value ? copySpec : undefined, disabled: !spec.data?.value, title: !spec.data?.value ? 'No spec attached to this API' : undefined },
       ]},
+      { label: 'Design', actions: [
+        { label: 'Operations', onClick: !isNew ? () => setTab('operations') : undefined, disabled: isNew, title: isNew ? 'Save the API first' : 'Create / edit / delete operations' },
+        { label: 'Add operation', onClick: !isNew ? () => { setTab('operations'); openNewOp(); } : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
+      ]},
       { label: 'Run', actions: [
         { label: 'Test', onClick: !isNew ? () => setTab('test') : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
         { label: 'Revisions', onClick: !isNew ? () => setTab('revisions') : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
       { label: 'Policy', actions: [
-        { label: 'Open policy editor', onClick: !isNew ? () => router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=api&apiId=${encodeURIComponent(id)}`) : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
+        { label: 'API policy', onClick: !isNew ? () => router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=api&apiId=${encodeURIComponent(id)}`) : undefined, disabled: isNew, title: isNew ? 'Save the API first' : 'Edit the API-scope policy XML' },
       ]},
     ]},
-  ], [status.kind, isNew, dirty, displayName, path, save, load, loadOps, loadSpec, spec.data, openSpecEditor, openOas, router, id]);
+  ], [status.kind, isNew, dirty, displayName, path, save, load, loadOps, loadSpec, spec.data, openSpecEditor, openOas, openNewOp, router, id]);
 
   const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
@@ -527,6 +705,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
 
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
             <Tab value="design" icon={<Document20Regular />}>Design</Tab>
+            <Tab value="operations" icon={<Code20Regular />} disabled={isNew}>Operations</Tab>
             <Tab value="test" icon={<Play20Regular />} disabled={isNew}>Test console</Tab>
             <Tab value="revisions" icon={<BranchFork20Regular />} disabled={isNew}>Revisions</Tab>
           </TabList>
@@ -570,6 +749,48 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                 </div>
               )}
             </>
+          )}
+
+          {tab === 'operations' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Body1>Create, edit, and delete the API's operations — method, URL template, parameters, and declared responses. Writes go straight to APIM via real ARM REST.</Body1>
+                <Button appearance="primary" icon={<Add20Regular />} onClick={openNewOp} style={{ marginLeft: 'auto' }}>Add operation</Button>
+                <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadOps}>Reload</Button>
+              </div>
+              {opMsg && <MessageBar intent={opMsg.intent}><MessageBarBody>{opMsg.text}</MessageBarBody></MessageBar>}
+              {ops.loading && <Spinner size="tiny" label="Loading operations…" labelPosition="after" />}
+              {ops.error && !ops.loading && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Could not load operations</MessageBarTitle>{ops.error}</MessageBarBody></MessageBar>}
+              {!ops.loading && !ops.error && (
+                <Table size="small" aria-label="Operations">
+                  <TableHeader><TableRow>
+                    <TableHeaderCell>Method</TableHeaderCell>
+                    <TableHeaderCell>Display name</TableHeaderCell>
+                    <TableHeaderCell>URL template</TableHeaderCell>
+                    <TableHeaderCell>Actions</TableHeaderCell>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {(ops.data || []).length === 0 && (
+                      <TableRow><TableCell colSpan={4}><Caption1>No operations yet. Click <strong>Add operation</strong> or import an OpenAPI spec.</Caption1></TableCell></TableRow>
+                    )}
+                    {(ops.data || []).map((op) => (
+                      <TableRow key={op.name}>
+                        <TableCell><Badge appearance="tint" color={op.method === 'GET' ? 'success' : op.method === 'DELETE' ? 'danger' : 'brand'}>{op.method}</Badge></TableCell>
+                        <TableCell>{op.displayName || op.name}</TableCell>
+                        <TableCell><code>{op.urlTemplate}</code></TableCell>
+                        <TableCell>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <Button size="small" onClick={() => openEditOp(op.name)}>Edit</Button>
+                            <Button size="small" appearance="outline" icon={<Code20Regular />} onClick={() => openOpPolicy(op.name)}>Policy</Button>
+                            <Button size="small" appearance="outline" icon={<Delete20Regular />} onClick={() => deleteOp(op.name, op.displayName || op.name)} disabled={opBusy}>Delete</Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
           )}
 
           {tab === 'test' && (
@@ -795,6 +1016,61 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                 <DialogActions>
                   <Button onClick={() => setSpecEditorOpen(false)}>Cancel</Button>
                   <Button appearance="primary" onClick={saveSpec} disabled={specSaving}>{specSaving ? 'Saving…' : 'Save spec'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Operation authoring dialog — create / edit a single operation */}
+          <Dialog open={opDialogOpen} onOpenChange={(_, d) => { if (!d.open) setOpDialogOpen(false); }}>
+            <DialogSurface style={{ maxWidth: '90vw', width: 760 }}>
+              <DialogBody>
+                <DialogTitle>{opDraft.isNew ? 'Add operation' : `Edit operation${opDraft.operationId ? ` — ${opDraft.operationId}` : ''}`}</DialogTitle>
+                <DialogContent>
+                  {opLoadingDetail ? (
+                    <Spinner size="tiny" label="Loading operation…" labelPosition="after" />
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div className={s.form}>
+                        <Field label="Display name" required>
+                          <Input value={opDraft.displayName} onChange={(_, d) => setOpDraft((o) => ({ ...o, displayName: d.value }))} placeholder="Get order by id" />
+                        </Field>
+                        <Field label="Method" required>
+                          <Dropdown value={opDraft.method} selectedOptions={[opDraft.method]} onOptionSelect={(_, d) => d.optionValue && setOpDraft((o) => ({ ...o, method: d.optionValue! }))}>
+                            {['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'TRACE'].map((m) => <Option key={m} value={m}>{m}</Option>)}
+                          </Dropdown>
+                        </Field>
+                        <Field label="URL template" required hint="Relative to the API path, e.g. /orders/{id}" style={{ gridColumn: '1 / -1' }}>
+                          <Input value={opDraft.urlTemplate} onChange={(_, d) => setOpDraft((o) => ({ ...o, urlTemplate: d.value }))} placeholder="/orders/{id}" />
+                        </Field>
+                        <Field label="Description" style={{ gridColumn: '1 / -1' }}>
+                          <Input value={opDraft.description} onChange={(_, d) => setOpDraft((o) => ({ ...o, description: d.value }))} placeholder="Returns a single order" />
+                        </Field>
+                        <Field label="Template parameters" hint="One per line: name:type:required (one for each {token} in the URL)">
+                          <Textarea value={opDraft.templateParams} onChange={(_, d) => setOpDraft((o) => ({ ...o, templateParams: d.value }))} rows={3} placeholder={'id:string:required'} />
+                        </Field>
+                        <Field label="Query parameters" hint="One per line: name:type:required">
+                          <Textarea value={opDraft.queryParams} onChange={(_, d) => setOpDraft((o) => ({ ...o, queryParams: d.value }))} rows={3} placeholder={'expand:boolean'} />
+                        </Field>
+                        <Field label="Request headers" hint="One per line: name:type:required">
+                          <Textarea value={opDraft.headerParams} onChange={(_, d) => setOpDraft((o) => ({ ...o, headerParams: d.value }))} rows={3} placeholder={'X-Trace-Id:string'} />
+                        </Field>
+                        <Field label="Request representations" hint="One content-type per line">
+                          <Textarea value={opDraft.requestReps} onChange={(_, d) => setOpDraft((o) => ({ ...o, requestReps: d.value }))} rows={3} placeholder={'application/json'} />
+                        </Field>
+                        <Field label="Responses" hint="One per line: statusCode:description" style={{ gridColumn: '1 / -1' }}>
+                          <Textarea value={opDraft.responses} onChange={(_, d) => setOpDraft((o) => ({ ...o, responses: d.value }))} rows={3} placeholder={'200:OK\n404:Not found'} />
+                        </Field>
+                      </div>
+                      {opErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{opErr}</MessageBarBody></MessageBar>}
+                    </div>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setOpDialogOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" icon={<Save20Regular />} onClick={saveOp} disabled={opBusy || opLoadingDetail || !opDraft.displayName.trim() || !opDraft.urlTemplate.trim()}>
+                    {opBusy ? 'Saving…' : opDraft.isNew ? 'Create operation' : 'Save operation'}
+                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
