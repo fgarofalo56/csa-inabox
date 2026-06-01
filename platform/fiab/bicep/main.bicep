@@ -248,6 +248,13 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     frontDoorEnabled: frontDoorEnabled
     loomStorageAccount: take('saloomdefault${uniqueString(singleDlzRg.id)}', 24)
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
+    // Forward the Cosmos data-plane endpoints to the console so the vector-store
+    // and graph editors bind to the deployed account by default (no manual
+    // config). Vector search runs on the NoSQL document endpoint; the Gremlin
+    // editor honest-gates because the default account is NoSQL-only (set this
+    // when a Gremlin-capable Cosmos account is deployed — see full-deployment-and-byo).
+    loomCosmosVectorEndpoint: 'https://${take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)}.documents.azure.com:443/'
+    loomCosmosGremlinEndpoint: ''
     loomPurviewAccount: loomPurviewAccount
     loomMipEnabled: loomMipEnabled
     loomDlpEnabled: loomDlpEnabled
