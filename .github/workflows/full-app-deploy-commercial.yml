@@ -102,6 +102,19 @@ jobs:
             --body '{"properties":{"policies":{"quarantinePolicy":{"status":"disabled"}}}}' \
             --output none 2>&1 || true
           echo "::warning::ACR $ACR_NAME public access + admin user OPENED; quarantine/trust DISABLED for build."
+          # ACR network-rule changes propagate asynchronously (~30-90s). The
+          # parallel build jobs were getting 'client IP not allowed' because
+          # they started pushing before the open took effect. Poll the registry
+          # token endpoint until it authorizes from this runner, then give the
+          # change extra slack before the build matrix fans out.
+          echo "Waiting for ACR public access to propagate…"
+          ok=false
+          for i in $(seq 1 24); do
+            if az acr login --name "$ACR_NAME" >/dev/null 2>&1; then ok=true; echo "ACR reachable after ${i} attempt(s)."; break; fi
+            sleep 10
+          done
+          $ok || echo "::warning::ACR login still failing after ~240s; builds may need a retry."
+          sleep 20
       - name: Grant AcrPush to deploy SP + AcrPull to all app UAMIs (idempotent)
         run: |
           set +e
