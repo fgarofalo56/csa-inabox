@@ -13,16 +13,17 @@
  * regardless of whether Purview is deployed.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Input, Textarea, Button,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add24Regular, Delete20Regular, ArrowSync24Regular, Info20Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
+import { Section, Toolbar } from '@/lib/components/ui/section';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface Domain {
   id: string; name: string; description?: string; color?: string;
@@ -35,19 +36,14 @@ type PurviewStatus =
   | { configured: false; gated: true; hint: string };
 
 const useStyles = makeStyles({
-  toolbar: {
-    display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12,
-    paddingBottom: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  spacer: { flex: 1 },
-  swatch: { width: 14, height: 14, borderRadius: 3, display: 'inline-block', verticalAlign: 'middle', marginRight: 6 },
-  empty: { padding: 32, color: tokens.colorNeutralForeground3, fontSize: 13, textAlign: 'center' },
   explainer: {
-    display: 'flex', gap: 10, alignItems: 'flex-start',
-    padding: 12, marginBottom: 16, borderRadius: 8,
-    backgroundColor: tokens.colorNeutralBackground2,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start',
   },
+  swatch: {
+    width: '14px', height: '14px', borderRadius: '3px', display: 'inline-block',
+    verticalAlign: 'middle', marginRight: '8px', flexShrink: 0,
+  },
+  nameCell: { display: 'flex', alignItems: 'center', minWidth: 0 },
 });
 
 const PRESET_COLORS = ['#0078d4', '#7719aa', '#107c10', '#dca900', '#d13438', '#3aaaaa', '#bd7800', '#5c2d91'];
@@ -58,6 +54,7 @@ export default function DomainsPage() {
   const [purview, setPurview] = useState<PurviewStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [q, setQ] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [newId, setNewId] = useState('');
   const [newName, setNewName] = useState('');
@@ -113,29 +110,84 @@ export default function DomainsPage() {
     } catch (e: any) { setActionErr(e?.message || String(e)); }
   }
 
-  const purviewNames = new Set(
+  const purviewNames = useMemo(() => new Set(
     purview && purview.configured ? purview.domains.map((d) => (d.name || '').toLowerCase()) : [],
-  );
+  ), [purview]);
+
+  const filtered = useMemo(() => {
+    const f = q.toLowerCase().trim();
+    const all = domains || [];
+    if (!f) return all;
+    return all.filter((d) =>
+      d.name.toLowerCase().includes(f) ||
+      d.id.toLowerCase().includes(f) ||
+      (d.description || '').toLowerCase().includes(f) ||
+      (d.owners || []).some((o) => o.toLowerCase().includes(f)) ||
+      (d.createdBy || '').toLowerCase().includes(f)
+    );
+  }, [domains, q]);
+
+  const columns: LoomColumn<Domain>[] = useMemo(() => [
+    {
+      key: 'name', label: 'Name', width: 200, getValue: (d) => d.name,
+      render: (d) => (
+        <span className={s.nameCell}>
+          {d.color && <span className={s.swatch} style={{ backgroundColor: d.color }} />}
+          <strong>{d.name}</strong>
+        </span>
+      ),
+    },
+    { key: 'id', label: 'ID', width: 140, render: (d) => <code style={{ fontSize: 11 }}>{d.id}</code> },
+    {
+      key: 'owners', label: 'Owners', width: 220, sortable: false,
+      getValue: (d) => (d.owners || []).join(' '),
+      render: (d) => d.owners && d.owners.length
+        ? d.owners.map((o) => <Badge key={o} appearance="outline" size="small" style={{ marginRight: 4 }}>{o}</Badge>)
+        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>,
+    },
+    { key: 'description', label: 'Description', width: 240, render: (d) => d.description || '—' },
+    {
+      key: 'governance', label: 'Governance', width: 130,
+      getValue: (d) => (purviewNames.has((d.name || '').toLowerCase()) ? 'Governed' : 'Loom only'),
+      render: (d) => purviewNames.has((d.name || '').toLowerCase())
+        ? <Badge appearance="tint" color="brand" size="small">Governed</Badge>
+        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loom only</Caption1>,
+    },
+    { key: 'createdBy', label: 'Created by', width: 160, render: (d) => <Caption1>{d.createdBy}</Caption1> },
+    {
+      key: 'actions', label: '', width: 110, sortable: false, filterable: false,
+      render: (d) => (
+        <Button
+          size="small" appearance="subtle" icon={<Delete20Regular />}
+          onClick={(e) => { e.stopPropagation(); remove(d.id); }}
+          aria-label={`Delete domain ${d.id}`}
+        >
+          Delete
+        </Button>
+      ),
+    },
+  ], [s, purviewNames]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <AdminShell sectionTitle="Domains">
-      <div className={s.explainer}>
-        <Info20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: 2 }} />
-        <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
-          <strong>What is a domain?</strong> A domain is a governance-scoped, labeled grouping
-          of data products and workspaces — Finance, Operations, Mission-Ops. It carries
-          <strong> owners</strong>, a description, and a color, and is the unit Loom uses to
-          organize the tenant&apos;s data estate (the same concept Microsoft Purview calls a
-          <em> business domain</em> and Fabric calls a <em>domain</em>). Adding one here creates
-          the grouping in Loom&apos;s Cosmos store immediately; workspaces tag themselves to it via
-          their <code>domain</code> field. When Microsoft Purview is provisioned, the same domain
-          can be mirrored as a Purview business domain so policies and glossary terms flow with it.
-        </Body1>
-      </div>
+      <Section title="What is a domain?">
+        <div className={s.explainer}>
+          <Info20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: 2 }} />
+          <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5 }}>
+            A domain is a governance-scoped, labeled grouping of data products and workspaces —
+            Finance, Operations, Mission-Ops. It carries <strong>owners</strong>, a description, and a color,
+            and is the unit Loom uses to organize the tenant&apos;s data estate (the same concept Microsoft
+            Purview calls a <em>business domain</em> and Fabric calls a <em>domain</em>). Adding one here creates
+            the grouping in Loom&apos;s Cosmos store immediately; workspaces tag themselves to it via their
+            <code> domain</code> field. When Microsoft Purview is provisioned, the same domain can be mirrored
+            as a Purview business domain so policies and glossary terms flow with it.
+          </Body1>
+        </div>
+      </Section>
 
       {/* Honest Purview gate — full surface still renders either way. */}
       {purview && !purview.configured && (
-        <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+        <MessageBar intent="warning" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             <MessageBarTitle>Purview business-domain mirror not active</MessageBarTitle>
             {purview.hint}
@@ -143,7 +195,7 @@ export default function DomainsPage() {
         </MessageBar>
       )}
       {purview && purview.configured && (
-        <MessageBar intent="success" style={{ marginBottom: 12 }}>
+        <MessageBar intent="success" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             <MessageBarTitle>Purview connected</MessageBarTitle>
             {purview.domains.length} Purview business domain{purview.domains.length === 1 ? '' : 's'} found.
@@ -155,14 +207,8 @@ export default function DomainsPage() {
         </MessageBar>
       )}
 
-      <div className={s.toolbar}>
-        <div className={s.spacer} />
-        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
-        <Button appearance="primary" icon={<Add24Regular />} onClick={() => setCreateOpen(true)}>Add domain</Button>
-      </div>
-
       {error && (
-        <MessageBar intent="error">
+        <MessageBar intent="error" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             <MessageBarTitle>Could not load domains</MessageBarTitle>
             {error}
@@ -170,73 +216,33 @@ export default function DomainsPage() {
         </MessageBar>
       )}
       {actionErr && (
-        <MessageBar intent="error" style={{ marginBottom: 12 }}>
+        <MessageBar intent="error" style={{ marginBottom: 16 }}>
           <MessageBarBody>{actionErr}</MessageBarBody>
         </MessageBar>
       )}
 
-      {loading && !error && <Spinner label="Loading domains…" />}
-
-      {!loading && !error && (domains?.length ?? 0) === 0 && (
-        <div className={s.empty}>
-          No domains defined yet. Click <strong>Add domain</strong> to create your first one.
-        </div>
-      )}
-
-      {!loading && !error && (domains?.length ?? 0) > 0 && (
-        <Table aria-label="Domains">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>Name</TableHeaderCell>
-              <TableHeaderCell>ID</TableHeaderCell>
-              <TableHeaderCell>Owners</TableHeaderCell>
-              <TableHeaderCell>Description</TableHeaderCell>
-              <TableHeaderCell>Governance</TableHeaderCell>
-              <TableHeaderCell>Created by</TableHeaderCell>
-              <TableHeaderCell></TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(domains || []).map((d) => {
-              const governed = purviewNames.has((d.name || '').toLowerCase());
-              return (
-                <TableRow key={d.id}>
-                  <TableCell>
-                    {d.color && <span className={s.swatch} style={{ backgroundColor: d.color }} />}
-                    <strong>{d.name}</strong>
-                  </TableCell>
-                  <TableCell><code style={{ fontSize: 11 }}>{d.id}</code></TableCell>
-                  <TableCell>
-                    {d.owners && d.owners.length
-                      ? d.owners.map((o) => (
-                          <Badge key={o} appearance="outline" size="small" style={{ marginRight: 4 }}>{o}</Badge>
-                        ))
-                      : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>}
-                  </TableCell>
-                  <TableCell>{d.description || '—'}</TableCell>
-                  <TableCell>
-                    {governed
-                      ? <Badge appearance="tint" color="brand" size="small">Governed</Badge>
-                      : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Loom only</Caption1>}
-                  </TableCell>
-                  <TableCell><Caption1>{d.createdBy}</Caption1></TableCell>
-                  <TableCell>
-                    <Button
-                      size="small"
-                      appearance="subtle"
-                      icon={<Delete20Regular />}
-                      onClick={() => remove(d.id)}
-                      aria-label={`Delete domain ${d.id}`}
-                    >
-                      Delete
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      )}
+      <Section
+        title="Domains"
+        actions={
+          <>
+            <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
+            <Button appearance="primary" icon={<Add24Regular />} onClick={() => setCreateOpen(true)}>Add domain</Button>
+          </>
+        }
+      >
+        <Toolbar search={q} onSearch={setQ} searchPlaceholder="Search by name, id, owner…" />
+        {loading && !error ? (
+          <Spinner label="Loading domains…" />
+        ) : (
+          <LoomDataTable
+            columns={columns}
+            rows={filtered}
+            getRowId={(d) => d.id}
+            empty={q ? `No domains match "${q}".` : 'No domains defined yet. Click “Add domain” to create your first one.'}
+            ariaLabel="Domains"
+          />
+        )}
+      </Section>
 
       <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
         <DialogSurface>
@@ -246,11 +252,11 @@ export default function DomainsPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
                   <Caption1 style={{ display: 'block', marginBottom: 4 }}>ID (lowercase, hyphens)</Caption1>
-                  <Input value={newId} onChange={(_, d) => setNewId(d.value)} placeholder="e.g. finance" />
+                  <Input value={newId} onChange={(_, d) => setNewId(d.value)} placeholder="e.g. finance" style={{ width: '100%' }} />
                 </div>
                 <div>
                   <Caption1 style={{ display: 'block', marginBottom: 4 }}>Display name</Caption1>
-                  <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder="Finance" />
+                  <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder="Finance" style={{ width: '100%' }} />
                 </div>
                 <div>
                   <Caption1 style={{ display: 'block', marginBottom: 4 }}>
@@ -260,11 +266,12 @@ export default function DomainsPage() {
                     value={newOwners}
                     onChange={(_, d) => setNewOwners(d.value)}
                     placeholder="alice@contoso.com, fin-stewards@contoso.com"
+                    style={{ width: '100%' }}
                   />
                 </div>
                 <div>
                   <Caption1 style={{ display: 'block', marginBottom: 4 }}>Description</Caption1>
-                  <Textarea value={newDesc} onChange={(_, d) => setNewDesc(d.value)} resize="vertical" />
+                  <Textarea value={newDesc} onChange={(_, d) => setNewDesc(d.value)} resize="vertical" style={{ width: '100%' }} />
                 </div>
                 <div>
                   <Caption1 style={{ display: 'block', marginBottom: 4 }}>Color</Caption1>

@@ -11,7 +11,7 @@
  *     ok: true,
  *     configured: boolean,
  *     account: string | null,
- *     reason: 'live' | 'not_configured' | 'cross_cloud' | 'upstream_error',
+ *     reason: 'live' | 'not_configured' | 'role_missing' | 'upstream_error',
  *     message?: string,
  *     hint?: { missingEnvVar, bicepModule, bicepStatus, rolesRequired[], followUp },
  *     purviewPortal: string

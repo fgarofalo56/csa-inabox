@@ -5,12 +5,20 @@
  * everything configured in Loom." Six tabs, every one backed by a real
  * Azure REST call via the /api/monitor/* BFF routes:
  *
- *   Overview   — resource inventory + health roll-up
+ *   Overview   — resource inventory + health roll-up (KPI cards + health donut)
  *   Metrics    — Azure Monitor metric time-series per resource (SVG charts)
  *   Logs       — Log Analytics KQL (presets + ad-hoc) → result grid
  *   Activity   — ARM Activity Log (deployments / role changes / scale ops)
  *   Items      — Cosmos-backed item activity feed (who deployed/edited what)
  *   Alerts     — Azure Monitor metric-alert rules
+ *
+ * PERF: only the active tab mounts (so its fetch only fires when shown), and
+ * each tab's panels fetch in parallel. The Overview tab renders its resource
+ * grid the instant the (fast) inventory call returns and fetches Resource
+ * Health separately, in parallel — the slow whole-subscription health crawl no
+ * longer blocks first paint. Heavy panels (the run-health charts) render only
+ * after their data resolves, behind skeletons, so the grid is interactive
+ * immediately.
  *
  * Honest gates: when LOOM_LOG_ANALYTICS_WORKSPACE_ID (logs) or the
  * subscription/RGs (inventory/metrics/activity/alerts) aren't configured,
@@ -21,7 +29,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tab, TabList, Spinner, Badge, Button, Dropdown, Option, Textarea,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, Skeleton, SkeletonItem,
   makeStyles, tokens, Text,
 } from '@fluentui/react-components';
 import {
@@ -30,6 +38,8 @@ import {
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
+import { Section } from '@/lib/components/ui/section';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 // ---- types mirrored from monitor-client ------------------------------------
 
@@ -50,9 +60,10 @@ interface Gate { missing: string[]; message: string }
 
 const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' },
+  // KPI stat cards
   stats: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: '14px', marginBottom: '20px',
+    gap: '14px',
   },
   stat: {
     padding: '16px', borderRadius: '10px',
@@ -62,26 +73,29 @@ const useStyles = makeStyles({
   },
   statLabel: { fontSize: '11px', color: tokens.colorNeutralForeground3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' },
   statValue: { fontSize: '26px', fontWeight: 700, lineHeight: 1.1 },
+  statAccentSuccess: { color: tokens.colorPaletteGreenForeground1 },
+  statAccentWarn: { color: tokens.colorPaletteYellowForeground1 },
+  statAccentDanger: { color: tokens.colorPaletteRedForeground1 },
   charts: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '14px' },
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: '13px' },
-  th: {
-    textAlign: 'left', padding: '8px 10px', borderBottom: `2px solid ${tokens.colorNeutralStroke2}`,
-    fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.04em', color: tokens.colorNeutralForeground3,
-    position: 'sticky', top: 0, backgroundColor: tokens.colorNeutralBackground1,
-  },
-  td: { padding: '8px 10px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, verticalAlign: 'top', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '320px' },
-  tableWrap: { maxHeight: '520px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '8px' },
-  empty: {
-    padding: '32px', borderRadius: '12px', border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground2,
-    fontSize: '14px', textAlign: 'center', lineHeight: 1.6,
-  },
-  section: { display: 'flex', flexDirection: 'column', gap: '12px' },
+  // health roll-up: a horizontal stacked bar + legend
+  healthRow: { display: 'flex', gap: '24px', alignItems: 'center', flexWrap: 'wrap' },
+  healthBarWrap: { flex: '1 1 320px', minWidth: '240px', display: 'flex', flexDirection: 'column', gap: '8px' },
+  healthBar: { display: 'flex', height: '16px', borderRadius: '8px', overflow: 'hidden', backgroundColor: tokens.colorNeutralBackground3 },
+  healthLegend: { display: 'flex', gap: '16px', flexWrap: 'wrap' },
+  legendItem: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: tokens.colorNeutralForeground2 },
+  swatch: { width: '10px', height: '10px', borderRadius: '3px', display: 'inline-block' },
+  // breakdown bars (resources by type)
+  breakdown: { display: 'flex', flexDirection: 'column', gap: '10px' },
+  breakdownRow: { display: 'grid', gridTemplateColumns: '200px 1fr 40px', gap: '12px', alignItems: 'center', fontSize: '12px' },
+  breakdownLabel: { color: tokens.colorNeutralForeground2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  breakdownTrack: { height: '10px', borderRadius: '5px', backgroundColor: tokens.colorNeutralBackground3, overflow: 'hidden' },
+  breakdownFill: { height: '100%', borderRadius: '5px', backgroundColor: tokens.colorBrandBackground },
+  breakdownCount: { textAlign: 'right', color: tokens.colorNeutralForeground3, fontVariantNumeric: 'tabular-nums' },
   resPicker: { display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' },
-  metricGroup: { marginBottom: '24px' },
-  metricGroupTitle: { fontSize: '15px', fontWeight: 600, marginBottom: '8px' },
   kqlBox: { display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' },
   gap: { marginBottom: '12px' },
+  skelGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '14px' },
+  skelCard: { height: '92px', borderRadius: '10px' },
 });
 
 function healthBadge(state: string) {
@@ -97,11 +111,22 @@ function GateBar({ gate, subject }: { gate: Gate; subject: string }) {
     <MessageBar intent="warning" className="loom-monitor-gate">
       <MessageBarBody>
         <MessageBarTitle>{subject} not configured</MessageBarTitle>
-        This deployment hasn't set <strong>{gate.missing.join(', ')}</strong>. Set it on the
+        This deployment hasn&apos;t set <strong>{gate.missing.join(', ')}</strong>. Set it on the
         Console container app (admin-plane bicep <code>apps[]</code> env list) to light up {subject.toLowerCase()}.
         The rest of Monitor still works.
       </MessageBarBody>
     </MessageBar>
+  );
+}
+
+function StatCardSkeleton() {
+  const styles = useStyles();
+  return (
+    <Skeleton aria-label="Loading metrics">
+      <div className={styles.skelGrid}>
+        {[0, 1, 2, 3].map((i) => <SkeletonItem key={i} className={styles.skelCard} />)}
+      </div>
+    </Skeleton>
   );
 }
 
@@ -111,6 +136,7 @@ export function MonitorPane() {
   const styles = useStyles();
   const [tab, setTab] = useState<TabKey>('overview');
   const [unauth, setUnauth] = useState(false);
+  const onUnauth = useCallback(() => setUnauth(true), []);
 
   return (
     <div>
@@ -128,101 +154,207 @@ export function MonitorPane() {
         <Tab value="alerts">Alerts</Tab>
       </TabList>
 
-      {tab === 'overview' && <OverviewTab onUnauth={() => setUnauth(true)} />}
-      {tab === 'metrics' && <MetricsTab onUnauth={() => setUnauth(true)} />}
-      {tab === 'logs' && <LogsTab onUnauth={() => setUnauth(true)} />}
-      {tab === 'activity' && <ActivityTab onUnauth={() => setUnauth(true)} />}
+      {/* Only the active tab mounts → its fetch only fires when shown. */}
+      {tab === 'overview' && <OverviewTab onUnauth={onUnauth} />}
+      {tab === 'metrics' && <MetricsTab onUnauth={onUnauth} />}
+      {tab === 'logs' && <LogsTab onUnauth={onUnauth} />}
+      {tab === 'activity' && <ActivityTab onUnauth={onUnauth} />}
       {tab === 'items' && <ActivityFeedPane />}
-      {tab === 'alerts' && <AlertsTab onUnauth={() => setUnauth(true)} />}
+      {tab === 'alerts' && <AlertsTab onUnauth={onUnauth} />}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Overview — inventory + health
+// Overview — KPI cards + health roll-up + resource-type breakdown + inventory
 // ---------------------------------------------------------------------------
+
+const HEALTH_COLORS = {
+  available: tokens.colorPaletteGreenBackground3,
+  degraded: tokens.colorPaletteYellowBackground3,
+  unavailable: tokens.colorPaletteRedBackground3,
+  unknown: tokens.colorNeutralBackground4,
+};
 
 function OverviewTab({ onUnauth }: { onUnauth: () => void }) {
   const styles = useStyles();
-  const [data, setData] = useState<{ resources: LoomResource[]; health: Record<string, HealthEntry> } | null>(null);
+  // Inventory and Health load INDEPENDENTLY. The grid renders as soon as the
+  // (fast) inventory resolves; the slow Resource Health crawl streams in after.
+  const [resources, setResources] = useState<LoomResource[] | null>(null);
+  const [health, setHealth] = useState<Record<string, HealthEntry> | null>(null);
   const [gate, setGate] = useState<Gate | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    setData(null); setGate(null); setErr(null);
+    let alive = true;
+    setResources(null); setHealth(null); setGate(null); setErr(null);
+
+    // 1) Inventory — fast, first paint.
     fetch('/api/monitor/inventory').then(async (r) => {
-      if (r.status === 401 || r.status === 403) { onUnauth(); setData({ resources: [], health: {} }); return; }
+      if (!alive) return;
+      if (r.status === 401 || r.status === 403) { onUnauth(); setResources([]); setHealth({}); return; }
       const j = await r.json();
-      if (j.gate) { setGate(j.gate); setData({ resources: [], health: {} }); return; }
-      if (!j.ok) { setErr(j.error || 'Failed to load inventory'); setData({ resources: [], health: {} }); return; }
-      setData(j.data);
-    }).catch((e) => { setErr(String(e)); setData({ resources: [], health: {} }); });
+      if (j.gate) { setGate(j.gate); setResources([]); setHealth({}); return; }
+      if (!j.ok) { setErr(j.error || 'Failed to load inventory'); setResources([]); setHealth({}); return; }
+      setResources(j.data.resources ?? []);
+    }).catch((e) => { if (alive) { setErr(String(e)); setResources([]); setHealth({}); } });
+
+    // 2) Resource Health — slow, parallel, best-effort. Never blocks the grid.
+    fetch('/api/monitor/health').then(async (r) => {
+      if (!alive) return;
+      if (r.status === 401 || r.status === 403) { setHealth({}); return; }
+      const j = await r.json();
+      if (!j.ok || !j.data?.statuses) { setHealth({}); return; }
+      const map: Record<string, HealthEntry> = {};
+      for (const s of j.data.statuses as { resourceId: string; availabilityState: string; summary?: string }[]) {
+        map[(s.resourceId || '').toLowerCase()] = { availabilityState: s.availabilityState, summary: s.summary };
+      }
+      setHealth(map);
+    }).catch(() => { if (alive) setHealth({}); });
+
+    return () => { alive = false; };
   }, [tick, onUnauth]);
 
+  const res = resources ?? [];
+  const healthReady = health !== null;
+
   const stats = useMemo(() => {
-    const res = data?.resources ?? [];
-    const health = data?.health ?? {};
-    const states = Object.values(health).map((h) => h.availabilityState?.toLowerCase());
+    const states = Object.values(health ?? {}).map((h) => h.availabilityState?.toLowerCase());
     const available = states.filter((s) => s === 'available').length;
     const unhealthy = states.filter((s) => s === 'unavailable' || s === 'degraded').length;
     const types = new Set(res.map((r) => r.type)).size;
     return [
-      { label: 'Resources', value: res.length },
-      { label: 'Resource types', value: types },
-      { label: 'Available', value: available },
-      { label: 'Degraded / down', value: unhealthy },
+      { label: 'Resources', value: res.length, accent: undefined as string | undefined },
+      { label: 'Resource types', value: types, accent: undefined },
+      { label: 'Available', value: available, accent: styles.statAccentSuccess, pending: !healthReady },
+      { label: 'Degraded / down', value: unhealthy, accent: unhealthy > 0 ? styles.statAccentDanger : undefined, pending: !healthReady },
     ];
-  }, [data]);
+  }, [res, health, healthReady, styles]);
 
-  if (data === null) return <Spinner label="Loading resource inventory…" />;
+  // Health donut-style stacked bar segments.
+  const healthSegments = useMemo(() => {
+    const states = Object.values(health ?? {}).map((h) => (h.availabilityState || 'Unknown').toLowerCase());
+    const counts = {
+      available: states.filter((s) => s === 'available').length,
+      degraded: states.filter((s) => s === 'degraded').length,
+      unavailable: states.filter((s) => s === 'unavailable').length,
+      unknown: states.filter((s) => s !== 'available' && s !== 'degraded' && s !== 'unavailable').length,
+    };
+    const total = counts.available + counts.degraded + counts.unavailable + counts.unknown;
+    return { counts, total };
+  }, [health]);
+
+  // Resource-type breakdown (top 8 types by count).
+  const typeBreakdown = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of res) {
+      const t = r.type.replace(/^Microsoft\./, '');
+      m.set(t, (m.get(t) ?? 0) + 1);
+    }
+    const arr = Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    const max = arr[0]?.[1] ?? 1;
+    return { arr, max };
+  }, [res]);
+
+  const columns: LoomColumn<LoomResource>[] = useMemo(() => [
+    { key: 'name', label: 'Name', width: 240, render: (r) => <strong>{r.name}</strong> },
+    { key: 'type', label: 'Type', width: 220, getValue: (r) => r.type.replace(/^Microsoft\./, ''), render: (r) => r.type.replace(/^Microsoft\./, '') },
+    { key: 'resourceGroup', label: 'Resource group', width: 200 },
+    { key: 'location', label: 'Location', width: 130 },
+    {
+      key: 'health', label: 'Health', width: 130, filterable: false,
+      getValue: (r) => health?.[r.id?.toLowerCase()]?.availabilityState ?? '',
+      render: (r) => {
+        if (!healthReady) return <Spinner size="extra-tiny" aria-label="Loading health" />;
+        const h = health?.[r.id?.toLowerCase()];
+        return h ? healthBadge(h.availabilityState) : <Text size={200}>—</Text>;
+      },
+    },
+  ], [health, healthReady]);
 
   return (
-    <div className={styles.section}>
-      <div className={styles.toolbar}>
-        <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>
-      </div>
-      {gate && <GateBar gate={gate} subject="Resource inventory" />}
-      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-      <div className={styles.stats}>
-        {stats.map((s) => (
-          <div key={s.label} className={styles.stat}>
-            <span className={styles.statLabel}>{s.label}</span>
-            <span className={styles.statValue}>{s.value}</span>
+    <div>
+      <Section
+        title="Health overview"
+        actions={<Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
+      >
+        {gate && <GateBar gate={gate} subject="Resource inventory" />}
+        {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+
+        {resources === null ? (
+          <StatCardSkeleton />
+        ) : (
+          <div className={styles.stats}>
+            {stats.map((s) => (
+              <div key={s.label} className={styles.stat}>
+                <span className={styles.statLabel}>{s.label}</span>
+                <span className={`${styles.statValue} ${s.accent ?? ''}`}>
+                  {s.pending ? <Spinner size="tiny" aria-label="Loading" /> : s.value}
+                </span>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      {data.resources.length === 0 && !gate ? (
-        <div className={styles.empty}>No Loom resources found in the configured resource groups.</div>
-      ) : (
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th className={styles.th}>Name</th>
-                <th className={styles.th}>Type</th>
-                <th className={styles.th}>Resource group</th>
-                <th className={styles.th}>Location</th>
-                <th className={styles.th}>Health</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.resources.map((r) => {
-                const h = data.health[r.id?.toLowerCase()];
-                return (
-                  <tr key={r.id}>
-                    <td className={styles.td} title={r.name}>{r.name}</td>
-                    <td className={styles.td} title={r.type}>{r.type.replace(/^Microsoft\./, '')}</td>
-                    <td className={styles.td}>{r.resourceGroup}</td>
-                    <td className={styles.td}>{r.location}</td>
-                    <td className={styles.td}>{h ? healthBadge(h.availabilityState) : <Text size={200}>—</Text>}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        )}
+      </Section>
+
+      {resources !== null && res.length > 0 && (
+        <Section title="Availability roll-up">
+          <div className={styles.healthRow}>
+            <div className={styles.healthBarWrap}>
+              {!healthReady ? (
+                <Skeleton aria-label="Loading health roll-up"><SkeletonItem style={{ height: 16, borderRadius: 8 }} /></Skeleton>
+              ) : healthSegments.total === 0 ? (
+                <Text size={200}>Resource Health reports no monitored resources yet.</Text>
+              ) : (
+                <div className={styles.healthBar} role="img" aria-label="Availability distribution">
+                  {(['available', 'degraded', 'unavailable', 'unknown'] as const).map((k) => {
+                    const pct = (healthSegments.counts[k] / healthSegments.total) * 100;
+                    return pct > 0 ? (
+                      <div key={k} style={{ width: `${pct}%`, backgroundColor: HEALTH_COLORS[k] }} title={`${k}: ${healthSegments.counts[k]}`} />
+                    ) : null;
+                  })}
+                </div>
+              )}
+              {healthReady && healthSegments.total > 0 && (
+                <div className={styles.healthLegend}>
+                  {(['available', 'degraded', 'unavailable', 'unknown'] as const).map((k) => (
+                    <span key={k} className={styles.legendItem}>
+                      <span className={styles.swatch} style={{ backgroundColor: HEALTH_COLORS[k] }} />
+                      {k.charAt(0).toUpperCase() + k.slice(1)} ({healthSegments.counts[k]})
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className={styles.healthBarWrap}>
+              <Text weight="semibold" size={200}>Resources by type</Text>
+              <div className={styles.breakdown}>
+                {typeBreakdown.arr.map(([t, n]) => (
+                  <div key={t} className={styles.breakdownRow}>
+                    <span className={styles.breakdownLabel} title={t}>{t}</span>
+                    <span className={styles.breakdownTrack}>
+                      <span className={styles.breakdownFill} style={{ width: `${(n / typeBreakdown.max) * 100}%` }} />
+                    </span>
+                    <span className={styles.breakdownCount}>{n}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Section>
       )}
+
+      <Section title="Resource inventory">
+        <LoomDataTable
+          columns={columns}
+          rows={res}
+          getRowId={(r) => r.id}
+          loading={resources === null}
+          empty={gate ? 'Configure the Loom subscription to list resources.' : 'No Loom resources found in the configured resource groups.'}
+          ariaLabel="Loom resource inventory"
+        />
+      </Section>
     </div>
   );
 }
@@ -293,14 +425,17 @@ function MetricsTab({ onUnauth }: { onUnauth: () => void }) {
 
   // Resources that have a metric catalog entry are pickable.
   useEffect(() => {
+    let alive = true;
     fetch('/api/monitor/inventory').then(async (r) => {
+      if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setResources([]); return; }
       const j = await r.json();
       if (j.gate) { setGate(j.gate); setResources([]); return; }
       const monitorable = (j.data?.resources ?? []).filter((res: LoomResource) => METRIC_CATALOG[res.type?.toLowerCase()]);
       setResources(monitorable);
       if (monitorable[0]) setSelected(monitorable[0].id);
-    }).catch(() => setResources([]));
+    }).catch(() => { if (alive) setResources([]); });
+    return () => { alive = false; };
   }, [onUnauth]);
 
   const selectedRes = resources?.find((r) => r.id === selected);
@@ -333,7 +468,7 @@ function MetricsTab({ onUnauth }: { onUnauth: () => void }) {
   if (resources === null) return <Spinner label="Loading metric-capable resources…" />;
 
   return (
-    <div className={styles.section}>
+    <Section title="Platform metrics">
       {gate && <GateBar gate={gate} subject="Metrics" />}
       <div className={styles.resPicker}>
         <Dropdown
@@ -361,11 +496,15 @@ function MetricsTab({ onUnauth }: { onUnauth: () => void }) {
         <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={loadMetrics}>Refresh</Button>
       </div>
       {resources.length === 0 && !gate && (
-        <div className={styles.empty}>No metric-capable resources found in the Loom resource groups.</div>
+        <Text>No metric-capable resources found in the Loom resource groups.</Text>
       )}
       {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
       {loadingMetrics ? (
-        <Spinner label="Querying Azure Monitor metrics…" />
+        <div className={styles.charts}>
+          {(catalog.length ? catalog : [0, 1, 2]).map((_, i) => (
+            <Skeleton key={i} aria-label="Loading metric"><SkeletonItem style={{ height: 132, borderRadius: 10 }} /></Skeleton>
+          ))}
+        </div>
       ) : results && results.length > 0 ? (
         <div className={styles.charts}>
           {results.map((m) => {
@@ -374,9 +513,9 @@ function MetricsTab({ onUnauth }: { onUnauth: () => void }) {
           })}
         </div>
       ) : results && results.length === 0 && !err ? (
-        <div className={styles.empty}>No metric data returned for this resource in the selected window.</div>
+        <Text>No metric data returned for this resource in the selected window.</Text>
       ) : null}
-    </div>
+    </Section>
   );
 }
 
@@ -395,11 +534,14 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
   const [running, setRunning] = useState(false);
 
   useEffect(() => {
+    let alive = true;
     fetch('/api/monitor/logs').then(async (r) => {
+      if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); return; }
       const j = await r.json();
       if (j.ok) setPresets(j.data.presets);
     }).catch(() => {});
+    return () => { alive = false; };
   }, [onUnauth]);
 
   const run = useCallback(async () => {
@@ -418,8 +560,26 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
     finally { setRunning(false); }
   }, [query, span]);
 
+  // LoomDataTable rows: map each result row to a keyed object by column name.
+  const logColumns: LoomColumn<Record<string, unknown>>[] = useMemo(
+    () => (result?.columns ?? []).map((c) => ({
+      key: c, label: c, width: 200,
+      render: (row) => String(row[c] ?? ''),
+      getValue: (row) => String(row[c] ?? ''),
+    })),
+    [result?.columns],
+  );
+  const logRows = useMemo(
+    () => (result?.rows ?? []).slice(0, 500).map((row, i) => {
+      const o: Record<string, unknown> = { __id: String(i) };
+      (result?.columns ?? []).forEach((c, j) => { o[c] = row[j]; });
+      return o;
+    }),
+    [result],
+  );
+
   return (
-    <div className={styles.section}>
+    <Section title="Logs (Log Analytics — KQL)">
       {gate && <GateBar gate={gate} subject="Logs (Log Analytics)" />}
       <div className={styles.kqlBox}>
         <div className={styles.toolbar}>
@@ -459,37 +619,32 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
       {running ? (
         <Spinner label="Running KQL against Log Analytics…" />
       ) : result ? (
-        result.rowCount === 0 ? (
-          <div className={styles.empty}>Query returned 0 rows.</div>
-        ) : (
-          <>
-            <Text size={200}>{result.rowCount} rows</Text>
-            <div className={styles.tableWrap}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>{result.columns.map((c) => <th key={c} className={styles.th}>{c}</th>)}</tr>
-                </thead>
-                <tbody>
-                  {result.rows.slice(0, 500).map((row, i) => (
-                    <tr key={i}>
-                      {row.map((cell, j) => (
-                        <td key={j} className={styles.td} title={String(cell ?? '')}>{String(cell ?? '')}</td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )
+        <>
+          <Text size={200}>{result.rowCount} rows{result.rowCount > 500 ? ' (showing first 500)' : ''}</Text>
+          <LoomDataTable
+            columns={logColumns}
+            rows={logRows}
+            getRowId={(r) => String(r.__id)}
+            empty="Query returned 0 rows."
+            ariaLabel="KQL query results"
+          />
+        </>
       ) : null}
-    </div>
+    </Section>
   );
 }
 
 // ---------------------------------------------------------------------------
 // Activity log — ARM control-plane events
 // ---------------------------------------------------------------------------
+
+function statusBadge(status?: string) {
+  const s = (status || '').toLowerCase();
+  if (s === 'succeeded' || s === 'success') return <Badge color="success" appearance="filled">{status}</Badge>;
+  if (s === 'failed' || s === 'failure') return <Badge color="danger" appearance="filled">{status}</Badge>;
+  if (s === 'started' || s === 'accepted') return <Badge color="informative" appearance="outline">{status}</Badge>;
+  return status ? <Badge color="subtle" appearance="outline">{status}</Badge> : <Text size={200}>—</Text>;
+}
 
 function ActivityTab({ onUnauth }: { onUnauth: () => void }) {
   const styles = useStyles();
@@ -500,64 +655,90 @@ function ActivityTab({ onUnauth }: { onUnauth: () => void }) {
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
+    let alive = true;
     setEvents(null); setGate(null); setErr(null);
     fetch(`/api/monitor/activity?days=${days}`).then(async (r) => {
+      if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setEvents([]); return; }
       const j = await r.json();
       if (j.gate) { setGate(j.gate); setEvents([]); return; }
       if (!j.ok) { setErr(j.error || 'Failed to load activity log'); setEvents([]); return; }
       setEvents(j.data.events);
-    }).catch((e) => { setErr(String(e)); setEvents([]); });
+    }).catch((e) => { if (alive) { setErr(String(e)); setEvents([]); } });
+    return () => { alive = false; };
   }, [days, tick, onUnauth]);
 
-  if (events === null) return <Spinner label="Loading Azure Activity Log…" />;
+  // KPI roll-up of the activity window.
+  const kpis = useMemo(() => {
+    const e = events ?? [];
+    const succeeded = e.filter((x) => /succ/i.test(x.status ?? '')).length;
+    const failed = e.filter((x) => /fail/i.test(x.status ?? '')).length;
+    const callers = new Set(e.map((x) => x.caller).filter(Boolean)).size;
+    return [
+      { label: 'Events', value: e.length, accent: undefined as string | undefined },
+      { label: 'Succeeded', value: succeeded, accent: styles.statAccentSuccess },
+      { label: 'Failed', value: failed, accent: failed > 0 ? styles.statAccentDanger : undefined },
+      { label: 'Distinct callers', value: callers, accent: undefined },
+    ];
+  }, [events, styles]);
+
+  const columns: LoomColumn<ActivityEvent & { __id: string }>[] = useMemo(() => [
+    { key: 'eventTimestamp', label: 'Time', width: 180, getValue: (e) => new Date(e.eventTimestamp).getTime(), render: (e) => new Date(e.eventTimestamp).toLocaleString() },
+    { key: 'operationName', label: 'Operation', width: 300, render: (e) => e.operationName ?? '—' },
+    { key: 'status', label: 'Status', width: 130, filterable: true, render: (e) => statusBadge(e.status) },
+    { key: 'resourceGroup', label: 'Resource group', width: 200, render: (e) => e.resourceGroup ?? '—' },
+    { key: 'caller', label: 'Caller', width: 220, render: (e) => e.caller ?? '—' },
+  ], []);
+
+  const rows = useMemo(() => (events ?? []).map((e, i) => ({ ...e, __id: String(i) })), [events]);
 
   return (
-    <div className={styles.section}>
-      <div className={styles.toolbar}>
-        <Dropdown
-          aria-label="Window"
-          value={days === 1 ? 'Last 24 hours' : `Last ${days} days`}
-          selectedOptions={[String(days)]}
-          onOptionSelect={(_, d) => d.optionValue && setDays(Number(d.optionValue))}
-        >
-          <Option value="1">Last 24 hours</Option>
-          <Option value="7">Last 7 days</Option>
-          <Option value="30">Last 30 days</Option>
-          <Option value="90">Last 90 days</Option>
-        </Dropdown>
-        <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>
-      </div>
-      {gate && <GateBar gate={gate} subject="Activity log" />}
-      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-      {events.length === 0 && !gate ? (
-        <div className={styles.empty}>No control-plane activity in this window.</div>
-      ) : (
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th className={styles.th}>Time</th>
-                <th className={styles.th}>Operation</th>
-                <th className={styles.th}>Status</th>
-                <th className={styles.th}>Resource group</th>
-                <th className={styles.th}>Caller</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((e, i) => (
-                <tr key={i}>
-                  <td className={styles.td}>{new Date(e.eventTimestamp).toLocaleString()}</td>
-                  <td className={styles.td} title={e.operationName}>{e.operationName}</td>
-                  <td className={styles.td}>{e.status}</td>
-                  <td className={styles.td}>{e.resourceGroup}</td>
-                  <td className={styles.td} title={e.caller}>{e.caller}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+    <div>
+      <Section
+        title="Activity log"
+        actions={
+          <>
+            <Dropdown
+              aria-label="Window"
+              value={days === 1 ? 'Last 24 hours' : `Last ${days} days`}
+              selectedOptions={[String(days)]}
+              onOptionSelect={(_, d) => d.optionValue && setDays(Number(d.optionValue))}
+            >
+              <Option value="1">Last 24 hours</Option>
+              <Option value="7">Last 7 days</Option>
+              <Option value="30">Last 30 days</Option>
+              <Option value="90">Last 90 days</Option>
+            </Dropdown>
+            <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>
+          </>
+        }
+      >
+        {gate && <GateBar gate={gate} subject="Activity log" />}
+        {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+        {events === null ? (
+          <StatCardSkeleton />
+        ) : (
+          <div className={styles.stats}>
+            {kpis.map((s) => (
+              <div key={s.label} className={styles.stat}>
+                <span className={styles.statLabel}>{s.label}</span>
+                <span className={`${styles.statValue} ${s.accent ?? ''}`}>{s.value}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <Section title="Control-plane events">
+        <LoomDataTable
+          columns={columns}
+          rows={rows}
+          getRowId={(r) => r.__id}
+          loading={events === null}
+          empty={gate ? 'Configure the Loom subscription to read the Activity Log.' : 'No control-plane activity in this window.'}
+          ariaLabel="Azure Activity Log"
+        />
+      </Section>
     </div>
   );
 }
@@ -574,61 +755,80 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
+    let alive = true;
     setRules(null); setGate(null); setErr(null);
     fetch('/api/monitor/alerts').then(async (r) => {
+      if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setRules([]); return; }
       const j = await r.json();
       if (j.gate) { setGate(j.gate); setRules([]); return; }
       if (!j.ok) { setErr(j.error || 'Failed to load alert rules'); setRules([]); return; }
       setRules(j.data.rules);
-    }).catch((e) => { setErr(String(e)); setRules([]); });
+    }).catch((e) => { if (alive) { setErr(String(e)); setRules([]); } });
+    return () => { alive = false; };
   }, [tick, onUnauth]);
 
-  if (rules === null) return <Spinner label="Loading Azure Monitor alert rules…" />;
+  const kpis = useMemo(() => {
+    const r = rules ?? [];
+    const enabled = r.filter((x) => x.enabled).length;
+    const sev01 = r.filter((x) => x.severity != null && x.severity <= 1).length;
+    return [
+      { label: 'Alert rules', value: r.length, accent: undefined as string | undefined },
+      { label: 'Enabled', value: enabled, accent: styles.statAccentSuccess },
+      { label: 'Disabled', value: r.length - enabled, accent: undefined },
+      { label: 'Sev 0–1', value: sev01, accent: sev01 > 0 ? styles.statAccentWarn : undefined },
+    ];
+  }, [rules, styles]);
+
+  const columns: LoomColumn<AlertRule>[] = useMemo(() => [
+    { key: 'name', label: 'Name', width: 280, render: (r) => <strong>{r.name}</strong> },
+    {
+      key: 'enabled', label: 'Enabled', width: 110, getValue: (r) => (r.enabled ? 'On' : 'Off'),
+      render: (r) => r.enabled ? <Badge color="success" appearance="filled">On</Badge> : <Badge color="subtle" appearance="outline">Off</Badge>,
+    },
+    { key: 'severity', label: 'Severity', width: 110, getValue: (r) => (r.severity ?? 99), render: (r) => r.severity != null ? `Sev ${r.severity}` : '—' },
+    { key: 'resourceGroup', label: 'Resource group', width: 200, render: (r) => r.resourceGroup ?? '—' },
+    { key: 'description', label: 'Description', width: 320, render: (r) => r.description || '—' },
+  ], []);
 
   return (
-    <div className={styles.section}>
-      <div className={styles.toolbar}>
-        <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>
-      </div>
-      <MessageBar intent="info">
-        <MessageBarBody>
-          Lists metric-alert rules scoped to the Loom resource groups (Azure Monitor <code>metricAlerts</code> REST).
-          Rule authoring (create/edit) is not yet wired — manage rules in the Azure portal for now.
-        </MessageBarBody>
-      </MessageBar>
-      {gate && <GateBar gate={gate} subject="Alerts" />}
-      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-      {rules.length === 0 && !gate ? (
-        <div className={styles.empty}>No metric-alert rules defined for the Loom resource groups.</div>
-      ) : (
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th className={styles.th}>Name</th>
-                <th className={styles.th}>Enabled</th>
-                <th className={styles.th}>Severity</th>
-                <th className={styles.th}>Resource group</th>
-                <th className={styles.th}>Description</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rules.map((r) => (
-                <tr key={r.id}>
-                  <td className={styles.td} title={r.name}>{r.name}</td>
-                  <td className={styles.td}>
-                    {r.enabled ? <Badge color="success" appearance="filled">On</Badge> : <Badge color="subtle" appearance="outline">Off</Badge>}
-                  </td>
-                  <td className={styles.td}>{r.severity != null ? `Sev ${r.severity}` : '—'}</td>
-                  <td className={styles.td}>{r.resourceGroup}</td>
-                  <td className={styles.td} title={r.description}>{r.description || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+    <div>
+      <Section
+        title="Alert rules"
+        actions={<Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
+      >
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Lists metric-alert rules scoped to the Loom resource groups (Azure Monitor <code>metricAlerts</code> REST).
+            Rule authoring (create/edit) is not yet wired — manage rules in the Azure portal for now.
+          </MessageBarBody>
+        </MessageBar>
+        {gate && <GateBar gate={gate} subject="Alerts" />}
+        {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+        {rules === null ? (
+          <StatCardSkeleton />
+        ) : (
+          <div className={styles.stats}>
+            {kpis.map((s) => (
+              <div key={s.label} className={styles.stat}>
+                <span className={styles.statLabel}>{s.label}</span>
+                <span className={`${styles.statValue} ${s.accent ?? ''}`}>{s.value}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      <Section title="Metric-alert rules">
+        <LoomDataTable
+          columns={columns}
+          rows={rules ?? []}
+          getRowId={(r) => r.id}
+          loading={rules === null}
+          empty={gate ? 'Configure the Loom subscription to list alert rules.' : 'No metric-alert rules defined for the Loom resource groups.'}
+          ariaLabel="Azure Monitor alert rules"
+        />
+      </Section>
     </div>
   );
 }

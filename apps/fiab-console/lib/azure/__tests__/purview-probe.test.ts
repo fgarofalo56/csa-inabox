@@ -2,12 +2,13 @@
  * Contract tests for the Purview connection probe helpers:
  *   - isPurviewConfigured
  *   - getPurviewAccountName  (account-name normalization)
- *   - probePurview           (live / not_configured / cross_cloud / upstream_error)
+ *   - probePurview           (live / not_configured / role_missing / upstream_error)
  *
  * These back the /api/governance/purview/status route + the PurviewGate so the
- * honest infra gate reflects the REAL deployment state.
+ * honest infra gate reflects the REAL deployment state of the CLASSIC Data Map
+ * account (host {account}.purview.azure.com, Atlas typedefs probe).
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 
 vi.mock('@azure/identity', () => {
   class Cred { async getToken() { return { token: 'TOK', expiresOnTimestamp: Date.now() + 3600_000 }; } }
@@ -38,7 +39,11 @@ describe('getPurviewAccountName', () => {
   it('returns null when unset', () => {
     expect(getPurviewAccountName()).toBeNull();
   });
-  it('normalizes a full URL down to the short account name', () => {
+  it('normalizes a full classic URL down to the short account name', () => {
+    process.env.LOOM_PURVIEW_ACCOUNT = 'https://purview-csa-loom-eastus2.purview.azure.com';
+    expect(getPurviewAccountName()).toBe('purview-csa-loom-eastus2');
+  });
+  it('also tolerates a pasted -api host and normalizes it', () => {
     process.env.LOOM_PURVIEW_ACCOUNT = 'https://purview-csa-loom-eastus2-api.purview.azure.com';
     expect(getPurviewAccountName()).toBe('purview-csa-loom-eastus2');
   });
@@ -58,28 +63,40 @@ describe('probePurview', () => {
     expect(r.hint?.rolesRequired?.length).toBeGreaterThan(0);
   });
 
-  it('reports live when the data plane resolves and answers (even 401/403)', async () => {
+  it('reports live when the classic Data Map typedefs endpoint answers 200', async () => {
     process.env.LOOM_PURVIEW_ACCOUNT = 'purview-test';
     let url = '';
     global.fetch = vi.fn(async (u: any) => {
       url = String(u);
-      return new Response('', { status: 403 });
+      return new Response('{}', { status: 200 });
     }) as any;
     const r = await probePurview();
-    expect(url).toContain('purview-test-api.purview.azure.com/datagovernance/businessdomains');
+    // CLASSIC host (NOT -api) and an Atlas v2 typedefs probe.
+    expect(url).toContain('purview-test.purview.azure.com');
+    expect(url).not.toContain('-api.purview.azure.com');
+    expect(url).toContain('/datamap/api/atlas/v2/types/typedefs/headers');
     expect(r.configured).toBe(true);
     expect(r.reason).toBe('live');
     expect(r.account).toBe('purview-test');
   });
 
-  it('reports cross_cloud on a DNS / network failure (the Gov↔Commercial signature)', async () => {
-    process.env.LOOM_PURVIEW_ACCOUNT = 'purview-gov-only';
-    global.fetch = vi.fn(async () => { throw new Error('getaddrinfo ENOTFOUND purview-gov-only-api.purview.azure.com'); }) as any;
+  it('reports role_missing on 401/403 (host reachable, UAMI lacks a Data Map role)', async () => {
+    process.env.LOOM_PURVIEW_ACCOUNT = 'purview-test';
+    global.fetch = vi.fn(async () => new Response('', { status: 403 })) as any;
     const r = await probePurview();
     expect(r.configured).toBe(true);
-    expect(r.reason).toBe('cross_cloud');
-    expect(r.account).toBe('purview-gov-only');
-    expect(r.hint?.followUp).toMatch(/different Azure cloud|US Gov|did not resolve/i);
+    expect(r.reason).toBe('role_missing');
+    expect(r.hint?.followUp).toMatch(/Data Curator|Data Reader|grant-purview-datamap-role/i);
+  });
+
+  it('reports not_configured on a DNS / network failure (account does not resolve as classic Purview)', async () => {
+    process.env.LOOM_PURVIEW_ACCOUNT = 'purview-bogus';
+    global.fetch = vi.fn(async () => { throw new Error('getaddrinfo ENOTFOUND purview-bogus.purview.azure.com'); }) as any;
+    const r = await probePurview();
+    expect(r.configured).toBe(true);
+    expect(r.reason).toBe('not_configured');
+    expect(r.account).toBe('purview-bogus');
+    expect(r.hint?.followUp).toMatch(/did not resolve|classic Purview/i);
   });
 
   it('reports upstream_error on a 5xx', async () => {

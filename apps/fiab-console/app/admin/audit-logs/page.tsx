@@ -4,17 +4,22 @@
  * /admin/audit-logs — real audit-log viewer backed by the Cosmos
  * audit-log container. Tenant-settings flips, item edits, share grants,
  * apps installs all land here.
+ *
+ * UI: spaced Section + capped Toolbar (search never full-width) + a single
+ * LoomDataTable (sort / resize / per-column filter + padded cells for free)
+ * on the real data already fetched from /api/admin/audit-logs.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Input, Button, Dropdown, Option,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Spinner, Badge, Caption1, Body1, Button, Dropdown, Option, Field,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Search24Regular, ArrowSync24Regular, ArrowDownload24Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, ArrowDownload24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
+import { Section, Toolbar } from '@/lib/components/ui/section';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface AuditRow {
   id: string;
@@ -24,24 +29,34 @@ interface AuditRow {
   at: string;
   kind: string;
   key?: string;
-  from?: any;
-  to?: any;
-  [k: string]: any;
+  from?: unknown;
+  to?: unknown;
+  [k: string]: unknown;
 }
 
 const useStyles = makeStyles({
-  toolbar: {
-    display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12,
-    paddingBottom: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  intro: {
+    color: tokens.colorNeutralForeground3,
+    marginBottom: tokens.spacingVerticalL,
+    display: 'block',
+  },
+  filters: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
+    alignItems: 'flex-end',
   },
-  spacer: { flex: 1 },
-  tableWrap: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 8, overflow: 'auto',
+  mono: {
+    fontFamily: 'Consolas, monospace',
+    fontSize: '12px',
+    color: tokens.colorNeutralForeground2,
   },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 11 },
-  empty: { padding: 32, color: tokens.colorNeutralForeground3, fontSize: 13, textAlign: 'center' },
+  count: { color: tokens.colorNeutralForeground3, whiteSpace: 'nowrap' },
+  loadingBox: {
+    display: 'flex',
+    justifyContent: 'center',
+    padding: tokens.spacingVerticalXXL,
+  },
 });
 
 const SINCE_OPTIONS = [
@@ -66,7 +81,7 @@ function describeChange(r: AuditRow): string {
 
 function toCsv(rows: AuditRow[]): string {
   const header = ['at', 'who', 'kind', 'itemId', 'key', 'from', 'to'];
-  const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const out = [header.join(',')];
   for (const r of rows) {
     out.push([r.at, r.who, r.kind, r.itemId, r.key, r.from, r.to].map(esc).join(','));
@@ -97,8 +112,8 @@ export default function AuditLogsPage() {
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setRows(j.rows || []);
       setKinds(j.kinds || []);
-    } catch (e: any) {
-      setError(e?.message || String(e));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally { setLoading(false); }
   }, [q, kind, since]);
 
@@ -109,6 +124,38 @@ export default function AuditLogsPage() {
     for (const r of (rows || [])) out.set(r.kind, (out.get(r.kind) || 0) + 1);
     return out;
   }, [rows]);
+
+  const tableRows = rows || [];
+
+  const columns = useMemo<LoomColumn<AuditRow>[]>(() => [
+    {
+      key: 'at',
+      label: 'When',
+      width: 200,
+      getValue: (r) => new Date(r.at).getTime(),
+      render: (r) => <Caption1>{new Date(r.at).toLocaleString()}</Caption1>,
+    },
+    { key: 'who', label: 'Who', width: 200 },
+    {
+      key: 'kind',
+      label: 'Kind',
+      width: 220,
+      render: (r) => <Badge appearance="outline" size="small">{r.kind}</Badge>,
+    },
+    {
+      key: 'itemId',
+      label: 'Target',
+      width: 220,
+      render: (r) => <span className={s.mono}>{r.itemId}</span>,
+    },
+    {
+      key: 'change',
+      label: 'Change',
+      width: 320,
+      getValue: (r) => describeChange(r),
+      render: (r) => <span className={s.mono}>{describeChange(r)}</span>,
+    },
+  ], [s.mono]);
 
   function downloadCsv() {
     if (!rows) return;
@@ -125,46 +172,13 @@ export default function AuditLogsPage() {
 
   return (
     <AdminShell sectionTitle="Audit logs">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+      <Body1 className={s.intro}>
         Every tenant-settings change, item save, share grant, app install, and admin action lands here.
         Backed by the Cosmos <code>audit-log</code> container.
       </Body1>
 
-      <div className={s.toolbar}>
-        <Input
-          contentBefore={<Search24Regular />}
-          placeholder="Filter by user, kind, item id, key…"
-          value={q}
-          onChange={(_, d) => setQ(d.value)}
-          style={{ flex: 1, maxWidth: 360 }}
-        />
-        <Dropdown
-          value={kind || 'All event types'}
-          selectedOptions={kind ? [kind] : []}
-          onOptionSelect={(_, d) => setKind(d.optionValue || '')}
-          style={{ minWidth: 200 }}
-        >
-          <Option value="">All event types</Option>
-          {kinds.map((k) => <Option key={k} value={k}>{k} ({totals.get(k) || 0})</Option>)}
-        </Dropdown>
-        <Dropdown
-          value={SINCE_OPTIONS.find((o) => o.value === since)?.label || 'All time'}
-          selectedOptions={[since]}
-          onOptionSelect={(_, d) => setSince(d.optionValue ?? '')}
-          style={{ minWidth: 160 }}
-        >
-          {SINCE_OPTIONS.map((o) => <Option key={o.value || 'all'} value={o.value}>{o.label}</Option>)}
-        </Dropdown>
-        <div className={s.spacer} />
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-          {(rows || []).length} entries
-        </Caption1>
-        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
-        <Button icon={<ArrowDownload24Regular />} onClick={downloadCsv} disabled={!rows?.length}>Export CSV</Button>
-      </div>
-
       {error && (
-        <MessageBar intent="error">
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>
             <MessageBarTitle>Could not load audit logs</MessageBarTitle>
             {error}
@@ -172,40 +186,65 @@ export default function AuditLogsPage() {
         </MessageBar>
       )}
 
-      {loading && !error && <Spinner label="Loading audit log…" />}
+      <Section
+        title="Audit events"
+        actions={
+          <>
+            <Caption1 className={s.count}>{tableRows.length} entries</Caption1>
+            <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
+            <Button icon={<ArrowDownload24Regular />} onClick={downloadCsv} disabled={!rows?.length}>Export CSV</Button>
+          </>
+        }
+      >
+        <Toolbar
+          search={q}
+          onSearch={setQ}
+          searchPlaceholder="Search user, kind, item id, key…"
+          actions={
+            <div className={s.filters}>
+              <Field label="Event type">
+                <Dropdown
+                  value={kind || 'All event types'}
+                  selectedOptions={kind ? [kind] : ['']}
+                  onOptionSelect={(_, d) => setKind(d.optionValue || '')}
+                  style={{ minWidth: 200 }}
+                >
+                  <Option value="">All event types</Option>
+                  {kinds.map((k) => (
+                    <Option key={k} value={k}>{`${k} (${totals.get(k) || 0})`}</Option>
+                  ))}
+                </Dropdown>
+              </Field>
+              <Field label="Time range">
+                <Dropdown
+                  value={SINCE_OPTIONS.find((o) => o.value === since)?.label || 'All time'}
+                  selectedOptions={[since]}
+                  onOptionSelect={(_, d) => setSince(d.optionValue ?? '')}
+                  style={{ minWidth: 160 }}
+                >
+                  {SINCE_OPTIONS.map((o) => (
+                    <Option key={o.value || 'all'} value={o.value}>{o.label}</Option>
+                  ))}
+                </Dropdown>
+              </Field>
+            </div>
+          }
+        />
 
-      {!loading && !error && (rows?.length ?? 0) === 0 && (
-        <div className={s.empty}>
-          No audit events match the current filters. Try a wider time range or change the event type.
-        </div>
-      )}
-
-      {!loading && !error && (rows?.length ?? 0) > 0 && (
-        <div className={s.tableWrap}>
-          <Table aria-label="Audit log">
-            <TableHeader>
-              <TableRow>
-                <TableHeaderCell>When</TableHeaderCell>
-                <TableHeaderCell>Who</TableHeaderCell>
-                <TableHeaderCell>Kind</TableHeaderCell>
-                <TableHeaderCell>Target</TableHeaderCell>
-                <TableHeaderCell>Change</TableHeaderCell>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(rows || []).map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell><Caption1>{new Date(r.at).toLocaleString()}</Caption1></TableCell>
-                  <TableCell>{r.who}</TableCell>
-                  <TableCell><Badge appearance="outline" size="small">{r.kind}</Badge></TableCell>
-                  <TableCell className={s.mono}>{r.itemId}</TableCell>
-                  <TableCell className={s.mono}>{describeChange(r)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
+        {loading ? (
+          <div className={s.loadingBox}>
+            <Spinner label="Loading audit log…" />
+          </div>
+        ) : (
+          <LoomDataTable
+            columns={columns}
+            rows={tableRows}
+            getRowId={(r) => r.id}
+            ariaLabel="Audit log"
+            empty="No audit events match the current filters. Try a wider time range or a different event type."
+          />
+        )}
+      </Section>
     </AdminShell>
   );
 }

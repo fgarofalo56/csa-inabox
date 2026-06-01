@@ -1,36 +1,60 @@
 /**
- * Microsoft Purview Unified Catalog Data Plane client.
+ * Microsoft Purview CLASSIC Data Map data-plane client.
  *
- * Targets the Loom Console UAMI via ChainedTokenCredential:
- *   1. ManagedIdentityCredential({ clientId: LOOM_UAMI_CLIENT_ID }) — prod path
- *   2. DefaultAzureCredential — local dev / az login fallback
+ * ----------------------------------------------------------------------------
+ * Why this file targets the CLASSIC Data Map (and not the new unified catalog)
+ * ----------------------------------------------------------------------------
+ * The account provisioned for CSA Loom (`purview-csa-loom-eastus2`, created via
+ * ARM `Microsoft.Purview/accounts`) is a CLASSIC Data Map account. It exposes:
  *
- * Backing API: Purview Unified Catalog (Public Preview)
- *   https://learn.microsoft.com/rest/api/purview/purview-unified-catalog/data-products
+ *   catalog/Atlas : https://{account}.purview.azure.com/datamap/api/atlas/v2/...
+ *   discovery     : https://{account}.purview.azure.com/datamap/api/search/query
+ *   account dp    : https://{account}.purview.azure.com/collections
+ *   scan          : https://{account}.purview.azure.com/scan/datasources/...
  *
- *   POST  https://{account}-api.purview.azure.com/datagovernance/catalog/dataProducts?api-version=2026-03-20-preview
- *   GET   https://{account}-api.purview.azure.com/datagovernance/catalog/dataProducts/{id}?api-version=2026-03-20-preview
- *   GET   https://{account}-api.purview.azure.com/datagovernance/catalog/dataProducts?api-version=2026-03-20-preview
+ * It does NOT expose the new unified-catalog host `{account}-api.purview.azure.com`
+ * nor the `/datagovernance/...` surface (business domains, data products). That
+ * host only exists for accounts created in the *new* Purview unified-catalog
+ * experience (purview.microsoft.com), which is NOT provisionable via ARM
+ * `az purview account create`. Calling the `-api` host against a classic account
+ * fails DNS (HTTP 000), which is exactly what broke Loom's governance surfaces.
  *
- * Token scope: https://purview.azure.net/.default   (NOT azure.com — the
- * Unified Catalog data plane is a distinct audience from ARM.)
+ * Endpoints (all grounded in Microsoft Learn — see the per-function comments):
+ *   - Data Map API versions ...... https://learn.microsoft.com/rest/api/purview/azure.analytics.purview.datamap/versions
+ *   - Discovery Query ............ https://learn.microsoft.com/rest/api/purview/datamapdataplane/discovery/query
+ *   - Operation groups ........... https://learn.microsoft.com/rest/api/purview/datamapdataplane/operation-groups
+ *   - Account/Collections dp ..... https://learn.microsoft.com/rest/api/purview/accountdataplane/collections/list-collections
+ *   - Scan data sources .......... https://learn.microsoft.com/rest/api/purview/scanningdataplane/data-sources
+ *   - Atlas 2.2 / typedefs ....... https://learn.microsoft.com/purview/data-gov-api-atlas-2-2
+ *   - Lineage REST ............... https://learn.microsoft.com/purview/data-gov-api-create-lineage-relationships
  *
- * UAMI permissions: Loom UAMI needs *both* of the following data-plane roles
- * at the governance-domain level, granted via the Purview portal because
- * these are NOT ARM RBAC:
- *   - Data Curator
- *   - Data Product Owner
+ * Token scope: https://purview.azure.net/.default  (the Data Map data-plane
+ * audience; confirmed on the Discovery Query reference page's OAuth2 scope).
+ *
+ * Host: https://{account}.purview.azure.com   (NOT -api).
+ *
+ * Auth: ChainedTokenCredential — UAMI first (LOOM_UAMI_CLIENT_ID), then
+ * DefaultAzureCredential for local `az login` dev.
+ *
+ * UAMI permissions (classic Data Map data-plane roles, granted via collection
+ * metadata policy — NOT ARM RBAC):
+ *   - Data Curator           → read/write catalog (Atlas entities, glossary, lineage)
+ *   - Data Reader            → read-only catalog
+ *   - Data Source Administrator → register sources + run scans
+ *   - Collection Admin       → manage collections + assign data-plane roles
+ * See scripts/csa-loom/grant-purview-datamap-role.sh.
  *
  * Env vars:
- *   LOOM_PURVIEW_ACCOUNT  — short Purview account name (e.g. `purview-csa-loom-eastus2`),
- *                            NOT the full https://… URL. The client appends `-api.purview.azure.com`.
+ *   LOOM_PURVIEW_ACCOUNT — short account name (e.g. `purview-csa-loom-eastus2`),
+ *                          NOT a full URL. The client appends `.purview.azure.com`.
  *
- * Configuration gate: if LOOM_PURVIEW_ACCOUNT is missing, every export throws
- * `PurviewNotConfiguredError` carrying a structured `hint` payload the BFF
- * can surface to the operator (bicep module path + missing roles).
- *
- * 404 → returns null on GETs so the route can branch cleanly.
- * Any other non-2xx throws `PurviewError(status, body)`.
+ * Honest gates (per .claude/rules/no-vaporware.md):
+ *   - LOOM_PURVIEW_ACCOUNT unset → PurviewNotConfiguredError (501/503 + hint).
+ *   - new-unified-catalog-only concepts (business domains, data products, the
+ *     `/datagovernance` surface) → PurviewUnifiedCatalogGateError (a typed
+ *     subclass carrying an honest-gate hint). NEVER fabricated data.
+ *   - 401/403 from the data plane → PurviewError(status) ("UAMI lacks Data Map role").
+ *   - DNS/000 → surfaced by probePurview as 'not_configured' with the actionable hint.
  */
 import { randomUUID } from 'node:crypto';
 import {
@@ -40,7 +64,13 @@ import {
 } from '@azure/identity';
 
 const PURVIEW_SCOPE = 'https://purview.azure.net/.default';
-const PURVIEW_API_VERSION = '2026-03-20-preview';
+
+/** Data Map data plane (Atlas v2 + Discovery). GA stable version. */
+const DATAMAP_API_VERSION = '2023-09-01';
+/** Account data plane (collections). */
+const ACCOUNT_API_VERSION = '2019-11-01-preview';
+/** Scanning data plane (data sources, scans, triggers, runs). */
+const SCAN_API_VERSION = '2022-07-01-preview';
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -65,9 +95,9 @@ export interface PurviewNotConfiguredHint {
 }
 
 /**
- * Thrown when LOOM_PURVIEW_ACCOUNT (or other required infra prerequisites) is
- * not set. The BFF translates this into HTTP 501 with the hint payload so the
- * operator sees an actionable next step in the editor MessageBar.
+ * Thrown when LOOM_PURVIEW_ACCOUNT is not set. The BFF translates this into an
+ * HTTP 501/503 with the hint payload so the operator sees an actionable next
+ * step in the editor MessageBar.
  */
 export class PurviewNotConfiguredError extends Error {
   hint: PurviewNotConfiguredHint;
@@ -77,11 +107,27 @@ export class PurviewNotConfiguredError extends Error {
   }
 }
 
+/**
+ * Thrown by functions that map to the NEW unified-catalog experience
+ * (`/datagovernance` — business domains, data products) when the deployed
+ * account is a CLASSIC Data Map account. It is a *subclass* of
+ * PurviewNotConfiguredError so every existing BFF catch-block renders it as an
+ * honest 501/503 + hint MessageBar with ZERO fabricated data — the full UI
+ * surface still renders; only the unified-catalog-only tab shows the gate.
+ */
+export class PurviewUnifiedCatalogGateError extends PurviewNotConfiguredError {
+  /** Discriminator so the UI can theme the gate differently from "unset". */
+  gate: 'unified-catalog-only' = 'unified-catalog-only';
+  constructor(concept: string) {
+    super(unifiedCatalogGateHint(concept));
+  }
+}
+
 export class PurviewError extends Error {
   status: number;
   body: unknown;
   constructor(status: number, body: unknown, message?: string) {
-    super(message || `Purview Unified Catalog call failed (${status})`);
+    super(message || `Purview Data Map call failed (${status})`);
     this.status = status;
     this.body = body;
   }
@@ -94,29 +140,61 @@ export class PurviewError extends Error {
 function notConfiguredHint(missing: string): PurviewNotConfiguredHint {
   return {
     missingEnvVar: missing,
-    bicepModule: 'platform/fiab/bicep/modules/purview/',
-    bicepStatus: 'Not yet deployed. The `purview/` module does not exist in the FiaB bicep tree as of this build — Phase 6 of docs/fiab/data-product-parity-spec.md adds it. Until then, Purview registration is gated.',
+    bicepModule: 'platform/fiab/bicep/modules/admin-plane/catalog.bicep',
+    bicepStatus:
+      'Deploys a CLASSIC Microsoft.Purview/accounts (Data Map) + a UAMI role assignment. ' +
+      'Set LOOM_PURVIEW_ACCOUNT to the deployed account name (short name, NOT the -api host).',
     rolesRequired: [
       {
         name: 'Data Curator',
-        scope: 'Governance domain (granted in the Purview portal — NOT an ARM RBAC role)',
-        reason: 'Required to read business domains, glossary terms, and data assets that back a data product.',
+        scope: 'Root collection (Data Map metadata policy — NOT ARM RBAC)',
+        reason: 'Read/write the Atlas catalog: entities, glossary, lineage, classifications.',
       },
       {
-        name: 'Data Product Owner',
-        scope: 'Governance domain (granted in the Purview portal — NOT an ARM RBAC role)',
-        reason: 'Required to create, update, publish, and unpublish data products via the Unified Catalog data plane.',
+        name: 'Data Source Administrator',
+        scope: 'Root collection (Data Map metadata policy — NOT ARM RBAC)',
+        reason: 'Register data sources and trigger/inspect scans under /scan.',
       },
     ],
-    followUp: 'Operator action: (1) add platform/fiab/bicep/modules/purview/purview.bicep that deploys Microsoft.Purview/accounts + diagnostic settings, (2) set LOOM_PURVIEW_ACCOUNT in admin-plane/main.bicep apps[] env list, (3) grant Loom UAMI both data-plane roles at the governance-domain level via the Purview portal (or scripts/csa-loom/grant-purview-rbac.sh once it lands), then redeploy admin-plane.',
+    followUp:
+      'Operator action: (1) deploy platform/fiab/bicep/modules/admin-plane/catalog.bicep (a classic Data Map account), ' +
+      '(2) set LOOM_PURVIEW_ACCOUNT in admin-plane/main.bicep apps[] env list to the account short name, ' +
+      '(3) grant the Loom UAMI Data Map roles on the root collection via scripts/csa-loom/grant-purview-datamap-role.sh, ' +
+      'then redeploy admin-plane. See docs/fiab/purview-setup.md for all three scenarios.',
+  };
+}
+
+/** Honest-gate hint for new-unified-catalog-only concepts on a classic account. */
+function unifiedCatalogGateHint(concept: string): PurviewNotConfiguredHint {
+  return {
+    missingEnvVar: 'LOOM_PURVIEW_ACCOUNT (unified-catalog account)',
+    bicepModule: 'platform/fiab/bicep/modules/admin-plane/catalog.bicep',
+    bicepStatus:
+      `${concept} require a Purview account in the NEW unified-catalog experience ` +
+      '(purview.microsoft.com). The account deployed for CSA Loom is a CLASSIC Data Map ' +
+      'account (Microsoft.Purview/accounts via ARM), which does not expose the ' +
+      '/datagovernance unified-catalog surface.',
+    rolesRequired: [
+      {
+        name: 'Data Governance roles (unified catalog)',
+        scope: 'Governance domain (granted in purview.microsoft.com — not ARM, not classic metadata policy)',
+        reason: `Required to manage ${concept} in the unified-catalog data plane.`,
+      },
+    ],
+    followUp:
+      `${concept} are not available on a classic Data Map account. Use the Data Map ` +
+      'catalog (search, Atlas entities, glossary, collections) and the Scan plane ' +
+      '(data sources, scans, runs) on this surface instead. To enable the unified ' +
+      'catalog, onboard a Purview account in the new experience and point ' +
+      'LOOM_PURVIEW_ACCOUNT at it. See docs/fiab/purview-setup.md (scenario c).',
   };
 }
 
 function purviewAccount(): string {
   const raw = process.env.LOOM_PURVIEW_ACCOUNT;
   if (!raw) throw new PurviewNotConfiguredError(notConfiguredHint('LOOM_PURVIEW_ACCOUNT'));
-  // Defensive: accept either bare account name or full URL — store the short
-  // name in env, but tolerate copy/paste of a full URL.
+  // Accept either a bare account name or a full URL (tolerate copy/paste of the
+  // classic OR the -api host) and normalize down to the short account name.
   return raw
     .replace(/^https?:\/\//, '')
     .replace(/-api\.purview\.azure\.com.*$/, '')
@@ -124,8 +202,9 @@ function purviewAccount(): string {
     .replace(/\/+$/, '');
 }
 
+/** Classic Data Map base host — `{account}.purview.azure.com` (NOT -api). */
 function purviewBase(): string {
-  return `https://${purviewAccount()}-api.purview.azure.com`;
+  return `https://${purviewAccount()}.purview.azure.com`;
 }
 
 /** True when LOOM_PURVIEW_ACCOUNT is set (does NOT prove reachability). */
@@ -141,26 +220,29 @@ export function getPurviewAccountName(): string | null {
 export interface PurviewProbeResult {
   configured: boolean;
   account: string | null;
-  /** 'live' | 'not_configured' | 'cross_cloud' | 'upstream_error' */
-  reason: 'live' | 'not_configured' | 'cross_cloud' | 'upstream_error';
+  /** 'live' | 'not_configured' | 'role_missing' | 'upstream_error' */
+  reason: 'live' | 'not_configured' | 'role_missing' | 'upstream_error';
   message?: string;
   hint?: PurviewNotConfiguredHint;
 }
 
 /**
- * Lightweight reachability probe. Distinguishes:
- *   - not_configured   → LOOM_PURVIEW_ACCOUNT unset
- *   - live             → data plane answered 2xx / 401 / 403 (DNS resolved + TLS ok)
- *   - cross_cloud      → DNS / network failure reaching `<account>-api.purview.azure.com`
- *                        (the classic symptom of a Gov account name resolved from a
- *                        Commercial-cloud Console, or vice-versa) OR a token-audience
- *                        mismatch from acquiring a token for the wrong sovereign cloud.
- *   - upstream_error   → reachable but answered 5xx / unexpected error.
+ * Reachability probe against a CLASSIC Data Map endpoint that the account
+ * actually exposes:
  *
- * We hit a cheap GET (businessdomains) and inspect the outcome. A 401/403 still
- * means the host is reachable in this cloud — that's a role-grant problem, not a
- * cross-cloud problem, so we report it as 'live' (the surfaces then show the
- * specific Purview error from their own calls).
+ *   GET {base}/datamap/api/atlas/v2/types/typedefs/headers?api-version=2023-09-01
+ *
+ * Outcomes:
+ *   - not_configured → LOOM_PURVIEW_ACCOUNT unset.
+ *   - live           → HTTP 200 (host resolves, TLS ok, UAMI has a Data Map role).
+ *   - role_missing   → HTTP 401/403 (host reachable, but the UAMI lacks a Data
+ *                      Map role on the collection — grant Data Curator/Reader).
+ *   - upstream_error → 5xx, OR a DNS/network failure (the account name does not
+ *                      resolve as a classic Purview account in this cloud — set
+ *                      LOOM_PURVIEW_ACCOUNT to a provisioned classic account).
+ *
+ * Grounded in: https://learn.microsoft.com/purview/data-gov-api-atlas-2-2
+ *              https://learn.microsoft.com/rest/api/purview/datamapdataplane/type
  */
 export async function probePurview(): Promise<PurviewProbeResult> {
   if (!process.env.LOOM_PURVIEW_ACCOUNT) {
@@ -177,24 +259,33 @@ export async function probePurview(): Promise<PurviewProbeResult> {
     if (!token?.token) {
       return { configured: true, account, reason: 'upstream_error', message: 'Failed to acquire a Purview data-plane token.' };
     }
-    const url = `${purviewBase()}/datagovernance/businessdomains?api-version=${PURVIEW_API_VERSION}`;
+    const url = `${purviewBase()}/datamap/api/atlas/v2/types/typedefs/headers?api-version=${DATAMAP_API_VERSION}`;
     const res = await fetch(url, { headers: { authorization: `Bearer ${token.token}` } });
-    // Any HTTP answer (even 401/403/404) proves the host resolves in this cloud.
-    if (res.status >= 500) {
-      return { configured: true, account, reason: 'upstream_error', message: `Purview answered ${res.status}.` };
+    if (res.status === 200) {
+      return { configured: true, account, reason: 'live' };
     }
-    return { configured: true, account, reason: 'live' };
+    if (res.status === 401 || res.status === 403) {
+      const hint = notConfiguredHint('LOOM_PURVIEW_ACCOUNT');
+      hint.followUp =
+        `The Data Map host resolved and answered ${res.status} — the Loom UAMI lacks a Data Map ` +
+        'data-plane role on this account. Grant Data Curator (read/write) or Data Reader ' +
+        '(read-only) on the root collection via scripts/csa-loom/grant-purview-datamap-role.sh, ' +
+        'then retry.';
+      return { configured: true, account, reason: 'role_missing', message: `Purview answered ${res.status} (UAMI lacks a Data Map role).`, hint };
+    }
+    return { configured: true, account, reason: 'upstream_error', message: `Purview answered ${res.status}.` };
   } catch (e: any) {
-    // fetch throws on DNS / connection failures — the cross-cloud signature.
+    // fetch throws on DNS / connection failures.
     const msg = e?.message || String(e);
     const networkish = /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|getaddrinfo|fetch failed|network|certificate/i.test(msg);
     if (networkish) {
       const hint = notConfiguredHint('LOOM_PURVIEW_ACCOUNT');
       hint.followUp =
-        `The account name "${account}" did not resolve from this Console's cloud (${msg}). ` +
-        'This usually means the Purview account lives in a different Azure cloud (e.g. US Gov) than the Loom Console (Commercial). ' +
-        'Provision a Purview account in the Console cloud and set LOOM_PURVIEW_ACCOUNT to it, then restart the Console.';
-      return { configured: true, account, reason: 'cross_cloud', message: msg, hint };
+        `The account name "${account}" did not resolve as a classic Purview Data Map host ` +
+        `(${account}.purview.azure.com): ${msg}. Set LOOM_PURVIEW_ACCOUNT to a provisioned ` +
+        'classic Purview account (Microsoft.Purview/accounts) in this cloud, then restart the Console. ' +
+        'See docs/fiab/purview-setup.md.';
+      return { configured: true, account, reason: 'not_configured', message: msg, hint };
     }
     return { configured: true, account, reason: 'upstream_error', message: msg };
   }
@@ -204,18 +295,26 @@ export async function probePurview(): Promise<PurviewProbeResult> {
 // Low-level fetch
 // ============================================================
 
+/**
+ * Issues a Data Map / scan / account-dp request. `apiVersion` is required per
+ * call because the three planes use different versions:
+ *   - Atlas + Discovery → 2023-09-01
+ *   - Scan              → 2022-07-01-preview
+ *   - Account (collections) → 2019-11-01-preview
+ */
 async function purviewFetch(
   path: string,
-  init: RequestInit & { query?: Record<string, string> } = {},
+  init: RequestInit & { query?: Record<string, string>; apiVersion?: string } = {},
 ): Promise<Response> {
   const token = await credential.getToken(PURVIEW_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire Purview data-plane token');
+  const apiVersion = init.apiVersion || DATAMAP_API_VERSION;
   const sep = path.includes('?') ? '&' : '?';
   const query = init.query
     ? '&' + new URLSearchParams(init.query).toString()
     : '';
-  const url = `${purviewBase()}${path}${sep}api-version=${PURVIEW_API_VERSION}${query}`;
-  const { query: _q, ...rest } = init;
+  const url = `${purviewBase()}${path}${sep}api-version=${apiVersion}${query}`;
+  const { query: _q, apiVersion: _v, ...rest } = init;
   return fetch(url, {
     ...rest,
     headers: {
@@ -236,6 +335,7 @@ async function readJson<T>(res: Response): Promise<T | null> {
   if (!res.ok) {
     const msg =
       (parsed as any)?.error?.message ||
+      (parsed as any)?.errorMessage ||
       (parsed as any)?.message ||
       (typeof parsed === 'string' ? parsed : `Purview ${res.status}`);
     throw new PurviewError(res.status, parsed, msg);
@@ -244,193 +344,7 @@ async function readJson<T>(res: Response): Promise<T | null> {
 }
 
 // ============================================================
-// Data product types (Phase 1 — subset of the Unified Catalog schema)
-// ============================================================
-
-/**
- * Loom-side payload for register/upsert. We keep this narrow on purpose —
- * Phase 1 wires the create/get/list happy path. Subsequent phases extend it
- * with type/audience/terms/customAttributes/owners[]/dataAssets[] per the
- * parity spec.
- */
-export interface PurviewDataProductPayload {
-  /**
-   * Optional caller-supplied id (uuid). Purview's create contract REQUIRES an
-   * id in the request; when omitted the client mints one. Supply this on a
-   * re-register so the same Unified Catalog product is targeted.
-   */
-  id?: string;
-  /** Display name. Maps to Unified Catalog `name`. */
-  displayName: string;
-  /** Long-form description / business narrative. Maps to `description`. */
-  description?: string;
-  /**
-   * Governance domain GUID. REQUIRED by Purview. This MUST be the actual
-   * Purview `businessDomainId` — not a free-text label. The BFF route is
-   * responsible for translating Loom's stored `state.domain` to a real
-   * domain id before calling here, or returning 422.
-   */
-  domain: string;
-  /** Primary owner UPN/email. Mapped to the first entry of Purview `contacts`. */
-  owner?: string;
-  /** Optional SLA narrative — surfaced as a `termsOfUse` line in Phase 2. */
-  sla?: string;
-  /** Free-text bundle entries from the Loom editor. Stored as `documentation[]`. */
-  bundle?: string[];
-  /** Optional product type. Defaults to `Operational` if not supplied. */
-  type?: string;
-  /** Whether to mark Endorsed. Default false (drafts publish unendorsed). */
-  endorsed?: boolean;
-}
-
-export interface PurviewDataProduct {
-  id: string;
-  name: string;
-  description?: string;
-  domain?: string;
-  status?: string;
-  type?: string;
-  endorsed?: boolean;
-  contacts?: unknown;
-  documentation?: unknown;
-  updatedAt?: string;
-  raw?: unknown;
-}
-
-function shape(raw: any): PurviewDataProduct {
-  return {
-    id: raw?.id || raw?.dataProductId,
-    name: raw?.name || raw?.displayName,
-    description: raw?.description,
-    domain: raw?.domain || raw?.businessDomainId,
-    // CatalogModelStatus enum is UPPERCASE (DRAFT/PUBLISHED/EXPIRED).
-    status: raw?.status,
-    type: raw?.type,
-    endorsed: raw?.endorsed,
-    // contacts is a ContactsMap ({ owner: [...], expert: [...] }) in the
-    // 2026-03-20-preview schema — pass through verbatim.
-    contacts: raw?.contacts,
-    documentation: raw?.documentation,
-    updatedAt: raw?.updatedAt || raw?.modifiedAt || raw?.systemData?.lastModifiedAt,
-    raw,
-  };
-}
-
-/**
- * Build the Unified Catalog `DataProducts_Create` request body.
- *
- * Grounded in the 2026-03-20-preview REST contract
- * (learn.microsoft.com/rest/api/purview/purview-unified-catalog/data-products/create):
- *   - `id`     REQUIRED string(uuid). The caller MUST supply the id it wants
- *              the product created under; Purview does NOT mint one. We pass
- *              it through here so the route can persist the SAME id to Cosmos.
- *   - `status` is the `CatalogModelStatus` enum: DRAFT | PUBLISHED | EXPIRED
- *              (UPPERCASE — `Draft` is rejected).
- *   - `contacts` is a `ContactsMap`: { owner: [{ id(uuid), description }], … }
- *              keyed by role — NOT a flat array. `id` must be an AAD oid GUID,
- *              so a free-text owner email is dropped (kept in Cosmos state).
- *   - `documentation` / `termsOfUse` are `CatalogModelExternalLink[]`, each
- *              requiring a `url`. Free-text bundle/SLA lines without a URL are
- *              therefore NOT valid links and are skipped here (they remain in
- *              the Loom Cosmos record and the editor's Bundle preview).
- */
-function toPurviewBody(p: PurviewDataProductPayload, id: string): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    id,
-    name: p.displayName,
-    description: p.description || '',
-    domain: p.domain,
-    type: p.type || 'Operational',
-    status: 'DRAFT',
-    endorsed: !!p.endorsed,
-  };
-  // Contacts map: only include an owner contact when the supplied owner is a
-  // real AAD object-id GUID (the schema types contacts[].id as uuid). A
-  // free-text email would 400 the create, so we omit it rather than send junk.
-  if (p.owner && GUID_RE.test(p.owner.trim())) {
-    body.contacts = { owner: [{ id: p.owner.trim(), description: 'Primary owner' }] };
-  }
-  // Bundle/SLA entries are free text, not external links with URLs, so they
-  // are not valid CatalogModelExternalLink payloads — they stay in Cosmos.
-  return body;
-}
-
-// ============================================================
-// Exports — Phase 1 surface area
-// ============================================================
-
-/**
- * Create a data product in Purview Unified Catalog.
- *
- * Phase 1 always POSTs (idempotent upsert by name is a Phase 2 task once we
- * have a GET-by-name endpoint and a reliable id round-trip). Caller is
- * responsible for persisting the returned `id` back to Cosmos so subsequent
- * edits route through `updateDataProduct` (Phase 2).
- */
-export async function registerDataProduct(payload: PurviewDataProductPayload): Promise<PurviewDataProduct> {
-  // Touch the env var early so a NotConfigured throw beats the body build.
-  purviewAccount();
-  if (!payload?.displayName) throw new PurviewError(400, null, 'displayName is required');
-  if (!payload?.domain) throw new PurviewError(400, null, 'domain (Purview businessDomainId GUID) is required');
-  if (!GUID_RE.test(payload.domain.trim())) {
-    throw new PurviewError(400, null, 'domain must be a Purview businessDomainId GUID');
-  }
-
-  // Per the 2026-03-20-preview contract, `id` is a REQUIRED request field —
-  // Purview does NOT mint one. Reuse a caller-supplied id (re-register /
-  // idempotent retry) or mint a fresh GUID. The route persists THIS id to
-  // Cosmos so subsequent GET/UPDATE round-trips line up.
-  const id = payload.id && GUID_RE.test(payload.id.trim()) ? payload.id.trim() : randomUUID();
-
-  const res = await purviewFetch('/datagovernance/catalog/dataProducts', {
-    method: 'POST',
-    body: JSON.stringify(toPurviewBody(payload, id)),
-  });
-  const j = await readJson<any>(res);
-  // Purview returns 201 with the created resource. Some preview stamps reply
-  // 200 with the same body; both are handled by readJson (res.ok). If the body
-  // is empty but the call succeeded, fall back to the id we just created with.
-  const shaped = j ? shape(j) : ({} as PurviewDataProduct);
-  if (!shaped.id) shaped.id = id;
-  return shaped;
-}
-
-export async function getDataProduct(id: string): Promise<PurviewDataProduct | null> {
-  purviewAccount();
-  if (!id) throw new PurviewError(400, null, 'id is required');
-  const res = await purviewFetch(`/datagovernance/catalog/dataProducts/${encodeURIComponent(id)}`);
-  const j = await readJson<any>(res);
-  return j ? shape(j) : null;
-}
-
-export async function listDataProducts(domain?: string): Promise<PurviewDataProduct[]> {
-  purviewAccount();
-  const init: { query?: Record<string, string> } = {};
-  if (domain) init.query = { domain };
-  const res = await purviewFetch('/datagovernance/catalog/dataProducts', init);
-  const j = await readJson<{ value?: any[] }>(res);
-  return (j?.value || []).map(shape);
-}
-
-// ============================================================
-// Phase-2 surface area — federated catalog + admin governance.
-//
-// Combines:
-//   - Federated catalog surface for /catalog (business domains,
-//     atlas search, lineage, atlas entity registration, glossary).
-//   - Admin governance: registered data sources, scans, scan runs,
-//     glossary listings, business domain CRUD, data-quality rules.
-//
-// All endpoints call Purview "scan" (legacy Atlas catalog), the
-// Unified Catalog (datagovernance/catalog), or the Atlas v2 data plane.
-// They share auth scope (https://purview.azure.net/.default) and the
-// same `-api.purview.azure.com` host, so purviewFetch / readJson reuse.
-//
-// Tenant requirements:
-//   - Loom UAMI granted "Data Source Administrator" (sources/scans)
-//   - Loom UAMI granted "Data Curator" (glossary/domains/DQ/Atlas)
-//   - Loom UAMI granted "Data Product Owner" (data products)
-//   All are governance-domain-scoped RBAC granted in the Purview portal.
+// Shared types
 // ============================================================
 
 export interface PurviewDataSource {
@@ -480,6 +394,14 @@ export interface PurviewBusinessDomain {
   raw?: unknown;
 }
 
+export interface PurviewCollection {
+  name: string;
+  friendlyName?: string;
+  description?: string;
+  parentCollection?: string;
+  raw?: unknown;
+}
+
 export interface PurviewAssetHit {
   source: 'purview';
   id: string;
@@ -511,47 +433,23 @@ export interface PurviewLineageGraph {
   relations: PurviewLineageEdge[];
 }
 
-/** GET /datagovernance/businessdomains — domain CRUD surface for /catalog/domains. */
-export async function listBusinessDomains(): Promise<PurviewBusinessDomain[]> {
-  purviewAccount();
-  const res = await purviewFetch('/datagovernance/businessdomains');
-  const j = await readJson<{ value?: any[] }>(res);
-  return (j?.value || []).map((d: any) => ({
-    id: d.id, name: d.name || d.displayName, description: d.description,
-    type: d.type, parentId: d.parentId,
-    createdAt: d.createdAt || d.systemData?.createdAt,
-    updatedAt: d.updatedAt || d.systemData?.lastModifiedAt,
-  }));
+export interface PurviewDataQualityRule {
+  id: string;
+  name?: string;
+  description?: string;
+  expression?: string;
+  scope?: string;
+  enabled?: boolean;
+  raw?: unknown;
 }
 
-export async function createBusinessDomain(body: { name: string; description?: string; type?: string; parentId?: string }): Promise<PurviewBusinessDomain> {
-  purviewAccount();
-  if (!body.name) throw new PurviewError(400, null, 'name is required');
-  const res = await purviewFetch('/datagovernance/businessdomains', {
-    method: 'POST',
-    body: JSON.stringify({ name: body.name, description: body.description || '', type: body.type || 'BusinessDomain', parentId: body.parentId }),
-  });
-  const j = await readJson<any>(res);
-  if (!j) throw new PurviewError(500, null, 'Empty response creating domain');
-  return { id: j.id, name: j.name || j.displayName, description: j.description, type: j.type, parentId: j.parentId };
-}
+// ============================================================
+// Discovery (search) — Data Map data plane
+//   POST {base}/datamap/api/search/query?api-version=2023-09-01
+//   body: { keywords, limit, offset? }
+//   https://learn.microsoft.com/rest/api/purview/datamapdataplane/discovery/query
+// ============================================================
 
-export async function deleteBusinessDomain(id: string): Promise<void> {
-  purviewAccount();
-  if (!id) throw new PurviewError(400, null, 'id is required');
-  const res = await purviewFetch(`/datagovernance/businessdomains/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  if (!res.ok && res.status !== 204 && res.status !== 404) {
-    const t = await res.text();
-    throw new PurviewError(res.status, t, `delete domain failed: ${t || res.statusText}`);
-  }
-}
-
-/**
- * Atlas catalog search — POST /datamap/api/search/query (a.k.a. v2 Atlas).
- *
- * Body shape per the Purview docs: { keywords, limit, filter? }. We trim
- * the response to the fields the federated search row needs.
- */
 export async function searchPurview(q: string, limit = 50): Promise<PurviewAssetHit[]> {
   purviewAccount();
   const res = await purviewFetch('/datamap/api/search/query', {
@@ -568,126 +466,39 @@ export async function searchPurview(q: string, limit = 50): Promise<PurviewAsset
     classification: v.classification || v.classifications,
     description: v.description,
     owner: v.owner || (Array.isArray(v.contact) ? v.contact[0]?.id : undefined),
-    domain: v.domain || v.businessDomainId,
+    domain: v.domain,
     updatedAt: v.updateTime || v.modifiedTime,
   }));
 }
 
-export interface PurviewDataQualityRule {
-  id: string;
-  name?: string;
-  description?: string;
-  expression?: string;
-  scope?: string;
-  enabled?: boolean;
-  raw?: unknown;
-}
+// ============================================================
+// Collections — Account data plane
+//   GET {base}/collections?api-version=2019-11-01-preview
+//   https://learn.microsoft.com/rest/api/purview/accountdataplane/collections/list-collections
+// ============================================================
 
-/** GET /scan/datasources — registered data sources. */
-export async function listDataSources(): Promise<PurviewDataSource[]> {
+export async function listCollections(): Promise<PurviewCollection[]> {
   purviewAccount();
-  const res = await purviewFetch('/scan/datasources');
+  const res = await purviewFetch('/collections', { apiVersion: ACCOUNT_API_VERSION });
   const j = await readJson<{ value?: any[] }>(res);
-  return (j?.value || []).map((raw): PurviewDataSource => ({
-    id: raw?.id || raw?.name,
+  return (j?.value || []).map((raw: any): PurviewCollection => ({
     name: raw?.name,
-    kind: raw?.kind || raw?.properties?.kind,
-    endpoint: raw?.properties?.endpoint || raw?.properties?.serverEndpoint,
-    collectionId: raw?.properties?.collection?.referenceName,
+    friendlyName: raw?.friendlyName,
+    description: raw?.description,
+    parentCollection: raw?.parentCollection?.referenceName,
     raw,
   }));
 }
+
+// ============================================================
+// Atlas v2 — entities, lineage, glossary, classifications.
+//   {base}/datamap/api/atlas/v2/...?api-version=2023-09-01
+//   https://learn.microsoft.com/purview/data-gov-api-atlas-2-2
+//   https://learn.microsoft.com/purview/data-gov-api-create-lineage-relationships
+// ============================================================
 
 /**
- * Register a new data source.
- *
- * PUT /scan/datasources/{name}
- *
- * Caller supplies `{ name, kind, properties }`. We forward as-is.
- */
-export async function registerDataSource(payload: {
-  name: string;
-  kind: string;
-  properties: Record<string, unknown>;
-}): Promise<PurviewDataSource> {
-  purviewAccount();
-  if (!payload?.name) throw new PurviewError(400, null, 'name is required');
-  if (!payload?.kind) throw new PurviewError(400, null, 'kind is required');
-  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(payload.name)}`, {
-    method: 'PUT',
-    body: JSON.stringify({ kind: payload.kind, properties: payload.properties }),
-  });
-  const raw = await readJson<any>(res);
-  if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on registerDataSource');
-  return {
-    id: raw?.id || raw?.name,
-    name: raw?.name,
-    kind: raw?.kind,
-    endpoint: raw?.properties?.endpoint,
-    collectionId: raw?.properties?.collection?.referenceName,
-    raw,
-  };
-}
-
-/** DELETE /scan/datasources/{name} */
-export async function deleteDataSource(name: string): Promise<boolean> {
-  purviewAccount();
-  if (!name) throw new PurviewError(400, null, 'name is required');
-  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(name)}`, { method: 'DELETE' });
-  if (res.status === 404) return false;
-  await readJson<unknown>(res);
-  return true;
-}
-
-/** GET /scan/datasources/{name}/scans — scans defined on a source. */
-export async function listScansForSource(sourceName: string): Promise<PurviewScan[]> {
-  purviewAccount();
-  if (!sourceName) throw new PurviewError(400, null, 'sourceName is required');
-  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(sourceName)}/scans`);
-  if (res.status === 404) return [];
-  const j = await readJson<{ value?: any[] }>(res);
-  return (j?.value || []).map((raw): PurviewScan => ({
-    id: raw?.id || raw?.name,
-    name: raw?.name,
-    kind: raw?.kind,
-    schedule: raw?.properties?.schedule,
-    raw,
-  }));
-}
-
-/** PUT /scan/datasources/{name}/scans/{scan}/run — trigger a scan run. */
-export async function triggerScanRun(sourceName: string, scanName: string): Promise<{ runId?: string; raw: unknown }> {
-  purviewAccount();
-  if (!sourceName || !scanName) throw new PurviewError(400, null, 'sourceName + scanName required');
-  const runId = `loom-${Date.now()}`;
-  const res = await purviewFetch(
-    `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}/runs/${runId}`,
-    { method: 'PUT' },
-  );
-  const raw = await readJson<any>(res);
-  return { runId: raw?.runId || runId, raw };
-}
-
-/** GET /scan/datasources/{name}/scans/{scan}/runs — last N scan runs. */
-export async function listScanRuns(sourceName: string, scanName: string): Promise<PurviewScanRun[]> {
-  purviewAccount();
-  const res = await purviewFetch(
-    `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}/runs`,
-  );
-  if (res.status === 404) return [];
-  const j = await readJson<{ value?: any[] }>(res);
-  return (j?.value || []).slice(0, 10).map((raw): PurviewScanRun => ({
-    runId: raw?.id || raw?.runId,
-    status: raw?.status,
-    startTime: raw?.startTime,
-    endTime: raw?.endTime,
-    errorMessage: raw?.errorMessage,
-    raw,
-  }));
-}
-
-/**
- * Lineage subgraph — Atlas API. GET /datamap/api/atlas/v2/lineage/{guid}?direction=BOTH&depth=3
+ * Lineage subgraph — GET /datamap/api/atlas/v2/lineage/{guid}?direction=BOTH&depth=3
  */
 export async function getLineageSubgraph(guid: string, depth = 3): Promise<PurviewLineageGraph> {
   purviewAccount();
@@ -721,24 +532,17 @@ export async function getAssetDetail(guid: string): Promise<any | null> {
   return readJson<any>(res);
 }
 
-// ============================================================
+// ------------------------------------------------------------
 // Cross-source registration — Atlas entity upsert
-// ============================================================
+// ------------------------------------------------------------
 
 /**
- * Payload to register a Unity Catalog table (or OneLake item) as a Purview
- * Atlas entity. Loom maps:
- *
+ * Payload to register a Unity Catalog table (or OneLake item / Azure DB) as a
+ * Purview Atlas entity.
  *   UC table   →  typeName = "databricks_table"
  *   OneLake LH →  typeName = "fabric_lakehouse"
  *
- * The qualified name uniquely identifies the underlying physical asset and
- * Atlas dedupes on it (subsequent upserts merge). We always set:
- *
- *   attributes.qualifiedName = qualifiedName
- *   attributes.name          = displayName
- *   attributes.comment       = comment (when provided)
- *   contacts                 = [{ id: owner, info: 'Owner' }]
+ * Atlas dedupes on qualifiedName (subsequent upserts merge).
  */
 export interface RegisterAtlasEntityPayload {
   typeName: string;
@@ -747,10 +551,13 @@ export interface RegisterAtlasEntityPayload {
   comment?: string;
   owner?: string;
   classifications?: string[];
-  /** Optional Purview businessDomainId guid to attach the asset to. */
-  domain?: string;
-  /** Optional extra attributes (Atlas-typed). */
+  /** Optional Atlas attributes. */
   attributes?: Record<string, unknown>;
+  /**
+   * @deprecated `businessDomainId` is a unified-catalog concept and is ignored
+   * on a classic Data Map account. Kept for caller compatibility.
+   */
+  domain?: string;
 }
 
 export interface AtlasUpsertResponse {
@@ -785,7 +592,6 @@ export async function registerAtlasEntity(p: RegisterAtlasEntityPayload): Promis
         ? { classifications: p.classifications.map((c) => ({ typeName: c })) }
         : {}),
       ...(p.owner ? { contacts: { Expert: [{ id: p.owner, info: 'Owner' }] } } : {}),
-      ...(p.domain ? { businessDomainId: p.domain } : {}),
     },
   };
   const res = await purviewFetch('/datamap/api/atlas/v2/entity', {
@@ -798,11 +604,10 @@ export async function registerAtlasEntity(p: RegisterAtlasEntityPayload): Promis
   return { ...j, primaryGuid };
 }
 
-/**
- * Atlas glossary surface (low-level — /datamap/api/atlas/v2). For the Unified
- * Catalog endpoints (which back /catalog/glossary), see `listGlossaryTerms` /
- * `createGlossaryTerm` below.
- */
+// ------------------------------------------------------------
+// Atlas glossary surface (low-level — /datamap/api/atlas/v2/glossary)
+// ------------------------------------------------------------
+
 export interface AtlasGlossaryTermPayload {
   name: string;
   longDescription?: string;
@@ -810,8 +615,8 @@ export interface AtlasGlossaryTermPayload {
 }
 
 /**
- * POST /datamap/api/atlas/v2/glossary/term — create a glossary term and apply
- * it. Returns the term GUID. The term name must be unique in the glossary.
+ * POST /datamap/api/atlas/v2/glossary/term — create a glossary term.
+ * The term name must be unique in the glossary.
  */
 export async function createAtlasGlossaryTerm(term: AtlasGlossaryTermPayload): Promise<{ guid: string; name: string }> {
   purviewAccount();
@@ -829,7 +634,8 @@ export async function createAtlasGlossaryTerm(term: AtlasGlossaryTermPayload): P
 }
 
 /**
- * Assign a glossary term to an entity. POST /datamap/api/atlas/v2/glossary/terms/{termGuid}/assignedEntities
+ * Assign a glossary term to an entity.
+ * POST /datamap/api/atlas/v2/glossary/terms/{termGuid}/assignedEntities
  */
 export async function applyGlossaryTerm(termGuid: string, entityGuid: string): Promise<void> {
   purviewAccount();
@@ -846,22 +652,21 @@ export async function applyGlossaryTerm(termGuid: string, entityGuid: string): P
   }
 }
 
-// ============================================================
-// Unified Catalog glossary + data-quality surface (Phase 2 admin)
-// ============================================================
-
 /**
- * GET /catalog/api/atlas/v2/glossaries — list glossaries, then for the
- * first glossary, list its terms via /glossary/{guid}/terms.
+ * List glossary terms via Atlas v2.
+ *   GET /datamap/api/atlas/v2/glossary        → list glossaries (pick the first)
+ *   GET /datamap/api/atlas/v2/glossary/{guid}/terms?limit=200
  *
- * Limited to the first 200 terms — UI is paged below this.
+ * Live-verified on purview-csa-loom-eastus2: the glossaries-list endpoint is
+ * the SINGULAR `/glossary` (200); the plural `/glossaries` 404s.
+ * https://learn.microsoft.com/rest/api/purview/datamapdataplane/glossary
  */
 export async function listGlossaryTerms(glossaryGuid?: string): Promise<PurviewGlossaryTerm[]> {
   purviewAccount();
 
   let targetGuid = glossaryGuid;
   if (!targetGuid) {
-    const gRes = await purviewFetch('/catalog/api/atlas/v2/glossaries');
+    const gRes = await purviewFetch('/datamap/api/atlas/v2/glossary');
     const gj = await readJson<any[]>(gRes);
     if (!Array.isArray(gj) || gj.length === 0) return [];
     targetGuid = gj[0]?.guid;
@@ -869,7 +674,8 @@ export async function listGlossaryTerms(glossaryGuid?: string): Promise<PurviewG
   if (!targetGuid) return [];
 
   const tRes = await purviewFetch(
-    `/catalog/api/atlas/v2/glossary/${encodeURIComponent(targetGuid)}/terms?limit=200`,
+    `/datamap/api/atlas/v2/glossary/${encodeURIComponent(targetGuid)}/terms`,
+    { query: { limit: '200' } },
   );
   if (tRes.status === 404) return [];
   const tj = await readJson<any[]>(tRes);
@@ -885,7 +691,7 @@ export async function listGlossaryTerms(glossaryGuid?: string): Promise<PurviewG
   }));
 }
 
-/** POST /catalog/api/atlas/v2/glossary/term — create a Unified-Catalog glossary term. */
+/** POST /datamap/api/atlas/v2/glossary/term — create an Atlas glossary term. */
 export async function createGlossaryTerm(payload: {
   name: string;
   glossaryGuid: string;
@@ -903,7 +709,7 @@ export async function createGlossaryTerm(payload: {
     longDescription: payload.longDescription || '',
     status: 'Draft',
   };
-  const res = await purviewFetch('/catalog/api/atlas/v2/glossary/term', {
+  const res = await purviewFetch('/datamap/api/atlas/v2/glossary/term', {
     method: 'POST',
     body: JSON.stringify(body),
   });
@@ -920,21 +726,200 @@ export async function createGlossaryTerm(payload: {
   };
 }
 
-/** GET /datagovernance/dataquality/rules — list configured DQ rules (preview). */
-export async function listDataQualityRules(): Promise<PurviewDataQualityRule[]> {
+// ============================================================
+// Scan plane — data sources, scans, runs.
+//   {base}/scan/datasources/...?api-version=2022-07-01-preview
+//   https://learn.microsoft.com/rest/api/purview/scanningdataplane/data-sources
+//   https://learn.microsoft.com/purview/register-scan-synapse-workspace#scan
+// ============================================================
+
+/** GET /scan/datasources — registered data sources. */
+export async function listDataSources(): Promise<PurviewDataSource[]> {
   purviewAccount();
-  // Endpoint is still in preview; some Purview tenants 404 this entirely.
-  // Treat 404 as "no rules / preview not enabled" rather than an error.
-  const res = await purviewFetch('/datagovernance/dataquality/rules');
-  if (res.status === 404) return [];
+  const res = await purviewFetch('/scan/datasources', { apiVersion: SCAN_API_VERSION });
   const j = await readJson<{ value?: any[] }>(res);
-  return (j?.value || []).map((raw): PurviewDataQualityRule => ({
-    id: raw?.id,
-    name: raw?.name || raw?.displayName,
-    description: raw?.description,
-    expression: raw?.expression || raw?.ruleExpression,
-    scope: raw?.scope || raw?.target,
-    enabled: raw?.enabled,
+  return (j?.value || []).map((raw): PurviewDataSource => ({
+    id: raw?.id || raw?.name,
+    name: raw?.name,
+    kind: raw?.kind || raw?.properties?.kind,
+    endpoint: raw?.properties?.endpoint || raw?.properties?.serverEndpoint,
+    collectionId: raw?.properties?.collection?.referenceName,
     raw,
   }));
+}
+
+/** PUT /scan/datasources/{name} — register/update a data source. */
+export async function registerDataSource(payload: {
+  name: string;
+  kind: string;
+  properties: Record<string, unknown>;
+}): Promise<PurviewDataSource> {
+  purviewAccount();
+  if (!payload?.name) throw new PurviewError(400, null, 'name is required');
+  if (!payload?.kind) throw new PurviewError(400, null, 'kind is required');
+  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(payload.name)}`, {
+    method: 'PUT',
+    apiVersion: SCAN_API_VERSION,
+    body: JSON.stringify({ kind: payload.kind, properties: payload.properties }),
+  });
+  const raw = await readJson<any>(res);
+  if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on registerDataSource');
+  return {
+    id: raw?.id || raw?.name,
+    name: raw?.name,
+    kind: raw?.kind,
+    endpoint: raw?.properties?.endpoint,
+    collectionId: raw?.properties?.collection?.referenceName,
+    raw,
+  };
+}
+
+/** DELETE /scan/datasources/{name} */
+export async function deleteDataSource(name: string): Promise<boolean> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'name is required');
+  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    apiVersion: SCAN_API_VERSION,
+  });
+  if (res.status === 404) return false;
+  await readJson<unknown>(res);
+  return true;
+}
+
+/** GET /scan/datasources/{name}/scans — scans defined on a source. */
+export async function listScansForSource(sourceName: string): Promise<PurviewScan[]> {
+  purviewAccount();
+  if (!sourceName) throw new PurviewError(400, null, 'sourceName is required');
+  const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(sourceName)}/scans`, { apiVersion: SCAN_API_VERSION });
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewScan => ({
+    id: raw?.id || raw?.name,
+    name: raw?.name,
+    kind: raw?.kind,
+    schedule: raw?.properties?.schedule,
+    raw,
+  }));
+}
+
+/** PUT /scan/datasources/{name}/scans/{scan}/runs/{runId} — trigger a scan run. */
+export async function triggerScanRun(sourceName: string, scanName: string): Promise<{ runId?: string; raw: unknown }> {
+  purviewAccount();
+  if (!sourceName || !scanName) throw new PurviewError(400, null, 'sourceName + scanName required');
+  const runId = `loom-${Date.now()}`;
+  const res = await purviewFetch(
+    `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}/runs/${runId}`,
+    { method: 'PUT', apiVersion: SCAN_API_VERSION },
+  );
+  const raw = await readJson<any>(res);
+  return { runId: raw?.runId || runId, raw };
+}
+
+/** GET /scan/datasources/{name}/scans/{scan}/runs — last N scan runs. */
+export async function listScanRuns(sourceName: string, scanName: string): Promise<PurviewScanRun[]> {
+  purviewAccount();
+  const res = await purviewFetch(
+    `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}/runs`,
+    { apiVersion: SCAN_API_VERSION },
+  );
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).slice(0, 10).map((raw): PurviewScanRun => ({
+    runId: raw?.id || raw?.runId,
+    status: raw?.status,
+    startTime: raw?.startTime,
+    endTime: raw?.endTime,
+    errorMessage: raw?.errorMessage,
+    raw,
+  }));
+}
+
+// ============================================================
+// NEW unified-catalog-only concepts — HONEST GATE.
+//
+// Business domains, data products, and unified-catalog data-quality rules live
+// behind the `/datagovernance` surface on a NEW unified-catalog account, which
+// the deployed CLASSIC Data Map account does not expose. Per no-vaporware.md we
+// keep the signatures and surface a typed honest-gate (NOT fabricated data,
+// NOT a generic 500). PurviewUnifiedCatalogGateError is a subclass of
+// PurviewNotConfiguredError so every existing BFF catch renders a 501/503 +
+// hint MessageBar while the full UI surface still renders.
+// ============================================================
+
+export interface PurviewDataProductPayload {
+  id?: string;
+  displayName?: string;
+  /** Compatibility: workspace-bindings passes `name`. */
+  name?: string;
+  description?: string;
+  domain?: string;
+  owner?: string;
+  sla?: string;
+  bundle?: string[];
+  type?: string;
+  endorsed?: boolean;
+  [k: string]: unknown;
+}
+
+export interface PurviewDataProduct {
+  id: string;
+  name: string;
+  description?: string;
+  domain?: string;
+  status?: string;
+  type?: string;
+  endorsed?: boolean;
+  contacts?: unknown;
+  documentation?: unknown;
+  updatedAt?: string;
+  raw?: unknown;
+}
+
+/**
+ * Honest gate: data products are a unified-catalog concept. On the classic Data
+ * Map account this throws PurviewUnifiedCatalogGateError so callers render the
+ * MessageBar. Use `registerAtlasEntity` to catalog physical assets instead.
+ */
+export async function registerDataProduct(_payload: PurviewDataProductPayload): Promise<PurviewDataProduct> {
+  // Touch the env var so an unset account still yields the precise "not
+  // configured" gate before the unified-catalog gate.
+  purviewAccount();
+  throw new PurviewUnifiedCatalogGateError('Data products');
+}
+
+export async function getDataProduct(_id: string): Promise<PurviewDataProduct | null> {
+  purviewAccount();
+  throw new PurviewUnifiedCatalogGateError('Data products');
+}
+
+export async function listDataProducts(_domain?: string): Promise<PurviewDataProduct[]> {
+  purviewAccount();
+  throw new PurviewUnifiedCatalogGateError('Data products');
+}
+
+export async function listBusinessDomains(): Promise<PurviewBusinessDomain[]> {
+  purviewAccount();
+  throw new PurviewUnifiedCatalogGateError('Business / governance domains');
+}
+
+export async function createBusinessDomain(_body: { name: string; description?: string; type?: string; parentId?: string }): Promise<PurviewBusinessDomain> {
+  purviewAccount();
+  throw new PurviewUnifiedCatalogGateError('Business / governance domains');
+}
+
+export async function deleteBusinessDomain(_id: string): Promise<void> {
+  purviewAccount();
+  throw new PurviewUnifiedCatalogGateError('Business / governance domains');
+}
+
+/**
+ * Honest gate: the unified-catalog Data Quality preview lives under
+ * `/datagovernance/dataquality` on a new-experience account. Returns the gate
+ * via throw so the panel renders the MessageBar (classic Data Map has no
+ * equivalent rules surface).
+ */
+export async function listDataQualityRules(): Promise<PurviewDataQualityRule[]> {
+  purviewAccount();
+  throw new PurviewUnifiedCatalogGateError('Unified-catalog data-quality rules');
 }

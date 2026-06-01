@@ -5,7 +5,7 @@ export default function DataAgentPage() {
   return (
     <PageShell
       title="Data agent"
-      subtitle="Conversational Q&A grounded in your data. The cross-item Copilot orchestrator at /copilot is the production surface; this pane is preserved as a single-agent entry-point for tenants that pin a specific agent."
+      subtitle="Pick a published data agent and ask plain-language questions grounded in your warehouse, lakehouse, semantic models, and KQL. The cross-item orchestrator lives at /copilot."
     >
       <DataAgentPane />
     </PageShell>
