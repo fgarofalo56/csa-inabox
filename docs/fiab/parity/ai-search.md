@@ -5,8 +5,14 @@
 > F=scaffold). When in doubt, graded DOWN. A UI with no real backend is NOT
 > "built".
 >
-> **Audit date:** 2026-05-31
-> **Verdict:** **C (functional but rough — real backend, partial UI parity)**
+> **Audit date:** 2026-05-31 (rev. 2 — corrected after re-reading the editor.
+> rev. 1 marked the visual field designer and the search-explorer query options
+> as MISSING; both are in fact BUILT. The doc lagged behind the code shipped in
+> the navigator parity program.)
+> **Verdict:** **B (production-grade — real backend, near-1:1 UI parity for the
+> index field designer + search explorer; remaining gaps are admin/preview
+> surfaces, listed below).** Live visual functional verification still pends
+> operator MSAL login.
 >
 > This doc supersedes/consolidates the older split docs `ai-search-service.md`
 > (the service navigator tree) and `ai-search-index.md` (the index editor).
@@ -129,8 +135,8 @@ MISSING ❌
 ### B. Index designer / management
 | # | Capability | Loom status | Where |
 |---|------------|-------------|-------|
-| 8 | **Visual field designer** (add/remove fields, toggle attribute checkboxes, analyzer/type pickers) | ❌ MISSING | Schema tab is a **read-only grid** + raw JSON Monaco editor. No per-field add/edit UI; the portal's flagship index designer is absent. |
-| 8 | Field grid (read-only view of attributes) | ✅ built | Schema tab table |
+| 8 | **Visual field designer** (add/remove fields, toggle attribute checkboxes, analyzer/type pickers) | ✅ built | Schema tab is now a full per-field designer: ＋Add field, per-row Name `Input`, Type `Dropdown` (FIELD_TYPES), Key/Searchable/Filterable/Sortable/Facetable/Retrievable `Checkbox`es (vector-aware disabling), analyzer `Dropdown` for searchable strings, dimensions + vector-profile pickers for vector fields, per-row Delete. Save → real `PUT /indexes/{name}`; Revert; dirty-state guard. `foundry-sub-editors.tsx:1146-1249` |
+| 8 | Field grid (read-only view of attributes) | ✅ built | superseded by the editable designer above |
 | 9 | Semantic configuration **designer** | ⚠️ honest-gate | "Not yet wired" row; editable only via Schema JSON |
 | 10 | Vector profile / algorithm / vectorizer **designer** | ⚠️ honest-gate | "Not yet wired" row; editable only via Schema JSON; vector profiles shown read-only as a `Caption1` |
 | 11 | Scoring-profile designer | ❌ MISSING (JSON-only) | only via raw Schema JSON; no designer, not even flagged |
@@ -157,8 +163,9 @@ MISSING ❌
 |---|------------|-------------|-------|
 | 21 | **Import data** wizard (datasource+skillset+index+indexer in one flow, chunking + vectorization) | ⚠️ honest-gate | "Not yet wired" row; user must build each piece individually |
 | 22 | **Search explorer** — basic query (search/filter/select/top), results grid, facets, count | ✅ built | Search tab → `POST /docs/search` |
-| 22 | Search explorer — **Query options** (semantic / vector / queryType picker / search fields / orderby UI / highlights / JSON view) | ❌ MISSING | UI only sends search/filter/select/top. Backend `SearchRequest` supports `queryType` + `vectorQueries`, but the **editor exposes no control** to set them, so semantic/vector queries are unreachable from the UI. |
-| 22 | Semantic captions / answers rendering | ❌ MISSING | results are a flat field table |
+| 22 | Search explorer — **Query options** (semantic / vector / queryType picker / search fields / orderby / select / top / count / filter) | ✅ built | queryType `Dropdown` (simple/full/semantic), semantic-config picker, search-fields, OData filter, select, orderby, top, count — all wired into the real `POST /docs/search` payload, with the raw request body echoed. `foundry-sub-editors.tsx:1267-1370` |
+| 22 | **Vector query builder** (k-NN / hybrid; text-vectorize or raw embedding; per-query field + k) | ✅ built | ＋Add vector query, kind text/vector, field picker, k; posts `vectorQueries[]`. `foundry-sub-editors.tsx:1312-1358` |
+| 22 | Semantic captions / answers rendering | ✅ built | answers card (score + text) + reranker-score column when present. `foundry-sub-editors.tsx:1376-1401` |
 | 23 | Create demo app (HTML page) | ❌ MISSING | not present |
 | 24 | Debug sessions (visual skillset debugger) | ⚠️ honest-gate | "Not yet wired" row |
 | 25 | Analyze text → tokens | ✅ built | Search tab Analyze card → `POST /indexes/{n}/analyze` |
