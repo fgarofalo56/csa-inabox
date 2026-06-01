@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Tooltip,
   Tree, TreeItem, TreeItemLayout,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -21,7 +21,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Pause20Regular,
-  ArrowSync20Regular, Folder20Regular, Lightbulb20Regular,
+  ArrowSync20Regular, Folder20Regular, Lightbulb20Regular, ArrowDownload20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -40,7 +40,8 @@ const useStyles = makeStyles({
     resize: 'vertical',
   },
   resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 200 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 },
+  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
   tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
   treePad: { padding: 8 },
@@ -63,6 +64,27 @@ function formatCell(v: unknown): string {
   if (v === null || v === undefined) return 'NULL';
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
+}
+
+// ── Results export (CSV / JSON) — client-side, no extra route ──
+function downloadBlob(filename: string, mime: string, data: string) {
+  const blob = new Blob([data], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+function csvEscape(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  const str = typeof v === 'object' ? JSON.stringify(v) : String(v);
+  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+function resultsToCsv(columns: string[], rows: unknown[][]): string {
+  return [columns.map(csvEscape).join(','), ...rows.map((r) => columns.map((_, j) => csvEscape(r[j])).join(','))].join('\r\n');
+}
+function resultsToJson(columns: string[], rows: unknown[][]): string {
+  return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, j) => [c, r[j] ?? null]))), null, 2);
 }
 
 function ResultsPanel({ result, loading }: { result: QueryResponse | null; loading: boolean }) {
@@ -95,12 +117,25 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
   }
   const rows = result.rows || [];
   const columns = result.columns || [];
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   return (
     <div className={s.resultBox}>
       <div className={s.resultMeta}>
         <Badge appearance="filled" color="success">{result.rowCount ?? rows.length} rows</Badge>
         <Caption1>· {result.executionMs} ms</Caption1>
         {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
+        {rows.length > 0 && (
+          <div className={s.resultActions}>
+            <Tooltip content="Download results as CSV" relationship="label">
+              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                onClick={() => downloadBlob(`query-results-${stamp}.csv`, 'text/csv', resultsToCsv(columns, rows))}>CSV</Button>
+            </Tooltip>
+            <Tooltip content="Download results as JSON" relationship="label">
+              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                onClick={() => downloadBlob(`query-results-${stamp}.json`, 'application/json', resultsToJson(columns, rows))}>JSON</Button>
+            </Tooltip>
+          </div>
+        )}
       </div>
       {rows.length === 0 ? (
         <Caption1>Query returned no rows.</Caption1>
@@ -183,6 +218,19 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
       setLoading(false);
     }
   }, [id, sqlText, database]);
+
+  // Ctrl+S / Cmd+S → Run (SSMS / Azure Data Studio muscle memory). T-SQL text
+  // is ephemeral query state, so the surfaced save action is Run.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (!loading) run();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [loading, run]);
 
   // Ribbon — every action is wired. Query actions run through the wired /query
   // TDS path; the catalog actions load real DMV / OPENROWSET T-SQL into the
@@ -428,6 +476,18 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const state = poolState?.state || 'Unknown';
   const isOnline = state === 'Online';
   const schemaTree = useMemo(() => Object.entries(schema?.schemas || {}), [schema]);
+
+  // Ctrl+S / Cmd+S → Run when the pool is Online (SSMS muscle memory).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (isOnline && !loading) run();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOnline, loading, run]);
 
   // Ribbon — every action is wired. State actions hit ARM/TDS routes; Query +
   // Manage actions load real DMV T-SQL into the editor so Run executes them via

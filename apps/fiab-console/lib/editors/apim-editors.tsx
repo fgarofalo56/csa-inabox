@@ -27,7 +27,7 @@ import {
 import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
-  ArrowImport20Regular, Add20Regular, Delete20Regular,
+  ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ApimTree } from '@/lib/components/apim/apim-tree';
@@ -313,6 +313,11 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const save = useCallback(async () => {
     if (!displayName.trim() || !path.trim()) {
       setStatus({ kind: 'err', msg: 'displayName and path are required' });
+      return;
+    }
+    if (protocols.length === 0) {
+      // APIM rejects an API with no protocols — guard client-side with a clear message.
+      setStatus({ kind: 'err', msg: 'Select at least one protocol (https / http / ws / wss).' });
       return;
     }
     setStatus({ kind: 'saving' });
@@ -636,7 +641,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'API', actions: [
-        { label: status.kind === 'saving' ? 'Saving…' : 'Save', onClick: status.kind !== 'saving' && (isNew || dirty) && displayName.trim() && path.trim() ? save : undefined, disabled: status.kind === 'saving' || (!isNew && !dirty) || !displayName.trim() || !path.trim(), title: !displayName.trim() || !path.trim() ? 'displayName and path are required' : (!dirty && !isNew ? 'No unsaved changes' : undefined) },
+        { label: status.kind === 'saving' ? 'Saving…' : 'Save', onClick: status.kind !== 'saving' && (isNew || dirty) && displayName.trim() && path.trim() && protocols.length > 0 ? save : undefined, disabled: status.kind === 'saving' || (!isNew && !dirty) || !displayName.trim() || !path.trim() || protocols.length === 0, title: !displayName.trim() || !path.trim() ? 'displayName and path are required' : protocols.length === 0 ? 'Select at least one protocol' : (!dirty && !isNew ? 'No unsaved changes' : undefined) },
         { label: 'Reload', onClick: !isNew ? () => { load(); loadOps(); loadSpec(); } : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
       { label: 'Definition', actions: [
@@ -657,7 +662,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
         { label: 'API policy', onClick: !isNew ? () => router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=api&apiId=${encodeURIComponent(id)}`) : undefined, disabled: isNew, title: isNew ? 'Save the API first' : 'Edit the API-scope policy XML' },
       ]},
     ]},
-  ], [status.kind, isNew, dirty, displayName, path, save, load, loadOps, loadSpec, spec.data, openSpecEditor, openOas, openNewOp, router, id]);
+  ], [status.kind, isNew, dirty, displayName, path, protocols, save, load, loadOps, loadSpec, spec.data, openSpecEditor, openOas, openNewOp, router, id]);
 
   const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
@@ -688,7 +693,13 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
             <Badge appearance="outline">{api.data?.name || id}</Badge>
             {subscriptionRequired && <Badge appearance="outline">Subscription required</Badge>}
             {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
-            <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving' || (!isNew && !dirty)}>
+            <Button
+              appearance="primary"
+              icon={<Save20Regular />}
+              onClick={save}
+              disabled={status.kind === 'saving' || (!isNew && !dirty) || !displayName.trim() || !path.trim() || protocols.length === 0}
+              title={!displayName.trim() || !path.trim() ? 'Display name and path are required' : protocols.length === 0 ? 'Select at least one protocol' : (!dirty && !isNew ? 'No unsaved changes' : undefined)}
+            >
               {status.kind === 'saving' ? 'Saving…' : isNew ? 'Create' : 'Save'}
             </Button>
             <Button appearance="outline" icon={<CloudArrowUp20Regular />} onClick={openOas}>Import from OpenAPI</Button>
@@ -804,7 +815,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                     selectedOptions={testOpName ? [testOpName] : []}
                     onOptionSelect={(_, d) => d.optionValue && pickTestOp(d.optionValue)}
                   >
-                    {(ops.data || []).map((op) => <Option key={op.name} value={op.name}>{op.method} {op.urlTemplate}</Option>)}
+                    {(ops.data || []).map((op) => <Option key={op.name} value={op.name}>{`${op.method} ${op.urlTemplate}`}</Option>)}
                   </Dropdown>
                 </Field>
                 <Field label="Method">
@@ -849,6 +860,17 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
 
           {tab === 'revisions' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Honest gate per ui-parity.md: APIM also offers API *versions* /
+                  version sets (segment/header/query scheme) alongside revisions.
+                  That is a distinct, heavier ARM surface (apiVersionSets +
+                  per-version apis) with no BFF route yet, so it is flagged rather
+                  than stubbed. Revisions below are fully live. */}
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Revisions are live. Versions / version sets are a tracked gap.</MessageBarTitle>
+                  API <em>versions</em> (segment / header / query-string scheme via <code>apiVersionSets</code>) are not built yet — they need a dedicated <code>/api/apim/version-sets</code> route. Revision list, create, and release (make-current) below all call real ARM.
+                </MessageBarBody>
+              </MessageBar>
               <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <Subtitle2>Create revision</Subtitle2>
                 <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -1121,6 +1143,25 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   // Subscriptions.
   const [subs, setSubs] = useState<LoadState<any[]>>({ loading: false, data: null });
+  // Per-subscription key reveal. APIM never returns keys on GET; the real
+  // POST /api/marketplace/subscriptions/[sid]/keys route resolves them via
+  // listSecrets server-side. Keyed by subscription name; cleared on tab leave.
+  const [subKeys, setSubKeys] = useState<Record<string, { primaryKey?: string; secondaryKey?: string }>>({});
+  const [subKeyBusy, setSubKeyBusy] = useState<string | null>(null);
+  const [subKeyErr, setSubKeyErr] = useState<{ sid: string; msg: string } | null>(null);
+
+  const revealSubKeys = useCallback(async (sid: string) => {
+    // Toggle off if already revealed.
+    if (subKeys[sid]) { setSubKeys((cur) => { const n = { ...cur }; delete n[sid]; return n; }); return; }
+    setSubKeyBusy(sid); setSubKeyErr(null);
+    try {
+      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}/keys`, { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) { setSubKeyErr({ sid, msg: j.error || `HTTP ${r.status}` }); return; }
+      setSubKeys((cur) => ({ ...cur, [sid]: { primaryKey: j.primaryKey, secondaryKey: j.secondaryKey } }));
+    } catch (e: any) { setSubKeyErr({ sid, msg: e?.message || String(e) }); }
+    finally { setSubKeyBusy(null); }
+  }, [subKeys]);
 
   const loadApis = useCallback(async () => {
     if (isNew) return;
@@ -1136,6 +1177,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
   const loadSubs = useCallback(async () => {
     if (isNew) return;
     setSubs({ loading: true, data: null });
+    setSubKeys({}); setSubKeyErr(null); // re-conceal keys on every reload
     try {
       const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}/subscriptions`);
       const j = await r.json();
@@ -1299,7 +1341,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
           <Tab value="settings" icon={<Document20Regular />}>Settings</Tab>
           <Tab value="apis" icon={<Code20Regular />} disabled={isNew}>APIs</Tab>
-          <Tab value="subs" icon={<Library20Regular />} disabled={isNew}>Subscriptions</Tab>
+          <Tab value="subs" icon={<Key20Regular />} disabled={isNew}>Subscriptions</Tab>
         </TabList>
 
         {tab === 'settings' && (
@@ -1341,7 +1383,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                   selectedOptions={addApiId ? [addApiId] : []}
                   onOptionSelect={(_, d) => setAddApiId(d.optionValue || '')}
                 >
-                  {(apis.data?.allApis || []).map((a: any) => <Option key={a.name} value={a.name}>{a.displayName} ({a.name})</Option>)}
+                  {(apis.data?.allApis || []).map((a: any) => <Option key={a.name} value={a.name}>{`${a.displayName} (${a.name})`}</Option>)}
                 </Dropdown>
               </Field>
               <Button appearance="primary" icon={<Add20Regular />} onClick={addApi} disabled={apiBusy || !addApiId}>Add</Button>
@@ -1376,7 +1418,23 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
 
         {tab === 'subs' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadSubs} style={{ alignSelf: 'flex-start' }}>Reload</Button>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadSubs}>Reload</Button>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Subscriptions scoped to this product. Use <strong>Show keys</strong> to reveal the primary/secondary key (resolved server-side via listSecrets — keys never persist in the browser).
+              </Caption1>
+            </div>
+            {/* Honest gate: APIM exposes Suspend / Activate / Cancel state transitions and
+                key regeneration on subscriptions. Those write-paths have no BFF route in
+                this deployment yet, so they are surfaced as a tracked gap rather than a
+                dead button. */}
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>Read + reveal only</MessageBarTitle>
+                State transitions (Suspend / Activate / Cancel) and key <em>regeneration</em> are not yet wired — they need a
+                {' '}<code>PATCH/POST /api/apim/subscriptions/&#123;sid&#125;</code> route (<code>updateSubscriptionState</code> / <code>regenerateSubscriptionKey</code> on the ARM client). Reveal + copy below are live.
+              </MessageBarBody>
+            </MessageBar>
             {subs.loading && <Spinner size="tiny" label="Loading subscriptions…" labelPosition="after" />}
             {subs.error && <MessageBar intent="warning"><MessageBarBody>{subs.error}</MessageBarBody></MessageBar>}
             {subs.data && (
@@ -1386,19 +1444,50 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                   <TableHeaderCell>Display name</TableHeaderCell>
                   <TableHeaderCell>State</TableHeaderCell>
                   <TableHeaderCell>Created</TableHeaderCell>
+                  <TableHeaderCell>Keys</TableHeaderCell>
                 </TableRow></TableHeader>
                 <TableBody>
                   {subs.data.length === 0 && (
-                    <TableRow><TableCell>No subscriptions to this product.</TableCell><TableCell /><TableCell /><TableCell /></TableRow>
+                    <TableRow><TableCell>No subscriptions to this product.</TableCell><TableCell /><TableCell /><TableCell /><TableCell /></TableRow>
                   )}
-                  {subs.data.map((sub: any) => (
-                    <TableRow key={sub.name}>
-                      <TableCell><code>{sub.name}</code></TableCell>
-                      <TableCell>{sub.displayName || '—'}</TableCell>
-                      <TableCell><Badge appearance="outline" color={sub.state === 'active' ? 'success' : 'informative'}>{sub.state || '—'}</Badge></TableCell>
-                      <TableCell>{sub.createdDate || '—'}</TableCell>
-                    </TableRow>
-                  ))}
+                  {subs.data.map((sub: any) => {
+                    const revealed = subKeys[sub.name];
+                    return (
+                      <TableRow key={sub.name}>
+                        <TableCell><code>{sub.name}</code></TableCell>
+                        <TableCell>{sub.displayName || '—'}</TableCell>
+                        <TableCell><Badge appearance="outline" color={sub.state === 'active' ? 'success' : 'informative'}>{sub.state || '—'}</Badge></TableCell>
+                        <TableCell>{sub.createdDate || '—'}</TableCell>
+                        <TableCell>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <Button
+                              size="small"
+                              icon={revealed ? <EyeOff20Regular /> : <Eye20Regular />}
+                              onClick={() => revealSubKeys(sub.name)}
+                              disabled={subKeyBusy === sub.name}
+                              aria-label={revealed ? `Hide keys for ${sub.name}` : `Show keys for ${sub.name}`}
+                            >
+                              {subKeyBusy === sub.name ? 'Revealing…' : revealed ? 'Hide keys' : 'Show keys'}
+                            </Button>
+                            {subKeyErr && subKeyErr.sid === sub.name && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{subKeyErr.msg}</Caption1>}
+                            {revealed && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                {(['primaryKey', 'secondaryKey'] as const).map((k) => (
+                                  <div key={k} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                    <Caption1 style={{ color: tokens.colorNeutralForeground3, minWidth: 64 }}>{k === 'primaryKey' ? 'Primary' : 'Secondary'}</Caption1>
+                                    <code style={{ fontSize: 11, wordBreak: 'break-all', maxWidth: 240 }}>{revealed[k] || '—'}</code>
+                                    {revealed[k] && (
+                                      <Button size="small" appearance="transparent" icon={<Copy20Regular />} aria-label={`Copy ${k === 'primaryKey' ? 'primary' : 'secondary'} key`} onClick={() => navigator.clipboard?.writeText(revealed[k]!).catch(() => {})} />
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
@@ -1628,6 +1717,7 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add policy snippet:</Caption1>
           <Dropdown
+            aria-label="Add a policy snippet to the editor"
             placeholder="Choose a snippet…"
             selectedOptions={[]}
             value=""
@@ -1640,6 +1730,17 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
           </Dropdown>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Inserts into the matching inbound/outbound section.</Caption1>
         </div>
+        {/* Honest gate per ui-parity.md: the Azure portal also ships a form-based
+            "+ Add policy" guided editor, an effective-policy (inherited base
+            resolution) view, and reusable policy fragments. The code editor below
+            is full-fidelity, but those three surfaces are genuinely heavy and
+            backend-gated, so they are flagged as tracked gaps rather than faked. */}
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <MessageBarTitle>Code editor (full XML). Three portal surfaces are tracked gaps.</MessageBarTitle>
+            The form-based guided editor, <em>Calculate effective policy</em> (inherited <code>&lt;base/&gt;</code> resolution), and reusable <em>policy fragments</em> are not built yet — each needs a dedicated ARM read (<code>policies?format=rawxml</code> effective resolution / <code>policyFragments</code> CRUD). The XML editor, snippet gallery, scope selector, validation, and save are all live.
+          </MessageBarBody>
+        </MessageBar>
         <MonacoTextarea
           value={value}
           onChange={(v) => { setValue(v); setDirty(true); }}

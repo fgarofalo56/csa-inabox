@@ -190,6 +190,9 @@ export function LakehouseEditor({ item, id }: Props) {
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSparkConfText, setSettingsSparkConfText] = useState('');
+  // Real deployed Synapse Spark pools — bind the "Default Spark pool" field to
+  // an enumerated picker (no freeform compute input) per the UI-parity rule.
+  const [sparkPools, setSparkPools] = useState<{ name: string }[] | null>(null);
 
   // ---- Fabric-style context menu (right-click on tree / table nodes) ----
   // Anchored at the cursor via a virtual positioning target, mirroring the
@@ -206,116 +209,14 @@ export function LakehouseEditor({ item, id }: Props) {
     setCtxOpen(true);
   }, []);
 
-  // ---- Shortcuts (OneLake virtualization) state ----
-  interface ShortcutTarget { type?: string; adlsGen2?: any; amazonS3?: any; oneLake?: any }
-  interface ShortcutRow { name: string; path: string; target?: ShortcutTarget }
-  // The Fabric OneLake shortcuts REST needs a Fabric workspaceId + lakehouse
-  // itemId. An ADLS-backed Loom lakehouse has no native Fabric binding, so the
-  // operator supplies them (persisted in localStorage per item) — and the full
-  // create dialog still renders even before they're set.
-  const [scWorkspaceId, setScWorkspaceId] = useState('');
-  const [scItemId, setScItemId] = useState('');
-  const [shortcuts, setShortcuts] = useState<ShortcutRow[] | null>(null);
-  const [scBusy, setScBusy] = useState(false);
-  const [scError, setScError] = useState<string | null>(null);
-  const [scStatus, setScStatus] = useState<string | null>(null);
-  // create-shortcut dialog
-  const [scDialogOpen, setScDialogOpen] = useState(false);
-  const [scTargetType, setScTargetType] = useState<'adlsGen2' | 'amazonS3' | 'oneLake'>('adlsGen2');
-  const [scName, setScName] = useState('');
-  const [scPath, setScPath] = useState<'Files' | 'Tables'>('Files');
-  const [scSubfolder, setScSubfolder] = useState('');
-  const [scLocation, setScLocation] = useState('');
-  const [scSubpath, setScSubpath] = useState('');
-  const [scConnectionId, setScConnectionId] = useState('');
-  const [scOlWorkspaceId, setScOlWorkspaceId] = useState('');
-  const [scOlItemId, setScOlItemId] = useState('');
-  const [scOlPath, setScOlPath] = useState('');
-
-  // Restore any previously-saved Fabric binding for this lakehouse item.
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(`loom.lakehouse.fabricBinding.${id}`);
-      if (raw) {
-        const b = JSON.parse(raw);
-        if (b.workspaceId) setScWorkspaceId(b.workspaceId);
-        if (b.itemId) setScItemId(b.itemId);
-      }
-    } catch { /* ignore */ }
-  }, [id]);
-
-  const persistBinding = useCallback((ws: string, it: string) => {
-    try {
-      localStorage.setItem(`loom.lakehouse.fabricBinding.${id}`, JSON.stringify({ workspaceId: ws, itemId: it }));
-    } catch { /* ignore */ }
-  }, [id]);
-
-  const loadShortcuts = useCallback(async () => {
-    if (!scWorkspaceId.trim() || !scItemId.trim()) { setShortcuts(null); return; }
-    setScBusy(true); setScError(null);
-    try {
-      const qs = new URLSearchParams({ workspaceId: scWorkspaceId.trim(), itemId: scItemId.trim() });
-      const r = await fetch(`/api/catalog/shortcut?${qs.toString()}`);
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; shortcuts?: ShortcutRow[] }>(r, 'List shortcuts');
-      if (!j.ok) throw new Error((j.error || `HTTP ${r.status}`) + ((j as any).hint ? ` — ${(j as any).hint}` : ''));
-      setShortcuts(j.shortcuts || []);
-    } catch (e: any) { setScError(e?.message || String(e)); setShortcuts(null); }
-    finally { setScBusy(false); }
-  }, [scWorkspaceId, scItemId]);
-
-  const createShortcut = useCallback(async () => {
-    if (!scWorkspaceId.trim() || !scItemId.trim() || !scName.trim()) return;
-    setScBusy(true); setScError(null); setScStatus(null);
-    try {
-      let target: ShortcutTarget;
-      if (scTargetType === 'oneLake') {
-        if (!scOlWorkspaceId.trim() || !scOlItemId.trim() || !scOlPath.trim()) {
-          throw new Error('OneLake target requires source workspace id, item id, and path.');
-        }
-        target = { oneLake: { workspaceId: scOlWorkspaceId.trim(), itemId: scOlItemId.trim(), path: scOlPath.trim() } };
-      } else {
-        if (!scLocation.trim() || !scSubpath.trim()) {
-          throw new Error(`${scTargetType === 'amazonS3' ? 'S3' : 'ADLS Gen2'} target requires location and subpath.`);
-        }
-        if (!scConnectionId.trim()) {
-          throw new Error('A cloud connection id is required for external targets. Create the connection in Fabric → Manage connections, then paste its GUID.');
-        }
-        const inner = { location: scLocation.trim(), subpath: scSubpath.trim(), connectionId: scConnectionId.trim() };
-        target = scTargetType === 'amazonS3' ? { amazonS3: inner } : { adlsGen2: inner };
-      }
-      const fullPath = scSubfolder.trim() ? `${scPath}/${scSubfolder.trim().replace(/^\/+|\/+$/g, '')}` : scPath;
-      const r = await fetch('/api/catalog/shortcut', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: scWorkspaceId.trim(), itemId: scItemId.trim(), name: scName.trim(), path: fullPath, target }),
-      });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; shortcut?: ShortcutRow }>(r, 'Create shortcut');
-      if (!j.ok) throw new Error((j.error || `HTTP ${r.status}`) + ((j as any).hint ? ` — ${(j as any).hint}` : ''));
-      persistBinding(scWorkspaceId.trim(), scItemId.trim());
-      setScStatus(`Shortcut ${scName.trim()} created at ${new Date().toLocaleTimeString()}`);
-      setScDialogOpen(false);
-      setScName(''); setScSubfolder(''); setScLocation(''); setScSubpath(''); setScConnectionId('');
-      setScOlWorkspaceId(''); setScOlItemId(''); setScOlPath('');
-      await loadShortcuts();
-    } catch (e: any) { setScError(e?.message || String(e)); }
-    finally { setScBusy(false); }
-  }, [scWorkspaceId, scItemId, scName, scPath, scSubfolder, scTargetType, scLocation, scSubpath, scConnectionId, scOlWorkspaceId, scOlItemId, scOlPath, persistBinding, loadShortcuts]);
-
-  const deleteShortcut = useCallback(async (sc: ShortcutRow) => {
-    if (!scWorkspaceId.trim() || !scItemId.trim()) return;
-    // eslint-disable-next-line no-alert
-    const ok = typeof window !== 'undefined' ? window.confirm(`Delete shortcut ${sc.name}?`) : false;
-    if (!ok) return;
-    setScBusy(true); setScError(null); setScStatus(null);
-    try {
-      const qs = new URLSearchParams({ workspaceId: scWorkspaceId.trim(), itemId: scItemId.trim(), path: sc.path, name: sc.name });
-      const r = await fetch(`/api/catalog/shortcut?${qs.toString()}`, { method: 'DELETE' });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Delete shortcut');
-      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setScStatus(`Shortcut ${sc.name} deleted at ${new Date().toLocaleTimeString()}`);
-      await loadShortcuts();
-    } catch (e: any) { setScError(e?.message || String(e)); }
-    finally { setScBusy(false); }
-  }, [scWorkspaceId, scItemId, loadShortcuts]);
+  // ---- Shortcuts tab (honest infra-gate) ----
+  // The Fabric OneLake Shortcuts REST that previously backed this tab is a hard
+  // Fabric dependency the product must not have (see
+  // docs/fiab/design/lakehouse-shortcuts.md). The Azure-native shortcut engine
+  // (ADLS Gen2 + Databricks Unity Catalog + Synapse Serverless external tables,
+  // Cosmos registry) is a separately tracked build. Until that backend lands,
+  // this tab renders an honest infra-gate — no Fabric binding, no Fabric POST,
+  // no dead controls.
 
   const loadPerms = useCallback(async () => {
     if (!activeContainer) return;
@@ -381,10 +282,27 @@ export function LakehouseEditor({ item, id }: Props) {
     finally { setSettingsBusy(false); }
   }, [activeContainer]);
 
+  const loadSparkPools = useCallback(async () => {
+    try {
+      const r = await fetch('/api/loom/compute-targets');
+      const j = await parseJsonOrError<{ ok: boolean; computes?: { name: string; kind: string }[] }>(r, 'List compute');
+      if (j.ok && Array.isArray(j.computes)) {
+        setSparkPools(
+          j.computes
+            .filter((c) => c.kind === 'synapse-spark')
+            .map((c) => ({ name: c.name.replace(/\s*\(Synapse Spark\)\s*$/, '') })),
+        );
+      } else {
+        setSparkPools([]);
+      }
+    } catch { setSparkPools([]); }
+  }, []);
+
   const openSettings = useCallback(() => {
     setSettingsOpen(true);
     loadSettings();
-  }, [loadSettings]);
+    if (sparkPools === null) loadSparkPools();
+  }, [loadSettings, loadSparkPools, sparkPools]);
 
   const saveSettings = useCallback(async () => {
     if (!activeContainer) return;
@@ -695,7 +613,7 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [openPrefixes, activeContainer, currentPrefix, cacheKey]);
 
   // ---- tree renderer --------------------------------------------------
-  function renderTreeChildren(container: string, prefix: string): JSX.Element {
+  function renderTreeChildren(container: string, prefix: string): React.ReactElement {
     const state = openPrefixes[cacheKey(container, prefix)];
     if (state === undefined) {
       return (
@@ -1024,89 +942,45 @@ export function LakehouseEditor({ item, id }: Props) {
               <>
                 <div className={s.toolbar}>
                   <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
-                  <Caption1>OneLake shortcuts — virtualize external storage into the lakehouse without copying data</Caption1>
-                  <Button appearance="primary" icon={<LinkMultiple20Regular />}
-                    style={{ marginLeft: 'auto' }}
-                    disabled={!scWorkspaceId.trim() || !scItemId.trim()}
-                    onClick={() => { setScError(null); setScStatus(null); setScDialogOpen(true); }}>
-                    New shortcut
-                  </Button>
-                  <Button appearance="outline" icon={<ArrowSync20Regular />}
-                    disabled={!scWorkspaceId.trim() || !scItemId.trim() || scBusy}
-                    onClick={loadShortcuts}>
-                    Refresh
-                  </Button>
+                  <Caption1>Shortcuts — virtualize external storage into the lakehouse without copying data (zero-copy)</Caption1>
                 </div>
 
-                {/* Fabric binding — the OneLake shortcuts REST keys off a Fabric
-                    workspaceId + lakehouse itemId. An ADLS-backed Loom lakehouse
-                    has no native Fabric binding, so the operator supplies them
-                    once (persisted per item). The full surface renders either way. */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, maxWidth: 720 }}>
-                  <Field label="Fabric workspace id" hint="GUID of the Fabric workspace hosting the lakehouse">
-                    <Input value={scWorkspaceId} placeholder="cfafbeb1-8037-4d0c-896e-a46fb27ff222"
-                      onChange={(_, d) => setScWorkspaceId(d.value)}
-                      onBlur={() => { if (scWorkspaceId.trim() && scItemId.trim()) { persistBinding(scWorkspaceId.trim(), scItemId.trim()); loadShortcuts(); } }} />
-                  </Field>
-                  <Field label="Fabric lakehouse item id" hint="GUID of the Lakehouse item in that workspace">
-                    <Input value={scItemId} placeholder="25bac802-080d-4f73-8a42-1b406eb1fceb"
-                      onChange={(_, d) => setScItemId(d.value)}
-                      onBlur={() => { if (scWorkspaceId.trim() && scItemId.trim()) { persistBinding(scWorkspaceId.trim(), scItemId.trim()); loadShortcuts(); } }} />
-                  </Field>
-                </div>
+                {/* Honest infra-gate. Azure-native shortcuts (no Fabric
+                    dependency) are a separately tracked engine build. We do NOT
+                    bind to Fabric here and we do NOT POST to a Fabric endpoint —
+                    that would be a hard Fabric dependency the product must not
+                    have. See docs/fiab/design/lakehouse-shortcuts.md. */}
+                <MessageBar intent="warning" layout="multiline">
+                  <MessageBarBody>
+                    <MessageBarTitle>Azure-native shortcuts are coming to this lakehouse</MessageBarTitle>
+                    A shortcut is a named, zero-copy pointer that surfaces external data as a
+                    folder under <code>Files</code> or a table under <code>Tables</code> — no ETL,
+                    no byte copy. CSA Loom virtualizes this using the engines already deployed
+                    with your data landing zone, with <strong>no Microsoft Fabric dependency</strong>:
+                    <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+                      <li><strong>ADLS Gen2 / internal Loom lakehouse</strong> — resolved via the Console UAMI
+                        (<code>LOOM_UAMI_CLIENT_ID</code>, Storage Blob Data Reader on the target account); no extra credential.</li>
+                      <li><strong>Tables shortcuts</strong> register as external tables via
+                        <strong> Synapse Serverless</strong> (<code>LOOM_SYNAPSE_WORKSPACE</code>) or
+                        <strong> Databricks Unity Catalog</strong> (<code>LOOM_DATABRICKS_HOSTNAME</code>),
+                        queryable from the SQL and Notebook surfaces.</li>
+                      <li><strong>Amazon S3 / GCS / S3-compatible / Dataverse</strong> — honest-gated until a
+                        Key Vault <code>credentialRef</code> secret is configured.</li>
+                    </ul>
+                    The shortcut registry is a Cosmos container (<code>lakehouse-shortcuts</code>); definitions are
+                    idempotently re-creatable on redeploy. Tracked design + build plan:
+                    {' '}<code>docs/fiab/design/lakehouse-shortcuts.md</code>.
+                  </MessageBarBody>
+                </MessageBar>
 
-                {(!scWorkspaceId.trim() || !scItemId.trim()) && (
-                  <MessageBar intent="warning">
-                    <MessageBarBody>
-                      <MessageBarTitle>Bind a Fabric lakehouse to manage shortcuts</MessageBarTitle>
-                      Enter the Fabric workspace id and lakehouse item id above. Shortcuts are created
-                      via the real Fabric OneLake Shortcuts REST API
-                      (<code>POST /v1/workspaces/&#123;ws&#125;/items/&#123;lakehouse&#125;/shortcuts</code>),
-                      which requires the Console UAMI added as Member/Admin on that workspace and the
-                      tenant setting <em>“Service principals can use Fabric APIs”</em> enabled.
-                    </MessageBarBody>
-                  </MessageBar>
-                )}
-
-                {scError && (
-                  <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Shortcuts error</MessageBarTitle>{scError}</MessageBarBody></MessageBar>
-                )}
-                {scStatus && !scError && (
-                  <MessageBar intent="success"><MessageBarBody>{scStatus}</MessageBarBody></MessageBar>
-                )}
-                {scBusy && <Spinner size="small" label="Calling Fabric REST…" labelPosition="after" />}
-
-                {scWorkspaceId.trim() && scItemId.trim() && shortcuts && (
-                  <div className={s.tableWrap}>
-                    <Table aria-label="OneLake shortcuts" size="small">
-                      <TableHeader>
-                        <TableRow>
-                          <TableHeaderCell>Name</TableHeaderCell>
-                          <TableHeaderCell>Path</TableHeaderCell>
-                          <TableHeaderCell>Target</TableHeaderCell>
-                          <TableHeaderCell>Action</TableHeaderCell>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {shortcuts.length === 0 && (
-                          <TableRow><TableCell colSpan={4}>
-                            <div style={{ padding: 16 }}>
-                              <Caption1>No shortcuts on this lakehouse yet. Click <b>New shortcut</b> to virtualize an ADLS Gen2 / S3 / OneLake source.</Caption1>
-                            </div>
-                          </TableCell></TableRow>
-                        )}
-                        {shortcuts.map((sc) => (
-                          <TableRow key={`${sc.path}/${sc.name}`}>
-                            <TableCell><strong>{sc.name}</strong></TableCell>
-                            <TableCell className={s.cell}>{sc.path}</TableCell>
-                            <TableCell>{sc.target?.type || (sc.target?.adlsGen2 ? 'AdlsGen2' : sc.target?.amazonS3 ? 'AmazonS3' : sc.target?.oneLake ? 'OneLake' : '—')}</TableCell>
-                            <TableCell><Button size="small" appearance="subtle" disabled={scBusy} onClick={() => deleteShortcut(sc)}>Delete</Button></TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    In the meantime you can achieve the same zero-copy read today: use
+                    {' '}<strong>Open in notebook</strong> on a file (Files tab → right-click) to read an
+                    {' '}<code>abfss://</code> path directly with Spark, or the <strong>SQL</strong> tab to
+                    {' '}<code>OPENROWSET</code> over any path through Synapse Serverless.
+                  </MessageBarBody>
+                </MessageBar>
               </>
             )}
 
@@ -1248,7 +1122,7 @@ export function LakehouseEditor({ item, id }: Props) {
                 {ctxEntry && ctxEntry.isDirectory && (
                   <>
                     <MenuItem icon={<Folder20Regular />} onClick={() => { if (ctxEntry && activeContainer) loadPaths(activeContainer, ctxEntry.name); setCtxOpen(false); }}>Open</MenuItem>
-                    <MenuItem icon={<LinkMultiple20Regular />} onClick={() => { setTab('shortcuts'); setScError(null); setScStatus(null); setScDialogOpen(!!(scWorkspaceId.trim() && scItemId.trim())); setCtxOpen(false); }}>New shortcut…</MenuItem>
+                    <MenuItem icon={<LinkMultiple20Regular />} onClick={() => { setTab('shortcuts'); setCtxOpen(false); }}>Shortcuts…</MenuItem>
                     <MenuItem icon={<ArrowSync20Regular />} onClick={() => { if (ctxEntry && activeContainer) loadPaths(activeContainer, ctxEntry.name); setCtxOpen(false); }}>Refresh</MenuItem>
                   </>
                 )}
@@ -1280,93 +1154,6 @@ export function LakehouseEditor({ item, id }: Props) {
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setPropsEntry(null)}>Close</Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
-
-          {/* Create-shortcut dialog — Fabric-like New shortcut wizard, wired to
-              the real Fabric OneLake Shortcuts REST API via /api/catalog/shortcut. */}
-          <Dialog open={scDialogOpen} onOpenChange={(_, d) => setScDialogOpen(d.open)}>
-            <DialogSurface style={{ maxWidth: 640, width: '90vw' }}>
-              <DialogBody>
-                <DialogTitle>New shortcut</DialogTitle>
-                <DialogContent>
-                  <Caption1>
-                    Create a OneLake shortcut — a virtualized pointer to an external
-                    or internal data source. No bytes are copied; the source appears
-                    in the lakehouse explorer and is queryable like native data.
-                  </Caption1>
-                  {scError && (
-                    <MessageBar intent="error"><MessageBarBody>{scError}</MessageBarBody></MessageBar>
-                  )}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
-                    <Field label="Source type" required>
-                      <Dropdown
-                        selectedOptions={[scTargetType]}
-                        value={scTargetType === 'adlsGen2' ? 'ADLS Gen2' : scTargetType === 'amazonS3' ? 'Amazon S3' : 'OneLake (Fabric)'}
-                        onOptionSelect={(_, d) => setScTargetType((d.optionValue as any) || 'adlsGen2')}
-                      >
-                        <Option value="adlsGen2">ADLS Gen2</Option>
-                        <Option value="amazonS3">Amazon S3</Option>
-                        <Option value="oneLake">OneLake (Fabric)</Option>
-                      </Dropdown>
-                    </Field>
-                    <Field label="Section" required hint="Tables = Delta auto-registered; Files = any format">
-                      <Dropdown
-                        selectedOptions={[scPath]}
-                        value={scPath}
-                        onOptionSelect={(_, d) => setScPath((d.optionValue as 'Files' | 'Tables') || 'Files')}
-                      >
-                        <Option value="Files">Files</Option>
-                        <Option value="Tables">Tables</Option>
-                      </Dropdown>
-                    </Field>
-                  </div>
-                  <Field label="Shortcut name" required>
-                    <Input value={scName} onChange={(_, d) => setScName(d.value)} placeholder="partner-products" />
-                  </Field>
-                  <Field label="Subfolder under section (optional)" hint={`Created at ${scPath}/<subfolder>`}>
-                    <Input value={scSubfolder} onChange={(_, d) => setScSubfolder(d.value)} placeholder="bronze" />
-                  </Field>
-
-                  {scTargetType !== 'oneLake' && (
-                    <>
-                      <Field label={scTargetType === 'amazonS3' ? 'S3 bucket URL' : 'ADLS Gen2 account URL'} required>
-                        <Input value={scLocation} onChange={(_, d) => setScLocation(d.value)}
-                          placeholder={scTargetType === 'amazonS3' ? 'https://my-bucket.s3.us-west-2.amazonaws.com' : 'https://contosoadls.dfs.core.windows.net'} />
-                      </Field>
-                      <Field label="Subpath" required hint={scTargetType === 'amazonS3' ? '/folder within bucket' : '/container/subfolder'}>
-                        <Input value={scSubpath} onChange={(_, d) => setScSubpath(d.value)}
-                          placeholder={scTargetType === 'amazonS3' ? '/data/ContosoEmployees' : '/mycontainer/data/ContosoProducts'} />
-                      </Field>
-                      <Field label="Cloud connection id (GUID)" required
-                        hint="Create in Fabric → Manage connections; paste the connection GUID here.">
-                        <Input value={scConnectionId} onChange={(_, d) => setScConnectionId(d.value)}
-                          placeholder="91324db9-8dc4-4730-a1e5-bafabf1fb91e" />
-                      </Field>
-                    </>
-                  )}
-
-                  {scTargetType === 'oneLake' && (
-                    <>
-                      <Field label="Source workspace id" required>
-                        <Input value={scOlWorkspaceId} onChange={(_, d) => setScOlWorkspaceId(d.value)} placeholder="acafbeb1-…" />
-                      </Field>
-                      <Field label="Source item id" required hint="Lakehouse / Warehouse / KQL DB">
-                        <Input value={scOlItemId} onChange={(_, d) => setScOlItemId(d.value)} placeholder="56bac802-…" />
-                      </Field>
-                      <Field label="Source path" required>
-                        <Input value={scOlPath} onChange={(_, d) => setScOlPath(d.value)} placeholder="Tables/myTablesFolder" />
-                      </Field>
-                    </>
-                  )}
-                </DialogContent>
-                <DialogActions>
-                  <Button appearance="secondary" onClick={() => setScDialogOpen(false)} disabled={scBusy}>Cancel</Button>
-                  <Button appearance="primary" onClick={createShortcut} disabled={scBusy || !scName.trim()}>
-                    {scBusy ? 'Creating…' : 'Create'}
-                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
@@ -1462,8 +1249,27 @@ export function LakehouseEditor({ item, id }: Props) {
                   <Field label="Description">
                     <Textarea value={settings.description || ''} onChange={(_, d) => setSettings((s) => ({ ...s, description: d.value }))} />
                   </Field>
-                  <Field label="Default Spark pool (Synapse)">
-                    <Input value={settings.defaultSparkPool || ''} onChange={(_, d) => setSettings((s) => ({ ...s, defaultSparkPool: d.value }))} placeholder="loomspark" />
+                  <Field
+                    label="Default Spark pool (Synapse)"
+                    hint={sparkPools !== null && sparkPools.length === 0
+                      ? 'No Synapse Spark pools discovered. Provision a pool in the Synapse workspace (LOOM_SYNAPSE_WORKSPACE) to populate this list.'
+                      : 'Notebooks attached to this lakehouse default to this pool.'}
+                  >
+                    {sparkPools === null ? (
+                      <Spinner size="tiny" label="Loading pools…" labelPosition="after" />
+                    ) : (
+                      <Dropdown
+                        selectedOptions={settings.defaultSparkPool ? [settings.defaultSparkPool] : []}
+                        value={settings.defaultSparkPool || ''}
+                        placeholder={sparkPools.length === 0 ? 'No Spark pools deployed' : 'Select a Spark pool'}
+                        disabled={sparkPools.length === 0}
+                        onOptionSelect={(_, d) => setSettings((s) => ({ ...s, defaultSparkPool: d.optionValue || '' }))}
+                      >
+                        {sparkPools.map((p) => (
+                          <Option key={p.name} value={p.name}>{p.name}</Option>
+                        ))}
+                      </Dropdown>
+                    )}
                   </Field>
                   <Field label="Time-travel retention (days)">
                     <Input type="number" min={0} value={String(settings.timeTravelDays ?? 7)} onChange={(_, d) => setSettings((s) => ({ ...s, timeTravelDays: Math.max(0, Number(d.value) || 0) }))} />

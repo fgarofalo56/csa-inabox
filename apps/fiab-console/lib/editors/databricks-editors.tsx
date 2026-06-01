@@ -610,21 +610,33 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             {isRunning && (
               <Button appearance="outline" icon={<Stop20Regular />} onClick={stop}>Stop</Button>
             )}
-            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => {
+            <Button appearance="outline" icon={<ArrowSync20Regular />} aria-label="Refresh warehouse state" onClick={() => {
               refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
             }}>Refresh</Button>
-            <Button appearance="outline" icon={<Save20Regular />} disabled={!warehouseId} onClick={openEdit}>
-              Edit
-            </Button>
-            <Button
-              appearance="primary"
-              icon={<Play20Regular />}
-              disabled={loading || !isRunning || !warehouseId}
-              onClick={run}
-              style={{ marginLeft: 'auto' }}
+            <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless'} relationship="label">
+              <Button appearance="outline" icon={<Save20Regular />} disabled={!warehouseId} onClick={openEdit}>
+                Edit
+              </Button>
+            </Tooltip>
+            <Tooltip
+              content={
+                !warehouseId ? 'Pick a warehouse first'
+                  : loading ? 'A query is running…'
+                  : !isRunning ? 'Start the warehouse before running SQL'
+                  : 'Run the SQL on the selected warehouse'
+              }
+              relationship="label"
             >
-              Run
-            </Button>
+              <Button
+                appearance="primary"
+                icon={<Play20Regular />}
+                disabled={loading || !isRunning || !warehouseId}
+                onClick={run}
+                style={{ marginLeft: 'auto' }}
+              >
+                Run
+              </Button>
+            </Tooltip>
           </div>
           {state === 'STARTING' && (
             <MessageBar intent="info">
@@ -1233,7 +1245,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
   const openRuns = useCallback(() => { setRunsOpen(true); void loadRuns(); }, [loadRuns]);
 
   // ---- Tree render ----
-  const renderTree = (path: string, depth = 0): JSX.Element[] => {
+  const renderTree = (path: string, depth = 0) => {
     const items = tree[path] || [];
     return items.map((o) => {
       const isDir = o.object_type === 'DIRECTORY' || o.object_type === 'REPO';
@@ -1246,8 +1258,17 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
             style={{ background: selectedPath === o.path ? tokens.colorNeutralBackground2Selected : undefined }}
           >
             <div
+              role="button"
+              tabIndex={0}
+              aria-label={`${isDir ? 'Toggle' : 'Open'} ${o.path}`}
               style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, cursor: 'pointer', minWidth: 0 }}
               onClick={() => isDir ? toggle(o.path) : isNb ? openNotebook(o.path, o.language) : undefined}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  if (isDir) toggle(o.path); else if (isNb) openNotebook(o.path, o.language);
+                }
+              }}
             >
               {isDir ? <Folder20Regular /> : isNb ? <Document20Regular /> : <DocumentTable20Regular />}
               <Caption1 style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1362,23 +1383,43 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
                 {selectedCluster.state}
               </Badge>
             )}
-            <Button
-              appearance="primary"
-              icon={<Play20Regular />}
-              disabled={!canRunAll}
-              onClick={runAll}
-              style={{ marginLeft: 'auto' }}
+            <Tooltip
+              content={
+                runningAll ? 'Running all cells…'
+                  : !clusterId ? 'Attach a cluster first'
+                  : !cells.some((c) => c.type === 'code' && c.source.trim()) ? 'Add a non-empty code cell'
+                  : 'Run every code cell top-to-bottom (stops on first error)'
+              }
+              relationship="label"
             >
-              {runningAll ? 'Running all…' : 'Run all'}
-            </Button>
-            <Button
-              appearance="primary"
-              icon={<Save20Regular />}
-              disabled={!selectedPath || !dirty || savingFile}
-              onClick={save}
+              <Button
+                appearance="primary"
+                icon={<Play20Regular />}
+                disabled={!canRunAll}
+                onClick={runAll}
+                style={{ marginLeft: 'auto' }}
+              >
+                {runningAll ? 'Running all…' : 'Run all'}
+              </Button>
+            </Tooltip>
+            <Tooltip
+              content={
+                !selectedPath ? 'Open or create a notebook first'
+                  : savingFile ? 'Saving…'
+                  : !dirty ? 'No unsaved changes'
+                  : 'Save to the workspace (workspace/import)'
+              }
+              relationship="label"
             >
-              {savingFile ? 'Saving…' : dirty ? 'Save *' : 'Save'}
-            </Button>
+              <Button
+                appearance="primary"
+                icon={<Save20Regular />}
+                disabled={!selectedPath || !dirty || savingFile}
+                onClick={save}
+              >
+                {savingFile ? 'Saving…' : dirty ? 'Save *' : 'Save'}
+              </Button>
+            </Tooltip>
           </div>
 
           {clustersError && (
@@ -1864,6 +1905,16 @@ interface JobRow {
 
 type TriggerType = 'none' | 'cron' | 'continuous' | 'file_arrival';
 
+// Timezone ids the Databricks schedule UI offers (IANA / Joda zone ids).
+// Mirrors the portal's timezone dropdown for cron schedules.
+const SCHEDULE_TIMEZONES = [
+  'UTC',
+  'America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York',
+  'America/Sao_Paulo', 'Europe/London', 'Europe/Paris', 'Europe/Berlin',
+  'Europe/Moscow', 'Asia/Dubai', 'Asia/Kolkata', 'Asia/Singapore',
+  'Asia/Shanghai', 'Asia/Tokyo', 'Australia/Sydney', 'Pacific/Auckland',
+];
+
 export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
 
@@ -1901,6 +1952,8 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodeTypes, setNodeTypes] = useState<{ node_type_id: string; description?: string }[]>([]);
   const [sparkVersions, setSparkVersions] = useState<{ key: string; name: string }[]>([]);
+  // SQL Warehouses (for sql_task / dbt_task warehouse picker — real REST list).
+  const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
   // Notebook workspace browse (for notebook_task path picker)
   const [notebooks, setNotebooks] = useState<string[]>([]);
 
@@ -1961,6 +2014,17 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       const r = await fetch('/api/items/databricks-cluster/options');
       const j = await r.json();
       if (j.ok) { setNodeTypes(j.nodeTypes || []); setSparkVersions(j.sparkVersions || []); }
+    })();
+    // SQL warehouses (for sql_task / dbt_task warehouse picker). Optional —
+    // a free-text fallback remains if the workspace has none / list fails.
+    void (async () => {
+      try {
+        const r = await fetch('/api/databricks/warehouses');
+        const j = await r.json();
+        if (j.ok) {
+          setWarehouses((j.warehouses || []).map((w: any) => ({ id: w.id, name: w.name || w.id })));
+        }
+      } catch { /* picker optional; free-text warehouse id still works */ }
     })();
     // notebooks under /Workspace for the notebook-task path picker
     void (async () => {
@@ -2273,22 +2337,34 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
             {dirty && jobId !== null && <Badge appearance="outline" color="warning">unsaved</Badge>}
             {jobId !== null && <Badge appearance="outline">job_id {jobId}</Badge>}
             {workspaceHost && <Caption1>workspace: <code>{workspaceHost}</code></Caption1>}
-            <Button
-              appearance="primary"
-              icon={<Save20Regular />}
-              disabled={!canSaveJob}
-              onClick={save}
-              style={{ marginLeft: 'auto' }}
+            <Tooltip
+              content={
+                saving ? 'Save in progress…'
+                  : !tasks.some((t) => t.task_key) ? 'Add at least one task with a task key'
+                  : !canSaveJob ? 'No unsaved changes'
+                  : jobId === null ? 'Create this job (jobs/create)' : 'Save changes (jobs/reset)'
+              }
+              relationship="label"
             >
-              {saving ? 'Saving…' : jobId === null ? 'Create' : dirty ? 'Save *' : 'Save'}
-            </Button>
-            {jobId !== null && (
-              <Button appearance="outline" icon={<Play20Regular />} disabled={running} onClick={runNow}>
-                {running ? 'Submitting…' : 'Run now'}
+              <Button
+                appearance="primary"
+                icon={<Save20Regular />}
+                disabled={!canSaveJob}
+                onClick={save}
+                style={{ marginLeft: 'auto' }}
+              >
+                {saving ? 'Saving…' : jobId === null ? 'Create' : dirty ? 'Save *' : 'Save'}
               </Button>
+            </Tooltip>
+            {jobId !== null && (
+              <Tooltip content={running ? 'A run is being submitted…' : 'Trigger this job now (jobs/run-now)'} relationship="label">
+                <Button appearance="outline" icon={<Play20Regular />} disabled={running} onClick={runNow}>
+                  {running ? 'Submitting…' : 'Run now'}
+                </Button>
+              </Tooltip>
             )}
             {jobId !== null && (
-              <Button appearance="outline" icon={<Delete20Regular />} onClick={del}>Delete</Button>
+              <Button appearance="outline" icon={<Delete20Regular />} aria-label="Delete job" onClick={del}>Delete</Button>
             )}
           </div>
           {saveError && (
@@ -2333,7 +2409,11 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                   {tasks.map((t) => (
                     <div
                       key={t.task_key}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Edit task ${t.task_key}`}
                       onClick={() => setActiveTaskKey(t.task_key)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTaskKey(t.task_key); } }}
                       style={{
                         padding: 6, cursor: 'pointer', borderRadius: 3, marginBottom: 2,
                         display: 'flex', alignItems: 'center', gap: 6,
@@ -2453,9 +2533,21 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                     )}
                     {activeTask.task_type === 'sql_task' && (
                       <>
-                        <Field label="SQL Warehouse id" hint="Pro/serverless warehouse the SQL runs on">
-                          <Input value={activeTask.sql_warehouse_id}
-                            onChange={(_, d) => patchTask(activeTask.task_key, { sql_warehouse_id: d.value })} />
+                        <Field label="SQL Warehouse" hint="Pro/serverless warehouse the SQL runs on">
+                          {warehouses.length > 0 ? (
+                            <Dropdown
+                              aria-label="SQL Warehouse"
+                              placeholder="Select warehouse"
+                              value={warehouses.find((w) => w.id === activeTask.sql_warehouse_id)?.name || activeTask.sql_warehouse_id}
+                              selectedOptions={activeTask.sql_warehouse_id ? [activeTask.sql_warehouse_id] : []}
+                              onOptionSelect={(_, d) => d.optionValue && patchTask(activeTask.task_key, { sql_warehouse_id: d.optionValue })}
+                            >
+                              {warehouses.map((w) => <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>)}
+                            </Dropdown>
+                          ) : (
+                            <Input aria-label="SQL Warehouse id" value={activeTask.sql_warehouse_id} placeholder="warehouse id"
+                              onChange={(_, d) => patchTask(activeTask.task_key, { sql_warehouse_id: d.value })} />
+                          )}
                         </Field>
                         <div style={{ display: 'flex', gap: 12 }}>
                           <Field label="Query id (saved query)" style={{ flex: 1 }}>
@@ -2480,23 +2572,51 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                             <Input value={activeTask.dbt_project_directory}
                               onChange={(_, d) => patchTask(activeTask.task_key, { dbt_project_directory: d.value })} />
                           </Field>
-                          <Field label="SQL Warehouse id" style={{ flex: 1 }}>
-                            <Input value={activeTask.sql_warehouse_id}
-                              onChange={(_, d) => patchTask(activeTask.task_key, { sql_warehouse_id: d.value })} />
+                          <Field label="SQL Warehouse" style={{ flex: 1 }}>
+                            {warehouses.length > 0 ? (
+                              <Dropdown
+                                aria-label="dbt SQL Warehouse"
+                                placeholder="Select warehouse"
+                                value={warehouses.find((w) => w.id === activeTask.sql_warehouse_id)?.name || activeTask.sql_warehouse_id}
+                                selectedOptions={activeTask.sql_warehouse_id ? [activeTask.sql_warehouse_id] : []}
+                                onOptionSelect={(_, d) => d.optionValue && patchTask(activeTask.task_key, { sql_warehouse_id: d.optionValue })}
+                              >
+                                {warehouses.map((w) => <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>)}
+                              </Dropdown>
+                            ) : (
+                              <Input aria-label="dbt SQL Warehouse id" value={activeTask.sql_warehouse_id} placeholder="warehouse id"
+                                onChange={(_, d) => patchTask(activeTask.task_key, { sql_warehouse_id: d.value })} />
+                            )}
                           </Field>
                         </div>
                       </>
                     )}
                     {activeTask.task_type === 'pipeline_task' && (
-                      <Field label="DLT pipeline id">
-                        <Input value={activeTask.pipeline_id}
+                      <Field label="DLT / Lakeflow pipeline id" hint="Paste the pipeline id from the Databricks Delta Live Tables UI — no Loom DLT editor yet (tracked gap)">
+                        <Input aria-label="DLT pipeline id" value={activeTask.pipeline_id} placeholder="e.g. 0123abcd-…"
                           onChange={(_, d) => patchTask(activeTask.task_key, { pipeline_id: d.value })} />
                       </Field>
                     )}
                     {activeTask.task_type === 'run_job_task' && (
-                      <Field label="Job id to run">
-                        <Input value={activeTask.run_job_id}
-                          onChange={(_, d) => patchTask(activeTask.task_key, { run_job_id: d.value })} />
+                      <Field label="Job to run" hint="Another Databricks job this task triggers">
+                        {jobs.filter((jb) => jb.job_id !== jobId).length > 0 ? (
+                          <Dropdown
+                            aria-label="Job to run"
+                            placeholder="Select a job"
+                            value={jobs.find((jb) => String(jb.job_id) === activeTask.run_job_id)?.settings?.name || activeTask.run_job_id}
+                            selectedOptions={activeTask.run_job_id ? [activeTask.run_job_id] : []}
+                            onOptionSelect={(_, d) => d.optionValue && patchTask(activeTask.task_key, { run_job_id: d.optionValue })}
+                          >
+                            {jobs.filter((jb) => jb.job_id !== jobId).map((jb) => (
+                              <Option key={jb.job_id} value={String(jb.job_id)} text={jb.settings?.name || String(jb.job_id)}>
+                                {jb.settings?.name || `job ${jb.job_id}`} · {jb.job_id}
+                              </Option>
+                            ))}
+                          </Dropdown>
+                        ) : (
+                          <Input aria-label="Job id to run" type="number" value={activeTask.run_job_id} placeholder="job_id"
+                            onChange={(_, d) => patchTask(activeTask.task_key, { run_job_id: d.value })} />
+                        )}
                       </Field>
                     )}
 
@@ -2645,8 +2765,15 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                   <Field label="Quartz cron expression" hint="e.g. 0 0 2 * * ?  (daily 02:00)">
                     <Input value={cron} onChange={(_, d) => { setCron(d.value); markDirty(); }} />
                   </Field>
-                  <Field label="Timezone id" hint="e.g. UTC, America/Los_Angeles">
-                    <Input value={tz} onChange={(_, d) => { setTz(d.value); markDirty(); }} />
+                  <Field label="Timezone" hint="Cron is evaluated in this zone">
+                    <Dropdown
+                      aria-label="Schedule timezone"
+                      value={tz}
+                      selectedOptions={[tz]}
+                      onOptionSelect={(_, d) => { if (d.optionValue) { setTz(d.optionValue); markDirty(); } }}
+                    >
+                      {SCHEDULE_TIMEZONES.map((z) => <Option key={z} value={z} text={z}>{z}</Option>)}
+                    </Dropdown>
                   </Field>
                 </div>
               )}
@@ -3075,11 +3202,11 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
         <div className={s.treePad}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
             <Subtitle2 style={{ flex: 1 }}>Clusters ({clusters.length})</Subtitle2>
-            <Button size="small" icon={<Add20Regular />} onClick={() => {
+            <Button size="small" icon={<Add20Regular />} aria-label="New cluster" onClick={() => {
               setClusterId(null); setCluster(null); setName(''); setEvents([]);
               setSaveMessage(null); setSaveError(null);
             }} />
-            <Button size="small" icon={<ArrowSync20Regular />} onClick={loadClusters} />
+            <Button size="small" icon={<ArrowSync20Regular />} aria-label="Refresh cluster list" onClick={loadClusters} />
           </div>
           {listError && (
             <MessageBar intent="error"><MessageBarBody>{listError}</MessageBarBody></MessageBar>
@@ -3087,7 +3214,11 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
           {clusters.map((c) => (
             <div
               key={c.cluster_id}
+              role="button"
+              tabIndex={0}
+              aria-label={`Open cluster ${c.cluster_name || c.cluster_id}`}
               onClick={() => selectCluster(c.cluster_id)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectCluster(c.cluster_id); } }}
               style={{
                 padding: 6, cursor: 'pointer', borderRadius: 3,
                 background: clusterId === c.cluster_id ? tokens.colorNeutralBackground2Selected : undefined,
@@ -3112,16 +3243,22 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
             </Button>
             {clusterId && (
               <>
-                <Button appearance="outline" icon={<Play20Regular />}
-                  disabled={stateBusy || state === 'RUNNING' || state === 'PENDING'}
-                  onClick={() => doState('start')}>Start</Button>
-                <Button appearance="outline" icon={<Stop20Regular />}
-                  disabled={stateBusy || state === 'TERMINATED' || state === 'TERMINATING'}
-                  onClick={() => doState('stop')}>Stop</Button>
-                <Button appearance="outline" icon={<ArrowSync20Regular />}
-                  disabled={stateBusy || state !== 'RUNNING'}
-                  onClick={() => doState('restart')}>Restart</Button>
-                <Button appearance="outline" icon={<Delete20Regular />} onClick={del}>Delete</Button>
+                <Tooltip content={state === 'RUNNING' || state === 'PENDING' ? `Cluster is already ${state.toLowerCase()}` : 'Start the cluster (clusters/start)'} relationship="label">
+                  <Button appearance="outline" icon={<Play20Regular />}
+                    disabled={stateBusy || state === 'RUNNING' || state === 'PENDING'}
+                    onClick={() => doState('start')}>Start</Button>
+                </Tooltip>
+                <Tooltip content={state === 'TERMINATED' || state === 'TERMINATING' ? `Cluster is already ${state.toLowerCase()}` : 'Terminate the cluster (clusters/delete)'} relationship="label">
+                  <Button appearance="outline" icon={<Stop20Regular />}
+                    disabled={stateBusy || state === 'TERMINATED' || state === 'TERMINATING'}
+                    onClick={() => doState('stop')}>Stop</Button>
+                </Tooltip>
+                <Tooltip content={state !== 'RUNNING' ? 'Restart is only available while RUNNING' : 'Restart the cluster (clusters/restart)'} relationship="label">
+                  <Button appearance="outline" icon={<ArrowSync20Regular />}
+                    disabled={stateBusy || state !== 'RUNNING'}
+                    onClick={() => doState('restart')}>Restart</Button>
+                </Tooltip>
+                <Button appearance="outline" icon={<Delete20Regular />} aria-label="Permanently delete cluster" onClick={del}>Delete</Button>
               </>
             )}
           </div>

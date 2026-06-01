@@ -569,7 +569,7 @@ export function NotebookEditor({ item, id }: Props) {
   const ribbon: RibbonTab[] = useMemo(() => {
     const activeIdx = cells.findIndex(c => c.id === activeCellId);
     const insertAfter = activeIdx >= 0 ? activeIdx : cells.length - 1;
-    const canRun = !!notebookId && !running;
+    const canRun = !!notebookId && !!computeId && !running;
     const canSave = !!notebookId && dirty && !saving;
     const canDelete = !!notebookId;
     const canHistory = !!notebookId;
@@ -614,7 +614,7 @@ export function NotebookEditor({ item, id }: Props) {
       ]},
     ];
   }, [
-    cells, activeCellId, notebookId, running, dirty, saving, workspaceId,
+    cells, activeCellId, notebookId, running, dirty, saving, workspaceId, computeId,
     run, save, del, loadList, insertCell, openAttach,
   ]);
 
@@ -677,7 +677,7 @@ export function NotebookEditor({ item, id }: Props) {
             <Badge appearance="filled" color="brand">Loom Notebook</Badge>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
               <Caption1>Workspace</Caption1>
-              <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
+              <Select aria-label="Workspace" value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
                 {(ws.workspaces || []).map((w) => (
                   <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · dedicated' : ''}</option>
@@ -686,7 +686,7 @@ export function NotebookEditor({ item, id }: Props) {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
               <Caption1>Compute target</Caption1>
-              <Select value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
+              <Select aria-label="Compute target" value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
                 {!computeId && <option value="">{cp.loading ? 'Loading compute…' : 'Select compute'}</option>}
                 {cp.computes
                   .filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster')
@@ -720,7 +720,15 @@ export function NotebookEditor({ item, id }: Props) {
               aren't confused by two visually-identical Save buttons.
               Ctrl+S still works from anywhere.
             */}
-            <Button appearance="primary" icon={<Play20Regular />} disabled={running || !notebookId} onClick={run}>{running ? 'Queuing…' : 'Run'}</Button>
+            <Button
+              appearance="primary"
+              icon={<Play20Regular />}
+              disabled={running || !notebookId || !computeId}
+              title={!notebookId ? 'Open or create a notebook first'
+                : !computeId ? 'Select a compute target first'
+                : undefined}
+              onClick={run}
+            >{running ? 'Queuing…' : 'Run'}</Button>
             <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
@@ -782,6 +790,28 @@ export function NotebookEditor({ item, id }: Props) {
             </MessageBar>
           )}
           {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+          {/* Honest compute gate — a notebook with no runnable Spark/Databricks
+              compute can't execute. Surface the discovery error, or name the env
+              vars to provision, instead of silently disabling Run. */}
+          {cp.error && (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                <MessageBarTitle>Compute discovery failed</MessageBarTitle>
+                {cp.error}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {!cp.loading && !cp.error && cp.computes.filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster').length === 0 && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>No notebook compute is available</MessageBarTitle>
+                Notebooks run on a Synapse Spark pool or a Databricks cluster. Provision one and
+                set <code>LOOM_SYNAPSE_WORKSPACE</code> (Synapse Spark) or
+                {' '}<code>LOOM_DATABRICKS_HOSTNAME</code> (Databricks) so it appears in the compute
+                picker above. You can still edit and save cells without compute.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           {runMsg && <MessageBar intent="info"><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
 
           {notebookId && (

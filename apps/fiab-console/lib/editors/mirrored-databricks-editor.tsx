@@ -17,8 +17,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea,
-  Tree, TreeItem, TreeItemLayout, Select, Field,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Tooltip,
+  Tree, TreeItem, TreeItemLayout, Dropdown, Option, Field,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -140,11 +140,19 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
     } catch (e: any) { setTablesErr(e?.message || String(e)); setTables([]); }
   }, []);
 
+  // Default to the first deployed workspace (rule 4: bind to the deployed
+  // instance, never a blank required picker). User can still switch.
+  useEffect(() => {
+    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) {
+      setWorkspaceId(ws.workspaces[0].id);
+    }
+  }, [ws.workspaces, workspaceId]);
+
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && mirrorId) loadDetail(workspaceId, mirrorId); }, [workspaceId, mirrorId, loadDetail]);
   useEffect(() => {
     if (!workspaceId || !mirrorId) return;
-    if (tab === 'catalog' && schemas === null) loadSchemas(workspaceId, mirrorId);
+    if ((tab === 'catalog' || tab === 'tables') && schemas === null) loadSchemas(workspaceId, mirrorId);
     if (tab === 'tables' && schemaName && tables === null) loadTables(workspaceId, mirrorId, schemaName);
   }, [tab, workspaceId, mirrorId, schemas, tables, schemaName, loadSchemas, loadTables]);
 
@@ -243,13 +251,19 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
             <div className={s.toolbar}>
               <Badge appearance="filled" color="brand">MirroredAzureDatabricksCatalog</Badge>
               <div className={s.field}>
-                <Caption1>Workspace</Caption1>
-                <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={(ws.workspaces?.length ?? 0) === 0}>
-                  {!workspaceId && <option value="">{ws.workspaces === null ? 'Loading…' : 'Select a workspace'}</option>}
+                <Caption1 id="mirror-ws-label">Workspace</Caption1>
+                <Dropdown
+                  aria-labelledby="mirror-ws-label"
+                  placeholder={ws.workspaces === null ? 'Loading…' : 'Select a workspace'}
+                  value={ws.workspaces?.find((w) => w.id === workspaceId)?.name || ''}
+                  selectedOptions={workspaceId ? [workspaceId] : []}
+                  onOptionSelect={(_, d) => { if (d.optionValue) setWorkspaceId(d.optionValue); }}
+                  disabled={(ws.workspaces?.length ?? 0) === 0}
+                >
                   {(ws.workspaces || []).map((w) => (
-                    <option key={w.id} value={w.id}>{w.name}</option>
+                    <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>
                   ))}
-                </Select>
+                </Dropdown>
               </div>
               <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
                 <DialogTrigger disableButtonEnhancement>
@@ -350,9 +364,25 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                 {!mirrorId && <Caption1>Select a mirror first.</Caption1>}
                 {mirrorId && (
                   <div className={s.toolbar}>
-                    <Caption1>Schema</Caption1>
-                    <Input value={schemaName} onChange={(_, d) => { setSchemaName(d.value); setTables(null); }} placeholder="default" />
-                    <Button appearance="primary" disabled={!schemaName} onClick={() => mirrorId && schemaName && loadTables(workspaceId, mirrorId, schemaName)}>List tables</Button>
+                    <Caption1 id="mirror-schema-label">Schema</Caption1>
+                    {schemas && schemas.length > 0 ? (
+                      <Dropdown
+                        aria-labelledby="mirror-schema-label"
+                        placeholder="Select a schema"
+                        value={schemaName}
+                        selectedOptions={schemaName ? [schemaName] : []}
+                        onOptionSelect={(_, d) => { if (d.optionValue) { setSchemaName(d.optionValue); setTables(null); } }}
+                        style={{ minWidth: 200 }}
+                      >
+                        {schemas.map((sc) => <Option key={sc.full_name || sc.name} value={sc.name} text={sc.name}>{sc.name}</Option>)}
+                      </Dropdown>
+                    ) : (
+                      <Input aria-labelledby="mirror-schema-label" value={schemaName}
+                        onChange={(_, d) => { setSchemaName(d.value); setTables(null); }} placeholder="default" />
+                    )}
+                    <Tooltip content={!schemaName ? 'Pick or type a schema first' : 'List tables in this schema (Unity Catalog REST)'} relationship="label">
+                      <Button appearance="primary" disabled={!schemaName} onClick={() => mirrorId && schemaName && loadTables(workspaceId, mirrorId, schemaName)}>List tables</Button>
+                    </Tooltip>
                   </div>
                 )}
                 {tables === null && schemaName && <Spinner size="small" label="Loading tables…" labelPosition="after" />}

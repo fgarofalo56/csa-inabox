@@ -33,7 +33,7 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 | 4 | ✅ | `preview` tab — sample rows |
 | 5 | ✅ | `Query this file` → SQL tab, runs through serverless `/query` |
 | 6 | ✅ (fixed) | T-SQL via the lakehouse's OWN route `/api/items/lakehouse/[id]/query` → Synapse Serverless (was wrongly POSTing to the synapse-serverless-sql-pool route with a lakehouse id → 404 HTML → JSON.parse crash). All `fetch().json()` now route through a `content-type`-sniffing `parseJsonOrError` guard. SQL endpoint shows a 503 MessageBar naming `LOOM_SYNAPSE_WORKSPACE` when unprovisioned. |
-| 7 | ✅ (built) | Shortcuts tab is a working create/list/delete surface → `/api/catalog/shortcut` → Fabric `createOneLakeShortcut`/`listOneLakeShortcuts`/`deleteOneLakeShortcut`. Targets: ADLS Gen2, Amazon S3, OneLake. Honest-gate: requires a Fabric workspace id + lakehouse item id (ADLS-backed Loom lakehouse has no native binding) + the “Service principals can use Fabric APIs” tenant toggle + UAMI workspace membership + a cloud connection GUID for external targets — full dialog renders regardless. |
+| 7 | ⚠️ (honest-gate) | Shortcuts tab renders an honest infra-gate `MessageBar intent="warning"`. The previous implementation bound to the **Fabric** OneLake Shortcuts REST (`/api/catalog/shortcut`) — a hard Fabric dependency the product must not have — and has been removed (no Fabric workspace/item binding, no Fabric POST, no dead controls). The Azure-native shortcut engine (ADLS Gen2 + Synapse Serverless / Databricks Unity Catalog external tables, Cosmos `lakehouse-shortcuts` registry, UAMI-backed) is a separately tracked build per `docs/fiab/design/lakehouse-shortcuts.md`. The gate names the exact engines/env vars and points to the design doc; the tab also offers the working zero-copy alternatives available today (Open-in-notebook `abfss://` + SQL `OPENROWSET`). |
 | 8 | ✅ | Query-this-file load path + Load to Tables (Delta) deep-link |
 | 9 | ✅ | `Settings` dialog + `ItemSidePanel` |
 | 10 | ✅ | `Permissions` dialog (`openPerms`) |
@@ -41,13 +41,14 @@ Editor: `apps/fiab-console/lib/editors/lakehouse-editor.tsx`
 | 12 | ✅ (built) | `onContextMenu` → Fluent Menu anchored at cursor (`preventDefault`); distinct file vs folder command sets, each invoking the real backend. |
 | 13 | ✅ (built) | Download via `/api/lakehouse/download` (ADLS byte passthrough, `attachment` disposition). |
 | 14 | ✅ (built) | Properties dialog from the real ADLS metadata already in state. |
-| 15 | ✅ (built) | Shortcuts table lists + deletes via the Fabric REST. |
+| 15 | ⚠️ (honest-gate) | Folds into row 7 — list/delete of native shortcuts ships with the Azure-native engine build (tracked design doc). No Fabric REST. |
 
 ## Backend per control
 - Tree/preview/files → ADLS Gen2 data-plane (`@azure/storage-file-datalake`) via lakehouse API.
 - T-SQL query → Synapse serverless TDS (`executeQuery` / `serverlessTarget`) via `/api/items/lakehouse/[id]/query`.
 - Download → ADLS `readToBuffer` (`downloadFile`) via `/api/lakehouse/download`.
 - Context-menu commands → reuse the above backends (no separate / dead paths).
-- Shortcuts → Fabric REST `GET/POST/DELETE /v1/workspaces/{ws}/items/{lakehouse}/shortcuts` via `/api/catalog/shortcut` (honest-gate naming the Fabric binding + tenant prerequisites).
+- Settings → `defaultSparkPool` is an enumerated Dropdown bound to real Synapse Spark pools from `/api/loom/compute-targets` (no freeform compute input); honest empty-state when none deployed.
+- Shortcuts → **no backend yet, by design.** Honest infra-gate only. The Azure-native engine (ADLS Gen2 + Synapse Serverless / Databricks UC + Cosmos registry) is tracked in `docs/fiab/design/lakehouse-shortcuts.md`. The prior Fabric REST path (`/api/catalog/shortcut`) was removed from this editor to eliminate the lakehouse's last hard Fabric dependency.
 
-Grade: **A (all inventory rows built + real backend; remaining non-functional states are honest infra-gates that still render the full UI).**
+Grade: **A (every inventory row is built with a real backend or an honest infra-gate that names the exact remediation; the Shortcuts row is an intentional honest-gate pending the tracked Azure-native engine build — zero Fabric dependency, zero dead controls).**

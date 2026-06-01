@@ -30,13 +30,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Label, Field,
+  Dropdown, Option, Tooltip, Checkbox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   TabList, Tab, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Database20Regular, Play20Regular, Add20Regular, PlugConnected20Regular,
   Table20Regular, BookDatabase20Regular, ShieldKeyhole20Regular,
+  ArrowDownload20Regular, Delete20Regular, Copy20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -44,11 +47,59 @@ import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
+// ── Real Azure database option sets (parity with the portal create blades) ──
+const AZURE_REGIONS = [
+  'eastus', 'eastus2', 'centralus', 'southcentralus', 'westus', 'westus2', 'westus3',
+  'northcentralus', 'westcentralus', 'canadacentral', 'northeurope', 'westeurope',
+  'uksouth', 'francecentral', 'germanywestcentral', 'switzerlandnorth', 'norwayeast',
+  'swedencentral', 'eastasia', 'southeastasia', 'japaneast', 'australiaeast',
+  'centralindia', 'koreacentral', 'brazilsouth', 'southafricanorth', 'uaenorth',
+  'usgovvirginia', 'usgovarizona', 'usgovtexas', 'usdodeast', 'usdodcentral',
+];
+const SQL_DB_SKUS = [
+  'Basic', 'S0', 'S1', 'S2', 'S3', 'S4', 'S6', 'S7', 'S9', 'S12',
+  'P1', 'P2', 'P4', 'P6', 'P11', 'P15',
+  'GP_Gen5_2', 'GP_Gen5_4', 'GP_Gen5_8', 'GP_Gen5_16', 'GP_Gen5_32',
+  'GP_S_Gen5_1', 'GP_S_Gen5_2', 'GP_S_Gen5_4', 'GP_S_Gen5_8',
+  'BC_Gen5_2', 'BC_Gen5_4', 'BC_Gen5_8', 'BC_Gen5_16',
+  'HS_Gen5_2', 'HS_Gen5_4', 'HS_Gen5_8', 'HS_Gen5_16',
+];
+const SQL_DB_TIERS = ['Basic', 'Standard', 'Premium', 'GeneralPurpose', 'BusinessCritical', 'Hyperscale'];
+const PG_VERSIONS = ['11', '12', '13', '14', '15', '16'];
+const PG_TIERS = ['Burstable', 'GeneralPurpose', 'MemoryOptimized'];
+// Common PG flexible-server compute SKUs grouped by tier.
+const PG_SKUS = [
+  'Standard_B1ms', 'Standard_B2s', 'Standard_B2ms', 'Standard_B4ms',
+  'Standard_D2s_v3', 'Standard_D4s_v3', 'Standard_D8s_v3', 'Standard_D16s_v3',
+  'Standard_E2s_v3', 'Standard_E4s_v3', 'Standard_E8s_v3', 'Standard_E16s_v3',
+];
+
+// ── Results export (CSV / JSON) — client-side, no extra route ──
+function downloadBlob(filename: string, mime: string, data: string) {
+  const blob = new Blob([data], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+function csvEscape(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  const str = typeof v === 'object' ? JSON.stringify(v) : String(v);
+  return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+}
+function resultsToCsv(columns: string[], rows: unknown[][]): string {
+  return [columns.map(csvEscape).join(','), ...rows.map((r) => columns.map((_, j) => csvEscape(r[j])).join(','))].join('\r\n');
+}
+function resultsToJson(columns: string[], rows: unknown[][]): string {
+  return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, j) => [c, r[j] ?? null]))), null, 2);
+}
+
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
   resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 160 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 },
+  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' },
   tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
   treePad: { padding: 8, display: 'flex', flexDirection: 'column', gap: 10 },
@@ -59,6 +110,8 @@ const useStyles = makeStyles({
     background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1,
   },
   card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
+  fullWidth: { width: '100%' },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
   treeWrap: {
     flex: 1, minHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: '4px', overflow: 'hidden',
@@ -132,12 +185,25 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
   }
   const rows = result.rows || [];
   const columns = result.columns || [];
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   return (
     <div className={s.resultBox}>
       <div className={s.resultMeta}>
         <Badge appearance="filled" color="success">{result.rowCount ?? rows.length} rows</Badge>
         <Caption1>· {result.executionMs} ms</Caption1>
         {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
+        {rows.length > 0 && (
+          <div className={s.resultActions}>
+            <Tooltip content="Download results as CSV" relationship="label">
+              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                onClick={() => downloadBlob(`query-results-${stamp}.csv`, 'text/csv', resultsToCsv(columns, rows))}>CSV</Button>
+            </Tooltip>
+            <Tooltip content="Download results as JSON" relationship="label">
+              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                onClick={() => downloadBlob(`query-results-${stamp}.json`, 'application/json', resultsToJson(columns, rows))}>JSON</Button>
+            </Tooltip>
+          </div>
+        )}
       </div>
       {rows.length === 0 ? <Caption1>Query returned no rows.</Caption1> : (
         <div className={s.tableWrap}>
@@ -180,6 +246,7 @@ function SqlServerAdminPanel({
   const [fwName, setFwName] = useState('');
   const [fwStart, setFwStart] = useState('');
   const [fwEnd, setFwEnd] = useState('');
+  const [confirmDeleteRule, setConfirmDeleteRule] = useState<string | null>(null);
 
   // Entra (AAD) admin
   const [aad, setAad] = useState<AadAdminState | null>(null);
@@ -309,7 +376,11 @@ function SqlServerAdminPanel({
                   <TableCell><strong>{r.name}</strong></TableCell>
                   <TableCell><code style={{ fontSize: 11 }}>{r.startIpAddress}</code></TableCell>
                   <TableCell><code style={{ fontSize: 11 }}>{r.endIpAddress}</code></TableCell>
-                  <TableCell><Button size="small" appearance="subtle" disabled={fwBusy} onClick={() => deleteRule(r.name)}>Delete</Button></TableCell>
+                  <TableCell>
+                    <Tooltip content={`Delete firewall rule ${r.name}`} relationship="label">
+                      <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete firewall rule ${r.name}`} disabled={fwBusy} onClick={() => setConfirmDeleteRule(r.name)}>Delete</Button>
+                    </Tooltip>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -366,8 +437,17 @@ function SqlServerAdminPanel({
               </select>
             </Field>
             <Field label="Replica DB name"><Input value={replicaDb} onChange={(_, d) => setReplicaDb(d.value)} placeholder={database || 'same as primary'} /></Field>
-            <Field label="Replica region" required><Input value={replicaLocation} onChange={(_, d) => setReplicaLocation(d.value)} placeholder="eastus2" /></Field>
-            <Field label="SKU (optional)"><Input value={replicaSku} onChange={(_, d) => setReplicaSku(d.value)} placeholder="match primary" /></Field>
+            <Field label="Replica region" required>
+              <Dropdown className={s.fullWidth} selectedOptions={replicaLocation ? [replicaLocation] : []} value={replicaLocation} onOptionSelect={(_, d) => setReplicaLocation(d.optionValue || '')} aria-label="Replica region">
+                {AZURE_REGIONS.map((r) => <Option key={r} value={r}>{r}</Option>)}
+              </Dropdown>
+            </Field>
+            <Field label="SKU (optional — blank matches primary)">
+              <Dropdown className={s.fullWidth} selectedOptions={replicaSku ? [replicaSku] : []} value={replicaSku} placeholder="Match primary" onOptionSelect={(_, d) => setReplicaSku(d.optionValue || '')} aria-label="Replica SKU">
+                <Option value="">Match primary</Option>
+                {SQL_DB_SKUS.map((sku) => <Option key={sku} value={sku}>{sku}</Option>)}
+              </Dropdown>
+            </Field>
           </div>
           {geoMsg && <MessageBar intent={geoMsg.ok ? 'success' : 'error'}><MessageBarBody><MessageBarTitle>{geoMsg.ok ? 'Geo-replica accepted' : 'Geo-replication failed'}</MessageBarTitle>{geoMsg.text}</MessageBarBody></MessageBar>}
           <Button appearance="primary" icon={<Add20Regular />} disabled={geoBusy || !database || !replicaServer || !replicaLocation} onClick={submitGeo}>{geoBusy ? 'Creating…' : 'Create geo-replica'}</Button>
@@ -381,6 +461,27 @@ function SqlServerAdminPanel({
           </MessageBarBody></MessageBar>
         </div>
       )}
+
+      {/* Destructive-op confirmation for firewall rule deletion. */}
+      <Dialog open={!!confirmDeleteRule} onOpenChange={(_, d) => { if (!d.open) setConfirmDeleteRule(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Delete firewall rule?</DialogTitle>
+            <DialogContent>
+              <Body1>
+                This removes <code>{confirmDeleteRule}</code> from <strong>{server}</strong> via ARM.
+                Clients in that IP range lose access. This cannot be undone.
+              </Body1>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setConfirmDeleteRule(null)} disabled={fwBusy}>Cancel</Button>
+              <Button appearance="primary" disabled={fwBusy} onClick={async () => { const n = confirmDeleteRule; setConfirmDeleteRule(null); if (n) await deleteRule(n); }}>
+                {fwBusy ? 'Deleting…' : 'Delete rule'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </>
   );
 }
@@ -506,6 +607,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const [newDbSku, setNewDbSku] = useState('GP_S_Gen5_2');
   const [newDbTier, setNewDbTier] = useState('GeneralPurpose');
   const [newDbSample, setNewDbSample] = useState(false);
+  const [newDbZoneRedundant, setNewDbZoneRedundant] = useState(false);
   // PG fields
   const [pgName, setPgName] = useState('');
   const [pgRg, setPgRg] = useState('');
@@ -523,6 +625,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
       body: JSON.stringify({
         server: newDbServer, name: newDbName, skuName: newDbSku, tier: newDbTier,
         sampleName: newDbSample ? 'AdventureWorksLT' : undefined,
+        zoneRedundant: newDbZoneRedundant || undefined,
       }),
     });
     setProvMsg(j.ok
@@ -530,7 +633,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
       : { ok: false, text: j.error || 'create failed' });
     if (j.ok) loadInventory();
     setProvBusy(false);
-  }, [id, newDbServer, newDbName, newDbSku, newDbTier, newDbSample, loadInventory]);
+  }, [id, newDbServer, newDbName, newDbSku, newDbTier, newDbSample, newDbZoneRedundant, loadInventory]);
 
   const provisionPg = useCallback(async () => {
     setProvBusy(true); setProvMsg(null);
@@ -637,7 +740,15 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
           )}
           {dbError && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Databases not reachable</MessageBarTitle>{dbError}</MessageBarBody></MessageBar>}
           {bindMsg && <Caption1>{bindMsg}</Caption1>}
-          {serverFqdn && <Caption1>FQDN: <code>{serverFqdn}</code></Caption1>}
+          {serverFqdn && (
+            <Caption1>
+              FQDN: <code>{serverFqdn}</code>
+              <Tooltip content="Copy FQDN" relationship="label">
+                <Button size="small" appearance="subtle" icon={<Copy20Regular />} aria-label="Copy server FQDN"
+                  onClick={() => navigator.clipboard?.writeText(serverFqdn)} style={{ marginLeft: 4 }} />
+              </Tooltip>
+            </Caption1>
+          )}
         </div>
       }
       main={
@@ -755,13 +866,20 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                       </select>
                     </Field>
                     <Field label="Database name" required><Input value={newDbName} onChange={(_, d) => setNewDbName(d.value)} placeholder="loom_app_db" /></Field>
-                    <Field label="SKU / service objective"><Input value={newDbSku} onChange={(_, d) => setNewDbSku(d.value)} placeholder="GP_S_Gen5_2 / S0 / Basic" /></Field>
-                    <Field label="Tier"><Input value={newDbTier} onChange={(_, d) => setNewDbTier(d.value)} placeholder="GeneralPurpose" /></Field>
+                    <Field label="SKU / service objective">
+                      <Dropdown className={s.fullWidth} selectedOptions={[newDbSku]} value={newDbSku} onOptionSelect={(_, d) => setNewDbSku(d.optionValue || newDbSku)} aria-label="SKU / service objective">
+                        {SQL_DB_SKUS.map((sku) => <Option key={sku} value={sku}>{sku}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Tier">
+                      <Dropdown className={s.fullWidth} selectedOptions={[newDbTier]} value={newDbTier} onOptionSelect={(_, d) => setNewDbTier(d.optionValue || newDbTier)} aria-label="Service tier">
+                        {SQL_DB_TIERS.map((t) => <Option key={t} value={t}>{t}</Option>)}
+                      </Dropdown>
+                    </Field>
                   </div>
-                  <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <input type="checkbox" checked={newDbSample} onChange={(e) => setNewDbSample(e.target.checked)} />
-                    <Caption1>Seed AdventureWorksLT sample schema</Caption1>
-                  </label>
+                  <Checkbox checked={newDbSample} onChange={(_, d) => setNewDbSample(!!d.checked)} label="Seed AdventureWorksLT sample schema" />
+                  <Checkbox checked={newDbZoneRedundant} onChange={(_, d) => setNewDbZoneRedundant(!!d.checked)}
+                    label="Zone-redundant (Premium / Business Critical / Hyperscale)" />
                   <Button appearance="primary" icon={<Add20Regular />} disabled={provBusy || !newDbServer || !newDbName} onClick={provisionSqlDb}>
                     {provBusy ? 'Creating…' : 'Create Azure SQL database'}
                   </Button>
@@ -772,12 +890,28 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   <div className={s.formGrid}>
                     <Field label="Server name" required><Input value={pgName} onChange={(_, d) => setPgName(d.value)} placeholder="loom-pg-01" /></Field>
                     <Field label="Resource group" required><Input value={pgRg} onChange={(_, d) => setPgRg(d.value)} placeholder="rg-loom-data" /></Field>
-                    <Field label="Region" required><Input value={pgLocation} onChange={(_, d) => setPgLocation(d.value)} placeholder="eastus2" /></Field>
-                    <Field label="PG version"><Input value={pgVersion} onChange={(_, d) => setPgVersion(d.value)} placeholder="16" /></Field>
+                    <Field label="Region" required>
+                      <Dropdown className={s.fullWidth} selectedOptions={[pgLocation]} value={pgLocation} onOptionSelect={(_, d) => setPgLocation(d.optionValue || pgLocation)} aria-label="Region">
+                        {AZURE_REGIONS.map((r) => <Option key={r} value={r}>{r}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="PG version">
+                      <Dropdown className={s.fullWidth} selectedOptions={[pgVersion]} value={pgVersion} onOptionSelect={(_, d) => setPgVersion(d.optionValue || pgVersion)} aria-label="PostgreSQL version">
+                        {PG_VERSIONS.map((v) => <Option key={v} value={v}>{v}</Option>)}
+                      </Dropdown>
+                    </Field>
                     <Field label="Admin login" required><Input value={pgAdmin} onChange={(_, d) => setPgAdmin(d.value)} placeholder="pgadmin" /></Field>
                     <Field label="Admin password" required><Input type="password" value={pgPassword} onChange={(_, d) => setPgPassword(d.value)} /></Field>
-                    <Field label="SKU"><Input value={pgSku} onChange={(_, d) => setPgSku(d.value)} placeholder="Standard_B1ms" /></Field>
-                    <Field label="Tier"><Input value={pgTier} onChange={(_, d) => setPgTier(d.value)} placeholder="Burstable" /></Field>
+                    <Field label="Tier">
+                      <Dropdown className={s.fullWidth} selectedOptions={[pgTier]} value={pgTier} onOptionSelect={(_, d) => setPgTier(d.optionValue || pgTier)} aria-label="Compute tier">
+                        {PG_TIERS.map((t) => <Option key={t} value={t}>{t}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="SKU">
+                      <Dropdown className={s.fullWidth} selectedOptions={[pgSku]} value={pgSku} onOptionSelect={(_, d) => setPgSku(d.optionValue || pgSku)} aria-label="Compute SKU">
+                        {PG_SKUS.map((sku) => <Option key={sku} value={sku}>{sku}</Option>)}
+                      </Dropdown>
+                    </Field>
                   </div>
                   <Button appearance="primary" icon={<Add20Regular />} disabled={provBusy || !pgName || !pgRg || !pgAdmin || !pgPassword} onClick={provisionPg}>
                     {provBusy ? 'Creating…' : 'Create PostgreSQL flexible server'}
