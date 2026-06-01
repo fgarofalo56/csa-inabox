@@ -249,6 +249,16 @@ jobs:
           RG='${{ needs.resolve.outputs.rg }}'
           ACR='${{ needs.resolve.outputs.acr_login_server }}'
           TAG='${{ inputs.tag || 'v0.1' }}'
+          # Unique per run+attempt so the roll ALWAYS creates a fresh revision.
+          # Critical: the image tag (:v0.1) is mutable and overwritten in place,
+          # so on a redeploy the only change is the image *digest* behind the
+          # unchanged tag. `az containerapp update --image …:v0.1` with an
+          # otherwise-identical template is then a NO-OP — no new revision is
+          # created and the running revision stays pinned to the OLD digest
+          # (Container Apps pins digest at revision-creation). The deploy goes
+          # green but Front Door serves stale code. A unique --revision-suffix
+          # forces a new revision that re-pulls :v0.1 and gets the new digest.
+          SUFFIX="r${{ github.run_id }}-${{ github.run_attempt }}"
           APPS=(loom-console loom-mcp loom-setup-orchestrator loom-activator loom-mirroring loom-direct-lake-shim)
           # Retry the update on the transient ContainerAppOperationInProgress
           # error (a prior provisioning op on the app is still settling). Up to
@@ -256,7 +266,7 @@ jobs:
           roll() {
             local app="$1" attempt
             for attempt in 1 2 3 4 5 6; do
-              if az containerapp update -g "$RG" -n "$app" --image "$ACR/$app:$TAG" -o none 2>/tmp/roll.err; then
+              if az containerapp update -g "$RG" -n "$app" --image "$ACR/$app:$TAG" --revision-suffix "$SUFFIX" -o none 2>/tmp/roll.err; then
                 return 0
               fi
               if grep -qi "OperationInProgress\|active provisioning operation" /tmp/roll.err; then
