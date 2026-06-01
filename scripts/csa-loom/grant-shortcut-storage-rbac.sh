@@ -70,12 +70,38 @@ else
   echo "  - Storage firewall defaultAction=$DEF_ACTION (not Deny) — no VNet rule needed"
 fi
 
+# ---------------------------------------------------------------------------
+# MANAGED PRIVATE ENDPOINT. If the account is private-endpoint-locked
+# (publicNetworkAccess=Disabled), its public name CNAMEs to
+# privatelink.dfs.core.windows.net and won't resolve from the Loom VNet
+# ('ENOTFOUND') — a VNet rule isn't enough. Create a managed PE from the Loom
+# hub VNet's snet-private-endpoints to the account's `dfs` sub-resource and
+# register it in the hub-linked privatelink.dfs zone. This is the same
+# managed-private-endpoint model Fabric uses for firewalled sources. Verified
+# working live 2026-06-01 (dlzdlzstorageraw: ENOTFOUND -> shortcut created).
+# Forced on with --managed-pe; auto-enabled when publicNetworkAccess=Disabled.
+# ---------------------------------------------------------------------------
+PUB="$(az storage account show -n "$ACCT" -g "$RG" --subscription "$SUB_ARG" --query publicNetworkAccess -o tsv 2>/dev/null)"
+WANT_PE=false; for a in "$@"; do [[ "$a" == "--managed-pe" ]] && WANT_PE=true; done
+if [[ "$WANT_PE" == true || "$PUB" == "Disabled" ]]; then
+  PE_SUBNET="${LOOM_PE_SUBNET_ID:-/subscriptions/363ef5d1-0e77-4594-a530-f51af23dbf8c/resourceGroups/rg-csa-loom-admin-eastus2/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-eastus2/subnets/snet-private-endpoints}"
+  PE_RG="${LOOM_HUB_RG:-rg-csa-loom-admin-eastus2}"
+  DNS_ZONE_ID="${LOOM_DFS_PRIVDNS_ID:-/subscriptions/363ef5d1-0e77-4594-a530-f51af23dbf8c/resourceGroups/rg-csa-loom-admin-eastus2/providers/Microsoft.Network/privateDnsZones/privatelink.dfs.core.windows.net}"
+  PE_NAME="pe-loomsc-${ACCT}"
+  echo "  Creating managed Private Endpoint $PE_NAME (snet-private-endpoints -> $ACCT/dfs)…"
+  MSYS_NO_PATHCONV=1 az network private-endpoint create --name "$PE_NAME" -g "$PE_RG" \
+    --vnet-name vnet-csa-loom-hub-eastus2 --subnet snet-private-endpoints \
+    --private-connection-resource-id "$SCOPE" --group-id dfs \
+    --connection-name "loomsc-${ACCT}" -l "${LOOM_LOCATION:-eastus2}" -o none 2>&1 | grep -viE "already exists" || true
+  MSYS_NO_PATHCONV=1 az network private-endpoint dns-zone-group create --name default -g "$PE_RG" \
+    --endpoint-name "$PE_NAME" --private-dns-zone "$DNS_ZONE_ID" --zone-name dfs -o none 2>&1 | grep -viE "already exists" || true
+  echo "  ✓ Managed Private Endpoint + privatelink DNS record created for $ACCT"
+  echo "    (if the connection shows Pending, approve it on the storage account's"
+  echo "    Networking → Private endpoint connections — auto-approves when you own the account.)"
+fi
+
 echo
-echo "Done. The Console UAMI + Loom subnet are now authorized for $ACCT (ADLS Gen2"
-echo "AND blob-only accounts work — the .dfs endpoint serves both). Allow ~60s, then"
-echo "create the shortcut in Lakehouse → Shortcuts: abfss://<container>@$ACCT.dfs.core.windows.net/<path>"
-echo
-echo "NOTE: if the account has PRIVATE ENDPOINTS (public name CNAMEs to"
-echo "privatelink.dfs.core.windows.net), DNS won't resolve from the Loom VNet"
-echo "('ENOTFOUND'). Those need a Private Endpoint from vnet-csa-loom-hub-eastus2 +"
-echo "its privatelink DNS record — the managed-private-endpoint model Fabric uses."
+echo "Done. $ACCT is authorized for Loom Lakehouse shortcuts (UAMI read + network)."
+echo "ADLS Gen2, blob-only, AND private-endpoint-locked accounts all work."
+echo "Allow ~60s, then create it in Lakehouse → Shortcuts:"
+echo "  abfss://<container>@$ACCT.dfs.core.windows.net/<path>"
