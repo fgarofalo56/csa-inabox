@@ -17,13 +17,14 @@ import {
 } from '@fluentui/react-components';
 import {
   SignOut24Regular, Settings24Regular, Person24Regular,
-  Sparkle24Regular, Question24Regular, ChatHelp24Regular,
+  Question24Regular, ChatHelp24Regular,
   Navigation24Regular,
 } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { LeftNav } from './left-nav';
 import { CommandPalette } from './command-palette';
 import { CopilotPane } from './copilot-pane';
+import { CopilotIcon } from './icons/copilot-icon';
 import { HelpCopilotWidget, openHelpCopilot } from './help-copilot/widget';
 import { LoomLogo } from './loom-logo';
 import { ThemeToggle } from './theme-toggle';
@@ -163,7 +164,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <TopbarSearch />
         <div className={styles.actions} role="toolbar" aria-label="Global actions">
           <Tooltip content="Help Copilot — ask anything about CSA Loom (Ctrl+/)" relationship="label">
-            <Button appearance="transparent" className={styles.iconBtn} icon={<Sparkle24Regular />}
+            <Button appearance="transparent" className={styles.iconBtn} icon={<CopilotIcon />}
               onClick={openHelpCopilot} aria-label="Open Help Copilot" />
           </Tooltip>
           <NotificationsButton />
