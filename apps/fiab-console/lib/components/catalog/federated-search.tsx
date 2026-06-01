@@ -3,21 +3,42 @@
 /**
  * FederatedSearch — single search box across Purview + UC + OneLake.
  *
- * Hits /api/catalog/search and renders per-source success badges in the
- * toolbar (so users see at a glance which back-end is contributing) plus
- * a unified result table with filter chips for source, type, and owner.
+ * Hits /api/catalog/search and renders per-source success badges (so users
+ * see at a glance which back-end is contributing) plus a unified result
+ * table with filter chips for source and type.
  *
- * When a source is not provisioned, the chip displays "(not configured)"
- * and a click-through MessageBar surfaces the bicep + role remediation
- * payload from the API — per no-vaporware.md, no source is faked.
+ * Web-3.0 layout (per docs/fiab/design/ui-web3-guide.md):
+ *   • A left gutter so nothing butts the CatalogShell sidebar's vertical rule.
+ *   • Search / Sources / Results each wrapped in a <Section> — real vertical
+ *     rhythm, never smushed together.
+ *   • The search box is capped (≤360px), never full-bleed.
+ *   • Colored, keyboard-activatable source/type chips carry an itemVisual
+ *     icon + brand color.
+ *   • Results render in <LoomDataTable> (sort + resize + per-column filter),
+ *     Name cells get an icon+color chip, classifications become spaced pills.
+ *
+ * When a source is not provisioned, the chip reads "(not configured)" and a
+ * MessageBar surfaces the bicep + role remediation payload from the API —
+ * per no-vaporware.md, no source is faked.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Input, Button, Spinner, Badge, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  makeStyles, tokens, Subtitle2, Body1,
+  Button,
+  Badge,
+  Caption1,
+  Text,
+  SearchBox,
+  MessageBar,
+  MessageBarBody,
+  MessageBarTitle,
+  makeStyles,
+  tokens,
+  mergeClasses,
 } from '@fluentui/react-components';
-import { Search24Regular, ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
+import { Section } from '@/lib/components/ui/section';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { itemVisual } from '@/lib/components/ui/item-type-visual';
 
 interface FederatedHit {
   source: 'purview' | 'unity-catalog' | 'onelake';
@@ -34,21 +55,193 @@ interface FederatedHit {
   detail_path: string;
 }
 
-interface SourceResult { ok: boolean; count: number; error?: string; hint?: any; durationMs: number; }
+interface SourceResult { ok: boolean; count: number; error?: string; hint?: unknown; durationMs: number; }
 
-const useStyles = makeStyles({
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 },
-  spacer: { flex: 1 },
-  sourceRow: { display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' },
-  chip: { padding: '4px 10px', borderRadius: 999, fontSize: 12, cursor: 'pointer', border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2 },
-  chipActive: { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1, borderColor: tokens.colorBrandStroke2 },
-  tableWrap: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8, overflow: 'auto' },
-  hintBox: { fontSize: 12, color: tokens.colorNeutralForeground3, marginTop: 4, fontFamily: 'monospace', whiteSpace: 'pre-wrap' },
-});
+const SOURCES = ['purview', 'unity-catalog', 'onelake'] as const;
+type SourceKey = (typeof SOURCES)[number];
+
+const SOURCE_LABEL: Record<SourceKey, string> = {
+  purview: 'Purview',
+  'unity-catalog': 'Unity Catalog',
+  onelake: 'OneLake',
+};
 
 const SOURCE_COLORS: Record<string, 'brand' | 'severe' | 'informative' | 'success' | 'warning'> = {
   purview: 'severe', 'unity-catalog': 'brand', onelake: 'informative',
 };
+
+const useStyles = makeStyles({
+  // left gutter so content never touches the sidebar's vertical rule
+  gutter: {
+    paddingLeft: tokens.spacingHorizontalL,
+  },
+  searchRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+  },
+  search: {
+    width: '100%',
+    maxWidth: '360px',
+    minWidth: '220px',
+  },
+  searchHint: {
+    color: tokens.colorNeutralForeground3,
+  },
+  chipRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  chipRowSpaced: {
+    marginTop: tokens.spacingVerticalM,
+  },
+  chipLabel: {
+    color: tokens.colorNeutralForeground3,
+    marginRight: tokens.spacingHorizontalXS,
+  },
+  // keyboard-activatable filter chip: icon dot + colored tint when active
+  chip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    paddingTop: '5px',
+    paddingBottom: '5px',
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusCircular,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    cursor: 'pointer',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
+    transitionDuration: tokens.durationFaster,
+    transitionProperty: 'background-color, border-color, box-shadow',
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
+    ':focus-visible': {
+      outline: `2px solid ${tokens.colorStrokeFocus2}`,
+      outlineOffset: '2px',
+    },
+  },
+  chipActive: {
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  chipDot: {
+    width: '8px',
+    height: '8px',
+    borderRadius: tokens.borderRadiusCircular,
+    flexShrink: 0,
+  },
+  chipCount: {
+    color: tokens.colorNeutralForeground3,
+  },
+  resultCount: {
+    marginLeft: 'auto',
+    color: tokens.colorNeutralForeground3,
+  },
+  hintBox: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    marginTop: tokens.spacingVerticalXS,
+    fontFamily: tokens.fontFamilyMonospace,
+    whiteSpace: 'pre-wrap',
+  },
+  // Name cell: color icon chip + name + qualified-name caption
+  nameCell: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalSNudge,
+    minWidth: 0,
+  },
+  nameChip: {
+    flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '28px',
+    height: '28px',
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  nameText: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+  },
+  nameTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  nameSub: {
+    color: tokens.colorNeutralForeground3,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  // classifications: spaced tag-pills, wrapping
+  classRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+  },
+  openLink: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorBrandForeground1,
+    textDecorationLine: 'none',
+    ':hover': { textDecorationLine: 'underline' },
+  },
+  muted: {
+    color: tokens.colorNeutralForeground3,
+  },
+});
+
+/** A keyboard-activatable filter chip with a colored dot. */
+function FilterChip({
+  active,
+  color,
+  onToggle,
+  testId,
+  children,
+}: {
+  active: boolean;
+  color?: string;
+  onToggle: () => void;
+  testId?: string;
+  children: React.ReactNode;
+}) {
+  const s = useStyles();
+  return (
+    <span
+      className={mergeClasses(s.chip, active ? s.chipActive : undefined)}
+      role="button"
+      tabIndex={0}
+      aria-pressed={active}
+      data-testid={testId}
+      onClick={onToggle}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onToggle();
+        }
+      }}
+    >
+      {color && <span className={s.chipDot} style={{ backgroundColor: color }} aria-hidden />}
+      {children}
+    </span>
+  );
+}
 
 export function FederatedSearch() {
   const s = useStyles();
@@ -71,8 +264,8 @@ export function FederatedSearch() {
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setHits(j.hits || []);
       setSources(j.sources || {});
-    } catch (e: any) {
-      setError(e?.message || String(e));
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally { setLoading(false); }
   }, [q, sourceFilter]);
 
@@ -88,122 +281,227 @@ export function FederatedSearch() {
     return Array.from(t).sort();
   }, [hits]);
 
+  const failedSources = useMemo(
+    () => Object.entries(sources).filter(([, v]) => !v.ok),
+    [sources],
+  );
+
   function toggleSource(src: string) {
     const next = new Set(sourceFilter);
     if (next.has(src)) next.delete(src); else next.add(src);
     setSourceFilter(next);
   }
 
-  return (
-    <>
-      <div className={s.toolbar}>
-        <Input
-          contentBefore={<Search24Regular />}
-          placeholder="Search across Purview + Unity Catalog + OneLake…"
-          value={q}
-          onChange={(_, d) => setQ(d.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') load(); }}
-          style={{ flex: 1, maxWidth: 600 }}
-          data-testid="catalog-search-input"
-        />
-        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>
-          {loading ? 'Searching…' : 'Search'}
-        </Button>
-      </div>
-
-      <div className={s.sourceRow}>
-        <Subtitle2>Sources:</Subtitle2>
-        {(['purview', 'unity-catalog', 'onelake'] as const).map((src) => {
-          const stat = sources[src];
-          const active = sourceFilter.size === 0 || sourceFilter.has(src);
-          return (
+  const columns: LoomColumn<FederatedHit>[] = useMemo(() => [
+    {
+      key: 'display_name',
+      label: 'Name',
+      width: 300,
+      minWidth: 200,
+      getValue: (h) => h.display_name,
+      render: (h) => {
+        const visual = itemVisual(h.type);
+        const Icon = visual.icon;
+        return (
+          <span className={s.nameCell}>
             <span
-              key={src}
-              className={`${s.chip} ${active ? s.chipActive : ''}`}
-              onClick={() => toggleSource(src)}
-              role="button"
-              tabIndex={0}
-              data-testid={`source-chip-${src}`}
+              className={s.nameChip}
+              style={{ backgroundColor: `${visual.color}1f`, color: visual.color }}
+              aria-hidden
             >
-              {src} {stat ? (stat.ok ? `(${stat.count})` : '(not configured)') : ''}
+              <Icon style={{ width: 18, height: 18, color: visual.color }} />
             </span>
-          );
-        })}
-        <div className={s.spacer} />
-        <Caption1>{filteredHits.length} result{filteredHits.length === 1 ? '' : 's'}</Caption1>
-      </div>
+            <span className={s.nameText}>
+              <Text className={s.nameTitle} title={h.display_name}>{h.display_name}</Text>
+              {h.qualified_name && h.qualified_name !== h.display_name && (
+                <Caption1 className={s.nameSub} title={h.qualified_name}>{h.qualified_name}</Caption1>
+              )}
+            </span>
+          </span>
+        );
+      },
+    },
+    {
+      key: 'source',
+      label: 'Source',
+      width: 150,
+      getValue: (h) => SOURCE_LABEL[h.source] ?? h.source,
+      render: (h) => (
+        <Badge appearance="filled" color={SOURCE_COLORS[h.source] || 'subtle'} size="small">
+          {SOURCE_LABEL[h.source] ?? h.source}
+        </Badge>
+      ),
+    },
+    {
+      key: 'type',
+      label: 'Type',
+      width: 170,
+      getValue: (h) => itemVisual(h.type).label,
+      render: (h) => <Text>{itemVisual(h.type).label}</Text>,
+    },
+    {
+      key: 'location',
+      label: 'Workspace / Domain',
+      width: 200,
+      getValue: (h) => h.workspace_name || h.domain || '',
+      render: (h) =>
+        h.workspace_name || h.domain
+          ? <Text>{h.workspace_name || h.domain}</Text>
+          : <Text className={s.muted}>—</Text>,
+    },
+    {
+      key: 'owner',
+      label: 'Owner',
+      width: 160,
+      getValue: (h) => h.owner || '',
+      render: (h) => (h.owner ? <Text>{h.owner}</Text> : <Text className={s.muted}>—</Text>),
+    },
+    {
+      key: 'classifications',
+      label: 'Classifications',
+      width: 220,
+      filterable: true,
+      getValue: (h) => (h.classifications || []).join(' '),
+      render: (h) =>
+        h.classifications && h.classifications.length ? (
+          <span className={s.classRow}>
+            {h.classifications.map((c) => (
+              <Badge key={c} appearance="tint" color="informative" size="small">{c}</Badge>
+            ))}
+          </span>
+        ) : (
+          <Text className={s.muted}>—</Text>
+        ),
+    },
+    {
+      key: 'open',
+      label: '',
+      width: 90,
+      minWidth: 80,
+      sortable: false,
+      filterable: false,
+      getValue: () => '',
+      render: (h) => (
+        <a
+          className={s.openLink}
+          href={h.detail_path}
+          onClick={(e) => e.stopPropagation()}
+        >
+          Open <Open16Regular />
+        </a>
+      ),
+    },
+  ], [s]);
 
-      {/* Per-source NotConfigured hints */}
-      {Object.entries(sources).filter(([, v]) => !v.ok).map(([src, stat]) => (
-        <MessageBar key={src} intent="warning" style={{ marginBottom: 12 }}>
-          <MessageBarBody>
-            <MessageBarTitle>{src} not contributing</MessageBarTitle>
-            <Body1>{stat.error}</Body1>
-            {stat.hint && (
-              <pre className={s.hintBox}>{JSON.stringify(stat.hint, null, 2)}</pre>
-            )}
-          </MessageBarBody>
-        </MessageBar>
-      ))}
-
-      {types.length > 1 && (
-        <div className={s.sourceRow}>
-          <Subtitle2>Type:</Subtitle2>
-          <span className={`${s.chip} ${!typeFilter ? s.chipActive : ''}`} onClick={() => setTypeFilter('')} role="button" tabIndex={0}>All</span>
-          {types.map((t) => (
-            <span key={t} className={`${s.chip} ${typeFilter === t ? s.chipActive : ''}`} onClick={() => setTypeFilter(t === typeFilter ? '' : t)} role="button" tabIndex={0}>{t}</span>
-          ))}
+  return (
+    <div className={s.gutter}>
+      {/* ── Search ─────────────────────────────────────────────────── */}
+      <Section title="Search">
+        <div className={s.searchRow}>
+          <SearchBox
+            className={s.search}
+            placeholder="Search Purview, Unity Catalog, OneLake…"
+            value={q}
+            onChange={(_, d) => setQ(d.value ?? '')}
+            onKeyDown={(e) => { if (e.key === 'Enter') load(); }}
+            data-testid="catalog-search-input"
+          />
+          <Button icon={<ArrowSync24Regular />} appearance="primary" onClick={load} disabled={loading}>
+            {loading ? 'Searching…' : 'Search'}
+          </Button>
+          <Caption1 className={s.searchHint}>
+            One query across all three governed catalogs.
+          </Caption1>
         </div>
-      )}
+      </Section>
 
-      {error && (
-        <MessageBar intent="error">
-          <MessageBarBody><MessageBarTitle>Search failed</MessageBarTitle>{error}</MessageBarBody>
-        </MessageBar>
-      )}
-
-      {loading && !error && <Spinner label="Searching…" />}
-
-      {!loading && filteredHits.length === 0 && !error && (
-        <div style={{ padding: 32, textAlign: 'center', color: tokens.colorNeutralForeground3 }}>
-          No results. Try a broader keyword, clear filters, or check the source warnings above.
+      {/* ── Sources + Type filters ─────────────────────────────────── */}
+      <Section title="Sources">
+        <div className={s.chipRow}>
+          <Caption1 className={s.chipLabel}>Filter by source</Caption1>
+          {SOURCES.map((src) => {
+            const stat = sources[src];
+            const active = sourceFilter.size === 0 || sourceFilter.has(src);
+            const visual = itemVisual(src === 'onelake' ? 'lakehouse' : src === 'unity-catalog' ? 'warehouse' : 'data-product');
+            return (
+              <FilterChip
+                key={src}
+                active={active}
+                color={visual.color}
+                onToggle={() => toggleSource(src)}
+                testId={`source-chip-${src}`}
+              >
+                {SOURCE_LABEL[src]}
+                <span className={s.chipCount}>
+                  {stat ? (stat.ok ? `· ${stat.count}` : '· not configured') : ''}
+                </span>
+              </FilterChip>
+            );
+          })}
+          <Caption1 className={s.resultCount} data-testid="result-count">
+            {filteredHits.length} result{filteredHits.length === 1 ? '' : 's'}
+          </Caption1>
         </div>
-      )}
 
-      {filteredHits.length > 0 && (
-        <div className={s.tableWrap}>
-          <Table aria-label="Catalog search results">
-            <TableHeader>
-              <TableRow>
-                <TableHeaderCell>Name</TableHeaderCell>
-                <TableHeaderCell>Source</TableHeaderCell>
-                <TableHeaderCell>Type</TableHeaderCell>
-                <TableHeaderCell>Workspace / Domain</TableHeaderCell>
-                <TableHeaderCell>Owner</TableHeaderCell>
-                <TableHeaderCell>Classifications</TableHeaderCell>
-                <TableHeaderCell></TableHeaderCell>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredHits.map((h) => (
-                <TableRow key={`${h.source}:${h.id}`}>
-                  <TableCell><strong>{h.display_name}</strong>{h.qualified_name && h.qualified_name !== h.display_name && <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{h.qualified_name}</Caption1>}</TableCell>
-                  <TableCell><Badge appearance="filled" color={SOURCE_COLORS[h.source] || 'subtle'} size="small">{h.source}</Badge></TableCell>
-                  <TableCell>{h.type}</TableCell>
-                  <TableCell>{h.workspace_name || h.domain || '—'}</TableCell>
-                  <TableCell>{h.owner || '—'}</TableCell>
-                  <TableCell>{(h.classifications && h.classifications.length) ? h.classifications.join(', ') : '—'}</TableCell>
-                  <TableCell>
-                    <a href={h.detail_path} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-                      Open <Open16Regular />
-                    </a>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-    </>
+        {types.length > 1 && (
+          <div className={mergeClasses(s.chipRow, s.chipRowSpaced)}>
+            <Caption1 className={s.chipLabel}>Filter by type</Caption1>
+            <FilterChip active={!typeFilter} onToggle={() => setTypeFilter('')}>All</FilterChip>
+            {types.map((t) => {
+              const visual = itemVisual(t);
+              return (
+                <FilterChip
+                  key={t}
+                  active={typeFilter === t}
+                  color={visual.color}
+                  onToggle={() => setTypeFilter(t === typeFilter ? '' : t)}
+                >
+                  {visual.label}
+                </FilterChip>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Per-source NotConfigured hints — real remediation payload */}
+        {failedSources.map(([src, stat]) => (
+          <MessageBar key={src} intent="warning" style={{ marginTop: tokens.spacingVerticalM }}>
+            <MessageBarBody>
+              <MessageBarTitle>{SOURCE_LABEL[src as SourceKey] ?? src} not contributing</MessageBarTitle>
+              <Text>{stat.error}</Text>
+              {stat.hint != null && (
+                <pre className={s.hintBox}>{JSON.stringify(stat.hint, null, 2)}</pre>
+              )}
+            </MessageBarBody>
+          </MessageBar>
+        ))}
+      </Section>
+
+      {/* ── Results ────────────────────────────────────────────────── */}
+      <Section title="Results">
+        {error ? (
+          <MessageBar intent="error">
+            <MessageBarBody>
+              <MessageBarTitle>Search failed</MessageBarTitle>
+              {error}
+            </MessageBarBody>
+          </MessageBar>
+        ) : (
+          <LoomDataTable<FederatedHit>
+            columns={columns}
+            rows={filteredHits}
+            getRowId={(h) => `${h.source}:${h.id}`}
+            loading={loading}
+            ariaLabel="Catalog search results"
+            empty={
+              <span>
+                No results. Try a broader keyword, clear filters, or check the source
+                warnings above.
+              </span>
+            }
+          />
+        )}
+      </Section>
+    </div>
   );
 }
