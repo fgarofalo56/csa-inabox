@@ -11,10 +11,12 @@
  * "what deploys where": services sit inside the domain inside the subscription.
  */
 
+import * as React from 'react';
 import { memo } from 'react';
 import { type NodeProps } from '@xyflow/react';
 import { Badge, Caption1, tokens } from '@fluentui/react-components';
-import { serviceByKey } from './service-catalog';
+import { serviceByKey, serviceVisual } from './service-catalog';
+import { iconUrl } from '../ui/item-type-visual';
 
 const BOUNDARY_TINT: Record<string, string> = {
   'Commercial': '#0078d4',
@@ -93,37 +95,77 @@ function DomainNodeImpl({ data, width, height, selected }: NodeProps) {
 function ServiceNodeImpl({ data, selected }: NodeProps) {
   const d = data as ServiceNodeData;
   const def = serviceByKey(d.serviceKey);
-  const color = def?.color || '#0078d4';
+  const vis = serviceVisual(d.serviceKey);
+  const Glyph = vis.glyph;
+  const remote = iconUrl(d.serviceKey); // optional Atlas Diag enhancement
   return (
     <div
       data-plan-service={d.serviceKey}
       title={def?.description}
       style={{
-        width: 128,
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '5px 7px', borderRadius: 6,
+        width: 132,
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '6px 9px', borderRadius: 8,
         background: tokens.colorNeutralBackground1,
         border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
         boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.06)',
         boxSizing: 'border-box',
       }}
     >
-      {def?.icon ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={`/azure-icons/${def.icon}`} alt="" width={20} height={20} style={{ flexShrink: 0 }} />
-      ) : (
-        <span style={{
-          width: 20, height: 20, flexShrink: 0, borderRadius: 4, background: color, color: '#fff',
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
-        }}>{(def?.label || d.serviceKey).slice(0, 2).toUpperCase()}</span>
-      )}
+      <ServiceIconChip def={def} vis={vis} Glyph={Glyph} remote={remote} size={26} iconPx={16} radius={6} />
       <span style={{
+        flex: 1, minWidth: 0,
         fontSize: 11, fontWeight: 500, color: tokens.colorNeutralForeground1,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-      }}>{def?.label || d.serviceKey}</span>
+      }}>{vis.label}</span>
+      {def?.planOnly && (
+        <span title="Plan-only — no one-button bicep toggle yet" style={{
+          flexShrink: 0, width: 7, height: 7, borderRadius: 4,
+          background: tokens.colorPaletteMarigoldBackground3,
+        }} />
+      )}
     </div>
   );
 }
+
+/**
+ * Shared icon chip: a tinted rounded square holding either the bundled Azure
+ * raster icon, the optional Atlas Diag remote icon, or the Fluent glyph. The
+ * fixed-size chip with its own padding is what keeps the icon from butting the
+ * label (the old node packed a bare 20px image flush against the text).
+ */
+function ServiceIconChip({
+  def, vis, Glyph, remote, size, iconPx, radius,
+}: {
+  def: ReturnType<typeof serviceByKey>;
+  vis: { color: string; label: string };
+  Glyph: React.ComponentType<{ style?: React.CSSProperties }>;
+  remote: string | undefined;
+  size: number; iconPx: number; radius: number;
+}) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        flexShrink: 0, width: size, height: size, borderRadius: radius,
+        background: `${vis.color}1f`, color: vis.color,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      {remote ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={remote} alt="" width={iconPx} height={iconPx} style={{ borderRadius: 3 }} />
+      ) : def?.icon ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={`/azure-icons/${def.icon}`} alt="" width={iconPx} height={iconPx} />
+      ) : (
+        <Glyph style={{ width: iconPx, height: iconPx, color: vis.color }} />
+      )}
+    </span>
+  );
+}
+
+export { ServiceIconChip };
 
 export const SubscriptionNode = memo(SubscriptionNodeImpl);
 export const DomainNode = memo(DomainNodeImpl);

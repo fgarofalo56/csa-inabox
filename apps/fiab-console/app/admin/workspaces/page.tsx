@@ -8,13 +8,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Input, Button,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Spinner, Badge, Caption1, Body1, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Search24Regular, ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Open16Regular, Folder24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
+import { Section, Toolbar } from '@/lib/components/ui/section';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface Workspace {
   id: string; name: string; description?: string;
@@ -25,16 +26,15 @@ interface Workspace {
 }
 
 const useStyles = makeStyles({
-  toolbar: {
-    display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12,
-    paddingBottom: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
+  nameCell: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  icon: {
+    flexShrink: 0, width: '32px', height: '32px', borderRadius: tokens.borderRadiusMedium,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: tokens.colorPaletteBlueBackground2, color: tokens.colorPaletteBlueForeground2,
   },
-  spacer: { flex: 1 },
-  tableWrap: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 8, overflow: 'auto',
-  },
-  empty: { padding: 32, color: tokens.colorNeutralForeground3, fontSize: 13, textAlign: 'center' },
+  nameText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
+  openLink: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px' },
 });
 
 export default function AdminWorkspacesPage() {
@@ -70,31 +70,63 @@ export default function AdminWorkspacesPage() {
     );
   }, [workspaces, q]);
 
-  const totalItems = useMemo(() => (workspaces || []).reduce((s, w) => s + (w.itemCount || 0), 0), [workspaces]);
+  const totalItems = useMemo(() => (workspaces || []).reduce((sum, w) => sum + (w.itemCount || 0), 0), [workspaces]);
+
+  const columns: LoomColumn<Workspace>[] = useMemo(() => [
+    {
+      key: 'name', label: 'Name', width: 280, getValue: (w) => w.name,
+      render: (w) => (
+        <span className={s.nameCell}>
+          <span className={s.icon} aria-hidden><Folder24Regular style={{ width: 18, height: 18 }} /></span>
+          <span className={s.nameText}>
+            <strong title={w.name} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</strong>
+            {w.description && (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {w.description}
+              </Caption1>
+            )}
+          </span>
+        </span>
+      ),
+    },
+    { key: 'createdBy', label: 'Owner', width: 180, getValue: (w) => w.createdBy || '', render: (w) => w.createdBy || '—' },
+    {
+      key: 'capacity', label: 'Capacity', width: 150, getValue: (w) => w.capacity || '',
+      render: (w) => w.capacity ? <Badge appearance="tint" size="small">{w.capacity}</Badge> : '—',
+    },
+    { key: 'domain', label: 'Domain', width: 140, getValue: (w) => w.domain || '', render: (w) => w.domain || '—' },
+    { key: 'itemCount', label: 'Items', width: 100, getValue: (w) => w.itemCount, render: (w) => <strong>{w.itemCount}</strong> },
+    {
+      key: 'lastActivity', label: 'Last activity', width: 170,
+      getValue: (w) => (w.lastActivity ? new Date(w.lastActivity).getTime() : 0),
+      render: (w) => <Caption1>{w.lastActivity ? new Date(w.lastActivity).toLocaleString() : '—'}</Caption1>,
+    },
+    {
+      key: 'state', label: 'State', width: 110, getValue: (w) => w.state || 'Active',
+      render: (w) => (
+        <Badge appearance={w.state === 'Active' || !w.state ? 'filled' : 'outline'} color="success" size="small">
+          {w.state || 'Active'}
+        </Badge>
+      ),
+    },
+    {
+      key: 'open', label: 'Open', width: 100, sortable: false, filterable: false,
+      render: (w) => (
+        <a href={`/workspaces/${w.id}`} className={s.openLink} onClick={(e) => e.stopPropagation()}>
+          Open <Open16Regular />
+        </a>
+      ),
+    },
+  ], [s]);
 
   return (
     <AdminShell sectionTitle="Workspaces (tenant-wide)">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+      <Body1 className={s.intro}>
         Every workspace in your tenant, regardless of owner. Item counts and last activity computed live from Cosmos.
       </Body1>
 
-      <div className={s.toolbar}>
-        <Input
-          contentBefore={<Search24Regular />}
-          placeholder="Search by name, owner, domain, capacity…"
-          value={q}
-          onChange={(_, d) => setQ(d.value)}
-          style={{ flex: 1, maxWidth: 360 }}
-        />
-        <div className={s.spacer} />
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-          {filtered.length} workspaces · {totalItems} items total
-        </Caption1>
-        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
-      </div>
-
       {error && (
-        <MessageBar intent="error">
+        <MessageBar intent="error" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             <MessageBarTitle>Could not load workspaces</MessageBarTitle>
             {error}
@@ -102,60 +134,30 @@ export default function AdminWorkspacesPage() {
         </MessageBar>
       )}
 
-      {loading && !error && <Spinner label="Loading workspaces…" />}
-
-      {!loading && !error && filtered.length === 0 && (
-        <div className={s.empty}>
-          {q ? <>No workspaces match &ldquo;{q}&rdquo;.</> : <>No workspaces in this tenant yet. Create one from /workspaces.</>}
-        </div>
-      )}
-
-      {!loading && !error && filtered.length > 0 && (
-        <div className={s.tableWrap}>
-          <Table aria-label="Workspaces">
-            <TableHeader>
-              <TableRow>
-                <TableHeaderCell>Name</TableHeaderCell>
-                <TableHeaderCell>Owner</TableHeaderCell>
-                <TableHeaderCell>Capacity</TableHeaderCell>
-                <TableHeaderCell>Domain</TableHeaderCell>
-                <TableHeaderCell>Items</TableHeaderCell>
-                <TableHeaderCell>Last activity</TableHeaderCell>
-                <TableHeaderCell>State</TableHeaderCell>
-                <TableHeaderCell></TableHeaderCell>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map((w) => (
-                <TableRow key={w.id}>
-                  <TableCell>
-                    <strong>{w.name}</strong>
-                    {w.description && <div style={{ fontSize: 12, color: tokens.colorNeutralForeground3 }}>{w.description}</div>}
-                  </TableCell>
-                  <TableCell>{w.createdBy || '—'}</TableCell>
-                  <TableCell>{w.capacity ? <Badge appearance="tint" size="small">{w.capacity}</Badge> : '—'}</TableCell>
-                  <TableCell>{w.domain || '—'}</TableCell>
-                  <TableCell><strong>{w.itemCount}</strong></TableCell>
-                  <TableCell><Caption1>{w.lastActivity ? new Date(w.lastActivity).toLocaleString() : '—'}</Caption1></TableCell>
-                  <TableCell>
-                    <Badge appearance={w.state === 'Active' ? 'filled' : 'outline'} color="success" size="small">
-                      {w.state || 'Active'}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <a
-                      href={`/workspaces/${w.id}`}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}
-                    >
-                      Open <Open16Regular />
-                    </a>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
+      <Section
+        title="Workspaces"
+        actions={
+          <>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              {filtered.length} workspaces · {totalItems} items total
+            </Caption1>
+            <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
+          </>
+        }
+      >
+        <Toolbar search={q} onSearch={setQ} searchPlaceholder="Search by name, owner, domain, capacity…" />
+        {loading && !error ? (
+          <Spinner label="Loading workspaces…" />
+        ) : (
+          <LoomDataTable
+            columns={columns}
+            rows={filtered}
+            getRowId={(w) => w.id}
+            empty={q ? `No workspaces match "${q}".` : 'No workspaces in this tenant yet. Create one from /workspaces.'}
+            ariaLabel="Workspaces"
+          />
+        )}
+      </Section>
     </AdminShell>
   );
 }

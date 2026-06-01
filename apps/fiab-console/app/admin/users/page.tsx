@@ -12,13 +12,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Input, Button,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Spinner, Badge, Caption1, Body1, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Search24Regular, ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Open16Regular, Person24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
+import { Section, Toolbar } from '@/lib/components/ui/section';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface UserRow {
   upn: string;
@@ -33,12 +34,15 @@ interface UserRow {
 }
 
 const useStyles = makeStyles({
-  toolbar: {
-    display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12,
-    paddingBottom: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
+  userCell: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  avatar: {
+    flexShrink: 0, width: '32px', height: '32px', borderRadius: '50%',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
   },
-  spacer: { flex: 1 },
-  empty: { padding: 32, color: tokens.colorNeutralForeground3, fontSize: 13, textAlign: 'center' },
+  userText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
+  entraLink: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px' },
 });
 
 export default function UsersPage() {
@@ -76,10 +80,59 @@ export default function UsersPage() {
     );
   }, [users, q]);
 
+  const columns: LoomColumn<UserRow>[] = useMemo(() => [
+    {
+      key: 'user', label: 'User', width: 260,
+      getValue: (u) => u.displayName || u.upn,
+      render: (u) => (
+        <span className={s.userCell}>
+          <span className={s.avatar} aria-hidden><Person24Regular style={{ width: 18, height: 18 }} /></span>
+          <span className={s.userText}>
+            <strong title={u.displayName || u.upn} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {u.displayName || u.upn}
+            </strong>
+            {u.displayName && (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {u.upn}
+              </Caption1>
+            )}
+          </span>
+        </span>
+      ),
+    },
+    { key: 'department', label: 'Department', width: 160, getValue: (u) => u.department || '',
+      render: (u) => u.department || '—' },
+    {
+      key: 'roles', label: 'Roles', width: 200, sortable: false,
+      getValue: (u) => u.roles.join(' '),
+      render: (u) => u.roles.length
+        ? u.roles.map((r) => <Badge key={r} appearance="outline" size="small" style={{ marginRight: 4 }}>{r}</Badge>)
+        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>,
+    },
+    { key: 'workspacesOwned', label: 'Workspaces', width: 150, getValue: (u) => u.workspacesOwned,
+      render: (u) => <span><strong>{u.workspacesOwned}</strong> owned / {u.workspacesMember} member</span> },
+    { key: 'itemsCreated', label: 'Items created', width: 130, getValue: (u) => u.itemsCreated,
+      render: (u) => <strong>{u.itemsCreated}</strong> },
+    { key: 'lastActivity', label: 'Last activity', width: 140,
+      getValue: (u) => (u.lastActivity ? new Date(u.lastActivity).getTime() : 0),
+      render: (u) => <Caption1>{u.lastActivity ? new Date(u.lastActivity).toLocaleDateString() : '—'}</Caption1> },
+    {
+      key: 'entra', label: 'Entra', width: 110, sortable: false, filterable: false,
+      render: (u) => (
+        <a
+          href={`https://portal.azure.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/${encodeURIComponent(u.upn)}`}
+          target="_blank" rel="noreferrer" className={s.entraLink} onClick={(e) => e.stopPropagation()}
+        >
+          Entra <Open16Regular />
+        </a>
+      ),
+    },
+  ], [s]);
+
   return (
     <AdminShell sectionTitle="Users, roles & licenses">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
-        Users with access to this tenant's workspaces. Derived from Cosmos workspaces + items + workspace-permissions.
+      <Body1 className={s.intro}>
+        Users with access to this tenant&apos;s workspaces. Derived from Cosmos workspaces + items + workspace-permissions.
         {graphEnabled ? (
           <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: 8 }}>
             Graph enriched: {enrichedCount}/{(users || []).length}
@@ -92,7 +145,7 @@ export default function UsersPage() {
       </Body1>
 
       {!graphEnabled && (
-        <MessageBar intent="info" style={{ marginBottom: 12 }}>
+        <MessageBar intent="info" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             Set <code>LOOM_GRAPH_USERS_ENABLED=true</code> and grant the Console UAMI
             <strong> Directory.Read.All</strong> in Microsoft Graph for display name + department enrichment.
@@ -101,21 +154,8 @@ export default function UsersPage() {
         </MessageBar>
       )}
 
-      <div className={s.toolbar}>
-        <Input
-          contentBefore={<Search24Regular />}
-          placeholder="Search by UPN, name, department, role…"
-          value={q}
-          onChange={(_, d) => setQ(d.value)}
-          style={{ flex: 1, maxWidth: 360 }}
-        />
-        <div className={s.spacer} />
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{filtered.length} users</Caption1>
-        <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
-      </div>
-
       {error && (
-        <MessageBar intent="error">
+        <MessageBar intent="error" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             <MessageBarTitle>Could not load users</MessageBarTitle>
             {error}
@@ -123,61 +163,28 @@ export default function UsersPage() {
         </MessageBar>
       )}
 
-      {loading && !error && <Spinner label="Loading users…" />}
-
-      {!loading && !error && filtered.length === 0 && (
-        <div className={s.empty}>
-          {q ? <>No users match &ldquo;{q}&rdquo;.</> : <>No users have created workspaces or items yet.</>}
-        </div>
-      )}
-
-      {!loading && !error && filtered.length > 0 && (
-        <Table aria-label="Users">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>User</TableHeaderCell>
-              <TableHeaderCell>Department</TableHeaderCell>
-              <TableHeaderCell>Roles</TableHeaderCell>
-              <TableHeaderCell>Workspaces (owned / member)</TableHeaderCell>
-              <TableHeaderCell>Items created</TableHeaderCell>
-              <TableHeaderCell>Last activity</TableHeaderCell>
-              <TableHeaderCell></TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filtered.map((u) => (
-              <TableRow key={u.upn}>
-                <TableCell>
-                  <strong>{u.displayName || u.upn}</strong>
-                  {u.displayName && (
-                    <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{u.upn}</Caption1>
-                  )}
-                </TableCell>
-                <TableCell>{u.department || '—'}</TableCell>
-                <TableCell>
-                  {u.roles.map((r) => (
-                    <Badge key={r} appearance="outline" size="small" style={{ marginRight: 4 }}>{r}</Badge>
-                  ))}
-                </TableCell>
-                <TableCell><strong>{u.workspacesOwned}</strong> / {u.workspacesMember}</TableCell>
-                <TableCell><strong>{u.itemsCreated}</strong></TableCell>
-                <TableCell>
-                  <Caption1>{u.lastActivity ? new Date(u.lastActivity).toLocaleDateString() : '—'}</Caption1>
-                </TableCell>
-                <TableCell>
-                  <a
-                    href={`https://portal.azure.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/${encodeURIComponent(u.upn)}`}
-                    target="_blank" rel="noreferrer"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}
-                  >
-                    Entra <Open16Regular />
-                  </a>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
+      <Section
+        title="Users"
+        actions={
+          <>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{filtered.length} users</Caption1>
+            <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
+          </>
+        }
+      >
+        <Toolbar search={q} onSearch={setQ} searchPlaceholder="Search by UPN, name, department, role…" />
+        {loading && !error ? (
+          <Spinner label="Loading users…" />
+        ) : (
+          <LoomDataTable
+            columns={columns}
+            rows={filtered}
+            getRowId={(u) => u.upn}
+            empty={q ? `No users match "${q}".` : 'No users have created workspaces or items yet.'}
+            ariaLabel="Users"
+          />
+        )}
+      </Section>
     </AdminShell>
   );
 }

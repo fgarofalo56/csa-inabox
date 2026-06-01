@@ -26,14 +26,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tab, TabList, Spinner, Badge, Button, Dropdown, Option, Textarea, Checkbox,
-  MessageBar, MessageBarBody, MessageBarTitle, Text,
+  MessageBar, MessageBarBody, MessageBarTitle, Text, Caption1,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  ArrowSync20Regular, Rocket20Regular, ArrowRight20Regular,
+  ArrowSync20Regular, Rocket20Regular, ArrowRight20Regular, ChevronRight24Regular,
+  Beaker20Regular, Server20Regular, Globe20Regular, BranchFork20Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { Section } from '@/lib/components/ui/section';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 // ---- types mirrored from the clients ---------------------------------------
 
@@ -61,20 +64,30 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' },
   section: { display: 'flex', flexDirection: 'column', gap: '12px' },
   gap: { marginBottom: '12px' },
-  stages: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-    gap: '16px',
-    alignItems: 'stretch',
+  stageFlow: {
+    display: 'flex', alignItems: 'stretch', gap: '4px',
+    flexWrap: 'wrap', marginBottom: '8px',
+  },
+  stageCol: { flex: '1 1 260px', minWidth: '240px', display: 'flex', flexDirection: 'column' },
+  connector: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    color: tokens.colorNeutralForeground4, flexShrink: 0, alignSelf: 'stretch',
   },
   stageCard: {
     display: 'flex', flexDirection: 'column', gap: '10px',
     padding: '16px', borderRadius: '12px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    minHeight: '160px',
+    boxShadow: tokens.shadow2,
+    minHeight: '180px', flex: 1,
+    borderTopWidth: '3px', borderTopStyle: 'solid',
   },
-  stageHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' },
+  stageHead: { display: 'flex', alignItems: 'center', gap: '10px' },
+  stageChip: {
+    flexShrink: 0, width: '34px', height: '34px',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: tokens.borderRadiusLarge,
+  },
   stageName: { fontSize: '15px', fontWeight: 700 },
   stageMeta: { fontSize: '12px', color: tokens.colorNeutralForeground3 },
   itemList: { display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '220px', overflow: 'auto' },
@@ -85,21 +98,12 @@ const useStyles = makeStyles({
   },
   itemType: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
   deployRow: { display: 'flex', justifyContent: 'center', alignItems: 'center', paddingTop: '4px' },
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: '13px' },
-  th: {
-    textAlign: 'left', padding: '8px 10px', borderBottom: `2px solid ${tokens.colorNeutralStroke2}`,
-    fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.04em', color: tokens.colorNeutralForeground3,
-    position: 'sticky', top: 0, backgroundColor: tokens.colorNeutralBackground1,
-  },
-  td: { padding: '8px 10px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, verticalAlign: 'top', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  tableWrap: { maxHeight: '520px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '8px' },
   empty: {
     padding: '32px', borderRadius: '12px', border: `1px dashed ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground2,
     fontSize: '14px', textAlign: 'center', lineHeight: 1.6,
   },
   dialogItems: { display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '320px', overflow: 'auto', marginTop: '8px' },
-  historyTitle: { fontSize: '15px', fontWeight: 600, marginTop: '8px' },
 });
 
 function GateBar({ gate, subject }: { gate: Gate; subject: string }) {
@@ -132,6 +136,18 @@ function provStateBadge(state?: string) {
   return <Badge color="subtle" appearance="outline">{state || 'Unknown'}</Badge>;
 }
 
+/**
+ * Stage visual — colour + icon by stage position (Dev → Test → Prod), the
+ * same colour language Fabric uses for its deployment-pipeline stage cards.
+ */
+function stageVisual(order: number, displayName?: string) {
+  const name = (displayName || '').toLowerCase();
+  if (order === 0 || name.includes('dev')) return { color: '#0078d4', Icon: BranchFork20Regular };   // Development — blue
+  if (name.includes('prod')) return { color: '#1a7f4e', Icon: Globe20Regular };                       // Production — green
+  if (order === 1 || name.includes('test') || name.includes('stag')) return { color: '#c2410c', Icon: Beaker20Regular }; // Test — orange
+  return { color: '#7c3aed', Icon: Server20Regular };                                                  // extra stages — purple
+}
+
 type TabKey = 'pipelines' | 'infra';
 
 export function DeploymentPipelinesPane() {
@@ -143,8 +159,8 @@ export function DeploymentPipelinesPane() {
     <div>
       {unauth && <SignInRequired subject="deployment pipelines" />}
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as TabKey)} className={styles.gap}>
-        <Tab value="pipelines">Deployment pipelines</Tab>
-        <Tab value="infra">Infra deployments (ARM)</Tab>
+        <Tab value="pipelines" icon={<Rocket20Regular />}>Deployment pipelines</Tab>
+        <Tab value="infra" icon={<Server20Regular />}>Infra deployments (ARM)</Tab>
       </TabList>
       {tab === 'pipelines' && <PipelinesTab onUnauth={() => setUnauth(true)} />}
       {tab === 'infra' && <InfraTab onUnauth={() => setUnauth(true)} />}
@@ -258,99 +274,119 @@ function PipelineDetail({ pipeline }: { pipeline: Pipeline }) {
 
   const stageName = (id?: string) => stages.find((s) => s.id === id)?.displayName || id || '—';
 
+  const historyCols: LoomColumn<Operation>[] = [
+    {
+      key: 'executionStartTime', label: 'Started', sortable: true, filterable: false, width: 180,
+      getValue: (o) => o.executionStartTime ? new Date(o.executionStartTime).getTime() : 0,
+      render: (o) => o.executionStartTime ? new Date(o.executionStartTime).toLocaleString() : '—',
+    },
+    {
+      key: 'route', label: 'From → To', sortable: true, filterable: true, width: 220,
+      getValue: (o) => `${stageName(o.sourceStageId)} → ${stageName(o.targetStageId)}`,
+      render: (o) => <>{stageName(o.sourceStageId)} <ArrowRight20Regular style={{ verticalAlign: 'middle', width: 14, height: 14 }} /> {stageName(o.targetStageId)}</>,
+    },
+    {
+      key: 'status', label: 'Status', sortable: true, filterable: true, width: 130,
+      getValue: (o) => o.status || '',
+      render: (o) => opStatusBadge(o.status),
+    },
+    { key: 'performedBy', label: 'By', sortable: true, filterable: true, width: 180, render: (o) => o.performedBy || '—' },
+    { key: 'note', label: 'Note', sortable: false, filterable: true, width: 240, render: (o) => o.note || '—' },
+  ];
+
   return (
     <div className={styles.section}>
       {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
 
-      <div className={styles.stages}>
-        {stages.map((st, i) => {
-          const next = stages[i + 1];
-          const items = stageItems[st.id];
-          return (
-            <div key={st.id} className={styles.stageCard}>
-              <div className={styles.stageHead}>
-                <span className={styles.stageName}>{st.displayName}</span>
-                {st.isPublic && <Badge appearance="outline" size="small">Public</Badge>}
-              </div>
-              <div className={styles.stageMeta}>
-                {st.workspaceName
-                  ? <>Workspace: <strong>{st.workspaceName}</strong></>
-                  : st.workspaceId
-                    ? <>Workspace assigned ({st.workspaceId.slice(0, 8)}…)</>
-                    : <>No workspace assigned</>}
-              </div>
-              {st.description && <div className={styles.stageMeta}>{st.description}</div>}
+      <Section title="Stages">
+        <div className={styles.stageFlow}>
+          {stages.map((st, i) => {
+            const next = stages[i + 1];
+            const items = stageItems[st.id];
+            const { color, Icon } = stageVisual(st.order ?? i, st.displayName);
+            return (
+              <div key={st.id} style={{ display: 'contents' }}>
+                <div className={styles.stageCol}>
+                  <div className={styles.stageCard} style={{ borderTopColor: color }}>
+                    <div className={styles.stageHead}>
+                      <span className={styles.stageChip} style={{ backgroundColor: `${color}1f`, color }} aria-hidden>
+                        <Icon style={{ width: 20, height: 20, color }} />
+                      </span>
+                      <span className={styles.stageName}>{st.displayName}</span>
+                      {st.isPublic && <Badge appearance="outline" size="small">Public</Badge>}
+                      {items !== undefined && (
+                        <Badge appearance="tint" size="small" style={{ marginLeft: 'auto' }}>{items.length}</Badge>
+                      )}
+                    </div>
+                    <div className={styles.stageMeta}>
+                      {st.workspaceName
+                        ? <>Workspace: <strong>{st.workspaceName}</strong></>
+                        : st.workspaceId
+                          ? <>Workspace assigned ({st.workspaceId.slice(0, 8)}…)</>
+                          : <>No workspace assigned</>}
+                    </div>
+                    {st.description && <div className={styles.stageMeta}>{st.description}</div>}
 
-              {st.workspaceId ? (
-                items === undefined ? (
-                  <Spinner size="tiny" label="Loading items…" />
-                ) : items.length === 0 ? (
-                  <div className={styles.stageMeta}>No supported items in this stage yet.</div>
-                ) : (
-                  <div className={styles.itemList}>
-                    {items.map((it) => (
-                      <div key={it.itemId} className={styles.itemRow}>
-                        <span title={it.itemDisplayName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {it.itemDisplayName}
-                        </span>
-                        <span className={styles.itemType}>{it.itemType}</span>
+                    {st.workspaceId ? (
+                      items === undefined ? (
+                        <Spinner size="tiny" label="Loading items…" />
+                      ) : items.length === 0 ? (
+                        <div className={styles.stageMeta}>No supported items in this stage yet.</div>
+                      ) : (
+                        <div className={styles.itemList}>
+                          {items.map((it) => (
+                            <div key={it.itemId} className={styles.itemRow}>
+                              <span title={it.itemDisplayName} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {it.itemDisplayName}
+                              </span>
+                              <span className={styles.itemType}>{it.itemType}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    ) : (
+                      <div className={styles.stageMeta}>
+                        Assign a workspace to this stage in Fabric to populate it.
                       </div>
-                    ))}
+                    )}
+
+                    {next && (
+                      <div className={styles.deployRow}>
+                        <DeployDialog
+                          pipelineId={pipeline.id}
+                          source={st}
+                          target={next}
+                          items={items || []}
+                          onDeployed={reload}
+                        />
+                      </div>
+                    )}
                   </div>
-                )
-              ) : (
-                <div className={styles.stageMeta}>
-                  Assign a workspace to this stage in Fabric to populate it.
                 </div>
-              )}
-
-              {next && (
-                <div className={styles.deployRow}>
-                  <DeployDialog
-                    pipelineId={pipeline.id}
-                    source={st}
-                    target={next}
-                    items={items || []}
-                    onDeployed={reload}
-                  />
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      <div className={styles.historyTitle}>Deployment history</div>
-      {operations === null ? (
-        <Spinner size="tiny" label="Loading deployment history…" />
-      ) : operations.length === 0 ? (
-        <div className={styles.empty}>No deployments recorded for this pipeline yet.</div>
-      ) : (
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th className={styles.th}>Started</th>
-                <th className={styles.th}>From → To</th>
-                <th className={styles.th}>Status</th>
-                <th className={styles.th}>By</th>
-                <th className={styles.th}>Note</th>
-              </tr>
-            </thead>
-            <tbody>
-              {operations.map((o) => (
-                <tr key={o.id}>
-                  <td className={styles.td}>{o.executionStartTime ? new Date(o.executionStartTime).toLocaleString() : '—'}</td>
-                  <td className={styles.td}>{stageName(o.sourceStageId)} → {stageName(o.targetStageId)}</td>
-                  <td className={styles.td}>{opStatusBadge(o.status)}</td>
-                  <td className={styles.td} title={o.performedBy}>{o.performedBy || '—'}</td>
-                  <td className={styles.td} title={o.note}>{o.note || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                {next && (
+                  <div className={styles.connector} aria-hidden>
+                    <ChevronRight24Regular />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
-      )}
+      </Section>
+
+      <Section title="Deployment history">
+        {operations === null ? (
+          <Spinner size="tiny" label="Loading deployment history…" />
+        ) : (
+          <LoomDataTable
+            ariaLabel="Deployment history"
+            columns={historyCols}
+            rows={operations}
+            getRowId={(o) => o.id}
+            empty="No deployments recorded for this pipeline yet."
+          />
+        )}
+      </Section>
     </div>
   );
 }
@@ -511,11 +547,26 @@ function InfraTab({ onUnauth }: { onUnauth: () => void }) {
 
   if (deployments === null) return <Spinner label="Loading ARM deployment history…" />;
 
+  const armCols: LoomColumn<ArmDeployment>[] = [
+    { key: 'name', label: 'Name', sortable: true, filterable: true, width: 220, render: (d) => <strong title={d.name} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{d.name}</strong> },
+    { key: 'resourceGroup', label: 'Resource group', sortable: true, filterable: true, width: 200 },
+    {
+      key: 'provisioningState', label: 'State', sortable: true, filterable: true, width: 160,
+      getValue: (d) => d.provisioningState || '',
+      render: (d) => <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>{provStateBadge(d.provisioningState)}{d.error ? <Text size={100} title={d.error}>{d.error.slice(0, 60)}</Text> : null}</span>,
+    },
+    {
+      key: 'timestamp', label: 'Timestamp', sortable: true, filterable: false, width: 180,
+      getValue: (d) => d.timestamp ? new Date(d.timestamp).getTime() : 0,
+      render: (d) => d.timestamp ? new Date(d.timestamp).toLocaleString() : '—',
+    },
+    { key: 'durationSec', label: 'Duration', sortable: true, filterable: false, width: 110, getValue: (d) => d.durationSec ?? 0, render: (d) => d.durationSec != null ? `${Math.round(d.durationSec)}s` : '—' },
+    { key: 'mode', label: 'Mode', sortable: true, filterable: true, width: 120, render: (d) => d.mode || '—' },
+    { key: 'resourceCount', label: 'Resources', sortable: true, filterable: false, width: 110, getValue: (d) => d.resourceCount ?? 0, render: (d) => d.resourceCount != null ? String(d.resourceCount) : '—' },
+  ];
+
   return (
     <div className={styles.section}>
-      <div className={styles.toolbar}>
-        <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>
-      </div>
       <MessageBar intent="info">
         <MessageBarBody>
           The platform's own ARM / bicep rollouts across the Loom resource groups
@@ -525,38 +576,18 @@ function InfraTab({ onUnauth }: { onUnauth: () => void }) {
       </MessageBar>
       {gate && <GateBar gate={gate} subject="Infra deployments" />}
       {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-      {deployments.length === 0 && !gate && !err ? (
-        <div className={styles.empty}>No ARM deployments found in the configured Loom resource groups.</div>
-      ) : (
-        <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th className={styles.th}>Name</th>
-                <th className={styles.th}>Resource group</th>
-                <th className={styles.th}>State</th>
-                <th className={styles.th}>Timestamp</th>
-                <th className={styles.th}>Duration</th>
-                <th className={styles.th}>Mode</th>
-                <th className={styles.th}>Resources</th>
-              </tr>
-            </thead>
-            <tbody>
-              {deployments.map((d) => (
-                <tr key={d.id}>
-                  <td className={styles.td} title={d.name}>{d.name}</td>
-                  <td className={styles.td}>{d.resourceGroup}</td>
-                  <td className={styles.td}>{provStateBadge(d.provisioningState)}{d.error ? <Text size={100} block title={d.error}> {d.error.slice(0, 60)}</Text> : null}</td>
-                  <td className={styles.td}>{d.timestamp ? new Date(d.timestamp).toLocaleString() : '—'}</td>
-                  <td className={styles.td}>{d.durationSec != null ? `${Math.round(d.durationSec)}s` : '—'}</td>
-                  <td className={styles.td}>{d.mode || '—'}</td>
-                  <td className={styles.td}>{d.resourceCount != null ? d.resourceCount : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <Section
+        title="ARM / bicep rollouts"
+        actions={<Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
+      >
+        <LoomDataTable
+          ariaLabel="ARM deployment history"
+          columns={armCols}
+          rows={deployments}
+          getRowId={(d) => d.id}
+          empty="No ARM deployments found in the configured Loom resource groups."
+        />
+      </Section>
     </div>
   );
 }

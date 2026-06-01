@@ -19,8 +19,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   TabList, Tab, type SelectTabData, type SelectTabEvent,
-  Spinner, Badge, Caption1, Body1, Subtitle2, Button,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Spinner, Badge, Caption1, Body1, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -30,6 +29,8 @@ import { PurviewPanel } from '@/lib/components/admin-security/purview-panel';
 import { MipPanel } from '@/lib/components/admin-security/mip-panel';
 import { DlpPanel } from '@/lib/components/admin-security/dlp-panel';
 import { AuditPanel } from '@/lib/components/admin-security/audit-panel';
+import { Section } from '@/lib/components/ui/section';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface Insights {
   kpis: { totalItems: number; sensitiveCoveragePct: number; classificationCoveragePct: number; activePolicies: number; auditEvents30d: number };
@@ -47,35 +48,32 @@ interface AuditRow {
 }
 
 const useStyles = makeStyles({
-  topTabs: { marginBottom: 16 },
+  intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
+  topTabs: { marginBottom: tokens.spacingVerticalL },
   statsRow: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: 12, marginBottom: 20,
+    gap: tokens.spacingHorizontalM,
   },
   statCard: {
-    padding: 16, borderRadius: 8,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
+    backgroundColor: tokens.colorNeutralBackground2,
   },
-  statVal: { fontSize: 24, fontWeight: 600, color: tokens.colorBrandForeground1 },
-  statLabel: { fontSize: 12, color: tokens.colorNeutralForeground3 },
-  bar: { height: 6, background: tokens.colorNeutralBackground3, borderRadius: 3, overflow: 'hidden', marginTop: 4 },
-  barFill: { height: '100%', background: tokens.colorBrandBackground, borderRadius: 3 },
+  statVal: { fontSize: '24px', fontWeight: 600, color: tokens.colorBrandForeground1 },
+  statLabel: { fontSize: '12px', color: tokens.colorNeutralForeground3, marginTop: '2px' },
+  bar: { height: '6px', backgroundColor: tokens.colorNeutralBackground3, borderRadius: '3px', overflow: 'hidden', marginTop: '8px' },
+  barFill: { height: '100%', backgroundColor: tokens.colorBrandBackground, borderRadius: '3px' },
   twoCol: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
-    gap: 16, marginBottom: 20,
-  },
-  section: {
-    padding: 16, borderRadius: 8,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
+    gap: tokens.spacingHorizontalL,
   },
   chip: {
-    fontSize: 11, padding: '2px 8px', borderRadius: 999,
+    fontSize: '11px', padding: '4px 10px', borderRadius: '999px',
     backgroundColor: tokens.colorPaletteBlueBackground2,
     color: tokens.colorPaletteBlueForeground2,
-    marginRight: 4, display: 'inline-block', marginBottom: 4,
+    marginRight: '6px', display: 'inline-block', marginBottom: '6px',
   },
+  refresh: { display: 'flex', justifyContent: 'flex-end', marginBottom: tokens.spacingVerticalM },
 });
 
 function labelColor(l: string): any {
@@ -93,7 +91,7 @@ export default function SecurityPage() {
 
   return (
     <AdminShell sectionTitle="Security & governance">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 16 }}>
+      <Body1 className={s.intro}>
         Tenant-wide security posture + inline management of Microsoft Purview, Information Protection, and
         DLP. Every operation is wired to a real Azure / Microsoft Graph backend — when an upstream isn't
         wired in this deployment, the affected tab surfaces a precise remediation (env var, AppRole, bicep
@@ -113,10 +111,11 @@ export default function SecurityPage() {
       </TabList>
 
       {tab === 'overview' && <OverviewTab />}
-      {tab === 'purview' && <PurviewPanel />}
-      {tab === 'mip' && <MipPanel />}
-      {tab === 'dlp' && <DlpPanel />}
-      {tab === 'audit' && <AuditPanel />}
+      {/* Gated panels own their internal layout/logic; the page only frames them. */}
+      {tab === 'purview' && <Section bare><PurviewPanel /></Section>}
+      {tab === 'mip' && <Section bare><MipPanel /></Section>}
+      {tab === 'dlp' && <Section bare><DlpPanel /></Section>}
+      {tab === 'audit' && <Section bare><AuditPanel /></Section>}
     </AdminShell>
   );
 }
@@ -154,14 +153,32 @@ function OverviewTab() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  const labelColumns: LoomColumn<{ label: string; count: number }>[] = [
+    {
+      key: 'label', label: 'Label', width: 240, getValue: (d) => d.label,
+      render: (d) => <Badge appearance="filled" color={labelColor(d.label)} size="small">{d.label}</Badge>,
+    },
+    { key: 'count', label: 'Items', width: 120, getValue: (d) => d.count, render: (d) => <strong>{d.count}</strong> },
+  ];
+
+  const shareColumns: LoomColumn<AuditRow>[] = [
+    {
+      key: 'at', label: 'When', width: 190, getValue: (e) => new Date(e.at).getTime(),
+      render: (e) => <Caption1>{new Date(e.at).toLocaleString()}</Caption1>,
+    },
+    { key: 'who', label: 'Who', width: 200 },
+    { key: 'kind', label: 'Action', width: 160, render: (e) => <Badge appearance="outline" size="small">{e.kind}</Badge> },
+    { key: 'itemId', label: 'Target', width: 220, render: (e) => <code style={{ fontSize: 11 }}>{e.itemId}</code> },
+  ];
+
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+      <div className={s.refresh}>
         <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
       </div>
 
       {error && (
-        <MessageBar intent="error">
+        <MessageBar intent="error" style={{ marginBottom: 16 }}>
           <MessageBarBody>
             <MessageBarTitle>Could not load security dashboard</MessageBarTitle>
             {error}
@@ -169,13 +186,13 @@ function OverviewTab() {
         </MessageBar>
       )}
 
-      {loading && !error && <Spinner label="Composing security view…" />}
+      {loading && !error && <Section><Spinner label="Composing security view…" /></Section>}
 
       {!loading && (insights || sensitivity || classifications) && (
         <>
-          <div className={s.statsRow}>
-            {insights && (
-              <>
+          {insights && (
+            <Section title="Posture">
+              <div className={s.statsRow}>
                 <div className={s.statCard}>
                   <div className={s.statVal}>{insights.kpis.totalItems}</div>
                   <div className={s.statLabel}>data items</div>
@@ -202,53 +219,40 @@ function OverviewTab() {
                   <div className={s.statVal}>{insights.kpis.auditEvents30d}</div>
                   <div className={s.statLabel}>audit events (30d)</div>
                 </div>
-              </>
-            )}
-          </div>
+              </div>
+            </Section>
+          )}
 
           <div className={s.twoCol}>
-            <div className={s.section}>
-              <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>
-                <Shield24Regular style={{ verticalAlign: 'middle', marginRight: 8 }} />
-                Sensitivity label distribution
-              </Subtitle2>
+            <Section title={<span><Shield24Regular style={{ verticalAlign: 'middle', marginRight: 8 }} />Sensitivity label distribution</span>}>
               {sensitivity && sensitivity.distribution.length > 0 ? (
-                <Table size="small" aria-label="Label distribution">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHeaderCell>Label</TableHeaderCell>
-                      <TableHeaderCell>Items</TableHeaderCell>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {sensitivity.distribution.map((d) => (
-                      <TableRow key={d.label}>
-                        <TableCell>
-                          <Badge appearance="filled" color={labelColor(d.label)} size="small">{d.label}</Badge>
-                        </TableCell>
-                        <TableCell><strong>{d.count}</strong></TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <LoomDataTable
+                  columns={labelColumns}
+                  rows={sensitivity.distribution}
+                  getRowId={(d) => d.label}
+                  noFilters
+                  ariaLabel="Label distribution"
+                  empty="No labels applied yet."
+                />
               ) : (
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No labels applied yet.</Caption1>
               )}
               {sensitivity && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: 12, color: tokens.colorNeutralForeground3 }}>
                   {sensitivity.unlabeled} of {sensitivity.total} items are unlabeled.
                   <a href="/governance/sensitivity" style={{ marginLeft: 8 }}>Open full view</a>
                 </Caption1>
               )}
-            </div>
+            </Section>
 
-            <div className={s.section}>
-              <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Top classifications</Subtitle2>
+            <Section title="Top classifications">
               {classifications && classifications.classifications.length > 0 ? (
                 <>
-                  {classifications.classifications.slice(0, 12).map((c) => (
-                    <span key={c.name} className={s.chip}>{c.name} <strong>({c.count})</strong></span>
-                  ))}
+                  <div>
+                    {classifications.classifications.slice(0, 12).map((c) => (
+                      <span key={c.name} className={s.chip}>{c.name} <strong>({c.count})</strong></span>
+                    ))}
+                  </div>
                   <Caption1 style={{ display: 'block', marginTop: 12, color: tokens.colorNeutralForeground3 }}>
                     <a href="/governance/classifications">Open full view</a>
                   </Caption1>
@@ -256,38 +260,24 @@ function OverviewTab() {
               ) : (
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No classifications applied yet.</Caption1>
               )}
-            </div>
+            </Section>
           </div>
 
-          <div className={s.section}>
-            <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Recent permission changes</Subtitle2>
+          <Section title="Recent permission changes">
             {shareEvents.length > 0 ? (
-              <Table size="small" aria-label="Permission changes">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>When</TableHeaderCell>
-                    <TableHeaderCell>Who</TableHeaderCell>
-                    <TableHeaderCell>Action</TableHeaderCell>
-                    <TableHeaderCell>Target</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {shareEvents.map((e) => (
-                    <TableRow key={e.id}>
-                      <TableCell><Caption1>{new Date(e.at).toLocaleString()}</Caption1></TableCell>
-                      <TableCell>{e.who}</TableCell>
-                      <TableCell><Badge appearance="outline" size="small">{e.kind}</Badge></TableCell>
-                      <TableCell><code style={{ fontSize: 11 }}>{e.itemId}</code></TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <LoomDataTable
+                columns={shareColumns}
+                rows={shareEvents}
+                getRowId={(e) => e.id}
+                ariaLabel="Permission changes"
+                empty="No recent permission changes."
+              />
             ) : (
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                 No recent share / permission events in the last 30 days. Use the <strong>Audit</strong> tab for full history + CSV export.
               </Caption1>
             )}
-          </div>
+          </Section>
         </>
       )}
     </>

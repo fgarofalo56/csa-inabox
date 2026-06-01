@@ -235,6 +235,24 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
       { key: 'dataConnectionId', label: 'Connection id', help: 'Connection to the storage account (System Topic).' },
     ],
   },
+  // ---- Fabric events (cont.) -------------------------------------------
+  {
+    id: 'fabric-capacity-events',
+    name: 'Fabric Capacity Utilization events',
+    category: 'Fabric events',
+    sourceType: 'FabricCapacityUtilizationEvents',
+    description: 'Stream capacity throttling / utilization events for a Fabric capacity.',
+    fields: [],
+  },
+  // ---- External streams (cont.) ----------------------------------------
+  {
+    id: 'custom-endpoint',
+    name: 'Custom endpoint',
+    category: 'External streams',
+    sourceType: 'CustomEndpoint',
+    description: 'Push events to a custom app endpoint (Event Hub / Kafka / AMQP compatible).',
+    fields: [],
+  },
   // ---- Sample -----------------------------------------------------------
   {
     id: 'sample-data',
@@ -247,6 +265,66 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     ],
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Per-connector visual — a stable {icon, color} for each Real-Time Hub source
+// so the source gallery + data-stream rows render color-coded, recognisable
+// chips (one-for-one with how Fabric colour-codes its connector tiles).
+// Source types are not Loom "item types", so this is a dedicated local
+// registry (kept beside the catalog it serves).
+// ---------------------------------------------------------------------------
+
+import type { FluentIcon } from '@fluentui/react-icons';
+import {
+  Pulse20Regular, Iot20Regular, Mail20Regular, Database20Regular,
+  DatabasePlugConnected20Regular, CloudArrowUp20Regular, Cloud20Regular,
+  Storage20Regular, Box20Regular, Branch20Regular, Stream20Regular,
+  Briefcase20Regular, DocumentTable20Regular, Gauge20Regular,
+  BeakerSettings20Regular, PlugConnected20Regular,
+} from '@fluentui/react-icons';
+
+export interface SourceVisual { icon: FluentIcon; color: string; }
+
+/** Category → brand colour family (mirrors Fabric connector grouping). */
+export const SOURCE_CATEGORY_COLOR: Record<SourceCategory, string> = {
+  'Microsoft sources': '#0078d4', // Azure blue
+  'Database CDC':      '#1a7f4e', // green
+  'External streams':  '#c2410c', // orange
+  'Fabric events':     '#4b1d8f', // Fabric purple
+  'Azure events':      '#0050b3', // deep blue
+  'Sample':            '#6b7280', // neutral grey
+};
+
+const SOURCE_ICONS: Partial<Record<RthSourceType, FluentIcon>> = {
+  AzureEventHub:                   Pulse20Regular,
+  AzureIoTHub:                     Iot20Regular,
+  AzureServiceBus:                 Mail20Regular,
+  AzureSQLDBCDC:                   Database20Regular,
+  AzureSQLMIDBCDC:                 DatabasePlugConnected20Regular,
+  AzureCosmosDBCDC:                Box20Regular,
+  PostgreSQLCDC:                   Database20Regular,
+  MySQLCDC:                        Database20Regular,
+  AzureBlobStorageEvents:          Storage20Regular,
+  AmazonKinesis:                   Stream20Regular,
+  AmazonMSKKafka:                  Branch20Regular,
+  ApacheKafka:                     Branch20Regular,
+  ConfluentCloud:                  CloudArrowUp20Regular,
+  GooglePubSub:                    Cloud20Regular,
+  SampleData:                      BeakerSettings20Regular,
+  CustomEndpoint:                  PlugConnected20Regular,
+  FabricWorkspaceItemEvents:       Briefcase20Regular,
+  FabricJobEvents:                 DocumentTable20Regular,
+  FabricOneLakeEvents:             Storage20Regular,
+  FabricCapacityUtilizationEvents: Gauge20Regular,
+};
+
+/** Resolve a colour-coded visual for a connector (icon + brand colour). */
+export function sourceVisual(c: Pick<SourceConnector, 'sourceType' | 'category'>): SourceVisual {
+  return {
+    icon: SOURCE_ICONS[c.sourceType] ?? PlugConnected20Regular,
+    color: SOURCE_CATEGORY_COLOR[c.category] ?? '#6b7280',
+  };
+}
 
 export const SOURCE_CATEGORIES: SourceCategory[] = [
   'Microsoft sources',
