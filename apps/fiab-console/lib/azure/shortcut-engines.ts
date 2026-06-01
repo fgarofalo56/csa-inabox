@@ -95,8 +95,11 @@ export async function resolveAndTestAdls(
   if (!parts) {
     throw Object.assign(new Error(`Target URI is not a valid ADLS Gen2 / internal path: ${targetUri}`), { code: 'bad_target' });
   }
-  // Real listPaths against the target container+path proves the UAMI can read it.
-  await listPaths(parts.container, parts.path, 1);
+  // Real listPaths against the target container+path on the TARGET account
+  // (NOT Loom's default account) proves the UAMI can read it. Requires the
+  // Console UAMI to have Storage Blob Data Reader on parts.account — see
+  // scripts/csa-loom/grant-shortcut-storage-rbac.sh.
+  await listPaths(parts.container, parts.path, 1, parts.account);
   return { abfssUri: parts.abfss, reachable: true };
 }
 
