@@ -1,5 +1,14 @@
 # event-hubs — parity with Azure Event Hubs (namespace + entity + Data Explorer)
 
+> **rev.2 — corrected against current code (2026-05-31).** The B6 Data Explorer
+> rows below already reflect PR #548: **Send events** is real (data-plane
+> `POST https://{ns}.servicebus.windows.net/{hub}/messages` with an Entra Bearer
+> token via `lib/azure/eventhubs-data-client.ts` → `/api/eventhubs/data-explorer`
+> op=send; honors `disableLocalAuth:true`), verified no-mock. **View/receive**
+> stays an honest dependency-gate ⚠️ (Event Hubs has no HTTPS REST receive;
+> AMQP needs `@azure/event-hubs` + `LOOM_EVENTHUB_RECEIVE_ENABLED`) — allowed
+> per `no-vaporware.md`. Verdict + gap list updated below to credit Send.
+
 > **Brutally honest audit, 2026-05-31.** Graded conservatively per
 > `.claude/rules/no-vaporware.md` and `.claude/rules/ui-parity.md`. This doc
 > supersedes the optimistic framing in `eventhubs-namespace.md`, which scoped
@@ -192,15 +201,17 @@ problem is **coverage**, not honesty of what's there.
 
 ## Verdict (conservative)
 
-**Grade: C− / D+.** What exists is honest and real-backed (ARM CRUD for event
-hubs / consumer groups / schema groups; read-only lists for SAS rules,
-networking, Geo-DR). But measured against the **real** Azure Event Hubs UI,
-Loom implements roughly **one-third of one of the three major surfaces** (the
-namespace entity tree) and **zero of the other two** (the namespace
-management/monitoring blades and the entire **Data Explorer** data-plane
-send/view tool). No Overview, no Scale, no IAM, no Metrics, no Capture
-authoring, no SAS key/connection-string copy, no Data Explorer. The prior
-`eventhubs-namespace.md` "zero ❌" claim is **inaccurate** because it scoped
+**Grade: C (rev.2 — up from C−/D+).** What exists is honest and real-backed
+(ARM CRUD for event hubs / consumer groups / schema groups; read-only lists for
+SAS rules, networking, Geo-DR) **plus a real Data Explorer Send path** (Entra
+data-plane `POST …/messages`, PR #548) with an honest dependency-gate on the
+receive/View side. That closes half of the single biggest missing surface. Still
+measured against the **real** Azure Event Hubs UI, Loom implements roughly the
+namespace entity tree + the send half of Data Explorer, and **zero** of the
+namespace management/monitoring blades. No Overview, no Scale, no IAM, no
+Metrics, no Capture authoring, no SAS key/connection-string copy, and the Data
+Explorer **View/receive** side is still gated (AMQP dep). The prior
+`eventhubs-namespace.md` "zero ❌" claim remains **inaccurate** because it scoped
 the inventory to only the rows the navigator already had.
 
 This is a competent **Eventstream source-picker sidecar**, not a
@@ -209,10 +220,13 @@ many ❌ rows and the absence of whole blades.
 
 ## Highest-value gaps to build first
 
-1. **Data Explorer (Send + View events)** — the single biggest missing
-   surface; it's the Event Hubs feature operators actually use day-to-day.
-   (Note: requires re-enabling local-auth **or** Entra data-plane send/receive
-   since bicep currently sets `disableLocalAuth:true`.)
+> rev.2: Data Explorer **Send** is now built (PR #548, Entra data-plane,
+> honors `disableLocalAuth:true`). The remaining Data Explorer gap is the
+> **View/receive** side, which is an honest AMQP dependency-gate (allowed).
+
+1. **Data Explorer — View/receive events** — the receive half (AMQP via
+   `@azure/event-hubs` + `LOOM_EVENTHUB_RECEIVE_ENABLED`); today an honest
+   dependency-gate. (Send is done.)
 2. **SAS shared-access-policy keys + connection strings** — `listKeys` /
    `regenerateKeys` + a copy affordance; today there is no way to get a
    connection string out of Loom. (Also gated by `disableLocalAuth:true`.)

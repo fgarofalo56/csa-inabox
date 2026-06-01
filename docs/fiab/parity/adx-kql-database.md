@@ -1,5 +1,12 @@
 # adx-kql-database — parity with Azure Data Explorer / Fabric Eventhouse (KQL database object navigator)
 
+> **rev.2 — corrected against current code (PR #536).** The navigator now has a
+> real read-only **Database policies** group (db-level retention / caching /
+> sharding / mergepolicy / streamingingestion via `.show database <db> policy
+> <kind>` through `/api/adx/policies`). The two policy rows below were flipped
+> from "coming" to reflect that db-level policies are now genuinely **read** in
+> the tree; per-table & inline-`.alter` authoring stays an honest ⚠️ gate.
+
 Source UI: the **Azure Data Explorer web UI** (`https://dataexplorer.azure.com`)
 and **Microsoft Fabric Eventhouse → KQL database** schema tree. Once a KQL
 database is open, its left pane is a typed navigator of the database's objects
@@ -84,8 +91,9 @@ the existing Monaco KQL editor + focuses it (existing Run flow). Pre-save
 | **Database schema** — show full schema | ✅ | branch row loads `.show database schema` into the editor; `GET /api/adx/overview` also returns `.show database schema as json` |
 | **Continuous export** — list (read-only) | ✅ | `GET /api/adx/overview` → `.show continuous-exports`; status badge (running/disabled/last-result) |
 | **Continuous export** — create / enable / disable / drop | ⚠️ | honest "coming" row — authoring needs an external table + Database Admin (`.create-or-alter continuous-export over (T) to ExternalTable <\| query`); listed read-only above |
+| **Database policies** — list (read-only) | ✅ | **Now built (PR #536).** A **Policies group** lists db-level retention/caching/sharding/mergepolicy/streamingingestion via `GET /api/adx/policies` → `showDatabasePolicies()` → real `.show database <db> policy <kind>` (`kusto-client.ts:342`, tree `:423-440`); raw policy JSON in a tooltip |
 | **Update policies** | ⚠️ | honest "coming" row — `.alter table T policy update`; the KQL database **ribbon** (New → Update policy) already authors these via the query route, not the navigator yet |
-| **Retention / caching policies** | ⚠️ | honest "coming" row — `.alter table T policy retention` / `.alter database policy caching`; db-level details are read-only today |
+| **Retention / caching policies** (authoring) | ⚠️ | db-level retention/caching are now **read** in the Policies group above (✅, real `.show database … policy`); per-table & inline-`.alter` **authoring** remains an honest "coming" row — `.alter table T policy retention` / `.alter database policy caching` (the latter authored today from the Eventhouse "Data policies" dialog) |
 | **Row-level security** | ⚠️ | honest "coming" row — `.alter table T policy row_level_security` |
 | **External tables** | ⚠️ | honest "coming" row — `.create external table` (continuous-export targets) |
 | Honest infra-gate when cluster unconfigured | ✅ | routes 503 `not_configured` → whole navigator shows one `MessageBar` naming `LOOM_KUSTO_CLUSTER_URI` + the Database Admin / AllDatabasesAdmin role |

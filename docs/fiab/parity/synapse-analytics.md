@@ -1,5 +1,21 @@
 # synapse-analytics — parity with Azure Synapse Analytics (Synapse Studio)
 
+> **rev.2 (2026-05-31) — re-verified against current code; claims confirmed, no
+> stale-MISSING rows found.** Re-read `synapse-sql-editors.tsx`,
+> `azure-services-editors.tsx` (`SynapseSparkPoolEditor`), the Spark item routes,
+> and searched the whole tree for a Synapse notebook editor / Studio shell.
+> Confirmed: there is **no** unified Synapse Studio shell, **no** Synapse
+> notebook authoring editor, and **no** data-flow visual designer — all three
+> marquee Develop-hub surfaces are genuinely absent (not stale-marked). The
+> Dedicated SQL editor exposes pause/resume only (no `updateDedicatedPoolSku` on
+> its ribbon — DWU scale lives on the separate admin-scaling editor, ⚠️). The
+> Spark pool editor's **Scale** (`/scale`), **Auto-pause** (`/auto-pause`),
+> **Force-pause**, **Submit batch** (Livy), and **Recent batches** ARE real,
+> wired routes ✅; **Packages** and **Spark config** remain read-only/MISSING.
+> All ❌/⚠️ rows below stand. **Verdict: C** — real backend (ARM + dev-plane +
+> Livy + TDS, no mocks, honest gates) but well short of Synapse Studio feature
+> completeness, with flagship surfaces absent rather than gated.
+
 **Source UI:** Azure Synapse Studio (`https://web.azuresynapse.net`) + the Azure portal
 Synapse workspace blade. Grounded in Microsoft Learn:
 

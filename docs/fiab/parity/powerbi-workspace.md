@@ -1,7 +1,8 @@
 # powerbi-workspace — parity with the Power BI service (app.powerbi.com)
 
 **Audited:** 2026-05-31 · **Auditor:** automated brutal-honesty pass (grounded in Microsoft Learn, not memory)
-**Verdict:** **C+ (functional but rough; selective parity, several large surfaces missing).** Real Power BI / Fabric REST is genuinely wired across the whole content family (no mock arrays), which clears the no-vaporware bar for what is built. But "parity with the Power BI service workspace" is a much larger surface than the Loom editors cover: the workspace list-page itself (the canonical Power BI surface), Manage access / Roles on the *real* Power BI workspace, the full semantic-model **settings pane** (gateway binding, data-source credentials, endorsement, sensitivity labels, Q&A, scale-out), lineage view, app publishing, item-level share/subscribe, and report/dashboard *authoring* are all missing or out-of-scope-by-design. Loom is a set of typed per-item editors plus a navigator tree — not a workspace surface.
+**rev.2 — corrected against current code (2026-05-31):** item governance shipped — **Manage access** on the real PBI workspace (GroupUsers), **Endorsement** (promote/certify), and **Gateway binding + data-source** management are now BUILT and wired into the SemanticModel + Report editors. Grade raised **C+ → B-**. Sensitivity labels remain honestly OMITTED (no public apply REST).
+**Verdict:** **B- (functional, selectively production-grade; the largest governance gaps now closed; workspace list-page surface + lineage + sensitivity still missing).** Real Power BI / Fabric REST is genuinely wired across the whole content family (no mock arrays), which clears the no-vaporware bar for what is built. Still short of full "parity with the Power BI service workspace": the workspace list-page itself (the canonical Power BI content grid), lineage view, app publishing, subscribe, sensitivity labels, and report/dashboard *authoring* are missing or out-of-scope-by-design. Loom is a set of typed per-item editors plus a navigator tree — not a workspace surface.
 
 ## Source UI
 
@@ -25,6 +26,8 @@
 | `apps/fiab-console/app/api/powerbi/workspaces/route.ts` | BFF: list real Power BI groups |
 | `apps/fiab-console/lib/editors/phase3-editors.tsx` → `SemanticModelEditor`, `ReportLikeEditor`/`ReportEditor`/`PaginatedReportEditor`, `DashboardEditor`, `ScorecardEditor` | The per-item editors |
 | `apps/fiab-console/app/api/items/{semantic-model,report,dashboard,scorecard,paginated-report}/**` | BFF for each editor — all real Power BI/Fabric REST |
+| `apps/fiab-console/lib/components/powerbi/powerbi-governance.tsx` (rev.2) | `ManageAccessPanel` / `EndorsementControl` / `GatewayDatasourcesPanel` — item governance UI, wired into SemanticModelEditor (governance + access tabs) and ReportEditor (endorsement + access) |
+| `apps/fiab-console/app/api/powerbi/{access,endorsement,datasources}/route.ts` (rev.2) | BFF: real workspace ACL (GroupUsers), endorsement promote/certify, gateway binding + datasource mapping — all real PBI/Fabric REST |
 | `apps/fiab-console/lib/components/embed/powerbi-embed.tsx` | `powerbi-client-react` live embed renderer |
 | `apps/fiab-console/lib/components/deployment/deployment-pipelines-pane.tsx` + `app/api/deployment-pipelines/**` | Fabric deployment pipelines (real Fabric REST) |
 | `apps/fiab-console/app/api/workspaces/**` | **Loom-native** workspaces in Cosmos — NOT Power BI groups |
@@ -43,7 +46,7 @@ Legend: ✅ built (full 1:1 + real backend) · ⚠️ partial / honest-gate · �
 | A2 | Workspace **content list** page (all item types in one grid, sortable, with per-row More-options ⋯) | ⚠️ partial | `powerbi-tree.tsx` collapses 4 content types into a Fluent Tree with counts + inline actions. It is a left-rail tree, **not** the Power BI content grid (no columns: Type / Owner / Refreshed / Endorsement / Sensitivity / Next refresh; no sort; no multi-select). |
 | A3 | Switch list **View → List / Lineage** | ❌ MISSING | No lineage view anywhere. |
 | A4 | **Workspace settings** pane (name, description, image, contributor-can-update-app, OneDrive, license/capacity, Azure connections, system storage, Git integration, Spark, etc.) | ❌ MISSING | The *real* PBI workspace has no settings surface in Loom. (`workspace-settings-drawer.tsx` exists but targets Loom-native Cosmos workspaces, not PBI groups.) |
-| A5 | **Manage access** / Roles on the real workspace (Admin/Member/Contributor/Viewer add/remove, groups, guests) | ❌ MISSING | `/api/workspaces/[id]/permissions` manages **Loom-native** workspace roles in Cosmos with admin/contributor/viewer — *not* the Power BI workspace via PBI REST `GroupUsers`. No mapping to PBI workspace ACLs. |
+| A5 | **Manage access** / Roles on the real workspace (Admin/Member/Contributor/Viewer add/remove, groups, guests) | ✅ built (rev.2) | `ManageAccessPanel` (in SemanticModel `access` tab + Report editor) → `/api/powerbi/access` → real PBI REST **GroupUsers**: GET list / POST add / PUT update-role / DELETE remove, with User/Group/App principal types and the 4 roles. Distinct from the Cosmos Loom-native roles at `/api/workspaces/[id]/permissions`. Honest 401/403 SP-hint when the UAMI isn't a workspace Admin. |
 | A6 | Create workspace / assign to capacity / delete / restore | ❌ MISSING | No PBI workspace lifecycle (PBI REST `Groups` POST/DELETE, AssignToCapacity) in the PBI surface. |
 | A7 | **Publish app** from workspace / update app / manage app audience | ❌ MISSING | No app publishing (PBI REST is preview/limited, but the surface is absent). |
 | A8 | Capacity / Premium / PPU diamond badges, license enforcement | ❌ MISSING | Workspace picker shows name only; `PbiWorkspace` carries `isOnDedicatedCapacity`/`capacityId` but the UI never renders capacity state. |
@@ -64,10 +67,10 @@ Legend: ✅ built (full 1:1 + real backend) · ⚠️ partial / honest-gate · �
 | B9 | **Scheduled refresh** editor (enable, days, times, tz, notify) | ✅ built | Config tab → `/refresh-schedule` PATCH /refreshSchedule. Mirrors the PBI Scheduled-refresh pane. |
 | B10 | **Take over** dataset | ✅ built | `/take-over` → `takeOverDataset()` POST Default.TakeOver |
 | B11 | **Settings pane → About** (rename, description, image, connection string) | ❌ MISSING | PBI exposes name/description/image edit; Loom shows them read-only at best. |
-| B12 | **Gateway & cloud connections** (bind to gateway, map data sources) | ❌ MISSING | No gateway binding UI (PBI REST BindToGateway / DiscoverGateways exist but unused). |
-| B13 | **Data source credentials** (sign in, edit creds, privacy level, SSO) | ❌ MISSING | No credential management — a core semantic-model settings function. |
-| B14 | **Endorsement** (promote / certify / make discoverable) | ❌ MISSING | No endorsement UI for any item type. |
-| B15 | **Sensitivity label** (apply / downstream) | ❌ MISSING | No sensitivity-label surface anywhere. |
+| B12 | **Gateway & cloud connections** (bind to gateway, map data sources) | ✅ built (rev.2) | `GatewayDatasourcesPanel` (SemanticModel `governance` tab) → `/api/powerbi/datasources` → real PBI REST: GET Datasources + Get Bound Gateway Datasources + Discover Gateways; POST `action:'bind'` → **BindToGateway**, POST `action:'updateDatasources'` → **UpdateDatasources**. |
+| B13 | **Data source credentials** (sign in, edit creds, privacy level, SSO) | ⚠️ partial (rev.2) | The datasources panel surfaces datasources + bound gateway datasources and supports UpdateDatasources connection-detail remapping; full credential sign-in / privacy-level / SSO editing (Update Datasource **credentials** REST) is not yet surfaced. |
+| B14 | **Endorsement** (promote / certify / make discoverable) | ✅ built (rev.2) | `EndorsementControl` (SemanticModel `governance` tab + Report editor) → `/api/powerbi/endorsement`: GET reads via Fabric Items REST; PUT sets None/Promoted/Certified (certifiedBy required) via Power BI **Admin** REST. Honest admin-gate (Tenant.ReadWrite.All) when the SP isn't a Fabric admin. Dashboards excluded (not endorsable). |
+| B15 | **Sensitivity label** (apply / downstream) | ❌ MISSING (honestly omitted) | No public apply REST for MIP sensitivity labels on PBI items — intentionally omitted rather than faked. |
 | B16 | **Q&A** (on/off, featured questions, synonyms) | ❌ MISSING | — |
 | B17 | **RLS roles** (create/edit DAX filters, assign members) | ⚠️ honest-gate | Config tab states RLS is XMLA/Desktop-only via MessageBar + "Open in Power BI". Member assignment via PBI REST is *not* attempted. |
 | B18 | Data storage (large model format, OneLake integration), Query scale-out, Auto-aggregations, Query caching, M parameters | ❌ MISSING | None of the Performance / Data-storage settings groups. |
@@ -95,8 +98,8 @@ Legend: ✅ built (full 1:1 + real backend) · ⚠️ partial / honest-gate · �
 | C13 | **Clone / Save a copy** | ❌ MISSING | `cloneReport()` exists in client; no UI/route. |
 | C14 | Delete report | ✅ built | tree DELETE → `deleteReport()` |
 | C15 | **Subscribe** / manage subscriptions | ❌ MISSING | — |
-| C16 | **Share** (item permissions, grant/revoke) | ❌ MISSING | — |
-| C17 | Sensitivity label / endorsement on report | ❌ MISSING | — |
+| C16 | **Share** (item permissions, grant/revoke) | ⚠️ partial (rev.2) | Workspace-level access (Admin/Member/Contributor/Viewer) is built via `ManageAccessPanel` in the Report editor (real GroupUsers REST). Per-*item* report Share (Read/Build/Reshare grant) is not yet a separate surface. |
+| C17 | Sensitivity label / endorsement on report | ⚠️ partial (rev.2) | **Endorsement** on reports is built (`EndorsementControl itemType="reports"` → `/api/powerbi/endorsement`, real Fabric/Admin REST). Sensitivity label remains ❌ (no public apply REST). |
 | C18 | **Paginated report embed** | ⚠️ honest-gate | `PaginatedReportEditor` lists + opens out; embed needs `pbi-paginated` SDK — disclosed via MessageBar, not wired. |
 | C19 | Analyze in Excel / Download .pbix | ❌ MISSING | — |
 
@@ -152,10 +155,10 @@ Legend: ✅ built (full 1:1 + real backend) · ⚠️ partial / honest-gate · �
 | # | Power BI capability | Loom status |
 | --- | --- | --- |
 | H1 | **Lineage view** (data sources → models → reports → dashboards graph) | ❌ MISSING |
-| H2 | **Item-level permissions / Share** (grant Read/Build/Reshare) | ❌ MISSING |
+| H2 | **Item-level permissions / Share** (grant Read/Build/Reshare) | ⚠️ partial (rev.2) — workspace-level **Manage access** (GroupUsers, 4 roles, User/Group/App) is built via `ManageAccessPanel`; per-item Read/Build/Reshare share grants are not yet a separate surface |
 | H3 | **Subscriptions** | ❌ MISSING |
-| H4 | **Sensitivity labels** | ❌ MISSING |
-| H5 | **Endorsement** (promote/certify) | ❌ MISSING |
+| H4 | **Sensitivity labels** | ❌ MISSING (honestly omitted — no public apply REST) |
+| H5 | **Endorsement** (promote/certify) | ✅ built (rev.2) — `EndorsementControl` on semantic models + reports → `/api/powerbi/endorsement` (Fabric read / Admin write); dashboards excluded (not endorsable) |
 | H6 | **Settings ⋯ context menu** per item (the canonical PBI affordance) | ❌ MISSING — Loom exposes per-item inline buttons, not the PBI ⋯ menu with Settings/Manage permissions/Lineage/Remove/Quick insights |
 | H7 | **Search across workspace content** | ⚠️ partial — name filter only, per-editor |
 | H8 | **Honest infra-gate** when UAMI/SP unauthorized | ✅ built — `powerbiConfigGate()` + verbatim 401/403 `POWERBI_SP_HINT` everywhere |
@@ -171,23 +174,23 @@ Every Loom control above that is marked built/partial calls a **real** Power BI 
 
 Loom's Power BI work is a **vertical slice of real, working per-item editors**, not a reproduction of the Power BI service workspace. What exists is genuinely backed (B-grade for the SemanticModel editor and Report viewer in isolation; B for deployment pipelines). But measured against the rule's bar — *"whatever you can do in the Power BI service workspace UI you should be able to do in Loom"* — the coverage is partial:
 
-- The **workspace surface itself** (content grid, settings, manage access on the real PBI workspace, app publishing, capacity) is essentially absent (Section A almost entirely ❌).
-- The **semantic-model settings pane** — the single richest PBI surface — is ~20% covered (refresh/schedule/takeover built; gateway, credentials, endorsement, sensitivity, Q&A, scale-out, caching all ❌).
-- **Cross-cutting governance** (lineage, share/permissions, subscriptions, sensitivity, endorsement) is 0% across all item types.
+- The **workspace surface itself** (content grid, settings, app publishing, capacity) is still largely absent (Section A mostly ❌) — **except Manage access (A5), now built** via real PBI GroupUsers REST.
+- The **semantic-model settings pane** — the single richest PBI surface — is now ~45% covered (rev.2): refresh/schedule/takeover **+ gateway binding + datasource mapping + endorsement** built; data-source credentials partial; sensitivity, Q&A, scale-out, caching still ❌.
+- **Cross-cutting governance** is now mixed (rev.2): **endorsement (H5) and workspace manage-access (A5/H2) built** across semantic model + report; lineage, per-item share, subscriptions, sensitivity remain ❌.
 
 Several non-built items are *honestly disclosed* (visual authoring → Desktop, RLS → XMLA, paginated embed → SDK), which is allowed under no-vaporware — but the ui-parity rule still counts them as parity gaps, not "done." None are faked.
 
 ## Highest-value gaps to build next (parity order)
 
 1. **Item ⋯ context menu → Settings / Manage permissions / Lineage** — the universal PBI affordance; unlocks B11–B16, C16, H2, H4–H6 at once.
-2. **Semantic-model settings: gateway binding + data-source credentials + scheduled-refresh** as one pane (BindToGateway / DiscoverGateways / Datasources / UpdateDatasources REST) — without this, refresh fails for any gateway/cloud-connection model.
-3. **Endorsement (promote/certify) + Sensitivity label** apply controls across model/report/dashboard (REST + Fabric admin).
-4. **Manage access on the real PBI workspace** via PBI REST `GroupUsers` (add/update/delete Admin/Member/Contributor/Viewer) — distinct from today's Cosmos-only Loom roles.
+2. ~~**Semantic-model settings: gateway binding + scheduled-refresh**~~ — **DONE (rev.2)**: BindToGateway / DiscoverGateways / Datasources / UpdateDatasources wired in `GatewayDatasourcesPanel`. Remaining: data-source **credential** sign-in / privacy-level / SSO.
+3. **Endorsement (promote/certify)** — **DONE (rev.2)** across model + report. **Sensitivity label** remains ❌ (no public apply REST — honestly omitted).
+4. ~~**Manage access on the real PBI workspace**~~ — **DONE (rev.2)**: `ManageAccessPanel` → real `GroupUsers` add/update/delete for the 4 roles + User/Group/App.
 5. **Workspace content grid** (Type/Owner/Refreshed/Endorsement/Sensitivity columns, sort, ⋯) to replace the thin tree as the primary surface, + **Lineage view**.
 6. **Report Share + Subscribe**, **Clone/Save-a-copy** (`cloneReport()` already in client), **dashboard Pin tile** (`addDashboardTile()`/`cloneDashboardTile()` already in client — wire the UI).
 7. **Quick-create report** (paste data → push dataset → autogenerate) — the client already has push-dataset + executeQueries.
 
 ## Parity verdict
 
-- **Grade: C+** — functional and genuinely backed for the built slice, but feature-completeness vs the real Power BI service workspace is partial; the canonical workspace surface and most governance/settings are missing. Not B, because "production-grade" under ui-parity.md means feature parity, and large first-class surfaces are absent (not merely rough).
-- **A-grade blocker:** every ❌ in Sections A and H plus the semantic-model settings-pane rows (B11–B16, B18) must be built or honest-gated. Today there are ~35 ❌ rows.
+- **Grade: B- (rev.2)** — functional and genuinely backed for the built slice, now including the three richest governance gaps (manage-access, endorsement, gateway/datasource binding) wired to real PBI/Fabric REST. Still short of full feature-completeness vs the real Power BI service workspace: the canonical workspace content grid, lineage, app publishing, subscribe, sensitivity labels, and in-browser authoring are absent. Not B/A, because those first-class surfaces remain missing (not merely rough).
+- **A-grade blocker:** the remaining ❌ in Sections A and H (content grid, lineage, subscriptions, sensitivity) plus semantic-model settings rows (B11 About-edit, B16 Q&A, B18 scale-out/caching) must be built or honest-gated. ~28 ❌ rows remain after rev.2.

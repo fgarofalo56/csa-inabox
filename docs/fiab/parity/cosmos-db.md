@@ -24,15 +24,24 @@ This surface navigates a **user-selected** Cosmos DB account named by
 (`LOOM_COSMOS_ENDPOINT`, handled by `lib/azure/cosmos-client.ts`). It is the
 Cosmos peer of the ADF / Synapse / Databricks / APIM navigators (parity wave 7).
 
-> **Honest verdict (2026-05-31): grade C.** Loom is a faithful read-mostly
-> *control-plane navigator* (databases/containers/throughput CRUD + read-only
-> script lists). The single most-used half of the real Data Explorer — the
-> **data-plane** (browse/edit/query JSON items, the query editor with results
-> grid, and stored-proc/trigger/UDF authoring + execution) — is **entirely
-> absent** (disclosed as honest "coming" rows, no backend). It also omits all
-> account-level lifecycle blades (Keys, Networking, Replicate-globally, Backup,
-> Scale-on-existing, Default consistency, Features). This is the opposite split
-> from the portal, where Data Explorer is overwhelmingly a data tool. Not B/A.
+> **rev.2 — corrected against current code (2026-05-31).** The "data-plane
+> entirely absent" framing below is now STALE. PR #545 shipped a real Cosmos
+> **Items Data Explorer** on the AAD data plane (`lib/azure/cosmos-data-client.ts`
+> + `app/api/cosmos/items{,/action}/route.ts`): a SQL query box, results grid
+> with RU-charge + continuation paging, and New/Edit (Monaco JSON)/Delete item
+> CRUD — verified real (no mock). Rows D1–D5, D9 and E1–E3 are corrected to ✅
+> below. Stored-proc/trigger/UDF **authoring**, the account lifecycle blades
+> (Keys, Networking, Replicate-globally, Backup, Scale-on-existing, Default
+> consistency, Features), and write-path Scale/Settings/Indexing remain MISSING.
+>
+> **Honest verdict (rev.2): grade C+ / B−.** Loom is now a faithful
+> control-plane navigator (databases/containers/throughput CRUD + read-only
+> script lists) **plus a working data-plane Items Data Explorer** (query +
+> document CRUD). The most-used half of the portal Data Explorer now exists.
+> Still missing: script authoring/execution, the query results-stats round-trip
+> beyond RU charge, all account-level lifecycle blades, and write-path
+> Scale/Settings/Indexing editors. Not yet A (script authoring + lifecycle
+> blades still ❌), but well past the prior "control-plane only" C.
 
 ---
 
@@ -146,21 +155,21 @@ Cosmos peer of the ADF / Synapse / Databricks / APIM navigators (parity wave 7).
 | C5 | Conflict resolution policy | ⚠️ gated | "coming" row; no backend |
 | C6 | Unique keys | ❌ MISSING | not shaped, not shown |
 | C7 | Geospatial config | ❌ MISSING | — |
-| D1 | Items grid (browse documents) | ⚠️ gated | "Item / document data explorer" coming row; no data-plane client |
-| D2 | New Item | ❌ MISSING | — (covered by D1 gate) |
-| D3 | View document | ❌ MISSING | — |
-| D4 | Edit / Update Item | ❌ MISSING | — |
-| D5 | Delete Item | ❌ MISSING | — |
-| D6 | Items filter bar | ❌ MISSING | — |
-| D7 | Custom Column Selector | ❌ MISSING | — |
-| D8 | Upload Item from JSON | ❌ MISSING | — |
-| D9 | Continuation paging | ❌ MISSING | — |
-| E1 | New SQL Query tab | ❌ MISSING | no query editor anywhere |
-| E2 | Execute Query | ❌ MISSING | — |
-| E3 | Results / JSON / Query Stats (RU charge) | ❌ MISSING | — |
-| E4 | Open / Save query | ❌ MISSING | — |
+| D1 | Items grid (browse documents) | ✅ built | data-plane query feed → results grid (id + pk value + per-row JSON viewer) via `POST /api/cosmos/items` → `queryItems` (`cosmos-data-client.ts:248`) |
+| D2 | New Item | ✅ built | Monaco JSON editor → `POST /api/cosmos/items/action` upsert → `upsertItem` (`cosmos-data-client.ts:352`) |
+| D3 | View document | ✅ built | per-row JSON viewer + `GET /api/cosmos/items?id=&pk=` → `getItem` |
+| D4 | Edit / Update Item | ✅ built | Monaco JSON edit → upsert action (`upsertItem`, x-ms-documentdb-is-upsert) |
+| D5 | Delete Item | ✅ built | `POST /api/cosmos/items/action` delete → `deleteItem` (`cosmos-data-client.ts:378`) |
+| D6 | Items filter bar | 🟡 partial | covered by the editable SQL query box (default `SELECT * FROM c`), not a portal-style WHERE/ORDER-BY filter strip |
+| D7 | Custom Column Selector | ❌ MISSING | grid columns are fixed (id + pk + JSON), no add/remove/sort/reset |
+| D8 | Upload Item from JSON | ❌ MISSING | single-item editor only; no bulk file upload |
+| D9 | Continuation paging | ✅ built | `x-ms-continuation` token surfaced + "load more" via `continuation` in the query route response |
+| E1 | New SQL Query tab | ✅ built | Monaco SQL query box in the Data Explorer (Items) tab (single tab, not multi-tab) |
+| E2 | Execute Query | ✅ built | Execute → `POST /api/cosmos/items` (`x-ms-documentdb-isquery`, cross-partition) → real data-plane query |
+| E3 | Results / JSON / Query Stats (RU charge) | 🟡 partial | results grid + RU-charge (`x-ms-request-charge`) + doc-count readout; no JSON/Stats tabs, no round-trip/index-metrics |
+| E4 | Open / Save query | ❌ MISSING | no save-query-to-account/disk |
 | E5 | Query Copilot | ❌ MISSING | — |
-| E6 | Query tab management | ❌ MISSING | — |
+| E6 | Query tab management | ❌ MISSING | single query box, not multi-tab |
 | F1 | Stored procedure authoring + execute | ⚠️ gated | "authoring" coming row; list-only |
 | F2 | Trigger authoring | ⚠️ gated | same coming row |
 | F3 | UDF authoring | ⚠️ gated | same coming row |
@@ -174,12 +183,14 @@ Cosmos peer of the ADF / Synapse / Databricks / APIM navigators (parity wave 7).
 | G7 | Metrics / Insights | ❌ MISSING | — |
 | G8 | Mongo/Cassandra/Gremlin/Table API explorers | ❌ MISSING | SQL/NoSQL only |
 
-**Tally:** built ✅ 8 · partial 🟡 7 · gated ⚠️ 5 · MISSING ❌ 24.
+**Tally (rev.2):** built ✅ 17 · partial 🟡 9 · gated ⚠️ 5 · MISSING ❌ 13.
 
 The `ui-parity.md` A-grade bar is "every inventory row built ✅ or honest-gate ⚠️
-— zero ❌". This surface has **24 ❌ rows** and 7 partials, so it is far from A.
-The four honest-gate ⚠️ rows are legitimate per `no-vaporware.md` (tooltip names
-the exact REST/data-plane path), but they paper over the entire data plane.
+— zero ❌". This surface still has ❌ rows (column selector, upload, query
+save/copilot/tabs, script authoring/edit, and the entire account-lifecycle
+group G), so it is not yet A. But the whole **Items data plane** (D1–D5, D9, E1,
+E2) is now real-backed, which removes the single largest credibility gap from
+the prior revision.
 
 ---
 
@@ -193,17 +204,20 @@ the exact REST/data-plane path), but they paper over the entire data plane.
 | Throughput **write** (scale existing) | **none** — read-only; no PUT throughputSettings |
 | Stored procedures / triggers / UDFs | ARM `…/containers/{c}/{storedProcedures\|triggers\|userDefinedFunctions}` — **list only** |
 | Account header | ARM GET `…/databaseAccounts/{acct}` |
-| Item/document CRUD | **none** — no `documents.azure.com` data-plane client exists |
-| Query execution | **none** |
-| Script authoring/execution | **none** |
+| Item/document CRUD | **real** — Cosmos data plane `…/dbs/{db}/colls/{c}/docs[/{id}]` via `lib/azure/cosmos-data-client.ts` (`POST /api/cosmos/items`, `POST /api/cosmos/items/action`); AAD `Authorization: type=aad&ver=1.0&sig=<token>` |
+| Query execution | **real** — `POST …/docs` (`x-ms-documentdb-isquery`, cross-partition) → `queryItems`; RU charge from `x-ms-request-charge`, paging from `x-ms-continuation` |
+| Script authoring/execution | **none** — sprocs/triggers/UDFs are control-plane list-only |
 | Indexing / conflict / TTL editors | **none** |
 | Keys / networking / regions / backup / consistency | **none** |
-| Auth | `ChainedTokenCredential(ManagedIdentityCredential(LOOM_UAMI_CLIENT_ID), DefaultAzureCredential)` → `https://management.azure.com/.default` |
+| Control-plane auth | `ChainedTokenCredential(ManagedIdentityCredential(LOOM_UAMI_CLIENT_ID), DefaultAzureCredential)` → `https://management.azure.com/.default` |
+| Data-plane auth | same credential → `https://<acct>.documents.azure.com/.default`; URL-encoded `type=aad&ver=1.0&sig=<token>` (AAD/RBAC, NOT HMAC master key) |
 
-Note: every wired call is the **ARM control plane**. There is **no Cosmos
-data-plane client** (no `documents.azure.com` SDK/fetch, no resource-token or
-AAD data-plane RBAC path) anywhere in the app — confirmed by grep. That is the
-structural reason the entire D/E/F group is missing.
+Note: control-plane calls hit **ARM**; the Items Data Explorer hits the
+**Cosmos data plane** (`documents.azure.com`) via `cosmos-data-client.ts` with
+AAD data-plane RBAC. A 403 (substatus 5300) honest-gates the Items tab naming
+the **Cosmos DB Built-in Data Contributor** role (granted via
+`sqlRoleAssignments`); the full surface still renders. The remaining ❌ rows are
+script authoring/execution and the account-lifecycle blades (group G).
 
 ---
 
@@ -227,20 +241,24 @@ MessageBar, not real data. Bicep-sync is a prerequisite before any A/A+ claim.
 
 ## Files
 
-- `lib/azure/cosmos-account-client.ts` — ARM control-plane client + `cosmosConfigGate()` (461 lines)
-- `app/api/cosmos/{databases,containers,scripts,account}/route.ts` — session-guarded BFF
-- `app/api/cosmos/_shared.ts` — session / gate / error helpers
-- `lib/components/cosmos/cosmos-tree.tsx` — Fluent v9 Data Explorer tree (628 lines)
-- `lib/editors/cosmos-account-editor.tsx` — host editor (slug `azure-cosmos-account`, registered in `lib/editors/registry.ts:144`, catalogued in `lib/catalog/fabric-item-types.ts:2123`)
+- `lib/azure/cosmos-account-client.ts` — ARM control-plane client + `cosmosConfigGate()`
+- `lib/azure/cosmos-data-client.ts` — **data-plane** client (query / get / upsert / delete; AAD `type=aad&ver=1.0` auth; `CosmosDataPlaneRbacError`)
+- `app/api/cosmos/{databases,containers,scripts,account}/route.ts` — session-guarded control-plane BFF
+- `app/api/cosmos/items/route.ts` — data-plane query (POST) + get (GET)
+- `app/api/cosmos/items/action/route.ts` — data-plane upsert / delete
+- `app/api/cosmos/_shared.ts` — session / gate / error helpers (incl. 403 data-plane RBAC gate)
+- `lib/components/cosmos/cosmos-tree.tsx` — Fluent v9 Data Explorer tree
+- `lib/components/cosmos/cosmos-data-explorer.tsx` — Items query grid + Monaco JSON item editor
+- `lib/editors/cosmos-account-editor.tsx` — host editor (slug `azure-cosmos-account`); Properties + Data Explorer (Items) tabs
 
 ## Highest-value gaps to build next (in priority order)
 
-1. **Items data explorer (D1–D5)** — a `documents.azure.com` data-plane client
-   (AAD data-plane RBAC) + Items grid + New/Edit/Delete JSON editor. This is the
-   single most-used Data Explorer feature and the biggest credibility gap.
-2. **Query editor (E1–E3)** — Monaco NoSQL tab + Execute against the data plane
-   + results grid with RU-charge / doc-count query stats.
-3. **Scale & Settings editors (B3 + C3)** — PUT `throughputSettings/default`
+> rev.2: items 1–2 below are now DONE (Items data explorer + query editor
+> shipped in PR #545). Remaining priorities renumbered.
+
+1. **Script authoring + execute (F1–F4)** — JS editor for sprocs/triggers/UDFs
+   with partition-key-scoped Execute (currently control-plane list-only).
+2. **Scale & Settings editors (B3 + C3)** — PUT `throughputSettings/default`
    (manual↔autoscale toggle, edit RU/s on existing db/container) + TTL editor.
    The client already *reads* these values; only the write path is missing.
 4. **Script authoring + execute (F1–F4)** — JS editor for sprocs/triggers/UDFs

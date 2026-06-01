@@ -1,6 +1,20 @@
 # azure-sql-database — parity with Azure SQL Database (Azure portal blade)
 
-> **Honest audit 2026-05-31 (supersedes the prior self-graded "A").** The
+> **rev.2 — corrected against current code (2026-05-31, PR #541).** The prior
+> revision (below) hinged on a "critical wiring gap": the registered
+> `azure-sql-database` editor (`UnifiedSqlDatabaseEditor`) did **not** mount the
+> rich `SqlDbTree` object navigator, nor the firewall / Entra-admin /
+> geo-replication dialogs — so those real backends were unreachable from the
+> editor a user actually opens. **That gap is now closed.** The Unified editor
+> now mounts `SqlDbTree` in a **Schema** tab (real `sys.*` over TDS, via an
+> explicit `?server=&database=` override the BFF guard supports) AND a **Server
+> admin** tab (`SqlServerAdminPanel`) with firewall CRUD, Microsoft Entra admin
+> get/set, and active geo-replication — all calling the pre-existing real ARM
+> routes. The rows below are re-graded; the breadth gaps (scale, backups/PITR,
+> export/import, monitoring) remain real and unbuilt.
+>
+> ---
+> **Honest audit 2026-05-31 (rev.1 — superseded in part by rev.2 above).** The
 > previous version of this doc graded itself A by inventorying only the 15 ARM
 > operations the author chose to build, not the real Azure portal blade. It
 > also claimed firewall / AAD-admin / geo-replication were "built" without
@@ -25,14 +39,22 @@
 - Backends: `lib/azure/azure-sql-client.ts` (TDS via `mssql` + AAD token; ARM REST), `lib/azure/sql-objects-client.ts` (`sys.*` over TDS), `lib/azure/postgres-flex-client.ts`.
 - BFF routes: `app/api/items/sql-databases/route.ts`; `app/api/items/azure-sql-database/[id]/{query,create-db,connect,firewall,aad-admin,replication,mirroring,sql2025-features}/route.ts`; `app/api/items/azure-sql-server/...`; `app/api/sqldb/{tables,views,procedures,functions,schemas,table-types,columns}/route.ts`.
 
-> **Critical wiring gap (the audit hinges on this):** when a user opens an
-> **Azure SQL database** item they get `UnifiedSqlDatabaseEditor`. The firewall
-> dialog, AAD-admin dialog, geo-replica dialog, Fabric-mirroring tab, SQL-2025
-> tab, and the full object tree (`SqlDbTree`) all live in **components this item
-> never mounts**. So even where a backend exists, the capability is **not
-> reachable** from the registered editor. Rows below grade what the registered
-> editor actually surfaces; where a capability exists only in an unwired
-> sibling, it is `missing (not reachable)`.
+> **Critical wiring gap — RESOLVED in rev.2 (PR #541).** The audit originally
+> hinged on this: `UnifiedSqlDatabaseEditor` did not mount `SqlDbTree` or the
+> firewall / AAD-admin / geo-replication dialogs. As of PR #541 the Unified
+> editor now mounts:
+> - **Schema tab → `SqlDbTree`** (`unified-sql-database-editor.tsx:824-832`),
+>   passing `server`/`database` so the BFF guard (`app/api/sqldb/_shared.ts:55-83`,
+>   explicit `?server=&database=` override) resolves the user-selected Azure SQL
+>   target. Real `sys.*` over TDS.
+> - **Server admin tab → `SqlServerAdminPanel`** (`:168`, `:859-868`): firewall
+>   list/add/delete → `/firewall`; Microsoft Entra admin get/set → `/aad-admin`;
+>   active geo-replication → `/replication`. All real ARM routes.
+>
+> So firewall, Entra admin, geo-replication, and the rich object tree are now
+> **reachable** from the registered editor. Fabric-mirroring and SQL-2025 remain
+> separate (mirroring honest-gated; SQL-2025 is its own item type). Rows below
+> are updated accordingly.
 
 ---
 
@@ -64,7 +86,7 @@ Legend: ✅ built (1:1 + real backend, reachable) · ⚠️ partial · ⚠️ ho
 | **Save query as view** | ❌ MISSING | — |
 | Templates dropdown (new object scaffolds) | ⚠️ partial | only in `SqlDbTree` (Fabric editor), not this Query tab |
 | **Open in** SSMS / VS Code | ❌ MISSING | — |
-| Object Explorer tree beside query window | ⚠️ partial | **Schema** tab = flat `INFORMATION_SCHEMA.TABLES` grid only (no tree, no views/procs/funcs, no columns, no actions). Rich `SqlDbTree` exists but only on Fabric `sql-database` editor |
+| Object Explorer tree beside query window | ✅ built | **Now reachable.** Schema tab mounts the rich `SqlDbTree` (tables + expandable columns, views, procs, functions, table types, schemas with counts; Select-top-1000 / EXEC template / Drop / New-object) over live `sys.*`-via-TDS (`unified-sql-database-editor.tsx:824-832`; routes `/api/sqldb/*`). Double-click loads a statement into the Query tab. INFORMATION_SCHEMA grid retained as a fallback below the tree |
 | 5-min timeout / multi-statement last-result | ⚠️ partial | 60s timeout; single recordset |
 | Cancel running query | ❌ MISSING | — |
 
@@ -88,8 +110,8 @@ Legend: ✅ built (1:1 + real backend, reachable) · ⚠️ partial · ⚠️ ho
 ### E. Security blade
 | Azure capability | Loom | Where / backend |
 | --- | --- | --- |
-| Server firewall rules (list/add/delete) | ❌ MISSING (not reachable) | real `/firewall` + `list/upsert/deleteFirewallRule`; UI in unwired `AzureSqlServerEditor` |
-| Microsoft Entra admin (get/set) | ❌ MISSING (not reachable) | real `/aad-admin` + `get/setAadAdmin`; UI in unwired `AzureSqlServerEditor` |
+| Server firewall rules (list/add/delete) | ✅ built | **Now reachable** in the Server admin tab (`SqlServerAdminPanel`): list + add (ARM upsert) + delete → `/api/items/azure-sql-database/[id]/firewall` (`list/upsert/deleteFirewallRule`, real ARM) |
+| Microsoft Entra admin (get/set) | ✅ built | **Now reachable** in the Server admin tab: shows current admin + sets login/sid/tenant → `/api/items/azure-sql-database/[id]/aad-admin` (`get/setAadAdmin`, real ARM) |
 | Networking (public/selected/Private endpoint/VNet/Allow-Azure-services) | ❌ MISSING | none in registered editor |
 | TDE | ❌ MISSING | — |
 | Microsoft Defender for SQL | ❌ MISSING | — |
@@ -103,7 +125,7 @@ Legend: ✅ built (1:1 + real backend, reachable) · ⚠️ partial · ⚠️ ho
 | Point-in-time restore | ❌ MISSING | no route |
 | Geo-restore | ❌ MISSING | no route |
 | Long-term retention policy | ❌ MISSING | no route |
-| Active geo-replication (add secondary, list replicas, failover) | ❌ MISSING (not reachable) | real `enableReplication` (`createMode=Secondary`) + `/replication`; dialog in unwired `AzureSqlDatabaseEditor`; no replica list / failover anywhere |
+| Active geo-replication (add secondary, list replicas, failover) | ⚠️ partial | **Add-secondary now reachable** in the Server admin tab: pick replica server/region/db/SKU → `/api/items/azure-sql-database/[id]/replication` (`enableReplication`, `createMode=Secondary`, real ARM). Still **no replica list / failover** (create-only) |
 | Failover groups | ❌ MISSING | — |
 | Database copy | ❌ MISSING | — |
 | Export / Import bacpac | ❌ MISSING | — |
@@ -119,13 +141,13 @@ Legend: ✅ built (1:1 + real backend, reachable) · ⚠️ partial · ⚠️ ho
 | Purview/OneLake catalog register | ⚠️ partial / honest-gate | Catalog tab → `POST /api/catalog/register`; 501 honest-gate unless `LOOM_PURVIEW_ACCOUNT`. Real, but not a portal-native blade feature |
 | SQL Server 2025 vector / feature probe | ⚠️ partial (separate item) | real `/sql2025-features` + vector-index editor — a **separate item type**, not the SQL DB blade |
 
-### H. Object navigator — reachable ONLY via the Fabric `sql-database` editor
-Fully built + real over TDS, but **not on the audited `azure-sql-database` editor** — recorded so a reviewer knows the rich tree is elsewhere:
+### H. Object navigator — now reachable on the registered `azure-sql-database` editor (rev.2)
+As of PR #541 the rich `SqlDbTree` is mounted by `UnifiedSqlDatabaseEditor` (Schema tab) **and** the Fabric `sql-database` editor; both share the same `sys.*`-over-TDS backend (`/api/sqldb/*`, with the Unified editor passing an explicit `?server=&database=` override):
 | Capability | Loom | Backend |
 | --- | --- | --- |
-| Tables + expandable columns (type/PK/identity/nullable) | ✅ built (Fabric editor only) | `/api/sqldb/{tables,columns}` → `sys.tables/columns` |
-| Views / Procs / Functions / Table types / Schemas + counts | ✅ built (Fabric editor only) | `/api/sqldb/*` → `sys.*` |
-| Select-top-1000 / EXEC template / Drop (catalog-verified) / New-object template / filter | ✅ built (Fabric editor only) | `/api/sqldb/*` + client templates |
+| Tables + expandable columns (type/PK/identity/nullable) | ✅ built (both editors) | `/api/sqldb/{tables,columns}` → `sys.tables/columns` |
+| Views / Procs / Functions / Table types / Schemas + counts | ✅ built (both editors) | `/api/sqldb/*` → `sys.*` |
+| Select-top-1000 / EXEC template / Drop (catalog-verified) / New-object template / filter | ✅ built (both editors) | `/api/sqldb/*` + client templates |
 | Indexes / Keys & constraints / Edit-data grid / Query plan | ⚠️ honest-gate | "coming" rows naming the path |
 
 ---
@@ -139,15 +161,15 @@ Real backends confirmed — TDS via `mssql`+AAD, or ARM REST:
 - Managed Instance: list-only REAL; query honest-gated (needs private endpoint).
 - Mirroring honest-gated; Catalog register honest-gated.
 
-No mock arrays / `return []` placeholders in the SQL backends. The vaporware risk here is **not fake data** — it is **breadth + reachability**: most of the portal blade is absent, and the strongest implemented features (object tree, firewall, AAD admin, geo-replication) are wired into siblings the `azure-sql-database` item never mounts.
+No mock arrays / `return []` placeholders in the SQL backends. As of rev.2 the **reachability** problem is fixed: the object tree, firewall, Entra admin, and geo-replication are all mounted on the registered editor. The remaining vaporware-adjacent risk is **breadth** — large portal pillars (scale, backups/restore, monitoring, export/import) are still absent.
 
-## Verdict — Grade C-
+## Verdict — Grade C+ (rev.2, was C-)
 
-The registered editor delivers a real, working Query + Provision + flat-Schema + Catalog experience on a live TDS/ARM backend — genuinely useful, not vaporware. But against the actual Azure SQL Database portal blade the **majority of capabilities are MISSING** (scale/compute, backups/PITR/LTR/restore, copy, export/import, networking, TDE/Defender/auditing, monitoring, QPI, connection strings, results export), and the strongest implemented features are **not reachable** from this editor. Feature completeness does not match. Counts: ~6 built, ~7 partial/gated, ~30 missing.
+The registered editor now delivers a real, working Query + Provision + **rich object tree (sys.* over TDS)** + **Server admin (firewall / Entra admin / geo-replica add)** + Catalog experience on a live TDS/ARM backend — and these are all reachable from the editor a user actually opens (the rev.1 reachability blocker is resolved by PR #541). Grade raised C- → C+. It still falls short of B: against the full Azure SQL Database portal blade the **majority of capabilities remain MISSING** (scale/compute, backups/PITR/LTR/restore, copy, export/import, networking, TDE/Defender/auditing, monitoring, QPI, connection strings, results export, replica list/failover). Feature completeness does not yet match. Revised counts: ~12 built, ~6 partial/gated, ~26 missing.
 
 ## Highest-value gaps (build first)
-1. **Wire `SqlDbTree` into `UnifiedSqlDatabaseEditor`** — it already exists with a real `sys.*` backend; biggest parity jump for least work.
-2. **Surface firewall + AAD-admin + geo-replication in the registered editor** — backends already exist, just not mounted.
+1. ~~Wire `SqlDbTree` into `UnifiedSqlDatabaseEditor`~~ — **DONE (PR #541)**, now in the Schema tab.
+2. ~~Surface firewall + AAD-admin + geo-replication in the registered editor~~ — **DONE (PR #541)**, now in the Server admin tab. (Geo-replication still create-only — add replica list + failover.)
 3. **Compute & storage (scale)** — add a `PATCH`/update route for tier / vCore / serverless / auto-pause / max-size / backup-redundancy.
 4. **Backups & restore** — PITR + geo-restore + LTR policy routes.
 5. **Results export (CSV/JSON/XLSX) + Save-as-view + connection-strings panel** in the Query editor.

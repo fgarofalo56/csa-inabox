@@ -1,5 +1,19 @@
 # adf-data-factory — parity with the full Azure Data Factory Studio
 
+> **rev.2 (2026-05-31) — re-verified against current code; grade unchanged at C.**
+> Re-read the pipeline canvas (`canvas.tsx` + `palette.tsx` on `@xyflow/react`,
+> 24 activity types, real ARM `createRun`/`validatePipeline`/`queryPipelineRuns`),
+> the factory-resources tree, and the data-flow create path. The React Flow
+> drag-drop canvas (PR #511) backs ONLY the **pipeline** authoring surface (and
+> the Fabric Dataflow Gen2 Power-Query projection) — it does **not** add a
+> Mapping Data Flow visual designer: ADF data-flow create still produces an empty
+> `MappingDataFlow` editable only as raw JSON (the create dialog literally says
+> so). Confirmed still genuinely absent (not stale-marked): the Mapping Data Flow
+> designer, Copy Data Tool wizard (no `CopyDataTool` in the tree), the
+> Add-Dynamic-Content / Expression Builder (no expression-builder component
+> anywhere), connector galleries + Test Connection, source control / Publish, and
+> the factory-wide Monitor hub. The ❌/⚠️ rows below are accurate.
+
 > **Scope:** the ENTIRE Azure Data Factory Studio experience (Home, Author,
 > Monitor, Manage), not just one editor. Two finer-grained parity docs already
 > exist and stay authoritative for their slice:

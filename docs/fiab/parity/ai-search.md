@@ -228,27 +228,37 @@ appears as a generic 502/timeout. Worth a dedicated MessageBar.
 
 ## Grade & rationale
 
-**C (functional but rough).** The backend is genuinely strong and broad — real
+> **rev.2 — corrected against current code.** rev.1 graded this **C** on the
+> premise that the visual field designer and the search-explorer query options
+> were missing. Re-reading `foundry-sub-editors.tsx` proves both are built and
+> wired to the real `PUT /indexes/{name}` and `POST /docs/search` REST. The two
+> headline gaps rev.1 cited no longer exist, so the grade moves to **B**.
+
+**B (production-grade).** The backend is genuinely strong and broad — real
 data-plane REST for all six object types plus search/analyze/stats and real ARM
 scaling, an honest infra-gate, and bicep that deploys it. The navigator tree is
-B-grade. But the UI parity bar (per `ui-parity.md`: build the real portal UI
-one-for-one, full functionality) is not met on the headline surfaces:
+B-grade, and the two flagship index surfaces now meet the `ui-parity.md` bar:
 
-- The portal's **visual index field designer** (the single most-used index UI)
-  is replaced by a read-only grid + raw JSON editor — a `ui-parity.md`-forbidden
-  "rich surface → JSON textarea" substitution.
-- **Search explorer has no Query options**: semantic, vector, queryType,
-  highlights, JSON view — all unreachable from the UI, even though the backend
-  supports them. This is the second most-used portal tool.
-- **No indexer scheduling**, no execution history, no field/output mappings.
-- **Import data wizard, Debug sessions, Demo app** are honest-gated or missing —
-  these are core portal tools.
-- Service admin (Keys, Identity, Networking, Monitoring, service stats) is
-  absent from the surface (scale lives on a different page).
+- The portal's **visual index field designer** IS built — a per-field grid
+  (add/remove rows, Name input, Type dropdown, Key / Searchable / Filterable /
+  Sortable / Facetable / Retrievable checkboxes with vector-aware disabling,
+  analyzer picker for searchable strings, dimensions + vector-profile pickers
+  for vector fields), Save → real `PUT /indexes/{name}`, Revert, dirty guard.
+  A full-definition Monaco JSON editor sits alongside as the advanced fallback.
+- **Search explorer has full Query options**: queryType (simple/full/semantic)
+  picker, semantic-config selector, answers/captions, searchFields, OData
+  filter, select, orderby, top, count, a **vector-query builder** (k-NN/hybrid,
+  text-vectorize or raw embedding, per-query field + k), the raw request body
+  echoed, semantic answers + reranker-score rendered. All posted to the real
+  `POST /docs/search`.
 
-It is NOT vaporware (no mocks, real backend, honest gates), so not F/D. It is
-not B because too many flagship portal capabilities are JSON-only, gated, or
-missing. Conservative grade: **C**.
+Remaining gaps keep it off A: **no indexer scheduling**, no execution history,
+no field/output mappings; **semantic-config + vector-profile designers** are
+honest-gated (JSON-only); **scoring-profile / analyzer / CORS / CMK** designers
+are JSON-only; **Import data wizard, Debug sessions, Demo app** are honest-gated
+or missing; service admin (Keys, Identity, Networking, Monitoring, service
+stats) is absent from the surface (scale lives on a different page). It is NOT
+vaporware (no mocks, real backend, honest gates). Grade: **B**.
 
 ## Highest-value gaps to close first
 1. **Visual index field designer** — per-field add/edit grid with attribute
