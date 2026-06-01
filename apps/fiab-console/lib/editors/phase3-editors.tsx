@@ -41,6 +41,7 @@ import {
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
+import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -3388,7 +3389,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance'>('tables');
 
   // --- Model builder (real Power BI push-dataset authoring) ---------------
   // Builds a NEW semantic model with tables/typed-columns/measures/relationships
@@ -3670,6 +3671,8 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="build">Build model</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
                   <Tab value="config">Configuration</Tab>
+                  <Tab value="governance">Gateway &amp; endorsement</Tab>
+                  <Tab value="access">Manage access</Tab>
                 </TabList>
               </div>
               <div className={s.pad}>
@@ -3942,6 +3945,15 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       </MessageBarBody>
                     </MessageBar>
                   </>
+                )}
+                {tab === 'governance' && datasetId && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                    <EndorsementControl workspaceId={workspaceId} itemId={datasetId} itemType="datasets" />
+                    <GatewayDatasourcesPanel workspaceId={workspaceId} datasetId={datasetId} />
+                  </div>
+                )}
+                {tab === 'access' && (
+                  <ManageAccessPanel workspaceId={workspaceId} />
                 )}
               </div>
             </>
@@ -4285,6 +4297,14 @@ function ReportLikeEditor({
                 <Caption1>type: {report.reportType || (kind === 'paginated' ? 'PaginatedReport' : 'PowerBIReport')} · datasetId: {report.datasetId || '—'}</Caption1>
                 <Caption1>modified: {report.modifiedDateTime || '—'} by {report.modifiedBy || '—'}</Caption1>
                 {report.webUrl && <Caption1><a href={report.webUrl} target="_blank" rel="noreferrer">Open in Power BI</a></Caption1>}
+              </div>
+              {kind !== 'paginated' && reportId && (
+                <div className={s.card} style={{ marginTop: 8 }}>
+                  <EndorsementControl workspaceId={workspaceId} itemId={reportId} itemType="reports" />
+                </div>
+              )}
+              <div className={s.card} style={{ marginTop: 8 }}>
+                <ManageAccessPanel workspaceId={workspaceId} />
               </div>
               {kind === 'paginated' ? (
                 <MessageBar intent="warning">

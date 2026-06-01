@@ -910,3 +910,305 @@ export async function cloneDashboardTile(
     { method: 'POST', body },
   );
 }
+
+// ============================================================
+// Workspace access — Group Users (the REAL Power BI workspace ACL)
+//
+// This is the canonical "Manage access" surface on a Power BI workspace, NOT
+// the Loom-native Cosmos roles. Members are added/updated/removed with one of
+// the four Power BI workspace roles (Admin / Member / Contributor / Viewer).
+//
+// Docs:
+//   GET    /groups/{ws}/users                 (Groups - Get Group Users In Group)
+//   POST   /groups/{ws}/users  { groupUserAccessRight, identifier, principalType }
+//          (Groups - Add Group User)
+//   PUT    /groups/{ws}/users  { groupUserAccessRight, identifier, principalType }
+//          (Groups - Update Group User)
+//   DELETE /groups/{ws}/users/{user}          (Groups - Delete User In Group)
+//   https://learn.microsoft.com/rest/api/power-bi/groups/add-group-user
+//   https://learn.microsoft.com/rest/api/power-bi/groups/update-group-user
+//   https://learn.microsoft.com/rest/api/power-bi/groups/delete-user-in-group
+// ============================================================
+
+/** The four Power BI workspace roles (GroupUserAccessRight). */
+export type GroupUserAccessRight = 'Admin' | 'Member' | 'Contributor' | 'Viewer' | 'None';
+export type PbiPrincipalType = 'User' | 'Group' | 'App' | 'None';
+
+export interface PbiGroupUser {
+  /** Email (for users) or object id (for apps/groups). The DELETE key. */
+  identifier?: string;
+  /** Email address of a user principal, when present. */
+  emailAddress?: string;
+  displayName?: string;
+  groupUserAccessRight?: GroupUserAccessRight;
+  principalType?: PbiPrincipalType;
+  graphId?: string;
+}
+
+export async function listGroupUsers(workspaceId: string): Promise<PbiGroupUser[]> {
+  const j = await call<{ value: PbiGroupUser[] }>(
+    `/groups/${encodeURIComponent(workspaceId)}/users`,
+  );
+  return j.value || [];
+}
+
+/**
+ * POST /groups/{ws}/users — add a principal to the workspace at the given role.
+ * `identifier` is the user's email (User), or the object id (Group / App / SP).
+ */
+export async function addGroupUser(
+  workspaceId: string,
+  user: { identifier: string; groupUserAccessRight: GroupUserAccessRight; principalType?: PbiPrincipalType },
+): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/users`,
+    {
+      method: 'POST',
+      body: {
+        identifier: user.identifier,
+        groupUserAccessRight: user.groupUserAccessRight,
+        principalType: user.principalType || 'User',
+      },
+    },
+  );
+  return { ok: true };
+}
+
+/**
+ * PUT /groups/{ws}/users — change an existing principal's workspace role. Same
+ * body shape as AddGroupUser; Power BI matches on `identifier`.
+ */
+export async function updateGroupUser(
+  workspaceId: string,
+  user: { identifier: string; groupUserAccessRight: GroupUserAccessRight; principalType?: PbiPrincipalType },
+): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/users`,
+    {
+      method: 'PUT',
+      body: {
+        identifier: user.identifier,
+        groupUserAccessRight: user.groupUserAccessRight,
+        principalType: user.principalType || 'User',
+      },
+    },
+  );
+  return { ok: true };
+}
+
+/**
+ * DELETE /groups/{ws}/users/{user} — remove a principal from the workspace.
+ * `user` is the identifier (email for users; object id for apps/groups).
+ */
+export async function deleteGroupUser(workspaceId: string, user: string): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/users/${encodeURIComponent(user)}`,
+    { method: 'DELETE' },
+  );
+  return { ok: true };
+}
+
+// ============================================================
+// Endorsement (Promote / Certify)
+//
+// READ: the Fabric Items REST returns an item's current endorsement —
+//   GET /v1/workspaces/{ws}/items/{id}  → { endorsement: { endorsementStatus, certifiedBy } }
+//   https://learn.microsoft.com/rest/api/fabric/core/items/get-item
+//
+// WRITE: setting endorsement programmatically is a Power BI **Admin** REST
+// operation (requires Tenant.ReadWrite.All / a Fabric admin SP):
+//   PUT /admin/groups/{ws}/datasets/{id}  { endorsementDetails: { endorsement, certifiedBy } }
+//   PUT /admin/groups/{ws}/reports/{id}   { endorsementDetails: { endorsement, certifiedBy } }
+//   EndorsementDetails(endorsement, certifiedBy):
+//   https://learn.microsoft.com/dotnet/api/microsoft.powerbi.api.models.endorsementdetails.-ctor
+//
+// Power BI dashboards cannot be endorsed (per the endorsement overview), so we
+// only expose this for datasets / reports / dataflows. When the SP isn't a
+// tenant admin the PUT returns 401/403 and the route surfaces it as an honest
+// gate (the UI still renders the read-only current endorsement + control).
+// ============================================================
+
+export type EndorsementStatus = 'None' | 'Promoted' | 'Certified';
+
+export interface ItemEndorsement {
+  endorsementStatus: EndorsementStatus;
+  certifiedBy?: string;
+}
+
+/**
+ * GET /v1/workspaces/{ws}/items/{id} (Fabric) — read the live endorsement badge
+ * for any Fabric/Power BI item. Returns { endorsementStatus:'None' } when the
+ * item has no endorsement object or the Fabric items API isn't reachable for it.
+ */
+export async function getItemEndorsement(workspaceId: string, itemId: string): Promise<ItemEndorsement> {
+  try {
+    const j = await call<{ endorsement?: { endorsementStatus?: string; certifiedBy?: string } }>(
+      `/workspaces/${encodeURIComponent(workspaceId)}/items/${encodeURIComponent(itemId)}`,
+      { api: 'fabric' },
+    );
+    const e = j.endorsement;
+    return {
+      endorsementStatus: (e?.endorsementStatus as EndorsementStatus) || 'None',
+      certifiedBy: e?.certifiedBy,
+    };
+  } catch (e) {
+    if (e instanceof PowerBiError && (e.status === 404 || e.status === 400)) {
+      return { endorsementStatus: 'None' };
+    }
+    throw e;
+  }
+}
+
+/**
+ * PUT /admin/groups/{ws}/datasets|reports/{id} — set endorsement on a dataset
+ * or report via the Power BI Admin REST. `certifiedBy` is required by Power BI
+ * when endorsement === 'Certified' (the certifier UPN). Sending
+ * endorsement:'None' clears the badge.
+ *
+ * Requires the calling SP to be a Power BI / Fabric **admin**; otherwise PBI
+ * returns 401/403 which the route surfaces as an honest admin-gate.
+ */
+export async function setItemEndorsement(
+  workspaceId: string,
+  itemType: 'datasets' | 'reports' | 'dataflows',
+  itemId: string,
+  endorsement: EndorsementStatus,
+  certifiedBy?: string,
+): Promise<{ ok: true }> {
+  await call(
+    `/admin/groups/${encodeURIComponent(workspaceId)}/${itemType}/${encodeURIComponent(itemId)}`,
+    {
+      method: 'PUT',
+      body: {
+        endorsementDetails: {
+          endorsement,
+          certifiedBy: endorsement === 'Certified' ? (certifiedBy || '') : undefined,
+        },
+      },
+    },
+  );
+  return { ok: true };
+}
+
+// ============================================================
+// Semantic-model gateway binding + data-source credentials
+//
+//   GET  /groups/{ws}/datasets/{id}/datasources          (cloud data sources)
+//   GET  /groups/{ws}/datasets/{id}/Default.GetBoundGatewayDatasources
+//        (gateway data sources the model is bound to)
+//   GET  /groups/{ws}/datasets/{id}/Default.DiscoverGateways
+//        (gateways the caller could bind the model to)
+//   POST /groups/{ws}/datasets/{id}/Default.BindToGateway  { gatewayObjectId, datasourceObjectIds? }
+//   POST /groups/{ws}/datasets/{id}/Default.UpdateDatasources { updateDetails: [...] }
+//
+// Docs:
+//   https://learn.microsoft.com/rest/api/power-bi/datasets/get-datasources-in-group
+//   https://learn.microsoft.com/rest/api/power-bi/datasets/get-gateway-datasources-in-group
+//   https://learn.microsoft.com/rest/api/power-bi/datasets/discover-gateways-in-group
+//   https://learn.microsoft.com/rest/api/power-bi/datasets/bind-to-gateway-in-group
+//   https://learn.microsoft.com/rest/api/power-bi/datasets/update-datasources-in-group
+// ============================================================
+
+export interface PbiDatasource {
+  datasourceType?: string;
+  datasourceId?: string;
+  gatewayId?: string;
+  connectionDetails?: { server?: string; database?: string; url?: string; path?: string };
+  name?: string;
+}
+
+export interface PbiGateway {
+  id: string;
+  name?: string;
+  type?: string;
+  gatewayStatus?: string;
+}
+
+/** GET cloud data sources for the model (no gateway). */
+export async function getDatasetDatasources(workspaceId: string, datasetId: string): Promise<PbiDatasource[]> {
+  try {
+    const j = await call<{ value: PbiDatasource[] }>(
+      `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/datasources`,
+    );
+    return j.value || [];
+  } catch (e) {
+    if (e instanceof PowerBiError && (e.status === 404 || e.status === 400)) return [];
+    throw e;
+  }
+}
+
+/** GET the gateway data sources the model is currently bound to. */
+export async function getBoundGatewayDatasources(workspaceId: string, datasetId: string): Promise<PbiDatasource[]> {
+  try {
+    const j = await call<{ value: PbiDatasource[] }>(
+      `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/Default.GetBoundGatewayDatasources`,
+    );
+    return j.value || [];
+  } catch (e) {
+    if (e instanceof PowerBiError && (e.status === 404 || e.status === 400)) return [];
+    throw e;
+  }
+}
+
+/** GET gateways the caller could bind this model to. */
+export async function discoverGateways(workspaceId: string, datasetId: string): Promise<PbiGateway[]> {
+  try {
+    const j = await call<{ value: PbiGateway[] }>(
+      `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/Default.DiscoverGateways`,
+    );
+    return j.value || [];
+  } catch (e) {
+    if (e instanceof PowerBiError && (e.status === 404 || e.status === 400)) return [];
+    throw e;
+  }
+}
+
+/**
+ * POST .../Default.BindToGateway — bind the model to a gateway. Optionally pass
+ * the gateway data-source object ids to map (otherwise PBI auto-maps matching
+ * sources).
+ */
+export async function bindToGateway(
+  workspaceId: string,
+  datasetId: string,
+  gatewayObjectId: string,
+  datasourceObjectIds?: string[],
+): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/Default.BindToGateway`,
+    {
+      method: 'POST',
+      body: {
+        gatewayObjectId,
+        datasourceObjectIds: datasourceObjectIds && datasourceObjectIds.length ? datasourceObjectIds : undefined,
+      },
+    },
+  );
+  return { ok: true };
+}
+
+export interface UpdateDatasourceDetail {
+  /** The current connection to match (server/database/url/path). */
+  datasourceSelector: { datasourceType: string; connectionDetails: Record<string, string> };
+  /** The new connection to set. */
+  connectionDetails: Record<string, string>;
+}
+
+/**
+ * POST .../Default.UpdateDatasources — repoint the model's data source(s) to a
+ * new server/database (the supported REST path to change connection details).
+ * Note: this changes the *connection*, not credentials; credential set is the
+ * gateway/cloud-connection Update Datasource API which needs an encrypted
+ * credential payload — surfaced honestly in the UI.
+ */
+export async function updateDatasetDatasources(
+  workspaceId: string,
+  datasetId: string,
+  updateDetails: UpdateDatasourceDetail[],
+): Promise<{ ok: true }> {
+  await call(
+    `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/Default.UpdateDatasources`,
+    { method: 'POST', body: { updateDetails } },
+  );
+  return { ok: true };
+}
