@@ -21,7 +21,7 @@
  * the full Data Explorer surface still renders (per no-vaporware + ui-parity).
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button, Caption1, Badge, Spinner, Tooltip, Divider,
   Table, TableHeader, TableHeaderCell, TableRow, TableCell, TableBody,
@@ -63,6 +63,8 @@ export interface CosmosDataExplorerProps {
   container: string;
   /** Partition-key path of the container (e.g. "/tenantId"); drives writes. */
   partitionKey?: string;
+  /** Seed query (the studio's "New SQL Query" tab opens with `SELECT * FROM c`). */
+  initialQuery?: string;
 }
 
 interface CosmosDoc { [k: string]: unknown }
@@ -91,10 +93,12 @@ function pkDisplay(v: unknown): string {
   return String(v);
 }
 
-export function CosmosDataExplorer({ db, container, partitionKey }: CosmosDataExplorerProps) {
+export function CosmosDataExplorer({ db, container, partitionKey, initialQuery }: CosmosDataExplorerProps) {
   const s = useStyles();
 
-  const [query, setQuery] = useState(DEFAULT_QUERY);
+  const [query, setQuery] = useState(initialQuery || DEFAULT_QUERY);
+  // Per-execution Query Stats (RU + count for the last Execute, like the studio).
+  const [lastStats, setLastStats] = useState<{ charge: number; count: number } | null>(null);
   const [docs, setDocs] = useState<CosmosDoc[]>([]);
   const [continuation, setContinuation] = useState<string | null>(null);
   const [requestCharge, setRequestCharge] = useState(0);
@@ -113,7 +117,8 @@ export function CosmosDataExplorer({ db, container, partitionKey }: CosmosDataEx
 
   // Reset the query + results when the selected container changes.
   useEffect(() => {
-    setQuery(DEFAULT_QUERY);
+    setQuery(initialQuery || DEFAULT_QUERY);
+    setLastStats(null);
     setDocs([]);
     setContinuation(null);
     setRequestCharge(0);
@@ -151,9 +156,12 @@ export function CosmosDataExplorer({ db, container, partitionKey }: CosmosDataEx
       }).then(readJson);
       if (applyGates(r)) { setLoading(false); return; }
       if (!r.ok) { setError(r.error || 'query failed'); setLoading(false); return; }
-      setDocs((prev) => opts.append ? [...prev, ...(r.documents || [])] : (r.documents || []));
+      const page = r.documents || [];
+      setDocs((prev) => opts.append ? [...prev, ...page] : page);
       setContinuation(r.continuation || null);
       setRequestCharge(opts.append ? requestCharge + (r.requestCharge || 0) : (r.requestCharge || 0));
+      // Query Stats reflect the most recent Execute/page (real RU + row count).
+      setLastStats({ charge: r.requestCharge || 0, count: page.length });
       if (!opts.append) setExpanded(new Set());
     } catch (e: any) {
       setError(e?.message || String(e));
@@ -278,8 +286,8 @@ export function CosmosDataExplorer({ db, container, partitionKey }: CosmosDataEx
         <Tooltip content="New item" relationship="label">
           <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={openNew}>New item</Button>
         </Tooltip>
-        <Tooltip content="Run query" relationship="label">
-          <Button size="small" appearance="secondary" icon={<Play20Regular />} onClick={() => void runQuery()} disabled={loading}>Execute</Button>
+        <Tooltip content="Run query (real Cosmos data-plane SQL)" relationship="label">
+          <Button size="small" appearance="secondary" icon={<Play20Regular />} onClick={() => void runQuery()} disabled={loading}>Execute Query</Button>
         </Tooltip>
         <Tooltip content="Refresh" relationship="label">
           <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={() => void runQuery()} disabled={loading} aria-label="Refresh" />
@@ -287,7 +295,16 @@ export function CosmosDataExplorer({ db, container, partitionKey }: CosmosDataEx
         <span className={s.spacer} />
         <div className={s.readout}>
           <Badge size="small" appearance="tint">{docs.length} {docs.length === 1 ? 'item' : 'items'}</Badge>
-          <Badge size="small" appearance="tint" color="informative">{requestCharge.toFixed(2)} RU</Badge>
+          <Tooltip content="Cumulative RU request charge across all executed pages" relationship="label">
+            <Badge size="small" appearance="tint" color="informative">{requestCharge.toFixed(2)} RU total</Badge>
+          </Tooltip>
+          {lastStats && (
+            <Tooltip content="Query Stats — request charge + rows for the last Execute" relationship="label">
+              <Badge size="small" appearance="outline" color="brand">
+                Last: {lastStats.charge.toFixed(2)} RU · {lastStats.count} row{lastStats.count === 1 ? '' : 's'}
+              </Badge>
+            </Tooltip>
+          )}
           <Caption1 className={s.muted}>pk {pkLabel}</Caption1>
           {loading && <Spinner size="tiny" />}
         </div>
@@ -337,7 +354,7 @@ export function CosmosDataExplorer({ db, container, partitionKey }: CosmosDataEx
               const id = String((doc as any).id ?? '');
               const isOpen = expanded.has(i);
               return (
-                <>
+                <Fragment key={`f-${i}-${id}`}>
                   <TableRow key={`r-${i}-${id}`}>
                     <TableCell>
                       <Button
@@ -367,7 +384,7 @@ export function CosmosDataExplorer({ db, container, partitionKey }: CosmosDataEx
                       </TableCell>
                     </TableRow>
                   )}
-                </>
+                </Fragment>
               );
             })}
           </TableBody>
