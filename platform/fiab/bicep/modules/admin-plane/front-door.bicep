@@ -36,7 +36,22 @@ resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@20
     policySettings: {
       enabledState: 'Enabled'
       mode: 'Prevention'
-      requestBodyCheck: 'Enabled'
+      // Request-body inspection is DISABLED by design. The console's BFF (`/api/*`)
+      // is a session-gated (Entra) backend-for-frontend that legitimately carries
+      // SQL / KQL / OData / Gremlin / GraphQL query text in request bodies (Cosmos
+      // Data Explorer, AI Search, ADX, Azure SQL, Gremlin, GraphQL editors). The
+      // OWASP SQLI/RCE managed rules (Microsoft_DefaultRuleSet 2.1) inspect both the
+      // parsed JSON args AND the raw `InitialBodyContents` (which exclusions cannot
+      // cover), so they BLOCK every non-trivial query through Front Door in
+      // Prevention mode (verified live 2026-06-01: `SELECT … WHERE … ORDER BY` → 403).
+      // A custom Allow rule on `/api/*` did NOT bypass the managed body rules in
+      // practice, and per-arg exclusions miss InitialBodyContents — so the only
+      // reliable fix is to stop inspecting request bodies. URL / query-string /
+      // header / cookie inspection + the Bot Manager rule set all remain ACTIVE, so
+      // the public / login / static surface keeps WAF protection; only the request
+      // *body* (which the app parses safely and forwards as parameterized data-plane
+      // calls) is no longer scanned. Acceptable for an authenticated analytics BFF.
+      requestBodyCheck: 'Disabled'
     }
     managedRules: {
       managedRuleSets: [
