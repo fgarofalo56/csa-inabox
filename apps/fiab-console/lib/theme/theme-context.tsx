@@ -9,6 +9,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import { FluentProvider, webLightTheme, webDarkTheme, Theme } from '@fluentui/react-components';
+import { FluentSSR } from './fluent-ssr';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -94,9 +95,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // from a new {mode,setMode,toggle} object identity on unrelated re-renders.
   const ctxValue = useMemo(() => ({ mode, setMode, toggle }), [mode, setMode, toggle]);
 
+  // FluentSSR (Griffel SSR renderer + useServerInsertedHTML) MUST wrap
+  // FluentProvider so Fluent's CSS is flushed into the server HTML — otherwise
+  // styles inject client-side after hydration and the page flashes unstyled
+  // (FOUC) on load and route transitions.
   return (
     <Ctx.Provider value={ctxValue}>
-      <FluentProvider theme={theme}>{children}</FluentProvider>
+      <FluentSSR>
+        <FluentProvider theme={theme}>{children}</FluentProvider>
+      </FluentSSR>
     </Ctx.Provider>
   );
 }

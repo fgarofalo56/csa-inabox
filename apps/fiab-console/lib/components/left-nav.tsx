@@ -10,16 +10,17 @@ import {
   Apps24Regular,
   ChartMultiple24Regular,
   Flash24Regular,
-  Database24Regular,
+  Library24Regular,
+  GlobeSearch24Regular,
   CloudArrowUp24Regular,
   PuzzlePieceRegular,
   ShieldKeyhole24Regular,
   ShieldCheckmark24Regular,
   Settings24Regular,
   Bot24Regular,
-  Sparkle24Regular,
   Connector24Regular,
 } from '@fluentui/react-icons';
+import { CopilotIcon } from './icons/copilot-icon';
 
 // Fabric-parity left nav: top-level surfaces only, like the real
 // Fabric portal. Item types are reached from inside a workspace via
@@ -28,14 +29,14 @@ const navItems = [
   { href: '/', icon: Home24Regular, label: 'Home' },
   { href: '/workspaces', icon: Building24Regular, label: 'Workspaces' },
   { href: '/browse', icon: Apps24Regular, label: 'Browse' },
-  { href: '/onelake', icon: Database24Regular, label: 'OneLake catalog' },
-  { href: '/catalog', icon: Database24Regular, label: 'Unified catalog' },
+  { href: '/onelake', icon: Library24Regular, label: 'OneLake catalog' },
+  { href: '/catalog', icon: GlobeSearch24Regular, label: 'Unified catalog' },
   { href: '/api-marketplace', icon: Connector24Regular, label: 'API marketplace' },
   { href: '/governance', icon: ShieldCheckmark24Regular, label: 'Governance' },
   { href: '/monitor', icon: ChartMultiple24Regular, label: 'Monitor' },
   { href: '/realtime-hub', icon: Flash24Regular, label: 'Real-Time hub' },
   { href: '/data-agent', icon: Bot24Regular, label: 'Data agents' },
-  { href: '/copilot', icon: Sparkle24Regular, label: 'Copilot' },
+  { href: '/copilot', icon: CopilotIcon, label: 'Copilot' },
   { href: '/workload-hub', icon: PuzzlePieceRegular, label: 'Workload hub' },
   { href: '/deployment-pipelines', icon: CloudArrowUp24Regular, label: 'Deployment' },
   { href: '/admin', icon: ShieldKeyhole24Regular, label: 'Admin portal' },
