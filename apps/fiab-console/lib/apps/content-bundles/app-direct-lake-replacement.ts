@@ -23,9 +23,41 @@
  *   8. report             — Power BI report re-authored against Gold (visual parity)
  *   9. activator          — alert when a Shim partition-refresh fails or freshness SLA breached
  *
- * Backend per item: every itemType has a Phase-2 provisioner EXCEPT `report`
- * (registry-wired editor, provisioner gap — flagged for the integrator/verify
- * pass; the semantic model it binds to IS provisioned via the TMSL TOM path).
+ * Backend per item (Phase-2 provisioners, all on real REST — see
+ * lib/install/provisioners/*; wired in lib/install/provisioning-engine.ts):
+ *   1. mirrored-database  → mirrored-database.ts: Fabric POST /mirroredDatabases
+ *                           (Base64 mirroring.json) + startMirroring →
+ *                           replicates the legacy SQL source into Bronze Delta.
+ *                           Honest gate: LOOM_MIRROR_SOURCE_CONNECTION_ID
+ *                           (Fabric mirroring REST needs a source connection
+ *                           GUID, which can't be derived from a server FQDN).
+ *   2. lakehouse          → lakehouse.ts: Fabric POST /lakehouses, then SEEDS
+ *                           each deltaTable's sampleRows into a REAL Delta table
+ *                           via OneLake DFS create/append/flush + Load Table API
+ *                           (CSV → managed Delta). Gold/dims are non-empty at
+ *                           install time, before the notebooks finish.
+ *   3,4. databricks-notebook → databricks-notebook.ts: Databricks
+ *                           workspace/import + jobs/runs/submit on a live
+ *                           cluster + poll to terminal → actually RUNS the
+ *                           Silver/Gold transforms (produces live Delta).
+ *                           Honest gate: LOOM_DATABRICKS_HOSTNAME / a runnable
+ *                           cluster / UAMI workspace access.
+ *   5. eventstream        → eventstream.ts (Fabric POST /eventstreams).
+ *   6. data-pipeline      → data-pipeline.ts (Fabric pipeline + on-demand run).
+ *   7. semantic-model     → semantic-model.ts (Fabric POST /semanticModels, TMSL).
+ *   8. report             → report.ts: Fabric POST /reports with a PBIR
+ *                           definition bound byConnection to the semantic
+ *                           model (semanticmodelid=<id>) → renders over the
+ *                           seeded Gold tables.
+ *   9. activator          → activator.ts (Fabric Reflex rule).
+ *
+ * Every itemType in this bundle now has a real Phase-2 provisioner. With zero
+ * customer config the install still produces a functional workspace: the
+ * lakehouse seeds its sample Gold/dim rows (so the semantic model + report
+ * render with data immediately), and the mirror → Bronze and notebook runs
+ * surface precise honest MessageBar gates (the exact env var / role / Fabric
+ * connection to provision) rather than silently skipping — per
+ * .claude/rules/no-vaporware.md.
  *
  * Ground truth: docs/fiab/use-cases/direct-lake-replacement.md (migration
  * playbook steps 1-8), the Direct-Lake-Shim service + Tutorial 03 it links.

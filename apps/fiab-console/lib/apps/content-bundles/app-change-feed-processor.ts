@@ -17,9 +17,10 @@
  * This bundle reproduces every object the doc calls out, one BundleItem per
  * object with rich, runnable content:
  *
- *   1. eventstream      — Cosmos DB change feed source -> Event Hubs + Delta
- *                         + AI Search destinations (the Functions fan-out,
- *                         modelled declaratively).
+ *   1. eventstream      — Cosmos DB change feed source -> Event Hubs + AI
+ *                         Search + Redis (custom endpoint) + Delta
+ *                         destinations (the Functions fan-out across all
+ *                         four doc targets, modelled declaratively).
  *   2. notebook (CFP)   — the Change Feed Processor + Azure Functions
  *                         fan-out logic from Steps 1-3 as runnable cells.
  *   3. notebook (Delta) — the Databricks Delta Lake sync from Step 4
@@ -55,8 +56,9 @@ import type { AppBundle } from './types';
 // ─── Eventstream: Cosmos change feed -> fan-out destinations ─────────────
 // Models the Azure-Functions fan-out from Step 3 declaratively. The source
 // is the Cosmos DB change feed on analytics/orders; destinations mirror the
-// three sinks the Function writes to (Event Hubs, AI Search, Delta Lake).
-// The lease container provides checkpointing exactly as the doc's
+// four sinks the Function writes to (Event Hubs, AI Search, Redis Cache via
+// a custom endpoint, and Delta Lake). The lease container provides
+// checkpointing exactly as the doc's
 // `get_change_feed_processor(lease_container=...)` call does.
 
 const EVENTSTREAM_SOURCE_COSMOS = {
@@ -131,6 +133,37 @@ const EVENTSTREAM_DEST_DELTA = {
       'cosmos.oltp.changeFeed reader and MERGEs into Tables/orders ' +
       '(whenMatchedUpdateAll / whenNotMatchedInsertAll), checkpointing to ' +
       'Files/checkpoints/cosmos_sync exactly as Step 4 does.',
+  },
+};
+
+// Redis is a first-class fan-out target in the doc's architecture
+// (Functions --> Cache[Redis Cache]; handle_upsert -> update_cache,
+// handle_delete -> invalidate_cache). Fabric Eventstream has NO native Redis
+// destination — the documented way to route events to a system *outside*
+// Fabric is the **Custom endpoint** destination
+// (https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/add-destination-custom-app).
+// So Redis is modelled here as a custom-endpoint sink: the same egress the
+// Functions fan-out uses to push key-by-id SET / DEL into the cache. This
+// keeps the declarative fan-out 1:1 with the doc's four targets (Event Hubs,
+// AI Search, Redis, Delta) instead of three.
+const EVENTSTREAM_DEST_REDIS = {
+  id: 'dst-redis-cache',
+  type: 'custom-endpoint',
+  config: {
+    target: 'redis',
+    connectionSecretRef: 'REDIS_CONNECTION',
+    keyTemplate: 'order:{id}',
+    ttlSeconds: 3600,
+    upsertOp: 'SET',
+    deleteOp: 'DEL',
+    routeOnDeletedField: '_deleted',
+    description:
+      'Redis Cache fan-out target. Fabric Eventstream exposes no native ' +
+      'Redis destination, so this is a Custom endpoint sink — the documented ' +
+      'egress for systems outside Fabric — mirroring the Functions handlers ' +
+      'update_cache() (SET order:{id} <doc> EX 3600) and invalidate_cache() ' +
+      '(DEL order:{id}). Routes on the _deleted marker: upsert -> SET, ' +
+      'delete -> DEL. Connection from the REDIS_CONNECTION secret.',
   },
 };
 
@@ -555,8 +588,9 @@ const bundle: AppBundle = {
       displayName: 'Order Change Fan-out',
       description:
         'Cosmos DB change feed on analytics/orders -> Event Hubs (order-events) ' +
-        '+ AI Search (orders) + Delta Lake (Tables/orders). Models the Azure ' +
-        'Functions fan-out from Step 3 declaratively, checkpointed via the ' +
+        '+ AI Search (orders) + Redis Cache (order:{id}) + Delta Lake ' +
+        '(Tables/orders). Models the Azure Functions fan-out from Step 3 ' +
+        'declaratively across all four doc targets, checkpointed via the ' +
         'leases container.',
       learnDoc: 'change-feed-processor',
       content: {
@@ -566,6 +600,7 @@ const bundle: AppBundle = {
         destinations: [
           EVENTSTREAM_DEST_EVENTHUB,
           EVENTSTREAM_DEST_SEARCH,
+          EVENTSTREAM_DEST_REDIS,
           EVENTSTREAM_DEST_DELTA,
         ],
       },

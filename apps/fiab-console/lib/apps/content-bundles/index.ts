@@ -28,6 +28,7 @@ import directLakeReplacement from './app-direct-lake-replacement';
 import federalDataMesh from './app-federal-data-mesh';
 import mlPipeline from './app-ml-pipeline';
 import multiAgencyOnboarding from './app-multi-agency-onboarding';
+import azureRealtimeAnalytics from './app-azure-realtime-analytics';
 
 const REGISTRY: Record<string, AppBundle> = {
   [casinoAnalytics.appId]: casinoAnalytics,
@@ -45,6 +46,7 @@ const REGISTRY: Record<string, AppBundle> = {
   [federalDataMesh.appId]: federalDataMesh,
   [mlPipeline.appId]: mlPipeline,
   [multiAgencyOnboarding.appId]: multiAgencyOnboarding,
+  [azureRealtimeAnalytics.appId]: azureRealtimeAnalytics,
 };
 
 export function getBundle(appId: string): AppBundle | undefined {

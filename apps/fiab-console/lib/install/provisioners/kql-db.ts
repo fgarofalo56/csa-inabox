@@ -100,14 +100,45 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
     }
   }
 
-  // 4. Ingestion policies.
+  // 4. Ingestion / table policies.
+  //
+  // The bundle's `policy` field carries one of two shapes:
+  //   (a) a complete control script — one-or-more `.alter` / `.alter-merge`
+  //       policy commands, possibly multi-line (retention, caching,
+  //       streamingingestion, etc.). These must be executed VERBATIM, one
+  //       command per line. Wrapping them in `.alter table … policy
+  //       ingestionbatching @'<policy>'` would malform them.
+  //   (b) a raw ingestion-batching policy JSON body (legacy shape) — wrap it
+  //       in the documented `.alter table <t> policy ingestionbatching @'…'`.
+  //
+  // We detect (a) by the leading `.alter` token and run each statement as-is;
+  // otherwise we fall back to (b).
   const policies: Array<{ table: string; policy: string }> = Array.isArray(content?.ingestionPolicies) ? content.ingestionPolicies : [];
   for (const p of policies) {
-    try {
-      await executeMgmtCommand(dbName, `.alter table ${p.table} policy ingestionbatching @'${p.policy.replace(/'/g, "''")}'`);
-      steps.push(`.alter policy on ${p.table} OK.`);
-    } catch (e: any) {
-      steps.push(`.alter policy on ${p.table} failed: ${e?.message || String(e)}`);
+    const raw = String(p.policy ?? '');
+    const isControlScript = /^\s*\.alter(-merge)?\b/i.test(raw);
+    if (isControlScript) {
+      // Split into individual control commands. Kusto control commands are
+      // newline-delimited; a leading `.alter`/`.alter-merge` starts each one.
+      const commands = raw
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+      for (const cmd of commands) {
+        try {
+          await executeMgmtCommand(dbName, cmd);
+          steps.push(`Policy command on ${p.table} OK: ${cmd.slice(0, 60)}${cmd.length > 60 ? '…' : ''}`);
+        } catch (e: any) {
+          steps.push(`Policy command on ${p.table} failed (${cmd.slice(0, 60)}…): ${e?.message || String(e)}`);
+        }
+      }
+    } else {
+      try {
+        await executeMgmtCommand(dbName, `.alter table ${p.table} policy ingestionbatching @'${raw.replace(/'/g, "''")}'`);
+        steps.push(`.alter ingestionbatching policy on ${p.table} OK.`);
+      } catch (e: any) {
+        steps.push(`.alter ingestionbatching policy on ${p.table} failed: ${e?.message || String(e)}`);
+      }
     }
   }
 

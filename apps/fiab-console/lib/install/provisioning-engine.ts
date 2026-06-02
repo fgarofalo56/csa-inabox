@@ -31,6 +31,10 @@ import { semanticModelProvisioner } from './provisioners/semantic-model';
 import { activatorProvisioner } from './provisioners/activator';
 import { dataPipelineProvisioner } from './provisioners/data-pipeline';
 import { eventstreamProvisioner } from './provisioners/eventstream';
+import { kqlDashboardProvisioner } from './provisioners/kql-dashboard';
+import { mirroredDatabaseProvisioner } from './provisioners/mirrored-database';
+import { databricksNotebookProvisioner } from './provisioners/databricks-notebook';
+import { reportProvisioner } from './provisioners/report';
 
 /** Mapping from editor item type → provisioner.  Item types not listed
  * here are Cosmos-only (no Phase-2 backend side-effect). */
@@ -41,11 +45,15 @@ const PROVISIONERS: Record<string, Provisioner> = {
   'kql-database': kqlDatabaseProvisioner,
   'kql-queryset': kqlDatabaseProvisioner, // queryset rides on top of the parent DB
   'eventhouse': kqlDatabaseProvisioner,   // eventhouse = kql cluster, same surface for install
+  'kql-dashboard': kqlDashboardProvisioner, // Real-Time Dashboard item (Fabric kqlDashboards)
   'ai-search-index': aiSearchProvisioner,
   'semantic-model': semanticModelProvisioner,
   'activator': activatorProvisioner,
   'data-pipeline': dataPipelineProvisioner,
   'eventstream': eventstreamProvisioner,
+  'mirrored-database': mirroredDatabaseProvisioner, // replicate legacy SQL → Bronze (Fabric Mirroring)
+  'databricks-notebook': databricksNotebookProvisioner, // import + run the Silver/Gold medallion notebooks
+  'report': reportProvisioner, // create the PBIR report bound byConnection to the semantic model
 };
 
 /** Item types that have a Phase-2 provisioner — exposed for the wizard
