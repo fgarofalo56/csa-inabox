@@ -134,7 +134,6 @@ const KQL_FN_PARSE = `// Parses a raw Event Hub JSON payload into a normalized l
 {
     RawTelemetry
     | extend parsed = parse_json(payload)
-    | mv-expand parsed
     | extend
         device_id     = tostring(parsed.device_id),
         event_time    = todatetime(parsed.timestamp),
@@ -145,10 +144,10 @@ const KQL_FN_PARSE = `// Parses a raw Event Hub JSON payload into a normalized l
         pressure_hpa  = todouble(parsed.pressure_hpa),
         battery_pct   = todouble(parsed.battery_pct)
     | mv-expand metric = pack_array(
-        pack('metric_type', 'temperature_c', 'value', temperature_c),
-        pack('metric_type', 'humidity_pct',  'value', humidity_pct),
-        pack('metric_type', 'pressure_hpa', 'value', pressure_hpa),
-        pack('metric_type', 'battery_pct',  'value', battery_pct)
+        bag_pack('metric_type', 'temperature_c', 'value', temperature_c),
+        bag_pack('metric_type', 'humidity_pct',  'value', humidity_pct),
+        bag_pack('metric_type', 'pressure_hpa',  'value', pressure_hpa),
+        bag_pack('metric_type', 'battery_pct',   'value', battery_pct)
       )
     | extend
         metric_type = tostring(metric.metric_type),
@@ -173,13 +172,15 @@ const KQL_FN_ANOMALY = `// Computes a per-reading anomaly score using a rolling 
 {
     let _start = iff(isnull(StartTime), ago(24h), StartTime);
     let _end   = iff(isnull(EndTime),   now(),    EndTime);
+    // Per-(device, metric) baseline mean/std over the evaluation window.
+    let baseline =
+        Telemetry
+        | where event_time between (_start .. _end)
+        | summarize rolling_mean = avg(value), rolling_std = stdev(value)
+            by device_id, metric_type;
     Telemetry
     | where event_time between (_start .. _end)
-    | order by device_id asc, metric_type asc, event_time asc
-    | serialize
-    | extend
-        rolling_mean = row_window_session(value,    120, 1, false),
-        rolling_std  = row_window_session(value,    120, 1, false)
+    | join kind=inner baseline on device_id, metric_type
     | extend zscore = iff(rolling_std == 0 or isnull(rolling_std),
                           real(null),
                           (value - rolling_mean) / rolling_std)
@@ -211,17 +212,25 @@ Telemetry
 
 const KQL_Q_NOISY = `// Top-10 noisy devices in the last hour, ranked by anomaly count.
 // "Noisy" = generates anomaly flags out of proportion to its reading volume.
+// Baseline mean/std are computed per (device, metric), then each reading's
+// z-score is evaluated against its own device+metric baseline.
+let baseline =
+    Telemetry
+    | where event_time > ago(1h)
+    | summarize mean = avg(value), std = stdev(value)
+        by device_id, metric_type;
 Telemetry
 | where event_time > ago(1h)
-| extend zscore = (value - avg(value)) / stdev(value)
-| where abs(zscore) > 3
+| join kind=inner baseline on device_id, metric_type
+| extend zscore = iff(std == 0 or isnull(std), real(null), (value - mean) / std)
 | summarize
-    anomaly_count = count(),
-    reading_count = countif(true),
+    anomaly_count = countif(abs(zscore) > 3),
+    reading_count = count(),
     metrics       = make_set(metric_type)
     by device_id
+| where anomaly_count > 0
 | top 10 by anomaly_count desc
-| project device_id, anomaly_count, metrics`;
+| project device_id, anomaly_count, reading_count, metrics`;
 
 const KQL_Q_SITE_ANOM = `// Anomalies in the last 24h broken out by site + severity.
 // Powers the per-site bar visual on the dashboard.
@@ -270,7 +279,7 @@ const KQL_Q_LOW_BATTERY = `// Devices reporting battery < 20% — schedule a fie
 Telemetry
 | where metric_type == 'battery_pct'
   and event_time > ago(1h)
-| summarize latest_pct = arg_max(event_time, value) by device_id
+| summarize (event_time, latest_pct) = arg_max(event_time, value) by device_id
 | where latest_pct < 20
 | join kind=leftouter Devices on device_id
 | project device_id, latest_pct, site_id, location_lat, location_lon, last_service_date

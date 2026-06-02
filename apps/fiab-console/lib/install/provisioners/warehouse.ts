@@ -29,14 +29,85 @@ function splitBatches(sql: string): string[] {
     .filter((b) => b.length > 0);
 }
 
+interface SampleRowsEntry {
+  table: string;
+  columns?: string[];
+  rows: any[][];
+}
+
+/** Escape a single scalar into a safe T-SQL literal. mssql's request.query
+ * does not template our dynamically-shaped seed matrix, so we hand-build the
+ * VALUES clause with strict per-value escaping: strings are single-quoted
+ * with doubled quotes (N'…' for Unicode safety), numbers/bools/null are
+ * emitted verbatim, everything else is JSON-stringified and quoted. There is
+ * no string concatenation of caller input outside this escaper. */
+function sqlLiteral(v: any): string {
+  if (v === null || v === undefined) return 'NULL';
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return 'NULL';
+    return String(v);
+  }
+  if (typeof v === 'boolean') return v ? '1' : '0';
+  if (v instanceof Date) return `'${v.toISOString().replace(/'/g, "''")}'`;
+  const s = typeof v === 'string' ? v : JSON.stringify(v);
+  return `N'${s.replace(/'/g, "''")}'`;
+}
+
+/** Quote a SQL identifier (table / column) defensively. */
+function quoteIdent(name: string): string {
+  return `[${String(name).replace(/]/g, ']]')}]`;
+}
+
+/**
+ * Seed the bundle's sampleRows into their tables over the same Synapse TDS
+ * target the DDL ran on. Each table is inserted as one multi-row INSERT
+ * (capped to keep the statement small), then verified with SELECT COUNT(*).
+ * Returns log lines; never throws — seed failures degrade to a step note so
+ * the install still completes with the schema in place.
+ */
+async function seedSampleRows(
+  target: SynapseTarget,
+  sampleRows: SampleRowsEntry[],
+  steps: string[],
+): Promise<void> {
+  for (const entry of sampleRows) {
+    if (!entry?.table || !Array.isArray(entry.rows) || entry.rows.length === 0) continue;
+    const table = quoteIdent(entry.table);
+    const colClause =
+      Array.isArray(entry.columns) && entry.columns.length > 0
+        ? ` (${entry.columns.map(quoteIdent).join(', ')})`
+        : '';
+    const valuesClause = entry.rows
+      .map((row) => `(${row.map(sqlLiteral).join(', ')})`)
+      .join(',\n  ');
+    const insertSql = `INSERT INTO ${table}${colClause} VALUES\n  ${valuesClause};`;
+    try {
+      await synapseExec(target, insertSql);
+      steps.push(`Seeded ${entry.rows.length} row(s) into ${entry.table}.`);
+    } catch (e: any) {
+      steps.push(`Failed to seed ${entry.table}: ${e?.message || String(e)}`);
+      continue;
+    }
+    // Verify the rows actually landed.
+    try {
+      const res = await synapseExec(target, `SELECT COUNT(*) AS n FROM ${table};`);
+      const n = res.rows?.[0]?.[0];
+      steps.push(`Verified ${entry.table}: ${n ?? '?'} row(s) present.`);
+    } catch (e: any) {
+      steps.push(`Could not verify ${entry.table} count: ${e?.message || String(e)}`);
+    }
+  }
+}
+
 export const warehouseProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
   const steps: string[] = [];
   const content = input.content as any;
   const ddl = typeof content?.ddl === 'string' ? content.ddl : '';
   const dbtModels: Array<{ layer: string; name: string; sql: string }> = Array.isArray(content?.dbtModels) ? content.dbtModels : [];
+  const sampleRows: SampleRowsEntry[] = Array.isArray(content?.sampleRows) ? content.sampleRows : [];
 
-  if (!ddl && dbtModels.length === 0) {
-    return { status: 'skipped', steps: ['No DDL or dbt models in bundle; nothing to provision.'] };
+  if (!ddl && dbtModels.length === 0 && sampleRows.length === 0) {
+    return { status: 'skipped', steps: ['No DDL, dbt models, or sample rows in bundle; nothing to provision.'] };
   }
 
   if (BACKEND === 'synapse-dedicated') {
@@ -78,6 +149,12 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
         }
         return { status: 'failed', error: msg, steps };
       }
+    }
+
+    // Seed sample rows BEFORE dbt views so gold/silver views over the base
+    // tables return non-empty result sets the moment the app opens.
+    if (sampleRows.length > 0) {
+      await seedSampleRows(target, sampleRows, steps);
     }
 
     for (const m of dbtModels) {
