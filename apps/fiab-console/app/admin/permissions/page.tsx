@@ -29,7 +29,7 @@ const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
   layout: {
     display: 'grid',
-    gridTemplateColumns: '320px 1fr',
+    gridTemplateColumns: '320px minmax(0, 1fr)',
     minHeight: '600px',
     gap: tokens.spacingHorizontalL,
     alignItems: 'start',

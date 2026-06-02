@@ -44,9 +44,16 @@ interface MeResponse {
 const useStyles = makeStyles({
   root: {
     display: 'grid',
-    gridTemplateColumns: 'var(--loom-nav-width) 1fr',
+    // minmax(0, 1fr) (NOT 1fr) lets the content track shrink below its
+    // min-content width — without it a wide table/grid expands the whole
+    // layout past the viewport and the page (not the content) scrolls
+    // horizontally. With minmax(0,1fr) the content's own `overflow:auto`
+    // scrolls internally and the app stays within the browser width.
+    gridTemplateColumns: 'var(--loom-nav-width) minmax(0, 1fr)',
     gridTemplateRows: 'var(--loom-topbar-height) 1fr',
     height: '100vh',
+    maxWidth: '100vw',
+    overflow: 'hidden',
     backgroundColor: 'var(--loom-app-bg)',
   },
   topbar: {
@@ -103,6 +110,9 @@ const useStyles = makeStyles({
   main: {
     gridColumn: '2', gridRow: '2',
     overflow: 'auto',
+    // Grid items default to min-width:auto; 0 lets the content scroll its own
+    // overflow instead of widening the track past the viewport.
+    minWidth: 0,
     // Tighter top padding so the page header sits closer to the topbar
     // (less wasted vertical real estate).
     padding: 'var(--loom-space-3) var(--loom-space-5) var(--loom-space-5)',
