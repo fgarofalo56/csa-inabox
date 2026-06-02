@@ -18,6 +18,7 @@ import {
 import { Search24Regular, Save24Regular, ArrowReset24Regular, Open16Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section } from '@/lib/components/ui/section';
+import { CopilotAgentsConfig } from '@/lib/components/admin/copilot-agents-config';
 
 interface ToggleDef {
   id: string;
@@ -243,6 +244,9 @@ export default function TenantSettingsPage() {
           Last updated: {new Date(meta.updatedAt).toLocaleString()}{meta.updatedBy ? ` · by ${meta.updatedBy}` : ''}
         </Caption1>
       )}
+
+      {/* Tenant-wide Copilot & Agents config (Foundry account + model deployments). */}
+      <CopilotAgentsConfig />
 
       {!groups && !loadError && <Spinner label="Loading settings…" />}
 
