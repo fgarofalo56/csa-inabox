@@ -7,7 +7,10 @@
  *
  *   - For unity-catalog: empty path → metastores; one segment (host) → catalogs
  *     in that metastore; two (host,catalog) → schemas; three → tables+volumes.
- *   - For onelake: empty path → workspaces; one segment (workspaceId) → items.
+ *   - For onelake: empty path → the user's Fabric workspaces (real
+ *     api.fabric.microsoft.com/v1/workspaces); one segment (workspaceId) →
+ *     that workspace's items (lakehouses, warehouses, semantic models,
+ *     reports, KQL DBs, notebooks, pipelines, …) via /workspaces/{id}/items.
  *   - For purview: empty path → business domains; one segment (domainId) → data
  *     products in that domain.
  *
@@ -56,13 +59,54 @@ export async function GET(req: NextRequest) {
         const metastores = await listAllMetastores();
         return NextResponse.json({
           ok: true,
-          nodes: metastores.map((m) => ({
-            id: m.workspace_hostname || m.metastore_id,
-            label: `${m.name} (${m.workspace_hostname})`,
-            kind: 'metastore',
-            hasChildren: !m.metastore_id.startsWith('ERROR_'),
-            meta: { metastore_id: m.metastore_id, region: m.region },
-          })),
+          nodes: metastores.map((m) => {
+            // listAllMetastores returns a synthetic row (id prefixed `ERROR_`)
+            // for any workspace it could reach the host of but not list the
+            // metastore on — almost always a 403 "User is not an account admin
+            // for Account." That happens because GET /metastores requires
+            // Databricks account-admin privileges, OR the workspace simply
+            // isn't attached to a Unity Catalog metastore yet. Render a clean
+            // gate node instead of leaking the raw REST error string into the
+            // tree; the rest of the tree (other workspaces) still renders.
+            if (m.metastore_id.startsWith('ERROR_')) {
+              const reason = m.name.replace(/^\((.*)\)$/, '$1');
+              const is403 = /\b403\b/.test(reason) || /account admin/i.test(reason);
+              return {
+                id: m.metastore_id,
+                label: m.workspace_hostname,
+                kind: 'gate',
+                hasChildren: false,
+                meta: {
+                  workspace_hostname: m.workspace_hostname,
+                  reason,
+                  title: is403
+                    ? 'Unity Catalog metastore not listable from this workspace'
+                    : 'Workspace unreachable',
+                  detail: is403
+                    ? `Listing Unity Catalog metastores requires Databricks account-admin privileges, and this workspace returned 403. Either (a) the Console UAMI is not a Databricks account admin, or (b) ${m.workspace_hostname} is not yet attached to a Unity Catalog metastore.`
+                    : `The workspace ${m.workspace_hostname} could not be reached: ${reason}`,
+                  remediation: is403
+                    ? [
+                        'In the Databricks account console (accounts.azuredatabricks.net) → User management, grant the Console UAMI the Account Admin role, OR',
+                        'Assign the UAMI as a metastore admin on the metastore (Catalog → metastore → Metastore Admin → Edit), OR',
+                        `Enable ${m.workspace_hostname} for Unity Catalog by attaching it to a metastore (Catalog → metastore → Workspaces → Assign to workspace).`,
+                      ]
+                    : [
+                        `Confirm LOOM_DATABRICKS_HOSTNAMES lists a reachable workspace and the Console UAMI can authenticate to it.`,
+                      ],
+                  learnMore:
+                    'https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/admin-privileges#account-admins',
+                },
+              };
+            }
+            return {
+              id: m.workspace_hostname || m.metastore_id,
+              label: `${m.name} (${m.workspace_hostname})`,
+              kind: 'metastore',
+              hasChildren: true,
+              meta: { metastore_id: m.metastore_id, region: m.region },
+            };
+          }),
         });
       }
       if (path.length === 1) {
@@ -115,13 +159,17 @@ export async function GET(req: NextRequest) {
     }
 
     if (source === 'onelake') {
+      // Real Fabric/OneLake catalog — the workspaces the Console UAMI can see
+      // (api.fabric.microsoft.com/v1/workspaces) and, on expand, every item in
+      // them (lakehouses, warehouses, semantic models, reports, KQL DBs,
+      // notebooks, pipelines, …). This is live tenant data, not a sample.
       if (path.length === 0) {
         const ws = await listOneLakeWorkspaces();
         return NextResponse.json({
           ok: true,
           nodes: ws.map((w) => ({
             id: w.id, label: w.displayName, kind: 'workspace', hasChildren: true,
-            meta: { description: w.description, capacityId: w.capacityId, type: w.type },
+            meta: { description: w.description, capacityId: w.capacityId, type: w.type, source: 'fabric-onelake' },
           })),
         });
       }
@@ -129,9 +177,15 @@ export async function GET(req: NextRequest) {
         const items = await listWorkspaceItems(path[0]);
         return NextResponse.json({
           ok: true,
+          // Normalize Fabric item types to a stable, lower-case node `kind` so
+          // the tree can pick a per-type icon; keep the original Fabric type in
+          // meta.type for the label suffix and the detail page.
           nodes: items.map((it) => ({
-            id: it.id, label: it.displayName, kind: it.type || 'item', hasChildren: false,
-            meta: { description: it.description, type: it.type, workspaceId: path[0] },
+            id: it.id,
+            label: it.displayName,
+            kind: (it.type || 'item').toLowerCase(),
+            hasChildren: false,
+            meta: { description: it.description, type: it.type || 'Item', workspaceId: path[0], source: 'fabric-onelake' },
           })),
         });
       }
