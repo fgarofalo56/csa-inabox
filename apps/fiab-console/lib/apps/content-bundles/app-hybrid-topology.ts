@@ -196,31 +196,43 @@ GO
 
 ALTER TABLE hybrid.DataMovement
     ADD CONSTRAINT pk_movement PRIMARY KEY NONCLUSTERED (movement_id) NOT ENFORCED;
-GO
-
--- Seed: the doc's "What lives where" table, verbatim, as placement policy.
-INSERT INTO hybrid.WorkloadPlacement
-    (workload_id, workload_name, data_class, cloud, platform, boundary, rationale, cross_cloud_b2b)
-VALUES
- ('wp-public-ref','Public reference datasets (NOAA / Census)','Public','Commercial','Fabric',NULL,'Non-classified public data fits Fabric Commercial naturally.',1),
- ('wp-xagency-metrics','Cross-agency aggregate metrics','Public','Commercial','Fabric',NULL,'Aggregate, non-classified; exec + cross-agency analytics.',1),
- ('wp-exec-pbi','Exec Power BI dashboards (M365 commercial identity)','Public','Commercial','Fabric',NULL,'Bound to M365 Commercial identity; BYO-license does not cross clouds.',1),
- ('wp-demo-train','Demo / training environments','Public','Commercial','Fabric',NULL,'Throwaway, non-mission; cheapest in Commercial SaaS.',1),
- ('wp-mission-cui','Mission CUI data','CUI','Gov','Loom','IL4','CUI requires the Gov boundary; stays in the Loom DLZ.',1),
- ('wp-agency-classified','Agency-internal classified analytics','CUI-NSS','Gov','Loom','IL5','Classified analytics on a National Security System.',1),
- ('wp-itar','ITAR-eligible workloads','ITAR','Gov','Loom','GCC-H','GCC-H specifically; cross-cloud B2B DISABLED for this DLZ.',0),
- ('wp-hhs-cui','HHS / VHA clinical CUI','PHI','Gov','Loom','IL4','HIPAA-aligned clinical CUI; Gov-only.',1);
-GO
-
--- Seed: customer-initiated movements (the doc's worked patterns).
-INSERT INTO hybrid.DataMovement
-    (movement_id, direction, dataset_name, data_class, method, requested_by, approved_by, status, bytes_moved, attestation_hash, requested_at, moved_at)
-VALUES
- ('mv-0001','Commercial->Gov','NOAA station normals 1991-2020','Public','azcopy','analyst-gov@contoso.gov','data-owner-gov@contoso.gov','attested',734003200,'b7c9...e21a','2026-05-18T13:00:00','2026-05-18T13:42:00'),
- ('mv-0002','Commercial->Gov','Census ACS 5-year tract aggregates','Public','azcopy','analyst-gov@contoso.gov','data-owner-gov@contoso.gov','attested',1288490188,'4f1d...9ac3','2026-05-22T09:10:00','2026-05-22T09:55:00'),
- ('mv-0003','Gov->Commercial','Non-classified program KPI rollup (Q1)','Public','manual-export','reporter-gov@contoso.gov','dept-cdo@contoso.gov','approved',NULL,NULL,'2026-05-29T15:20:00',NULL),
- ('mv-0004','Commercial->Gov','Live mission feed (BLOCKED)','CUI','apim-broker','analyst-gov@contoso.gov',NULL,'denied',NULL,NULL,'2026-05-30T08:05:00',NULL);
 GO`;
+
+// ─── Warehouse seed rows (structured) ───────────────────────────────────
+// Synapse dedicated SQL pool rejects the multi-row table value constructor
+// (INSERT … VALUES (..),(..) → "Incorrect syntax near ','"; Microsoft Learn:
+// "Table value constructor is not supported in Azure Synapse Analytics").
+// The raw embedded INSERTs that used to live in WAREHOUSE_DDL are moved here
+// into the structured sampleRows mechanism so warehouse.ts emits a
+// backend-correct seed + COUNT verify, and skips already-seeded tables on
+// re-install (idempotent).
+//   https://learn.microsoft.com/sql/t-sql/statements/insert-transact-sql#arguments
+const WAREHOUSE_SAMPLE_ROWS: { table: string; columns?: string[]; rows: any[][] }[] = [
+  {
+    table: 'hybrid.WorkloadPlacement',
+    columns: ['workload_id', 'workload_name', 'data_class', 'cloud', 'platform', 'boundary', 'rationale', 'cross_cloud_b2b'],
+    rows: [
+      ['wp-public-ref', 'Public reference datasets (NOAA / Census)', 'Public', 'Commercial', 'Fabric', null, 'Non-classified public data fits Fabric Commercial naturally.', 1],
+      ['wp-xagency-metrics', 'Cross-agency aggregate metrics', 'Public', 'Commercial', 'Fabric', null, 'Aggregate, non-classified; exec + cross-agency analytics.', 1],
+      ['wp-exec-pbi', 'Exec Power BI dashboards (M365 commercial identity)', 'Public', 'Commercial', 'Fabric', null, 'Bound to M365 Commercial identity; BYO-license does not cross clouds.', 1],
+      ['wp-demo-train', 'Demo / training environments', 'Public', 'Commercial', 'Fabric', null, 'Throwaway, non-mission; cheapest in Commercial SaaS.', 1],
+      ['wp-mission-cui', 'Mission CUI data', 'CUI', 'Gov', 'Loom', 'IL4', 'CUI requires the Gov boundary; stays in the Loom DLZ.', 1],
+      ['wp-agency-classified', 'Agency-internal classified analytics', 'CUI-NSS', 'Gov', 'Loom', 'IL5', 'Classified analytics on a National Security System.', 1],
+      ['wp-itar', 'ITAR-eligible workloads', 'ITAR', 'Gov', 'Loom', 'GCC-H', 'GCC-H specifically; cross-cloud B2B DISABLED for this DLZ.', 0],
+      ['wp-hhs-cui', 'HHS / VHA clinical CUI', 'PHI', 'Gov', 'Loom', 'IL4', 'HIPAA-aligned clinical CUI; Gov-only.', 1],
+    ],
+  },
+  {
+    table: 'hybrid.DataMovement',
+    columns: ['movement_id', 'direction', 'dataset_name', 'data_class', 'method', 'requested_by', 'approved_by', 'status', 'bytes_moved', 'attestation_hash', 'requested_at', 'moved_at'],
+    rows: [
+      ['mv-0001', 'Commercial->Gov', 'NOAA station normals 1991-2020', 'Public', 'azcopy', 'analyst-gov@contoso.gov', 'data-owner-gov@contoso.gov', 'attested', 734003200, 'b7c9...e21a', '2026-05-18T13:00:00', '2026-05-18T13:42:00'],
+      ['mv-0002', 'Commercial->Gov', 'Census ACS 5-year tract aggregates', 'Public', 'azcopy', 'analyst-gov@contoso.gov', 'data-owner-gov@contoso.gov', 'attested', 1288490188, '4f1d...9ac3', '2026-05-22T09:10:00', '2026-05-22T09:55:00'],
+      ['mv-0003', 'Gov->Commercial', 'Non-classified program KPI rollup (Q1)', 'Public', 'manual-export', 'reporter-gov@contoso.gov', 'dept-cdo@contoso.gov', 'approved', null, null, '2026-05-29T15:20:00', null],
+      ['mv-0004', 'Commercial->Gov', 'Live mission feed (BLOCKED)', 'CUI', 'apim-broker', 'analyst-gov@contoso.gov', null, 'denied', null, null, '2026-05-30T08:05:00', null],
+    ],
+  },
+];
 
 const WH_Q_PLACEMENT = `-- The "what lives where" routing policy, ordered by cloud + classification.
 SELECT workload_name, data_class, cloud, platform, boundary,
@@ -566,6 +578,7 @@ const bundle: AppBundle = {
       content: {
         kind: 'warehouse',
         ddl: WAREHOUSE_DDL,
+        sampleRows: WAREHOUSE_SAMPLE_ROWS,
         starterQueries: [
           { name: 'What lives where (placement policy)', sql: WH_Q_PLACEMENT },
           { name: 'Pending / unattested movements', sql: WH_Q_PENDING_MOVES },

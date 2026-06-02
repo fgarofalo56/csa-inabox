@@ -1,6 +1,32 @@
 /**
  * Phase 2 — Lakehouse provisioner.
  *
+ * Two backends, picked at runtime:
+ *
+ *   A) Fabric (a Fabric workspace IS bound)
+ *      Real REST: Fabric POST /v1/workspaces/{ws}/lakehouses to create the
+ *      lakehouse item.  The bundle's deltaTables[].sampleRows are SEEDED
+ *      into real Delta tables at install time (see Fabric block below).
+ *
+ *   B) Azure-native DLZ ADLS (no Fabric workspace bound — the default for an
+ *      Azure-native Loom).  Loom has its own internal Data Landing Zone
+ *      ADLS Gen2 (the bronze/silver/gold/landing containers behind
+ *      LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL).  We materialise the lakehouse
+ *      there using the SAME UAMI + adls-client used by every other editor:
+ *        1. Create each LakehouseContent.folders[].path as a real directory.
+ *        2. For each deltaTables[] entry, create a Tables/<name>/ directory
+ *           and write its sampleRows as a REAL header CSV file
+ *           (Tables/<name>/<name>.csv) via ADLS Gen2 PUT — so the lakehouse
+ *           is browsable AND seeded the moment the app opens.
+ *        3. If LOOM_SYNAPSE_WORKSPACE is set, ALSO register each seeded table
+ *           as a Synapse serverless OPENROWSET external VIEW so it is
+ *           queryable as `SELECT * FROM <name>` over the freshly written CSV.
+ *      Returns status:'created' on Azure-native success.
+ *
+ * Only honest-gate (status:'remediation') when NEITHER a Fabric workspace
+ * NOR the internal DLZ ADLS is available — naming the exact env var to set.
+ *
+ * --- Fabric backend detail ---------------------------------------------------
  * Real REST: Fabric POST /v1/workspaces/{ws}/lakehouses to create the
  * lakehouse item.  The bundle's deltaTables[].sampleRows are SEEDED into
  * real Delta tables at install time:
@@ -37,6 +63,15 @@
 import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import type { Provisioner, ProvisionResult } from './types';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
+import {
+  KNOWN_CONTAINERS,
+  createDirectory as adlsCreateDirectory,
+  listContainers as adlsListContainers,
+  uploadFile as adlsUploadFile,
+  pathToHttpsUrl,
+  type KnownContainer,
+} from '@/lib/azure/adls-client';
+import { executeQuery as synapseExec, serverlessTarget } from '@/lib/azure/synapse-sql-client';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
@@ -263,19 +298,232 @@ async function fabricCall(path: string, method: 'GET' | 'POST', body?: unknown):
   return { status: res.status, body: json ?? text, location: res.headers.get('location') || undefined };
 }
 
+/** Sanitise a bundle folder/table path to a safe ADLS relative path (no
+ * leading/trailing slashes, no traversal, forward-slash separated). */
+function safeRelPath(p: string): string {
+  return String(p)
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((seg) => seg.trim())
+    .filter((seg) => seg && seg !== '.' && seg !== '..')
+    .join('/');
+}
+
+/**
+ * Azure-native DLZ fallback. Materialises the lakehouse in Loom's internal
+ * Data Landing Zone ADLS Gen2 using the SAME UAMI + adls-client every other
+ * editor uses. No Fabric required. Returns status:'created' on success, or an
+ * honest remediation gate when no DLZ ADLS is configured either.
+ */
+async function provisionAzureNative(
+  input: Parameters<Provisioner>[0],
+  steps: string[],
+): Promise<ProvisionResult> {
+  // Resolve the DLZ container to host this lakehouse. Prefer the explicit
+  // target.adlsContainer, else the first known container that actually exists
+  // (probed via the adls-client, which needs no account-list permission).
+  let container: KnownContainer | undefined =
+    (input.target.adlsContainer as KnownContainer | undefined) &&
+    (KNOWN_CONTAINERS as readonly string[]).includes(input.target.adlsContainer as string)
+      ? (input.target.adlsContainer as KnownContainer)
+      : undefined;
+
+  let available: { name: string }[] = [];
+  try {
+    available = await adlsListContainers();
+  } catch (e: any) {
+    steps.push(`Could not probe DLZ containers: ${e?.message || String(e)}`);
+  }
+
+  if (!container) {
+    // Prefer 'landing' (raw zone, natural home for a new lakehouse), else any
+    // container that exists.
+    const names = available.map((c) => c.name);
+    container =
+      (names.includes('landing') && 'landing') ||
+      (names.includes('bronze') && 'bronze') ||
+      (names[0] as KnownContainer | undefined) ||
+      undefined;
+  }
+
+  if (!container) {
+    // Neither Fabric nor any internal DLZ ADLS is available — honest gate.
+    return {
+      status: 'remediation',
+      gate: {
+        reason:
+          'No bound Fabric workspace AND no internal DLZ ADLS configured — cannot materialise a lakehouse.',
+        remediation:
+          'Either bind a Fabric workspace via /admin/workspaces > Bind capacity, OR configure the internal Data Landing Zone by setting LOOM_LANDING_URL (and/or LOOM_BRONZE_URL / LOOM_SILVER_URL / LOOM_GOLD_URL) to the DLZ ADLS Gen2 container URLs the DLZ Bicep deploy emits.',
+        link: '/admin/workspaces',
+      },
+      steps,
+    };
+  }
+  steps.push(`Azure-native DLZ backend: container '${container}'.`);
+
+  const content = input.content as any;
+  const folders: Array<{ path: string; description?: string }> = Array.isArray(content?.folders)
+    ? content.folders
+    : [];
+  const deltaTables: Array<{ name: string; ddl?: string; sampleRows?: any[][] }> = Array.isArray(
+    content?.deltaTables,
+  )
+    ? content.deltaTables
+    : [];
+
+  // Root path for this lakehouse inside the container — keeps multiple
+  // installed lakehouses isolated and browsable side-by-side.
+  const root = `lakehouses/${safeRelPath(input.displayName) || input.cosmosItemId}`;
+
+  // 1. Create the lakehouse root + every declared folder as real directories.
+  try {
+    await adlsCreateDirectory(container, root);
+    steps.push(`Created lakehouse root directory ${container}/${root}.`);
+  } catch (e: any) {
+    const msg = e?.message || String(e);
+    if (e?.statusCode === 401 || e?.statusCode === 403) {
+      return {
+        status: 'remediation',
+        gate: {
+          reason: `ADLS ${e.statusCode}: not authorized to write to the DLZ container '${container}'.`,
+          remediation:
+            'Grant the Console managed identity (LOOM_UAMI_CLIENT_ID) the Storage Blob Data Contributor role on the DLZ storage account / container.',
+          link: 'https://learn.microsoft.com/azure/storage/blobs/assign-azure-role-data-access',
+        },
+        steps,
+      };
+    }
+    return { status: 'failed', error: `Create lakehouse root failed: ${msg}`, steps };
+  }
+
+  const createdFolders: string[] = [];
+  for (const f of folders) {
+    const rel = safeRelPath(f?.path || '');
+    if (!rel) continue;
+    const dir = `${root}/${rel}`;
+    try {
+      await adlsCreateDirectory(container, dir);
+      createdFolders.push(rel);
+      steps.push(`Created folder ${container}/${dir}.`);
+    } catch (e: any) {
+      steps.push(`Folder ${rel}: create failed ${e?.statusCode || ''} ${e?.message || String(e)}`);
+    }
+  }
+
+  // 2. Seed each deltaTable's sampleRows as a real CSV under Tables/<name>/.
+  //    The table folder is created even when there are no sampleRows so the
+  //    Tables/ tree is browsable; columns come from the DDL (array-of-array
+  //    sampleRows are aligned to those columns).
+  const seeded: string[] = [];
+  const emptyTables: string[] = [];
+  const externalViews: string[] = [];
+
+  // Synapse serverless target (optional) — only when LOOM_SYNAPSE_WORKSPACE set.
+  let synapse: ReturnType<typeof serverlessTarget> | null = null;
+  if (process.env.LOOM_SYNAPSE_WORKSPACE) {
+    try {
+      synapse = serverlessTarget('master');
+      steps.push(`Synapse serverless available (${synapse.server}); will register OPENROWSET views.`);
+    } catch (e: any) {
+      steps.push(`Synapse serverless not usable: ${e?.message || String(e)}`);
+      synapse = null;
+    }
+  }
+
+  for (const t of deltaTables) {
+    const tName = safeRelPath(t?.name || '');
+    if (!tName) continue;
+    const tableDir = `${root}/Tables/${tName}`;
+    try {
+      await adlsCreateDirectory(container, tableDir);
+    } catch (e: any) {
+      steps.push(`Table ${tName}: directory create failed ${e?.message || String(e)}`);
+      continue;
+    }
+
+    const rows = Array.isArray(t.sampleRows) ? t.sampleRows : [];
+    if (rows.length === 0) {
+      emptyTables.push(tName);
+      steps.push(`Table ${tName}: no sampleRows in bundle; created empty Tables/${tName}/.`);
+      continue;
+    }
+    const columns = t.ddl ? columnsFromDdl(t.ddl) : [];
+    if (columns.length === 0) {
+      steps.push(`Table ${tName}: could not derive columns from DDL; created empty Tables/${tName}/.`);
+      emptyTables.push(tName);
+      continue;
+    }
+
+    const csv = buildCsv(columns, rows);
+    const csvPath = `${tableDir}/${tName}.csv`;
+    try {
+      await adlsUploadFile(container, csvPath, Buffer.from(csv, 'utf-8'), 'text/csv');
+      seeded.push(tName);
+      steps.push(`Table ${tName}: wrote ${rows.length}-row seed CSV to ${container}/${csvPath}.`);
+    } catch (e: any) {
+      steps.push(`Table ${tName}: seed CSV write failed ${e?.statusCode || ''} ${e?.message || String(e)}`);
+      continue;
+    }
+
+    // 3. Optionally register a Synapse serverless OPENROWSET external view so
+    //    the seeded CSV is queryable as `SELECT * FROM lakehouse.<view>`.
+    //    Mirrors the proven pattern in lib/azure/shortcut-engines.ts: a view in
+    //    serverless 'master' under a dedicated schema, built via EXEC('CREATE
+    //    VIEW …') with doubled single-quotes inside the EXEC string. The BULK
+    //    arg is the https DFS endpoint (Synapse OPENROWSET takes https, not
+    //    abfss). Idempotent: DROP-if-exists then CREATE so re-install upserts.
+    if (synapse) {
+      const httpsUrl = pathToHttpsUrl(container, csvPath);
+      const viewLeaf = `${tName}`.replace(/[^A-Za-z0-9_]/g, '_');
+      const obj = `lakehouse.${viewLeaf}`;
+      // Doubled single-quotes for the inner EXEC string literal.
+      const urlLiteral = httpsUrl.replace(/'/g, "''");
+      const ddl =
+        `IF SCHEMA_ID('lakehouse') IS NULL EXEC('CREATE SCHEMA lakehouse');\n` +
+        `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
+        `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${urlLiteral}'', ` +
+        `FORMAT = ''CSV'', PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE) AS r');`;
+      try {
+        await synapseExec(synapse, ddl);
+        externalViews.push(obj);
+        steps.push(`Table ${tName}: registered Synapse serverless view ${obj} over the seed CSV.`);
+      } catch (e: any) {
+        steps.push(`Table ${tName}: OPENROWSET view register failed: ${e?.message || String(e)}`);
+      }
+    }
+  }
+
+  steps.push(
+    `Azure-native lakehouse materialised in ${container}/${root}: ${createdFolders.length} folder(s), ` +
+      `${deltaTables.length} table folder(s) (${seeded.length} seeded, ${emptyTables.length} empty)` +
+      `${externalViews.length ? `, ${externalViews.length} Synapse view(s)` : ''}.`,
+  );
+
+  return {
+    status: 'created',
+    resourceId: `${container}/${root}`,
+    secondaryIds: {
+      backend: 'azure-native-adls',
+      container,
+      rootPath: root,
+      ...(createdFolders.length ? { folders: createdFolders.join(',') } : {}),
+      ...(seeded.length ? { seededTables: seeded.join(',') } : {}),
+      ...(emptyTables.length ? { emptyTables: emptyTables.join(',') } : {}),
+      ...(externalViews.length ? { synapseViews: externalViews.join(',') } : {}),
+    },
+    steps,
+  };
+}
+
 export const lakehouseProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
   const steps: string[] = [];
   const ws = input.target.fabricWorkspaceId;
   if (!ws) {
-    return {
-      status: 'remediation',
-      gate: {
-        reason: 'No bound Fabric workspace for this Loom workspace.',
-        remediation:
-          'Bind a Fabric workspace via /admin/workspaces > Bind capacity, OR set LOOM_DEFAULT_FABRIC_WORKSPACE.',
-        link: '/admin/workspaces',
-      },
-    };
+    // Azure-native Loom: no Fabric workspace bound. Fall back to the internal
+    // DLZ ADLS so the lakehouse is still browsable + seeded with real data.
+    steps.push('No bound Fabric workspace; using Azure-native DLZ ADLS backend.');
+    return provisionAzureNative(input, steps);
   }
   steps.push(`Fabric workspace: ${ws}`);
 
