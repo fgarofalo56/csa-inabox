@@ -109,34 +109,71 @@ for (const appId of APP_IDS) {
     const created = steps.filter((s) => ['created', 'exists'].includes(s.result?.status || ''));
     const remediation = steps.filter((s) => s.result?.status === 'remediation');
 
-    // 6) open one created item's editor and confirm it renders (no crash)
-    let editorOk = true;
-    const firstCreated = installed.find((i) => i.id);
-    if (firstCreated?.id) {
+    // 6) DEEP: open EVERY installed item's editor in the browser and assert it
+    // is BUILT-OUT (not an empty placeholder). "Populated" = any strong signal:
+    // a Monaco editor (notebook/warehouse/kql/synapse), a React-Flow node
+    // (pipelines/eventstream/dataflow), >=2 data-grid/table rows
+    // (lakehouse/kql tables/semantic-model measures), OR substantial rendered
+    // text in the editor body. Plus a hard crash check.
+    const crashes: string[] = [];
+    const empties: string[] = [];
+    let opened = 0;
+    for (const it of installed.filter((i) => i.id)) {
       try {
-        await page.goto(`${BASE}/items/${firstCreated.itemType}/${firstCreated.id}`, { waitUntil: 'networkidle' });
-        await page.waitForTimeout(1200);
-        await page.screenshot({ path: path.join(SHOT_DIR, `${appId}-4-editor.png`), fullPage: true });
-        // crash check: a Next error boundary shows "Application error" / "something went wrong"
-        const crash = await page.getByText(/Application error|something went wrong|Unhandled/i).count();
-        editorOk = crash === 0;
-      } catch { editorOk = false; }
+        // Authoritative signal: the item's server content is non-empty (this
+        // avoids DOM-timing false negatives on heavy editors like big notebooks
+        // / KQL trees / dashboards). We check this FIRST via the detail/cosmos
+        // route, then still open the editor for a crash + screenshot check.
+        let serverBuiltOut = false;
+        for (const url of [`${BASE}/api/items/${it.itemType}/${it.id}?workspaceId=${wsId}`, `${BASE}/api/cosmos-items/${it.itemType}/${it.id}?workspaceId=${wsId}`]) {
+          try {
+            const jr = await page.request.get(url);
+            if (!jr.ok()) continue;
+            const j = await jr.json();
+            const d = j.definition || j.item || j;
+            const sc = (d.state && d.state.content) || d.content || {};
+            const n = (d.cells?.length || 0) + ((d.activities || d.properties?.activities || []).length || 0)
+              + (d.tables?.length || 0) + ((d.tiles || d.dashboard?.tiles || []).length || 0)
+              + ((d.fields || d.schema?.fields || []).length || 0) + (d.measures?.length || 0)
+              + (d.folders?.length || 0) + (d.okrs?.length || 0) + (d.nodes?.length || 0) + (d.datasets?.length || 0)
+              + (sc.cells?.length || 0) + (sc.activities?.length || 0) + (sc.tables?.length || 0) + (sc.tiles?.length || 0)
+              + (sc.definition ? Object.keys(sc.definition.actions || sc.definition.triggers || {}).length : 0);
+            if (n > 0 || (d.ddl && String(d.ddl).length > 10) || (sc.ddl && String(sc.ddl).length > 10)) { serverBuiltOut = true; break; }
+          } catch { /* try next url */ }
+        }
+        await page.goto(`${BASE}/items/${it.itemType}/${it.id}`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+        await page.waitForTimeout(3500);
+        if (await page.getByText(/Application error|something went wrong|Unhandled Runtime|client-side exception/i).count()) {
+          crashes.push(it.itemType); continue;
+        }
+        const monaco = await page.locator('.monaco-editor').count();
+        const rfNodes = await page.locator('.react-flow__node, [data-id][class*="node"]').count();
+        const rows = await page.locator('[role="row"], .fui-TableRow, tbody tr, .fui-TreeItem, [role="treeitem"]').count();
+        const bodyText = (await page.locator('main, [role="main"], body').first().innerText().catch(() => '')) || '';
+        const populated = serverBuiltOut || monaco > 0 || rfNodes > 0 || rows >= 2 || bodyText.replace(/\s+/g, ' ').trim().length > 600;
+        if (!populated) empties.push(it.itemType);
+        else opened++;
+        if (opened <= 4) await page.screenshot({ path: path.join(SHOT_DIR, `${appId}-item-${it.itemType}.png`) });
+      } catch (e: any) { crashes.push(`${it.itemType}(${(e?.message || 'nav').slice(0, 24)})`); }
     }
+    const builtOutOk = empties.length === 0 && crashes.length === 0;
 
-    const verdict = failed.length === 0 && installed.length > 0 && editorOk ? 'A'
-      : failed.length === 0 ? 'B' : 'D';
+    const verdict = failed.length === 0 && installed.length > 0 && builtOutOk ? 'A'
+      : (failed.length === 0 && empties.length === 0) ? 'B' : 'D';
     recordVerdict({
-      surface: `app:${appId}`, feature: 'ui-install+provision+seed+render',
-      verdict, status: failed.length === 0 && editorOk ? 'pass' : 'fail',
-      notes: `installed=${installed.length} created=${created.length} remediation=${remediation.length} failed=${failed.length} editorRenders=${editorOk}` +
-        (failed.length ? ` | FAILS: ${failed.map((f) => `${f.itemType}:${f.result?.error?.slice(0, 80)}`).join(' ; ')}` : ''),
+      surface: `app:${appId}`, feature: 'ui-install+open-every-object-builtout',
+      verdict, status: failed.length === 0 && builtOutOk ? 'pass' : 'fail',
+      notes: `installed=${installed.length} created=${created.length} remediation=${remediation.length} failed=${failed.length} openedBuiltOut=${opened} EMPTY=[${empties.join(',')}] CRASH=[${crashes.join(',')}]` +
+        (failed.length ? ` | PROV-FAILS: ${failed.map((f) => `${f.itemType}:${f.result?.error?.slice(0, 70)}`).join(' ; ')}` : ''),
       consoleErrors, networkErrors,
       durationMs: Date.now() - start,
     });
 
-    // The hard gate: nothing may provision as `failed`.
+    // Hard gates: no provision failures, items installed, and EVERY object opens built-out.
     expect(failed, `provision failures in ${appId}: ${failed.map((f) => f.itemType + ' ' + (f.result?.error || '')).join(' | ')}`).toHaveLength(0);
     expect(installed.length, `no items installed for ${appId}`).toBeGreaterThan(0);
+    expect(empties, `EMPTY objects in ${appId} (opened as placeholders, not built-out)`).toHaveLength(0);
+    expect(crashes, `CRASHED editors in ${appId}`).toHaveLength(0);
     await ctx.close();
   });
 }

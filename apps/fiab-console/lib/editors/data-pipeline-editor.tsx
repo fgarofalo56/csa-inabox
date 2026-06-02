@@ -217,6 +217,23 @@ export function DataPipelineEditor({ item, id }: Props) {
     } catch { /* keep last */ }
   }, []);
 
+  // Resolve THIS item's workspace + bind to its pipeline id from the route id,
+  // so a deep-linked / app-installed pipeline auto-loads its canvas instead of
+  // showing an empty "Select a workspace" state with the activities stranded in
+  // the bundle banner. Mirrors the notebook editor's wsId self-resolution.
+  useEffect(() => {
+    if (!id || id === 'new' || workspaceId) return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/data-pipeline/${encodeURIComponent(id)}`);
+        const j = await r.json().catch(() => ({}));
+        if (alive && j?.workspaceId) { setWorkspaceId(j.workspaceId); setPipelineId(id); }
+      } catch { /* fall back to manual workspace pick */ }
+    })();
+    return () => { alive = false; };
+  }, [id, workspaceId]);
+
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => {
     if (workspaceId && pipelineId) {
