@@ -26,7 +26,7 @@ export const DAB_SCHEMA_URL =
 /** The env var the emitted JSON references for the DB connection string. */
 export const DAB_CONNECTION_ENV = 'DATABASE_CONNECTION_STRING';
 
-export type DabDatabaseType = 'mssql' | 'postgresql' | 'mysql' | 'cosmosdb_nosql';
+export type DabDatabaseType = 'mssql' | 'dwsql' | 'postgresql' | 'mysql' | 'cosmosdb_nosql';
 export type DabSourceType = 'table' | 'view' | 'stored-procedure';
 export type DabAction = 'create' | 'read' | 'update' | 'delete' | 'execute' | '*';
 export type DabCardinality = 'one' | 'many';
@@ -39,15 +39,29 @@ export type DabAuthProvider =
   | 'Custom'
   | 'Simulator';
 
+/**
+ * Which Synapse SQL surface a `dwsql` source points at. Grounded in Learn:
+ * DAB's `dwsql` database-type supports the Synapse **Dedicated** SQL pool
+ * (tables/views/stored-procedures). The **Serverless** SQL pool is explicitly
+ * NOT supported by DAB
+ * (https://learn.microsoft.com/azure/data-api-builder/reference-database-specific-features#azure-synapse-analytics-dedicated-sql-pool
+ *  — "Serverless SQL pool isn't supported"). We still let the user point at the
+ * serverless endpoint to introspect objects for exploration, but the config is
+ * flagged non-deployable so we never claim parity we don't have.
+ */
+export type DabSynapseRole = 'dedicated' | 'serverless';
+
 /** A non-secret reference to a Loom data source, resolved server-side. */
 export interface DabSourceRef {
   kind: DabDatabaseType;
-  /** Server name / Cosmos account / PG flexible-server name. */
+  /** Server name / Cosmos account / PG flexible-server name / Synapse SQL FQDN. */
   server?: string;
-  /** Database name (or Cosmos database). */
+  /** Database name (or Cosmos database / Synapse dedicated pool name). */
   database?: string;
   /** Cosmos-only: the .gql schema the user supplied (schema-less backend). */
   graphqlSchema?: string;
+  /** `dwsql`-only: which Synapse SQL surface this points at. */
+  synapseRole?: DabSynapseRole;
 }
 
 /** Per-entity field metadata (DAB 2.0 `fields[]` — supersedes mappings + key-fields). */
@@ -330,6 +344,16 @@ export function validateDabConfig(cfg: DabConfig): DabValidationIssue[] {
       severity: 'error',
       path: 'data-source.options.schema',
       message: 'Cosmos DB NoSQL is schema-less; a GraphQL schema (.gql) is required for every Cosmos entity.',
+    });
+  }
+  // Synapse: dwsql supports the Dedicated SQL pool only. The Serverless SQL
+  // pool is explicitly unsupported by DAB (per Learn), so block deploy honestly.
+  if (cfg.sourceRef.kind === 'dwsql' && cfg.sourceRef.synapseRole === 'serverless') {
+    issues.push({
+      severity: 'error',
+      path: 'data-source.database-type',
+      message:
+        'Data API builder does not support the Synapse Serverless SQL pool. Use the Synapse Dedicated SQL pool (dwsql), or mirror the serverless-queried data into an Azure SQL Database / Dedicated pool and point DAB there.',
     });
   }
 

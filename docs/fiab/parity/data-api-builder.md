@@ -182,3 +182,44 @@ the gap is depth on a handful of advanced schema sections + a live runtime.
 - Live `pnpm uat` side-by-side: **pending** for the preview/publish loop (needs
   `LOOM_DAB_PREVIEW_URL`). The builder/validate/download path is exercisable now;
   confirm the runtime loop once provisioned per the no-scaffold rule.
+
+## Data-source kinds (2026-06 update)
+
+Grounded in Microsoft Learn
+([data-source](https://learn.microsoft.com/azure/data-api-builder/configuration/data-source),
+[feature-availability](https://learn.microsoft.com/azure/data-api-builder/feature-availability),
+[database-specific-features](https://learn.microsoft.com/azure/data-api-builder/reference-database-specific-features#azure-synapse-analytics-dedicated-sql-pool)).
+
+| Source kind (UI) | DAB `database-type` | Status | Notes |
+|---|---|---|---|
+| Azure SQL / SQL Server | `mssql` | built ✅ | `sys.*` introspection over TDS |
+| Azure Synapse — Dedicated SQL pool | `dwsql` | built ✅ | Real DAB support; tables/views/SPs; same `sys.*` introspection over the `<ws>.sql.azuresynapse.net` endpoint |
+| Azure Synapse — Serverless SQL | — | honest-gate ⚠️ | **DAB does NOT support serverless SQL pool.** Surfaced for object exploration (introspection works via `<ws>-ondemand…`), but the config validator emits a hard error so it can't be published. Alternative: dedicated pool, or mirror to Azure SQL |
+| Databricks SQL Warehouse | — | honest-gate ⚠️ | **DAB has NO Databricks connector.** MessageBar names the supported path (mirror Delta to Azure SQL / Synapse Dedicated, or use the Databricks SQL editor). Switching to mssql/dwsql continues the build |
+| PostgreSQL | `postgresql` | built ✅ | manual server/db entry + emit |
+| Cosmos DB NoSQL | `cosmosdb_nosql` | built ✅ | schema-less; `.gql` required |
+
+`LOOM_SYNAPSE_WORKSPACE` (and `LOOM_SYNAPSE_DEDICATED_POOL`) drive Synapse source
+discovery (`GET /api/dab/sources?kind=dwsql`). Serverless `database` resolves to
+`master`; dedicated resolves to the pool name. Both endpoints are typed +
+introspected via the existing `sql-objects-client` `sys.*` path — only the FQDN
+differs (`azure-sql-client.getPool` connects directly to a fully-qualified server).
+
+## Deploy a new data source
+
+`POST /api/dab/deploy-source` — the Data-source stage exposes a "Deploy a new
+data source" panel when no SQL/PostgreSQL/Cosmos is discoverable (or on demand).
+
+| Target | What runs | Real vs gated |
+|---|---|---|
+| Azure SQL Database | `createDatabase` (ARM PUT, GP_S serverless SKU, optional AdventureWorksLT sample) on an existing logical server | **Real** when `LOOM_SUBSCRIPTION_ID` + a logical server exist; else honest-gated to the deploy-planner sql knob |
+| Grant deploying user/group SQL admin | `setAadAdmin` (ARM PUT) — group object id if supplied, else the session `oid` | **Real** (gated only if the session has no `oid` and no group id) |
+| Console UAMI data-plane role | `CREATE USER … FROM EXTERNAL PROVIDER` + `db_datareader/db_datawriter` | **Honest-gated** — a one-time in-DB SQL action the new admin runs (named exactly, with `LOOM_UAMI_NAME`) |
+| Register in Purview | `registerDataSource` (PUT `/scan/datasources/{name}`, kind `AzureSqlDatabase`) | **Real** when `LOOM_PURVIEW_ACCOUNT` set; else honest-gated. Scan run is left to Admin → Purview → Scans |
+| Create Unity Catalog | `createUcCatalog` (POST `/api/2.1/unity-catalog/catalogs`) | **Real** when `LOOM_DATABRICKS_HOSTNAME` set; else honest-gated |
+| PostgreSQL / Cosmos | — | **Honest bicep handoff** — names `postgresEnabled` knob / core Cosmos + the `az deployment sub create` command + deploy-planner link. No fake create |
+
+On SQL success the new `{ kind: 'mssql', server, database }` is registered onto
+the editor's `sourceRef` so it's immediately usable as a DAB source; each
+registration/permission step is reported with a `done | gated | error | skipped`
+badge so nothing is claimed that didn't run.
