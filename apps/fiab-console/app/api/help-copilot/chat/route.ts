@@ -14,6 +14,7 @@ import {
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
 import { orchestrateHelp, newSessionId } from '@/lib/azure/help-copilot-orchestrator';
+import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,9 +33,16 @@ export async function POST(req: NextRequest) {
   }
   const sessionId = body.sessionId || newSessionId();
 
+  // Tenant admin-selected Copilot config (account + model deployments). The
+  // help agent prefers helpAgentDeployment; resolveAoaiTarget falls back to env.
+  const tenantConfig = await loadTenantCopilotConfig(session.claims.oid);
+  const helpCfg = tenantConfig
+    ? { ...tenantConfig, copilotChatDeployment: tenantConfig.helpAgentDeployment || tenantConfig.copilotChatDeployment }
+    : null;
+
   // Pre-flight: surface AOAI-missing as 503 so the widget can deep-link.
   try {
-    await resolveAoaiTarget();
+    await resolveAoaiTarget(helpCfg);
   } catch (e: any) {
     if (e instanceof NoAoaiDeploymentError) {
       return NextResponse.json({ ok: false, error: e.message, gate: 'aoai' }, { status: 503 });
@@ -52,7 +60,7 @@ export async function POST(req: NextRequest) {
       };
       send('session', { sessionId });
       try {
-        for await (const step of orchestrateHelp({ prompt, sessionId, userId })) {
+        for await (const step of orchestrateHelp({ prompt, sessionId, userId, tenantConfig })) {
           send('step', step);
           if (step.kind === 'final' || step.kind === 'error') break;
         }

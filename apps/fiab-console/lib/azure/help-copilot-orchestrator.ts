@@ -35,6 +35,7 @@ import {
   isSearchConfigured,
   type DocHit,
 } from './loom-docs-index';
+import type { TenantCopilotConfig } from '../types/copilot-config';
 
 // ---------- Credential (for AOAI scope) ----------
 
@@ -85,6 +86,9 @@ export interface HelpOrchestrateOptions {
   userId: string;
   /** Optional override; default 6 (tighter than the cross-item orchestrator) */
   maxIterations?: number;
+  /** Tenant admin-selected Copilot config. The help agent prefers
+   *  helpAgentDeployment, then copilotChatDeployment, then env. */
+  tenantConfig?: TenantCopilotConfig | null;
 }
 
 interface ChatMessage {
@@ -454,7 +458,16 @@ export async function* orchestrateHelp(opts: HelpOrchestrateOptions): AsyncItera
 
   let target: AoaiTarget;
   try {
-    target = await resolveAoaiTarget();
+    // The help agent prefers its own model deployment; map it onto the chat
+    // deployment field resolveAoaiTarget understands.
+    const cfg = opts.tenantConfig
+      ? {
+          ...opts.tenantConfig,
+          copilotChatDeployment:
+            opts.tenantConfig.helpAgentDeployment || opts.tenantConfig.copilotChatDeployment,
+        }
+      : null;
+    target = await resolveAoaiTarget(cfg);
   } catch (e: any) {
     yield {
       kind: 'error',
