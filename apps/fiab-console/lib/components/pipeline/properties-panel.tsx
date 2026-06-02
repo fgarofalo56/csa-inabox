@@ -38,11 +38,12 @@ const useStyles = makeStyles({
   // Bottom-dock layout (ADF Studio parity) — full width, fixed height,
   // header + horizontal tab strip + scrollable body.
   dockRoot: {
+    // Fills the resizable bottom dock (height is owned by the parent splitter
+    // pane); the body scrolls internally so section expand/collapse never grows
+    // the dock or resizes the canvas above it.
     display: 'flex', flexDirection: 'column',
-    width: '100%', height: 260,
+    width: '100%', height: '100%', minHeight: 0,
     backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
     overflow: 'hidden',
   },
   header: {
