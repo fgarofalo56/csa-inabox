@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { getPipeline, upsertPipeline, deletePipeline, type AdfPipeline } from '@/lib/azure/adf-client';
+import { pipelineDefinitionFromContent } from '@/lib/azure/pipeline-binding';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -26,10 +27,25 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'data-pipeline') return err('pipeline not found', 404);
-    const adfName = (resource.state as any)?.adfPipelineName;
+    const state = (resource.state as any) || {};
+    const adfName = state?.adfPipelineName;
     let definition: AdfPipeline | null = null;
     if (adfName) {
       try { definition = await getPipeline(adfName); } catch { /* ADF may not have it yet */ }
+    }
+    // Fallback for bundle-installed pipelines whose rich activity graph was
+    // stamped only into state.content (AdfPipelineContent / SynapsePipelineContent)
+    // and never pushed to the live ADF factory — surface it as the editor's
+    // expected ADF-pipeline JSON so the canvas opens FULLY BUILT-OUT (every
+    // activity + dependency + parameter) rather than an empty pipeline. A
+    // previously-saved state.definition takes precedence over the bundle content.
+    if (!definition) {
+      if (state?.definition?.properties) {
+        definition = state.definition as AdfPipeline;
+      } else {
+        const fromContent = pipelineDefinitionFromContent(state?.content, adfName);
+        if (fromContent) definition = fromContent as AdfPipeline;
+      }
     }
     return NextResponse.json({
       ok: true,

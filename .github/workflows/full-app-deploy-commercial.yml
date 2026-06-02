@@ -190,24 +190,32 @@ jobs:
           registry: ${{ needs.resolve.outputs.acr_login_server }}
           username: ${{ steps.acr_creds.outputs.user }}
           password: ${{ steps.acr_creds.outputs.pass }}
-      - name: Build + push
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.ctx }}
-          file: ${{ matrix.ctx }}/Dockerfile
-          push: true
-          tags: |
-            ${{ needs.resolve.outputs.acr_login_server }}/${{ matrix.app }}:${{ inputs.tag || 'v0.1' }}
-            ${{ needs.resolve.outputs.acr_login_server }}/${{ matrix.app }}:${{ github.sha }}
-            ${{ needs.resolve.outputs.acr_login_server }}/${{ matrix.app }}:latest
-          # Stamp the git SHA into the image so /build-marker.txt matches the
-          # tag loom-roll-and-validate probes (the Dockerfile defaults these to
-          # "unknown" — without this, validation fails + rolls every deploy back).
-          build-args: |
-            LOOM_BUILD_SHA=${{ github.sha }}
-            LOOM_BUILD_TIMESTAMP=${{ github.run_id }}
-          cache-from: type=gha,scope=${{ matrix.app }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+      # Build + push via buildx directly, wrapped in a retry loop. The slowest
+      # image (loom-console) pushes ~10+ min after open-acr ran, and the ACR
+      # firewall intermittently denies the runner's push IP ("client with IP
+      # '…' is not allowed access") — a transient that previously failed the
+      # whole deploy and required a manual `gh run rerun --failed`. Re-assert
+      # the ACR public-access rule from THIS runner and retry up to 3×. SHA is
+      # stamped so /build-marker.txt matches what loom-roll-and-validate probes.
+      - name: Build + push (ACR-flake retry)
+        shell: bash
+        run: |
+          ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
+          SERVER="${{ needs.resolve.outputs.acr_login_server }}"
+          APP="${{ matrix.app }}"; CTX="${{ matrix.ctx }}"; TAG="${{ inputs.tag || 'v0.1' }}"
+          build() {
+            docker buildx build "$CTX" --file "$CTX/Dockerfile" --push \
+              --tag "$SERVER/$APP:$TAG" --tag "$SERVER/$APP:${{ github.sha }}" --tag "$SERVER/$APP:latest" \
+              --build-arg "LOOM_BUILD_SHA=${{ github.sha }}" --build-arg "LOOM_BUILD_TIMESTAMP=${{ github.run_id }}" \
+              --cache-from "type=gha,scope=$APP" --cache-to "type=gha,mode=max,scope=$APP"
+          }
+          for attempt in 1 2 3; do
+            if build; then echo "✓ $APP pushed on attempt $attempt"; exit 0; fi
+            echo "::warning::$APP build+push attempt $attempt failed (likely ACR firewall flake) — re-warming ACR + retrying"
+            az acr update --name "$ACR_NAME" --public-network-enabled true --default-action Allow >/dev/null 2>&1 || true
+            sleep 30
+          done
+          echo "::error::$APP build+push failed after 3 attempts"; exit 1
 
   close-acr:
     name: Re-lock ACR (private endpoint only)

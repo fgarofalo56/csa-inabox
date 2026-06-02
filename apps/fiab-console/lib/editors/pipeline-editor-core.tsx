@@ -94,6 +94,10 @@ export function PipelineEditorCore({
   const [bound, setBound] = useState<string | null>(null);
   const [available, setAvailable] = useState<Array<{ name: string }>>([]);
   const [listError, setListError] = useState<string | null>(null);
+  // Preview graph for an UNBOUND bundle-installed item: the rich activity graph
+  // stamped into state.content, surfaced by the bind GET so the canvas renders
+  // FULLY BUILT-OUT (read-only) while the bind gate prompts to push it live.
+  const [preview, setPreview] = useState<any | null>(null);
   const [pickName, setPickName] = useState<string>('');     // bind-to-existing selection
   const [newName, setNewName] = useState<string>('');       // create-new input
   const [bindBusy, setBindBusy] = useState(false);
@@ -146,6 +150,7 @@ export function PipelineEditorCore({
       setBound(data.bound ?? null);
       setAvailable(Array.isArray(data.pipelines) ? data.pipelines : []);
       setListError(data.listError || null);
+      setPreview(data.preview ?? null);
       if (data.bound && !pickName) setPickName(data.bound);
     } catch (e: any) {
       setBindError(e?.message || String(e));
@@ -475,6 +480,29 @@ export function PipelineEditorCore({
           ) : !bound ? (
             <div className={s.gate}>
               {bindGate}
+              {preview && Array.isArray(preview?.properties?.activities) && preview.properties.activities.length > 0 && (
+                <div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                    <Subtitle2>Starter graph from this app</Subtitle2>
+                    <Badge appearance="outline">
+                      {preview.properties.activities.length} activit{preview.properties.activities.length === 1 ? 'y' : 'ies'}
+                    </Badge>
+                    <Badge appearance="filled" color="informative">Preview · read-only</Badge>
+                  </div>
+                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: 8 }}>
+                    This pipeline was installed from an app with a fully built-out activity graph
+                    (every activity, dependency, and parameter shown below). Bind it to a real
+                    {` ${config.containerLabel}`} pipeline above to push this graph live and enable
+                    Save / Run / Validate / Triggers.
+                  </Body1>
+                  <PipelineDesigner
+                    activities={extractActivities(JSON.stringify(preview)) as any}
+                    parameters={paramsFromSpec(preview as PipelineSpec)}
+                    variables={varsFromSpec(preview as PipelineSpec)}
+                    onActivitiesChange={() => { /* read-only until bound */ }}
+                  />
+                </div>
+              )}
               {isAdf && (
                 <div>
                   <Subtitle2>Select a Data Factory (any subscription)</Subtitle2>

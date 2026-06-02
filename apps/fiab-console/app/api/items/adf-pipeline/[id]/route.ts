@@ -12,7 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getPipeline, upsertPipeline, deletePipeline, type AdfPipeline } from '@/lib/azure/adf-client';
-import { resolveBinding, bindingErrorResponse } from '@/lib/azure/pipeline-binding';
+import { resolveBinding, bindingErrorResponse, pipelineDefinitionFromContent } from '@/lib/azure/pipeline-binding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,17 +23,32 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const { id } = await ctx.params;
-  let pipelineName: string;
+  let binding: Awaited<ReturnType<typeof resolveBinding>>;
   try {
-    ({ pipelineName } = await resolveBinding(id, ITEM_TYPE, session.claims.oid));
+    binding = await resolveBinding(id, ITEM_TYPE, session.claims.oid);
   } catch (e) {
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });
   }
+  const { pipelineName, item } = binding;
   try {
     const pipeline = await getPipeline(pipelineName);
     return NextResponse.json({ ok: true, pipeline, boundTo: pipelineName });
   } catch (e: any) {
+    // The item is bound but the live ADF pipeline can't be fetched yet (never
+    // pushed / RBAC-gated / factory not provisioned). Fall back to the bundle's
+    // stamped state.content so the canvas opens FULLY BUILT-OUT instead of
+    // empty. Save/Run still target the live factory via the bound name.
+    const fromContent = pipelineDefinitionFromContent(item.state?.content, pipelineName);
+    if (fromContent) {
+      return NextResponse.json({
+        ok: true,
+        pipeline: fromContent,
+        boundTo: pipelineName,
+        fromContent: true,
+        backendError: e?.message || String(e),
+      });
+    }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }

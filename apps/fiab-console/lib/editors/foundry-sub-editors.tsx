@@ -369,7 +369,12 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
 
   useEffect(() => { if (!isNew) setSelected(id); }, [id, isNew]);
 
-  const detailUrl = project && selected ? `/api/items/prompt-flow/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}` : null;
+  // Load the flow detail whenever a flow is selected. When a Foundry project is
+  // bound we pass it (live data-plane); when it isn't, we still request the
+  // route so a bundle-installed flow opens from its stamped content fallback.
+  const detailUrl = selected
+    ? `/api/items/prompt-flow/${encodeURIComponent(selected)}${project ? `?project=${encodeURIComponent(project)}` : ''}`
+    : null;
   const [detail] = useApi<{ flow: any }>(detailUrl, [project, selected]);
   useEffect(() => {
     if (detail.data?.flow && !dirty) {
@@ -562,7 +567,12 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
   const [list, reload] = useApi<{ evaluations: any[] }>(project ? `/api/items/evaluation?project=${encodeURIComponent(project)}` : null, [project]);
   const [selected, setSelected] = useState<string | null>(null);
   useEffect(() => { if (id !== 'new' && id !== 'create') setSelected(id); }, [id]);
-  const detailUrl = project && selected ? `/api/items/evaluation/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}&results=1` : null;
+  // Load the evaluation detail whenever one is selected. With a Foundry project
+  // bound we pass it (live results); without one we still request the route so a
+  // bundle-installed evaluation opens from its stamped metric definitions.
+  const detailUrl = selected
+    ? `/api/items/evaluation/${encodeURIComponent(selected)}${project ? `?project=${encodeURIComponent(project)}&results=1` : ''}`
+    : null;
   const [detail] = useApi<{ evaluation: any; results: any }>(detailUrl, [project, selected]);
 
   const [form, setForm] = useState({ displayName: '', datasetId: '', modelDeployment: '', evaluators: 'groundedness,relevance,fluency' });
@@ -1215,7 +1225,25 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
             <Subtitle2>Index: {idx.name}</Subtitle2>
             {idx.vectorSearch && <Badge color="brand">vector</Badge>}
             {idx.semantic && <Badge color="success">semantic</Badge>}
+            {(detail.data as any)?.source === 'bundle' && <Badge color="warning">bundle template</Badge>}
           </div>
+
+          {/* Bundle-installed index: the full schema renders below from the
+              stamped definition. It isn't bound to a real index on the service
+              yet — surface the honest bind picker so the operator can create +
+              bind it (PUT /indexes) and make search/stats/indexers live. */}
+          {(detail.data as any)?.source === 'bundle' && !navIndex && (
+            <>
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>Template — not yet bound to a live index</MessageBarTitle>
+                  This index opens from its installed bundle definition (schema + scoring profiles + vector config below).
+                  Create &amp; bind it to a real Azure AI Search index to enable Search, Statistics, and Indexers against live data.
+                </MessageBarBody>
+              </MessageBar>
+              <AiSearchBindPicker id={id} onBound={reloadDetail} />
+            </>
+          )}
 
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
             <Tab value="schema">Schema ({fields.length})</Tab>

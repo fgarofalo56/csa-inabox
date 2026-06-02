@@ -22,6 +22,7 @@ import {
   loadModelItem, persistModelBinding, readModelBindingFromState,
   modelBindingErrorResponse, ModelItemNotFoundError, ML_MODEL_ITEM_TYPE,
 } from '@/lib/azure/model-binding';
+import { mlModelContentFromItem } from '../../../_lib/ai-content-fallback';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,6 +67,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       models,
       workspacesError,
       modelsError,
+      // Bundle-installed ml-model: surface the stamped MlModelContent
+      // (algorithm + framework + hyperparameters + features + trainingCode) so
+      // the editor renders the full definition even before the model is
+      // registered/bound. Null for hand-created items.
+      content: mlModelContentFromItem(item),
     });
   } catch (e) {
     const { status, body } = modelBindingErrorResponse(e);

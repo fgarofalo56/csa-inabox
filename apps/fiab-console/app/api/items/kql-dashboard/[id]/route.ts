@@ -32,7 +32,42 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** Map a bundle `KqlDashboardContent` viz keyword to a sanitizer-valid TileViz. */
+function vizFromContent(v: unknown): string {
+  switch (v) {
+    case 'card': return 'stat';   // bundle "card" == single big-number KPI
+    case 'line': return 'line';
+    case 'bar': return 'bar';
+    case 'pie': return 'pie';
+    case 'table': return 'table';
+    default: return 'table';
+  }
+}
+
+/**
+ * Build the dashboard model from persisted state, falling back to the
+ * app-install starter content (`state.content`, a `KqlDashboardContent`)
+ * when no tiles have been authored/saved yet. This makes a bundle-installed
+ * Real-Time Dashboard open FULLY BUILT-OUT — every starter tile visible —
+ * instead of an empty canvas, even before the live Fabric/ADX object exists.
+ * Saving (PUT) then persists into `state.tiles`, which takes precedence here.
+ */
 function readModel(state: Record<string, any> | undefined) {
+  const hasSavedTiles = Array.isArray(state?.tiles) && state!.tiles.length > 0;
+  const content = state?.content;
+  if (!hasSavedTiles && content?.kind === 'kql-dashboard' && Array.isArray(content.tiles)) {
+    return sanitizeModel({
+      tiles: content.tiles.map((t: any) => ({
+        title: t?.title,
+        kql: t?.kql,
+        viz: vizFromContent(t?.viz),
+      })),
+      dataSources: state?.dataSources,
+      parameters: state?.parameters,
+      timeRange: state?.timeRange,
+      autoRefreshMs: state?.autoRefreshMs,
+    });
+  }
   return sanitizeModel({
     tiles: state?.tiles,
     dataSources: state?.dataSources,

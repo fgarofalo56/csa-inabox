@@ -1469,6 +1469,45 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
   }, [rootPath]);
   useEffect(() => { void loadClusters(); }, [loadClusters]);
 
+  // ---- Hydrate from the installed item's bundle cells ----
+  // A bundle-installed databricks-notebook has its NotebookContent cells
+  // stamped into Cosmos (state.cells, or state.content.cells when only the
+  // NotebookContent shape was written). The live-workspace tree on the left
+  // doesn't surface those, so on mount we open the item populated with every
+  // markdown + code cell instead of a single empty cell — the bundle content
+  // is no longer stranded. Once the user clicks a real workspace path the
+  // openNotebook flow takes over (export from the live Databricks workspace).
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/databricks-notebook/${encodeURIComponent(id)}`);
+        if (!r.ok) return;
+        const item = await r.json();
+        if (cancelled) return;
+        const st = (item?.state as any) || {};
+        const raw: any[] = (Array.isArray(st.cells) && st.cells.length > 0)
+          ? st.cells
+          : (st.content?.kind === 'notebook' && Array.isArray(st.content.cells) ? st.content.cells : []);
+        if (raw.length === 0) return;
+        const hydrated: NotebookCell[] = raw.map((c, i) => ({
+          id: typeof c?.id === 'string' && c.id ? c.id : `bundle-${i}`,
+          type: c?.type === 'markdown' ? 'markdown' : 'code',
+          lang: (c?.lang || c?.language || st.defaultLang || st.content?.defaultLang || 'python') as NotebookCell['lang'],
+          source: typeof c?.source === 'string' ? c.source : Array.isArray(c?.source) ? c.source.join('') : '',
+        }));
+        setCells(hydrated);
+        setBaseLanguage('PYTHON');
+        setOrigSerialized(serializeCells(hydrated, 'PYTHON'));
+        setActiveCellId(hydrated[0]?.id || null);
+        setFileMessage('Loaded notebook cells from the installed app bundle. Click a workspace notebook on the left to open the deployed copy.');
+      } catch { /* fall back to the empty starter cell */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   const toggle = useCallback((path: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -2505,6 +2544,34 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     setTriggerType('none'); setCron('0 0 2 * * ?'); setTz('UTC'); setPaused(false); setFileArrivalUrl('');
     setActiveTab('tasks'); setDirty(false);
   }, []);
+
+  // Bundle-installed job: seed the form from the item's stamped
+  // DatabricksJobContent (tasks + shared cluster) so it opens FULLY BUILT-OUT
+  // before any live Databricks job exists. The item GET route returns the
+  // editor-shaped { job, source:'bundle' } when no jobId is passed. The user
+  // then clicks Create to push it to the real workspace (jobs/create). Only
+  // runs once per item id, and never overrides a live-job selection or unsaved
+  // edits.
+  const [bundleSeeded, setBundleSeeded] = useState(false);
+  useEffect(() => {
+    if (id === 'new' || !id || bundleSeeded || jobId !== null || dirty) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch(`/api/items/databricks-job/${encodeURIComponent(id)}`);
+        const j = await r.json();
+        if (cancelled || !j.ok || j.source !== 'bundle' || !j.job?.settings) return;
+        const settings = j.job.settings;
+        setName(settings.name || '');
+        const ts = (settings.tasks || []).map(specToTask);
+        if (ts.length) { setTasks(ts); setActiveTaskKey(ts[0].task_key || 'main'); }
+        setMaxConcurrent(settings.max_concurrent_runs ?? 1);
+        setActiveTab('tasks');
+        setBundleSeeded(true);
+      } catch { /* best-effort seed; the live job list still works */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id, bundleSeeded, jobId, dirty]);
 
   const selectJob = useCallback(async (jid: number) => {
     setJobId(jid);

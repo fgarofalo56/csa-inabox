@@ -41,6 +41,13 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'notebook') return err('notebook not found', 404);
     const state = (resource.state as any) || {};
+    // Fallback for bundle-installed notebooks whose cells were stamped only
+    // into state.content (NotebookContent shape) and never into state.cells —
+    // surface them so the notebook opens populated rather than empty.
+    if ((!Array.isArray(state.cells) || state.cells.length === 0) && state.content?.kind === 'notebook' && Array.isArray(state.content.cells)) {
+      state.cells = state.content.cells;
+      if (!state.defaultLang && state.content.defaultLang) state.defaultLang = state.content.defaultLang;
+    }
     const migrated = migrateLegacyState(state);
     return NextResponse.json({
       ok: true,

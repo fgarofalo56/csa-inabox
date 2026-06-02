@@ -11,7 +11,7 @@
  * Backed by /api/loom/workspaces + /api/items/notebook/**.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
   Tree, TreeItem, TreeItemLayout, Select,
@@ -22,7 +22,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
-  History20Regular,
+  History20Regular, ArrowUpload20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -160,6 +160,9 @@ export function NotebookEditor({ item, id }: Props) {
   const [attachBusy, setAttachBusy] = useState(false);
   // Phase 3: History drawer
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Import-from-file (desktop .ipynb / .py / .sql / .scala / .r → Loom notebook)
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
 
   // Auto-pick first runnable compute (skip serverless SQL — not for notebooks)
   useEffect(() => {
@@ -417,6 +420,55 @@ export function NotebookEditor({ item, id }: Props) {
     } finally { setCreateBusy(false); }
   }, [workspaceId, createName, loadList]);
 
+  // Import a desktop notebook file (.ipynb / .py / .sql / .scala / .r) into
+  // the current workspace as a Loom notebook with every cell populated.
+  // Reads the file → base64 → POST /api/items/notebook/import → on success
+  // refresh the list and select the new notebook so loadDetail renders its
+  // cells immediately.
+  const importFile = useCallback(async (file: File) => {
+    if (!workspaceId) { setRunMsg('Select a workspace before importing.'); return; }
+    setImporting(true);
+    setRunMsg(`Importing ${file.name}…`);
+    try {
+      const buf = await file.arrayBuffer();
+      // ArrayBuffer → base64 without blowing the call stack on large files.
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      const CHUNK = 0x8000;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+      }
+      const contentBase64 = btoa(binary);
+      const r = await fetch('/api/items/notebook/import', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, filename: file.name, contentBase64 }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setDetailErr(j.error || 'import failed');
+        setRunMsg(`Import failed: ${j.error || 'unknown error'}`);
+        return;
+      }
+      setRunMsg(`Imported ${file.name} → ${j.cellCount} cell${j.cellCount === 1 ? '' : 's'} (${j.defaultLang}).`);
+      await loadList(workspaceId);
+      // Select the freshly-created notebook; loadDetail will populate cells.
+      if (j.id) setNotebookId(j.id);
+    } catch (e: any) {
+      setDetailErr(e?.message || String(e));
+      setRunMsg(`Import failed: ${e?.message || e}`);
+    } finally {
+      setImporting(false);
+    }
+  }, [workspaceId, loadList]);
+
+  const onImportFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset so picking the same file again re-fires change.
+    e.target.value = '';
+    if (file) importFile(file);
+  }, [importFile]);
+
   const del = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
     if (!confirm('Delete this notebook? This cannot be undone.')) return;
@@ -581,6 +633,7 @@ export function NotebookEditor({ item, id }: Props) {
         ]},
         { label: 'Item', actions: [
           { label: 'New notebook', onClick: workspaceId ? () => setCreateOpen(true) : undefined, disabled: !workspaceId },
+          { label: importing ? 'Importing…' : 'Import notebook', onClick: workspaceId && !importing ? () => fileInputRef.current?.click() : undefined, disabled: !workspaceId || importing },
           { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
           { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
         ]},
@@ -614,7 +667,7 @@ export function NotebookEditor({ item, id }: Props) {
       ]},
     ];
   }, [
-    cells, activeCellId, notebookId, running, dirty, saving, workspaceId, computeId,
+    cells, activeCellId, notebookId, running, dirty, saving, workspaceId, computeId, importing,
     run, save, del, loadList, insertCell, openAttach,
   ]);
 
@@ -696,6 +749,21 @@ export function NotebookEditor({ item, id }: Props) {
               </Select>
             </div>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            {/* Import a desktop notebook file directly into this workspace. */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".ipynb,.py,.sql,.scala,.r"
+              style={{ display: 'none' }}
+              onChange={onImportFileChange}
+            />
+            <Button
+              appearance="outline"
+              icon={<ArrowUpload20Regular />}
+              disabled={!workspaceId || importing}
+              title={!workspaceId ? 'Select a workspace first' : 'Import .ipynb / .py / .sql / .scala / .r from your computer'}
+              onClick={() => fileInputRef.current?.click()}
+            >{importing ? 'Importing…' : 'Import'}</Button>
             <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
               <DialogTrigger disableButtonEnhancement>
                 <Button appearance="outline" icon={<Add20Regular />} disabled={!workspaceId}>New</Button>

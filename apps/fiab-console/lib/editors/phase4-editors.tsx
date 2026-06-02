@@ -199,6 +199,10 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const [pickModel, setPickModel] = useState<string>('');
   const [bindBusy, setBindBusy] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
+  // Bundle-installed definition (algorithm + hyperparameters + features +
+  // training code) stamped on the Cosmos item. Rendered as a read-only panel
+  // so the model item opens fully built-out before it's registered/bound.
+  const [bundleContent, setBundleContent] = useState<any | null>(null);
 
   // ---- Loaded model ----
   const [loading, setLoading] = useState(false);
@@ -237,6 +241,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
       setModels(j.data?.models || []);
       setWsError(j.data?.workspacesError || null);
       setModelsError(j.data?.modelsError || null);
+      setBundleContent(j.data?.content || null);
     } catch (e: any) { setBindError(e?.message || String(e)); }
     finally { setBindLoading(false); }
   }, [apiBase]);
@@ -428,6 +433,53 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
       main={
         <div className={s.pad}>
           {bindLoading && <Spinner size="small" label="Loading binding…" labelPosition="after" />}
+
+          {/* Bundle definition — algorithm + hyperparameters + features +
+              training code stamped at install. Renders fully built-out whether
+              or not the model is registered/bound yet; Register/Bind/Deploy
+              still target the real Azure ML registry. */}
+          {!bindLoading && bundleContent && (
+            <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Subtitle2>Model definition</Subtitle2>
+                <Badge appearance="filled" color="brand">{bundleContent.algorithm}</Badge>
+                {bundleContent.framework && <Badge appearance="outline">{bundleContent.framework}</Badge>}
+                {bundleContent.target && <Badge appearance="tint">target: {bundleContent.target}</Badge>}
+                <Badge appearance="outline" color="warning">bundle template</Badge>
+              </div>
+              {bundleContent.hyperparameters && Object.keys(bundleContent.hyperparameters).length > 0 && (
+                <div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Hyperparameters</Caption1>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                    {Object.entries(bundleContent.hyperparameters).map(([k, v]) => (
+                      <Badge key={k} appearance="outline">{k}={String(v)}</Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {Array.isArray(bundleContent.features) && bundleContent.features.length > 0 && (
+                <div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Features ({bundleContent.features.length})</Caption1>
+                  <Table aria-label="Model features" size="small">
+                    <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell></TableRow></TableHeader>
+                    <TableBody>
+                      {bundleContent.features.map((f: any) => (
+                        <TableRow key={f.name}><TableCell><strong>{f.name}</strong></TableCell><TableCell>{f.type}</TableCell></TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+              {bundleContent.trainingCode && (
+                <div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Training code</Caption1>
+                  <div className={s.monaco} style={{ whiteSpace: 'pre', overflow: 'auto', maxHeight: 320 }}>
+                    {bundleContent.trainingCode}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Unbound — render the bind picker. Full surface still present. */}
           {!bindLoading && !bound?.modelName && bindPanel}
