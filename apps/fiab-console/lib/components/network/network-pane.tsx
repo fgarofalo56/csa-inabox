@@ -249,15 +249,11 @@ export function NetworkPane() {
           <code> privatelink.sql.azuresynapse.net</code> zones linked to the hub VNet.
         </Body1>
         <Divider style={{ margin: '12px 0' }} />
-        <Body1Strong style={{ display: 'block', marginBottom: 4 }}>Is this breaking the Synapse-backed Loom apps? No.</Body1Strong>
         <Body1 style={{ display: 'block' }}>
-          The console resolves those private FQDNs through the hub-linked zones, so it authors + runs Synapse
-          pipelines privately — Synapse REST calls succeed (you get artifact-level responses, not connection
-          timeouts). Pipeline issues seen in the app were artifact-commit problems (long-running PUT not awaited /
-          unresolved dataset references), not connectivity — fixed separately. “Synapse Link” (HTAP for
-          Cosmos/SQL/Dataverse) is unrelated; what matters here — <strong>Private Link</strong> — is already
-          configured. To reach Synapse Studio yourself, add the two <code>azuresynapse</code> entries from the hosts
-          block (or the conditional forwarders) and browse to <code>web.azuresynapse.net</code> on the VPN.
+          To reach Synapse Studio from your workstation, add the <code>azuresynapse</code> entries from the hosts
+          block above (or configure the conditional forwarders) while on the VPN, then browse to
+          <code> web.azuresynapse.net</code>. SQL tools (SSMS / <code>sqlcmd</code>) connect to the
+          <code> *.sql.azuresynapse.net</code> endpoint the same way.
         </Body1>
       </div>
 
