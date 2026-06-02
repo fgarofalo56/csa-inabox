@@ -46,6 +46,17 @@ export interface WarehouseContent {
   dbtProject?: string;
   dbtModels?: { layer: 'bronze' | 'silver' | 'gold'; name: string; sql: string }[];
   starterQueries?: { name: string; sql: string }[];
+  /**
+   * Optional seed data inserted after the DDL runs so warehouse-backed apps
+   * (casino-analytics, pipeline-designer, ml-pipeline) land 'seeded' rather
+   * than empty. Each entry targets one table created by `ddl`. `rows` is a
+   * matrix of literal values; when `columns` is omitted the INSERT lists all
+   * columns positionally, otherwise it uses the named column list so the
+   * row tuples can be a subset / reordering of the table schema.
+   * The warehouse provisioner escapes every value (string/number/bool/null)
+   * into a parameterized-style literal INSERT and verifies with a COUNT.
+   */
+  sampleRows?: { table: string; columns?: string[]; rows: any[][] }[];
 }
 
 export interface LakehouseContent {

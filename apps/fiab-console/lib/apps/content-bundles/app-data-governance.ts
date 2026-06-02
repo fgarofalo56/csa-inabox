@@ -312,7 +312,7 @@ const DQ_CELLS = [
 // ─── Bundle ─────────────────────────────────────────────────────────────────
 
 const bundle: AppBundle = {
-  appId: 'app-app-data-governance',
+  appId: 'app-data-governance',
   intro:
     '## App Data Governance\n\n' +
     'An end-to-end **Microsoft Purview Unified Catalog** governance workspace for ' +

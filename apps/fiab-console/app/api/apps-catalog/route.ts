@@ -9,6 +9,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { appsCatalogContainer } from '@/lib/azure/cosmos-client';
+import { listBundleIds, getBundle } from '@/lib/apps/content-bundles';
+import { CATALOG_META } from '@/lib/apps/content-bundles/catalog-meta';
 import crypto from 'node:crypto';
 
 export const runtime = 'nodejs';
@@ -75,6 +77,44 @@ export async function GET() {
       resources = refetched.resources;
     }
   }
+
+  // Registry-derived backstop: ensure EVERY registered content bundle is
+  // discoverable as a tenant catalog doc, regardless of whether the Cosmos
+  // GLOBAL seed has been (re-)run on the live account. id === bundle.appId so
+  // install → getBundle(appId) always resolves. Idempotent; only upserts the
+  // apps that are missing or stale (no items[]).
+  const byId = new Map(resources.map((r: any) => [r.id, r]));
+  const missing: any[] = [];
+  for (const appId of listBundleIds()) {
+    const meta = CATALOG_META[appId];
+    if (!meta) continue; // bundle without catalog metadata — skip (still installable directly)
+    const bundle = getBundle(appId);
+    const items = (bundle?.items || []).map((i) => ({ type: i.itemType, template: appId }));
+    const existing = byId.get(appId);
+    if (existing && Array.isArray(existing.items) && existing.items.length > 0) continue;
+    missing.push({
+      id: appId,
+      tenantId: s.claims.oid,
+      name: meta.name,
+      description: meta.description,
+      icon: meta.icon,
+      category: meta.category,
+      publisher: meta.publisher,
+      items,
+      installedBy: existing?.installedBy || [],
+      createdBy: existing?.createdBy || 'CSA',
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      seededFromRegistryAt: new Date().toISOString(),
+    });
+  }
+  if (missing.length > 0) {
+    for (const doc of missing) await c.items.upsert(doc).catch(() => {});
+    const refetched = await c.items
+      .query({ query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.name', parameters: [{ name: '@t', value: s.claims.oid }] })
+      .fetchAll();
+    resources = refetched.resources;
+  }
+
   return NextResponse.json({ ok: true, apps: resources });
 }
 

@@ -193,7 +193,7 @@ describe('aiSearchProvisioner', () => {
       cosmosItemId: 'c1',
       workspaceId: 'lw1',
       displayName: 'X',
-      content: { kind: 'ai-search-index', schema: { fields: [{ name: 'id', type: 'Edm.String' }] } },
+      content: { kind: 'ai-search-index', schema: { fields: [{ name: 'id', type: 'Edm.String', key: true }] } },
       appId: 'a',
     });
     expect(r.status).toBe('remediation');
@@ -276,17 +276,27 @@ describe('runProvisioning engine', () => {
   }, COLD_TRANSFORM_TIMEOUT_MS);
 
   it('reports partial when one provisioner remediates and another succeeds', async () => {
-    captureFetch([
-      // notebook: list (empty) + create OK
-      { status: 200, body: { value: [] } },
-      { status: 201, body: { id: 'nb-1', displayName: 'NB' } },
-      // ai-search: PUT 403 (remediation)
-      { status: 403, body: { error: { message: 'no' } } },
-    ]);
+    // The engine now provisions items CONCURRENTLY (bounded batches), so the
+    // notebook and ai-search provisioners interleave their fetches and a
+    // global call-index response queue is no longer deterministic. Route the
+    // mock by URL instead: Fabric notebook calls succeed, AI Search PUT 403s.
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const u = typeof url === 'string' ? url : (url as any).toString();
+      if (u.includes('search.windows.net')) {
+        return new Response(JSON.stringify({ error: { message: 'no' } }), { status: 403, headers: { 'content-type': 'application/json' } });
+      }
+      // Fabric notebook: list (empty) then create OK. Both surface as
+      // success — listing empty drives the create path which returns 201.
+      if (/\/notebooks(\?|$)/.test(u) && (init?.method ?? 'GET') === 'GET') {
+        return new Response(JSON.stringify({ value: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ id: 'nb-1', displayName: 'NB' }), { status: 201, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
     const { runProvisioning } = await import('../provisioning-engine');
     const r = await runProvisioning(baseSession, 'app-test', 'ws-1', [
       { itemType: 'notebook', id: 'i1', displayName: 'NB', content: { kind: 'notebook', defaultLang: 'pyspark', cells: [] } },
-      { itemType: 'ai-search-index', id: 'i2', displayName: 'IDX', content: { kind: 'ai-search-index', schema: { fields: [{ name: 'id', type: 'Edm.String' }] } } },
+      { itemType: 'ai-search-index', id: 'i2', displayName: 'IDX', content: { kind: 'ai-search-index', schema: { fields: [{ name: 'id', type: 'Edm.String', key: true }] } } },
     ], { deploy: true, mode: 'shared' });
     expect(r.outcome).toBe('partial');
     expect(r.steps[0].result.status).toBe('created');

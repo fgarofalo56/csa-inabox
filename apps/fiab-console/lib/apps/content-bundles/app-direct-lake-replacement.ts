@@ -498,7 +498,7 @@ const NB_GOLD_CELLS = [
 // ─── Bundle ─────────────────────────────────────────────────────────────────
 
 const bundle: AppBundle = {
-  appId: 'direct-lake-replacement',
+  appId: 'app-direct-lake-replacement',
   intro:
     '## Direct Lake-Replacement Pattern\n\n' +
     'Migrate off a legacy on-prem / third-party BI server to **Power BI ' +

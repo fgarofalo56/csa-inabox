@@ -533,7 +533,7 @@ const KQL_FN_STALLED = `// DLZ deployments that have been 'deploying' for longer
 // Activator alert + cockpit "at-risk onboardings" tile.
 .create-or-alter function stalled_deployments(SlaMinutes: long = 45) {
     DeploymentEvent
-    | summarize last_state = arg_max(event_time, event_type) by dlz_id, agency
+    | summarize arg_max(event_time, event_type) by dlz_id, agency
     | where event_type == 'deploying'
     | extend stalled_min = datetime_diff('minute', now(), event_time)
     | where stalled_min > SlaMinutes
@@ -568,11 +568,10 @@ SmokeTest
 | summarize
     runs = count(),
     passes = countif(passed == true),
-    last_run = max(run_utc),
-    last_result = arg_max(run_utc, passed)
+    (last_run, last_passed) = arg_max(run_utc, passed)
     by dlz_id, agency
 | extend pass_rate = round(100.0 * passes / runs, 1)
-| project dlz_id, agency, runs, pass_rate, last_run, last_passed = passed`;
+| project dlz_id, agency, runs, pass_rate, last_run, last_passed`;
 
 // ─── Data Pipeline: DLZ Provision + Validate ────────────────────────────
 
@@ -678,7 +677,7 @@ const PIPELINE_ACTIVITIES = [
 // ─── Semantic Model + Report measures ───────────────────────────────────
 
 const bundle: AppBundle = {
-  appId: 'multi-agency-onboarding',
+  appId: 'app-multi-agency-onboarding',
   intro:
     '# Multi-Agency Onboarding\n\n' +
     'The operational + governance analytics estate for onboarding additional ' +

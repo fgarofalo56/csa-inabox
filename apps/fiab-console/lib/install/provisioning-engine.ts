@@ -142,6 +142,54 @@ export interface RunProvisioningOpts {
   targetOverrides?: Partial<ProvisionTarget>;
 }
 
+/** Max number of items provisioned concurrently. Bounds the fan-out so a
+ * large app (10-12 items) finishes well under the gateway timeout without
+ * hammering the Fabric/ARM/AI-Search control planes (which throttle at 429).
+ * Each item still runs its own one-shot transient retry. */
+const PROVISION_CONCURRENCY = 6;
+
+/** Provision a single installed item. Pure per-item logic extracted from the
+ * old serial loop so it can run inside a bounded-concurrency pool. Never
+ * throws (runWithRetry → safeRun guarantee), so a rejected slot can never
+ * sink the whole batch. The per-item provisioner contract and the returned
+ * ProvisionStep shape are unchanged. */
+async function provisionOne(
+  it: { itemType: string; id?: string; displayName: string; content?: unknown },
+  session: ProvisionerInput['session'],
+  appId: string,
+  workspaceId: string,
+  target: ProvisionTarget,
+): Promise<ProvisionStep> {
+  const p = PROVISIONERS[it.itemType];
+  if (!p) {
+    return {
+      itemType: it.itemType,
+      displayName: it.displayName,
+      cosmosItemId: it.id || '',
+      result: { status: 'skipped', steps: [`No Phase-2 provisioner for itemType '${it.itemType}' (Cosmos-only).`] },
+    };
+  }
+  if (!it.id) {
+    return {
+      itemType: it.itemType,
+      displayName: it.displayName,
+      cosmosItemId: '',
+      result: { status: 'failed', error: 'Cosmos item not created; cannot provision.', steps: [] },
+    };
+  }
+  const input: ProvisionerInput = {
+    session,
+    target,
+    cosmosItemId: it.id,
+    workspaceId,
+    displayName: it.displayName,
+    content: it.content || {},
+    appId,
+  };
+  const result = await runWithRetry(p, input);
+  return { itemType: it.itemType, displayName: it.displayName, cosmosItemId: it.id, result };
+}
+
 /** Run provisioning across an installed app's Cosmos items.  Each
  * `installed[i]` is an item just created by createOwnedItem(). */
 export async function runProvisioning(
@@ -167,38 +215,21 @@ export async function runProvisioning(
     };
   }
 
-  const out: ProvisionStep[] = [];
-  for (const it of installed) {
-    const p = PROVISIONERS[it.itemType];
-    if (!p) {
-      out.push({
-        itemType: it.itemType,
-        displayName: it.displayName,
-        cosmosItemId: it.id || '',
-        result: { status: 'skipped', steps: [`No Phase-2 provisioner for itemType '${it.itemType}' (Cosmos-only).`] },
-      });
-      continue;
-    }
-    if (!it.id) {
-      out.push({
-        itemType: it.itemType,
-        displayName: it.displayName,
-        cosmosItemId: '',
-        result: { status: 'failed', error: 'Cosmos item not created; cannot provision.', steps: [] },
-      });
-      continue;
-    }
-    const input: ProvisionerInput = {
-      session,
-      target,
-      cosmosItemId: it.id,
-      workspaceId,
-      displayName: it.displayName,
-      content: it.content || {},
-      appId,
-    };
-    const result = await runWithRetry(p, input);
-    out.push({ itemType: it.itemType, displayName: it.displayName, cosmosItemId: it.id, result });
+  // Provision items CONCURRENTLY in bounded batches. Serial provisioning of a
+  // 10-12 item app blew the ~30s gateway timeout (504); fanning out
+  // PROVISION_CONCURRENCY at a time cuts wall-clock to roughly the slowest
+  // item per batch. Results are written back by their original index so the
+  // returned `steps` order is deterministic and identical to the input order
+  // regardless of which item finishes first.
+  const out: ProvisionStep[] = new Array(installed.length);
+  for (let start = 0; start < installed.length; start += PROVISION_CONCURRENCY) {
+    const batch = installed.slice(start, start + PROVISION_CONCURRENCY);
+    const settled = await Promise.all(
+      batch.map((it) => provisionOne(it, session, appId, workspaceId, target)),
+    );
+    settled.forEach((step, j) => {
+      out[start + j] = step;
+    });
   }
 
   // Aggregate outcome.
