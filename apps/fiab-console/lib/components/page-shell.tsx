@@ -61,7 +61,7 @@ const useStyles = makeStyles({
     flexShrink: 0,
     marginLeft: 'auto',
   },
-  body: { flex: 1, minHeight: 0 },
+  body: { flex: 1, minHeight: 0, minWidth: 0, maxWidth: '100%' },
 });
 
 export interface Crumb {

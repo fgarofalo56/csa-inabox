@@ -94,6 +94,10 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     width: '100%',
     minWidth: 0,
+    maxWidth: '100%',
+    // When declared column widths exceed the container, scroll the table
+    // horizontally WITHIN itself rather than letting it widen the page.
+    overflowX: 'auto',
   },
   // Sticky header + subtle separators, generous padding, no heavy grid lines.
   grid: {
