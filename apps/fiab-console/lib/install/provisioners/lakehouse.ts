@@ -420,13 +420,42 @@ async function provisionAzureNative(
   const externalViews: string[] = [];
 
   // Synapse serverless target (optional) — only when LOOM_SYNAPSE_WORKSPACE set.
+  //
+  // CRITICAL: Synapse serverless does NOT support CREATE/ALTER VIEW (nor any
+  // CREATE EXTERNAL …) in the `master` database — it errors with
+  // "CREATE/ALTER VIEW is not supported in master database." Per Microsoft
+  // Learn, OPENROWSET views must live in a USER database. So we create-if-
+  // missing a dedicated serverless user DB ([loom_lakehouse] by default,
+  // overridable via LOOM_SYNAPSE_LAKEHOUSE_DB) by running CREATE DATABASE in
+  // the `master` context, then register every view against THAT user DB.
+  //
+  // If the user DB can't be created (e.g. workspace DB limit reached, or no
+  // permission), we SKIP the optional view-registration layer entirely and
+  // still report status:'created' with the real seeded files — the view layer
+  // is a queryability convenience, not the lakehouse itself.
+  // Learn: https://learn.microsoft.com/azure/synapse-analytics/sql/resources-self-help-sql-on-demand#configuration
+  const LAKEHOUSE_DB = (process.env.LOOM_SYNAPSE_LAKEHOUSE_DB || 'loom_lakehouse').replace(/[^A-Za-z0-9_]/g, '_');
   let synapse: ReturnType<typeof serverlessTarget> | null = null;
   if (process.env.LOOM_SYNAPSE_WORKSPACE) {
     try {
-      synapse = serverlessTarget('master');
-      steps.push(`Synapse serverless available (${synapse.server}); will register OPENROWSET views.`);
+      // Step 1 — create the user database if missing, in the master context
+      // (CREATE DATABASE cannot run from inside the not-yet-existing target DB).
+      const master = serverlessTarget('master');
+      await synapseExec(
+        master,
+        `IF DB_ID(N'${LAKEHOUSE_DB}') IS NULL EXEC('CREATE DATABASE [${LAKEHOUSE_DB}]');`,
+      );
+      // Step 2 — target the user DB for all subsequent view DDL.
+      synapse = serverlessTarget(LAKEHOUSE_DB);
+      steps.push(
+        `Synapse serverless available (${synapse.server}); will register OPENROWSET views in user DB [${LAKEHOUSE_DB}].`,
+      );
     } catch (e: any) {
-      steps.push(`Synapse serverless not usable: ${e?.message || String(e)}`);
+      // User DB unavailable — skip the optional view layer, keep seeded files.
+      steps.push(
+        `Synapse serverless view layer skipped (could not ensure user DB [${LAKEHOUSE_DB}]): ${e?.message || String(e)}. ` +
+          'Seeded files are still real; views are an optional queryability convenience.',
+      );
       synapse = null;
     }
   }
@@ -468,11 +497,12 @@ async function provisionAzureNative(
 
     // 3. Optionally register a Synapse serverless OPENROWSET external view so
     //    the seeded CSV is queryable as `SELECT * FROM lakehouse.<view>`.
-    //    Mirrors the proven pattern in lib/azure/shortcut-engines.ts: a view in
-    //    serverless 'master' under a dedicated schema, built via EXEC('CREATE
-    //    VIEW …') with doubled single-quotes inside the EXEC string. The BULK
-    //    arg is the https DFS endpoint (Synapse OPENROWSET takes https, not
-    //    abfss). Idempotent: DROP-if-exists then CREATE so re-install upserts.
+    //    The view is created in the dedicated USER database [loom_lakehouse]
+    //    (NOT master — serverless rejects CREATE VIEW in master), under a
+    //    dedicated `lakehouse` schema, built via EXEC('CREATE VIEW …') with
+    //    doubled single-quotes inside the EXEC string. The BULK arg is the
+    //    https DFS endpoint (Synapse OPENROWSET takes https, not abfss).
+    //    Idempotent: DROP-if-exists then CREATE so re-install upserts.
     if (synapse) {
       const httpsUrl = pathToHttpsUrl(container, csvPath);
       const viewLeaf = `${tName}`.replace(/[^A-Za-z0-9_]/g, '_');

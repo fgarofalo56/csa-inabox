@@ -151,6 +151,57 @@ function makeCreateTableIdempotent(batch: string): string {
   return `IF OBJECT_ID(N'${literal}', N'U') IS NULL\n${rewritten}`;
 }
 
+/**
+ * Make a leading `CREATE SCHEMA <name>` idempotent on dedicated SQL pool.
+ *
+ * `CREATE SCHEMA` is non-idempotent — re-running install raises "There is
+ * already an object named '<s>' ... CREATE SCHEMA failed". Dedicated pool also
+ * requires CREATE SCHEMA to be the first statement in its batch, so we cannot
+ * simply prefix an `IF NOT EXISTS … ` guard around a bare CREATE SCHEMA.
+ * Instead wrap it in the documented idempotent idiom that keeps CREATE SCHEMA
+ * inside its own EXEC batch:
+ *
+ *   IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'<s>')
+ *   EXEC('CREATE SCHEMA <s>');
+ *
+ *   https://learn.microsoft.com/sql/t-sql/statements/create-schema-transact-sql#remarks
+ *
+ * Only a batch whose statement is *exactly* `CREATE SCHEMA <name>` (optionally
+ * `AUTHORIZATION <owner>` and a trailing `;`) is rewritten — a no-op for any
+ * other batch. The full CREATE SCHEMA text is preserved inside the EXEC,
+ * with embedded single-quotes doubled.
+ */
+function makeCreateSchemaIdempotent(batch: string): string {
+  const m = batch.match(/^\s*CREATE\s+SCHEMA\s+([^\s;]+)/i);
+  if (!m) return batch;
+  // Schema name may be bracket-quoted ([hybrid]) or bare (hybrid); strip
+  // brackets and any embedded quote-doubling for the sys.schemas comparison.
+  const rawName = m[1].replace(/^\[|\]$/g, '');
+  const nameLiteral = rawName.replace(/'/g, "''");
+  const innerSql = batch.replace(/;\s*$/, '').trim().replace(/'/g, "''");
+  return `IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'${nameLiteral}')\nEXEC('${innerSql}');`;
+}
+
+/**
+ * Detect a batch that opens with `CREATE VIEW` (after the comment/GO scrub in
+ * splitBatches). On dedicated SQL pool CREATE VIEW must be the FIRST and ONLY
+ * statement in its batch, so such a batch must be issued on its own — never
+ * folded behind an IF/DROP guard or another statement.
+ */
+function isCreateViewBatch(batch: string): boolean {
+  return /^\s*CREATE\s+VIEW\b/i.test(batch);
+}
+
+/**
+ * Extract the view name from a leading `CREATE VIEW [name] AS …` /
+ * `CREATE VIEW schema.name AS …` so we can emit a separate idempotent DROP
+ * batch before the CREATE VIEW batch.
+ */
+function viewNameFromCreate(batch: string): string | null {
+  const m = batch.match(/^\s*CREATE\s+VIEW\s+([^\s(]+)/i);
+  return m ? m[1] : null;
+}
+
 interface SampleRowsEntry {
   table: string;
   columns?: string[];
@@ -227,10 +278,14 @@ async function seedSampleRows(
       Array.isArray(entry.columns) && entry.columns.length > 0
         ? ` (${entry.columns.map(quoteIdent).join(', ')})`
         : '';
-    const valuesClause = entry.rows
-      .map((row) => `(${row.map(sqlLiteral).join(', ')})`)
-      .join(',\n  ');
-    const insertSql = `INSERT INTO ${table}${colClause} VALUES\n  ${valuesClause};`;
+    // Synapse DEDICATED SQL pool does NOT support the multi-row table value
+    // constructor `VALUES (...),(...)` — it raises "Incorrect syntax near ','"
+    // at the second row. Emit ONE single-row INSERT per row instead (multiple
+    // single-row INSERTs in one batch separated by ';' are supported), which
+    // works on dedicated pool, Fabric Warehouse, and serverless alike.
+    const insertSql = entry.rows
+      .map((row) => `INSERT INTO ${table}${colClause} VALUES (${row.map(sqlLiteral).join(', ')});`)
+      .join('\n');
     try {
       await synapseExec(target, insertSql);
       steps.push(`Seeded ${entry.rows.length} row(s) into ${entry.table}.`);
@@ -290,7 +345,26 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
       return { status: 'remediation', gate: preGate, steps };
     }
 
-    const batches = splitBatches(ddl).map(makeCreateTableIdempotent);
+    // Expand the raw DDL into the ordered list of single-statement batches we
+    // actually send to TDS. Dedicated-pool constraints applied per batch:
+    //   • CREATE TABLE IF NOT EXISTS → OBJECT_ID guard (makeCreateTableIdempotent)
+    //   • CREATE SCHEMA → idempotent IF NOT EXISTS … EXEC('CREATE SCHEMA …')
+    //   • CREATE VIEW   → must be FIRST and ONLY statement in its batch, so the
+    //     existence-check/DROP is emitted as its OWN preceding batch and the
+    //     bare CREATE VIEW follows in a batch by itself.
+    const batches: string[] = [];
+    for (const raw of splitBatches(ddl)) {
+      if (isCreateViewBatch(raw)) {
+        const vn = viewNameFromCreate(raw);
+        if (vn) {
+          const bare = vn.replace(/^\[|\]$/g, '').replace(/'/g, "''");
+          batches.push(`IF OBJECT_ID(N'${bare}', N'V') IS NOT NULL DROP VIEW ${vn};`);
+        }
+        batches.push(raw); // CREATE VIEW alone in its own batch
+        continue;
+      }
+      batches.push(makeCreateSchemaIdempotent(makeCreateTableIdempotent(raw)));
+    }
     let resumedMidLoop = false;
     for (const sql of batches) {
       let attempted = false;
@@ -345,9 +419,15 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
 
     for (const m of dbtModels) {
       const viewName = `${m.layer}_${m.name}`;
-      const sql = `CREATE OR ALTER VIEW [${viewName}] AS ${m.sql}`;
+      // Synapse DEDICATED SQL pool does NOT support CREATE OR ALTER VIEW, and
+      // requires CREATE VIEW to be the FIRST and ONLY statement in its batch
+      // (Microsoft Learn: "The CREATE VIEW must be the first statement in a
+      // query batch."). So drop-if-exists in a SEPARATE batch, then issue the
+      // bare CREATE VIEW in its own batch.
+      //   https://learn.microsoft.com/sql/t-sql/statements/create-view-transact-sql#remarks
       try {
-        await synapseExec(target, sql);
+        await synapseExec(target, `IF OBJECT_ID(N'${viewName.replace(/'/g, "''")}', N'V') IS NOT NULL DROP VIEW [${viewName}];`);
+        await synapseExec(target, `CREATE VIEW [${viewName}] AS ${m.sql}`);
         steps.push(`Created dbt model view [${viewName}] (${m.layer}).`);
       } catch (e: any) {
         steps.push(`Failed to create view [${viewName}]: ${e?.message || String(e)}`);

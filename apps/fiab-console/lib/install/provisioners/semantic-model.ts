@@ -52,10 +52,74 @@ async function token(): Promise<string> {
   return t.token;
 }
 
-function buildTmsl(content: any, displayName: string): string {
+/**
+ * Build a lookup of every column the model actually defines, keyed by
+ * `table.column` (case-insensitive). Used to validate relationships before we
+ * emit them so a bundle that references a non-existent column can never produce
+ * a model TOM rejects with "Property FromColumn of object 'relationship …'
+ * refers to an object which cannot be found."
+ */
+function buildColumnIndex(tables: any[]): Set<string> {
+  const idx = new Set<string>();
+  for (const t of tables) {
+    const tableName = String(t?.name ?? '');
+    for (const c of t?.columns || []) {
+      const colName = String(c?.name ?? '');
+      if (tableName && colName) idx.add(`${tableName}.${colName}`.toLowerCase());
+    }
+  }
+  return idx;
+}
+
+/** Split a `Table.Column` reference into its parts (Column defaults to `Id`). */
+function splitRef(ref: unknown): { table: string; column: string } {
+  const s = String(ref ?? '');
+  const dot = s.indexOf('.');
+  if (dot < 0) return { table: s, column: 'Id' };
+  return { table: s.slice(0, dot), column: s.slice(dot + 1) || 'Id' };
+}
+
+/**
+ * Keep only relationships whose BOTH endpoints reference a column that exists
+ * in the model. Any relationship whose from/to column is undefined is dropped
+ * (and the reason pushed to `steps`) rather than failing the whole model —
+ * the rest of the model (tables, measures, valid relationships, seeded rows)
+ * still provisions. This is the guard for the live TOM "FromColumn … cannot be
+ * found" failure. Mirrors the Tabular requirement that a relationship's
+ * FromColumn/ToColumn must resolve to existing columns
+ * (https://learn.microsoft.com/analysis-services/tabular-models/relationships-ssas-tabular#requirements-for-relationships).
+ */
+function validateRelationships(relationships: any[], columnIndex: Set<string>, steps: string[]): any[] {
+  const valid: any[] = [];
+  for (const r of relationships) {
+    if (!r?.from || !r?.to) {
+      steps.push(`Skipped relationship with missing from/to: ${JSON.stringify(r)}.`);
+      continue;
+    }
+    const f = splitRef(r.from);
+    const t = splitRef(r.to);
+    const fromOk = columnIndex.has(`${f.table}.${f.column}`.toLowerCase());
+    const toOk = columnIndex.has(`${t.table}.${t.column}`.toLowerCase());
+    if (!fromOk || !toOk) {
+      const missing: string[] = [];
+      if (!fromOk) missing.push(`from '${r.from}'`);
+      if (!toOk) missing.push(`to '${r.to}'`);
+      steps.push(
+        `Skipped relationship ${r.from} -> ${r.to}: ${missing.join(' and ')} ` +
+          `references a column not defined in the model.`,
+      );
+      continue;
+    }
+    valid.push(r);
+  }
+  return valid;
+}
+
+function buildTmsl(content: any, displayName: string, steps: string[]): string {
   const tables = Array.isArray(content?.tables) ? content.tables : [];
   const measures = Array.isArray(content?.measures) ? content.measures : [];
-  const relationships = Array.isArray(content?.relationships) ? content.relationships : [];
+  const allRelationships = Array.isArray(content?.relationships) ? content.relationships : [];
+  const relationships = validateRelationships(allRelationships, buildColumnIndex(tables), steps);
   return JSON.stringify({
     name: displayName,
     compatibilityLevel: 1567,
@@ -126,10 +190,15 @@ function toPushColumnType(raw: unknown): PushColumnType {
 }
 
 /** Map SemanticModelContent → a Power BI push-dataset create request. */
-function buildPushDataset(content: any, name: string): CreatePushDatasetRequest {
+function buildPushDataset(content: any, name: string, steps: string[]): CreatePushDatasetRequest {
   const rawTables = Array.isArray(content?.tables) ? content.tables : [];
   const measures = Array.isArray(content?.measures) ? content.measures : [];
-  const relationships = Array.isArray(content?.relationships) ? content.relationships : [];
+  const allRelationships = Array.isArray(content?.relationships) ? content.relationships : [];
+  // Validate against the COLUMNS as they will be authored on the push dataset
+  // (every column the bundle declares per table — same set used below), so a
+  // relationship that points at a non-existent column is dropped before the
+  // create call instead of erroring server-side.
+  const relationships = validateRelationships(allRelationships, buildColumnIndex(rawTables), steps);
 
   const tables: PushTable[] = rawTables.map((t: any) => {
     const columns: PushColumn[] = (t.columns || []).map((c: any) => ({
@@ -264,7 +333,7 @@ async function provisionViaPowerBi(input: any, steps: string[]): Promise<Provisi
   const ws = pbi.id;
   steps.push(`No Fabric workspace; creating model in Power BI workspace ${ws} as a push dataset.`);
 
-  const request = buildPushDataset(input.content, input.displayName);
+  const request = buildPushDataset(input.content, input.displayName, steps);
   if (!request.tables.length) {
     return { status: 'failed', error: 'Semantic model content has no tables to author.', steps };
   }
@@ -320,7 +389,7 @@ export const semanticModelProvisioner: Provisioner = async (input): Promise<Prov
     // dataset and seed sample rows. Honest-gate only if no PBI target resolves.
     return provisionViaPowerBi(input, steps);
   }
-  const tmsl = buildTmsl(input.content, input.displayName);
+  const tmsl = buildTmsl(input.content, input.displayName, steps);
   steps.push(`Built TMSL payload (${tmsl.length} bytes).`);
 
   const definition = {
