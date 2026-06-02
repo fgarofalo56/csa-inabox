@@ -37,6 +37,8 @@ let _tenantSettings: Container | null = null;
 let _marketplaceListings: Container | null = null;
 let _featurePermissions: Container | null = null;
 let _lakehouseShortcuts: Container | null = null;
+let _copilotConfig: Container | null = null;
+let _workspaceAgentConfig: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -111,8 +113,18 @@ async function ensure() {
   // hits a single physical partition. Created lazily so a fresh environment
   // needs no extra ARM/Bicep step beyond the account+database.
   _lakehouseShortcuts = await mk('lakehouse-shortcuts', '/lakehouseId');
+  // Copilot & Agents config — tenant-wide default Foundry account + model
+  // deployments (PK /tenantId, one doc per tenant) set in admin tenant-settings,
+  // and per-workspace data-agent config (PK /workspaceId) set by workspace
+  // owners/contributors. Created lazily so a fresh environment needs no extra
+  // ARM/Bicep step beyond the account+database.
+  _copilotConfig = await mk('copilot-config', '/tenantId');
+  _workspaceAgentConfig = await mk('workspace-agent-config', '/workspaceId');
   _ensured = true;
 }
+
+export async function copilotConfigContainer(): Promise<Container> { await ensure(); return _copilotConfig!; }
+export async function workspaceAgentConfigContainer(): Promise<Container> { await ensure(); return _workspaceAgentConfig!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }

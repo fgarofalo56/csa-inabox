@@ -22,6 +22,7 @@ import {
   FoundryAgentError,
   type FoundryAgentBody,
 } from '@/lib/azure/foundry-agent-client';
+import { resolveWorkspaceFoundry } from '@/lib/azure/copilot-config-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,11 +40,21 @@ function errorResponse(e: any): NextResponse {
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET() {
+export async function GET(req?: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const projectId = getProjectId(); // throws FoundryAgentNotConfiguredError when unconfigured
+    // `?workspaceId=` targets the workspace's chosen Foundry project (workspace
+    // cfg → tenant default → env). Absent → env / tenant default.
+    const workspaceId = req?.nextUrl?.searchParams.get('workspaceId')?.trim();
+    if (workspaceId) {
+      const wf = await resolveWorkspaceFoundry(workspaceId, session.claims.oid);
+      const override = { projectEndpoint: wf.projectEndpoint, projectId: wf.projectId };
+      const projectId = getProjectId(override); // throws when unconfigured
+      const agents = await listAgents(projectId, override);
+      return NextResponse.json({ ok: true, agents, projectId, defaultAgent: wf.defaultAgent });
+    }
+    const projectId = getProjectId(); // throws when unconfigured
     const agents = await listAgents(projectId);
     return NextResponse.json({ ok: true, agents, projectId });
   } catch (e: any) {
