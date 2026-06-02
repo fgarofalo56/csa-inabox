@@ -42,6 +42,8 @@ import {
   Avatar,
   Spinner,
   Badge,
+  Dropdown,
+  Option,
   MessageBar,
   MessageBarBody,
   MessageBarTitle,
@@ -56,7 +58,9 @@ import {
   ChatMultiple24Regular,
   Database16Regular,
   Sparkle20Regular,
+  Settings20Regular,
 } from '@fluentui/react-icons';
+import { WorkspaceAgentConfigDialog } from './workspace-agent-config-dialog';
 
 // ---------------------------------------------------------------------------
 // Wire types — mirror the BFF route shapes.
@@ -66,6 +70,11 @@ interface FoundryAgentRow {
   name: string;
   description?: string;
   metadata?: Record<string, string>;
+}
+
+interface WorkspaceRow {
+  id: string;
+  name: string;
 }
 
 interface RunStepToolCall {
@@ -341,11 +350,30 @@ export function DataAgentPane() {
   const [gate, setGate] = useState<NotConfigured | null>(null);
   const [listError, setListError] = useState<string | null>(null);
 
+  // Workspace scoping — a workspace can target its own Foundry project/agent.
+  const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
+  const [workspaceId, setWorkspaceId] = useState<string>('');
+  const [configOpen, setConfigOpen] = useState(false);
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
 
   const transcriptRef = useRef<HTMLDivElement>(null);
+
+  // --- load the user's workspaces (so data agents can be workspace-scoped) ---
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/workspaces')
+      .then(async (r) => {
+        const j = await r.json().catch(() => []);
+        if (cancelled) return;
+        const rows: WorkspaceRow[] = Array.isArray(j) ? j.map((w: any) => ({ id: w.id, name: w.name })) : [];
+        setWorkspaces(rows);
+      })
+      .catch(() => { if (!cancelled) setWorkspaces([]); });
+    return () => { cancelled = true; };
+  }, []);
 
   // --- load real published agents from Foundry --------------------------
   const loadAgents = useCallback(async () => {
@@ -353,7 +381,8 @@ export function DataAgentPane() {
     setGate(null);
     setListError(null);
     try {
-      const res = await fetch('/api/foundry/agents', { method: 'GET' });
+      const qs = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
+      const res = await fetch(`/api/foundry/agents${qs}`, { method: 'GET' });
       const data = await res.json().catch(() => ({}));
       if (res.status === 501 || data?.code === 'not_configured') {
         setGate({ error: data?.error || 'Foundry Agent Service not configured', hint: data?.hint, missing: data?.missing });
@@ -367,14 +396,19 @@ export function DataAgentPane() {
       }
       const rows: FoundryAgentRow[] = Array.isArray(data.agents) ? data.agents : [];
       setAgents(rows);
-      setSelected((cur) => cur && rows.some((a) => a.name === cur) ? cur : (rows[0]?.name ?? null));
+      const preferred: string | undefined = data?.defaultAgent;
+      setSelected((cur) => {
+        if (cur && rows.some((a) => a.name === cur)) return cur;
+        if (preferred && rows.some((a) => a.name === preferred)) return preferred;
+        return rows[0]?.name ?? null;
+      });
     } catch (e) {
       setListError(e instanceof Error ? e.message : String(e));
       setAgents([]);
     } finally {
       setLoadingAgents(false);
     }
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     void loadAgents();
@@ -414,7 +448,7 @@ export function DataAgentPane() {
         const res = await fetch('/api/data-agent/run-steps', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent: selected, question: q }),
+          body: JSON.stringify({ agent: selected, question: q, workspaceId: workspaceId || undefined }),
         });
         const data = await res.json().catch(() => ({}));
 
@@ -467,7 +501,7 @@ export function DataAgentPane() {
         setSending(false);
       }
     },
-    [sending, selected],
+    [sending, selected, workspaceId],
   );
 
   const selectedAgent = agents.find((a) => a.name === selected) || null;
@@ -479,6 +513,16 @@ export function DataAgentPane() {
         <div className={s.railHead}>
           <ChatMultiple24Regular style={{ color: '#4b1d8f' }} />
           <Text className={s.railTitle}>Data agents</Text>
+          {workspaceId && (
+            <Button
+              appearance="subtle"
+              size="small"
+              icon={<Settings20Regular />}
+              aria-label="Configure workspace data agents"
+              title="Configure which Foundry agent / models this workspace uses"
+              onClick={() => setConfigOpen(true)}
+            />
+          )}
           <Button
             appearance="subtle"
             size="small"
@@ -487,6 +531,22 @@ export function DataAgentPane() {
             onClick={() => void loadAgents()}
             disabled={loadingAgents}
           />
+        </div>
+
+        {/* Workspace scope selector — pick the workspace whose data agents to use. */}
+        <div style={{ padding: tokens.spacingVerticalS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+          <Dropdown
+            size="small"
+            placeholder="All / tenant default"
+            value={workspaces.find((w) => w.id === workspaceId)?.name || ''}
+            selectedOptions={workspaceId ? [workspaceId] : []}
+            onOptionSelect={(_, d) => { setWorkspaceId(d.optionValue === '__all__' ? '' : (d.optionValue || '')); setMessages([]); }}
+            aria-label="Workspace scope"
+            style={{ width: '100%' }}
+          >
+            <Option value="__all__" text="All / tenant default">All / tenant default</Option>
+            {workspaces.map((w) => <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>)}
+          </Dropdown>
         </div>
 
         {loadingAgents ? (
@@ -712,6 +772,16 @@ export function DataAgentPane() {
           )}
         </Caption1>
       </div>
+
+      {workspaceId && (
+        <WorkspaceAgentConfigDialog
+          open={configOpen}
+          onOpenChange={setConfigOpen}
+          workspaceId={workspaceId}
+          agents={agents}
+          onSaved={() => { setConfigOpen(false); void loadAgents(); }}
+        />
+      )}
     </div>
   );
 }

@@ -20,8 +20,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ kind: strin
   const database = req.nextUrl.searchParams.get('database') || '';
   const objectId = Number(req.nextUrl.searchParams.get('objectId'));
 
-  if (kind !== 'mssql') {
-    return NextResponse.json({ ok: false, gate: { missing: 'mssql-only' }, error: `Column introspection is only available for mssql sources.` }, { status: 503 });
+  // mssql + dwsql (Synapse) share the sys.columns introspection path.
+  if (kind !== 'mssql' && kind !== 'dwsql') {
+    return NextResponse.json({ ok: false, gate: { missing: 'mssql-only' }, error: `Column introspection is only available for mssql / dwsql (Synapse) sources.` }, { status: 503 });
   }
   if (!server || !database || !Number.isInteger(objectId)) {
     return jerr('server, database, and a numeric objectId are required', 400);

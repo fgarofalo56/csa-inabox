@@ -23,7 +23,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ kind: strin
   const server = req.nextUrl.searchParams.get('server') || '';
   const database = req.nextUrl.searchParams.get('database') || '';
 
-  if (kind !== 'mssql') {
+  // mssql + dwsql (Azure Synapse) both speak T-SQL over TDS, so the same sys.*
+  // catalog introspection path works for Azure SQL, the Synapse Dedicated pool,
+  // and (for exploration only) the Synapse Serverless endpoint — getPool()
+  // connects to a fully-qualified server FQDN directly with the AAD token.
+  if (kind !== 'mssql' && kind !== 'dwsql') {
     return NextResponse.json(
       { ok: false, gate: { missing: kind === 'cosmosdb_nosql' ? 'cosmos-graphql-schema' : 'LOOM_POSTGRES_DISCOVERY' }, error: `Schema introspection for ${kind} is not wired; ${kind === 'cosmosdb_nosql' ? 'Cosmos is schema-less — supply a .gql type per container' : 'use information_schema via the PG navigator'}.` },
       { status: 503 },

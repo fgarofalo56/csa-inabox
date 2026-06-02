@@ -11,8 +11,14 @@
  *    dab-config.json (downloadable + persisted to the Loom Cosmos config store
  *    via /api/dab/[id]/config). The emitted JSON references
  *    @env('DATABASE_CONNECTION_STRING') — never a literal secret.
- *  - Source schema is introspected from a REAL Azure SQL database
- *    (/api/dab/sources/mssql/schema + /columns over sys.* catalog).
+ *  - Source schema is introspected from a REAL Azure SQL database OR an Azure
+ *    Synapse Dedicated SQL pool (/api/dab/sources/{mssql|dwsql}/schema +
+ *    /columns over the sys.* catalog — both speak T-SQL over TDS).
+ *  - Synapse Serverless SQL and Databricks SQL Warehouse are surfaced as honest
+ *    Fluent MessageBar gates (DAB supports neither), naming the supported path.
+ *  - "Deploy a new data source" provisions a real Azure SQL DB (ARM) + grants
+ *    the deploying user/group SQL admin + optionally registers it into Purview /
+ *    Unity Catalog; PostgreSQL/Cosmos hand off to the deploy-planner bicep.
  *  - Preview testers + APIM publish call a REAL DAB runtime when
  *    LOOM_DAB_PREVIEW_URL is set; otherwise an honest Fluent MessageBar names
  *    the exact env var to provision, and the full builder still renders.
@@ -36,7 +42,7 @@ import {
 import {
   Save20Regular, CheckmarkCircle20Regular, ArrowDownload20Regular, Play20Regular,
   CloudArrowUp20Regular, Add16Regular, Delete16Regular, Database20Regular,
-  Table20Regular, Eye20Regular, Code20Regular,
+  Table20Regular, Eye20Regular, Code20Regular, ServerLink20Regular, CloudAdd20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -44,7 +50,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import type {
   DabConfig, DabEntity, DabDatabaseType, DabSourceType, DabAction,
   DabPermission, DabRelationship, DabHostMode, DabAuthProvider, DabField,
-  DabValidationIssue,
+  DabValidationIssue, DabSynapseRole,
 } from '@/app/api/dab/_lib/dab-config-model';
 
 const useStyles = makeStyles({
@@ -92,11 +98,49 @@ const STAGES: { key: Stage; label: string; icon: React.ReactElement }[] = [
   { key: 'config', label: 'dab-config.json', icon: <Eye20Regular /> },
 ];
 
-const DB_TYPES: { value: DabDatabaseType; label: string }[] = [
-  { value: 'mssql', label: 'Azure SQL / SQL Server (mssql)' },
-  { value: 'postgresql', label: 'PostgreSQL (postgresql)' },
-  { value: 'cosmosdb_nosql', label: 'Cosmos DB NoSQL (cosmosdb_nosql)' },
+/**
+ * UI source-kind. Most map 1:1 to a DAB `database-type`. Two are special:
+ *  - `synapse-dedicated` / `synapse-serverless` both emit DAB `dwsql`, but only
+ *    DEDICATED is a supported deployable source — serverless is unsupported by
+ *    DAB (per Learn), surfaced for object exploration with an honest gate.
+ *  - `databricks` is NOT a DAB database-type at all (DAB has no Databricks
+ *    connector); it renders an honest MessageBar naming the supported path.
+ */
+type SourceKind =
+  | 'mssql' | 'synapse-dedicated' | 'synapse-serverless'
+  | 'postgresql' | 'cosmosdb_nosql' | 'databricks';
+
+interface SourceKindDef {
+  value: SourceKind;
+  label: string;
+  /** The DAB database-type this emits (undefined for the unsupported databricks pseudo-kind). */
+  dbType?: DabDatabaseType;
+  synapseRole?: DabSynapseRole;
+}
+
+const SOURCE_KINDS: SourceKindDef[] = [
+  { value: 'mssql', label: 'Azure SQL / SQL Server (mssql)', dbType: 'mssql' },
+  { value: 'synapse-dedicated', label: 'Azure Synapse — Dedicated SQL pool (dwsql)', dbType: 'dwsql', synapseRole: 'dedicated' },
+  { value: 'synapse-serverless', label: 'Azure Synapse — Serverless SQL (not supported by DAB)', dbType: 'dwsql', synapseRole: 'serverless' },
+  { value: 'databricks', label: 'Databricks SQL Warehouse (not supported by DAB)' },
+  { value: 'postgresql', label: 'PostgreSQL (postgresql)', dbType: 'postgresql' },
+  { value: 'cosmosdb_nosql', label: 'Cosmos DB NoSQL (cosmosdb_nosql)', dbType: 'cosmosdb_nosql' },
 ];
+
+/** Resolve the current UI source-kind from a DabSourceRef. */
+function sourceKindOf(ref: DabConfig['sourceRef']): SourceKind {
+  if (ref.kind === 'dwsql') return ref.synapseRole === 'serverless' ? 'synapse-serverless' : 'synapse-dedicated';
+  if (ref.kind === 'mssql') return 'mssql';
+  if (ref.kind === 'postgresql') return 'postgresql';
+  if (ref.kind === 'cosmosdb_nosql') return 'cosmosdb_nosql';
+  return 'mssql';
+}
+
+/** The discovery `kind` query param + the introspection route prefix for a UI kind. */
+function discoveryKind(k: SourceKind): DabDatabaseType {
+  const def = SOURCE_KINDS.find((d) => d.value === k);
+  return def?.dbType || 'mssql';
+}
 const AUTH_PROVIDERS: DabAuthProvider[] = ['Simulator', 'Unauthenticated', 'StaticWebApps', 'AppService', 'EntraId', 'Custom'];
 const ALL_ACTIONS: DabAction[] = ['create', 'read', 'update', 'delete'];
 
@@ -344,101 +388,301 @@ function DabBuilder({ item, id }: { item: FabricItemType; id: string }) {
 
 // --- Stage 1: Data source ---------------------------------------------------
 
-interface ServerSrc { server: string; fqdn?: string; databases: { name: string }[] }
+interface ServerSrc { server: string; fqdn?: string; databases: { name: string }[]; synapseRole?: DabSynapseRole; note?: string }
 
 function SourceStage({ cfg, mutate }: { cfg: DabConfig; mutate: (fn: (c: DabConfig) => DabConfig) => void }) {
   const s = useStyles();
   const [sources, setSources] = useState<ServerSrc[] | null>(null);
   const [gate, setGate] = useState<{ missing: string; error: string } | null>(null);
   const [loading, setLoading] = useState(false);
-  const kind = cfg.sourceRef.kind;
+  const [showDeploy, setShowDeploy] = useState(false);
+  // `databricks` is a UI-only pseudo-kind (DAB has no Databricks connector), so
+  // it can't be persisted on the typed DabSourceRef — track it as a local
+  // override that shows the honest MessageBar without mutating the config.
+  const [databricksSelected, setDatabricksSelected] = useState(false);
+  const uiKind: SourceKind = databricksSelected ? 'databricks' : sourceKindOf(cfg.sourceRef);
+  const dKind = discoveryKind(uiKind);
+  const isSqlFamily = uiKind === 'mssql' || uiKind === 'synapse-dedicated' || uiKind === 'synapse-serverless';
+
+  // Apply a UI source-kind selection onto the typed DabSourceRef.
+  const applyKind = useCallback((k: SourceKind) => {
+    if (k === 'databricks') { setDatabricksSelected(true); return; }
+    setDatabricksSelected(false);
+    const def = SOURCE_KINDS.find((d) => d.value === k);
+    if (!def?.dbType) return;
+    mutate((c) => {
+      c.sourceRef = { kind: def.dbType!, synapseRole: def.synapseRole, server: undefined, database: undefined };
+      return c;
+    });
+  }, [mutate]);
 
   const loadSources = useCallback(async () => {
+    if (uiKind === 'databricks') { setSources(null); setGate(null); return; }
     setLoading(true); setGate(null); setSources(null);
     try {
-      const r = await fetch(`/api/dab/sources?kind=${encodeURIComponent(kind)}`);
+      const r = await fetch(`/api/dab/sources?kind=${encodeURIComponent(dKind)}`);
       const j = await r.json();
       if (!j.ok) { setGate({ missing: j.gate?.missing || 'unknown', error: j.error || `HTTP ${r.status}` }); }
       else setSources(j.sources || []);
     } catch (e: any) { setGate({ missing: 'fetch', error: e?.message || String(e) }); }
     finally { setLoading(false); }
-  }, [kind]);
+  }, [dKind, uiKind]);
 
   useEffect(() => { loadSources(); }, [loadSources]);
 
-  const servers = sources || [];
+  // For Synapse, filter the returned endpoints to the chosen role.
+  const allServers = sources || [];
+  const servers = uiKind === 'synapse-dedicated' || uiKind === 'synapse-serverless'
+    ? allServers.filter((x) => x.synapseRole === cfg.sourceRef.synapseRole)
+    : allServers;
   const selServer = servers.find((x) => x.server === cfg.sourceRef.server);
+
+  const noSqlSourceFound = isSqlFamily && !loading && !gate && servers.length === 0;
 
   return (
     <>
       <Subtitle2>Data source</Subtitle2>
       <Body1>
         Choose the backend DAB connects to. The connection string is never stored —
-        the emitted config references <code>@env(&apos;DATABASE_CONNECTION_STRING&apos;)</code>; the secret is
-        injected as a Container-App secret at deploy time.
+        the emitted config references <code>@env(&apos;DATABASE_CONNECTION_STRING&apos;)</code> with
+        AAD / managed-identity auth (no literal secret); it is injected as a Container-App secret at deploy time.
       </Body1>
 
       <div className={s.row}>
         <div className={s.field}>
-          <Label>Database type</Label>
-          <Dropdown value={DB_TYPES.find((d) => d.value === kind)?.label} selectedOptions={[kind]}
-            onOptionSelect={(_, d) => mutate((c) => { c.sourceRef = { kind: d.optionValue as DabDatabaseType }; return c; })}>
-            {DB_TYPES.map((d) => <Option key={d.value} value={d.value}>{d.label}</Option>)}
+          <Label>Data source kind</Label>
+          <Dropdown value={SOURCE_KINDS.find((d) => d.value === uiKind)?.label} selectedOptions={[uiKind]}
+            onOptionSelect={(_, d) => applyKind(d.optionValue as SourceKind)}>
+            {SOURCE_KINDS.map((d) => <Option key={d.value} value={d.value}>{d.label}</Option>)}
           </Dropdown>
         </div>
-        <Button onClick={loadSources} disabled={loading}>{loading ? 'Loading…' : 'Refresh sources'}</Button>
+        {uiKind !== 'databricks' && (
+          <Button onClick={loadSources} disabled={loading}>{loading ? 'Loading…' : 'Refresh sources'}</Button>
+        )}
+        <Button appearance="primary" icon={<CloudAdd20Regular />} onClick={() => setShowDeploy((v) => !v)}>
+          Deploy a new data source
+        </Button>
       </div>
 
-      {gate && (
+      {/* Honest gate: Synapse Serverless is NOT a deployable DAB source. */}
+      {uiKind === 'synapse-serverless' && (
+        <MessageBar intent="warning"><MessageBarBody>
+          <MessageBarTitle>Synapse Serverless SQL is not supported by Data API builder</MessageBarTitle>
+          Per Microsoft Learn, DAB&apos;s <code>dwsql</code> database-type supports the Synapse
+          {' '}<strong>Dedicated</strong> SQL pool only — the Serverless (on-demand) pool isn&apos;t supported as a
+          DAB source. You can still browse its objects below for exploration, but you can&apos;t publish an API from it.
+          <br /><Caption1>
+            Supported alternatives: use the <strong>Dedicated SQL pool</strong> (dwsql), or mirror the
+            serverless-queried data into an Azure SQL Database / Dedicated pool and point DAB there. To run
+            ad-hoc serverless queries, use the Synapse Serverless SQL editor directly.
+          </Caption1>
+        </MessageBarBody></MessageBar>
+      )}
+
+      {/* Honest gate: Databricks has NO DAB connector. */}
+      {uiKind === 'databricks' && (
+        <MessageBar intent="warning"><MessageBarBody>
+          <MessageBarTitle>Databricks SQL Warehouse is not a Data API builder source</MessageBarTitle>
+          Data API builder has no native Databricks connector. Its supported database-types are
+          {' '}<code>mssql</code>, <code>dwsql</code> (Synapse Dedicated), <code>postgresql</code>,
+          {' '}<code>mysql</code>, <code>cosmosdb_nosql</code>, and <code>cosmosdb_postgresql</code> — none of
+          which speak the Databricks SQL (Spark Thrift / ODBC) protocol.
+          <br /><Caption1>
+            Supported alternatives: (1) mirror the Databricks Delta tables into an Azure SQL Database or a
+            Synapse Dedicated SQL pool and point DAB at that, or (2) query the warehouse directly from Loom&apos;s
+            Databricks SQL editor. Switch the kind above to mssql / dwsql to continue building a DAB API.
+          </Caption1>
+        </MessageBarBody></MessageBar>
+      )}
+
+      {gate && uiKind !== 'databricks' && (
         <MessageBar intent="warning"><MessageBarBody>
           <MessageBarTitle>Source discovery gated</MessageBarTitle>
           {gate.error} <br /><Caption1>Set <code>{gate.missing}</code>, or enter the server + database manually below.</Caption1>
         </MessageBarBody></MessageBar>
       )}
 
-      {kind === 'mssql' && servers.length > 0 && (
+      {/* No discoverable source → offer to deploy one. */}
+      {noSqlSourceFound && (
+        <MessageBar intent="info"><MessageBarBody>
+          <MessageBarTitle>No data source discovered</MessageBarTitle>
+          No {uiKind === 'mssql' ? 'Azure SQL' : 'Synapse SQL'} source was found.
+          {' '}<Button size="small" appearance="transparent" icon={<CloudAdd20Regular />} onClick={() => setShowDeploy(true)}>Deploy a new data source</Button>
+          {' '}or enter a server + database manually below.
+        </MessageBarBody></MessageBar>
+      )}
+
+      {isSqlFamily && servers.length > 0 && (
         <div className={s.row}>
           <div className={s.field}>
-            <Label>Server</Label>
+            <Label>Server / endpoint</Label>
             <Dropdown placeholder="Select a server" value={cfg.sourceRef.server || ''} selectedOptions={cfg.sourceRef.server ? [cfg.sourceRef.server] : []}
               onOptionSelect={(_, d) => mutate((c) => { c.sourceRef.server = d.optionValue; c.sourceRef.database = undefined; return c; })}>
-              {servers.map((sv) => <Option key={sv.server} value={sv.server}>{sv.server}</Option>)}
+              {servers.map((sv) => <Option key={sv.server} value={sv.server} text={sv.server}>{sv.fqdn || sv.server}</Option>)}
             </Dropdown>
           </div>
           <div className={s.field}>
-            <Label>Database</Label>
+            <Label>Database{uiKind === 'synapse-dedicated' ? ' / pool' : ''}</Label>
             <Dropdown placeholder="Select a database" value={cfg.sourceRef.database || ''} selectedOptions={cfg.sourceRef.database ? [cfg.sourceRef.database] : []}
-              disabled={!selServer}
+              disabled={!selServer || (selServer?.databases || []).length === 0}
               onOptionSelect={(_, d) => mutate((c) => { c.sourceRef.database = d.optionValue; return c; })}>
               {(selServer?.databases || []).map((db) => <Option key={db.name} value={db.name}>{db.name}</Option>)}
             </Dropdown>
           </div>
         </div>
       )}
+      {selServer?.note && <Caption1>{selServer.note}</Caption1>}
+
+      {showDeploy && <DeploySourcePanel cfg={cfg} mutate={mutate} onClose={() => setShowDeploy(false)} onDeployed={loadSources} />}
 
       {/* Manual entry — always available so the surface renders even when gated. */}
-      <div className={s.card}>
-        <Caption1>Manual / non-mssql source</Caption1>
-        <div className={s.row}>
-          <div className={s.field}>
-            <Label>Server / account</Label>
-            <Input value={cfg.sourceRef.server || ''} onChange={(_, d) => mutate((c) => { c.sourceRef.server = d.value || undefined; return c; })} placeholder="myserver" />
+      {uiKind !== 'databricks' && (
+        <div className={s.card}>
+          <Caption1>Manual source entry (server FQDN + database)</Caption1>
+          <div className={s.row}>
+            <div className={s.field}>
+              <Label>Server / account</Label>
+              <Input value={cfg.sourceRef.server || ''} onChange={(_, d) => mutate((c) => { c.sourceRef.server = d.value || undefined; return c; })} placeholder={isSqlFamily ? 'myserver.database.windows.net' : 'myserver'} />
+            </div>
+            <div className={s.field}>
+              <Label>Database</Label>
+              <Input value={cfg.sourceRef.database || ''} onChange={(_, d) => mutate((c) => { c.sourceRef.database = d.value || undefined; return c; })} placeholder="mydb" />
+            </div>
           </div>
-          <div className={s.field}>
-            <Label>Database</Label>
-            <Input value={cfg.sourceRef.database || ''} onChange={(_, d) => mutate((c) => { c.sourceRef.database = d.value || undefined; return c; })} placeholder="mydb" />
-          </div>
+          {uiKind === 'cosmosdb_nosql' && (
+            <div className={s.field}>
+              <Label>GraphQL schema (.gql) — required for Cosmos (schema-less)</Label>
+              <Textarea value={cfg.sourceRef.graphqlSchema || ''} resize="vertical"
+                onChange={(_, d) => mutate((c) => { c.sourceRef.graphqlSchema = d.value || undefined; return c; })}
+                placeholder={'type Book @model {\n  id: ID!\n  title: String\n}'} />
+            </div>
+          )}
         </div>
-        {kind === 'cosmosdb_nosql' && (
-          <div className={s.field}>
-            <Label>GraphQL schema (.gql) — required for Cosmos (schema-less)</Label>
-            <Textarea value={cfg.sourceRef.graphqlSchema || ''} resize="vertical"
-              onChange={(_, d) => mutate((c) => { c.sourceRef.graphqlSchema = d.value || undefined; return c; })}
-              placeholder={'type Book @model {\n  id: ID!\n  title: String\n}'} />
-          </div>
-        )}
-      </div>
+      )}
     </>
+  );
+}
+
+// --- Deploy-a-new-source panel ----------------------------------------------
+
+interface DeployStep { step: string; state: 'done' | 'gated' | 'error' | 'skipped'; detail: string; gate?: { missing: string } }
+
+function DeploySourcePanel({ cfg, mutate, onClose, onDeployed }: {
+  cfg: DabConfig; mutate: (fn: (c: DabConfig) => DabConfig) => void; onClose: () => void; onDeployed: () => void;
+}) {
+  const s = useStyles();
+  const [target, setTarget] = useState<'sql' | 'postgresql' | 'cosmos'>('sql');
+  const [name, setName] = useState('');
+  const [adminGroupSid, setAdminGroupSid] = useState('');
+  const [registerPurview, setRegisterPurview] = useState(true);
+  const [registerUc, setRegisterUc] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [caps, setCaps] = useState<any>(null);
+  const [result, setResult] = useState<{ ok: boolean; steps?: DeployStep[]; error?: string; remediation?: any; source?: any } | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try { const r = await fetch('/api/dab/deploy-source'); setCaps(await r.json()); } catch { /* non-fatal */ }
+    })();
+  }, []);
+
+  const deploy = useCallback(async () => {
+    setBusy(true); setResult(null);
+    try {
+      const r = await fetch('/api/dab/deploy-source', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ target, name: name.trim(), adminGroupSid: adminGroupSid.trim() || undefined, registerPurview, registerUnityCatalog: registerUc }),
+      });
+      const j = await r.json();
+      setResult(j);
+      if (j.ok && j.source) {
+        // Register the freshly-deployed source so it's usable as a DAB source.
+        mutate((c) => { c.sourceRef = { kind: j.source.kind, server: j.source.server, database: j.source.database }; return c; });
+        onDeployed();
+      }
+    } catch (e: any) { setResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  }, [target, name, adminGroupSid, registerPurview, registerUc, mutate, onDeployed]);
+
+  const sqlGate = caps?.capabilities?.sql?.gate;
+  const purviewConfigured = caps?.registration?.purview?.configured;
+  const ucConfigured = caps?.registration?.unityCatalog?.configured;
+
+  return (
+    <div className={s.card}>
+      <div className={s.row} style={{ justifyContent: 'space-between' }}>
+        <Caption1><ServerLink20Regular style={{ verticalAlign: 'middle' }} /> Deploy a new data source &amp; register it</Caption1>
+        <Button size="small" appearance="subtle" onClick={onClose}>Close</Button>
+      </div>
+      <Body1>
+        Provision a relational source and hand it to this DAB API. SQL Database is created in-product (real ARM);
+        PostgreSQL and Cosmos provision through the deploy-planner bicep and surface the exact knob + command.
+      </Body1>
+      <div className={s.row}>
+        <div className={s.field}>
+          <Label>Source type</Label>
+          <Dropdown value={target} selectedOptions={[target]} onOptionSelect={(_, d) => setTarget(d.optionValue as any)}>
+            <Option value="sql">Azure SQL Database</Option>
+            <Option value="postgresql">PostgreSQL Flexible Server</Option>
+            <Option value="cosmos">Cosmos DB</Option>
+          </Dropdown>
+        </div>
+        <div className={s.field}>
+          <Label>New database / resource name</Label>
+          <Input value={name} onChange={(_, d) => setName(d.value)} placeholder="myapidb" />
+        </div>
+      </div>
+      {target === 'sql' && (
+        <>
+          {sqlGate && (
+            <MessageBar intent="warning"><MessageBarBody>
+              <MessageBarTitle>SQL deploy gated</MessageBarTitle>
+              Needs <code>{sqlGate.missing}</code>.
+            </MessageBarBody></MessageBar>
+          )}
+          <div className={s.field}>
+            <Label>Optional admin group object id (Entra group to grant SQL admin)</Label>
+            <Input value={adminGroupSid} onChange={(_, d) => setAdminGroupSid(d.value)} placeholder="00000000-0000-0000-0000-000000000000" />
+            <Caption1>Leave blank to grant the deploying user ({caps?.deployer?.upn || 'you'}) as the server Entra admin.</Caption1>
+          </div>
+          <div className={s.pillRow}>
+            <Checkbox label={`Register in Purview${purviewConfigured ? '' : ' (gated — not configured)'}`} checked={registerPurview} onChange={(_, d) => setRegisterPurview(d.checked === true)} />
+            <Checkbox label={`Create Unity Catalog${ucConfigured ? '' : ' (gated — not configured)'}`} checked={registerUc} onChange={(_, d) => setRegisterUc(d.checked === true)} />
+          </div>
+        </>
+      )}
+      <div className={s.row}>
+        <Button appearance="primary" icon={<CloudAdd20Regular />} onClick={deploy} disabled={busy || !name.trim()}>
+          {busy ? 'Deploying…' : 'Deploy & register'}
+        </Button>
+        {busy && <Spinner size="tiny" />}
+      </div>
+
+      {result && !result.ok && (
+        <MessageBar intent="warning"><MessageBarBody>
+          <MessageBarTitle>Deploy gated / failed</MessageBarTitle>
+          {result.error}
+          {result.remediation && (
+            <Caption1>
+              {result.remediation.message}
+              {result.remediation.module && <><br />Module: <code>{result.remediation.module}</code></>}
+              {result.remediation.command && <><br /><code>{result.remediation.command}</code></>}
+            </Caption1>
+          )}
+        </MessageBarBody></MessageBar>
+      )}
+      {result?.ok && result.steps && (
+        <div className={s.card}>
+          <Caption1>Source created — registered as <code>{result.source?.database}</code> on <code>{result.source?.fqdn}</code> and selected as this API&apos;s source.</Caption1>
+          {result.steps.map((st, i) => (
+            <div key={i}>
+              <Badge size="small" color={st.state === 'done' ? 'success' : st.state === 'error' ? 'danger' : st.state === 'gated' ? 'warning' : 'informative'}>{st.state}</Badge>
+              {' '}<strong>{st.step}</strong> — {st.detail}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -463,13 +707,15 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
   const [entityTab, setEntityTab] = useState<EntityTab>('general');
 
   const loadSchema = useCallback(async () => {
-    if (cfg.sourceRef.kind !== 'mssql' || !cfg.sourceRef.server || !cfg.sourceRef.database) {
-      setSchemaGate('Select an mssql server + database on the Data source stage to introspect tables/views/procedures.');
+    const k = cfg.sourceRef.kind;
+    const introspectable = k === 'mssql' || k === 'dwsql';
+    if (!introspectable || !cfg.sourceRef.server || !cfg.sourceRef.database) {
+      setSchemaGate('Select an Azure SQL / Synapse (dwsql) server + database on the Data source stage to introspect tables/views/procedures.');
       return;
     }
     setLoading(true); setSchemaGate(null);
     try {
-      const r = await fetch(`/api/dab/sources/mssql/schema?server=${encodeURIComponent(cfg.sourceRef.server)}&database=${encodeURIComponent(cfg.sourceRef.database)}`);
+      const r = await fetch(`/api/dab/sources/${k}/schema?server=${encodeURIComponent(cfg.sourceRef.server)}&database=${encodeURIComponent(cfg.sourceRef.database)}`);
       const j = await r.json();
       if (!j.ok) setSchemaGate(j.error || `HTTP ${r.status}`);
       else setSchema({ tables: j.tables, views: j.views, procedures: j.procedures });
@@ -593,14 +839,15 @@ function EntityDetail({ cfg, entity, tab, mutate }: {
   const s = useStyles();
   const [cols, setCols] = useState<{ name: string; dataType: string; isPrimaryKey: boolean }[] | null>(null);
 
-  // Load columns lazily for fields/permissions tabs (mssql tables/views).
+  // Load columns lazily for fields/permissions tabs (mssql + dwsql tables/views).
   useEffect(() => {
-    if ((tab !== 'fields' && tab !== 'permissions') || cfg.sourceRef.kind !== 'mssql') return;
+    const k = cfg.sourceRef.kind;
+    if ((tab !== 'fields' && tab !== 'permissions') || (k !== 'mssql' && k !== 'dwsql')) return;
     if (!cfg.sourceRef.server || !cfg.sourceRef.database) return;
     // Resolve objectId via schema endpoint is costly; instead re-introspect columns by object name match.
     (async () => {
       try {
-        const sr = await fetch(`/api/dab/sources/mssql/schema?server=${encodeURIComponent(cfg.sourceRef.server!)}&database=${encodeURIComponent(cfg.sourceRef.database!)}`);
+        const sr = await fetch(`/api/dab/sources/${k}/schema?server=${encodeURIComponent(cfg.sourceRef.server!)}&database=${encodeURIComponent(cfg.sourceRef.database!)}`);
         const sj = await sr.json();
         if (!sj.ok) return;
         const all = [...(sj.tables || []), ...(sj.views || [])];
@@ -608,7 +855,7 @@ function EntityDetail({ cfg, entity, tab, mutate }: {
         const [schemaName, objName] = obj.split('.');
         const match = all.find((o: any) => o.schema === schemaName && o.name === objName);
         if (!match) return;
-        const cr = await fetch(`/api/dab/sources/mssql/columns?server=${encodeURIComponent(cfg.sourceRef.server!)}&database=${encodeURIComponent(cfg.sourceRef.database!)}&objectId=${match.objectId}`);
+        const cr = await fetch(`/api/dab/sources/${k}/columns?server=${encodeURIComponent(cfg.sourceRef.server!)}&database=${encodeURIComponent(cfg.sourceRef.database!)}&objectId=${match.objectId}`);
         const cj = await cr.json();
         if (cj.ok) setCols(cj.columns);
       } catch { /* non-fatal */ }
