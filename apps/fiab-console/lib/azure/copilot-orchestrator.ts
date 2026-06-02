@@ -23,6 +23,7 @@ import {
 } from '@azure/identity';
 
 import { listConnections } from './foundry-client';
+import type { TenantCopilotConfig } from '../types/copilot-config';
 import {
   executeQuery as synapseExecute,
   dedicatedTarget,
@@ -67,20 +68,58 @@ export interface AoaiTarget {
 
 let _aoaiTarget: AoaiTarget | null = null;
 
-export async function resolveAoaiTarget(force = false): Promise<AoaiTarget> {
-  if (_aoaiTarget && !force) return _aoaiTarget;
+/**
+ * Resolve the AOAI chat target.
+ *
+ * Resolution order:
+ *   1. `cfg` — the tenant's admin-selected Copilot config (aoaiEndpoint +
+ *      copilotChatDeployment, or just copilotChatDeployment paired with the
+ *      foundry account's endpoint). The admin picker is the source of truth.
+ *   2. LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT env vars (existing behaviour).
+ *   3. Discovery via Foundry hub connections.
+ *
+ * When `cfg` is supplied the result is NOT cached (config is per-tenant); the
+ * module cache only memoizes the env/discovery default.
+ */
+export async function resolveAoaiTarget(
+  forceOrCfg: boolean | TenantCopilotConfig | null = false,
+  maybeCfg?: TenantCopilotConfig | null,
+): Promise<AoaiTarget> {
+  const force = typeof forceOrCfg === 'boolean' ? forceOrCfg : false;
+  const cfg: TenantCopilotConfig | null =
+    typeof forceOrCfg === 'object' && forceOrCfg ? forceOrCfg : (maybeCfg ?? null);
 
-  // Env overrides (works even when no Foundry connection is registered)
-  const envEndpoint = process.env.LOOM_AOAI_ENDPOINT;
-  const envDeployment = process.env.LOOM_AOAI_DEPLOYMENT;
   const apiVersion = process.env.LOOM_AOAI_API_VERSION || '2024-10-21';
 
-  if (envEndpoint && envDeployment) {
-    _aoaiTarget = { endpoint: envEndpoint.replace(/\/$/, ''), deployment: envDeployment, apiVersion };
-    return _aoaiTarget;
+  // 1. Tenant admin-selected config (highest priority).
+  if (cfg && (cfg.copilotChatDeployment || cfg.aoaiEndpoint)) {
+    const endpoint = (cfg.aoaiEndpoint || process.env.LOOM_AOAI_ENDPOINT || '').replace(/\/$/, '');
+    const deployment = cfg.copilotChatDeployment || process.env.LOOM_AOAI_DEPLOYMENT || '';
+    if (endpoint && deployment) {
+      return { endpoint, deployment, apiVersion };
+    }
+    // Endpoint known but no deployment chosen yet → honest gate.
+    if (!deployment) {
+      throw new NoAoaiDeploymentError(
+        'A Foundry account is selected in admin tenant-settings but no Copilot chat-model deployment is chosen. ' +
+          'Pick one under Admin → Tenant settings → Copilot & Agents (deploy a gpt-4o / gpt-4.1 class model first).',
+      );
+    }
   }
 
-  // Discover via Foundry hub connections
+  if (_aoaiTarget && !force && !cfg) return _aoaiTarget;
+
+  // 2. Env overrides (works even when no Foundry connection is registered)
+  const envEndpoint = process.env.LOOM_AOAI_ENDPOINT;
+  const envDeployment = process.env.LOOM_AOAI_DEPLOYMENT;
+
+  if (envEndpoint && envDeployment) {
+    const t = { endpoint: envEndpoint.replace(/\/$/, ''), deployment: envDeployment, apiVersion };
+    if (!cfg) _aoaiTarget = t;
+    return t;
+  }
+
+  // 3. Discover via Foundry hub connections
   let conns: Awaited<ReturnType<typeof listConnections>> = [];
   try {
     conns = await listConnections();
@@ -100,13 +139,15 @@ export async function resolveAoaiTarget(force = false): Promise<AoaiTarget> {
     );
   }
 
-  const deployment = envDeployment || (aoai.metadata?.['DeploymentApiVersion'] as string) || 'gpt-4o';
-  _aoaiTarget = {
+  const deployment =
+    cfg?.copilotChatDeployment || envDeployment || (aoai.metadata?.['DeploymentApiVersion'] as string) || 'gpt-4o';
+  const discovered: AoaiTarget = {
     endpoint: aoai.target.replace(/\/$/, ''),
     deployment,
     apiVersion,
   };
-  return _aoaiTarget;
+  if (!cfg) _aoaiTarget = discovered;
+  return discovered;
 }
 
 async function aoaiToken(): Promise<string> {
@@ -478,6 +519,9 @@ export interface OrchestrateOptions {
   sessionId: string;
   userOid: string;
   maxIterations?: number;
+  /** Tenant admin-selected Copilot config (account + chat deployment). When
+   *  supplied it takes priority over env / discovery. */
+  tenantConfig?: TenantCopilotConfig | null;
 }
 
 interface ChatMessage {
@@ -562,7 +606,7 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
 
   let target: AoaiTarget;
   try {
-    target = await resolveAoaiTarget();
+    target = await resolveAoaiTarget(opts.tenantConfig ?? null);
   } catch (e: any) {
     const step: OrchestratorStep = {
       kind: 'error',

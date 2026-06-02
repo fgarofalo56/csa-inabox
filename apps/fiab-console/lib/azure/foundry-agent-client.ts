@@ -70,8 +70,20 @@ export class FoundryAgentError extends Error {
   }
 }
 
-function requireConfig(): { endpoint: string; projectId: string; apiVersion: string } {
-  const endpoint = process.env.LOOM_FOUNDRY_PROJECT_ENDPOINT;
+/**
+ * Optional config override threaded from a workspace's data-agent config (and,
+ * below it, the tenant default). When provided, these win over the env vars so
+ * a workspace can target its own Foundry project endpoint. Each field is
+ * individually optional — unset fields fall back to env.
+ */
+export interface FoundryAgentConfigOverride {
+  projectEndpoint?: string;
+  projectId?: string;
+  apiVersion?: string;
+}
+
+function requireConfig(override?: FoundryAgentConfigOverride): { endpoint: string; projectId: string; apiVersion: string } {
+  const endpoint = override?.projectEndpoint || process.env.LOOM_FOUNDRY_PROJECT_ENDPOINT;
   if (!endpoint) {
     throw new FoundryAgentNotConfiguredError(
       'LOOM_FOUNDRY_PROJECT_ENDPOINT',
@@ -81,7 +93,7 @@ function requireConfig(): { endpoint: string; projectId: string; apiVersion: str
         'and wire the resulting endpoint into the admin-plane app env list.',
     );
   }
-  const projectId = process.env.LOOM_FOUNDRY_PROJECT_ID;
+  const projectId = override?.projectId || process.env.LOOM_FOUNDRY_PROJECT_ID;
   if (!projectId) {
     throw new FoundryAgentNotConfiguredError(
       'LOOM_FOUNDRY_PROJECT_ID',
@@ -95,15 +107,16 @@ function requireConfig(): { endpoint: string; projectId: string; apiVersion: str
   return {
     endpoint: endpoint.replace(/\/$/, ''),
     projectId,
-    apiVersion: process.env.LOOM_FOUNDRY_API_VERSION || DEFAULT_API_VERSION,
+    apiVersion: override?.apiVersion || process.env.LOOM_FOUNDRY_API_VERSION || DEFAULT_API_VERSION,
   };
 }
 
 async function agentFetch(
   path: string,
   init: RequestInit = {},
+  override?: FoundryAgentConfigOverride,
 ): Promise<Response> {
-  const { endpoint, apiVersion } = requireConfig();
+  const { endpoint, apiVersion } = requireConfig(override);
   const token = await credential.getToken(AGENT_SCOPE);
   if (!token?.token) throw new Error('Failed to acquire token for Foundry Agent Service');
   const sep = path.includes('?') ? '&' : '?';
@@ -168,8 +181,8 @@ export interface FoundryAgentBody {
 }
 
 /** Returns the projectId env value without hitting the Agent Service — useful for editors. */
-export function getProjectId(): string {
-  return requireConfig().projectId;
+export function getProjectId(override?: FoundryAgentConfigOverride): string {
+  return requireConfig(override).projectId;
 }
 
 /**
@@ -226,9 +239,9 @@ export async function getAgent(
   return j ? { ...j, name: j.name || name, projectId } : null;
 }
 
-export async function listAgents(_projectId: string): Promise<FoundryAgent[]> {
-  const { projectId } = requireConfig();
-  const res = await agentFetch(`/agents`);
+export async function listAgents(_projectId: string, override?: FoundryAgentConfigOverride): Promise<FoundryAgent[]> {
+  const { projectId } = requireConfig(override);
+  const res = await agentFetch(`/agents`, {}, override);
   const j = await readJson<{ value?: FoundryAgent[]; data?: FoundryAgent[] }>(res);
   const rows = (j?.value || j?.data || []) as FoundryAgent[];
   return rows.map((a) => ({ ...a, projectId }));
@@ -331,25 +344,26 @@ function extractAssistantText(messages: any): string {
 export async function runAgentAndInspect(
   agentName: string,
   question: string,
-  opts?: { maxPollMs?: number; intervalMs?: number },
+  opts?: { maxPollMs?: number; intervalMs?: number; override?: FoundryAgentConfigOverride },
 ): Promise<AgentRunInspection> {
-  requireConfig(); // throws FoundryAgentNotConfiguredError when unconfigured
+  const override = opts?.override;
+  requireConfig(override); // throws FoundryAgentNotConfiguredError when unconfigured
   if (!agentName) throw new FoundryAgentError(400, undefined, 'agent name required');
   if (!question?.trim()) throw new FoundryAgentError(400, undefined, 'question required');
 
-  const thread = await readJson<any>(await agentFetch('/threads', { method: 'POST', body: JSON.stringify({}) }));
+  const thread = await readJson<any>(await agentFetch('/threads', { method: 'POST', body: JSON.stringify({}) }, override));
   const threadId: string = thread?.id;
   if (!threadId) throw new FoundryAgentError(502, thread, 'Foundry Agent Service did not return a thread id');
 
   await readJson(await agentFetch(`/threads/${encodeURIComponent(threadId)}/messages`, {
     method: 'POST',
     body: JSON.stringify({ role: 'user', content: question }),
-  }));
+  }, override));
 
   let run = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/runs`, {
     method: 'POST',
     body: JSON.stringify({ assistant_id: agentName }),
-  }));
+  }, override));
   const runId: string = run?.id;
   if (!runId) throw new FoundryAgentError(502, run, 'Foundry Agent Service did not return a run id');
 
@@ -359,16 +373,16 @@ export async function runAgentAndInspect(
   let status: string = run?.status || 'queued';
   while (!TERMINAL_RUN_STATUSES.has(status) && Date.now() - startedAt < maxPollMs) {
     await new Promise((r) => setTimeout(r, intervalMs));
-    run = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}`));
+    run = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}`, {}, override));
     status = run?.status || status;
   }
 
-  const stepsRes = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}/steps?order=asc`));
+  const stepsRes = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/runs/${encodeURIComponent(runId)}/steps?order=asc`, {}, override));
   const steps: RunStep[] = Array.isArray(stepsRes?.data) ? stepsRes.data.map(normalizeRunStep) : [];
 
   let answer = '';
   if (status === 'completed') {
-    const msgs = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/messages?order=desc&limit=10`));
+    const msgs = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/messages?order=desc&limit=10`, {}, override));
     answer = extractAssistantText(msgs);
   }
 

@@ -18,6 +18,7 @@ import {
   FoundryAgentNotConfiguredError,
   FoundryAgentError,
 } from '@/lib/azure/foundry-agent-client';
+import { resolveWorkspaceFoundry } from '@/lib/azure/copilot-config-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,13 +30,20 @@ export async function POST(req: NextRequest) {
 
   let body: any;
   try { body = await req.json(); } catch { body = {}; }
-  const agent = typeof body?.agent === 'string' ? body.agent.trim() : '';
   const question = typeof body?.question === 'string' ? body.question.trim() : '';
-  if (!agent) return NextResponse.json({ ok: false, error: 'agent (published Foundry agent name) required' }, { status: 400 });
+  const workspaceId = typeof body?.workspaceId === 'string' ? body.workspaceId.trim() : '';
   if (!question) return NextResponse.json({ ok: false, error: 'question required' }, { status: 400 });
 
   try {
-    const data = await runAgentAndInspect(agent, question);
+    // Resolve the workspace's Foundry project (workspace cfg → tenant default →
+    // env) and its preferred agent. A workspace can target its own Foundry.
+    const wf = workspaceId ? await resolveWorkspaceFoundry(workspaceId, session.claims.oid) : { defaultAgent: undefined as string | undefined };
+    const agent = (typeof body?.agent === 'string' && body.agent.trim()) || wf.defaultAgent || '';
+    if (!agent) return NextResponse.json({ ok: false, error: 'agent (published Foundry agent name) required' }, { status: 400 });
+    const override = workspaceId
+      ? { projectEndpoint: (wf as any).projectEndpoint, projectId: (wf as any).projectId }
+      : undefined;
+    const data = await runAgentAndInspect(agent, question, { override });
     return NextResponse.json({ ok: true, data });
   } catch (e: any) {
     if (e instanceof FoundryAgentNotConfiguredError) {
