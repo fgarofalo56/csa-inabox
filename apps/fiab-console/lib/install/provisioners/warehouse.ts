@@ -214,57 +214,6 @@ function viewNameFromCreate(batch: string): string | null {
   return m ? m[1] : null;
 }
 
-/**
- * Make a leading `CREATE SCHEMA <name>` idempotent on dedicated SQL pool.
- *
- * `CREATE SCHEMA` is non-idempotent — re-running install raises "There is
- * already an object named '<s>' ... CREATE SCHEMA failed". Dedicated pool also
- * requires CREATE SCHEMA to be the first statement in its batch, so we cannot
- * simply prefix an `IF NOT EXISTS … ` guard around a bare CREATE SCHEMA.
- * Instead wrap it in the documented idempotent idiom that keeps CREATE SCHEMA
- * inside its own EXEC batch:
- *
- *   IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'<s>')
- *   EXEC('CREATE SCHEMA <s>');
- *
- *   https://learn.microsoft.com/sql/t-sql/statements/create-schema-transact-sql#remarks
- *
- * Only a batch whose statement is *exactly* `CREATE SCHEMA <name>` (optionally
- * `AUTHORIZATION <owner>` and a trailing `;`) is rewritten — a no-op for any
- * other batch. The full CREATE SCHEMA text is preserved inside the EXEC,
- * with embedded single-quotes doubled.
- */
-function makeCreateSchemaIdempotent(batch: string): string {
-  const m = batch.match(/^\s*CREATE\s+SCHEMA\s+([^\s;]+)/i);
-  if (!m) return batch;
-  // Schema name may be bracket-quoted ([hybrid]) or bare (hybrid); strip
-  // brackets and any embedded quote-doubling for the sys.schemas comparison.
-  const rawName = m[1].replace(/^\[|\]$/g, '');
-  const nameLiteral = rawName.replace(/'/g, "''");
-  const innerSql = batch.replace(/;\s*$/, '').trim().replace(/'/g, "''");
-  return `IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'${nameLiteral}')\nEXEC('${innerSql}');`;
-}
-
-/**
- * Detect a batch that opens with `CREATE VIEW` (after the comment/GO scrub in
- * splitBatches). On dedicated SQL pool CREATE VIEW must be the FIRST and ONLY
- * statement in its batch, so such a batch must be issued on its own — never
- * folded behind an IF/DROP guard or another statement.
- */
-function isCreateViewBatch(batch: string): boolean {
-  return /^\s*CREATE\s+VIEW\b/i.test(batch);
-}
-
-/**
- * Extract the view name from a leading `CREATE VIEW [name] AS …` /
- * `CREATE VIEW schema.name AS …` so we can emit a separate idempotent DROP
- * batch before the CREATE VIEW batch.
- */
-function viewNameFromCreate(batch: string): string | null {
-  const m = batch.match(/^\s*CREATE\s+VIEW\s+([^\s(]+)/i);
-  return m ? m[1] : null;
-}
-
 interface SampleRowsEntry {
   table: string;
   columns?: string[];
