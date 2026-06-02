@@ -2342,6 +2342,35 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/copilot-fabric-overview"
     } },
+
+  // --- v3 — Azure Logic Apps (Consumption, multitenant) ---
+  // Workflow Definition Language (WDL) workflows: Request/Recurrence triggers,
+  // HTTP / ApiConnection / Compose / ParseJson / Query / Select / If actions,
+  // deployed via PUT Microsoft.Logic/workflows and run via the manual trigger.
+  { slug: 'logic-app',                   displayName: 'Logic App',                   restType: 'Microsoft.Logic/workflows',  category: 'Data Factory',
+    description: 'Azure Logic Apps (Consumption) workflow: triggers + actions in the WDL designer, run via the manual trigger.',
+    learnContent: {
+      "overview": "A Logic App is an Azure Logic Apps (Consumption) workflow defined in the Workflow Definition Language (WDL): a trigger (Request, Recurrence) followed by actions (HTTP, ApiConnection, Compose, ParseJson, Query, Select, If/Switch, Response). In Loom it opens fully built-out from the installed definition or the live Microsoft.Logic/workflows resource, and Run trigger fires a real manual run.",
+      "steps": [
+        {
+          "title": "Read the designer",
+          "body": "The Designer tab shows the trigger followed by every action in execution order, including branch sub-actions and runAfter dependencies."
+        },
+        {
+          "title": "Inspect parameters",
+          "body": "The Parameters tab lists the WDL parameters (type, default, description) and the deploy-time parameter values."
+        },
+        {
+          "title": "Review the WDL",
+          "body": "The Code view tab shows the full Workflow Definition Language JSON in a Monaco editor."
+        },
+        {
+          "title": "Run the trigger",
+          "body": "Run trigger fires the manual trigger on the bound workflow and polls run history, or surfaces an honest gate naming LOOM_LOGIC_SUB / LOOM_LOGIC_RG / LOOM_LOGIC_LOCATION + the Logic App Contributor role."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/logic-apps/workflow-definition-language-schema"
+    } },
 ];
 
 export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
