@@ -109,6 +109,37 @@ const RUN_POLL_MS = 3000;
 const RUN_SETTLE_POLLS = 3; // ~9s settle — catch an instant failure, don't block.
 const RUN_TERMINAL = new Set(['TERMINATED', 'SKIPPED', 'INTERNAL_ERROR']);
 
+/**
+ * A run that fails ONLY because a referenced notebook is missing or the run
+ * identity can't access it is NOT a job-creation failure — the job IS real on
+ * the workspace. Per the Jobs API, a job submitted by API runs with the
+ * notebook's default permissions (https://learn.microsoft.com/azure/databricks/jobs/privileges),
+ * so a freshly created job whose notebooks haven't been imported / shared with
+ * the Console UAMI surfaces exactly this signature in the run's state_message:
+ *   "...does not exist, or the identity <uami> lacks the required permissions"
+ *   "Unable to access the notebook ..."  (often with life_cycle INTERNAL_ERROR)
+ * Detect that signature so we report the job as `created` behind an honest
+ * remediation gate instead of hard-failing a successful deploy. */
+function isNotebookAccessFailure(life?: string, message?: string): boolean {
+  const m = (message || '').toLowerCase();
+  if (!m) return false;
+  const notebookScoped = m.includes('notebook') || m.includes('/workspace/');
+  if (!notebookScoped) return false;
+  return (
+    m.includes('does not exist') ||
+    m.includes('unable to access') ||
+    m.includes('cannot access') ||
+    m.includes("can't access") ||
+    m.includes('not found') ||
+    m.includes('lacks the required permission') ||
+    m.includes('lack the required permission') ||
+    m.includes('lacks required permission') ||
+    m.includes('permission denied') ||
+    m.includes('no permission') ||
+    (life === 'INTERNAL_ERROR' && (m.includes('permission') || m.includes('access')))
+  );
+}
+
 export const databricksJobProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
   const steps: string[] = [];
 
@@ -221,9 +252,33 @@ export const databricksJobProvisioner: Provisioner = async (input): Promise<Prov
       : `Run ${runId} submitted and executing (${life || 'PENDING'}); not blocking install on the full medallion build — tracked by run id.`,
   );
 
-  // A TERMINAL non-SUCCESS run means the data-production path errored — surface
-  // it (not silent success) per no-vaporware so the operator fixes it.
+  // A TERMINAL non-SUCCESS run means either (a) the JOB was created fine but
+  // its referenced notebooks aren't importable/accessible by the run identity —
+  // a one-time bootstrap gap, NOT a deploy failure; the job is real — or
+  // (b) a genuine data-production error. Distinguish the two: creating the job
+  // is the real deploy success, so a notebook-access failure becomes an honest
+  // remediation gate, while any other terminal failure still hard-fails.
   if (settled && result && result !== 'SUCCESS') {
+    const stateMessage = run?.state?.state_message;
+    if (isNotebookAccessFailure(life, stateMessage)) {
+      steps.push(
+        `Job ${jobId} created; run ${runId} could not start because a referenced notebook is missing or inaccessible.`,
+      );
+      return {
+        status: 'remediation',
+        resourceId: String(jobId),
+        secondaryIds,
+        gate: {
+          reason:
+            `Databricks job ${jobId} was created successfully, but its first run ${life}/${result} because a referenced notebook is missing or inaccessible` +
+            `${stateMessage ? `: ${stateMessage}` : '.'}`,
+          remediation:
+            "Import the job's referenced notebooks into the Databricks workspace (or point the job tasks at the bundle's imported notebooks) and grant the Console UAMI (LOOM_UAMI_CLIENT_ID) Can-Run on them, then re-run the job. The job definition is already deployed — this is a one-time notebook bootstrap.",
+          link: 'https://learn.microsoft.com/azure/databricks/jobs/privileges',
+        },
+        steps,
+      };
+    }
     return {
       status: 'failed',
       error: `Databricks job run ${runId} finished ${life}/${result}${run?.state?.state_message ? `: ${run.state.state_message}` : ''}.`,
