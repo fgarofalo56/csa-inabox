@@ -193,9 +193,9 @@ export const kqlDashboardProvisioner: Provisioner = async (input): Promise<Provi
     return {
       status: 'remediation',
       gate: {
-        reason: 'No bound Fabric workspace for this Loom workspace.',
+        reason: 'This is a Microsoft Fabric item — it needs a Fabric workspace bound to this Loom workspace.',
         remediation:
-          'Bind a Fabric workspace via /admin/workspaces > Bind capacity, OR set LOOM_DEFAULT_FABRIC_WORKSPACE.',
+          'Bind a capacity-backed Microsoft Fabric workspace to this Loom workspace at /admin/workspaces → Bind capacity (or set LOOM_DEFAULT_FABRIC_WORKSPACE to a default Fabric workspace GUID). This is a real Fabric/Power BI workspace on a Fabric capacity — NOT the Loom workspace itself. The rest of this app (lakehouse, notebooks, warehouse, KQL database, semantic model) installs without it.',
         link: '/admin/workspaces',
       },
       steps,

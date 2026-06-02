@@ -58,7 +58,12 @@ export const dataPipelineProvisioner: Provisioner = async (input): Promise<Provi
   if (!ws) {
     return {
       status: 'remediation',
-      gate: { reason: 'No bound Fabric workspace.', remediation: 'Bind a Fabric workspace.', link: '/admin/workspaces' },
+      gate: {
+        reason: 'This is a Microsoft Fabric Data pipeline — it needs a Fabric workspace bound to this Loom workspace.',
+        remediation:
+          'Bind a capacity-backed Microsoft Fabric workspace to this Loom workspace at /admin/workspaces → Bind capacity (or set LOOM_DEFAULT_FABRIC_WORKSPACE). This is a real Fabric/Power BI workspace on a Fabric capacity — NOT the Loom workspace itself. (For a non-Fabric pipeline, use the Synapse or ADF pipeline item instead.)',
+        link: '/admin/workspaces',
+      },
       steps,
     };
   }
