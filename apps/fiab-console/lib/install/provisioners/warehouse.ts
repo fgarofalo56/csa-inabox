@@ -139,16 +139,28 @@ function splitBatches(sql: string): string[] {
  * don't open with that idiom (plain CREATE TABLE, CREATE VIEW, INSERT, …).
  */
 function makeCreateTableIdempotent(batch: string): string {
-  const m = batch.match(/^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+([^\s(]+)/i);
-  if (!m) return batch;
-  const tableName = m[1];
-  // OBJECT_ID wants a string literal; double any embedded quotes.
-  const literal = tableName.replace(/'/g, "''");
-  const rewritten = batch.replace(
-    /^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+/i,
-    'CREATE TABLE ',
-  );
-  return `IF OBJECT_ID(N'${literal}', N'U') IS NULL\n${rewritten}`;
+  // Already wrapped (IF OBJECT_ID … CREATE TABLE) — leave it.
+  if (/^\s*IF\s+OBJECT_ID/i.test(batch)) return batch;
+
+  // Form 1: ANSI `CREATE TABLE IF NOT EXISTS <name>` → strip the unsupported
+  // IF NOT EXISTS and wrap with the OBJECT_ID guard.
+  const ifne = batch.match(/^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+([^\s(]+)/i);
+  if (ifne) {
+    const literal = ifne[1].replace(/'/g, "''");
+    const rewritten = batch.replace(/^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+/i, 'CREATE TABLE ');
+    return `IF OBJECT_ID(N'${literal}', N'U') IS NULL\n${rewritten}`;
+  }
+
+  // Form 2: plain `CREATE TABLE <name> (…)`. On a SHARED dedicated pool a table
+  // may already exist pool-wide from a prior install, so an unguarded CREATE
+  // raises "There is already an object named '<t>'". Wrap it with the same
+  // OBJECT_ID guard so re-install / shared-pool installs are idempotent.
+  const plain = batch.match(/^\s*CREATE\s+TABLE\s+([^\s(]+)/i);
+  if (plain) {
+    const literal = plain[1].replace(/'/g, "''");
+    return `IF OBJECT_ID(N'${literal}', N'U') IS NULL\n${batch}`;
+  }
+  return batch;
 }
 
 /**
@@ -419,6 +431,15 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
 
     for (const m of dbtModels) {
       const viewName = `${m.layer}_${m.name}`;
+      // dbt models authored with Jinja ({{ config }}, {{ ref/source }}, {% if %})
+      // are compiled by a dbt RUN, not executable as a raw CREATE VIEW — sending
+      // them to TDS raises "Incorrect syntax near '{'". Skip them honestly: the
+      // model SQL ships as project source for `dbt run`, and the bronze/silver/
+      // gold data path is already served by the seeded tables above.
+      if (/\{\{|\{%/.test(m.sql)) {
+        steps.push(`Skipped dbt model [${viewName}] (${m.layer}): Jinja-templated — compiled by a dbt run, not a direct view. Seeded tables already serve the data path.`);
+        continue;
+      }
       // Synapse DEDICATED SQL pool does NOT support CREATE OR ALTER VIEW, and
       // requires CREATE VIEW to be the FIRST and ONLY statement in its batch
       // (Microsoft Learn: "The CREATE VIEW must be the first statement in a
