@@ -45,6 +45,33 @@ export interface SearchRequest {
   vectorQueries?: VectorQuery[];
   queryType?: 'simple' | 'full' | 'semantic';
   /**
+   * `any` (default — OR the terms) or `all` (AND the terms). Mirrors the
+   * portal Search Explorer "searchMode" toggle. Grounded in Learn (Search -
+   * POST: searchMode `any`|`all`).
+   */
+  searchMode?: 'any' | 'all';
+  /**
+   * Name of a scoring profile embedded in the index
+   * (`index.scoringProfiles[].name`) used to bias the relevance score.
+   * Grounded in Learn (Search - POST: `scoringProfile`).
+   */
+  scoringProfile?: string;
+  /**
+   * Inputs for the scoring profile's functions, each `"name-value1,value2"`.
+   * Grounded in Learn (Search - POST: `scoringParameters` as a string array).
+   */
+  scoringParameters?: string[];
+  /**
+   * Comma-separated searchable field names to hit-highlight, each optionally
+   * suffixed `-N` to cap the highlights (e.g. `title-3,description-10`).
+   * Grounded in Learn (Search - POST: `highlight`).
+   */
+  highlight?: string;
+  /** Override the highlight open tag (default `<em>`). */
+  highlightPreTag?: string;
+  /** Override the highlight close tag (default `</em>`). */
+  highlightPostTag?: string;
+  /**
    * Required when queryType=semantic — the name of a semantic configuration
    * embedded in the index (`index.semantic.configurations[].name`). Grounded in
    * Learn: semantic ranking requires `queryType:'semantic'` + `semanticConfiguration`.
@@ -75,7 +102,17 @@ export function buildSearchBody(req: SearchRequest): any {
   if (req.searchFields) body.searchFields = req.searchFields;
   if (req.facets?.length) body.facets = req.facets;
   if (req.queryType) body.queryType = req.queryType;
+  if (req.searchMode) body.searchMode = req.searchMode;
   if (req.count !== undefined) body.count = req.count;
+  // Scoring profile + its function inputs (relevance boosting).
+  if (req.scoringProfile) body.scoringProfile = req.scoringProfile;
+  if (req.scoringParameters?.length) body.scoringParameters = req.scoringParameters;
+  // Hit highlighting (per-field, with optional custom tags).
+  if (req.highlight) {
+    body.highlight = req.highlight;
+    if (req.highlightPreTag) body.highlightPreTag = req.highlightPreTag;
+    if (req.highlightPostTag) body.highlightPostTag = req.highlightPostTag;
+  }
   // Semantic parameters only ride along on a semantic query.
   if (req.queryType === 'semantic') {
     if (req.semanticConfiguration) body.semanticConfiguration = req.semanticConfiguration;
@@ -223,4 +260,21 @@ export function vectorProfileNames(index: any): string[] {
   const profs = index?.vectorSearch?.profiles;
   if (!Array.isArray(profs)) return [];
   return profs.map((p: any) => p?.name).filter((n: any): n is string => typeof n === 'string' && !!n);
+}
+
+/** Names of the scoring profiles embedded in an index definition. */
+export function scoringProfileNames(index: any): string[] {
+  const profs = index?.scoringProfiles;
+  if (!Array.isArray(profs)) return [];
+  return profs.map((p: any) => p?.name).filter((n: any): n is string => typeof n === 'string' && !!n);
+}
+
+/** Names of the index's facetable, retrievable fields (valid faceting targets). */
+export function facetableFieldNames(index: any): string[] {
+  const fields = index?.fields;
+  if (!Array.isArray(fields)) return [];
+  return fields
+    .filter((f: any) => f?.facetable && !isVectorFieldType(f?.type || ''))
+    .map((f: any) => f?.name)
+    .filter((n: any): n is string => typeof n === 'string' && !!n);
 }

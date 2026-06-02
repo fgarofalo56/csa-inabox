@@ -210,6 +210,7 @@ export type { FieldRow } from './search-field-shapes';
 export {
   isVectorFieldType, fieldRowToApiField, apiFieldToRow, applyFieldRows,
   FIELD_TYPES, ANALYZERS, semanticConfigNames, vectorProfileNames,
+  scoringProfileNames, facetableFieldNames,
 } from './search-field-shapes';
 
 /** GET /indexes — list every index on the service (summary form). */

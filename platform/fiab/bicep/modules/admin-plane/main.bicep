@@ -83,6 +83,9 @@ param deployAppsEnabled bool = false
 @description('Deploy AI Foundry Hub. Requires explicit storage-account strategy; default off so initial provision succeeds before operator picks Hub strategy.')
 param aiFoundryEnabled bool = false
 
+@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. Independent of aiFoundryEnabled.')
+param agentFoundryEnabled bool = false
+
 @description('Deploy APIM. Premium V2 takes 30+ min; default off so initial provision iterates quickly.')
 param apimEnabled bool = false
 
@@ -417,6 +420,26 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoun
 }
 
 // =====================================================================
+// 8b. AI Foundry Agent Service account (aifndry-loom-<location>)
+// Dedicated AIServices account + loom-agents project + chat/embedding
+// model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* for
+// the Agent Service. Mirrors the live Commercial deployment one-for-one.
+// =====================================================================
+
+module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
+  name: 'agent-foundry'
+  params: {
+    location: location
+    // Sovereign / private-only boundaries keep the account off the public net.
+    publicNetworkAccess: boundary == 'Commercial'
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // 9. APIM (Premium V2 or classic Premium per boundary)
 // =====================================================================
 
@@ -714,10 +737,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
             { name: 'LOOM_FOUNDRY_REGION', value: location }
             // Foundry Agent Service (data-plane) — backs the data-agent Publish flow +
-            // the Foundry agent editor. Project endpoint + workspace GUID come from the
-            // Foundry project created in ai-foundry.bicep. Empty when AI Foundry is off.
-            { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectEndpoint : '' }
-            { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectId : '' }
+            // the Foundry agent editor. The dedicated Agent Service account
+            // (foundry-project.bicep, aifndry-loom-<location>) takes precedence;
+            // otherwise fall back to the shared Hub's project (ai-foundry.bicep).
+            // Empty when neither is deployed.
+            { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: agentFoundryEnabled ? agentFoundry!.outputs.projectEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectEndpoint : '') }
+            { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: agentFoundryEnabled ? agentFoundry!.outputs.projectId : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectId : '') }
+            { name: 'LOOM_FOUNDRY_PROJECT_NAME',     value: agentFoundryEnabled ? agentFoundry!.outputs.projectNameOut : '' }
+            // AOAI inference endpoint + model deployment names for the Agent
+            // Service account. Consumed by the AOAI clients (chat + embeddings).
+            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : '' }
+            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }

@@ -35,7 +35,7 @@ import { AiSearchServiceTree } from '@/lib/components/ai-search/ai-search-tree';
 import {
   type FieldRow, type VectorQuery,
   FIELD_TYPES, ANALYZERS, isVectorFieldType, apiFieldToRow, applyFieldRows,
-  semanticConfigNames, vectorProfileNames,
+  semanticConfigNames, vectorProfileNames, scoringProfileNames, facetableFieldNames,
 } from '@/lib/azure/search-field-shapes';
 import { PromptFlowBuilder } from '@/lib/prompt-flow/flow-builder';
 import {
@@ -98,6 +98,52 @@ function ErrorBar({ msg, hint, notDeployed }: { msg: string; hint?: string; notD
         {msg}{hint ? ` — ${hint}` : ''}
       </MessageBarBody>
     </MessageBar>
+  );
+}
+
+/**
+ * Render an AI Search `@search.highlights` map into bolded snippets. The service
+ * wraps matched terms with the request's pre/post tags (default `<em>`/`</em>`);
+ * we split on those tags and bold the matched spans WITHOUT innerHTML — so a
+ * field value that happens to contain markup can never inject DOM. Grounded in
+ * Learn (Shape search results — hit highlighting: `@search.highlights`).
+ */
+function renderHighlights(
+  highlights: Record<string, string[]> | undefined,
+  preTag: string,
+  postTag: string,
+): ReactNode {
+  if (!highlights) return '—';
+  const pre = preTag || '<em>';
+  const post = postTag || '</em>';
+  const entries = Object.entries(highlights);
+  if (!entries.length) return '—';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {entries.map(([field, snippets], fi) => (
+        <div key={fi}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{field}: </Caption1>
+          {(snippets || []).map((snippet, si) => {
+            // Split on the pre tag, then each piece on the post tag; the segment
+            // BEFORE the first post tag (after a pre) is the matched span.
+            const parts: ReactNode[] = [];
+            let rest = snippet;
+            let k = 0;
+            while (rest.length) {
+              const pi = rest.indexOf(pre);
+              if (pi < 0) { parts.push(rest); break; }
+              if (pi > 0) parts.push(rest.slice(0, pi));
+              rest = rest.slice(pi + pre.length);
+              const ei = rest.indexOf(post);
+              if (ei < 0) { parts.push(<strong key={`m${k++}`}>{rest}</strong>); break; }
+              parts.push(<strong key={`m${k++}`} style={{ background: tokens.colorPaletteYellowBackground2 }}>{rest.slice(0, ei)}</strong>);
+              rest = rest.slice(ei + post.length);
+            }
+            return <span key={si} style={{ display: 'block' }}>{parts}</span>;
+          })}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -877,6 +923,14 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const [captionsOn, setCaptionsOn] = useState(false);
   // Vector-query builder rows.
   const [vectorQueries, setVectorQueries] = useState<VectorQuery[]>([]);
+  // Search Explorer — extra portal-parity options.
+  const [searchMode, setSearchMode] = useState<'any' | 'all'>('any');
+  const [scoringProfile, setScoringProfile] = useState('');
+  const [scoringParameters, setScoringParameters] = useState(''); // newline-separated "name-v1,v2"
+  const [selectedFacets, setSelectedFacets] = useState<string[]>([]);
+  const [highlightFields, setHighlightFields] = useState(''); // comma-separated searchable fields
+  const [highlightPreTag, setHighlightPreTag] = useState('<em>');
+  const [highlightPostTag, setHighlightPostTag] = useState('</em>');
   // Last request body actually sent (raw-JSON view).
   const [lastQueryBody, setLastQueryBody] = useState<any>(null);
 
@@ -905,6 +959,13 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const fields: any[] = idx?.fields || [];
   const semanticConfigs = useMemo(() => semanticConfigNames(idx), [idx]);
   const vectorProfiles = useMemo(() => vectorProfileNames(idx), [idx]);
+  const scoringProfiles = useMemo(() => scoringProfileNames(idx), [idx]);
+  const facetableFields = useMemo(() => facetableFieldNames(idx), [idx]);
+  // Searchable, non-vector string fields are the only valid highlight targets.
+  const highlightableFields = useMemo(
+    () => fields.filter((f) => f.searchable && /Edm\.String/.test(f.type || '') && !isVectorFieldType(f.type)).map((f) => f.name),
+    [fields],
+  );
   // Vector field names — the only valid targets for a vector query's `fields`.
   const vectorFieldNames = useMemo(
     () => fields.filter((f) => isVectorFieldType(f.type)).map((f) => f.name),
@@ -925,6 +986,10 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   useEffect(() => {
     if (semanticConfigs.length && !semanticConfig) setSemanticConfig(semanticConfigs[0]);
   }, [semanticConfigs, semanticConfig]);
+
+  // Toggle a facetable field in/out of the selected facets set.
+  const toggleFacet = (name: string, on: boolean) =>
+    setSelectedFacets((prev) => (on ? [...new Set([...prev, name])] : prev.filter((f) => f !== name)));
 
   const ribbon = useMemo(() => {
     const armId = idx?.id || idx?.armId;
@@ -947,12 +1012,27 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
       orderby: orderby || undefined,
       top,
       queryType,
+      searchMode,
       count: countOn,
     };
     if (queryType === 'semantic') {
       if (semanticConfig) payload.semanticConfiguration = semanticConfig;
       if (answersOn) payload.answers = 'extractive';
       if (captionsOn) payload.captions = 'extractive';
+    }
+    // Faceting — only facetable fields are valid targets (server still validates).
+    if (selectedFacets.length) payload.facets = selectedFacets;
+    // Scoring profile + its function inputs (one "name-v1,v2" per non-empty line).
+    if (scoringProfile) {
+      payload.scoringProfile = scoringProfile;
+      const params = scoringParameters.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      if (params.length) payload.scoringParameters = params;
+    }
+    // Hit highlighting (with optional custom tags — only sent when non-default).
+    if (highlightFields.trim()) {
+      payload.highlight = highlightFields.trim();
+      if (highlightPreTag && highlightPreTag !== '<em>') payload.highlightPreTag = highlightPreTag;
+      if (highlightPostTag && highlightPostTag !== '</em>') payload.highlightPostTag = highlightPostTag;
     }
     // Only emit vector queries that name a field (k-NN needs a parsed vector; text
     // uses integrated vectorization). Empty/invalid rows are dropped at the wire.
@@ -1119,6 +1199,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const totalCount = hits?.ok ? hits.result?.['@odata.count'] : undefined;
   const answers: any[] = hits?.ok ? (hits.result?.['@search.answers'] || []) : [];
   const hasReranker = docs.some((d) => d?.['@search.rerankerScore'] !== undefined);
+  const hasHighlights = docs.some((d) => d?.['@search.highlights'] && Object.keys(d['@search.highlights']).length);
   const retrievable = fields.filter((f) => f.retrievable !== false).slice(0, 6);
 
   return chrome(
@@ -1301,13 +1382,64 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                     </>
                   )}
 
+                  <span>Search mode</span>
+                  <Dropdown value={searchMode} selectedOptions={[searchMode]} aria-label="searchMode"
+                    onOptionSelect={(_, d) => d.optionValue && setSearchMode(d.optionValue as 'any' | 'all')}>
+                    <Option value="any">any (OR terms)</Option>
+                    <Option value="all">all (AND terms)</Option>
+                  </Dropdown>
+
                   <span>Search fields</span><Input value={searchFields} onChange={(_, d) => setSearchFields(d.value)} placeholder="comma,separated (blank = all searchable)" />
                   <span>Filter (OData)</span><Input value={filter} onChange={(_, d) => setFilter(d.value)} placeholder="e.g. category eq 'docs'" />
                   <span>Select fields</span><Input value={select} onChange={(_, d) => setSelect(d.value)} placeholder="comma,separated (blank = all)" />
                   <span>Order by</span><Input value={orderby} onChange={(_, d) => setOrderby(d.value)} placeholder="e.g. created desc" />
                   <span>Top</span><Input type="number" value={String(top)} onChange={(_, d) => setTop(Number(d.value) || 25)} />
                   <span>Count</span><Checkbox label="return total match count" checked={countOn} onChange={(_, d) => setCountOn(!!d.checked)} />
+
+                  <span>Scoring profile</span>
+                  {scoringProfiles.length ? (
+                    <Dropdown value={scoringProfile || '(none)'} selectedOptions={scoringProfile ? [scoringProfile] : ['(none)']} aria-label="scoringProfile"
+                      onOptionSelect={(_, d) => setScoringProfile(d.optionValue === '(none)' ? '' : (d.optionValue || ''))}>
+                      <Option value="(none)">(default ranking)</Option>
+                      {scoringProfiles.map((p) => (<Option key={p} value={p}>{p}</Option>))}
+                    </Dropdown>
+                  ) : (
+                    <Caption1>No scoring profiles on this index (author one in the Schema → Advanced JSON).</Caption1>
+                  )}
+                  {scoringProfile && (
+                    <>
+                      <span>Scoring parameters</span>
+                      <Textarea value={scoringParameters} onChange={(_, d) => setScoringParameters(d.value)} rows={2}
+                        placeholder={'one per line, e.g.\nmylocation--122.2,44.8'} aria-label="scoringParameters" />
+                    </>
+                  )}
+
+                  <span>Highlight fields</span>
+                  <Input value={highlightFields} onChange={(_, d) => setHighlightFields(d.value)} aria-label="highlight"
+                    placeholder={highlightableFields.length ? `comma,separated (e.g. ${highlightableFields.slice(0, 2).join(',')}; suffix -N to cap)` : 'no searchable string fields'} />
+                  {highlightFields.trim() && (
+                    <>
+                      <span>Highlight tags</span>
+                      <div className={s.toolbar} style={{ gap: 8 }}>
+                        <Input value={highlightPreTag} onChange={(_, d) => setHighlightPreTag(d.value)} aria-label="highlightPreTag" placeholder="<em>" style={{ maxWidth: 120 }} />
+                        <Input value={highlightPostTag} onChange={(_, d) => setHighlightPostTag(d.value)} aria-label="highlightPostTag" placeholder="</em>" style={{ maxWidth: 120 }} />
+                      </div>
+                    </>
+                  )}
                 </div>
+
+                {/* Faceting — pick facetable fields to bucket results by. */}
+                {facetableFields.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <Caption1><strong>Facets</strong> — bucket results by a facetable field (returned under <code>@search.facets</code>).</Caption1>
+                    <div className={s.toolbar} style={{ gap: 12, flexWrap: 'wrap' }}>
+                      {facetableFields.map((f) => (
+                        <Checkbox key={f} label={f} checked={selectedFacets.includes(f)}
+                          aria-label={`facet-${f}`} onChange={(_, d) => toggleFacet(f, !!d.checked)} />
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Vector-query builder (k-NN / hybrid). */}
                 <Subtitle2 style={{ marginTop: 12 }}>Vector queries</Subtitle2>
@@ -1392,6 +1524,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                             <TableHeaderCell>Score</TableHeaderCell>
                             {hasReranker && <TableHeaderCell>Reranker</TableHeaderCell>}
                             {retrievable.map((f) => (<TableHeaderCell key={f.name}>{f.name}</TableHeaderCell>))}
+                            {hasHighlights && <TableHeaderCell>Highlights</TableHeaderCell>}
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -1409,6 +1542,11 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                                   })()}
                                 </TableCell>
                               ))}
+                              {hasHighlights && (
+                                <TableCell className={s.cell} style={{ whiteSpace: 'normal', maxWidth: 360 }}>
+                                  {renderHighlights(d['@search.highlights'], highlightPreTag, highlightPostTag)}
+                                </TableCell>
+                              )}
                             </TableRow>
                           ))}
                         </TableBody>

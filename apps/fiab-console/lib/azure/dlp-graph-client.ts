@@ -118,6 +118,32 @@ function assertEnabled() {
   }
 }
 
+/**
+ * Honest gate for the (common) case where Microsoft Graph does not expose a
+ * DLP policy/rules segment for this tenant + Graph version. Live tenants
+ * return HTTP 400 "Resource not found for the segment
+ * 'dataLossPreventionPolicies'" (NOT a 404), because the `dataLossPrevention`
+ * read surface is still PowerShell/Purview-portal-only outside the preview.
+ * We surface this as a configured-but-unavailable gate naming the exact
+ * operator action, instead of leaking a raw 400 or faking an empty list.
+ */
+function graphDlpUnavailableHint(): DlpNotConfiguredHint {
+  const h = notConfiguredHint('LOOM_DLP_ENABLED');
+  h.bicepStatus =
+    'LOOM_DLP_ENABLED=true and the Console UAMI holds Policy.Read.All, but Microsoft Graph does not expose a readable DLP policy segment for this tenant — the /beta/security/dataLossPreventionPolicies endpoint returns "Resource not found for the segment". DLP policy authoring/reads are still Purview-compliance-portal + Security & Compliance PowerShell only outside the Graph DLP preview.';
+  h.followUp =
+    'Manage DLP policies in the Microsoft Purview portal (https://purview.microsoft.com → Data loss prevention → Policies) or via Security & Compliance PowerShell (Get-DlpCompliancePolicy). Loom will list them here automatically once Microsoft Graph exposes the dataLossPreventionPolicies segment to this tenant (request enrollment in the Graph DLP preview via a Microsoft support ticket referencing /beta/security/dataLossPreventionPolicies). DLP alerts (Alerts tab) and label-based MIP reads work today.';
+  return h;
+}
+
+/** True when Graph rejected the call because the DLP segment doesn't exist for this tenant. */
+function isDlpSegmentUnavailable(e: unknown): boolean {
+  if (!(e instanceof DlpError)) return false;
+  if (e.status === 404) return true;
+  const msg = (e.message || '') + ' ' + JSON.stringify(e.body || '');
+  return e.status === 400 && /Resource not found for the segment|dataLossPrevention/i.test(msg);
+}
+
 // ============================================================
 // Low-level fetch
 // ============================================================
@@ -214,8 +240,14 @@ export async function listDlpPolicies(): Promise<DlpPolicy[]> {
   assertEnabled();
   const endpoint = '/beta/security/dataLossPreventionPolicies';
   const res = await graphFetch(endpoint);
-  if (res.status === 404) return [];
-  const j = await readJson<{ value?: any[] }>(res, endpoint);
+  if (res.status === 404) throw new DlpNotConfiguredError(graphDlpUnavailableHint());
+  let j: { value?: any[] } | null;
+  try {
+    j = await readJson<{ value?: any[] }>(res, endpoint);
+  } catch (e) {
+    if (isDlpSegmentUnavailable(e)) throw new DlpNotConfiguredError(graphDlpUnavailableHint());
+    throw e;
+  }
   return (j?.value || []).map((raw): DlpPolicy => ({
     id: raw?.id,
     name: raw?.name || raw?.displayName,
@@ -240,8 +272,14 @@ export async function listDlpRules(policyId: string): Promise<DlpRule[]> {
   if (!policyId) throw new DlpError(400, null, 'policyId is required');
   const endpoint = `/beta/security/dataLossPreventionPolicies/${encodeURIComponent(policyId)}/rules`;
   const res = await graphFetch(endpoint);
-  if (res.status === 404) return [];
-  const j = await readJson<{ value?: any[] }>(res, endpoint);
+  if (res.status === 404) throw new DlpNotConfiguredError(graphDlpUnavailableHint());
+  let j: { value?: any[] } | null;
+  try {
+    j = await readJson<{ value?: any[] }>(res, endpoint);
+  } catch (e) {
+    if (isDlpSegmentUnavailable(e)) throw new DlpNotConfiguredError(graphDlpUnavailableHint());
+    throw e;
+  }
   return (j?.value || []).map((raw): DlpRule => ({
     id: raw?.id,
     name: raw?.name || raw?.displayName,

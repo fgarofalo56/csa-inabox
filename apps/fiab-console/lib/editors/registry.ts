@@ -69,6 +69,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'synapse-serverless-sql-pool': reg(() => import('./synapse-sql-editors'),    'SynapseServerlessSqlPoolEditor'),
   'synapse-spark-pool':          reg(() => import('./azure-services-editors'), 'SynapseSparkPoolEditor'),
   'synapse-pipeline':            reg(() => import('./azure-services-editors'), 'SynapsePipelineEditor'),
+  'synapse-notebook':            reg(() => import('./synapse-notebook-editor'), 'SynapseNotebookEditor'),
   'databricks-notebook':         reg(() => import('./databricks-editors'),     'DatabricksNotebookEditor'),
   'databricks-job':              reg(() => import('./databricks-editors'),     'DatabricksJobEditor'),
   'databricks-cluster':          reg(() => import('./databricks-editors'),     'DatabricksClusterEditor'),
@@ -152,6 +153,11 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // v3 — Push-button data-products library (CSA-curated templates + instances)
   'data-product-template':       reg(() => import('./data-product-editors'),   'DataProductTemplateEditor'),
   'data-product-instance':       reg(() => import('./data-product-editors'),   'DataProductInstanceEditor'),
+
+  // v3 — Microsoft Data API builder (DAB) — WYSIWYG dab-config.json builder
+  // (real REST/GraphQL entity authoring, per-role permissions, relationships,
+  // runtime/host; emits real dab-config.json + publishes via APIM).
+  'data-api-builder':            reg(() => import('./data-api-builder-editor'), 'DataApiBuilderEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {

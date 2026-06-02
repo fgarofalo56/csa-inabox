@@ -69,6 +69,45 @@ resource ns 'Microsoft.EventHub/namespaces@2024-05-01-preview' = {
 // REST API when a new mirror config is registered. See
 // docs/fiab/services/mirroring-engine.md for the registration flow.
 
+// ---------------------------------------------------------------------
+// Default telemetry hub — backs the Event Hubs Data Explorer "receive"
+// path (real AMQP receive). Provisioned at deploy time (not per-mirror)
+// so the Eventstream / Data Explorer surface has a hub to read from on a
+// fresh deploy. Mirrors the live Commercial deployment one-for-one:
+//   hub            : loom-telemetry  (2 partitions, 24h / 1-day retention)
+//   consumer group : loom-receiver
+//   UAMI grant     : Azure Event Hubs Data Receiver (namespace scope)
+// ---------------------------------------------------------------------
+@description('Telemetry event hub name (Data Explorer receive path). Live: loom-telemetry.')
+param telemetryHubName string = 'loom-telemetry'
+
+@description('Telemetry event hub partition count.')
+@minValue(1)
+@maxValue(32)
+param telemetryHubPartitionCount int = 2
+
+@description('Telemetry event hub message retention in days.')
+@minValue(1)
+@maxValue(7)
+param telemetryHubRetentionDays int = 1
+
+@description('Telemetry consumer group name. Live: loom-receiver.')
+param telemetryConsumerGroupName string = 'loom-receiver'
+
+resource telemetryHub 'Microsoft.EventHub/namespaces/eventhubs@2024-05-01-preview' = {
+  parent: ns
+  name: telemetryHubName
+  properties: {
+    partitionCount: telemetryHubPartitionCount
+    messageRetentionInDays: telemetryHubRetentionDays
+  }
+}
+
+resource telemetryConsumerGroup 'Microsoft.EventHub/namespaces/eventhubs/consumergroups@2024-05-01-preview' = {
+  parent: telemetryHub
+  name: telemetryConsumerGroupName
+}
+
 // Private endpoint
 resource pe 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${ns.name}'
@@ -147,6 +186,22 @@ resource ehContributorRole 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
+// Azure Event Hubs Data Receiver — data-plane receive on the namespace so
+// the Data Explorer "receive" path (loom-telemetry / loom-receiver) can read
+// events via AMQP with the Console UAMI.
+resource ehDataReceiverRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  scope: ns
+  name: guid(ns.id, consolePrincipalId, 'a638d3c7-ab3a-418d-83e6-5f17a39d4fde')
+  properties: {
+    // Azure Event Hubs Data Receiver
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a638d3c7-ab3a-418d-83e6-5f17a39d4fde')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 output namespaceId string = ns.id
 output namespaceName string = ns.name
 output namespaceFqdn string = '${ns.name}.servicebus.windows.net'
+output telemetryHubName string = telemetryHub.name
+output telemetryConsumerGroupName string = telemetryConsumerGroup.name

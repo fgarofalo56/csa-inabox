@@ -89,6 +89,12 @@ const useStyles = makeStyles({
 // ============================================================
 // Shared KQL results panel
 // ============================================================
+interface KqlVisualization {
+  Visualization?: string;
+  Title?: string;
+  [k: string]: unknown;
+}
+
 interface KqlResult {
   ok: boolean;
   columns?: string[];
@@ -100,6 +106,28 @@ interface KqlResult {
   error?: string;
   database?: string;
   mode?: 'query' | 'mgmt';
+  /** Parsed `| render` hint from the cluster (drives auto-chart selection). */
+  visualization?: KqlVisualization;
+}
+
+/**
+ * Map a Kusto `render` visualization name to a Loom TileViz. Mirrors the chart
+ * family the ADX web UI auto-renders. Grounded in Learn (render operator
+ * visualizations). Unknown/empty → 'table'.
+ */
+function vizFromRender(name?: string): TileViz {
+  switch ((name || '').toLowerCase()) {
+    case 'timechart': return 'timechart';
+    case 'linechart': return 'line';
+    case 'areachart': // area renders as a line series here
+    case 'stackedareachart': return 'line';
+    case 'columnchart': return 'column';
+    case 'barchart': return 'bar';
+    case 'piechart': return 'pie';
+    case 'scatterchart': return 'map'; // geo scatter → point map; non-geo falls back below
+    case 'card': return 'stat';
+    default: return 'table';
+  }
 }
 
 function fmtCell(v: unknown): string {
@@ -107,8 +135,6 @@ function fmtCell(v: unknown): string {
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }
-
-type ResultViz = 'table' | 'bar' | 'line';
 
 // Dashboard tile visual types — superset that matches the ADX `render`
 // operator visualizations exposed by Fabric Real-Time Dashboards.
@@ -335,9 +361,39 @@ function TileVisual({ viz, result }: { viz: TileViz; result: KqlResult }) {
   }
 }
 
+// Full chart family the ADX web UI exposes, plus Table. The picker switches the
+// active visual; the cluster's `| render` hint chooses the default.
+const KQL_VIZ_CHOICES: { value: TileViz; label: string }[] = [
+  { value: 'table', label: 'Table' },
+  { value: 'timechart', label: 'Time chart' },
+  { value: 'line', label: 'Line' },
+  { value: 'column', label: 'Column' },
+  { value: 'bar', label: 'Bar' },
+  { value: 'pie', label: 'Pie' },
+  { value: 'stat', label: 'Card' },
+  { value: 'map', label: 'Map' },
+];
+
 function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loading: boolean }) {
   const s = useStyles();
-  const [viz, setViz] = useState<ResultViz>('table');
+  // Default visual follows the cluster's `| render` annotation; the user can
+  // override with the chart picker. Re-derive whenever a new result arrives.
+  const renderViz = vizFromRender(result?.visualization?.Visualization);
+  const [viz, setViz] = useState<TileViz>('table');
+  const [userPicked, setUserPicked] = useState(false);
+  const lastKeyRef = useRef<string>('');
+  useEffect(() => {
+    if (!result?.ok) return;
+    // A fresh result (new row count + first column + render hint) resets to the
+    // render default so a `| render piechart` query opens as a pie, like ADX.
+    const key = `${result.rowCount ?? 0}|${(result.columns || []).join(',')}|${result.visualization?.Visualization || ''}`;
+    if (key !== lastKeyRef.current) {
+      lastKeyRef.current = key;
+      setViz(renderViz);
+      setUserPicked(false);
+    }
+  }, [result, renderViz]);
+
   if (loading) {
     return <div className={s.resultBox}><Spinner size="small" label="Executing KQL…" labelPosition="after" /></div>;
   }
@@ -358,28 +414,37 @@ function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loadin
   }
   const rows = result.rows || [];
   const columns = result.columns || [];
+  const renderName = result.visualization?.Visualization;
+  const vizTitle = result.visualization?.Title;
   return (
     <div className={s.resultBox}>
       <div className={s.resultMeta}>
         <Badge appearance="filled" color="success">{result.rowCount ?? rows.length} rows</Badge>
         <Caption1>· {result.executionMs} ms</Caption1>
         {result.mode === 'mgmt' && <Badge appearance="outline">mgmt</Badge>}
+        {renderName && <Badge appearance="outline" color="brand" title="from the query's | render operator">render: {renderName}</Badge>}
         {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
         {rows.length > 0 && (
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }} role="tablist" aria-label="Result view">
-            {(['table', 'bar', 'line'] as ResultViz[]).map((v) => (
-              <Button key={v} size="small" appearance={viz === v ? 'primary' : 'subtle'}
-                onClick={() => setViz(v)} aria-pressed={viz === v}>
-                {v === 'table' ? 'Table' : v === 'bar' ? 'Bar' : 'Line'}
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexWrap: 'wrap' }} role="tablist" aria-label="Result view">
+            {KQL_VIZ_CHOICES.map((v) => (
+              <Button key={v.value} size="small" appearance={viz === v.value ? 'primary' : 'subtle'}
+                onClick={() => { setViz(v.value); setUserPicked(true); }} aria-pressed={viz === v.value}>
+                {v.label}
               </Button>
             ))}
           </div>
         )}
       </div>
+      {vizTitle && viz !== 'table' && <Caption1 style={{ fontWeight: 600 }}>{vizTitle}</Caption1>}
+      {!userPicked && renderName && viz !== 'table' && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Auto-rendered from <code>| render {renderName}</code>. Switch views above.
+        </Caption1>
+      )}
       {rows.length === 0 ? (
         <Caption1>Query returned no rows.</Caption1>
       ) : viz !== 'table' ? (
-        <ResultChart columns={columns} rows={rows} kind={viz} />
+        <TileVisual viz={viz} result={result} />
       ) : (
         <KustoResultsGrid
           columns={columns}

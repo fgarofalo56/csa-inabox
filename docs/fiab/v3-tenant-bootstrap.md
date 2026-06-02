@@ -99,3 +99,120 @@ read the reported reason (`not_configured` → env var unset on the app;
   `admin-plane/main.bicep`, and the Data Curator role assignment).
 - The three governance-domain roles in Step 3 are **portal-only** data-plane
   RBAC and intentionally cannot be expressed in ARM/bicep — hence this runbook.
+
+---
+
+## AI Foundry Agent Service project {#ai-foundry-agent-service}
+
+Loom's **Agent Service** surfaces (Foundry agent editor, Data Agent publish,
+the test-chat / embeddings paths) run against a dedicated **AI Foundry
+(AIServices) account + project** with two model deployments. Unlike the shared
+AzureML Foundry Hub (`aifoundry-csa-loom-<region>`), this is a
+`Microsoft.CognitiveServices/accounts` (kind `AIServices`) with project
+management enabled, so it exposes a real Agent Service project endpoint.
+
+The Console resolves it from these env vars (all set by bicep — see Bicep sync):
+
+| Env var | Live value (Commercial) | Backs |
+|---|---|---|
+| `LOOM_FOUNDRY_PROJECT_ENDPOINT` | `https://aifndry-loom-eastus2.services.ai.azure.com/api/projects/loom-agents` | Agent Service project plane |
+| `LOOM_FOUNDRY_PROJECT_ID` | ARM id of the project | Connection wiring |
+| `LOOM_FOUNDRY_PROJECT_NAME` | `loom-agents` | Project display / resolve |
+| `LOOM_AOAI_ENDPOINT` | `https://aifndry-loom-eastus2.openai.azure.com/` | AOAI chat + embeddings clients |
+| `LOOM_AOAI_CHAT_DEPLOYMENT` | `chat` (gpt-4.1-mini, 2025-04-14, GlobalStandard) | Chat completions |
+| `LOOM_AOAI_EMBED_DEPLOYMENT` | `text-embedding-ada-002` (v2, Standard) | Embeddings |
+
+### Greenfield (let bicep do it)
+
+Set `param agentFoundryEnabled = true` in
+`platform/fiab/bicep/params/<cloud>.bicepparam` and re-dispatch the admin-plane
+deploy. Bicep provisions:
+
+- The AIServices account `aifndry-loom-<region>` (S0, custom subdomain, project
+  management on).
+- The `loom-agents` project (SystemAssigned identity).
+- The `chat` and `text-embedding-ada-002` model deployments.
+- Three account-scope RBAC grants to the Console UAMI: **Azure AI Developer**,
+  **Cognitive Services User**, **Cognitive Services OpenAI User**.
+
+Module: `platform/fiab/bicep/modules/ai/foundry-project.bicep`.
+
+### Reuse an existing account
+
+Point the six env vars above at your existing AIServices account / project /
+deployment names via `az containerapp update --set-env-vars`, and grant the
+Console UAMI the same three roles on that account
+(`az role assignment create --assignee <uami-object-id> --role "Azure AI Developer" --scope <account-id>`,
+repeat for *Cognitive Services User* and *Cognitive Services OpenAI User*).
+
+### Verify
+
+Open an Agent editor / Data Agent in the Console. The Foundry status chip
+should report the resolved project; the test-chat path returns a model
+completion. If gated, the MessageBar names the unset env var.
+
+### Bicep sync
+
+- Account + project + model deployments + 3 UAMI roles:
+  `platform/fiab/bicep/modules/ai/foundry-project.bicep`.
+- Module wiring + the six `LOOM_FOUNDRY_*` / `LOOM_AOAI_*` env vars:
+  `platform/fiab/bicep/modules/admin-plane/main.bicep` (`agentFoundryEnabled`).
+
+---
+
+## Microsoft Graph admin consent — MIP + DLP {#graph-admin-consent-mip-dlp}
+
+Loom's **/admin/security** MIP (sensitivity labels) and DLP tabs call Microsoft
+Graph **app-only** with the Console UAMI. That requires two **application**
+app-roles on Microsoft Graph, granted to the UAMI **and** admin-consented at the
+tenant. ARM/bicep cannot grant Graph app-roles, so this is a one-time script +
+a one-time admin click.
+
+| App-role (application permission) | App-role id | Backs |
+|---|---|---|
+| `InformationProtectionPolicy.Read.All` | `19da66cb-0fb0-4390-b071-ebc76a349482` | MIP sensitivity-label policy reads |
+| `Policy.Read.All` | `246dd0d5-5bd0-4def-940b-0421030a5b68` | DLP / tenant policy reads |
+
+> These are the **Application** app-role ids (type `Role`), not the delegated
+> `oauth2PermissionScopes` ids. Using the delegated id silently fails app-only.
+
+### Step 1 — Grant the app-roles to the Console UAMI
+
+```bash
+az login    # as a user/SP with Application.ReadWrite.All on Graph
+CONSOLE_UAMI_PRINCIPAL=<console UAMI object id> \
+  ./scripts/csa-loom/grant-graph-approles.sh
+```
+
+The script is idempotent (re-running is a no-op). It POSTs
+`appRoleAssignments` on the UAMI's service principal against the Microsoft Graph
+SP (`appId 00000003-0000-0000-c000-000000000000`).
+
+### Step 2 — Tenant admin consent
+
+A **Privileged Role Administrator / Global Administrator** must consent:
+
+> Entra ID → Enterprise applications → *Console UAMI* → Permissions →
+> **Grant admin consent for `<tenant>`**
+
+Until consent is issued, every Graph call returns 403 and the MIP/DLP tabs show
+their honest `403 — AppRole not consented` MessageBars.
+
+### Step 3 — Flip the feature flags
+
+```bash
+az containerapp update --name <loom-console-app> --resource-group <loom-admin-rg> \
+  --set-env-vars LOOM_MIP_ENABLED=true LOOM_DLP_ENABLED=true
+```
+
+Or set `loomMipEnabled = true` / `loomDlpEnabled = true` in the `.bicepparam`
+and re-deploy admin-plane (the env wiring is already in `admin-plane/main.bicep`).
+
+### Bicep sync
+
+- Env flags `LOOM_MIP_ENABLED` / `LOOM_DLP_ENABLED`:
+  `platform/fiab/bicep/modules/admin-plane/main.bicep` (`loomMipEnabled` /
+  `loomDlpEnabled` params).
+- The two Graph app-roles are **Graph-plane** grants and intentionally cannot be
+  expressed in ARM/bicep — hence `scripts/csa-loom/grant-graph-approles.sh` +
+  the admin-consent click above.
