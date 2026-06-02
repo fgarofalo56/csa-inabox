@@ -207,6 +207,49 @@ param streamAnalyticsEnabled bool = false
 @description('Deploy an Azure Data Factory (v2) for the ADF editors.')
 param dataFactoryEnabled bool = false
 
+@description('Deploy a Linux Virtual Machine (isolated VNet/subnet + NIC, NO public IP, SSH-key auth).')
+param vmEnabled bool = false
+
+@description('SSH public key (OpenSSH) for the deploy-planner VM admin user. Required to actually boot the VM; password auth is disabled.')
+@secure()
+param vmAdminSshPublicKey string = ''
+
+@description('Deploy an Azure Batch account (BatchService mode) + backing auto-storage (managed-identity auth).')
+param batchEnabled bool = false
+
+@description('Deploy a Consumption Logic App (empty editable workflow).')
+param logicAppsEnabled bool = false
+
+@description('Deploy an Azure Static Web App (standalone, no repo link).')
+param staticWebAppsEnabled bool = false
+
+@description('Deploy an Azure CDN profile (Standard Microsoft).')
+param cdnEnabled bool = false
+
+@description('Deploy an internal Standard Load Balancer (isolated VNet/subnet + frontend/pool/probe/rule).')
+param loadBalancerEnabled bool = false
+
+@description('Deploy an Azure Firewall (Standard AZFW_VNet) in its own VNet with AzureFirewallSubnet + static public IP.')
+param firewallEnabled bool = false
+
+@description('Deploy a single-kind Computer Vision (CognitiveServices ComputerVision) account, Entra-only.')
+param visionServicesEnabled bool = false
+
+@description('Deploy a single-kind Speech Services (CognitiveServices SpeechServices) account, Entra-only.')
+param speechServicesEnabled bool = false
+
+@description('Deploy a single-kind Language (CognitiveServices TextAnalytics) account, Entra-only.')
+param languageServicesEnabled bool = false
+
+@description('Deploy an Azure Machine Learning workspace + its KV/Storage/AppInsights dependencies.')
+param mlWorkspaceEnabled bool = false
+
+@description('Enable Microsoft Defender for Cloud Standard pricing tiers on the subscription.')
+param defenderCloudEnabled bool = false
+
+@description('Assign a sample built-in audit policy at the subscription scope (Azure Policy navigator).')
+param policyEnabled bool = false
+
 // ---------- User access patterns ----------
 
 @description('Deploy a P2S VPN Gateway (AAD-auth, OpenVPN) in the hub VNet. ~30 min provisioning, ~$30/mo. Default off.')
@@ -580,6 +623,146 @@ module dpDataFactory 'modules/deploy-planner/data-factory.bicep' = if (deploymen
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }
+}
+
+module dpVm 'modules/deploy-planner/virtual-machine.bicep' = if (deploymentMode == 'single-sub' && vmEnabled) {
+  name: 'dp-vm'
+  scope: singleDlzRg
+  params: {
+    location: location
+    adminSshPublicKey: vmAdminSshPublicKey
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpBatch 'modules/deploy-planner/batch.bicep' = if (deploymentMode == 'single-sub' && batchEnabled) {
+  name: 'dp-batch'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpLogicApps 'modules/deploy-planner/logic-app.bicep' = if (deploymentMode == 'single-sub' && logicAppsEnabled) {
+  name: 'dp-logicapps'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpStaticWebApps 'modules/deploy-planner/static-web-app.bicep' = if (deploymentMode == 'single-sub' && staticWebAppsEnabled) {
+  name: 'dp-staticwebapps'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpCdn 'modules/deploy-planner/cdn.bicep' = if (deploymentMode == 'single-sub' && cdnEnabled) {
+  name: 'dp-cdn'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpLoadBalancer 'modules/deploy-planner/load-balancer.bicep' = if (deploymentMode == 'single-sub' && loadBalancerEnabled) {
+  name: 'dp-loadbalancer'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpFirewall 'modules/deploy-planner/firewall.bicep' = if (deploymentMode == 'single-sub' && firewallEnabled) {
+  name: 'dp-firewall'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpVision 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && visionServicesEnabled) {
+  name: 'dp-vision'
+  scope: singleDlzRg
+  params: {
+    location: location
+    kind: 'ComputerVision'
+    nameFragment: 'vision'
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpSpeech 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && speechServicesEnabled) {
+  name: 'dp-speech'
+  scope: singleDlzRg
+  params: {
+    location: location
+    kind: 'SpeechServices'
+    nameFragment: 'speech'
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpLanguage 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && languageServicesEnabled) {
+  name: 'dp-language'
+  scope: singleDlzRg
+  params: {
+    location: location
+    kind: 'TextAnalytics'
+    nameFragment: 'language'
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (deploymentMode == 'single-sub' && mlWorkspaceEnabled) {
+  name: 'dp-mlworkspace'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+// Subscription-scoped deploy-planner toggles. Defender pricings + Azure Policy
+// assignments are subscription resources, so these modules deploy at sub scope.
+module dpDefenderCloud 'modules/deploy-planner/defender-cloud.bicep' = if (deploymentMode == 'single-sub' && defenderCloudEnabled) {
+  name: 'dp-defendercloud'
+  scope: subscription()
+}
+
+module dpPolicy 'modules/deploy-planner/policy-assignment.bicep' = if (deploymentMode == 'single-sub' && policyEnabled) {
+  name: 'dp-policy'
+  scope: subscription()
 }
 
 output dlzSynapseWorkspaceName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseWorkspaceName : ''

@@ -1,9 +1,12 @@
 // CSA Loom deploy-planner — Azure AI / Cognitive Services account
 //
-// Reused by three deploy-planner catalog rows (one module, three kinds):
+// Reused by several deploy-planner catalog rows (one module, many kinds):
 //   - aiServices            → kind 'CognitiveServices'  (multi-service account)
 //   - documentIntelligence  → kind 'FormRecognizer'
 //   - contentSafety         → kind 'ContentSafety'
+//   - visionServices        → kind 'ComputerVision'
+//   - speechServices        → kind 'SpeechServices'
+//   - languageServices      → kind 'TextAnalytics'      (Language service)
 //
 // Self-contained: a single Microsoft.CognitiveServices/accounts resource with
 // local auth disabled (Entra-only), a custom subdomain (required for token
@@ -19,8 +22,8 @@ targetScope = 'resourceGroup'
 @description('Primary region')
 param location string
 
-@description('Cognitive Services account kind. CognitiveServices (multi), FormRecognizer (Document Intelligence), or ContentSafety.')
-@allowed(['CognitiveServices', 'FormRecognizer', 'ContentSafety'])
+@description('Cognitive Services account kind: CognitiveServices (multi), FormRecognizer (Document Intelligence), ContentSafety, ComputerVision (Vision), SpeechServices (Speech), or TextAnalytics (Language).')
+@allowed(['CognitiveServices', 'FormRecognizer', 'ContentSafety', 'ComputerVision', 'SpeechServices', 'TextAnalytics'])
 param kind string
 
 @description('Short name fragment (e.g. aiservices / docintel / contentsafety) used in the resource name + subdomain.')

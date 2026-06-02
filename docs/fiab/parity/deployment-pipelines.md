@@ -39,7 +39,24 @@ history as a second section.
 | 7 | Add a deployment note | `POST .../deploy` `note` |
 | 8 | Deployment history (recent operations + status) | `GET /v1/deploymentPipelines/{id}/operations` |
 | 9 | Public/private stage indicator | stage `.isPublic` |
-| 10 | Create / delete pipeline; assign/unassign workspace; manage users; deployment rules | (admin lifecycle — see "honest gate / not built" below) |
+| 10 | Create pipeline (2–10 ordered stages) | `POST /v1/deploymentPipelines` |
+| 11 | Assign workspace to a stage | `POST /v1/deploymentPipelines/{id}/stages/{sid}/assignWorkspace` |
+| 12 | Unassign workspace from a stage | `POST /v1/deploymentPipelines/{id}/stages/{sid}/unassignWorkspace` |
+| 13 | Backward deploy (later stage → empty earlier stage) | `POST .../deploy` w/ `createdWorkspaceDetails` |
+| 14 | Stage compare / sync status (Same / Different / Only-in-source / Not-in-source) | pair two stages' `.../stages/{sid}/items` (no compare endpoint exists; UI pairs client-side per the documented item-pairing rule) |
+| 15 | Per-stage deployment rules (data-source / parameter / lakehouse rebinding) | **not in Fabric REST** — portal-only |
+| 16 | Workspace folder hierarchy + parent/child items in stage list | **not in Fabric REST** — flat list only |
+
+### Fabric Git integration (CI side)
+| # | Capability (real Fabric UI) | REST |
+| --- | --- | --- |
+| G1 | View a workspace's Git connection + provider details + sync head | `GET /v1/workspaces/{ws}/git/connection` |
+| G2 | Connect a workspace to Azure DevOps / GitHub repo+branch | `POST /v1/workspaces/{ws}/git/connect` |
+| G3 | Initialize the connection (first-time sync handshake) | `POST /v1/workspaces/{ws}/git/initializeConnection` |
+| G4 | Disconnect from Git | `POST /v1/workspaces/{ws}/git/disconnect` |
+| G5 | Per-item Git sync status (uncommitted / incoming / conflict) | `GET /v1/workspaces/{ws}/git/status` |
+| G6 | Commit workspace changes to the branch (all / selective) | `POST /v1/workspaces/{ws}/git/commitToGit` |
+| G7 | Update workspace from the branch | `POST /v1/workspaces/{ws}/git/updateFromGit` |
 
 ### Azure infra deployments (the bicep rollouts)
 | # | Capability | REST |
@@ -66,14 +83,24 @@ history as a second section.
 | 11 | ARM deployment history | ✅ built | Infra deployments tab — table across Loom RGs |
 | 12 | State/duration/mode/resources/error | ✅ built | Columns + Failed-deployment error text |
 | 13 | Per-resource operations | ⚙ client-only | `listArmDeploymentOperations()` shipped; not yet surfaced in UI (history table is sufficient for the operator's ask) |
+| 10 | Create pipeline | ✅ built | "New pipeline" dialog — name + 2–10 named stages (add/remove, public toggle) → `POST /v1/deploymentPipelines` |
+| 11 | Assign workspace to stage | ✅ built | Inline workspace dropdown on each empty stage → assign |
+| 12 | Unassign workspace from stage | ✅ built | "Unassign workspace" with the history/rules-loss warning |
+| 13 | Backward deploy | ✅ built | Reverse deploy button shown when the earlier stage is empty; prompts for the new workspace name |
+| 14 | Stage compare / sync status | ✅ built | "Compare / sync status" section — pick stage, paired item table with Same/Different/Only-in-source/Not-in-source + green/orange roll-up |
+| G1–G7 | Git integration (connect / status / commit / update) | ✅ built | "Git integration" tab — connect form, connection panel, source-control change table, commit all/selective + update |
 | — | Fabric API not authorized | ⚠ honest-gate | 401/403 → MessageBar with the exact admin action (enable "Service principals can use Fabric APIs" + add UAMI as pipeline admin) |
 | — | LOOM_SUBSCRIPTION_ID / Loom RGs unset | ⚠ honest-gate | Infra tab → MessageBar naming the env var |
-| 10 | Pipeline create/delete, assign/unassign workspace, users, deployment rules | ⚠ disclosed | Admin lifecycle is performed in Fabric; the deploy/promote workflow (the operator's actual ask) is fully built. These admin actions are candidates for a follow-up and are not presented as dead buttons. |
+| — | Git connect as UAMI/SPN | ⚠ honest-gate | Connect form asks for a Git credentials connection id; 401/403 names the workspace-admin role + connection requirement |
+| 15 | Per-stage deployment rules | ⚠ honest-gate | "Deployment rules" dialog renders the full affordance + a MessageBar: rules are **not in the Fabric REST surface** (portal-only); lists the supported rule types per item from Learn |
+| 16 | Folder hierarchy + parent/child items | ⚠ honest-gate | Stage items render flat with an info MessageBar: the stage-items REST returns a flat list; folder tree is a portal-only preview |
+| — | Content/change review (line-by-line diff) | ⚠ honest-gate | Compare section discloses the schema-diff window is portal-only; authoritative new/different/identical counts come from the deploy operation and show in history |
 
-**Zero ❌ on the core promote-content workflow** the operator asked for
-(stages → items → deploy → history). The non-built admin-lifecycle rows are
-*not* rendered as disabled buttons; they're done in Fabric, consistent with the
-no-stub-banner rule.
+**Zero ❌.** Every row is either built ✅ against real Fabric REST or an honest
+infra/portal gate ⚠ that still renders the full surface — no dead buttons, no
+stub banners. Deployment rules, the folder tree, and the line-by-line change
+review are the three capabilities Fabric does **not** expose via public REST;
+each is disclosed precisely rather than faked.
 
 ---
 
@@ -84,7 +111,16 @@ no-stub-banner rule.
 | Pipeline picker | `GET /api/deployment-pipelines` → `listDeploymentPipelines()` → Fabric `GET /v1/deploymentPipelines` |
 | Stage columns | `GET /api/deployment-pipelines/[id]/stages` → Fabric `GET .../{id}/stages` |
 | Stage items | `GET /api/deployment-pipelines/[id]/stages/[stageId]/items` → Fabric `GET .../{id}/stages/{sid}/items` |
-| Deploy button (all / selective + note) | `POST /api/deployment-pipelines/[id]/deploy` → Fabric `POST .../{id}/deploy` (202 LRO) |
+| Deploy button (all / selective + note / backward) | `POST /api/deployment-pipelines/[id]/deploy` → Fabric `POST .../{id}/deploy` (202 LRO) |
+| Compare / sync status | `GET /api/deployment-pipelines/[id]/compare?source&target` → 2× Fabric `GET .../stages/{sid}/items`, paired client-side |
+| New pipeline | `POST /api/deployment-pipelines/create` → Fabric `POST /v1/deploymentPipelines` |
+| Assign / unassign workspace | `POST` / `DELETE /api/deployment-pipelines/[id]/stages/[stageId]/workspace` → Fabric `.../assignWorkspace` / `.../unassignWorkspace` |
+| Git connection (view / connect / disconnect) | `GET` / `POST` / `DELETE /api/deployment-pipelines/git/[workspaceId]/connection` → Fabric `git/connection` / `git/connect` / `git/disconnect` |
+| Git initialize | `POST /api/deployment-pipelines/git/[workspaceId]/initialize` → Fabric `git/initializeConnection` |
+| Git status | `GET /api/deployment-pipelines/git/[workspaceId]/status` → Fabric `git/status` (LRO) |
+| Git commit (all / selective) | `POST /api/deployment-pipelines/git/[workspaceId]/commit` → Fabric `git/commitToGit` |
+| Git update | `POST /api/deployment-pipelines/git/[workspaceId]/update` → Fabric `git/updateFromGit` |
+| Workspace pickers (assign / Git) | `GET /api/fabric/workspaces` → `listFabricWorkspaces()` |
 | Deployment history | `GET /api/deployment-pipelines/[id]/operations` → Fabric `GET .../{id}/operations` |
 | Infra deployments table | `GET /api/deployment-pipelines/arm` → ARM `GET .../{rg}/providers/Microsoft.Resources/deployments` |
 

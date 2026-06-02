@@ -63,6 +63,33 @@ and the per-service admin blades.
 > current built total by ~40–60 capabilities (the 12 shipped features). A full
 > recount is tracked as follow-up.
 
+## Deepened sub-surfaces (rev.3 — 2026-06-01)
+
+> Seven heavy designer / write surfaces were built out and audited individually
+> (per-surface docs alongside this file). These are the surfaces the rev.2 note
+> called the "headline gaps … heavy designers." Counts are honest
+> (built ✅ / partial ⚠️ / honest-gate ⚠️ / missing ❌), derived from reading the
+> editor source back to a real REST/data-plane call, not a live click-through
+> (confirm against the live portal per the no-scaffold rule). Lifts the parent
+> service grade where noted.
+
+| Sub-surface | Doc | Grade | ✅ | ⚠️ | gate | ❌ | Lifts |
+|---|---|:--:|:--:|:--:|:--:|:--:|---|
+| Databricks Unity Catalog WRITE (create catalog/schema/table + grants) | `databricks-unity-catalog.md` | **B−** | 24 | 1 | 0 | 17 | flips `databricks-workspace.md` F4–F5 ❌→✅ |
+| Synapse Spark notebook (cells + Livy run) | `synapse-notebook.md` | **B−** | 18 | 4 | 1 | 14 | flips `synapse-analytics.md` "notebook absent" ❌→built |
+| ADF Mapping Data Flow designer | `adf-mapping-data-flow.md` | **B−** | 18 | 3 | 1 | 8 | cures `adf-data-factory.md` "rich surface→JSON" violation |
+| ADX web UI — query + `render` auto-chart | `adx-web-ui.md` | **B** | 19 | 6 | 0 | 8 | deepens `adx-kusto.md` results/render |
+| AI Search — Search Explorer query options | `ai-search-explorer.md` | **B+** | 27 | 5 | 0 | 9 | deepens `ai-search.md` search tab |
+| AI Foundry — Evaluations | `foundry-evaluations.md` | **C+** | 13 | 2 | 1 | 11 | deepens `ai-foundry.md` evals tab |
+| Data API Builder — config UX | `data-api-builder.md` | **B+** | 30 | 6 | 1 | 1 | new DAB authoring surface |
+
+**Sub-surface distribution:** 1 × B+, 1 × B+, 1 × B, 3 × B−, 1 × C+ (two B+ rows).
+All seven are real built code with honest gates — no vaporware. The two flagship
+`ui-parity.md` violations called out in rev.2 (ADF/Synapse heavy designers,
+Databricks UC write) now have genuine built surfaces; they sit at **B−** because
+breadth (full transform library / `display()` viz / UC lineage+external-locations)
+is still missing, not because anything is faked.
+
 ---
 
 ## Overall honest assessment: how far is Loom from 1:1 Azure parity?

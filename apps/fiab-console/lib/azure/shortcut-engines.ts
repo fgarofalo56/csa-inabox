@@ -19,7 +19,21 @@
 import { listPaths } from './adls-client';
 import { serverlessTarget, executeQuery } from './synapse-sql-client';
 import { listWarehouses, executeStatement, databricksConfigGate } from './databricks-client';
-import type { ShortcutTargetType, ShortcutKind, ShortcutEngine } from './lakehouse-shortcuts';
+import {
+  getKeyVaultSecret,
+  keyVaultConfigGate,
+  ensureUcAwsStorageCredential,
+  ensureUcGcpStorageCredential,
+  ensureUcExternalLocation,
+  deleteUcExternalLocation,
+  deleteUcStorageCredential,
+} from './shortcut-credentials';
+import type {
+  ShortcutTargetType,
+  ShortcutKind,
+  ShortcutEngine,
+  ShortcutCredentialRef,
+} from './lakehouse-shortcuts';
 
 /** An honest-gate result — the control rendered, but a credential/resource is missing. */
 export interface EngineGate {
@@ -141,6 +155,23 @@ export async function createTablesShortcut(args: {
   name: string;
   abfssUri: string;
   format?: 'delta' | 'parquet' | 'csv' | 'json';
+  /**
+   * External-source binding (S3/GCS) produced by bindExternalSource(). When
+   * present, the engine object is created over this binding instead of an
+   * abfss path:
+   *   - UC: CREATE TABLE … LOCATION '<s3|gs>://…' (covered by an external location)
+   *   - Synapse: an external table over the pre-created EXTERNAL DATA SOURCE
+   */
+  external?: {
+    /** s3:// or gs:// object URI (read path). */
+    objectUri: string;
+    /** UC external location name (Databricks engine). */
+    ucExternalLocation?: string;
+    /** Synapse external-data-source name (Synapse engine). */
+    synapseDataSource?: string;
+    /** Object key under the bucket, for the Synapse OPENROWSET BULK path. */
+    objectKey?: string;
+  };
 }): Promise<TablesRegistration | EngineGate> {
   const engine = pickTablesEngine();
   if (!engine) {
@@ -158,13 +189,28 @@ export async function createTablesShortcut(args: {
 
   if (engine === 'synapse') {
     const obj = synapseObject(args.name);
+    const csvOpts = fmt === 'CSV' ? `, PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE` : '';
+
+    // External S3 source on Synapse: OPENROWSET BULK over the pre-created
+    // EXTERNAL DATA SOURCE (built by bindExternalSource). The BULK arg is the
+    // object key relative to the data source LOCATION.
+    if (args.external?.synapseDataSource) {
+      const key = (args.external.objectKey || '').replace(/'/g, "''");
+      const ddl =
+        `IF SCHEMA_ID('shortcuts') IS NULL EXEC('CREATE SCHEMA shortcuts');\n` +
+        `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
+        `EXEC('CREATE VIEW ${obj} AS SELECT * FROM OPENROWSET(BULK ''${key}'', ` +
+        `DATA_SOURCE = ''${args.external.synapseDataSource}'', FORMAT = ''${fmt}''${csvOpts}) AS r');`;
+      await executeQuery(serverlessTarget('master'), ddl);
+      return { engine, engineObject: obj };
+    }
+
     const parts = parseAbfss(args.abfssUri);
     if (!parts) {
       throw Object.assign(new Error(`Cannot resolve abfss for Synapse OPENROWSET: ${args.abfssUri}`), { code: 'bad_target' });
     }
     // Synapse OPENROWSET BULK takes the https DFS endpoint, not abfss://.
     const bulkUrl = `https://${parts.account}.dfs.core.windows.net/${parts.container}/${parts.path}`;
-    const csvOpts = fmt === 'CSV' ? `, PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE` : '';
     // Idempotent external view: drop + recreate so re-creating a shortcut is an
     // upsert (matches the registry's deterministic id).
     const ddl =
@@ -189,10 +235,13 @@ export async function createTablesShortcut(args: {
     };
   }
   const [cat, sch, tbl] = obj.split('.');
+  // For external S3/GCS sources the LOCATION is the object URI (covered by the
+  // UC external location created in bindExternalSource); otherwise it's abfss.
+  const location = (args.external?.objectUri || args.abfssUri).replace(/'/g, "''");
   const ddl =
     `CREATE SCHEMA IF NOT EXISTS ${cat}.${sch};\n` +
     `CREATE TABLE IF NOT EXISTS ${cat}.${sch}.${tbl} ` +
-    `USING ${fmt} LOCATION '${args.abfssUri}';`;
+    `USING ${fmt} LOCATION '${location}';`;
   await executeStatement(wh.id, ddl);
   return { engine, engineObject: obj };
 }
@@ -218,37 +267,267 @@ export async function dropShortcutObject(args: {
 }
 
 /**
- * Honest-gate for external cloud sources (S3/GCS/Dataverse). Returns a gate
- * unless a Key Vault credentialRef is configured. v1 always gates these on
- * create (the full wizard still renders) per the no-vaporware honest-config rule.
+ * Prove a Tables engine object is readable with a real SELECT TOP 1. Throws the
+ * raw engine error on failure (the Test route maps it to a status='error').
+ */
+export async function testEngineObject(engine: ShortcutEngine, engineObject: string): Promise<void> {
+  if (engine === 'synapse') {
+    await executeQuery(serverlessTarget('master'), `SELECT TOP 1 * FROM ${engineObject};`);
+    return;
+  }
+  if (engine === 'databricks') {
+    const warehouses = await listWarehouses();
+    const wh = warehouses.find((w) => w.state === 'RUNNING') || warehouses[0];
+    if (!wh) throw Object.assign(new Error('No SQL Warehouse available to test the engine object'), { code: 'no_warehouse' });
+    await executeStatement(wh.id, `SELECT * FROM ${engineObject} LIMIT 1;`);
+    return;
+  }
+  throw Object.assign(new Error(`Cannot test engine object on engine '${engine}'`), { code: 'no_engine' });
+}
+
+/**
+ * Drop the UC external location + storage credential created for an S3/GCS
+ * shortcut. Names are the deterministic ones from ucCredNames (the external
+ * location is unconditional; the storage credential prefers the persisted name
+ * but falls back to the deterministic one). Best-effort — never deletes bytes.
+ */
+export async function dropExternalBinding(
+  lakehouseId: string,
+  name: string,
+  storageCredentialName?: string,
+): Promise<void> {
+  const names = ucCredNames(lakehouseId, name);
+  // External location must go first (a storage credential in use can't be dropped).
+  await deleteUcExternalLocation(names.loc, true).catch(() => {});
+  await deleteUcStorageCredential(storageCredentialName || names.cred, true).catch(() => {});
+}
+
+/**
+ * Pre-flight honest-gate for external cloud sources (S3/GCS/Dataverse).
+ *
+ * Returns a gate ONLY when:
+ *   - the source is external AND no Key Vault credentialRef.keyVaultSecret was
+ *     supplied (we cannot resolve a secret that was never provisioned), or
+ *   - the Key Vault itself isn't configured on this deployment.
+ *
+ * When a credentialRef IS present and the vault is configured, this returns
+ * null and the route proceeds to bindExternalSource(), which resolves the
+ * secret and creates the real engine binding (UC storage credential +
+ * external location, or Synapse database-scoped credential + data source).
+ *
+ * ADLS/internal always returns null (the UAMI path needs no extra credential).
  */
 export function externalSourceGate(targetType: ShortcutTargetType, hasCredentialRef: boolean): EngineGate | null {
   if (targetType === 'adls' || targetType === 'internal') return null;
-  if (hasCredentialRef) {
-    // A credentialRef points at a KV secret the operator must have provisioned;
-    // resolving + wiring the UC storage credential / Synapse scoped credential
-    // is the PR-4 follow-up. Until that lands, gate honestly even WITH a ref.
+
+  if (!hasCredentialRef) {
+    const secret =
+      targetType === 's3' ? 'an AWS IAM role ARN (UC engine) or access key/secret (Synapse engine)' :
+      targetType === 'gcs' ? 'a GCS service-account JSON' :
+      'the Dataverse Synapse-Link linked ADLS Gen2 storage path';
     return {
       gated: true,
-      code: 'external_credential_pending',
+      code: 'needs_credential',
       hint:
-        `${labelFor(targetType)} shortcuts with a Key Vault credential are tracked for the ` +
-        'next build (UC storage-credential / Synapse scoped-credential wiring). The credential ' +
-        'reference was saved; the read-through binding lands in a follow-up.',
+        `${labelFor(targetType)} is an external cloud source and requires ${secret}. ` +
+        'Store it as a Key Vault secret and reference it via credentialRef.keyVaultSecret, then ' +
+        'grant the Console UAMI "Key Vault Secrets User" on the vault. ADLS Gen2 and internal ' +
+        'Loom lakehouse shortcuts work today on the UAMI with no extra credential.',
     };
   }
-  const secret =
-    targetType === 's3' ? 'an AWS access key/secret (or IAM role ARN)' :
-    targetType === 'gcs' ? 'a GCS service-account JSON' :
-    'the Dataverse Synapse-Link storage credential';
+
+  const kvGate = keyVaultConfigGate();
+  if (kvGate) {
+    return {
+      gated: true,
+      code: 'key_vault_not_configured',
+      hint:
+        `${labelFor(targetType)} shortcuts resolve their credential from Key Vault, but ` +
+        `${kvGate.missing} is not set on this deployment. Set it (and grant the Console UAMI ` +
+        '"Key Vault Secrets User" on that vault) so the secret can be read.',
+    };
+  }
+  return null;
+}
+
+/**
+ * Parse an s3://bucket/key or gs://bucket/key URI into a normalised
+ * { scheme, bucket, key, prefix } where prefix is the location root used for
+ * the UC external location / Synapse data source.
+ */
+function parseObjectStoreUri(uri: string): { scheme: 's3' | 'gs'; bucket: string; key: string; prefix: string } | null {
+  const m = (uri || '').trim().match(/^(s3a?|gs):\/\/([^/]+)\/?(.*)$/i);
+  if (!m) return null;
+  const scheme = m[1].toLowerCase().startsWith('s3') ? 's3' : 'gs';
+  const bucket = m[2];
+  const key = (m[3] || '').replace(/^\/+/, '');
+  // External location is scoped to the bucket root so the external table path
+  // is covered (UC requires the table path to fall under an external location).
+  const prefix = `${scheme}://${bucket}`;
+  return { scheme: scheme as 's3' | 'gs', bucket, key, prefix };
+}
+
+/** Stable UC object names for a shortcut's storage credential + external location. */
+function ucCredNames(lakehouseId: string, name: string): { cred: string; loc: string } {
+  const safe = (s: string) => s.replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
+  const base = `loom_sc_${safe(lakehouseId)}_${safe(name)}`.slice(0, 240);
+  return { cred: `${base}_cred`, loc: `${base}_loc` };
+}
+
+/**
+ * The real read-through binding for external cloud sources. Resolves the
+ * Key Vault secret named by credentialRef.keyVaultSecret, then materialises
+ * the engine binding and returns the address the Tables/Files engine reads
+ * from. Throws the raw backend error on a real failure; returns an EngineGate
+ * only when the engine for that source type isn't configured.
+ *
+ * Returns:
+ *   - { readUri }                 the resolved address (abfss/s3/gs) to read
+ *   - { readUri, ucExternalLocation } when a UC external location was created
+ *   - { readUri, synapse: {...} }  Synapse scoped-credential + data-source names
+ */
+export interface ExternalBinding {
+  /** The address the engine reads from (s3://… , gs://… , or abfss://… for Dataverse). */
+  readUri: string;
+  /** UC external location name (Databricks UC engine), if one was created. */
+  ucExternalLocation?: string;
+  /** UC storage credential name, if one was created. */
+  ucStorageCredential?: string;
+  /** Synapse external-data-source + scoped-credential names, if Synapse engine. */
+  synapse?: { dataSource: string; scopedCredential: string };
+}
+
+export async function bindExternalSource(args: {
+  lakehouseId: string;
+  name: string;
+  targetType: 's3' | 'gcs' | 'dataverse';
+  targetUri: string;
+  credentialRef: ShortcutCredentialRef;
+}): Promise<ExternalBinding | EngineGate> {
+  const { lakehouseId, name, targetType, targetUri, credentialRef } = args;
+  const secretName = credentialRef.keyVaultSecret;
+  if (!secretName) {
+    return { gated: true, code: 'needs_credential', hint: `${labelFor(targetType)} requires credentialRef.keyVaultSecret.` };
+  }
+
+  // --- Dataverse: bind via the Synapse-Link linked ADLS Gen2 storage. ---
+  // The KV secret holds the linked-lake abfss/https path that Synapse Link
+  // writes Dataverse tables to. We resolve it, then read it on the UAMI exactly
+  // like any internal ADLS shortcut (the UAMI needs Storage Blob Data Reader on
+  // that lake — granted as part of Synapse Link setup).
+  // Learn: https://learn.microsoft.com/power-apps/maker/data-platform/azure-synapse-link-data-lake
+  if (targetType === 'dataverse') {
+    const linkedPath = (await getKeyVaultSecret(secretName)).trim();
+    const parts = parseAbfss(linkedPath);
+    if (!parts) {
+      throw Object.assign(
+        new Error(
+          `Dataverse Synapse-Link secret '${secretName}' must contain the linked ADLS Gen2 path ` +
+          `(abfss://<container>@<acct>.dfs.core.windows.net/... or the https DFS form); got: ${linkedPath.slice(0, 80)}`,
+        ),
+        { code: 'bad_dataverse_secret' },
+      );
+    }
+    // Prove reachability now so the row lands 'active' only when it's real.
+    await listPaths(parts.container, parts.path, 1, parts.account);
+    return { readUri: parts.abfss };
+  }
+
+  // --- S3 / GCS: resolve the secret + create the engine binding. ---
+  const obj = parseObjectStoreUri(targetUri);
+  if (!obj) {
+    throw Object.assign(
+      new Error(`${labelFor(targetType)} targetUri must be ${targetType === 's3' ? 's3://bucket/key' : 'gs://bucket/key'}: ${targetUri}`),
+      { code: 'bad_target' },
+    );
+  }
+
+  const engine = pickTablesEngine();
+
+  // GCS is only supported on the Databricks UC engine (Synapse Serverless has no
+  // native GCS connector). Gate honestly if UC isn't configured.
+  if (targetType === 'gcs') {
+    if (engine !== 'databricks') {
+      return {
+        gated: true,
+        code: 'gcs_needs_databricks',
+        hint:
+          'Google Cloud Storage shortcuts bind through a Unity Catalog storage credential + ' +
+          'external location, which requires the Databricks engine. Set LOOM_DATABRICKS_HOSTNAME ' +
+          '(Synapse Serverless has no native GCS connector).',
+      };
+    }
+    const secret = await getKeyVaultSecret(secretName);
+    let sa: { client_email?: string; private_key_id?: string; private_key?: string };
+    try {
+      sa = JSON.parse(secret);
+    } catch {
+      throw Object.assign(
+        new Error(`GCS service-account secret '${secretName}' must be the service-account JSON`),
+        { code: 'bad_gcs_secret' },
+      );
+    }
+    const names = ucCredNames(lakehouseId, name);
+    await ensureUcGcpStorageCredential({ name: names.cred, serviceAccountJson: sa, readOnly: true, comment: `Loom shortcut ${name}` });
+    await ensureUcExternalLocation({ name: names.loc, url: obj.prefix, credentialName: names.cred, readOnly: true, comment: `Loom shortcut ${name}` });
+    return { readUri: targetUri, ucExternalLocation: names.loc, ucStorageCredential: names.cred };
+  }
+
+  // S3 — prefer UC (IAM role) when Databricks is configured; else Synapse (access keys).
+  const secret = await getKeyVaultSecret(secretName);
+  if (engine === 'databricks') {
+    const roleArn = secret.trim();
+    if (!/^arn:aws[a-z-]*:iam::\d+:role\//i.test(roleArn)) {
+      throw Object.assign(
+        new Error(
+          `S3 secret '${secretName}' must be an AWS IAM role ARN for the Databricks UC engine ` +
+          `(arn:aws:iam::<acct>:role/<name>); got: ${roleArn.slice(0, 60)}`,
+        ),
+        { code: 'bad_s3_secret' },
+      );
+    }
+    const names = ucCredNames(lakehouseId, name);
+    await ensureUcAwsStorageCredential({ name: names.cred, roleArn, readOnly: true, comment: `Loom shortcut ${name}` });
+    await ensureUcExternalLocation({ name: names.loc, url: obj.prefix, credentialName: names.cred, readOnly: true, comment: `Loom shortcut ${name}` });
+    return { readUri: targetUri, ucExternalLocation: names.loc, ucStorageCredential: names.cred };
+  }
+
+  if (engine === 'synapse') {
+    // Synapse Serverless S3 via PolyBase: DATABASE SCOPED CREDENTIAL ('S3 Access
+    // Key', SECRET = '<AccessKeyID>:<SecretKeyID>') + EXTERNAL DATA SOURCE.
+    // Learn: https://learn.microsoft.com/sql/relational-databases/polybase/polybase-configure-s3-compatible
+    if (!/^[^:]+:[^:]+$/.test(secret.trim())) {
+      throw Object.assign(
+        new Error(
+          `S3 secret '${secretName}' must be 'AccessKeyID:SecretKeyID' for the Synapse engine; ` +
+          `set LOOM_DATABRICKS_HOSTNAME to use an IAM role instead.`,
+        ),
+        { code: 'bad_s3_secret' },
+      );
+    }
+    const cred = `loom_s3_${name.replace(/[^a-z0-9_]+/gi, '_')}`.toLowerCase();
+    const dsName = `${cred}_ds`;
+    const ddl =
+      `IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##') ` +
+      `CREATE MASTER KEY;\n` +
+      `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = '${dsName}') ` +
+      `DROP EXTERNAL DATA SOURCE ${dsName};\n` +
+      `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${cred}') ` +
+      `DROP DATABASE SCOPED CREDENTIAL ${cred};\n` +
+      `CREATE DATABASE SCOPED CREDENTIAL ${cred} ` +
+      `WITH IDENTITY = 'S3 Access Key', SECRET = '${secret.trim().replace(/'/g, "''")}';\n` +
+      `CREATE EXTERNAL DATA SOURCE ${dsName} ` +
+      `WITH (LOCATION = '${obj.prefix}', CREDENTIAL = ${cred});`;
+    await executeQuery(serverlessTarget('master'), ddl);
+    return { readUri: targetUri, synapse: { dataSource: dsName, scopedCredential: cred } };
+  }
+
   return {
     gated: true,
-    code: 'needs_credential',
+    code: 'no_tables_engine',
     hint:
-      `${labelFor(targetType)} is an external cloud source and requires ${secret}. ` +
-      'Store it as a Key Vault secret and reference it via credentialRef.keyVaultSecret, then ' +
-      'grant the Console UAMI Key Vault Secrets User. ADLS Gen2 and internal Loom lakehouse ' +
-      'shortcuts work today on the UAMI with no extra credential.',
+      `${labelFor(targetType)} shortcuts need a query engine to create the external binding. ` +
+      'Set LOOM_DATABRICKS_HOSTNAME (Unity Catalog) or LOOM_SYNAPSE_WORKSPACE (Synapse Serverless).',
   };
 }
 

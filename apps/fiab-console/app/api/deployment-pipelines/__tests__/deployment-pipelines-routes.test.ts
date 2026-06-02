@@ -42,7 +42,7 @@ function stubFetch(impl: (url: string, init?: RequestInit) => { status?: number;
   return fetchMock;
 }
 
-const ctx = (params: Record<string, string>) => ({ params: Promise.resolve(params) });
+const ctx = <T extends Record<string, string>>(params: T) => ({ params: Promise.resolve(params) });
 
 // --------------------------------------------------------------------------
 // GET /api/deployment-pipelines
@@ -226,5 +226,237 @@ describe('GET /api/deployment-pipelines/arm', () => {
     const j = await r.json();
     expect(j.ok).toBe(false);
     expect(j.gate.missing).toContain('LOOM_SUBSCRIPTION_ID');
+  });
+});
+
+// --------------------------------------------------------------------------
+// GET /api/deployment-pipelines/[id]/compare — stage pairing + sync status
+// --------------------------------------------------------------------------
+
+describe('GET /api/deployment-pipelines/[id]/compare', () => {
+  it('pairs items and labels Same / Different / OnlyInSource / NotInSource', async () => {
+    // Fabric returns source items on the first call, target items on the second.
+    let n = 0;
+    stubFetch((u) => {
+      if (u.includes('/stages/src/items')) {
+        n++;
+        return { body: { value: [
+          { itemId: 's1', itemDisplayName: 'Report A', itemType: 'Report', lastDeploymentTime: '2026-05-01T00:00:00Z' },
+          { itemId: 's2', itemDisplayName: 'Only Source', itemType: 'Notebook' },
+        ] } };
+      }
+      if (u.includes('/stages/tgt/items')) {
+        return { body: { value: [
+          { itemId: 't1', itemDisplayName: 'Report A', itemType: 'Report', lastDeploymentTime: '2026-05-01T00:00:00Z' },
+          { itemId: 't3', itemDisplayName: 'Only Target', itemType: 'Dashboard' },
+        ] } };
+      }
+      return { body: { value: [] } };
+    });
+    const { GET } = await import('@/app/api/deployment-pipelines/[id]/compare/route');
+    const r = await GET(
+      new NextRequest('https://loom.test/api/deployment-pipelines/dp1/compare?source=src&target=tgt'),
+      ctx({ id: 'dp1' }),
+    );
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.data.summary.same).toBe(1);          // Report A paired, same lastDeploymentTime
+    expect(j.data.summary.onlyInSource).toBe(1);  // Only Source
+    expect(j.data.summary.notInSource).toBe(1);   // Only Target
+  });
+
+  it('missing source/target → 400', async () => {
+    const { GET } = await import('@/app/api/deployment-pipelines/[id]/compare/route');
+    const r = await GET(new NextRequest('https://loom.test/x?source=a'), ctx({ id: 'dp1' }));
+    expect(r.status).toBe(400);
+  });
+});
+
+// --------------------------------------------------------------------------
+// POST /api/deployment-pipelines/create
+// --------------------------------------------------------------------------
+
+describe('POST /api/deployment-pipelines/create', () => {
+  function req(body: unknown) {
+    return new NextRequest('https://loom.test/api/deployment-pipelines/create', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+  }
+  it('creates a pipeline and forwards stages', async () => {
+    let sent: any;
+    stubFetch((_u, init) => { sent = JSON.parse((init?.body as string) || '{}'); return { status: 201, body: { id: 'np1', displayName: 'X' } }; });
+    const { POST } = await import('@/app/api/deployment-pipelines/create/route');
+    const r = await POST(req({ displayName: 'X', stages: [{ displayName: 'Dev' }, { displayName: 'Prod', isPublic: true }] }));
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.data.pipeline.id).toBe('np1');
+    expect(sent.stages).toHaveLength(2);
+  });
+  it('rejects fewer than 2 stages → 400', async () => {
+    const { POST } = await import('@/app/api/deployment-pipelines/create/route');
+    const r = await POST(req({ displayName: 'X', stages: [{ displayName: 'Dev' }] }));
+    expect(r.status).toBe(400);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Stage workspace assign / unassign
+// --------------------------------------------------------------------------
+
+describe('Stage workspace assign / unassign', () => {
+  it('POST assigns a workspace', async () => {
+    let url = '';
+    stubFetch((u) => { url = u; return { status: 200 }; });
+    const { POST } = await import('@/app/api/deployment-pipelines/[id]/stages/[stageId]/workspace/route');
+    const r = await POST(
+      new NextRequest('https://loom.test/x', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceId: 'ws1' }) }),
+      ctx({ id: 'dp1', stageId: 's1' }),
+    );
+    expect(r.status).toBe(200);
+    expect(url).toContain('/stages/s1/assignWorkspace');
+    expect((await r.json()).data.assigned).toBe(true);
+  });
+  it('POST without workspaceId → 400', async () => {
+    const { POST } = await import('@/app/api/deployment-pipelines/[id]/stages/[stageId]/workspace/route');
+    const r = await POST(
+      new NextRequest('https://loom.test/x', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+      ctx({ id: 'dp1', stageId: 's1' }),
+    );
+    expect(r.status).toBe(400);
+  });
+  it('DELETE unassigns a workspace', async () => {
+    let url = '';
+    stubFetch((u) => { url = u; return { status: 200 }; });
+    const { DELETE } = await import('@/app/api/deployment-pipelines/[id]/stages/[stageId]/workspace/route');
+    const r = await DELETE(new NextRequest('https://loom.test/x'), ctx({ id: 'dp1', stageId: 's1' }));
+    expect(r.status).toBe(200);
+    expect(url).toContain('/stages/s1/unassignWorkspace');
+    expect((await r.json()).data.unassigned).toBe(true);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Git integration routes
+// --------------------------------------------------------------------------
+
+describe('Git integration routes', () => {
+  it('GET connection returns provider details', async () => {
+    stubFetch(() => ({ body: {
+      gitConnectionState: 'ConnectedAndInitialized',
+      gitProviderDetails: { gitProviderType: 'AzureDevOps', repositoryName: 'Repo', branchName: 'main' },
+      gitSyncDetails: { head: 'abc123', lastSyncTime: '2026-05-30T00:00:00Z' },
+    } }));
+    const { GET } = await import('@/app/api/deployment-pipelines/git/[workspaceId]/connection/route');
+    const r = await GET(new NextRequest('https://loom.test/x'), ctx({ workspaceId: 'ws1' }));
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.data.connection.gitProviderDetails.repositoryName).toBe('Repo');
+  });
+
+  it('POST connect forwards AzureDevOps details', async () => {
+    let url = ''; let sent: any;
+    stubFetch((u, init) => { url = u; sent = JSON.parse((init?.body as string) || '{}'); return { status: 200 }; });
+    const { POST } = await import('@/app/api/deployment-pipelines/git/[workspaceId]/connection/route');
+    const r = await POST(
+      new NextRequest('https://loom.test/x', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        provider: 'AzureDevOps', organizationName: 'org', projectName: 'proj', repositoryName: 'repo', branchName: 'main',
+      }) }),
+      ctx({ workspaceId: 'ws1' }),
+    );
+    expect(r.status).toBe(200);
+    expect(url).toContain('/git/connect');
+    expect(sent.gitProviderDetails.organizationName).toBe('org');
+  });
+
+  it('GET status returns changes', async () => {
+    stubFetch(() => ({ body: { workspaceHead: 'h1', remoteCommitHash: 'r1', changes: [
+      { itemMetadata: { itemIdentifier: { objectId: 'o1' }, itemType: 'Report', displayName: 'Rep' }, workspaceChange: 'Modified', conflictType: 'None' },
+    ] } }));
+    const { GET } = await import('@/app/api/deployment-pipelines/git/[workspaceId]/status/route');
+    const r = await GET(new NextRequest('https://loom.test/x'), ctx({ workspaceId: 'ws1' }));
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.data.status.changes[0].workspaceChange).toBe('Modified');
+  });
+
+  it('GET status 202 → pending', async () => {
+    stubFetch(() => ({ status: 202, headers: { location: 'https://api.fabric.microsoft.com/v1/operations/op1' } }));
+    const { GET } = await import('@/app/api/deployment-pipelines/git/[workspaceId]/status/route');
+    const r = await GET(new NextRequest('https://loom.test/x'), ctx({ workspaceId: 'ws1' }));
+    const j = await r.json();
+    expect(j.ok).toBe(true);
+    expect(j.data.pending).toBe(true);
+  });
+
+  it('POST commit All forwards mode', async () => {
+    let url = ''; let sent: any;
+    stubFetch((u, init) => { url = u; sent = JSON.parse((init?.body as string) || '{}'); return { status: 202, headers: { location: 'https://api.fabric.microsoft.com/v1/operations/op1' } }; });
+    const { POST } = await import('@/app/api/deployment-pipelines/git/[workspaceId]/commit/route');
+    const r = await POST(
+      new NextRequest('https://loom.test/x', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'All', comment: 'c' }) }),
+      ctx({ workspaceId: 'ws1' }),
+    );
+    expect(r.status).toBe(200);
+    expect(url).toContain('/git/commitToGit');
+    expect(sent.mode).toBe('All');
+    expect((await r.json()).data.accepted).toBe(true);
+  });
+
+  it('POST commit Selective without items → 400', async () => {
+    const { POST } = await import('@/app/api/deployment-pipelines/git/[workspaceId]/commit/route');
+    const r = await POST(
+      new NextRequest('https://loom.test/x', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'Selective' }) }),
+      ctx({ workspaceId: 'ws1' }),
+    );
+    expect(r.status).toBe(400);
+  });
+
+  it('POST update forwards heads', async () => {
+    let url = ''; let sent: any;
+    stubFetch((u, init) => { url = u; sent = JSON.parse((init?.body as string) || '{}'); return { status: 202, headers: { location: 'https://api.fabric.microsoft.com/v1/operations/op1' } }; });
+    const { POST } = await import('@/app/api/deployment-pipelines/git/[workspaceId]/update/route');
+    const r = await POST(
+      new NextRequest('https://loom.test/x', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceHead: 'h1', remoteCommitHash: 'r1' }) }),
+      ctx({ workspaceId: 'ws1' }),
+    );
+    expect(r.status).toBe(200);
+    expect(url).toContain('/git/updateFromGit');
+    expect(sent.workspaceHead).toBe('h1');
+    expect(sent.remoteCommitHash).toBe('r1');
+  });
+
+  it('Git 403 → 200 gate JSON', async () => {
+    stubFetch(() => ({ status: 403, body: { errorCode: 'Unauthorized', message: 'denied' } }));
+    const { GET } = await import('@/app/api/deployment-pipelines/git/[workspaceId]/connection/route');
+    const r = await GET(new NextRequest('https://loom.test/x'), ctx({ workspaceId: 'ws1' }));
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.ok).toBe(false);
+    expect(j.gate).toBeTruthy();
+  });
+});
+
+// --------------------------------------------------------------------------
+// Backward deploy — deploy into an empty earlier stage with createdWorkspaceDetails
+// --------------------------------------------------------------------------
+
+describe('POST deploy (backward / empty target)', () => {
+  it('forwards createdWorkspaceDetails when target is empty', async () => {
+    let sent: any;
+    stubFetch((_u, init) => { sent = JSON.parse((init?.body as string) || '{}'); return { status: 202, headers: { location: 'https://api.fabric.microsoft.com/v1/operations/op1' } }; });
+    const { POST } = await import('@/app/api/deployment-pipelines/[id]/deploy/route');
+    const r = await POST(
+      new NextRequest('https://loom.test/x', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        sourceStageId: 's2', targetStageId: 's1', createdWorkspaceDetails: { name: 'Dev WS' },
+      }) }),
+      ctx({ id: 'dp1' }),
+    );
+    expect(r.status).toBe(200);
+    expect(sent.sourceStageId).toBe('s2');
+    expect(sent.targetStageId).toBe('s1');
+    expect(sent.createdWorkspaceDetails.name).toBe('Dev WS');
   });
 });
