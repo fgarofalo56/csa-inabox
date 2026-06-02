@@ -156,8 +156,15 @@ export async function enforceCapability(
       requiredRole,
       reason: r.reason,
       remediation:
-        'Ask a tenant admin to grant your account (or a group you belong to) ' +
-        `at least the ${requiredRole} role on capability '${cap?.name || capabilityId}' at /admin/permissions.`,
+        `Two ways to get access to '${cap?.name || capabilityId}': ` +
+        '(1) Bootstrap admin — set LOOM_TENANT_ADMIN_OID to your user OID, or ' +
+        'LOOM_TENANT_ADMIN_GROUP_ID to an Entra group you are in (these are deploy ' +
+        'params: loomTenantAdminOid / loomTenantAdminGroupId in the bicepparam, wired ' +
+        'into the console app env). Members bypass the gate with full Admin. This is ' +
+        'how the first admin gets in before any grants exist. ' +
+        '(2) Delegated — an existing tenant admin grants your account (or a group you ' +
+        `belong to) at least the ${requiredRole} role at /admin/permissions.`,
+      bootstrapEnv: { oid: 'LOOM_TENANT_ADMIN_OID', group: 'LOOM_TENANT_ADMIN_GROUP_ID' },
     },
     { status: 403 },
   );
