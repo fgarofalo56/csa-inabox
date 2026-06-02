@@ -40,6 +40,9 @@ import { mlModelProvisioner } from './provisioners/ml-model';
 import { promptFlowProvisioner } from './provisioners/prompt-flow';
 import { evaluationProvisioner } from './provisioners/evaluation';
 import { logicAppProvisioner } from './provisioners/logic-app';
+import { synapsePipelineProvisioner } from './provisioners/synapse-pipeline';
+import { adfPipelineProvisioner } from './provisioners/adf-pipeline';
+import { databricksJobProvisioner } from './provisioners/databricks-job';
 
 /** Mapping from editor item type → provisioner.  Item types not listed
  * here are Cosmos-only (no Phase-2 backend side-effect). */
@@ -64,6 +67,9 @@ const PROVISIONERS: Record<string, Provisioner> = {
   'prompt-flow': promptFlowProvisioner, // create the grounded RAG flow in the AI Foundry project (AML data-plane)
   'evaluation': evaluationProvisioner, // submit a real AI Foundry evaluation run (no hard-coded scores)
   'logic-app': logicAppProvisioner, // PUT Microsoft.Logic/workflows + fire manual trigger run + poll run history (real ARM)
+  'synapse-pipeline': synapsePipelineProvisioner, // PUT Synapse Studio pipeline + createRun + poll status (real Synapse dev REST)
+  'adf-pipeline': adfPipelineProvisioner, // PUT ADF pipeline (ARM) + createRun + poll status (real ARM)
+  'databricks-job': databricksJobProvisioner, // create/reset multi-task job w/ shared cluster + run-now + poll (real Jobs 2.1)
 };
 
 /** Item types that have a Phase-2 provisioner — exposed for the wizard

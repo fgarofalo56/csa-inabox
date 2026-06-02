@@ -18,7 +18,7 @@
  *   - 401/403 on TDS → UAMI not added as a member of the warehouse DB.
  */
 import { executeQuery as synapseExec, dedicatedTarget, type SynapseTarget } from '@/lib/azure/synapse-sql-client';
-import { getPoolState, resumePool, waitForOnline } from '@/lib/azure/synapse-pool-arm';
+import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
 import type { Provisioner, ProvisionResult, RemediationGate } from './types';
 
 const BACKEND = process.env.LOOM_WAREHOUSE_BACKEND || 'synapse-dedicated';
@@ -43,19 +43,31 @@ function isAuthError(msg: string): boolean {
 
 const RESUME_GATE: RemediationGate = {
   reason:
-    'Synapse dedicated SQL pool is paused and Loom could not resume it automatically.',
+    'Synapse dedicated SQL pool is resuming. DDL + seed could not run yet because TDS connections are refused while the pool is offline.',
   remediation:
-    'Resume the dedicated SQL pool, or grant the Console managed identity (LOOM_UAMI_CLIENT_ID) the Synapse Administrator / Contributor role on the workspace so it can call the ARM resume API. Manual resume: az synapse sql pool resume --name $LOOM_SYNAPSE_DEDICATED_POOL --workspace-name $LOOM_SYNAPSE_WORKSPACE --resource-group $LOOM_DLZ_RG. After ~3 minutes online, click Retry.',
+    'Loom issued an ARM resume — wait ~3 minutes for the pool to come Online, then click Retry to run the warehouse DDL + seed rows. If resume was not accepted, grant the Console managed identity (LOOM_UAMI_CLIENT_ID) the Synapse Administrator / Contributor role on the workspace, or resume manually: az synapse sql pool resume --name $LOOM_SYNAPSE_DEDICATED_POOL --workspace-name $LOOM_SYNAPSE_WORKSPACE --resource-group $LOOM_DLZ_RG.',
   link: 'https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/pause-and-resume-compute-portal',
 };
 
 /**
- * Ensure the dedicated pool is Online before issuing DDL. If it is Paused (or
- * mid-pause), issue an ARM resume and poll to Online. Returns null on success,
- * or a RemediationGate when the pool can't be brought online (e.g. the Console
- * MI lacks the ARM role to resume). ARM/network failures here degrade to a
- * step note and let the DDL loop attempt the connection — the in-loop paused
- * handler is the second line of defence.
+ * Bring the dedicated pool toward Online WITHOUT blocking the install request.
+ *
+ * A paused pool refuses TDS connections, so the DDL/seed cannot run until it
+ * is Online. Resuming a dedicated SQL pool takes 1-3 minutes — far longer than
+ * Azure Front Door's ~30s origin-response window. The previous implementation
+ * blocked the request on `waitForOnline()` (up to 180s) plus two 20s grace
+ * sleeps; that is exactly what 504'd the install at the gateway.
+ *
+ * Submit-and-handoff instead: if the pool isn't Online, FIRE an ARM resume
+ * (returns ~immediately with 202) and return RESUME_GATE so the request
+ * finishes fast with an honest "resuming — click Retry" remediation. The
+ * re-run (per no-vaporware reconcile semantics) lands the DDL + seed once the
+ * pool is Online. Returns:
+ *   - null  → pool is Online now; proceed to run DDL inline (fast path).
+ *   - gate  → pool offline; resume kicked, surface remediation and return.
+ *
+ * If pool state can't be read (no ARM role/env), return null and let the TDS
+ * path try + handle a paused error there — we don't hard-fail on a probe.
  */
 async function ensurePoolOnline(steps: string[]): Promise<RemediationGate | null> {
   let state: Awaited<ReturnType<typeof getPoolState>>['state'];
@@ -63,61 +75,27 @@ async function ensurePoolOnline(steps: string[]): Promise<RemediationGate | null
     ({ state } = await getPoolState());
     steps.push(`Dedicated SQL pool state: ${state}.`);
   } catch (e: any) {
-    // Can't read state (no ARM role / env) — let the TDS path try and handle
-    // a paused error there. Don't hard-fail the whole provision on a probe.
     steps.push(`Could not read pool state via ARM (${e?.message || String(e)}); proceeding to connect.`);
     return null;
   }
 
   if (state === 'Online') return null;
 
-  if (state === 'Paused' || state === 'Pausing' || state === 'Resuming') {
+  // Paused / Pausing → kick a resume (non-blocking) and hand off.
+  if (state === 'Paused' || state === 'Pausing') {
     try {
-      if (state !== 'Resuming') {
-        steps.push('Pool is paused; issuing ARM resume…');
-        await resumePool();
-      } else {
-        steps.push('Pool is already resuming; waiting for Online…');
-      }
-      const finalState = await waitForOnline();
-      steps.push(`Pool state after wait: ${finalState}.`);
-      if (finalState !== 'Online') {
-        // resume() was accepted but pool didn't reach Online within the wait
-        // window — surface the resume gate so the user can Retry shortly.
-        return RESUME_GATE;
-      }
-      // Microsoft Learn: the pool can report Online while still finishing the
-      // online workflow, so the first TDS reconnect can still fail. Add the
-      // documented grace delay before letting the DDL loop connect.
-      // https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-manage-compute-rest-api#check-database-state
-      await new Promise((r) => setTimeout(r, 20_000));
-      return null;
+      steps.push('Pool is offline; submitting ARM resume (non-blocking) and handing off…');
+      await resumePool();
+      steps.push('Resume accepted (202). Pool will be Online in ~1-3 min; click Retry to run DDL + seed.');
     } catch (e: any) {
-      steps.push(`ARM resume failed: ${e?.message || String(e)}`);
-      return RESUME_GATE;
+      steps.push(`ARM resume submit failed: ${e?.message || String(e)}`);
     }
+    return RESUME_GATE;
   }
 
-  // Scaling / Unknown — give it a chance to settle, then proceed.
-  steps.push(`Pool in transient state ${state}; waiting for Online…`);
-  try {
-    const finalState = await waitForOnline();
-    steps.push(`Pool state after wait: ${finalState}.`);
-    if (finalState === 'Online') return null;
-    if (finalState === 'Paused') {
-      await resumePool();
-      const afterResume = await waitForOnline();
-      steps.push(`Pool state after resume: ${afterResume}.`);
-      if (afterResume !== 'Online') return RESUME_GATE;
-      // Grace delay before the DDL loop reconnects (see note above).
-      await new Promise((r) => setTimeout(r, 20_000));
-      return null;
-    }
-    return RESUME_GATE;
-  } catch (e: any) {
-    steps.push(`Wait/resume failed: ${e?.message || String(e)}`);
-    return RESUME_GATE;
-  }
+  // Resuming / Scaling / Unknown → already in motion; don't block, hand off.
+  steps.push(`Pool in transient state ${state}; not blocking install. Click Retry once Online.`);
+  return RESUME_GATE;
 }
 
 function splitBatches(sql: string): string[] {
@@ -130,9 +108,47 @@ function splitBatches(sql: string): string[] {
         // procedure 'GO'" if it leaks into request.query(). It is only a
         // separator when alone on its own line; remove every such line.
         .replace(/^[ \t]*GO[ \t]*$/gim, '')
+        // Strip whole-line SQL comments (-- …). Leading comment lines are
+        // harmless on their own batch, but when an IF-guarded CREATE TABLE
+        // (see makeCreateTableIdempotent) folds the comment into the same
+        // batch as the IF/CREATE, a `--` would comment out the rest of the
+        // single-line statement. Removing comment-only lines keeps the
+        // generated batch executable.
+        .replace(/^[ \t]*--.*$/gim, '')
         .trim(),
     )
     .filter((b) => b.length > 0);
+}
+
+/**
+ * Translate the (invalid-here) ANSI `CREATE TABLE IF NOT EXISTS <name> …`
+ * idiom into the idempotent form Synapse dedicated SQL pool / Fabric
+ * Warehouse actually support:
+ *
+ *   IF OBJECT_ID(N'<name>', N'U') IS NULL
+ *   CREATE TABLE <name> ( … )
+ *
+ * Neither dedicated SQL pool nor Fabric Warehouse support `IF NOT EXISTS`
+ * on CREATE TABLE — the TDS engine raises "Incorrect syntax near IF"
+ * (or near the column list). The OBJECT_ID guard is the Microsoft-documented
+ * pre-existence check and keeps install idempotent on re-run.
+ *   https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-tables-overview#commands-for-creating-tables
+ *
+ * Only the leading `CREATE TABLE IF NOT EXISTS <name>` is rewritten; the
+ * column list and table options are left verbatim. A no-op for batches that
+ * don't open with that idiom (plain CREATE TABLE, CREATE VIEW, INSERT, …).
+ */
+function makeCreateTableIdempotent(batch: string): string {
+  const m = batch.match(/^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+([^\s(]+)/i);
+  if (!m) return batch;
+  const tableName = m[1];
+  // OBJECT_ID wants a string literal; double any embedded quotes.
+  const literal = tableName.replace(/'/g, "''");
+  const rewritten = batch.replace(
+    /^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+/i,
+    'CREATE TABLE ',
+  );
+  return `IF OBJECT_ID(N'${literal}', N'U') IS NULL\n${rewritten}`;
 }
 
 interface SampleRowsEntry {
@@ -180,6 +196,10 @@ function quoteTable(name: string): string {
  * (capped to keep the statement small), then verified with SELECT COUNT(*).
  * Returns log lines; never throws — seed failures degrade to a step note so
  * the install still completes with the schema in place.
+ *
+ * Idempotent: a table that already holds rows is left untouched, so
+ * re-running install (the documented reconcile path) does not duplicate the
+ * sample rows.
  */
 async function seedSampleRows(
   target: SynapseTarget,
@@ -189,6 +209,20 @@ async function seedSampleRows(
   for (const entry of sampleRows) {
     if (!entry?.table || !Array.isArray(entry.rows) || entry.rows.length === 0) continue;
     const table = quoteTable(entry.table);
+
+    // Skip tables that already have data so re-install doesn't duplicate rows.
+    try {
+      const pre = await synapseExec(target, `SELECT COUNT(*) AS n FROM ${table};`);
+      const existing = Number(pre.rows?.[0]?.[0] ?? 0);
+      if (existing > 0) {
+        steps.push(`Skipped seeding ${entry.table}: already has ${existing} row(s).`);
+        continue;
+      }
+    } catch {
+      // Count failed (e.g. table not yet created by a deferred DDL) — fall
+      // through and attempt the INSERT, which will surface its own error.
+    }
+
     const colClause =
       Array.isArray(entry.columns) && entry.columns.length > 0
         ? ` (${entry.columns.map(quoteIdent).join(', ')})`
@@ -244,15 +278,19 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
     }
     steps.push(`Synapse target: ${target.server} / ${target.database}`);
 
-    // A paused dedicated pool can't accept TDS connections. Auto-resume it
-    // (and wait for Online) BEFORE issuing any DDL so the data-bearing seed
-    // actually lands. If it can't be brought online, gate honestly.
+    // A paused dedicated pool can't accept TDS connections. Probe state and,
+    // if it's offline, FIRE a non-blocking ARM resume and hand off with an
+    // honest "resuming — click Retry" gate (resuming takes 1-3 min, far past
+    // the gateway's ~30s window — blocking here is what 504'd the install).
+    // When the pool is already Online, this returns null and we run the DDL +
+    // seed inline (sub-second for this bundle), so the whole install stays
+    // well under the gateway timeout.
     const preGate = await ensurePoolOnline(steps);
     if (preGate) {
       return { status: 'remediation', gate: preGate, steps };
     }
 
-    const batches = splitBatches(ddl);
+    const batches = splitBatches(ddl).map(makeCreateTableIdempotent);
     let resumedMidLoop = false;
     for (const sql of batches) {
       let attempted = false;

@@ -35,63 +35,88 @@ function cell(
 // reference architecture (slv_player_sessions, slv_slot_performance,
 // gld_player_value) translated into a star schema for analyst consumption.
 
+// Authored in Azure Synapse **dedicated SQL pool** T-SQL (the backend the live
+// console targets when LOOM_WAREHOUSE_BACKEND is unset → 'synapse-dedicated').
+// Dedicated pool grammar differs from Databricks/Fabric Lakehouse SQL, so this
+// DDL deliberately avoids every dedicated-pool-unsupported feature (confirmed
+// against Microsoft Learn — develop-tables-overview#unsupported-table-features
+// and sql-data-warehouse-table-constraints):
+//   • NO `CREATE SCHEMA IF NOT EXISTS` — grammar is `CREATE SCHEMA name [;]`.
+//     Idempotency comes from an sys.schemas guard + EXEC (dynamic SQL).
+//   • NO `CREATE TABLE IF NOT EXISTS` — guarded with `IF OBJECT_ID(...) IS NULL`.
+//   • NO FOREIGN KEY / CHECK constraints (unsupported). Referential integrity
+//     is enforced upstream (dbt tests + the load pipeline); PKs are declared
+//     NONCLUSTERED NOT ENFORCED, the only PK form the pool accepts.
+//   • NO computed/`GENERATED ALWAYS AS … STORED` columns (unsupported). The
+//     former computed columns (net_result, coin_in_amount, coin_out_amount)
+//     are now persisted columns populated by the load/seed (value = the same
+//     expression) so the starter queries and dbt views that read them work
+//     unchanged.
+//   • NO `CREATE INDEX … IF NOT EXISTS`, filtered (`WHERE`) indexes, or
+//     `PARTITION BY RANGE` — facts use a clustered columnstore index + hash
+//     distribution; fact_handle is range-PARTITIONed in the WITH() clause on
+//     date_sk; dims are REPLICATEd (small).
+// Each statement is its own batch (split on `;\n` by the warehouse provisioner).
 const WAREHOUSE_DDL = `-- ════════════════════════════════════════════════════════════════════
--- Casino Analytics Data Warehouse
+-- Casino Analytics Data Warehouse  (Azure Synapse dedicated SQL pool)
 -- Star schema: player-grain facts (sessions, individual hands/spins) with
 -- supporting dimensions for players, tables/machines, dates, and zones.
 -- Compliance: NIGC MICS, Title 31 BSA/AML. All seed data is synthetic.
 -- ════════════════════════════════════════════════════════════════════
 
-CREATE SCHEMA IF NOT EXISTS casino;
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'casino') EXEC('CREATE SCHEMA casino');
 
--- ─── Dimensions ────────────────────────────────────────────────────────
+-- ─── Dimensions (small → REPLICATE) ─────────────────────────────────────
 
-CREATE TABLE IF NOT EXISTS casino.dim_player (
+IF OBJECT_ID('casino.dim_player', 'U') IS NULL
+CREATE TABLE casino.dim_player (
     player_sk           BIGINT          NOT NULL,
     player_id           VARCHAR(64)     NOT NULL,
     player_first_name   VARCHAR(80)     NULL,
     player_last_name    VARCHAR(80)     NULL,
     enrollment_date     DATE            NULL,
-    tier                VARCHAR(16)     NOT NULL DEFAULT 'BRONZE',
-    tier_qualified_at   TIMESTAMP       NULL,
+    tier                VARCHAR(16)     NOT NULL,     -- BRONZE|SILVER|GOLD|PLATINUM|DIAMOND
+    tier_qualified_at   DATETIME2       NULL,
     home_state          CHAR(2)         NULL,
     date_of_birth       DATE            NULL,
-    self_excluded       BIT             NOT NULL DEFAULT 0,
-    do_not_market       BIT             NOT NULL DEFAULT 0,
+    self_excluded       BIT             NOT NULL,
+    do_not_market       BIT             NOT NULL,
     lifetime_adt        DECIMAL(12, 2)  NULL,
     last_visit_date     DATE            NULL,
-    is_current          BIT             NOT NULL DEFAULT 1,
-    valid_from          TIMESTAMP       NOT NULL,
-    valid_to            TIMESTAMP       NULL,
-    CONSTRAINT pk_dim_player PRIMARY KEY (player_sk),
-    CONSTRAINT ck_dim_player_tier CHECK (tier IN ('BRONZE','SILVER','GOLD','PLATINUM','DIAMOND'))
-);
+    is_current          BIT             NOT NULL,
+    valid_from          DATETIME2       NOT NULL,
+    valid_to            DATETIME2       NULL,
+    CONSTRAINT pk_dim_player PRIMARY KEY NONCLUSTERED (player_sk) NOT ENFORCED
+)
+WITH (DISTRIBUTION = REPLICATE, CLUSTERED COLUMNSTORE INDEX);
 
-CREATE TABLE IF NOT EXISTS casino.dim_table (
+IF OBJECT_ID('casino.dim_table', 'U') IS NULL
+CREATE TABLE casino.dim_table (
     table_sk            BIGINT          NOT NULL,
     table_id            VARCHAR(32)     NOT NULL,
-    table_type          VARCHAR(32)     NOT NULL,  -- SLOT, BLACKJACK, POKER, ROULETTE, BACCARAT, CRAPS
+    table_type          VARCHAR(32)     NOT NULL,     -- SLOT, BLACKJACK, POKER, ROULETTE, BACCARAT, CRAPS
     game_theme          VARCHAR(80)     NULL,
     denomination        DECIMAL(6, 2)   NULL,
-    floor_zone          VARCHAR(8)      NOT NULL,
+    floor_zone          VARCHAR(8)      NOT NULL,      -- A1|A2|B1|B2|C1|C2|D1|VIP
     min_bet             DECIMAL(8, 2)   NULL,
     max_bet             DECIMAL(10, 2)  NULL,
-    target_hold_pct     DECIMAL(5, 2)   NOT NULL DEFAULT 8.00,
+    target_hold_pct     DECIMAL(5, 2)   NOT NULL,
     par_sheet_rtp_pct   DECIMAL(5, 2)   NULL,
     install_date        DATE            NULL,
     last_service_date   DATE            NULL,
-    is_active           BIT             NOT NULL DEFAULT 1,
-    CONSTRAINT pk_dim_table PRIMARY KEY (table_sk),
-    CONSTRAINT ck_dim_table_zone CHECK (floor_zone IN ('A1','A2','B1','B2','C1','C2','D1','VIP'))
-);
+    is_active           BIT             NOT NULL,
+    CONSTRAINT pk_dim_table PRIMARY KEY NONCLUSTERED (table_sk) NOT ENFORCED
+)
+WITH (DISTRIBUTION = REPLICATE, CLUSTERED COLUMNSTORE INDEX);
 
-CREATE TABLE IF NOT EXISTS casino.dim_date (
-    date_sk             INT             NOT NULL,    -- yyyymmdd
+IF OBJECT_ID('casino.dim_date', 'U') IS NULL
+CREATE TABLE casino.dim_date (
+    date_sk             INT             NOT NULL,      -- yyyymmdd
     full_date           DATE            NOT NULL,
     day_of_week         TINYINT         NOT NULL,
     day_name            VARCHAR(10)     NOT NULL,
     is_weekend          BIT             NOT NULL,
-    is_holiday          BIT             NOT NULL DEFAULT 0,
+    is_holiday          BIT             NOT NULL,
     holiday_name        VARCHAR(64)     NULL,
     week_of_year        TINYINT         NOT NULL,
     month_num           TINYINT         NOT NULL,
@@ -99,73 +124,73 @@ CREATE TABLE IF NOT EXISTS casino.dim_date (
     quarter_num         TINYINT         NOT NULL,
     year_num            SMALLINT        NOT NULL,
     fiscal_period       VARCHAR(8)      NULL,
-    gaming_day_start    TIMESTAMP       NOT NULL,    -- 06:00 local
-    CONSTRAINT pk_dim_date PRIMARY KEY (date_sk)
-);
+    gaming_day_start    DATETIME2       NOT NULL,      -- 06:00 local
+    CONSTRAINT pk_dim_date PRIMARY KEY NONCLUSTERED (date_sk) NOT ENFORCED
+)
+WITH (DISTRIBUTION = REPLICATE, CLUSTERED COLUMNSTORE INDEX);
 
--- ─── Facts ─────────────────────────────────────────────────────────────
+-- ─── Facts (large → HASH distribute on player_sk; CCI) ──────────────────
 
-CREATE TABLE IF NOT EXISTS casino.fact_session (
+IF OBJECT_ID('casino.fact_session', 'U') IS NULL
+CREATE TABLE casino.fact_session (
     session_sk          BIGINT          NOT NULL,
     session_id          VARCHAR(64)     NOT NULL,
     player_sk           BIGINT          NOT NULL,
     table_sk            BIGINT          NOT NULL,
     date_sk             INT             NOT NULL,
-    session_start       TIMESTAMP       NOT NULL,
-    session_end         TIMESTAMP       NULL,
+    session_start       DATETIME2       NOT NULL,
+    session_end         DATETIME2       NULL,
     duration_minutes    INT             NULL,
     game_type           VARCHAR(32)     NOT NULL,
-    coin_in             DECIMAL(14, 2)  NOT NULL DEFAULT 0,
-    coin_out            DECIMAL(14, 2)  NOT NULL DEFAULT 0,
-    theoretical_win     DECIMAL(14, 2)  NOT NULL DEFAULT 0,
-    actual_win          DECIMAL(14, 2)  NOT NULL DEFAULT 0,
-    net_result          DECIMAL(14, 2)  GENERATED ALWAYS AS (coin_in - coin_out) STORED,
+    coin_in             DECIMAL(14, 2)  NOT NULL,
+    coin_out            DECIMAL(14, 2)  NOT NULL,
+    theoretical_win     DECIMAL(14, 2)  NOT NULL,
+    actual_win          DECIMAL(14, 2)  NOT NULL,
+    net_result          DECIMAL(14, 2)  NOT NULL,      -- persisted (= coin_in - coin_out); maintained at load
     avg_bet             DECIMAL(8, 2)   NULL,
-    rated_play          BIT             NOT NULL DEFAULT 1,
+    rated_play          BIT             NOT NULL,
     comp_value          DECIMAL(10, 2)  NULL,
-    session_rating      TINYINT         NULL,         -- 1-5
+    session_rating      TINYINT         NULL,          -- 1-5
     floor_zone          VARCHAR(8)      NOT NULL,
-    ingest_ts           TIMESTAMP       NOT NULL,
-    CONSTRAINT pk_fact_session PRIMARY KEY (session_sk),
-    CONSTRAINT fk_session_player FOREIGN KEY (player_sk) REFERENCES casino.dim_player(player_sk),
-    CONSTRAINT fk_session_table  FOREIGN KEY (table_sk)  REFERENCES casino.dim_table(table_sk),
-    CONSTRAINT fk_session_date   FOREIGN KEY (date_sk)   REFERENCES casino.dim_date(date_sk)
-);
-CREATE INDEX IF NOT EXISTS ix_fact_session_player_date ON casino.fact_session (player_sk, date_sk);
-CREATE INDEX IF NOT EXISTS ix_fact_session_zone_date   ON casino.fact_session (floor_zone, date_sk);
+    ingest_ts           DATETIME2       NOT NULL,
+    CONSTRAINT pk_fact_session PRIMARY KEY NONCLUSTERED (session_sk) NOT ENFORCED
+)
+WITH (DISTRIBUTION = HASH(player_sk), CLUSTERED COLUMNSTORE INDEX);
 
 -- Grain: one row per individual handle event (slot spin, table hand, jackpot,
--- bonus, cash-in, cash-out). Volume ~50M/day; partition by date_sk.
-CREATE TABLE IF NOT EXISTS casino.fact_handle (
+-- bonus, cash-in, cash-out). Volume ~50M/day → HASH distribute on table_sk and
+-- range-PARTITION on date_sk (gaming-day boundaries) for partition elimination.
+IF OBJECT_ID('casino.fact_handle', 'U') IS NULL
+CREATE TABLE casino.fact_handle (
     handle_sk           BIGINT          NOT NULL,
     event_id            VARCHAR(64)     NOT NULL,
-    session_sk          BIGINT          NULL,         -- NULL for unrated play
+    session_sk          BIGINT          NULL,          -- NULL for unrated play
     player_sk           BIGINT          NULL,
     table_sk            BIGINT          NOT NULL,
     date_sk             INT             NOT NULL,
-    event_ts            TIMESTAMP       NOT NULL,
-    event_type          VARCHAR(16)     NOT NULL,     -- SPIN, JACKPOT, BONUS, CASH_IN, CASH_OUT, HAND_PAY, TILT
+    event_ts            DATETIME2       NOT NULL,
+    event_type          VARCHAR(16)     NOT NULL,      -- SPIN, JACKPOT, BONUS, CASH_IN, CASH_OUT, HAND_PAY, TILT, DOOR_OPEN
     denomination        DECIMAL(6, 2)   NOT NULL,
     credits_wagered     INT             NULL,
     credits_won         INT             NULL,
-    coin_in_amount      DECIMAL(12, 2)  GENERATED ALWAYS AS (credits_wagered * denomination) STORED,
-    coin_out_amount     DECIMAL(12, 2)  GENERATED ALWAYS AS (credits_won * denomination) STORED,
+    coin_in_amount      DECIMAL(12, 2)  NULL,          -- persisted (= credits_wagered * denomination); maintained at load
+    coin_out_amount     DECIMAL(12, 2)  NULL,          -- persisted (= credits_won * denomination); maintained at load
     jackpot_amount      DECIMAL(12, 2)  NULL,
     hand_pay_amount     DECIMAL(12, 2)  NULL,
     progressive_pool_id VARCHAR(32)     NULL,
     rtp_contribution    DECIMAL(8, 4)   NULL,
     floor_zone          VARCHAR(8)      NOT NULL,
-    ctr_trigger         BIT             NOT NULL DEFAULT 0,  -- Title 31 $10K event
+    ctr_trigger         BIT             NOT NULL,       -- Title 31 $10K event
     tilt_code           VARCHAR(16)     NULL,
-    ingest_ts           TIMESTAMP       NOT NULL,
-    CONSTRAINT pk_fact_handle PRIMARY KEY (handle_sk, date_sk),
-    CONSTRAINT ck_fact_handle_event CHECK (event_type IN
-        ('SPIN','JACKPOT','BONUS','CASH_IN','CASH_OUT','HAND_PAY','TILT','DOOR_OPEN'))
+    ingest_ts           DATETIME2       NOT NULL,
+    CONSTRAINT pk_fact_handle PRIMARY KEY NONCLUSTERED (handle_sk, date_sk) NOT ENFORCED
 )
-PARTITION BY RANGE (date_sk);
-CREATE INDEX IF NOT EXISTS ix_fact_handle_table_ts   ON casino.fact_handle (table_sk, event_ts);
-CREATE INDEX IF NOT EXISTS ix_fact_handle_player_ts  ON casino.fact_handle (player_sk, event_ts);
-CREATE INDEX IF NOT EXISTS ix_fact_handle_ctr        ON casino.fact_handle (ctr_trigger, date_sk) WHERE ctr_trigger = 1;
+WITH (
+    DISTRIBUTION = HASH(table_sk),
+    CLUSTERED COLUMNSTORE INDEX,
+    PARTITION (date_sk RANGE RIGHT FOR VALUES
+        (20260101, 20260201, 20260301, 20260401, 20260501, 20260601))
+);
 `;
 
 // ─── dbt project.yml ────────────────────────────────────────────────────
@@ -642,9 +667,12 @@ ORDER BY optimization_score DESC
 
 // ─── Starter analyst queries ────────────────────────────────────────────
 
+// Starter analyst queries — authored in Azure Synapse dedicated SQL pool
+// T-SQL (TOP not LIMIT; CAST(GETDATE() AS DATE) not CURRENT_DATE) so they run
+// as-is against the provisioned warehouse over the seeded star schema.
 const STARTER_QUERY_VIP = `-- Top-50 VIPs in the last 90 days by theoretical win.
 -- Used by player development hosts to prioritize outreach.
-SELECT
+SELECT TOP (50)
     p.player_id,
     p.player_last_name,
     p.tier,
@@ -661,11 +689,10 @@ SELECT
 FROM casino.fact_session s
 JOIN casino.dim_player   p ON p.player_sk = s.player_sk
 JOIN casino.dim_date     d ON d.date_sk   = s.date_sk
-WHERE d.full_date >= DATEADD(day, -90, CURRENT_DATE)
+WHERE d.full_date >= DATEADD(day, -90, CAST(GETDATE() AS DATE))
   AND p.self_excluded = 0
 GROUP BY p.player_id, p.player_last_name, p.tier
-ORDER BY theo_win_90d DESC
-LIMIT 50;
+ORDER BY theo_win_90d DESC;
 `;
 
 const STARTER_QUERY_HOLD_BY_ZONE = `-- Hold percentage variance by zone in the last 30 days.
@@ -686,10 +713,14 @@ SELECT
 FROM casino.fact_handle  h
 JOIN casino.dim_table    t ON t.table_sk = h.table_sk
 JOIN casino.dim_date     d ON d.date_sk  = h.date_sk
-WHERE d.full_date >= DATEADD(day, -30, CURRENT_DATE)
+WHERE d.full_date >= DATEADD(day, -30, CAST(GETDATE() AS DATE))
   AND h.event_type = 'SPIN'
 GROUP BY t.floor_zone
-ORDER BY ABS(hold_variance_pct) DESC;
+ORDER BY ABS(
+          100.0 *
+          (SUM(h.coin_in_amount) - SUM(h.coin_out_amount)) /
+          NULLIF(SUM(h.coin_in_amount), 0)
+          - AVG(t.target_hold_pct)) DESC;
 `;
 
 const STARTER_QUERY_CTR = `-- Title 31 CTR pre-alert: players whose cash transactions in the last
@@ -715,7 +746,7 @@ SELECT
 FROM casino.fact_handle h
 JOIN casino.dim_player  p ON p.player_sk = h.player_sk
 JOIN casino.dim_date    d ON d.date_sk   = h.date_sk
-WHERE h.event_ts >= DATEADD(hour, -24, CURRENT_TIMESTAMP)
+WHERE h.event_ts >= DATEADD(hour, -24, SYSDATETIME())
   AND h.event_type IN ('CASH_IN', 'CASH_OUT', 'HAND_PAY')
   AND p.player_sk IS NOT NULL
 GROUP BY p.player_id, p.player_last_name, p.tier
@@ -726,12 +757,12 @@ ORDER BY (cash_in_total + hand_pay_total) DESC;
 
 const STARTER_QUERY_CHURN = `-- Churn-risk players (no visit in 30+ days) sorted by historical ADT.
 -- Drives a "win-back" mail/email campaign from marketing.
-SELECT
+SELECT TOP (200)
     p.player_id,
     p.player_last_name,
     p.tier,
     p.last_visit_date,
-    DATEDIFF(day, p.last_visit_date, CURRENT_DATE)  AS days_since_last_visit,
+    DATEDIFF(day, p.last_visit_date, CAST(GETDATE() AS DATE))  AS days_since_last_visit,
     p.lifetime_adt,
     COUNT(DISTINCT s.session_id)                    AS sessions_lifetime,
     ROUND(SUM(s.theoretical_win), 2)                AS lifetime_theoretical
@@ -739,11 +770,10 @@ FROM casino.dim_player    p
 LEFT JOIN casino.fact_session s ON s.player_sk = p.player_sk
 WHERE p.self_excluded = 0
   AND p.do_not_market = 0
-  AND DATEDIFF(day, p.last_visit_date, CURRENT_DATE) BETWEEN 30 AND 120
+  AND DATEDIFF(day, p.last_visit_date, CAST(GETDATE() AS DATE)) BETWEEN 30 AND 120
   AND p.lifetime_adt >= 50
 GROUP BY p.player_id, p.player_last_name, p.tier, p.last_visit_date, p.lifetime_adt
-ORDER BY p.lifetime_adt DESC, days_since_last_visit ASC
-LIMIT 200;
+ORDER BY p.lifetime_adt DESC, days_since_last_visit ASC;
 `;
 
 const STARTER_QUERY_FLOOR_PERF = `-- Daily floor performance by zone with hold variance flag.
@@ -771,9 +801,11 @@ SELECT
 FROM casino.fact_session s
 JOIN casino.dim_table    t ON t.table_sk = s.table_sk
 JOIN casino.dim_date     d ON d.date_sk  = s.date_sk
-WHERE d.full_date >= DATEADD(day, -7, CURRENT_DATE)
+WHERE d.full_date >= DATEADD(day, -7, CAST(GETDATE() AS DATE))
 GROUP BY d.full_date, t.floor_zone
-ORDER BY d.full_date DESC, ABS(actual_hold_pct - target_hold_pct) DESC;
+ORDER BY d.full_date DESC,
+         ABS(100.0 * (SUM(s.coin_in) - SUM(s.coin_out)) / NULLIF(SUM(s.coin_in), 0)
+             - AVG(t.target_hold_pct)) DESC;
 `;
 
 // ─── Notebook cells ─────────────────────────────────────────────────────
@@ -1205,49 +1237,58 @@ const WAREHOUSE_SAMPLE_ROWS: { table: string; columns?: string[]; rows: any[][] 
     ],
   },
   {
+    // is_holiday is NOT NULL (dedicated pool DEFAULT constraints dropped from
+    // the DDL) so it is seeded explicitly.
     table: 'casino.dim_date',
     columns: [
       'date_sk', 'full_date', 'day_of_week', 'day_name', 'is_weekend',
-      'week_of_year', 'month_num', 'month_name', 'quarter_num', 'year_num',
-      'gaming_day_start',
+      'is_holiday', 'week_of_year', 'month_num', 'month_name', 'quarter_num',
+      'year_num', 'gaming_day_start',
     ],
     rows: [
-      [20260530, '2026-05-30', 7, 'Saturday', 1, 22, 5, 'May', 2, 2026, '2026-05-30T06:00:00'],
-      [20260529, '2026-05-29', 6, 'Friday',   1, 22, 5, 'May', 2, 2026, '2026-05-29T06:00:00'],
-      [20260528, '2026-05-28', 5, 'Thursday', 0, 22, 5, 'May', 2, 2026, '2026-05-28T06:00:00'],
+      [20260530, '2026-05-30', 7, 'Saturday', 1, 0, 22, 5, 'May', 2, 2026, '2026-05-30T06:00:00'],
+      [20260529, '2026-05-29', 6, 'Friday',   1, 0, 22, 5, 'May', 2, 2026, '2026-05-29T06:00:00'],
+      [20260528, '2026-05-28', 5, 'Thursday', 0, 0, 22, 5, 'May', 2, 2026, '2026-05-28T06:00:00'],
     ],
   },
   {
+    // net_result is a persisted column (= coin_in - coin_out) since dedicated
+    // SQL pool has no computed columns — seed it explicitly per row.
     table: 'casino.fact_session',
     columns: [
       'session_sk', 'session_id', 'player_sk', 'table_sk', 'date_sk',
       'session_start', 'session_end', 'duration_minutes', 'game_type',
-      'coin_in', 'coin_out', 'theoretical_win', 'actual_win', 'avg_bet',
-      'rated_play', 'comp_value', 'session_rating', 'floor_zone', 'ingest_ts',
+      'coin_in', 'coin_out', 'theoretical_win', 'actual_win', 'net_result',
+      'avg_bet', 'rated_play', 'comp_value', 'session_rating', 'floor_zone',
+      'ingest_ts',
     ],
     rows: [
-      [1, 'S2026053000001', 1, 3, 20260530, '2026-05-30T20:15:00', '2026-05-30T23:40:00', 205, 'BLACKJACK', 84000.00, 31000.00, 5040.00, 53000.00, 250.00, 1, 1200.00, 5, 'VIP', '2026-05-31T06:05:00'],
-      [2, 'S2026053000002', 2, 1, 20260530, '2026-05-30T18:30:00', '2026-05-30T20:05:00',  95, 'SLOT',      12500.00,  9800.00,  1000.00,  2700.00,   5.00, 1,  150.00, 4, 'A1',  '2026-05-31T06:05:00'],
-      [3, 'S2026052900001', 3, 4, 20260529, '2026-05-29T13:10:00', '2026-05-29T15:00:00', 110, 'SLOT',       3400.00,  3050.00,   289.00,   350.00,   2.50, 1,   40.00, 3, 'B1',  '2026-05-30T06:05:00'],
-      [4, 'S2026052900002', 4, 2, 20260529, '2026-05-29T11:00:00', '2026-05-29T11:45:00',  45, 'SLOT',        900.00,   840.00,    81.00,    60.00,   1.25, 1,   10.00, 2, 'A2',  '2026-05-30T06:05:00'],
-      [5, 'S2026052800001', 5, 5, 20260528, '2026-05-28T22:05:00', '2026-05-28T22:35:00',  30, 'ROULETTE',     600.00,   570.00,    31.56,    30.00,  20.00, 1,    5.00, 1, 'C1',  '2026-05-29T06:05:00'],
+      [1, 'S2026053000001', 1, 3, 20260530, '2026-05-30T20:15:00', '2026-05-30T23:40:00', 205, 'BLACKJACK', 84000.00, 31000.00, 5040.00, 53000.00, 53000.00, 250.00, 1, 1200.00, 5, 'VIP', '2026-05-31T06:05:00'],
+      [2, 'S2026053000002', 2, 1, 20260530, '2026-05-30T18:30:00', '2026-05-30T20:05:00',  95, 'SLOT',      12500.00,  9800.00,  1000.00,  2700.00,  2700.00,   5.00, 1,  150.00, 4, 'A1',  '2026-05-31T06:05:00'],
+      [3, 'S2026052900001', 3, 4, 20260529, '2026-05-29T13:10:00', '2026-05-29T15:00:00', 110, 'SLOT',       3400.00,  3050.00,   289.00,   350.00,   350.00,   2.50, 1,   40.00, 3, 'B1',  '2026-05-30T06:05:00'],
+      [4, 'S2026052900002', 4, 2, 20260529, '2026-05-29T11:00:00', '2026-05-29T11:45:00',  45, 'SLOT',        900.00,   840.00,    81.00,    60.00,    60.00,   1.25, 1,   10.00, 2, 'A2',  '2026-05-30T06:05:00'],
+      [5, 'S2026052800001', 5, 5, 20260528, '2026-05-28T22:05:00', '2026-05-28T22:35:00',  30, 'ROULETTE',     600.00,   570.00,    31.56,    30.00,    30.00,  20.00, 1,    5.00, 1, 'C1',  '2026-05-29T06:05:00'],
     ],
   },
   {
+    // coin_in_amount / coin_out_amount are persisted columns (= credits_wagered
+    // * denomination / credits_won * denomination) since dedicated SQL pool has
+    // no computed columns — seed them explicitly per row.
     table: 'casino.fact_handle',
     columns: [
       'handle_sk', 'event_id', 'session_sk', 'player_sk', 'table_sk',
       'date_sk', 'event_ts', 'event_type', 'denomination', 'credits_wagered',
-      'credits_won', 'jackpot_amount', 'hand_pay_amount', 'rtp_contribution',
-      'floor_zone', 'ctr_trigger', 'ingest_ts',
+      'credits_won', 'coin_in_amount', 'coin_out_amount', 'jackpot_amount',
+      'hand_pay_amount', 'rtp_contribution', 'floor_zone', 'ctr_trigger',
+      'ingest_ts',
     ],
     rows: [
-      [1, 'E20260530A0001', 2, 2, 1, 20260530, '2026-05-30T18:31:12', 'SPIN',     1.00,  500,    0, null,     null, 0.9100, 'A1',  0, '2026-05-31T06:05:00'],
-      [2, 'E20260530A0002', 2, 2, 1, 20260530, '2026-05-30T18:42:55', 'JACKPOT',  1.00,  500, 2500, 2500.00,  null, 0.9100, 'A1',  0, '2026-05-31T06:05:00'],
-      [3, 'E20260530V0001', 1, 1, 3, 20260530, '2026-05-30T21:05:00', 'CASH_IN',  1.00, 12000,   0, null,     null, null,   'VIP', 1, '2026-05-31T06:05:00'],
-      [4, 'E20260530V0002', 1, 1, 3, 20260530, '2026-05-30T22:50:00', 'HAND_PAY', 1.00,     0, 9000, null,  9000.00, null,   'VIP', 0, '2026-05-31T06:05:00'],
-      [5, 'E20260529B0001', 3, 3, 4, 20260529, '2026-05-29T13:15:30', 'SPIN',     0.50,  100,   80, null,     null, 0.9200, 'B1',  0, '2026-05-30T06:05:00'],
-      [6, 'E20260528C0001', 5, 5, 5, 20260528, '2026-05-28T22:10:00', 'SPIN',     1.00,   20,    0, null,     null, 0.9474, 'C1',  0, '2026-05-29T06:05:00'],
+      [1, 'E20260530A0001', 2, 2, 1, 20260530, '2026-05-30T18:31:12', 'SPIN',     1.00,   500,    0,   500.00,     0.00, null,     null, 0.9100, 'A1',  0, '2026-05-31T06:05:00'],
+      [2, 'E20260530A0002', 2, 2, 1, 20260530, '2026-05-30T18:42:55', 'JACKPOT',  1.00,   500, 2500,   500.00,  2500.00, 2500.00,  null, 0.9100, 'A1',  0, '2026-05-31T06:05:00'],
+      [3, 'E20260530V0001', 1, 1, 3, 20260530, '2026-05-30T21:05:00', 'CASH_IN',  1.00, 12000,    0, 12000.00,     0.00, null,     null, null,   'VIP', 1, '2026-05-31T06:05:00'],
+      [4, 'E20260530V0002', 1, 1, 3, 20260530, '2026-05-30T22:50:00', 'HAND_PAY', 1.00,     0, 9000,     0.00,  9000.00, null,  9000.00, null,   'VIP', 0, '2026-05-31T06:05:00'],
+      [5, 'E20260529B0001', 3, 3, 4, 20260529, '2026-05-29T13:15:30', 'SPIN',     0.50,   100,   80,    50.00,    40.00, null,     null, 0.9200, 'B1',  0, '2026-05-30T06:05:00'],
+      [6, 'E20260528C0001', 5, 5, 5, 20260528, '2026-05-28T22:10:00', 'SPIN',     1.00,    20,    0,    20.00,     0.00, null,     null, 0.9474, 'C1',  0, '2026-05-29T06:05:00'],
     ],
   },
 ];

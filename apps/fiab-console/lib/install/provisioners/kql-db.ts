@@ -15,10 +15,180 @@
  *   - LOOM_KUSTO_CLUSTER_URI missing → set it.
  *   - 401/403 on .create table → UAMI needs AllDatabasesAdmin on the cluster.
  */
-import { createDatabase, executeMgmtCommand, ingestInline, KustoError } from '@/lib/azure/kusto-client';
+import { createDatabase, executeMgmtCommand, executeQuery, ingestInline, KustoError } from '@/lib/azure/kusto-client';
 import type { Provisioner, ProvisionResult } from './types';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * A throttled ingest/set-or-append is a transient, retryable condition — NOT a
+ * hard failure. On a small/shared ADX cluster the Ingestion capacity policy can
+ * be as low as 1 concurrent operation, so the 2nd/3rd/4th table seed in a tight
+ * loop is aborted with HTTP 429 / `ControlCommandThrottledException`:
+ *   "The control command was aborted due to throttling … Retrying after some
+ *    backoff might succeed. … Origin: 'CapacityPolicy/Ingestion', Capacity: 1".
+ * Microsoft Learn (Capacity policy → "Management commands throttling") states
+ * the documented client remedy is exactly that: retry after backoff. We detect
+ * the throttle by the 429 status or the throttling text. Non-throttle errors
+ * (auth, schema) are NOT matched so the caller's precise gating still runs.
+ *   https://learn.microsoft.com/kusto/management/capacity-policy#management-commands-throttling
+ */
+function isThrottled(e: any): boolean {
+  if (e instanceof KustoError && e.status === 429) return true;
+  const msg = (e?.message || String(e || '')).toString();
+  return /throttl|TooManyRequests|ControlCommandThrottled|CapacityPolicy\/Ingestion/i.test(msg);
+}
+
+/**
+ * Run an ingest-class command (`.ingest inline` / `.set-or-append`) with
+ * exponential backoff + full jitter on throttling (HTTP 429). Serializes
+ * retries so the bundle's table seeds all land even when the shared cluster's
+ * ingestion capacity is 1. Re-throws non-throttle errors immediately (so 401/403
+ * still surface to the caller's AllDatabasesAdmin gate) and re-throws the final
+ * throttle error once the attempt budget is exhausted.
+ */
+async function withIngestRetry<T>(
+  op: () => Promise<T>,
+  label: string,
+  steps: string[],
+  opts: { maxAttempts?: number; baseDelayMs?: number } = {},
+): Promise<T> {
+  const maxAttempts = opts.maxAttempts ?? 6;
+  const baseDelayMs = opts.baseDelayMs ?? 4_000;
+  let lastErr: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const r = await op();
+      if (attempt > 1) steps.push(`${label} succeeded on attempt ${attempt}.`);
+      return r;
+    } catch (e: any) {
+      lastErr = e;
+      if (!isThrottled(e)) throw e; // auth / schema → surface immediately
+      if (attempt === maxAttempts) break;
+      // Exponential backoff, capped at 30s, with full jitter so serialized
+      // single-capacity ingests are spread out instead of hammering the policy.
+      const backoff = Math.min(baseDelayMs * 2 ** (attempt - 1), 30_000);
+      const wait = Math.round(backoff / 2 + Math.random() * (backoff / 2));
+      steps.push(`${label} throttled (attempt ${attempt}/${maxAttempts}); backing off ${Math.round(wait / 1000)}s.`);
+      await sleep(wait);
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Render a single scalar as a Kusto `datatable()` literal cell for the given
+ * column type. Used by the `.set-or-append <table> <| datatable(...) [...]`
+ * fallback seed path (see seedTableRows). Strings are double-quoted with
+ * embedded quotes escaped; datetimes wrapped in datetime(...); bool/long/int/
+ * real emitted verbatim; null/empty as the typed null literal so the row shape
+ * still matches. Grounded in Microsoft Learn (datatable operator):
+ *   https://learn.microsoft.com/kusto/query/datatable-operator
+ */
+function kqlLiteral(value: unknown, type: string): string {
+  const t = (type || 'string').toLowerCase();
+  if (value === null || value === undefined || value === '') {
+    // Typed null keeps the datatable row arity correct.
+    if (t === 'string') return '""';
+    if (t === 'datetime') return 'datetime(null)';
+    if (t === 'bool' || t === 'boolean') return 'bool(null)';
+    if (t === 'real' || t === 'double' || t === 'decimal') return 'real(null)';
+    if (t === 'long' || t === 'int') return 'long(null)';
+    return '""';
+  }
+  if (t === 'datetime') return `datetime(${String(value).replace(/[)"\\]/g, '')})`;
+  if (t === 'bool' || t === 'boolean') {
+    const b = value === true || value === 'true' || value === 1 || value === '1';
+    return b ? 'true' : 'false';
+  }
+  if (t === 'long' || t === 'int' || t === 'real' || t === 'double' || t === 'decimal') {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(n) : (t === 'real' || t === 'double' || t === 'decimal' ? 'real(null)' : 'long(null)');
+  }
+  // string / dynamic / guid / timespan → quoted string literal.
+  return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * Seed a table's sample rows so they are ACTUALLY queryable when the install
+ * returns — never a misleading "ingested" with zero rows landed.
+ *
+ * Why this exists: `.ingest inline` is *direct* ingestion (Microsoft Learn:
+ * "intended for exploration and prototyping … don't use in production") with
+ * NO automatic retry, and against a freshly-created table it can intermittently
+ * produce zero data shards — the exact flake that left FederationAudit with a
+ * schema but no rows on one workspace. We therefore:
+ *   1. Try `.ingest inline`, then VERIFY with `<table> | count`.
+ *   2. If the count is short (0 / fewer than expected), fall back to
+ *      `.set-or-append <table> <| datatable(<schema>) [<rows>]`. This is a
+ *      single transactional control command whose extent is committed and
+ *      queryable the moment it returns (no eventual-consistency window), then
+ *      verify the count again.
+ * Returns true once the expected row count is present, false otherwise. Never
+ * throws for data errors — 401/403 are re-thrown so the caller maps them to the
+ * AllDatabasesAdmin remediation. Grounded in Microsoft Learn (ingest inline;
+ * ingest from query .set-or-append; datatable operator).
+ */
+async function seedTableRows(
+  dbName: string,
+  table: string,
+  columns: { name: string; type: string }[],
+  rows: any[][],
+  steps: string[],
+): Promise<boolean> {
+  const expected = rows.length;
+  const countRows = async (): Promise<number> => {
+    try {
+      const r = await executeQuery(dbName, `["${table}"] | count`);
+      const n = Number(r.rows?.[0]?.[0]);
+      return Number.isFinite(n) ? n : 0;
+    } catch (e: any) {
+      if (e instanceof KustoError && (e.status === 401 || e.status === 403)) throw e;
+      return 0;
+    }
+  };
+
+  // Attempt 1: .ingest inline (with throttle backoff) + verify.
+  try {
+    await withIngestRetry(() => ingestInline(dbName, table, rows), `Inline ingest into ${table}`, steps);
+  } catch (e: any) {
+    if (e instanceof KustoError && (e.status === 401 || e.status === 403)) throw e;
+    steps.push(`Inline ingest into ${table} threw: ${e?.message || String(e)} — will try .set-or-append.`);
+  }
+  // Direct ingestion can lag a beat before the extent is visible; give it one
+  // short settle before the count probe.
+  await sleep(1_500);
+  let present = await countRows();
+  if (present >= expected) {
+    steps.push(`Seeded ${expected} row(s) into ${table} (verified ${present}).`);
+    return true;
+  }
+
+  // Attempt 2: transactional .set-or-append from a datatable() literal. The
+  // extent is committed + queryable on return, so this is the reliable path
+  // when inline ingest dropped the rows.
+  const schema = columns.map((c) => `${c.name}:${(c.type || 'string').toLowerCase()}`).join(', ');
+  const literals = rows
+    .map((row) => columns.map((c, i) => kqlLiteral(row[i], c.type)).join(', '))
+    .join(',\n  ');
+  const setCmd = `.set-or-append ["${table}"] <|\n  datatable(${schema}) [\n  ${literals}\n]`;
+  try {
+    // .set-or-append is also an ingest-class command bound by the Ingestion
+    // capacity policy, so it can throttle too — retry with the same backoff.
+    await withIngestRetry(() => executeMgmtCommand(dbName, setCmd), `.set-or-append into ${table}`, steps);
+  } catch (e: any) {
+    if (e instanceof KustoError && (e.status === 401 || e.status === 403)) throw e;
+    steps.push(`.set-or-append into ${table} failed: ${e?.message || String(e)}`);
+    return false;
+  }
+  present = await countRows();
+  if (present >= expected) {
+    steps.push(`Seeded ${expected} row(s) into ${table} via .set-or-append (verified ${present}).`);
+    return true;
+  }
+  steps.push(`Seed into ${table} short: expected ${expected}, found ${present} after inline + .set-or-append.`);
+  return false;
+}
 
 /**
  * Poll the data plane until a freshly-created Kusto database is queryable.
@@ -159,6 +329,8 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
   let tableCreateFailures = 0;
   let ingestFailures = 0;
   let expectedSeedTables = 0;
+  let functionFailures = 0;
+  let policyFailures = 0;
   const tables: Array<{ name: string; columns: { name: string; type: string }[]; sample?: any[][] }> = Array.isArray(content?.tables) ? content.tables : [];
   for (const t of tables) {
     const cols = t.columns.map((c) => `${c.name}:${c.type}`).join(', ');
@@ -185,11 +357,27 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
     if (Array.isArray(t.sample) && t.sample.length > 0) {
       expectedSeedTables += 1;
       try {
-        await ingestInline(dbName, t.name, t.sample);
-        steps.push(`Inline-ingested ${t.sample.length} rows into ${t.name}.`);
+        // Verified, retrying seed: inline ingest → count → .set-or-append
+        // fallback → count. Only counts as a failure if NO rows landed after
+        // both paths (a data-bearing item that seeds zero rows is forbidden).
+        const ok = await seedTableRows(dbName, t.name, t.columns, t.sample, steps);
+        if (!ok) ingestFailures += 1;
       } catch (e: any) {
+        // seedTableRows only throws for 401/403 — map to the precise gate.
+        if (e instanceof KustoError && (e.status === 401 || e.status === 403)) {
+          return {
+            status: 'remediation',
+            gate: {
+              reason: `Kusto ${e.status}: not authorized to ingest into '${dbName}'.`,
+              remediation:
+                'Grant the Console UAMI AllDatabasesAdmin on the cluster: az kusto cluster-principal-assignment create --principal-id <uami-objectid> --principal-type App --role AllDatabasesAdmin',
+              link: 'https://learn.microsoft.com/azure/data-explorer/access-control/principals-and-identity-providers',
+            },
+            steps,
+          };
+        }
         ingestFailures += 1;
-        steps.push(`Inline ingest into ${t.name} failed: ${e?.message || String(e)}`);
+        steps.push(`Seed into ${t.name} failed: ${e?.message || String(e)}`);
       }
     }
   }
@@ -209,19 +397,53 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
   //
   // We detect (a) by scanning past any leading `//` comment / blank lines for
   // a leading `.create`/`.create-or-alter function` token.
+  //
+  // CRITICAL (ADX SYN0100): a management/control command is identified by its
+  // FIRST non-whitespace character being a dot (`.`) — grounded in Learn,
+  // "Management commands overview": *"the first character of the text of a
+  // request determines if the request is a management command or a query.
+  // Management commands must start with the dot (.) character."* When shape
+  // (a) bodies carry leading `//` comment lines (every bundle authors them
+  // that way for readability), sending the body VERBATIM makes the literal
+  // first char a `/`, and ADX rejects it with
+  //   SYN0100: 'Admin commands must have a dot (.) character as their first
+  //             non-whitespace character [line:position=0:0]'.
+  // So for shape (a) we strip the leading blank / `//`-comment lines and send
+  // from the `.create-or-alter function` line onward, guaranteeing the dot
+  // leads. (Comments AFTER the first code line are inside the function and are
+  // valid CSL, so we only trim the leading run.)
   const fns: Array<{ name: string; body: string }> = Array.isArray(content?.functions) ? content.functions : [];
   for (const fn of fns) {
     const body = String(fn.body ?? '');
-    const firstCodeLine = body
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .find((l) => l.length > 0 && !l.startsWith('//'));
+    const lines = body.split(/\r?\n/);
+    const firstCodeIdx = lines.findIndex((l) => {
+      const t = l.trim();
+      return t.length > 0 && !t.startsWith('//');
+    });
+    const firstCodeLine = firstCodeIdx >= 0 ? lines[firstCodeIdx].trim() : undefined;
     const isFullCommand = /^\.create(-or-alter)?\s+function\b/i.test(firstCodeLine ?? '');
-    const cmd = isFullCommand ? body : `.create-or-alter function ${fn.name} { ${body} }`;
+    // For a full command, drop the leading blank/comment run so the dot is the
+    // first non-whitespace character ADX sees (SYN0100 fix). For a bare body,
+    // wrap it as a complete `.create-or-alter function` command.
+    const dotLedBody = firstCodeIdx >= 0 ? lines.slice(firstCodeIdx).join('\n') : body;
+    const cmd = isFullCommand ? dotLedBody : `.create-or-alter function ${fn.name} { ${body} }`;
     try {
       await executeMgmtCommand(dbName, cmd);
       steps.push(`.create-or-alter function ${fn.name} OK.`);
     } catch (e: any) {
+      if (e instanceof KustoError && (e.status === 401 || e.status === 403)) {
+        return {
+          status: 'remediation',
+          gate: {
+            reason: `Kusto ${e.status}: not authorized to .create-or-alter function on database '${dbName}'.`,
+            remediation:
+              'Grant the Console UAMI AllDatabasesAdmin on the cluster: az kusto cluster-principal-assignment create --principal-id <uami-objectid> --principal-type App --role AllDatabasesAdmin',
+            link: 'https://learn.microsoft.com/azure/data-explorer/access-control/principals-and-identity-providers',
+          },
+          steps,
+        };
+      }
+      functionFailures += 1;
       steps.push(`.create-or-alter function ${fn.name} failed: ${e?.message || String(e)}`);
     }
   }
@@ -261,6 +483,7 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
           await executeMgmtCommand(dbName, cmd);
           steps.push(`Policy command on ${p.table} OK: ${cmd.slice(0, 60)}${cmd.length > 60 ? '…' : ''}`);
         } catch (e: any) {
+          policyFailures += 1;
           steps.push(`Policy command on ${p.table} failed (${cmd.slice(0, 60)}…): ${e?.message || String(e)}`);
         }
       }
@@ -269,6 +492,7 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
         await executeMgmtCommand(dbName, `.alter table ${p.table} policy ingestionbatching @'${raw.replace(/'/g, "''")}'`);
         steps.push(`.alter ingestionbatching policy on ${p.table} OK.`);
       } catch (e: any) {
+        policyFailures += 1;
         steps.push(`.alter ingestionbatching policy on ${p.table} failed: ${e?.message || String(e)}`);
       }
     }
@@ -293,6 +517,25 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
     return {
       status: 'failed',
       error: `Schema created on '${dbName}' but all ${expectedSeedTables} sample-row ingests failed; no rows landed.`,
+      resourceId: dbName,
+      secondaryIds: { cluster: process.env.LOOM_KUSTO_CLUSTER_URI || '', database: dbName },
+      steps,
+    };
+  }
+  // A failed function or policy command is a real broken artifact, not an
+  // honest infra gate: the update policy that fans RawOrders into Orders (and
+  // the enrichment functions it calls) is core to this app's end-to-end
+  // correctness. Per no-vaporware, surface it as 'failed' rather than a
+  // misleading 'created'. (This is what previously hid the parse_orders /
+  // order_health SYN0100 failures and the cascading SEM0260 update-policy
+  // failure behind a green 'created'.)
+  if (functionFailures > 0 || policyFailures > 0) {
+    return {
+      status: 'failed',
+      error:
+        `KQL database '${dbName}' tables + rows landed, but ${functionFailures} function command(s) ` +
+        `and ${policyFailures} policy command(s) failed — see steps. The streaming update policy / ` +
+        `enrichment functions are not fully wired, so the database is not functionally complete.`,
       resourceId: dbName,
       secondaryIds: { cluster: process.env.LOOM_KUSTO_CLUSTER_URI || '', database: dbName },
       steps,
