@@ -1948,11 +1948,18 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         const r = await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`);
         const j = await r.json();
         if (cancelled) return;
-        if (!j.ok) {
+        // /api/cosmos-items/[type]/[id] returns the bare WorkspaceItem record
+        // (state lives at the top level), not an { ok, item } envelope. On
+        // error it returns { ok:false, error }. Read state from the top level
+        // (with a legacy j.item.state fallback) so a bundle-installed data
+        // product opens FULLY BUILT-OUT — its datasets, glossary terms, owner,
+        // and endorsement from state.content — instead of an empty form.
+        const itemState = (j?.state ?? j?.item?.state) as Record<string, unknown> | undefined;
+        if (j?.ok === false) {
           // 404 on fresh items is expected; show empty form rather than error.
           if (r.status !== 404) setLoadErr(j.error || `HTTP ${r.status}`);
-        } else if (j.item?.state) {
-          setState({ ...DP_EMPTY, ...projectDataProductContent(j.item.state as Record<string, unknown>) });
+        } else if (itemState) {
+          setState({ ...DP_EMPTY, ...projectDataProductContent(itemState) });
           setDirty(false);
         }
       } catch (e: any) {

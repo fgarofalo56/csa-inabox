@@ -21,7 +21,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  loadKustoItem, saveItemState, resolveDatabase, defaultDatabase,
+  loadKustoItem, saveItemState, resolveDatabase, resolveDashboardDatabase, defaultDatabase,
   executeQuery, KustoError,
 } from '@/lib/azure/kusto-client';
 import {
@@ -85,7 +85,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
 
     const model = readModel(item.state);
-    const fallbackDb = resolveDatabase(item);
+    // Bundle dashboards have no DB of their own — their tiles query the
+    // dedicated database the sibling kql-database item provisioned. Resolve
+    // that so tiles run against the database where the seeded tables live.
+    const fallbackDb = await resolveDashboardDatabase(item);
 
     const run = req.nextUrl.searchParams.get('run') === '1';
     const timeKey = req.nextUrl.searchParams.get('time') || model.timeRange || 'last-24h';

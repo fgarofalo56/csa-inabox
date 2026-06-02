@@ -212,7 +212,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       try {
         const { resource: cur } = await items.item(step.cosmosItemId, workspaceId).read<any>();
         if (!cur) continue;
-        const nextState = {
+        const nextState: Record<string, unknown> = {
           ...(cur.state || {}),
           provisioning: {
             status: step.result.status,
@@ -224,6 +224,29 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
             at: new Date().toISOString(),
           },
         };
+        // Pipeline items (adf-pipeline / synapse-pipeline) bind to a real Azure
+        // pipeline via `state.pipelineName` — the pipeline GET route's
+        // resolveBinding() 412s ("unbound") and never reaches its state.content
+        // fallback when this is missing, so the designer canvas opens EMPTY even
+        // though the bundle stamped a full activity graph. The provisioner
+        // already computed the Azure pipeline name (secondaryIds.pipelineName);
+        // stamp it as the binding here so the editor loads either the live
+        // pipeline OR the built-out content fallback, and Run/Validate target
+        // the real backend. Don't clobber a name the user already bound.
+        const sec = (step.result.secondaryIds || {}) as Record<string, string>;
+        if (
+          (step.itemType === 'adf-pipeline' || step.itemType === 'synapse-pipeline') &&
+          sec.pipelineName &&
+          !(cur.state as any)?.pipelineName
+        ) {
+          nextState.pipelineName = sec.pipelineName;
+          if (sec.backend === 'synapse' && process.env.LOOM_SYNAPSE_WORKSPACE) {
+            nextState.workspace = process.env.LOOM_SYNAPSE_WORKSPACE;
+          }
+          if (sec.backend === 'adf' && process.env.LOOM_ADF_NAME) {
+            nextState.factory = process.env.LOOM_ADF_NAME;
+          }
+        }
         await items.item(step.cosmosItemId, workspaceId).replace({ ...cur, state: nextState, updatedAt: new Date().toISOString() });
       } catch { /* swallow — provisioning record is best-effort */ }
     }
