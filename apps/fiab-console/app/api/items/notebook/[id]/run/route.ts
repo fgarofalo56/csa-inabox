@@ -95,25 +95,50 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     if (compute.startsWith('spark:')) {
       const pool = compute.slice('spark:'.length);
-      const { createLivySessionAsync } = await import('@/lib/azure/synapse-dev-client');
-      const sess = await createLivySessionAsync(pool, sessKind);
-      const runIdStr = `spark:${pool}:${sess.id}`;
-      if (cellSource) {
+      const { createLivySessionAsync, getLivySession } = await import('@/lib/azure/synapse-dev-client');
+
+      // REUSE an existing live Livy session for this pool+kind instead of
+      // creating a new one per cell. A Synapse Spark pool cold-starts in
+      // minutes; creating a fresh session for every cell meant every run paid
+      // that cold start — the "takes forever" symptom. A pyspark session also
+      // hosts sql/spark statements via per-statement kind, so one session
+      // serves Python + Spark SQL + Scala cells. Only re-create when the saved
+      // session is gone or terminal.
+      let sessionId: number | undefined;
+      let sessState = 'starting';
+      let reused = false;
+      const saved = state.sparkSession;
+      if (saved && saved.pool === pool && saved.kind === sessKind && typeof saved.id === 'number') {
         try {
-          const items = await itemsContainer();
-          const pendingRuns = { ...(state.pendingRuns || {}) };
-          pendingRuns[runIdStr] = { source: cellSource, lang: stmtKind, cellId };
-          await items.item(nb.id, workspaceId).replace({
-            ...nb,
-            state: { ...state, pendingRuns },
-            updatedAt: new Date().toISOString(),
-          } as WorkspaceItem);
-        } catch { /* non-fatal — poll will fall back to state.code */ }
+          const live = await getLivySession(pool, saved.id);
+          if (['idle', 'busy', 'starting', 'not_started'].includes(live.state)) {
+            sessionId = saved.id; sessState = live.state; reused = true;
+          }
+        } catch { /* stale/expired → fall through to create */ }
       }
+      if (sessionId === undefined) {
+        const sess = await createLivySessionAsync(pool, sessKind);
+        sessionId = sess.id; sessState = sess.state;
+      }
+      const runIdStr = `spark:${pool}:${sessionId}`;
+
+      // Persist the (possibly new) session for reuse + the per-cell pending run.
+      try {
+        const items = await itemsContainer();
+        const pendingRuns = { ...(state.pendingRuns || {}) };
+        if (cellSource) pendingRuns[runIdStr] = { source: cellSource, lang: stmtKind, cellId };
+        await items.item(nb.id, workspaceId).replace({
+          ...nb,
+          state: { ...state, pendingRuns, sparkSession: { pool, id: sessionId, kind: sessKind } },
+          updatedAt: new Date().toISOString(),
+        } as WorkspaceItem);
+      } catch { /* non-fatal — poll will fall back to state.code */ }
+
       return NextResponse.json({
         ok: true,
         runId: runIdStr,
-        status: sess.state,
+        status: sessState,
+        reusedSession: reused,
         compute: { kind: 'synapse-spark', pool },
         cellId: cellId || null,
         sourcePreview: code.slice(0, 200),
