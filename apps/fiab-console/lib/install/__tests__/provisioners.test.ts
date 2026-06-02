@@ -294,9 +294,12 @@ describe('runProvisioning engine', () => {
   }, COLD_TRANSFORM_TIMEOUT_MS);
 
   it('marks unsupported itemType as skipped (Cosmos-only)', async () => {
+    // 'dataflow' has no Phase-2 backend provisioner — it is Cosmos-only.
+    // (Note: 'data-product' was promoted to a real provisioner in the
+    // use-case-apps work, so it can no longer stand in for "unsupported".)
     const { runProvisioning } = await import('../provisioning-engine');
     const r = await runProvisioning(baseSession, 'app-test', 'ws-1', [
-      { itemType: 'data-product', id: 'i1', displayName: 'X', content: {} },
+      { itemType: 'dataflow', id: 'i1', displayName: 'X', content: {} },
     ], { deploy: true, mode: 'shared' });
     expect(r.steps[0].result.status).toBe('skipped');
     expect(r.steps[0].result.steps?.[0]).toContain('No Phase-2 provisioner');
