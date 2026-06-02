@@ -1790,6 +1790,47 @@ const DP_EMPTY: DataProductState = {
   bundle: [],
 };
 
+/**
+ * Project a bundle-installed data product's `state.content` (DataProductContent
+ * — datasets/glossaryTerms/owner/endorsement per content-bundles/types.ts) into
+ * the editor's DataProductState so an app-installed data product opens FULLY
+ * BUILT-OUT (its datasets, glossary terms, owner, endorsement) instead of an
+ * empty form. The editor's existing direct state fields win when present
+ * (e.g. after the user has edited + saved); content only fills gaps. This
+ * keeps Register-with-Purview / dataset registration hitting the real backend.
+ */
+function projectDataProductContent(state: Record<string, unknown>): Partial<DataProductState> {
+  const out: Partial<DataProductState> = { ...(state as Partial<DataProductState>) };
+  const content = (state?.content as any);
+  if (!content || content.kind !== 'data-product') return out;
+
+  // Datasets: content { id, name, description, classification } → editor
+  // DataProductDataset { name, typeName, qualifiedName, classifications[] }.
+  if ((!out.datasets || out.datasets.length === 0) && Array.isArray(content.datasets)) {
+    out.datasets = content.datasets.map((d: any) => ({
+      name: d.name,
+      typeName: 'fabric_data_product',
+      qualifiedName: d.id || d.name,
+      classifications: d.classification ? [String(d.classification)] : [],
+    }));
+  }
+  // Glossary terms: content { term, definition } → editor { name }.
+  if ((!out.glossaryLinks || out.glossaryLinks.length === 0) && Array.isArray(content.glossaryTerms)) {
+    out.glossaryLinks = content.glossaryTerms.map((t: any) => ({ name: t.term }));
+  }
+  // Owner: content { name, email? } → editor owner string.
+  if (!out.owner && content.owner) {
+    out.owner = content.owner.email
+      ? `${content.owner.name} <${content.owner.email}>`
+      : (content.owner.name || '');
+  }
+  // Endorsement → certified flag (editor's only endorsement surface).
+  if (out.certified === undefined && content.endorsement) {
+    out.certified = content.endorsement === 'certified';
+  }
+  return out;
+}
+
 // Hint payload returned with HTTP 501 from /register-purview when the
 // LOOM_PURVIEW_ACCOUNT env var is not set. Mirrors PurviewNotConfiguredHint
 // in lib/azure/purview-client.ts.
@@ -1911,7 +1952,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           // 404 on fresh items is expected; show empty form rather than error.
           if (r.status !== 404) setLoadErr(j.error || `HTTP ${r.status}`);
         } else if (j.item?.state) {
-          setState({ ...DP_EMPTY, ...(j.item.state as Partial<DataProductState>) });
+          setState({ ...DP_EMPTY, ...projectDataProductContent(j.item.state as Record<string, unknown>) });
           setDirty(false);
         }
       } catch (e: any) {

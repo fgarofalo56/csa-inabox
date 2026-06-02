@@ -25,6 +25,9 @@ export const dynamic = 'force-dynamic';
 interface StreamConfig {
   source?: Record<string, any>;
   sink?: Record<string, any>;
+  /** Multi-source / multi-sink topology (visual designer reads these). */
+  sources?: Array<Record<string, any>>;
+  sinks?: Array<Record<string, any>>;
   transforms?: Array<Record<string, any>>;
 }
 
@@ -32,8 +35,77 @@ function sanitizeConfig(input: any): StreamConfig {
   const out: StreamConfig = {};
   if (input?.source && typeof input.source === 'object') out.source = input.source;
   if (input?.sink && typeof input.sink === 'object') out.sink = input.sink;
+  if (Array.isArray(input?.sources)) out.sources = input.sources.slice(0, 50);
+  if (Array.isArray(input?.sinks)) out.sinks = input.sinks.slice(0, 50);
   if (Array.isArray(input?.transforms)) out.transforms = input.transforms.slice(0, 50);
   return out;
+}
+
+// ─── Bundle EventstreamContent → visual-designer topology ────────────────
+// App-install stamps a rich `EventstreamContent` ({ sources, destinations,
+// transforms } of { id, type, config }) onto `state.content`. The visual
+// designer reads `SourceNode`/`SinkNode`/`TransformNode` ({ kind, name, … }).
+// Map the bundle node types onto the designer's recognized kinds so a
+// bundle-installed Eventstream opens with its FULL topology rendered —
+// before any live Fabric Eventstream item exists. Saving (PUT) persists the
+// designer shape into state.{sources,sinks,transforms}, which wins here.
+function mapSourceKind(t: string): string {
+  const k = (t || '').toLowerCase();
+  if (k.includes('iot')) return 'iothub';
+  if (k.includes('kafka')) return 'kafka';
+  if (k.includes('sample')) return 'sample';
+  if (k.includes('cdc') || k.includes('mirror')) return 'cdc-mirror';
+  return 'eventhub';
+}
+function mapSinkKind(t: string): string {
+  const k = (t || '').toLowerCase();
+  if (k.includes('kql') || k.includes('kusto') || k.includes('eventhouse') || k.includes('adx')) return 'kusto';
+  if (k.includes('lakehouse')) return 'lakehouse';
+  if (k.includes('reflex') || k.includes('activator')) return 'reflex';
+  if (k.includes('derived') || k.includes('stream')) return 'derivedStream';
+  return 'eventhub';
+}
+function mapTransformKind(t: string): string {
+  const k = (t || '').toLowerCase();
+  if (k.includes('filter')) return 'filter';
+  if (k.includes('aggregate')) return 'aggregate';
+  if (k.includes('group')) return 'group-by';
+  if (k.includes('project') || k.includes('enrich')) return 'project';
+  if (k.includes('union')) return 'union';
+  if (k.includes('join')) return 'join';
+  return 'filter';
+}
+function configFromContent(content: any): StreamConfig | null {
+  if (!content || content.kind !== 'eventstream') return null;
+  const sources = Array.isArray(content.sources)
+    ? content.sources.map((n: any) => ({
+        kind: mapSourceKind(n?.type),
+        name: String(n?.id || n?.type || 'source'),
+        ...(n?.config && typeof n.config === 'object' ? n.config : {}),
+      }))
+    : [];
+  const sinks = Array.isArray(content.destinations)
+    ? content.destinations.map((n: any) => ({
+        kind: mapSinkKind(n?.type),
+        name: String(n?.id || n?.type || 'destination'),
+        ...(n?.config && typeof n.config === 'object' ? n.config : {}),
+      }))
+    : [];
+  const transforms = Array.isArray(content.transforms)
+    ? content.transforms.map((n: any) => ({
+        kind: mapTransformKind(n?.type),
+        name: String(n?.id || n?.type || 'transform'),
+        ...(n?.config && typeof n.config === 'object' ? n.config : {}),
+      }))
+    : [];
+  if (sources.length === 0 && sinks.length === 0 && transforms.length === 0) return null;
+  return {
+    source: sources[0],
+    sink: sinks[0],
+    ...(sources.length > 1 ? { sources } : {}),
+    ...(sinks.length > 1 ? { sinks } : {}),
+    transforms,
+  };
 }
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -42,9 +114,19 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-    const config: StreamConfig = {
+    const hasSaved =
+      !!item.state?.source || !!item.state?.sink ||
+      (Array.isArray(item.state?.sources) && item.state!.sources.length > 0) ||
+      (Array.isArray(item.state?.sinks) && item.state!.sinks.length > 0) ||
+      (Array.isArray(item.state?.transforms) && item.state!.transforms.length > 0);
+    // Fall back to the app-install starter topology stranded in state.content
+    // so a bundle-installed Eventstream opens FULLY BUILT-OUT instead of empty.
+    const fromContent = hasSaved ? null : configFromContent(item.state?.content);
+    const config: StreamConfig = fromContent || {
       source: item.state?.source as Record<string, any> | undefined,
       sink: item.state?.sink as Record<string, any> | undefined,
+      sources: Array.isArray(item.state?.sources) ? item.state!.sources : undefined,
+      sinks: Array.isArray(item.state?.sinks) ? item.state!.sinks : undefined,
       transforms: Array.isArray(item.state?.transforms) ? item.state!.transforms : [],
     };
     const published = typeof item.state?.fabricEventstreamId === 'string';

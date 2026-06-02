@@ -6,19 +6,51 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listActivators, createActivator, ActivatorError } from '@/lib/azure/activator-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * List the Cosmos activator items installed into this workspace whose
+ * state.content is an activator rule bundle. These are surfaced alongside the
+ * live Fabric reflexes so a bundle-installed reflex (e.g. casino-analytics,
+ * ml-pipeline) shows up FULLY BUILT-OUT — its rule renders via the /rules
+ * fallback — even before a live Fabric Activator exists. Best-effort: any
+ * Cosmos error yields [] so the live path is never blocked.
+ */
+async function listBundleActivators(workspaceId: string) {
+  try {
+    const items = await itemsContainer();
+    const { resources } = await items.items.query<WorkspaceItem>({
+      query: 'SELECT * FROM c WHERE c.workspaceId = @w AND c.itemType = @t ORDER BY c.updatedAt DESC',
+      parameters: [{ name: '@w', value: workspaceId }, { name: '@t', value: 'activator' }],
+    }, { partitionKey: workspaceId }).fetchAll();
+    return resources
+      .filter((r) => (r.state as any)?.content?.kind === 'activator')
+      .map((r) => ({ id: r.id, displayName: r.displayName, description: r.description, type: 'Reflex', __loomContent: true as const }));
+  } catch { return []; }
+}
 
 export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+  // Always include bundle-installed activators (Cosmos). Merge live Fabric
+  // reflexes on top when reachable; if Fabric isn't wired we still surface the
+  // installed reflexes rather than failing the whole list.
+  const bundle = await listBundleActivators(workspaceId);
   try {
-    const activators = await listActivators(workspaceId);
-    return NextResponse.json({ ok: true, workspaceId, activators });
+    const live = await listActivators(workspaceId);
+    const liveIds = new Set(live.map((a: any) => a.id));
+    const merged = [...live, ...bundle.filter((b) => !liveIds.has(b.id))];
+    return NextResponse.json({ ok: true, workspaceId, activators: merged });
   } catch (e: any) {
+    if (bundle.length > 0) {
+      return NextResponse.json({ ok: true, workspaceId, activators: bundle, fabricError: e?.message || String(e) });
+    }
     const status = e instanceof ActivatorError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }

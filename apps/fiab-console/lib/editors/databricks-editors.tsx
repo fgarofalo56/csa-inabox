@@ -2545,6 +2545,34 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     setActiveTab('tasks'); setDirty(false);
   }, []);
 
+  // Bundle-installed job: seed the form from the item's stamped
+  // DatabricksJobContent (tasks + shared cluster) so it opens FULLY BUILT-OUT
+  // before any live Databricks job exists. The item GET route returns the
+  // editor-shaped { job, source:'bundle' } when no jobId is passed. The user
+  // then clicks Create to push it to the real workspace (jobs/create). Only
+  // runs once per item id, and never overrides a live-job selection or unsaved
+  // edits.
+  const [bundleSeeded, setBundleSeeded] = useState(false);
+  useEffect(() => {
+    if (id === 'new' || !id || bundleSeeded || jobId !== null || dirty) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch(`/api/items/databricks-job/${encodeURIComponent(id)}`);
+        const j = await r.json();
+        if (cancelled || !j.ok || j.source !== 'bundle' || !j.job?.settings) return;
+        const settings = j.job.settings;
+        setName(settings.name || '');
+        const ts = (settings.tasks || []).map(specToTask);
+        if (ts.length) { setTasks(ts); setActiveTaskKey(ts[0].task_key || 'main'); }
+        setMaxConcurrent(settings.max_concurrent_runs ?? 1);
+        setActiveTab('tasks');
+        setBundleSeeded(true);
+      } catch { /* best-effort seed; the live job list still works */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id, bundleSeeded, jobId, dirty]);
+
   const selectJob = useCallback(async (jid: number) => {
     setJobId(jid);
     setSaveError(null); setSaveMessage(null); setRunError(null);

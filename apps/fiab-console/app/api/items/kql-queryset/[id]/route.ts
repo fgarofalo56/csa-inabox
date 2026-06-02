@@ -39,7 +39,25 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const item = await loadKustoItem((await ctx.params).id, 'kql-queryset', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-    const queries: SavedQuery[] = Array.isArray(item.state?.queries) ? item.state!.queries : [];
+    let queries: SavedQuery[] = Array.isArray(item.state?.queries) ? item.state!.queries : [];
+    // Fall back to app-install starter content so a bundle-installed queryset
+    // opens with its starter queries instead of empty. A KQL-DB/queryset bundle
+    // stamps `state.content.starterQueries` ([{ name, kql }]) or `.queries`.
+    if (queries.length === 0) {
+      const content: any = item.state?.content;
+      const starters = Array.isArray(content?.starterQueries)
+        ? content.starterQueries
+        : Array.isArray(content?.queries)
+          ? content.queries
+          : [];
+      queries = starters
+        .map((q: any) => ({
+          title: String(q?.name || q?.title || 'Query'),
+          kql: String(q?.kql || ''),
+          database: q?.database ? String(q.database) : undefined,
+        }))
+        .filter((q: SavedQuery) => q.kql.length > 0);
+    }
     return NextResponse.json({
       ok: true,
       displayName: item.displayName,

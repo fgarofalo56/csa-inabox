@@ -16,6 +16,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
+import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
+import type { LakehouseContent } from '@/lib/apps/content-bundles/types';
 import {
   Badge, Body1, Button, Caption1, Spinner, Subtitle2,
   Tree, TreeItem, TreeItemLayout,
@@ -145,6 +148,27 @@ interface Props { item: FabricItemType; id: string }
 export function LakehouseEditor({ item, id }: Props) {
   const s = useStyles();
   const router = useRouter();
+
+  // Bundle-installed lakehouses stamp their rich definition (folder tree,
+  // Delta tables, shortcuts) into the Cosmos item's state.content
+  // (LakehouseContent). The live ADLS account / Synapse Serverless endpoint may
+  // not be provisioned yet, in which case the Files/Tables/Shortcuts listings
+  // come back empty. Read the persisted content from the React Query cache the
+  // host page primes at ['item','lakehouse',id] so the editor opens FULLY
+  // built-out — showing the planned folders, Delta tables, and shortcuts — even
+  // before the live backend exists. Browse / preview / SQL still hit live ADLS.
+  const isNewItem = id === 'new';
+  const itemQ = useQuery<WorkspaceItem>({
+    queryKey: ['item', 'lakehouse', id],
+    queryFn: () => getItem('lakehouse', id),
+    enabled: !isNewItem,
+  });
+  const lhContentRaw = (itemQ.data?.state as any)?.content as LakehouseContent | undefined;
+  const lhContent = lhContentRaw?.kind === 'lakehouse' ? lhContentRaw : undefined;
+  const bundleFolders = lhContent?.folders ?? [];
+  const bundleDeltaTables = lhContent?.deltaTables ?? [];
+  const bundleShortcuts = lhContent?.shortcuts ?? [];
+  const hasBundle = bundleFolders.length > 0 || bundleDeltaTables.length > 0 || bundleShortcuts.length > 0;
   const [containers, setContainers] = useState<ContainerInfo[] | null>(null);
   const [containerError, setContainerError] = useState<string | null>(null);
   const [activeContainer, setActiveContainer] = useState<string | null>(null);
@@ -854,6 +878,66 @@ export function LakehouseEditor({ item, id }: Props) {
               ))}
             </Tree>
           )}
+          {hasBundle && (
+            <Tree
+              aria-label="Planned lakehouse structure from app bundle"
+              defaultOpenItems={['bundle', 'bundle-folders', 'bundle-tables', 'bundle-shortcuts']}
+              style={{ marginTop: 12 }}
+            >
+              <TreeItem itemType="branch" value="bundle">
+                <TreeItemLayout iconBefore={<Database20Regular />}>Starter structure (app bundle)</TreeItemLayout>
+                <Tree>
+                  {bundleFolders.length > 0 && (
+                    <TreeItem itemType="branch" value="bundle-folders">
+                      <TreeItemLayout iconBefore={<Folder20Regular />}>Folders ({bundleFolders.length})</TreeItemLayout>
+                      <Tree>
+                        {bundleFolders.map((f) => (
+                          <TreeItem key={f.path} itemType="leaf" value={`bf-${f.path}`} title={f.description}>
+                            <TreeItemLayout iconBefore={<Folder20Regular />}>{f.path}</TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  )}
+                  {bundleDeltaTables.length > 0 && (
+                    <TreeItem itemType="branch" value="bundle-tables">
+                      <TreeItemLayout iconBefore={<TableSimple20Regular />}>Delta tables ({bundleDeltaTables.length})</TreeItemLayout>
+                      <Tree>
+                        {bundleDeltaTables.map((t) => (
+                          <TreeItem
+                            key={t.name}
+                            itemType="leaf"
+                            value={`bt-${t.name}`}
+                            onClick={() => setTab('tables')}
+                          >
+                            <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{t.name}</TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  )}
+                  {bundleShortcuts.length > 0 && (
+                    <TreeItem itemType="branch" value="bundle-shortcuts">
+                      <TreeItemLayout iconBefore={<LinkMultiple20Regular />}>Shortcuts ({bundleShortcuts.length})</TreeItemLayout>
+                      <Tree>
+                        {bundleShortcuts.map((sc) => (
+                          <TreeItem
+                            key={sc.name}
+                            itemType="leaf"
+                            value={`bs-${sc.name}`}
+                            title={sc.target}
+                            onClick={() => setTab('shortcuts')}
+                          >
+                            <TreeItemLayout iconBefore={<CloudLink20Regular />}>{sc.name}</TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  )}
+                </Tree>
+              </TreeItem>
+            </Tree>
+          )}
         </div>
       }
       main={
@@ -1018,12 +1102,52 @@ export function LakehouseEditor({ item, id }: Props) {
                   const tables = (tableListing as PathEntry[]).filter(e => e.isDirectory);
                   if (tables.length === 0) {
                     return (
-                      <MessageBar intent="info">
-                        <MessageBarBody>
-                          No Delta tables yet. From the Files tab, right-click a Parquet / CSV / JSON
-                          file and choose <strong>Load to Tables (Delta)</strong> to create one.
-                        </MessageBarBody>
-                      </MessageBar>
+                      <>
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            No Delta tables materialized in ADLS yet. From the Files tab, right-click a
+                            Parquet / CSV / JSON file and choose <strong>Load to Tables (Delta)</strong> to create one.
+                          </MessageBarBody>
+                        </MessageBar>
+                        {bundleDeltaTables.length > 0 && (
+                          <>
+                            <Caption1 style={{ display: 'block', marginTop: 12 }}>
+                              <strong>Planned tables from the installed app bundle</strong> — run the load/DDL in a
+                              notebook against the live lakehouse to materialize these.
+                            </Caption1>
+                            <div className={s.tableWrap}>
+                              <Table aria-label="Planned Delta tables" size="small">
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHeaderCell>Table</TableHeaderCell>
+                                    <TableHeaderCell>DDL</TableHeaderCell>
+                                    <TableHeaderCell>Sample rows</TableHeaderCell>
+                                    <TableHeaderCell></TableHeaderCell>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {bundleDeltaTables.map((t) => (
+                                    <TableRow key={t.name}>
+                                      <TableCell><strong>{t.name}</strong></TableCell>
+                                      <TableCell><code style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>{t.ddl}</code></TableCell>
+                                      <TableCell className={s.cell}>{t.sampleRows?.length ?? 0}</TableCell>
+                                      <TableCell>
+                                        <Button size="small" appearance="primary"
+                                          onClick={() => {
+                                            setSqlText(`-- Read Delta table (once materialized under Tables/${t.name})\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer || '<container>'}/Tables/${t.name}', FORMAT='DELTA') AS r;`);
+                                            setTab('sql');
+                                          }}>
+                                          Query template
+                                        </Button>
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          </>
+                        )}
+                      </>
                     );
                   }
                   return (
@@ -1084,15 +1208,48 @@ export function LakehouseEditor({ item, id }: Props) {
                 {shortcutsBusy && shortcuts === null && <Spinner size="small" label="Loading shortcuts…" labelPosition="after" />}
 
                 {shortcuts !== null && shortcuts.length === 0 && !shortcutsBusy && (
-                  <MessageBar intent="info">
-                    <MessageBarBody>
-                      <MessageBarTitle>No shortcuts yet</MessageBarTitle>
-                      Click <strong>New shortcut</strong> to virtualize an ADLS Gen2 path, another
-                      Loom lakehouse, S3, GCS, or Dataverse into this lakehouse — without copying data.
-                      ADLS Gen2 and internal Loom lakehouse work today on the Console UAMI;
-                      external clouds prompt for a Key Vault credential.
-                    </MessageBarBody>
-                  </MessageBar>
+                  <>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>No shortcuts registered yet</MessageBarTitle>
+                        Click <strong>New shortcut</strong> to virtualize an ADLS Gen2 path, another
+                        Loom lakehouse, S3, GCS, or Dataverse into this lakehouse — without copying data.
+                        ADLS Gen2 and internal Loom lakehouse work today on the Console UAMI;
+                        external clouds prompt for a Key Vault credential.
+                      </MessageBarBody>
+                    </MessageBar>
+                    {bundleShortcuts.length > 0 && (
+                      <>
+                        <Caption1 style={{ display: 'block', marginTop: 12 }}>
+                          <strong>Planned shortcuts from the installed app bundle</strong> — use{' '}
+                          <strong>New shortcut</strong> to register each against the live backend.
+                        </Caption1>
+                        <div className={s.tableWrap}>
+                          <Table aria-label="Planned shortcuts" size="small">
+                            <TableHeader>
+                              <TableRow>
+                                <TableHeaderCell>Name</TableHeaderCell>
+                                <TableHeaderCell>Target</TableHeaderCell>
+                                <TableHeaderCell>Description</TableHeaderCell>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {bundleShortcuts.map((sc) => (
+                                <TableRow key={sc.name}>
+                                  <TableCell>
+                                    <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                                    <strong>{sc.name}</strong>
+                                  </TableCell>
+                                  <TableCell><code style={{ fontSize: 11 }}>{sc.target}</code></TableCell>
+                                  <TableCell>{sc.description || '—'}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </>
+                    )}
+                  </>
                 )}
 
                 {shortcuts !== null && shortcuts.length > 0 && (

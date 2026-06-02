@@ -23,6 +23,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
+import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
+import type { WarehouseContent } from '@/lib/apps/content-bundles/types';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Spinner, Field,
   Tab, TabList,
@@ -881,12 +884,18 @@ interface KqlDbInfo {
   cluster?: string;
   database?: string;
   details?: Record<string, unknown> | null;
-  tables?: Array<{ name: string }>;
+  tables?: Array<{ name: string; fromContent?: boolean }>;
   tableCount?: number;
-  functions?: Array<{ name: string; parameters?: string }>;
+  functions?: Array<{ name: string; parameters?: string; fromContent?: boolean }>;
   functionCount?: number;
   materializedViews?: Array<{ name: string; sourceTable?: string }>;
   materializedViewCount?: number;
+  // Content-derived projections surfaced when the live ADX object is absent
+  // (bundle-installed KQL database not yet provisioned to the cluster). Lets
+  // the editor open FULLY BUILT-OUT — schema + starter queries.
+  schema?: Array<{ name: string; columns: Array<{ name: string; type: string }>; sample?: unknown[][]; live?: boolean }>;
+  starterQueries?: Array<{ name: string; kql: string }>;
+  contentFallback?: boolean;
   error?: string;
 }
 
@@ -1125,6 +1134,99 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
             ariaLabel="KQL query editor"
           />
           <KqlResultsPanel result={result} loading={loading} />
+
+          {/* Starter schema + queries from the app-install template. Surfaced
+              when the live ADX object isn't provisioned yet so a bundle-
+              installed KQL database opens FULLY BUILT-OUT (tables + columns +
+              sample rows + starter analyst queries) instead of empty. Once the
+              tables/functions exist on the live cluster the navigator + Run
+              hit the real backend; these template rows are clearly labeled. */}
+          {info?.contentFallback && (
+            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>App template — schema & starter queries</MessageBarTitle>
+                  This KQL database ships a starter schema and analyst queries from its app
+                  bundle. Create the tables on the live cluster (New → Table, or run a
+                  starter query that references them) to ingest data; until then these are
+                  the template definitions.
+                </MessageBarBody>
+              </MessageBar>
+
+              {Array.isArray(info.schema) && info.schema.length > 0 && (
+                <div>
+                  <Subtitle2>Tables ({info.schema.length})</Subtitle2>
+                  <Tree aria-label="Starter table schema" style={{ marginTop: 6 }}>
+                    {info.schema.map((t) => (
+                      <TreeItem key={t.name} itemType="branch" value={`stbl-${t.name}`}>
+                        <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
+                          {t.name}{' '}
+                          <Caption1>({t.columns.length} cols)</Caption1>{' '}
+                          <Badge size="small" appearance="tint" color={t.live ? 'success' : 'warning'}>
+                            {t.live ? 'live' : 'template'}
+                          </Badge>
+                        </TreeItemLayout>
+                        <Tree>
+                          {t.columns.map((c) => (
+                            <TreeItem key={c.name} itemType="leaf" value={`stcol-${t.name}-${c.name}`}>
+                              <TreeItemLayout iconBefore={<Table20Regular />}>
+                                {c.name} <Caption1>: {c.type}</Caption1>
+                              </TreeItemLayout>
+                            </TreeItem>
+                          ))}
+                        </Tree>
+                        {Array.isArray(t.sample) && t.sample.length > 0 && (
+                          <div style={{ overflowX: 'auto', margin: '4px 0 8px 24px' }}>
+                            <Table size="extra-small" aria-label={`${t.name} sample rows`}>
+                              <TableHeader>
+                                <TableRow>
+                                  {t.columns.map((c) => (
+                                    <TableHeaderCell key={c.name}>{c.name}</TableHeaderCell>
+                                  ))}
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {t.sample.slice(0, 5).map((row, ri) => (
+                                  <TableRow key={ri}>
+                                    {(Array.isArray(row) ? row : []).map((cell, ci) => (
+                                      <TableCell key={ci}>{String(cell)}</TableCell>
+                                    ))}
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        )}
+                      </TreeItem>
+                    ))}
+                  </Tree>
+                </div>
+              )}
+
+              {Array.isArray(info.starterQueries) && info.starterQueries.length > 0 && (
+                <div>
+                  <Subtitle2>Starter queries ({info.starterQueries.length})</Subtitle2>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                    {info.starterQueries.map((q) => (
+                      <Button
+                        key={q.name}
+                        appearance="subtle"
+                        icon={<Play20Regular />}
+                        style={{ justifyContent: 'flex-start' }}
+                        onClick={() => {
+                          setKql(q.kql);
+                          const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
+                          el?.focus();
+                        }}
+                      >
+                        {q.name}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <Dialog open={!!wizardKind} onOpenChange={(_: unknown, d: any) => { if (!d.open) setWizardKind(null); }}>
             <DialogSurface>
@@ -3168,10 +3270,40 @@ function formatCell(v: unknown): string {
 
 export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const isNew = id === 'new';
+  // Bundle-installed warehouses stamp their rich definition (DDL, dbt models,
+  // starter queries) into the Cosmos item's state.content (WarehouseContent).
+  // The live Synapse Dedicated pool may be Paused / not-yet-provisioned, in
+  // which case /schema 409s and the explorer renders empty. Read the persisted
+  // content from the React Query cache the host page primes at
+  // ['item','warehouse',id] so the editor opens FULLY built-out — showing the
+  // DDL, dbt medallion models, and starter queries — even before the live
+  // warehouse exists. Run / Save-as-table still hit the live backend.
+  const itemQ = useQuery<WorkspaceItem>({
+    queryKey: ['item', 'warehouse', id],
+    queryFn: () => getItem('warehouse', id),
+    enabled: !isNew,
+  });
+  const content = (itemQ.data?.state as any)?.content as WarehouseContent | undefined;
+  const bundleContent = content?.kind === 'warehouse' ? content : undefined;
+  const starterQueries = bundleContent?.starterQueries ?? [];
+  const dbtModels = bundleContent?.dbtModels ?? [];
+  const hasBundle = !!bundleContent && (!!bundleContent.ddl || starterQueries.length > 0 || dbtModels.length > 0);
+
   const [sqlText, setSqlText] = useState(SAMPLE_SQL);
   const [schema, setSchema] = useState<WHSchemaResp | null>(null);
   const [result, setResult] = useState<WHQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Seed the SQL editor with the bundle DDL once, when the live warehouse has
+  // no tables to show — so the surface lands populated instead of on a smoke
+  // test. The user can Run it (creates the schema) against the live compute.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current || !bundleContent?.ddl) return;
+    if (sqlText !== SAMPLE_SQL) return;
+    setSqlText(`-- Starter DDL from the installed app bundle.\n-- Run against the warehouse compute to provision these tables.\n\n${bundleContent.ddl}`);
+    seededRef.current = true;
+  }, [bundleContent, sqlText]);
   // Surface the underlying Synapse Dedicated SQL pool via ComputePicker so
   // users can Resume the pool when paused without leaving the Warehouse
   // editor. Selection is informational here — Warehouse query routes to the
@@ -3329,7 +3461,61 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
-          <Tree aria-label="Warehouse explorer" defaultOpenItems={['schemas']}>
+          <Tree aria-label="Warehouse explorer" defaultOpenItems={['schemas', 'starter', 'starter-queries', 'dbt-models']}>
+            {hasBundle && (
+              <TreeItem itemType="branch" value="starter">
+                <TreeItemLayout iconBefore={<Database20Regular />}>
+                  Starter content (app bundle)
+                </TreeItemLayout>
+                <Tree>
+                  {bundleContent?.ddl && (
+                    <TreeItem
+                      itemType="leaf"
+                      value="starter-ddl"
+                      onClick={() => { setSqlText(`-- Starter DDL from the installed app bundle.\n-- Run against the warehouse compute to provision these tables.\n\n${bundleContent.ddl}`); setResult(null); }}
+                    >
+                      <TreeItemLayout iconBefore={<DocumentTable20Regular />}>DDL — schema script</TreeItemLayout>
+                    </TreeItem>
+                  )}
+                  {dbtModels.length > 0 && (
+                    <TreeItem itemType="branch" value="dbt-models">
+                      <TreeItemLayout iconBefore={<Folder20Regular />}>dbt models ({dbtModels.length})</TreeItemLayout>
+                      <Tree>
+                        {dbtModels.map((m, i) => (
+                          <TreeItem
+                            key={`${m.layer}.${m.name}.${i}`}
+                            itemType="leaf"
+                            value={`dbt-${m.layer}-${m.name}-${i}`}
+                            onClick={() => { setSqlText(`-- dbt model [${m.layer}] ${m.name}\n\n${m.sql}`); setResult(null); }}
+                          >
+                            <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
+                              {m.name} <Caption1>· {m.layer}</Caption1>
+                            </TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  )}
+                  {starterQueries.length > 0 && (
+                    <TreeItem itemType="branch" value="starter-queries">
+                      <TreeItemLayout iconBefore={<Folder20Regular />}>Starter queries ({starterQueries.length})</TreeItemLayout>
+                      <Tree>
+                        {starterQueries.map((qy, i) => (
+                          <TreeItem
+                            key={`${qy.name}-${i}`}
+                            itemType="leaf"
+                            value={`sq-${qy.name}-${i}`}
+                            onClick={() => { setSqlText(qy.sql); setResult(null); }}
+                          >
+                            <TreeItemLayout iconBefore={<Play20Regular />}>{qy.name}</TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  )}
+                </Tree>
+              </TreeItem>
+            )}
             <TreeItem itemType="branch" value="schemas">
               <TreeItemLayout iconBefore={<Database20Regular />}>
                 Schemas ({schemaEntries.length})
@@ -3383,6 +3569,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               <MessageBarBody>
                 <MessageBarTitle>Warehouse compute is {schema.state}</MessageBarTitle>
                 {schema.message || 'Pick the Synapse Dedicated SQL pool below and click Resume.'}
+                {hasBundle && ' This warehouse was installed from an app bundle — its starter DDL, dbt models, and queries are listed in the explorer on the left. Resume the pool, then Run the DDL to provision them.'}
               </MessageBarBody>
             </MessageBar>
           )}

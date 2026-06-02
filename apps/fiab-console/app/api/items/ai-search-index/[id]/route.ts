@@ -19,10 +19,27 @@ import {
 } from '@/lib/azure/search-index-client';
 import {
   resolveSearchBinding, searchBindingErrorResponse, SEARCH_ITEM_TYPE,
+  UnboundSearchIndexError,
 } from '@/lib/azure/search-binding';
+import { loadContentBackedItem, aiSearchIndexFromContent } from '../../_lib/ai-content-fallback';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * Fall back to the bundle's AiSearchIndexContent (schema fields + scoring
+ * profiles + vector config + sample docs) stamped on the Cosmos item, so a
+ * bundle-installed index item opens FULLY BUILT-OUT (full Schema / field
+ * designer) before it's bound to a real index on the service. Binding,
+ * search, and field-edits still target the real data-plane once bound.
+ */
+async function searchIndexContentFallback(id: string, tenantId: string) {
+  const item = await loadContentBackedItem(id, SEARCH_ITEM_TYPE, tenantId);
+  if (!item) return null;
+  const built = aiSearchIndexFromContent(item);
+  if (!built) return null;
+  return { index: built.index, stats: built.stats, boundTo: null, sampleDocs: built.sampleDocs, source: 'bundle' };
+}
 
 function gateOr(e: any) {
   if (e instanceof SearchNotDeployedError) {
@@ -40,20 +57,38 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     ({ indexName, service } = await resolveSearchBinding(id, SEARCH_ITEM_TYPE, session.claims.oid));
   } catch (e) {
+    // Unbound bundle-installed item: open FULLY BUILT-OUT from the stamped
+    // AiSearchIndexContent (the editor still surfaces a bind picker because we
+    // flag source:'bundle'). Other resolution errors keep their structured body.
+    if (e instanceof UnboundSearchIndexError) {
+      const fb = await searchIndexContentFallback(id, session.claims.oid);
+      if (fb) return NextResponse.json({ ok: true, ...fb });
+    }
     const { status, body } = searchBindingErrorResponse(e);
     return NextResponse.json(body, { status });
   }
   try {
     const index = await getIndex(indexName, service);
     if (!index) {
-      // Bound to an index that no longer exists on the service — surface a
-      // precise 404 (NOT the unbound gate; the binding is valid, the index is gone).
+      // Bound to an index that no longer exists on the service. Surface the
+      // bundle definition when present (so the schema still renders) and keep
+      // the precise "index gone" signal; otherwise a precise 404.
+      const fb = await searchIndexContentFallback(id, session.claims.oid);
+      if (fb) return NextResponse.json({ ok: true, ...fb, boundTo: indexName, indexMissing: true });
       return NextResponse.json({ ok: false, error: `Bound index '${indexName}' not found on the search service.`, boundTo: indexName }, { status: 404 });
     }
     let stats: unknown = undefined;
     try { stats = await getIndexStats(indexName, service); } catch { /* stats best-effort */ }
     return NextResponse.json({ ok: true, index, stats, boundTo: indexName });
-  } catch (e: any) { return gateOr(e); }
+  } catch (e: any) {
+    // AI Search not provisioned / data-plane error: surface the bundle schema
+    // rather than an empty editor, when available.
+    if (e instanceof SearchNotDeployedError) {
+      const fb = await searchIndexContentFallback(id, session.claims.oid);
+      if (fb) return NextResponse.json({ ok: true, ...fb, notDeployed: true });
+    }
+    return gateOr(e);
+  }
 }
 
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
