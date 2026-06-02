@@ -25,6 +25,39 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.24.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.23.0...csa-inabox-v0.24.0) (2026-06-02)
+
+
+### Features
+
+* **csa-loom:** Azure-native provisioner fallbacks (lakehouse/notebook/semantic-model) + bundle raw-SQL sweep ([#586](https://github.com/fgarofalo56/csa-inabox/issues/586)) ([35b37af](https://github.com/fgarofalo56/csa-inabox/commit/35b37af3d2a6976ce80eb2aeda1216c11053d9f8))
+* **csa-loom:** close remaining gaps — pipelines CI, MLflow, ext-shortcut creds, deploy-planner +13, DAB runtime, parity docs ([#581](https://github.com/fgarofalo56/csa-inabox/issues/581)) ([80bec78](https://github.com/fgarofalo56/csa-inabox/commit/80bec7889b4d424d03a049dccea921a0558ef720))
+* **csa-loom:** documented use cases as one-click seeded apps (E2E) ([#582](https://github.com/fgarofalo56/csa-inabox/issues/582)) ([99b1a34](https://github.com/fgarofalo56/csa-inabox/commit/99b1a349c0ddf8bef9c6e4ebf032efb9ac559fae))
+* **csa-loom:** every app object opens fully built-out from bundle content ([#593](https://github.com/fgarofalo56/csa-inabox/issues/593)) ([7ced022](https://github.com/fgarofalo56/csa-inabox/commit/7ced022b38d25c2b1f3b2936f3c04c63c2dab4ee))
+* **csa-loom:** Logic App editor — WDL designer + code view on real ARM ([#595](https://github.com/fgarofalo56/csa-inabox/issues/595)) ([7b85a2d](https://github.com/fgarofalo56/csa-inabox/commit/7b85a2d89dcdc2eb7bb66f213a7060d4f71f2d8c))
+
+
+### Bug Fixes
+
+* **csa-loom:** dedicated-pool view/schema, lakehouse user-db views, KQL caching-policy syntax, TOM relationship validation ([#588](https://github.com/fgarofalo56/csa-inabox/issues/588)) ([996f8a0](https://github.com/fgarofalo56/csa-inabox/commit/996f8a045af8bc01306ab58d86974cb4aa911ac6))
+* **csa-loom:** notebook RUN route assembles code from state.content.cells ([#594](https://github.com/fgarofalo56/csa-inabox/issues/594)) ([f1a87e5](https://github.com/fgarofalo56/csa-inabox/commit/f1a87e599b8588edea1d9df0dfb55c649cdb8eb1))
+* **csa-loom:** OneLake catalog shows each lakehouse's REAL tables, not a mock ([#596](https://github.com/fgarofalo56/csa-inabox/issues/596)) ([28050c8](https://github.com/fgarofalo56/csa-inabox/commit/28050c8b3e040878d6aff5861b9ba0e709a8e1f6))
+* **csa-loom:** use-case apps iter2 — AI Search schema, warehouse seeding, parallel provisioning, KQL content ([#583](https://github.com/fgarofalo56/csa-inabox/issues/583)) ([0d0744b](https://github.com/fgarofalo56/csa-inabox/commit/0d0744b4255e2e26815f8881f1001937f53744dc))
+* **csa-loom:** use-case apps live fix round 1 ([#584](https://github.com/fgarofalo56/csa-inabox/issues/584)) ([c6ef586](https://github.com/fgarofalo56/csa-inabox/commit/c6ef586cbea2696e82c0e0d4541282d9e699622a))
+* **csa-loom:** use-case apps live fix round 2 ([#585](https://github.com/fgarofalo56/csa-inabox/issues/585)) ([26107b0](https://github.com/fgarofalo56/csa-inabox/commit/26107b0c07d405256de09011a513b0e87e144840))
+* **csa-loom:** warehouse ADD-CONSTRAINT idempotency + CREATE OR ALTER VIEW + databricks-job run honest-gate ([#591](https://github.com/fgarofalo56/csa-inabox/issues/591)) ([07e62c8](https://github.com/fgarofalo56/csa-inabox/commit/07e62c8dbe27bb7a51fac6979949d1294ba1cb63))
+* **csa-loom:** warehouse idempotency (all CREATE TABLE forms) + dbt-Jinja skip + pipeline-designer refs ([#590](https://github.com/fgarofalo56/csa-inabox/issues/590)) ([636c172](https://github.com/fgarofalo56/csa-inabox/commit/636c1727db5f8ffa5c3d83075e383a5bef31c233))
+
+
+### Documentation
+
+* site polish — nav hub, /learn dedup, parity matrix, TCO, maturity, freshness stamps ([#579](https://github.com/fgarofalo56/csa-inabox/issues/579)) ([d002289](https://github.com/fgarofalo56/csa-inabox/commit/d0022897d2157976f0a8b1f5afa54926304b03b0))
+
+
+### Tests
+
+* **csa-loom:** front-end UAT for all 21 use-case apps (UI install→provision→render) ([#592](https://github.com/fgarofalo56/csa-inabox/issues/592)) ([84cc53f](https://github.com/fgarofalo56/csa-inabox/commit/84cc53f45d21eba82e6a4f9470d67a8138b50345))
+
 ## [0.23.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.22.0...csa-inabox-v0.23.0) (2026-06-02)
 
 
