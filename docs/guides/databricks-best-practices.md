@@ -12,6 +12,9 @@ tags:
 
 # Databricks Best Practices for CSA-in-a-Box
 
+!!! note "Freshness"
+    **Validated against:** Azure Databricks (Premium workspaces, Unity Catalog, Delta Lake) on the Databricks REST API + `databricks-cli` · `dbt-databricks` adapter — **as of 2026-06-02.** Cluster-policy JSON, Photon/runtime, and Unity Catalog namespace behavior track the current Databricks runtime; confirm against the Databricks docs before applying, as runtime defaults change between LTS releases.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

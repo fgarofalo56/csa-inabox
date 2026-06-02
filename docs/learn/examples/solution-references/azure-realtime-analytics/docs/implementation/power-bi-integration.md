@@ -2,7 +2,7 @@
 title: "Power BI Integration Guide"
 tags:
   - examples
-  - solution_refrances
+  - solution-references
   - azure-realtime-analytics
   - implementation
 ---

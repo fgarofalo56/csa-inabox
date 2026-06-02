@@ -1,5 +1,8 @@
 # Azure Data Explorer (ADX) / KQL Guide
 
+!!! note "Freshness"
+    **Validated against:** Azure Data Explorer (Kusto) — KQL engine, database/table policies, ingestion (streaming + batch), cluster scale/stop — on the ADX data-plane + ARM — **as of 2026-06-02.** KQL syntax and policy commands track the current Kusto engine; verify against the ADX/KQL docs before deploying.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

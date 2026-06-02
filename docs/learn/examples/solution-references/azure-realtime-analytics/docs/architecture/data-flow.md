@@ -2,7 +2,7 @@
 title: "Data Flow Architecture"
 tags:
   - examples
-  - solution_refrances
+  - solution-references
   - azure-realtime-analytics
   - architecture
 ---

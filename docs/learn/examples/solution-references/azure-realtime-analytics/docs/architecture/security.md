@@ -2,7 +2,7 @@
 title: "Security Architecture"
 tags:
   - examples
-  - solution_refrances
+  - solution-references
   - azure-realtime-analytics
   - architecture
 ---

@@ -1,5 +1,8 @@
 # APIM as the Unified Gateway for Data Mesh APIs
 
+!!! note "Freshness"
+    **Validated against:** Azure API Management (gateway, policies, products, named values, Entra ID integration) fronting Data API Builder, AI, Marketplace, and Portal APIs — **as of 2026-06-02.** APIM policy XML and SKU behavior track the current APIM service; verify against the API Management docs before deploying.
+
 > Architecture guide for the CSA-in-a-Box APIM gateway layer — a single entry point
 > for all Data Mesh services including DAB, AI, Marketplace, and Portal APIs.
 

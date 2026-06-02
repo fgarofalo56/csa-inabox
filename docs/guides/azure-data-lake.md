@@ -13,6 +13,9 @@ tags:
 
 # Azure Data Lake Storage Gen2
 
+!!! note "Freshness"
+    **Validated against:** Azure Data Lake Storage Gen2 (hierarchical namespace, ABFS driver, lifecycle-management tiering, RBAC + ACLs, redundancy options) on the storage data-plane + ARM — **as of 2026-06-02.** Lifecycle-policy JSON and access-tier behavior track the current Storage service; verify against the ADLS Gen2 docs before deploying.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

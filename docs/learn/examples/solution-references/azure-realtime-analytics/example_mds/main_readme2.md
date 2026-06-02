@@ -3,7 +3,7 @@ title: "Azure Real-Time Analytics Architecture"
 description: "[](https://opensource.org/licenses/MIT)"
 tags:
   - examples
-  - solution_refrances
+  - solution-references
   - azure-realtime-analytics
   - example_mds
 ---

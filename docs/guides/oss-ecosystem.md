@@ -1,5 +1,8 @@
 # Open-Source Ecosystem Guide
 
+!!! note "Freshness"
+    **Validated against:** the OSS gap-filler stack deployed on **AKS** — Apache Atlas, Apache NiFi, Trino, Apache Superset, OpenSearch, Apache Airflow, Prometheus/Grafana — via the Helm charts in `scripts/deploy-oss-stack.sh` — **as of 2026-06-02.** OSS component versions track the pinned Helm charts; confirm each project's current release before deploying.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

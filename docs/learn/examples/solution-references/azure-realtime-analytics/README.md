@@ -3,7 +3,7 @@ title: "️ Azure Real-Time Analytics Architecture"
 description: "[](https://azure.microsoft.com/)"
 tags:
   - examples
-  - solution_refrances
+  - solution-references
   - azure-realtime-analytics
 ---
 # 🏗️ Azure Real-Time Analytics Architecture

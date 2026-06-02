@@ -1,5 +1,8 @@
 # Azure Event Hubs Guide
 
+!!! note "Freshness"
+    **Validated against:** Azure Event Hubs — Kafka-compatible ingestion, Capture to ADLS, throughput units / auto-inflate, Entra data-plane (AMQP) — **as of 2026-06-02.** Note the CSA deployment sets `disableLocalAuth: true` (Entra-only, no SAS). Throughput-unit and Capture behavior track the current Event Hubs service; verify against the Event Hubs docs before deploying.
+
 <!-- cross-link-admonition -->
 !!! info "See also: generic Azure reference"
     For service-agnostic deep-dive content on Azure Event Hubs — architecture, feature reference, code samples, and patterns independent of CSA-in-a-Box — see [`Azure Event Hubs` in the reference library](../learn/02-services/streaming-services/azure-event-hubs/README.md).

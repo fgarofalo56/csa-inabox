@@ -3,7 +3,7 @@ title: "Architecture Overview"
 description: "> Comprehensive overview of the Azure Real-Time Analytics Platform architecture, design principles, and key capabilities."
 tags:
   - examples
-  - solution_refrances
+  - solution-references
   - azure-realtime-analytics
   - example_mds
 ---

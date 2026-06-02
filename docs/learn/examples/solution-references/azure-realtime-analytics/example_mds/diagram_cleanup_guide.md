@@ -2,7 +2,7 @@
 title: "Visual Documentation Cleanup & Implementation Guide"
 tags:
   - examples
-  - solution_refrances
+  - solution-references
   - azure-realtime-analytics
   - example_mds
 ---

@@ -18,7 +18,9 @@ Data governance practices for Azure analytics platforms.
 
 ## In This Section
 
+- **[Data Governance Overview](data-governance-overview.md)** - Governance practices for Azure Synapse Analytics
 - **[Retention Policies](retention-policies.md)** - Data lifecycle management and compliance
+- **[Metadata Governance](metadata-governance.md)** - Catalog and lineage management
 
 ---
 
