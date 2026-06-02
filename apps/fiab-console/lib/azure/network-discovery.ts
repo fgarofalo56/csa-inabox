@@ -33,6 +33,7 @@ import {
 const ARM_SCOPE = 'https://management.azure.com/.default';
 const SUBSCRIPTIONS_API = '2022-12-01';
 const PE_API = '2024-03-01';
+const NIC_API = '2024-03-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -78,6 +79,11 @@ export interface PrivateEndpointInfo {
   state?: string;
   /** FQDN→IP→zone mappings derived from customDnsConfigs. */
   dns: PrivateDnsRecord[];
+  /** Private IP(s) on the endpoint NIC — the authoritative IP for the hosts file
+   * when a customDnsConfig has an FQDN but no echoed ipAddresses. */
+  nicIps?: string[];
+  /** Internal: the NIC ARM id, resolved to nicIps in a second pass. */
+  _nicId?: string;
 }
 
 async function armToken(): Promise<string> {
@@ -144,10 +150,19 @@ function shape(raw: any, subscriptionId: string): PrivateEndpointInfo {
   const conn = conns[0]?.properties || {};
   const connId: string | undefined = conn.privateLinkServiceId;
   const groupIds: string[] = conns.flatMap((c: any) => c?.properties?.groupIds || []);
+  // Keep EVERY customDnsConfig FQDN (even when ipAddresses is empty — common when
+  // the IP is registered in a private DNS zone group rather than echoed back). The
+  // missing IPs are filled from the endpoint NIC in a second pass, so the hosts
+  // file covers all endpoints (SQL, Synapse, Storage, KV, …) — not just the few
+  // that happen to echo an IP here.
   const dnsConfigs: any[] = raw?.properties?.customDnsConfigs || [];
   const dns: PrivateDnsRecord[] = dnsConfigs
-    .filter((d) => d?.fqdn && Array.isArray(d.ipAddresses) && d.ipAddresses.length)
-    .map((d) => ({ fqdn: d.fqdn, ips: d.ipAddresses, zone: privatelinkZoneFor(d.fqdn) }));
+    .filter((d) => d?.fqdn)
+    .map((d) => ({
+      fqdn: d.fqdn,
+      ips: Array.isArray(d.ipAddresses) ? d.ipAddresses : [],
+      zone: privatelinkZoneFor(d.fqdn),
+    }));
   return {
     id,
     name: raw?.name || id.split('/').pop() || 'private-endpoint',
@@ -159,7 +174,19 @@ function shape(raw: any, subscriptionId: string): PrivateEndpointInfo {
     groupIds,
     state: conns[0]?.properties?.privateLinkServiceConnectionState?.status || raw?.properties?.provisioningState,
     dns,
+    _nicId: raw?.properties?.networkInterfaces?.[0]?.id,
   };
+}
+
+/** Resolve the private IP(s) on a private-endpoint NIC. */
+async function nicPrivateIps(nicId: string): Promise<string[]> {
+  try {
+    const nic = await armGet<any>(`${nicId}?api-version=${NIC_API}`);
+    const ips = (nic?.properties?.ipConfigurations || [])
+      .map((c: any) => c?.properties?.privateIPAddress)
+      .filter(Boolean);
+    return ips;
+  } catch { return []; }
 }
 
 /**
@@ -181,6 +208,18 @@ export async function listPrivateEndpoints(): Promise<PrivateEndpointInfo[]> {
     } catch { continue; }
     for (const r of raws) all.push(shape(r, sub));
   }
+  // Second pass: for any endpoint whose DNS records have no echoed IP, resolve the
+  // NIC private IP and fill it in — so EVERY endpoint contributes a hosts entry.
+  await Promise.all(all.map(async (pe) => {
+    const needsIp = pe.dns.some((d) => !d.ips.length);
+    if (!needsIp || !pe._nicId) return;
+    const ips = await nicPrivateIps(pe._nicId);
+    pe.nicIps = ips;
+    if (ips.length) {
+      for (const d of pe.dns) if (!d.ips.length) d.ips = ips;
+    }
+  }));
+  all.forEach((pe) => { delete pe._nicId; });
   all.sort((a, b) => (a.connectedResourceName || a.name).localeCompare(b.connectedResourceName || b.name));
   return all;
 }
