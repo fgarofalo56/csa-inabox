@@ -144,6 +144,16 @@ import type { AppBundle } from './types';
 const WAREHOUSE_DDL = `-- Hybrid estate workload-placement register + cross-cloud data-movement
 -- audit (T-SQL / TDS). Backs the doc's "What lives where" routing table and
 -- the "Customer-controlled data movement" + "never automatic" requirements.
+--
+-- Constraint note (Microsoft Learn): both Fabric Warehouse and Synapse
+-- dedicated SQL pool reject ENFORCED PK/UNIQUE constraints — they are only
+-- supported as NONCLUSTERED ... NOT ENFORCED. Fabric Warehouse additionally
+-- forbids inline constraints inside CREATE TABLE, so every key is added with
+-- a separate ALTER TABLE ... ADD CONSTRAINT ... NOT ENFORCED batch (valid on
+-- both backends). Uniqueness here is guaranteed by the seed data, not the
+-- engine.
+--   https://learn.microsoft.com/fabric/data-warehouse/table-constraints
+--   https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-table-constraints
 
 CREATE SCHEMA hybrid;
 GO
@@ -158,9 +168,12 @@ CREATE TABLE hybrid.WorkloadPlacement (
     platform           VARCHAR(32)  NOT NULL,  -- Fabric | Loom
     boundary           VARCHAR(16)  NULL,      -- (Gov only) GCC-H | IL4 | IL5
     rationale          VARCHAR(400) NOT NULL,
-    cross_cloud_b2b    BIT          NOT NULL,  -- 0 = disabled (ITAR), 1 = allowed
-    CONSTRAINT pk_placement PRIMARY KEY (workload_id)
+    cross_cloud_b2b    BIT          NOT NULL   -- 0 = disabled (ITAR), 1 = allowed
 );
+GO
+
+ALTER TABLE hybrid.WorkloadPlacement
+    ADD CONSTRAINT pk_placement PRIMARY KEY NONCLUSTERED (workload_id) NOT ENFORCED;
 GO
 
 -- Customer-initiated cross-cloud data-movement register. Loom NEVER moves
@@ -177,9 +190,12 @@ CREATE TABLE hybrid.DataMovement (
     bytes_moved        BIGINT       NULL,
     attestation_hash   VARCHAR(128) NULL,      -- SHA-256 of the moved payload manifest
     requested_at       DATETIME2    NOT NULL,
-    moved_at           DATETIME2    NULL,
-    CONSTRAINT pk_movement PRIMARY KEY (movement_id)
+    moved_at           DATETIME2    NULL
 );
+GO
+
+ALTER TABLE hybrid.DataMovement
+    ADD CONSTRAINT pk_movement PRIMARY KEY NONCLUSTERED (movement_id) NOT ENFORCED;
 GO
 
 -- Seed: the doc's "What lives where" table, verbatim, as placement policy.

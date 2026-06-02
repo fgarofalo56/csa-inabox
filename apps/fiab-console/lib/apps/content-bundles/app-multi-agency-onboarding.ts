@@ -54,14 +54,26 @@ import type { NotebookCell } from '@/lib/types/notebook-cell';
 // (Mission Operations live, Field Services in-flight, Inspector General
 // queued) so the registry renders with real rows on first open.
 
+// IDEMPOTENT by construction: this DDL is split on ';\\n' and each batch is
+// run independently by warehouse.ts; it must survive re-install AND a shared
+// dedicated-pool backing (another DLZ app may already own the `onboarding`
+// schema). T-SQL has no CREATE SCHEMA/TABLE IF NOT EXISTS, so:
+//   - CREATE SCHEMA is guarded by sys.schemas + run via EXEC() so it executes
+//     in its own batch (Microsoft Learn: "You must execute this statement as
+//     a separate batch"). https://learn.microsoft.com/sql/t-sql/statements/create-schema-transact-sql
+//   - Each CREATE TABLE is guarded by IF OBJECT_ID(..,'U') IS NULL BEGIN..END.
+//   - Each seed INSERT is guarded by IF NOT EXISTS so re-install never double-seeds.
 const WAREHOUSE_DDL = `-- DLZ Onboarding Registry — operational system-of-record for the
 -- Multi-Agency Onboarding Setup-Wizard workflow (single Entra tenant,
--- one row per onboarded / in-flight / queued agency DLZ).
+-- one row per onboarded / in-flight / queued agency DLZ). Idempotent.
 
-CREATE SCHEMA onboarding;
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'onboarding')
+    EXEC('CREATE SCHEMA onboarding');
 GO
 
 -- Departments owning an Admin Plane (the central governance plane).
+IF OBJECT_ID(N'onboarding.Department', N'U') IS NULL
+BEGIN
 CREATE TABLE onboarding.Department (
     DepartmentId        INT            NOT NULL,
     DepartmentName      VARCHAR(128)   NOT NULL,
@@ -72,10 +84,13 @@ CREATE TABLE onboarding.Department (
     DeploymentMode      VARCHAR(16)    NOT NULL,   -- single-sub | multi-sub
     DepartmentCdoEmail  VARCHAR(256)   NULL,
     CONSTRAINT PK_Department PRIMARY KEY NONCLUSTERED (DepartmentId) NOT ENFORCED
-);
+)
+END;
 GO
 
 -- One row per agency DLZ being onboarded under a Department.
+IF OBJECT_ID(N'onboarding.AgencyDlz', N'U') IS NULL
+BEGIN
 CREATE TABLE onboarding.AgencyDlz (
     DlzId                  INT           NOT NULL,
     DepartmentId           INT           NOT NULL,
@@ -93,12 +108,15 @@ CREATE TABLE onboarding.AgencyDlz (
     RequestedUtc           DATETIME2     NOT NULL,
     DeployedUtc            DATETIME2     NULL,
     CONSTRAINT PK_AgencyDlz PRIMARY KEY NONCLUSTERED (DlzId) NOT ENFORCED
-);
+)
+END;
 GO
 
 -- Hub<->spoke VNet peering state (Admin Plane hub peered to each DLZ spoke,
 -- Microsoft.Network/virtualNetworks/virtualNetworkPeerings, cross-sub same
 -- tenant). https://learn.microsoft.com/azure/virtual-network/create-peering-different-subscriptions
+IF OBJECT_ID(N'onboarding.VnetPeering', N'U') IS NULL
+BEGIN
 CREATE TABLE onboarding.VnetPeering (
     PeeringId          INT           NOT NULL,
     DlzId              INT           NOT NULL,
@@ -109,11 +127,14 @@ CREATE TABLE onboarding.VnetPeering (
     UseRemoteGateways  BIT           NOT NULL,
     CheckedUtc         DATETIME2     NOT NULL,
     CONSTRAINT PK_VnetPeering PRIMARY KEY NONCLUSTERED (PeeringId) NOT ENFORCED
-);
+)
+END;
 GO
 
 -- Purview catalog scan registrations created for each DLZ's ADLS accounts
 -- (post-deploy validation: "Catalog scans registered for new DLZ").
+IF OBJECT_ID(N'onboarding.CatalogScanRegistration', N'U') IS NULL
+BEGIN
 CREATE TABLE onboarding.CatalogScanRegistration (
     ScanId          INT           NOT NULL,
     DlzId           INT           NOT NULL,
@@ -124,11 +145,14 @@ CREATE TABLE onboarding.CatalogScanRegistration (
     LastRunStatus   VARCHAR(24)   NULL,       -- Succeeded | Failed | Running
     AssetsDiscovered INT          NULL,
     CONSTRAINT PK_CatalogScan PRIMARY KEY NONCLUSTERED (ScanId) NOT ENFORCED
-);
+)
+END;
 GO
 
 -- The per-DLZ onboarding checklist (mirrors the runbook Procedure +
 -- Post-deploy validation + Hand-off steps, one row per step per DLZ).
+IF OBJECT_ID(N'onboarding.OnboardingTask', N'U') IS NULL
+BEGIN
 CREATE TABLE onboarding.OnboardingTask (
     TaskId        INT           NOT NULL,
     DlzId         INT           NOT NULL,
@@ -139,17 +163,21 @@ CREATE TABLE onboarding.OnboardingTask (
     CompletedUtc  DATETIME2     NULL,
     Notes         VARCHAR(400)  NULL,
     CONSTRAINT PK_OnboardingTask PRIMARY KEY NONCLUSTERED (TaskId) NOT ENFORCED
-);
+)
+END;
 GO
 
 -- Seed: one fully-onboarded department + three agency DLZs at different
--- lifecycle stages, with their peering / scan / checklist rows.
+-- lifecycle stages, with their peering / scan / checklist rows. Each INSERT
+-- is guarded so re-install / shared-pool backing never double-seeds.
+IF NOT EXISTS (SELECT 1 FROM onboarding.Department WHERE DepartmentId = 1)
 INSERT INTO onboarding.Department
     (DepartmentId, DepartmentName, EntraTenantId, AdminPlaneSubId, AdminPlaneRegion, CloudBoundary, DeploymentMode, DepartmentCdoEmail)
 VALUES
     (1, 'Department of Mission Affairs', '11111111-1111-1111-1111-111111111111', 'aaaa0000-0000-0000-0000-00000000aaaa', 'usgovvirginia', 'gcc-high', 'multi-sub', 'cdo@mission-affairs.gov');
 GO
 
+IF NOT EXISTS (SELECT 1 FROM onboarding.AgencyDlz WHERE DlzId IN (101, 102, 103))
 INSERT INTO onboarding.AgencyDlz
     (DlzId, DepartmentId, AgencyName, MissionDomain, SubscriptionId, Region, SpokeVnetCidr, CapacitySku, DomainStewardGroupId, DomainStewardGroupName, WorkspaceIdentityConv, OnboardingPattern, Status, RequestedUtc, DeployedUtc)
 VALUES
@@ -158,6 +186,7 @@ VALUES
     (103, 1, 'Inspector General',  'Oversight',          'dddd3333-3333-3333-3333-3333333333dd', 'usgovvirginia', '10.22.0.0/16', 'F8',  'd3333333-3333-3333-3333-333333333333', 'Stewards-IG',         'mi-\${domain}-\${workspace}', 'B-joint-program',      'queued',   '2026-05-31T16:40:00Z', NULL);
 GO
 
+IF NOT EXISTS (SELECT 1 FROM onboarding.VnetPeering WHERE PeeringId IN (1, 2))
 INSERT INTO onboarding.VnetPeering
     (PeeringId, DlzId, HubVnetResourceId, SpokeVnetResourceId, PeeringState, AllowForwardedTraffic, UseRemoteGateways, CheckedUtc)
 VALUES
@@ -165,6 +194,7 @@ VALUES
     (2, 102, '/subscriptions/aaaa0000-0000-0000-0000-00000000aaaa/resourceGroups/rg-adminplane-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub', '/subscriptions/cccc2222-2222-2222-2222-2222222222cc/resourceGroups/rg-dlz-fieldsvc/providers/Microsoft.Network/virtualNetworks/vnet-spoke',  'Initiated',   1, 0, '2026-05-31T17:00:00Z');
 GO
 
+IF NOT EXISTS (SELECT 1 FROM onboarding.CatalogScanRegistration WHERE ScanId IN (1, 2, 3))
 INSERT INTO onboarding.CatalogScanRegistration
     (ScanId, DlzId, AdlsAccountName, ScanRuleSet, ScheduleCron, LastRunUtc, LastRunStatus, AssetsDiscovered)
 VALUES
@@ -173,6 +203,7 @@ VALUES
     (3, 102, 'stfieldsvcbronze',   'AdlsGen2', '0 2 * * *', NULL,                   NULL,        NULL);
 GO
 
+IF NOT EXISTS (SELECT 1 FROM onboarding.OnboardingTask WHERE TaskId BETWEEN 1 AND 15)
 INSERT INTO onboarding.OnboardingTask
     (TaskId, DlzId, Phase, StepName, OwnerRole, Status, CompletedUtc, Notes)
 VALUES

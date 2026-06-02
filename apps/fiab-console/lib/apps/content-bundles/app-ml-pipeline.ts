@@ -450,9 +450,17 @@ const NB_MONITOR_CELLS = [
 //  WAREHOUSE DDL — inference-log + drift-metric tables (seeded)
 // ════════════════════════════════════════════════════════════════════════
 
+// NOTE: target is a Fabric/Synapse Warehouse (T-SQL), which does NOT support
+// `CREATE TABLE IF NOT EXISTS` — it raises "Incorrect syntax near IF". The
+// Microsoft-documented idempotent idiom is a pre-existence OBJECT_ID guard
+// (https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/
+//  sql-data-warehouse-tables-overview#commands-for-creating-tables). The
+// warehouse provisioner's splitBatches() splits on ";\n", so each guarded
+// CREATE stays one batch.
 const WAREHOUSE_DDL = [
   '-- Inference log: one row per scored prediction served from the endpoint.',
-  'CREATE TABLE IF NOT EXISTS customer_churn_model_predictions (',
+  "IF OBJECT_ID(N'customer_churn_model_predictions', N'U') IS NULL",
+  'CREATE TABLE customer_churn_model_predictions (',
   '    request_id        VARCHAR(64)   NOT NULL,',
   '    model_version     VARCHAR(16)   NOT NULL,',
   '    customer_id       VARCHAR(32)   NOT NULL,',
@@ -463,7 +471,8 @@ const WAREHOUSE_DDL = [
   ');',
   '',
   '-- Daily drift metrics produced by Lakehouse Monitoring.',
-  'CREATE TABLE IF NOT EXISTS customer_churn_model_drift_metrics (',
+  "IF OBJECT_ID(N'customer_churn_model_drift_metrics', N'U') IS NULL",
+  'CREATE TABLE customer_churn_model_drift_metrics (',
   '    [date]            DATE          NOT NULL,',
   '    model_version     VARCHAR(16)   NOT NULL,',
   '    drift_score       FLOAT         NOT NULL,',
@@ -784,6 +793,52 @@ const bundle: AppBundle = {
       content: {
         kind: 'warehouse',
         ddl: WAREHOUSE_DDL,
+        // Seed sample drift + prediction rows so the drift alert / Activator
+        // rule and the starter queries return non-empty result sets the moment
+        // the app opens. The warehouse provisioner's seedSampleRows() inserts
+        // these over the same TDS target the DDL ran on (one multi-row INSERT
+        // per table) and verifies the count. Column order matches the DDL.
+        sampleRows: [
+          {
+            table: 'customer_churn_model_drift_metrics',
+            columns: [
+              'date',
+              'model_version',
+              'drift_score',
+              'feature_count',
+              'drifted_features',
+              'status',
+            ],
+            rows: [
+              ['2026-05-26', 'v1', 0.04, 8, 0, 'NORMAL'],
+              ['2026-05-27', 'v1', 0.06, 8, 1, 'NORMAL'],
+              ['2026-05-28', 'v1', 0.05, 8, 0, 'NORMAL'],
+              ['2026-05-29', 'v1', 0.09, 8, 1, 'NORMAL'],
+              ['2026-05-30', 'v1', 0.12, 8, 2, 'DRIFT_DETECTED'],
+              ['2026-05-31', 'v1', 0.15, 8, 3, 'DRIFT_DETECTED'],
+            ],
+          },
+          {
+            table: 'customer_churn_model_predictions',
+            columns: [
+              'request_id',
+              'model_version',
+              'customer_id',
+              'prediction',
+              'prediction_proba',
+              'actual_label',
+              'timestamp',
+            ],
+            rows: [
+              ['req-0001', 'v1', 'cust-0001', 0, 0.12, 0, '2026-05-31T08:00:00.000Z'],
+              ['req-0002', 'v1', 'cust-0002', 1, 0.88, 1, '2026-05-31T08:01:00.000Z'],
+              ['req-0003', 'v1', 'cust-0003', 0, 0.21, 0, '2026-05-31T08:02:00.000Z'],
+              ['req-0004', 'v1', 'cust-0004', 1, 0.79, 1, '2026-05-31T08:03:00.000Z'],
+              ['req-0005', 'v1', 'cust-0005', 0, 0.09, 0, '2026-05-31T08:04:00.000Z'],
+              ['req-0006', 'v1', 'cust-0001', 1, 0.64, null, '2026-05-31T08:05:00.000Z'],
+            ],
+          },
+        ],
         starterQueries: [
           {
             name: 'Today drift status',

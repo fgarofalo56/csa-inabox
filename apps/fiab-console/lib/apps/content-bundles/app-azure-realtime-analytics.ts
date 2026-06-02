@@ -368,9 +368,27 @@ const NB_OPENAI_CELLS = [
 //  (data-quality.md: data_quality_metrics, streaming_quality_metrics, dashboard view)
 // ════════════════════════════════════════════════════════════════════════
 
+// Dedicated Synapse SQL pools do NOT support `CREATE TABLE IF NOT EXISTS`
+// (Parse error "Incorrect syntax near IF") nor `DROP TABLE IF EXISTS` — those
+// are SQL Server 2016+ / Fabric Warehouse syntax. The documented idempotent
+// pattern for a dedicated pool is an OBJECT_ID pre-existence check + DROP, then
+// a plain CREATE TABLE. Grounded in Microsoft Learn:
+//   - "Design tables using Synapse SQL pool" (CREATE TABLE has no IF NOT EXISTS;
+//     unsupported table features) and
+//   - "Temporary tables in Synapse SQL" / DROP TABLE (T-SQL) — the
+//     `IF OBJECT_ID('t') IS NOT NULL DROP TABLE t` idiom is the supported
+//     existence-guarded drop (DROP TABLE IF EXISTS is NOT supported on a
+//     dedicated pool: its DROP TABLE syntax has no IF EXISTS clause).
+//
+// Each statement is a SINGLE statement terminated by `;\n` so the warehouse
+// provisioner's `splitBatches` (split on `;\n`) feeds the dedicated-pool TDS
+// endpoint one valid batch at a time. The single-statement `IF … DROP TABLE x;`
+// needs no BEGIN/END, so it survives the splitter intact, and re-running the
+// install is idempotent (drop-then-create reloads a clean schema each time).
 const WAREHOUSE_DDL = [
   '-- Per-table data-quality metrics (data-quality.md _log_quality_metrics).',
-  'CREATE TABLE IF NOT EXISTS data_quality_metrics (',
+  "IF OBJECT_ID('data_quality_metrics', 'U') IS NOT NULL DROP TABLE data_quality_metrics;",
+  'CREATE TABLE data_quality_metrics (',
   '    table_name      VARCHAR(128)  NOT NULL,',
   '    [timestamp]     DATETIME2(3)  NOT NULL,',
   '    total_records   BIGINT        NOT NULL,',
@@ -379,7 +397,8 @@ const WAREHOUSE_DDL = [
   ');',
   '',
   '-- Streaming micro-batch quality metrics (foreachBatch sink).',
-  'CREATE TABLE IF NOT EXISTS streaming_quality_metrics (',
+  "IF OBJECT_ID('streaming_quality_metrics', 'U') IS NOT NULL DROP TABLE streaming_quality_metrics;",
+  'CREATE TABLE streaming_quality_metrics (',
   '    batch_id        BIGINT        NOT NULL,',
   '    [timestamp]     DATETIME2(3)  NOT NULL,',
   '    total_records   BIGINT        NOT NULL,',
@@ -392,10 +411,20 @@ const WAREHOUSE_DDL = [
 //  KQL — operational metrics database (operations/dashboards + monitoring)
 // ════════════════════════════════════════════════════════════════════════
 
+// ADX/Eventhouse identifies a management/control command by its FIRST
+// non-whitespace character being a dot (`.`). A leading `//` comment makes the
+// literal first character a `/`, which the engine rejects with
+//   SYN0100: 'Admin commands must have a dot (.) character as their first
+//             non-whitespace character'.
+// So the function body MUST begin with `.create-or-alter function` — no leading
+// comment lines. The descriptive text that used to lead the body now lives in
+// the command's own `with (docstring=…, folder=…)` clause, which the
+// `.create-or-alter function` syntax supports (Microsoft Learn:
+// ".create-or-alter function command"). This is correct regardless of how the
+// kql-database provisioner forwards the body.
 const KQL_FN_SUCCESS_RATE =
-  '// Data-quality success rate per table over a window. Mirrors the\n' +
-  '// data-quality.md KQL "Data quality metrics over time" query.\n' +
-  '.create-or-alter function success_rate(window: timespan = 24h)\n' +
+  ".create-or-alter function with (docstring = 'Data-quality success rate per table over a window (data-quality.md).', folder = 'RealTimeAnalytics')\n" +
+  'success_rate(window: timespan = 24h)\n' +
   '{\n' +
   '    QualityMetrics\n' +
   '    | where TimeGenerated > ago(window)\n' +
@@ -701,6 +730,34 @@ const bundle: AppBundle = {
       content: {
         kind: 'warehouse',
         ddl: WAREHOUSE_DDL,
+        // Seeded by the warehouse provisioner (seedSampleRows) AFTER the DDL so
+        // the DQ dashboard view + starter queries return non-empty result sets
+        // the moment the app opens. Explicit `columns` so the multi-row INSERT
+        // targets columns by name (the bracketed [timestamp] reserved word is
+        // quoted by the provisioner's quoteIdent). ISO-8601 datetime literals
+        // are accepted by Synapse DATETIME2.
+        sampleRows: [
+          {
+            table: 'data_quality_metrics',
+            columns: ['table_name', 'timestamp', 'total_records', 'valid_records', 'quality_score'],
+            rows: [
+              ['silver.validated_events',       '2026-05-31T14:00:00', 100000, 99800, 99.80],
+              ['silver.validated_events',       '2026-05-31T13:00:00', 98000,  97608, 99.60],
+              ['gold.customer_daily_metrics',   '2026-05-31T14:00:00', 25000,  25000, 100.00],
+              ['gold.customer_daily_metrics',   '2026-05-31T13:00:00', 24500,  24500, 100.00],
+            ],
+          },
+          {
+            table: 'streaming_quality_metrics',
+            columns: ['batch_id', 'timestamp', 'total_records', 'valid_records', 'invalid_records'],
+            rows: [
+              [1001, '2026-05-31T14:00:30', 5200, 5188, 12],
+              [1002, '2026-05-31T14:01:00', 5310, 5301, 9],
+              [1003, '2026-05-31T14:01:30', 4980, 4972, 8],
+              [1004, '2026-05-31T14:02:00', 5125, 5096, 29],
+            ],
+          },
+        ],
         starterQueries: [
           {
             name: 'DQ success rate by table (today)',

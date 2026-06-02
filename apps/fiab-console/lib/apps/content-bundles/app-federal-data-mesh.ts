@@ -308,14 +308,35 @@ LabelViolationDetections(1440, 50000)
 
 // ─── Federated access-request register (Warehouse / TDS) ──────────────────
 
-const WAREHOUSE_DDL = `-- Federated cross-domain access register + audit (T-SQL / TDS).
+// Synapse Dedicated SQL Pool dialect + idempotency notes (Microsoft Learn):
+//   - PRIMARY KEY is ONLY supported as NONCLUSTERED NOT ENFORCED; an ENFORCED
+//     PK errors "Enforced unique constraints are not supported … must include
+//     the NOT ENFORCED syntax".
+//     /azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-table-constraints
+//   - FOREIGN KEY is NOT supported at all on a dedicated SQL pool — referential
+//     integrity between Domains/DataProducts/AccessRequests is enforced by the
+//     publishing app + the cross-boundary governance query, not by the engine.
+//   - CREATE SCHEMA accepts no IF NOT EXISTS and must run as its own batch, so we
+//     guard it with `IF NOT EXISTS(sys.schemas) EXEC('CREATE SCHEMA …')` (EXEC
+//     runs the CREATE SCHEMA in its own child batch — the documented pattern).
+//   - Each CREATE TABLE is guarded with `IF OBJECT_ID(...,'U') IS NULL` and each
+//     seed with `IF NOT EXISTS(SELECT 1 FROM <table>)` so a re-install on a
+//     fresh-but-named workspace (or a Retry after a partial create) is fully
+//     idempotent and never errors "There is already an object named …".
+// splitBatches() in warehouse.ts splits on `;\n` and strips lone `GO` lines, so
+// every statement below is one self-contained batch ending in `;` + newline and
+// carries no embedded `;\n`.
+const WAREHOUSE_DDL = `-- Federated cross-domain access register + audit (T-SQL / Synapse Dedicated).
 -- Backs the doc's request -> review -> approve(90d) -> grant flow and the
 -- "different agencies may have different audit boundaries" requirement.
 
-CREATE SCHEMA federation;
+-- Idempotent schema create (CREATE SCHEMA must be its own batch + has no
+-- IF NOT EXISTS on Synapse; EXEC runs it in a child batch).
+IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'federation') EXEC('CREATE SCHEMA federation');
 GO
 
 -- Domain (agency) registry — one row per DLZ.
+IF OBJECT_ID('federation.Domains','U') IS NULL
 CREATE TABLE federation.Domains (
     domain_code        VARCHAR(32)  NOT NULL,
     domain_name        VARCHAR(128) NOT NULL,
@@ -324,29 +345,32 @@ CREATE TABLE federation.Domains (
     audit_boundary     VARCHAR(16)  NOT NULL,  -- FedRAMP-H | IL4 | IL5
     domain_steward_grp VARCHAR(128) NOT NULL,  -- Entra group object id/name
     onboarded_at       DATETIME2    NOT NULL,
-    CONSTRAINT pk_domains PRIMARY KEY (domain_code)
+    CONSTRAINT pk_domains PRIMARY KEY NONCLUSTERED (domain_code) NOT ENFORCED
 );
 GO
 
 -- Data products published to the cross-domain Marketplace.
+-- (owner_domain references federation.Domains.domain_code at the app layer —
+--  Synapse Dedicated does not support FOREIGN KEY constraints.)
+IF OBJECT_ID('federation.DataProducts','U') IS NULL
 CREATE TABLE federation.DataProducts (
     product_id         VARCHAR(64)  NOT NULL,
     product_name       VARCHAR(160) NOT NULL,
-    owner_domain       VARCHAR(32)  NOT NULL,
+    owner_domain       VARCHAR(32)  NOT NULL,  -- -> federation.Domains.domain_code
     classification     VARCHAR(32)  NOT NULL,  -- MIP label
     endorsement        VARCHAR(16)  NULL,      -- promoted | certified
     share_name         VARCHAR(128) NULL,      -- Delta Sharing share
     published_at       DATETIME2    NOT NULL,
-    CONSTRAINT pk_products PRIMARY KEY (product_id),
-    CONSTRAINT fk_products_domain FOREIGN KEY (owner_domain)
-        REFERENCES federation.Domains(domain_code)
+    CONSTRAINT pk_products PRIMARY KEY NONCLUSTERED (product_id) NOT ENFORCED
 );
 GO
 
 -- Cross-domain access requests + their approval lifecycle.
+-- (product_id references federation.DataProducts.product_id at the app layer.)
+IF OBJECT_ID('federation.AccessRequests','U') IS NULL
 CREATE TABLE federation.AccessRequests (
     request_id         VARCHAR(64)  NOT NULL,
-    product_id         VARCHAR(64)  NOT NULL,
+    product_id         VARCHAR(64)  NOT NULL,  -- -> federation.DataProducts.product_id
     requesting_domain  VARCHAR(32)  NOT NULL,
     requested_by       VARCHAR(128) NOT NULL,
     use_case           VARCHAR(256) NOT NULL,
@@ -356,13 +380,13 @@ CREATE TABLE federation.AccessRequests (
     requested_at       DATETIME2    NOT NULL,
     decided_at         DATETIME2    NULL,
     expires_at         DATETIME2    NULL,
-    CONSTRAINT pk_requests PRIMARY KEY (request_id),
-    CONSTRAINT fk_requests_product FOREIGN KEY (product_id)
-        REFERENCES federation.DataProducts(product_id)
+    CONSTRAINT pk_requests PRIMARY KEY NONCLUSTERED (request_id) NOT ENFORCED
 );
 GO
 
 -- Seed: 4 agency domains across mixed audit boundaries (doc: FedRAMP-H / IL4 / IL5).
+-- Guarded so a Retry / re-install never double-seeds.
+IF NOT EXISTS (SELECT 1 FROM federation.Domains)
 INSERT INTO federation.Domains
     (domain_code, domain_name, subscription_id, region, audit_boundary, domain_steward_grp, onboarded_at)
 VALUES
@@ -373,6 +397,7 @@ VALUES
 GO
 
 -- Seed: 4 published data products (one per domain).
+IF NOT EXISTS (SELECT 1 FROM federation.DataProducts)
 INSERT INTO federation.DataProducts
     (product_id, product_name, owner_domain, classification, endorsement, share_name, published_at)
 VALUES
@@ -383,6 +408,7 @@ VALUES
 GO
 
 -- Seed: the doc's worked example (Agency B requests Agency A's product, 90-day window).
+IF NOT EXISTS (SELECT 1 FROM federation.AccessRequests)
 INSERT INTO federation.AccessRequests
     (request_id, product_id, requesting_domain, requested_by, use_case, status, decided_by, window_days, requested_at, decided_at, expires_at)
 VALUES
