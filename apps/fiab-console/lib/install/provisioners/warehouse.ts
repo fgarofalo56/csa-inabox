@@ -98,6 +98,21 @@ async function ensurePoolOnline(steps: string[]): Promise<RemediationGate | null
   return RESUME_GATE;
 }
 
+/**
+ * Make a leading `ALTER TABLE <t> ADD CONSTRAINT <c> …` idempotent. On a SHARED
+ * dedicated pool the table (and its PK) may already exist from a prior install,
+ * so an unguarded ADD CONSTRAINT raises "Table '<t>' already has a primary key
+ * defined on it." Guard by constraint name (constraint names are unique within
+ * a schema; sys.objects covers PK/UQ/FK/CHECK/DEFAULT). No-op for non-ADD-CONSTRAINT batches.
+ */
+function makeAddConstraintIdempotent(batch: string): string {
+  if (/^\s*IF\s+NOT\s+EXISTS/i.test(batch)) return batch;
+  const m = batch.match(/^\s*ALTER\s+TABLE\s+\S+\s+ADD\s+CONSTRAINT\s+\[?([^\s\]]+)\]?/i);
+  if (!m) return batch;
+  const c = m[1].replace(/'/g, "''");
+  return `IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE name = N'${c}')\n${batch}`;
+}
+
 function splitBatches(sql: string): string[] {
   return sql
     .split(/;\s*\n/)
@@ -195,23 +210,41 @@ function makeCreateSchemaIdempotent(batch: string): string {
 }
 
 /**
- * Detect a batch that opens with `CREATE VIEW` (after the comment/GO scrub in
- * splitBatches). On dedicated SQL pool CREATE VIEW must be the FIRST and ONLY
- * statement in its batch, so such a batch must be issued on its own — never
- * folded behind an IF/DROP guard or another statement.
+ * Detect a batch that opens with `CREATE VIEW` or `CREATE OR ALTER VIEW`
+ * (after the comment/GO scrub in splitBatches). On dedicated SQL pool a view
+ * DDL must be the FIRST and ONLY statement in its batch, so such a batch must
+ * be issued on its own — never folded behind an IF/DROP guard or another
+ * statement.
+ *
+ * Dedicated SQL pool / Fabric Warehouse do NOT support `CREATE OR ALTER VIEW`
+ * (it raises "Incorrect syntax near 'CREATE'"); bundles commonly author views
+ * with that idiom for portability. We match both forms here, then normalize
+ * `CREATE OR ALTER VIEW` → bare `CREATE VIEW` in normalizeCreateView() since we
+ * emit our own idempotent DROP batch immediately before it.
+ *   https://learn.microsoft.com/sql/t-sql/statements/create-view-transact-sql#remarks
  */
 function isCreateViewBatch(batch: string): boolean {
-  return /^\s*CREATE\s+VIEW\b/i.test(batch);
+  return /^\s*CREATE\s+(?:OR\s+ALTER\s+)?VIEW\b/i.test(batch);
 }
 
 /**
- * Extract the view name from a leading `CREATE VIEW [name] AS …` /
- * `CREATE VIEW schema.name AS …` so we can emit a separate idempotent DROP
- * batch before the CREATE VIEW batch.
+ * Extract the view name from a leading `CREATE [OR ALTER] VIEW [name] AS …` /
+ * `… schema.name AS …` so we can emit a separate idempotent DROP batch before
+ * the CREATE VIEW batch.
  */
 function viewNameFromCreate(batch: string): string | null {
-  const m = batch.match(/^\s*CREATE\s+VIEW\s+([^\s(]+)/i);
+  const m = batch.match(/^\s*CREATE\s+(?:OR\s+ALTER\s+)?VIEW\s+([^\s(]+)/i);
   return m ? m[1] : null;
+}
+
+/**
+ * Normalize a view-DDL batch into the bare `CREATE VIEW …` form dedicated SQL
+ * pool / Fabric Warehouse accept. The unsupported `OR ALTER` is stripped (we
+ * already DROP the view in a preceding batch, so plain CREATE is idempotent).
+ * A no-op for a batch that is already bare `CREATE VIEW`.
+ */
+function normalizeCreateView(batch: string): string {
+  return batch.replace(/^\s*CREATE\s+OR\s+ALTER\s+VIEW\b/i, 'CREATE VIEW');
 }
 
 interface SampleRowsEntry {
@@ -372,10 +405,11 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
           const bare = vn.replace(/^\[|\]$/g, '').replace(/'/g, "''");
           batches.push(`IF OBJECT_ID(N'${bare}', N'V') IS NOT NULL DROP VIEW ${vn};`);
         }
-        batches.push(raw); // CREATE VIEW alone in its own batch
+        // Bare CREATE VIEW (OR ALTER stripped) alone in its own batch.
+        batches.push(normalizeCreateView(raw));
         continue;
       }
-      batches.push(makeCreateSchemaIdempotent(makeCreateTableIdempotent(raw)));
+      batches.push(makeAddConstraintIdempotent(makeCreateSchemaIdempotent(makeCreateTableIdempotent(raw))));
     }
     let resumedMidLoop = false;
     for (const sql of batches) {
