@@ -165,64 +165,74 @@ CREATE TABLE onboarding.OnboardingTask (
     CONSTRAINT PK_OnboardingTask PRIMARY KEY NONCLUSTERED (TaskId) NOT ENFORCED
 )
 END;
-GO
-
--- Seed: one fully-onboarded department + three agency DLZs at different
--- lifecycle stages, with their peering / scan / checklist rows. Each INSERT
--- is guarded so re-install / shared-pool backing never double-seeds.
-IF NOT EXISTS (SELECT 1 FROM onboarding.Department WHERE DepartmentId = 1)
-INSERT INTO onboarding.Department
-    (DepartmentId, DepartmentName, EntraTenantId, AdminPlaneSubId, AdminPlaneRegion, CloudBoundary, DeploymentMode, DepartmentCdoEmail)
-VALUES
-    (1, 'Department of Mission Affairs', '11111111-1111-1111-1111-111111111111', 'aaaa0000-0000-0000-0000-00000000aaaa', 'usgovvirginia', 'gcc-high', 'multi-sub', 'cdo@mission-affairs.gov');
-GO
-
-IF NOT EXISTS (SELECT 1 FROM onboarding.AgencyDlz WHERE DlzId IN (101, 102, 103))
-INSERT INTO onboarding.AgencyDlz
-    (DlzId, DepartmentId, AgencyName, MissionDomain, SubscriptionId, Region, SpokeVnetCidr, CapacitySku, DomainStewardGroupId, DomainStewardGroupName, WorkspaceIdentityConv, OnboardingPattern, Status, RequestedUtc, DeployedUtc)
-VALUES
-    (101, 1, 'Mission Operations', 'Mission Operations', 'bbbb1111-1111-1111-1111-1111111111bb', 'usgovvirginia', '10.20.0.0/16', 'F64', 'd1111111-1111-1111-1111-111111111111', 'Stewards-MissionOps', 'mi-\${domain}-\${workspace}', 'A-dept-many-agencies', 'active',    '2026-05-10T13:00:00Z', '2026-05-10T13:34:00Z'),
-    (102, 1, 'Field Services',     'Field Services',     'cccc2222-2222-2222-2222-2222222222cc', 'usgovtexas',    '10.21.0.0/16', 'F32', 'd2222222-2222-2222-2222-222222222222', 'Stewards-FieldSvc',   'mi-\${domain}-\${workspace}', 'A-dept-many-agencies', 'deploying','2026-05-31T09:15:00Z', NULL),
-    (103, 1, 'Inspector General',  'Oversight',          'dddd3333-3333-3333-3333-3333333333dd', 'usgovvirginia', '10.22.0.0/16', 'F8',  'd3333333-3333-3333-3333-333333333333', 'Stewards-IG',         'mi-\${domain}-\${workspace}', 'B-joint-program',      'queued',   '2026-05-31T16:40:00Z', NULL);
-GO
-
-IF NOT EXISTS (SELECT 1 FROM onboarding.VnetPeering WHERE PeeringId IN (1, 2))
-INSERT INTO onboarding.VnetPeering
-    (PeeringId, DlzId, HubVnetResourceId, SpokeVnetResourceId, PeeringState, AllowForwardedTraffic, UseRemoteGateways, CheckedUtc)
-VALUES
-    (1, 101, '/subscriptions/aaaa0000-0000-0000-0000-00000000aaaa/resourceGroups/rg-adminplane-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub', '/subscriptions/bbbb1111-1111-1111-1111-1111111111bb/resourceGroups/rg-dlz-missionops/providers/Microsoft.Network/virtualNetworks/vnet-spoke', 'Connected',   1, 1, '2026-05-31T17:00:00Z'),
-    (2, 102, '/subscriptions/aaaa0000-0000-0000-0000-00000000aaaa/resourceGroups/rg-adminplane-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub', '/subscriptions/cccc2222-2222-2222-2222-2222222222cc/resourceGroups/rg-dlz-fieldsvc/providers/Microsoft.Network/virtualNetworks/vnet-spoke',  'Initiated',   1, 0, '2026-05-31T17:00:00Z');
-GO
-
-IF NOT EXISTS (SELECT 1 FROM onboarding.CatalogScanRegistration WHERE ScanId IN (1, 2, 3))
-INSERT INTO onboarding.CatalogScanRegistration
-    (ScanId, DlzId, AdlsAccountName, ScanRuleSet, ScheduleCron, LastRunUtc, LastRunStatus, AssetsDiscovered)
-VALUES
-    (1, 101, 'stmissionopsbronze', 'AdlsGen2', '0 2 * * *', '2026-05-31T02:00:00Z', 'Succeeded', 1842),
-    (2, 101, 'stmissionopsgold',   'AdlsGen2', '0 3 * * *', '2026-05-31T03:00:00Z', 'Succeeded',  311),
-    (3, 102, 'stfieldsvcbronze',   'AdlsGen2', '0 2 * * *', NULL,                   NULL,        NULL);
-GO
-
-IF NOT EXISTS (SELECT 1 FROM onboarding.OnboardingTask WHERE TaskId BETWEEN 1 AND 15)
-INSERT INTO onboarding.OnboardingTask
-    (TaskId, DlzId, Phase, StepName, OwnerRole, Status, CompletedUtc, Notes)
-VALUES
-    (1, 102, 'prerequisite', 'Procure new Azure subscription for agency',           'Procurement',    'done',    '2026-05-29T12:00:00Z', 'Sub cccc2222 created under dept tenant'),
-    (2, 102, 'prerequisite', 'Confirm single Entra tenant (no cross-tenant multi-sub)','Loom Admin',    'done',    '2026-05-29T12:10:00Z', 'Tenant 11111111 verified'),
-    (3, 102, 'prerequisite', 'Pick non-overlapping /16 CIDR (10.21.0.0/16)',          'Loom Admin',    'done',    '2026-05-29T12:20:00Z', 'No overlap with hub 10.0.0.0/16 or 10.20.0.0/16'),
-    (4, 102, 'prerequisite', 'Domain Stewards Entra group created',                   'Domain Steward','done',    '2026-05-29T13:00:00Z', 'Stewards-FieldSvc d2222222'),
-    (5, 102, 'procedure',    'Setup Wizard: Add Data Landing Zone interview',         'Loom Admin',    'done',    '2026-05-31T09:10:00Z', NULL),
-    (6, 102, 'procedure',    'Render + confirm .bicepparam',                          'Loom Admin',    'done',    '2026-05-31T09:14:00Z', NULL),
-    (7, 102, 'procedure',    'PIM-for-Groups activate Contributor on new sub',        'MCP',           'done',    '2026-05-31T09:15:00Z', 'eligibilityScheduleRequest selfActivate 8h'),
-    (8, 102, 'procedure',    'Submit Bicep sub deployment (~25-40 min)',              'MCP',           'doing',   NULL,                   'az deployment sub create in progress'),
-    (9, 102, 'validation',   'New DLZ visible in Workspaces pane',                    'Loom Admin',    'todo',    NULL,                   NULL),
-    (10,102, 'validation',   'VNet peering hub<->spoke Connected',                    'Loom Admin',    'doing',   NULL,                   'Peering state Initiated'),
-    (11,102, 'validation',   'Catalog scans registered for DLZ ADLS accounts',        'Loom Admin',    'todo',    NULL,                   NULL),
-    (12,102, 'validation',   'Smoke test: create ws, ingest sample, run query',       'Loom Admin',    'todo',    NULL,                   NULL),
-    (13,102, 'handoff',      'Add agency-specific Workspace Admin groups',            'Domain Steward','todo',    NULL,                   NULL),
-    (14,102, 'handoff',      'Set per-agency OAP (Outbound Access Protection) rules', 'Domain Steward','todo',    NULL,                   NULL),
-    (15,102, 'handoff',      'Document per-agency cost allocation',                   'Domain Steward','todo',    NULL,                   NULL);
 GO`;
+
+// ─── Warehouse seed rows (structured) ───────────────────────────────────
+// Synapse dedicated SQL pool does NOT support the multi-row table value
+// constructor (INSERT … VALUES (..),(..) → "Incorrect syntax near ','";
+// Microsoft Learn: "Table value constructor is not supported in Azure
+// Synapse Analytics"). The raw embedded INSERTs that used to live in
+// WAREHOUSE_DDL are therefore moved here into the structured sampleRows
+// mechanism so warehouse.ts emits a backend-correct seed and verifies with
+// a COUNT. The provisioner skips tables that already hold rows, so this is
+// idempotent across re-install (replaces the old IF NOT EXISTS guards).
+//   https://learn.microsoft.com/sql/t-sql/statements/insert-transact-sql#arguments
+const WAREHOUSE_SAMPLE_ROWS: { table: string; columns?: string[]; rows: any[][] }[] = [
+  {
+    table: 'onboarding.Department',
+    columns: ['DepartmentId', 'DepartmentName', 'EntraTenantId', 'AdminPlaneSubId', 'AdminPlaneRegion', 'CloudBoundary', 'DeploymentMode', 'DepartmentCdoEmail'],
+    rows: [
+      [1, 'Department of Mission Affairs', '11111111-1111-1111-1111-111111111111', 'aaaa0000-0000-0000-0000-00000000aaaa', 'usgovvirginia', 'gcc-high', 'multi-sub', 'cdo@mission-affairs.gov'],
+    ],
+  },
+  {
+    table: 'onboarding.AgencyDlz',
+    columns: ['DlzId', 'DepartmentId', 'AgencyName', 'MissionDomain', 'SubscriptionId', 'Region', 'SpokeVnetCidr', 'CapacitySku', 'DomainStewardGroupId', 'DomainStewardGroupName', 'WorkspaceIdentityConv', 'OnboardingPattern', 'Status', 'RequestedUtc', 'DeployedUtc'],
+    rows: [
+      [101, 1, 'Mission Operations', 'Mission Operations', 'bbbb1111-1111-1111-1111-1111111111bb', 'usgovvirginia', '10.20.0.0/16', 'F64', 'd1111111-1111-1111-1111-111111111111', 'Stewards-MissionOps', 'mi-${domain}-${workspace}', 'A-dept-many-agencies', 'active', '2026-05-10T13:00:00Z', '2026-05-10T13:34:00Z'],
+      [102, 1, 'Field Services', 'Field Services', 'cccc2222-2222-2222-2222-2222222222cc', 'usgovtexas', '10.21.0.0/16', 'F32', 'd2222222-2222-2222-2222-222222222222', 'Stewards-FieldSvc', 'mi-${domain}-${workspace}', 'A-dept-many-agencies', 'deploying', '2026-05-31T09:15:00Z', null],
+      [103, 1, 'Inspector General', 'Oversight', 'dddd3333-3333-3333-3333-3333333333dd', 'usgovvirginia', '10.22.0.0/16', 'F8', 'd3333333-3333-3333-3333-333333333333', 'Stewards-IG', 'mi-${domain}-${workspace}', 'B-joint-program', 'queued', '2026-05-31T16:40:00Z', null],
+    ],
+  },
+  {
+    table: 'onboarding.VnetPeering',
+    columns: ['PeeringId', 'DlzId', 'HubVnetResourceId', 'SpokeVnetResourceId', 'PeeringState', 'AllowForwardedTraffic', 'UseRemoteGateways', 'CheckedUtc'],
+    rows: [
+      [1, 101, '/subscriptions/aaaa0000-0000-0000-0000-00000000aaaa/resourceGroups/rg-adminplane-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub', '/subscriptions/bbbb1111-1111-1111-1111-1111111111bb/resourceGroups/rg-dlz-missionops/providers/Microsoft.Network/virtualNetworks/vnet-spoke', 'Connected', 1, 1, '2026-05-31T17:00:00Z'],
+      [2, 102, '/subscriptions/aaaa0000-0000-0000-0000-00000000aaaa/resourceGroups/rg-adminplane-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub', '/subscriptions/cccc2222-2222-2222-2222-2222222222cc/resourceGroups/rg-dlz-fieldsvc/providers/Microsoft.Network/virtualNetworks/vnet-spoke', 'Initiated', 1, 0, '2026-05-31T17:00:00Z'],
+    ],
+  },
+  {
+    table: 'onboarding.CatalogScanRegistration',
+    columns: ['ScanId', 'DlzId', 'AdlsAccountName', 'ScanRuleSet', 'ScheduleCron', 'LastRunUtc', 'LastRunStatus', 'AssetsDiscovered'],
+    rows: [
+      [1, 101, 'stmissionopsbronze', 'AdlsGen2', '0 2 * * *', '2026-05-31T02:00:00Z', 'Succeeded', 1842],
+      [2, 101, 'stmissionopsgold', 'AdlsGen2', '0 3 * * *', '2026-05-31T03:00:00Z', 'Succeeded', 311],
+      [3, 102, 'stfieldsvcbronze', 'AdlsGen2', '0 2 * * *', null, null, null],
+    ],
+  },
+  {
+    table: 'onboarding.OnboardingTask',
+    columns: ['TaskId', 'DlzId', 'Phase', 'StepName', 'OwnerRole', 'Status', 'CompletedUtc', 'Notes'],
+    rows: [
+      [1, 102, 'prerequisite', 'Procure new Azure subscription for agency', 'Procurement', 'done', '2026-05-29T12:00:00Z', 'Sub cccc2222 created under dept tenant'],
+      [2, 102, 'prerequisite', 'Confirm single Entra tenant (no cross-tenant multi-sub)', 'Loom Admin', 'done', '2026-05-29T12:10:00Z', 'Tenant 11111111 verified'],
+      [3, 102, 'prerequisite', 'Pick non-overlapping /16 CIDR (10.21.0.0/16)', 'Loom Admin', 'done', '2026-05-29T12:20:00Z', 'No overlap with hub 10.0.0.0/16 or 10.20.0.0/16'],
+      [4, 102, 'prerequisite', 'Domain Stewards Entra group created', 'Domain Steward', 'done', '2026-05-29T13:00:00Z', 'Stewards-FieldSvc d2222222'],
+      [5, 102, 'procedure', 'Setup Wizard: Add Data Landing Zone interview', 'Loom Admin', 'done', '2026-05-31T09:10:00Z', null],
+      [6, 102, 'procedure', 'Render + confirm .bicepparam', 'Loom Admin', 'done', '2026-05-31T09:14:00Z', null],
+      [7, 102, 'procedure', 'PIM-for-Groups activate Contributor on new sub', 'MCP', 'done', '2026-05-31T09:15:00Z', 'eligibilityScheduleRequest selfActivate 8h'],
+      [8, 102, 'procedure', 'Submit Bicep sub deployment (~25-40 min)', 'MCP', 'doing', null, 'az deployment sub create in progress'],
+      [9, 102, 'validation', 'New DLZ visible in Workspaces pane', 'Loom Admin', 'todo', null, null],
+      [10, 102, 'validation', 'VNet peering hub<->spoke Connected', 'Loom Admin', 'doing', null, 'Peering state Initiated'],
+      [11, 102, 'validation', 'Catalog scans registered for DLZ ADLS accounts', 'Loom Admin', 'todo', null, null],
+      [12, 102, 'validation', 'Smoke test: create ws, ingest sample, run query', 'Loom Admin', 'todo', null, null],
+      [13, 102, 'handoff', 'Add agency-specific Workspace Admin groups', 'Domain Steward', 'todo', null, null],
+      [14, 102, 'handoff', 'Set per-agency OAP (Outbound Access Protection) rules', 'Domain Steward', 'todo', null, null],
+      [15, 102, 'handoff', 'Document per-agency cost allocation', 'Domain Steward', 'todo', null, null],
+    ],
+  },
+];
 
 // ─── Notebook cells: DLZ Onboarding Orchestrator ────────────────────────
 // Real, runnable cells implementing the Setup-Wizard / MCP path:
@@ -763,6 +773,7 @@ const bundle: AppBundle = {
       content: {
         kind: 'warehouse',
         ddl: WAREHOUSE_DDL,
+        sampleRows: WAREHOUSE_SAMPLE_ROWS,
         starterQueries: [
           {
             name: 'Onboarding funnel (count by status)',

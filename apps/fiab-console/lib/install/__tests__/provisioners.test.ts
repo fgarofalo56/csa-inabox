@@ -140,7 +140,13 @@ describe('notebookProvisioner', () => {
     expect(r.gate?.remediation).toMatch(/Contributor/i);
   });
 
-  it('returns remediation when no Fabric workspace bound', async () => {
+  it('returns remediation when no notebook backend configured at all', async () => {
+    // No Fabric workspace bound AND no Azure-native fallback (Synapse/Databricks)
+    // configured — the only honest outcome is the combined remediation gate.
+    // ENV_SHARED sets LOOM_SYNAPSE_WORKSPACE by default, so clear the fallback
+    // env vars here to exercise the truly-unconfigured path.
+    delete process.env.LOOM_SYNAPSE_WORKSPACE;
+    delete process.env.LOOM_DATABRICKS_HOSTNAME;
     const { notebookProvisioner } = await import('../provisioners/notebook');
     const r = await notebookProvisioner({
       session: baseSession,
@@ -153,6 +159,27 @@ describe('notebookProvisioner', () => {
     });
     expect(r.status).toBe('remediation');
     expect(r.gate?.remediation).toMatch(/LOOM_DEFAULT_FABRIC_WORKSPACE/);
+  });
+
+  it('falls back to Synapse notebook artifact when no Fabric workspace bound', async () => {
+    // LOOM_SYNAPSE_WORKSPACE is set by ENV_SHARED, so a shared-mode target with
+    // no Fabric workspace must import into Synapse (real dev-plane PUT), not gate.
+    const { calls } = captureFetch([
+      { status: 200, body: { name: 'X', id: 'syn:nb/X' } }, // PUT /notebooks
+    ]);
+    const { notebookProvisioner } = await import('../provisioners/notebook');
+    const r = await notebookProvisioner({
+      session: baseSession,
+      target: { mode: 'shared' },
+      cosmosItemId: 'c1',
+      workspaceId: 'lw1',
+      displayName: 'X',
+      content: { defaultLang: 'pyspark', cells: [] },
+      appId: 'a',
+    });
+    expect(r.status).toBe('created');
+    expect(r.secondaryIds?.backend).toBe('synapse');
+    expect(calls.some((c) => c.url.includes('.dev.azuresynapse.net'))).toBe(true);
   });
 });
 

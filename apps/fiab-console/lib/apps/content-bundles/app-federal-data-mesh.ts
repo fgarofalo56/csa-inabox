@@ -382,40 +382,48 @@ CREATE TABLE federation.AccessRequests (
     expires_at         DATETIME2    NULL,
     CONSTRAINT pk_requests PRIMARY KEY NONCLUSTERED (request_id) NOT ENFORCED
 );
-GO
-
--- Seed: 4 agency domains across mixed audit boundaries (doc: FedRAMP-H / IL4 / IL5).
--- Guarded so a Retry / re-install never double-seeds.
-IF NOT EXISTS (SELECT 1 FROM federation.Domains)
-INSERT INTO federation.Domains
-    (domain_code, domain_name, subscription_id, region, audit_boundary, domain_steward_grp, onboarded_at)
-VALUES
- ('agency-a','Agency A','11111111-1111-1111-1111-111111111111','usgovvirginia','IL4','grp-agency-a-stewards','2026-01-12T00:00:00'),
- ('agency-b','Agency B','22222222-2222-2222-2222-222222222222','usgovvirginia','IL4','grp-agency-b-stewards','2026-02-03T00:00:00'),
- ('agency-c','Agency C','33333333-3333-3333-3333-333333333333','usgovtexas','FedRAMP-H','grp-agency-c-stewards','2026-03-18T00:00:00'),
- ('agency-n','Agency N','44444444-4444-4444-4444-444444444444','usgovarizona','IL5','grp-agency-n-stewards','2026-04-27T00:00:00');
-GO
-
--- Seed: 4 published data products (one per domain).
-IF NOT EXISTS (SELECT 1 FROM federation.DataProducts)
-INSERT INTO federation.DataProducts
-    (product_id, product_name, owner_domain, classification, endorsement, share_name, published_at)
-VALUES
- ('dp-a-perf','Agency Performance Metrics','agency-a','CUI','certified','agency_a_performance','2026-04-01T00:00:00'),
- ('dp-b-grants','Grant Disbursement Facts','agency-b','CUI','promoted','agency_b_grants','2026-04-08T00:00:00'),
- ('dp-c-bene','Beneficiary Outcomes (de-identified)','agency-c','Restricted-PHI','certified','agency_c_outcomes','2026-04-15T00:00:00'),
- ('dp-n-intel','Mission Readiness Indicators','agency-n','CUI-NSS','certified','agency_n_readiness','2026-05-02T00:00:00');
-GO
-
--- Seed: the doc's worked example (Agency B requests Agency A's product, 90-day window).
-IF NOT EXISTS (SELECT 1 FROM federation.AccessRequests)
-INSERT INTO federation.AccessRequests
-    (request_id, product_id, requesting_domain, requested_by, use_case, status, decided_by, window_days, requested_at, decided_at, expires_at)
-VALUES
- ('req-0001','dp-a-perf','agency-b','workspace-admin-b@dept.gov','Cross-agency dashboards','approved','agency-a-domain-steward@dept.gov',90,'2026-05-20T14:02:00','2026-05-20T16:40:00','2026-08-18T16:40:00'),
- ('req-0002','dp-c-bene','agency-b','analyst-b@dept.gov','Outcome benchmarking','pending',NULL,NULL,'2026-05-29T09:15:00',NULL,NULL),
- ('req-0003','dp-a-perf','agency-c','steward-c@dept.gov','Inter-agency KPI rollup','denied','agency-a-domain-steward@dept.gov',NULL,'2026-05-22T11:00:00','2026-05-23T08:30:00',NULL);
 GO`;
+
+// ─── Warehouse seed rows (structured) ───────────────────────────────────
+// Synapse dedicated SQL pool rejects the multi-row table value constructor
+// (INSERT … VALUES (..),(..) → "Incorrect syntax near ','"; Microsoft Learn:
+// "Table value constructor is not supported in Azure Synapse Analytics").
+// The raw embedded INSERTs that used to live in WAREHOUSE_DDL are moved here
+// into the structured sampleRows mechanism so warehouse.ts emits a
+// backend-correct seed + COUNT verify, and skips already-seeded tables on
+// re-install (idempotent — replaces the old IF NOT EXISTS guards).
+//   https://learn.microsoft.com/sql/t-sql/statements/insert-transact-sql#arguments
+const WAREHOUSE_SAMPLE_ROWS: { table: string; columns?: string[]; rows: any[][] }[] = [
+  {
+    table: 'federation.Domains',
+    columns: ['domain_code', 'domain_name', 'subscription_id', 'region', 'audit_boundary', 'domain_steward_grp', 'onboarded_at'],
+    rows: [
+      ['agency-a', 'Agency A', '11111111-1111-1111-1111-111111111111', 'usgovvirginia', 'IL4', 'grp-agency-a-stewards', '2026-01-12T00:00:00'],
+      ['agency-b', 'Agency B', '22222222-2222-2222-2222-222222222222', 'usgovvirginia', 'IL4', 'grp-agency-b-stewards', '2026-02-03T00:00:00'],
+      ['agency-c', 'Agency C', '33333333-3333-3333-3333-333333333333', 'usgovtexas', 'FedRAMP-H', 'grp-agency-c-stewards', '2026-03-18T00:00:00'],
+      ['agency-n', 'Agency N', '44444444-4444-4444-4444-444444444444', 'usgovarizona', 'IL5', 'grp-agency-n-stewards', '2026-04-27T00:00:00'],
+    ],
+  },
+  {
+    table: 'federation.DataProducts',
+    columns: ['product_id', 'product_name', 'owner_domain', 'classification', 'endorsement', 'share_name', 'published_at'],
+    rows: [
+      ['dp-a-perf', 'Agency Performance Metrics', 'agency-a', 'CUI', 'certified', 'agency_a_performance', '2026-04-01T00:00:00'],
+      ['dp-b-grants', 'Grant Disbursement Facts', 'agency-b', 'CUI', 'promoted', 'agency_b_grants', '2026-04-08T00:00:00'],
+      ['dp-c-bene', 'Beneficiary Outcomes (de-identified)', 'agency-c', 'Restricted-PHI', 'certified', 'agency_c_outcomes', '2026-04-15T00:00:00'],
+      ['dp-n-intel', 'Mission Readiness Indicators', 'agency-n', 'CUI-NSS', 'certified', 'agency_n_readiness', '2026-05-02T00:00:00'],
+    ],
+  },
+  {
+    table: 'federation.AccessRequests',
+    columns: ['request_id', 'product_id', 'requesting_domain', 'requested_by', 'use_case', 'status', 'decided_by', 'window_days', 'requested_at', 'decided_at', 'expires_at'],
+    rows: [
+      ['req-0001', 'dp-a-perf', 'agency-b', 'workspace-admin-b@dept.gov', 'Cross-agency dashboards', 'approved', 'agency-a-domain-steward@dept.gov', 90, '2026-05-20T14:02:00', '2026-05-20T16:40:00', '2026-08-18T16:40:00'],
+      ['req-0002', 'dp-c-bene', 'agency-b', 'analyst-b@dept.gov', 'Outcome benchmarking', 'pending', null, null, '2026-05-29T09:15:00', null, null],
+      ['req-0003', 'dp-a-perf', 'agency-c', 'steward-c@dept.gov', 'Inter-agency KPI rollup', 'denied', 'agency-a-domain-steward@dept.gov', null, '2026-05-22T11:00:00', '2026-05-23T08:30:00', null],
+    ],
+  },
+];
 
 const WH_Q_PENDING = `-- Pending cross-domain access requests awaiting a Domain Steward decision.
 SELECT r.request_id, p.product_name, p.owner_domain, r.requesting_domain,
@@ -726,6 +734,7 @@ const bundle: AppBundle = {
       content: {
         kind: 'warehouse',
         ddl: WAREHOUSE_DDL,
+        sampleRows: WAREHOUSE_SAMPLE_ROWS,
         starterQueries: [
           { name: 'Pending access requests', sql: WH_Q_PENDING },
           { name: 'Active grants (days remaining)', sql: WH_Q_ACTIVE },
