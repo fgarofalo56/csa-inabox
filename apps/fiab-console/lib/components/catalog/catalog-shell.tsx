@@ -20,14 +20,28 @@ const SECTIONS = [
 ];
 
 const useStyles = makeStyles({
-  layout: { display: 'grid', gridTemplateColumns: '280px 1fr', gap: 24, minHeight: '60vh' },
+  layout: {
+    display: 'grid',
+    gridTemplateColumns: '280px 1fr',
+    gap: tokens.spacingHorizontalXXL,
+    minHeight: '60vh',
+  },
   sidebar: {
-    display: 'flex', flexDirection: 'column', gap: 2,
-    borderRight: `1px solid ${tokens.colorNeutralStroke2}`, paddingRight: 12,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+    paddingRight: tokens.spacingHorizontalM,
   },
   item: {
-    display: 'flex', flexDirection: 'column', gap: 2,
-    padding: '10px 12px', borderRadius: 6,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    paddingTop: tokens.spacingVerticalS,
+    paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
     color: tokens.colorNeutralForeground1,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
     textDecoration: 'none',
@@ -35,10 +49,21 @@ const useStyles = makeStyles({
   itemActive: {
     backgroundColor: tokens.colorBrandBackground2,
     color: tokens.colorBrandForeground1,
-    fontWeight: 600,
+    fontWeight: tokens.fontWeightSemibold,
   },
-  desc: { fontSize: 12, color: tokens.colorNeutralForeground3, fontWeight: 400 },
+  desc: {
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    color: tokens.colorNeutralForeground3,
+    fontWeight: tokens.fontWeightRegular,
+  },
   body: { minWidth: 0 },
+  sectionHead: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: tokens.spacingHorizontalM,
+    marginBottom: tokens.spacingVerticalL,
+  },
 });
 
 export function CatalogShell({ sectionTitle, sectionBadge, children }: { sectionTitle?: string; sectionBadge?: string; children: ReactNode }) {
@@ -63,7 +88,7 @@ export function CatalogShell({ sectionTitle, sectionBadge, children }: { section
         </nav>
         <div className={s.body}>
           {sectionTitle && (
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 16 }}>
+            <div className={s.sectionHead}>
               <Title3 as="h2">{sectionTitle}</Title3>
               {sectionBadge && <Badge appearance="outline" color="brand">{sectionBadge}</Badge>}
             </div>
