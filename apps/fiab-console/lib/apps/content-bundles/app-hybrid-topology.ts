@@ -491,7 +491,7 @@ union
 // ─── Bundle ─────────────────────────────────────────────────────────────────
 
 const bundle: AppBundle = {
-  appId: 'hybrid-topology',
+  appId: 'app-hybrid-topology',
   intro:
     '## Hybrid Fabric Commercial + CSA Loom Gov\n\n' +
     'The **most-likely federal pattern**: Microsoft **Fabric** (full SaaS) in ' +

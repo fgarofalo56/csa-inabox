@@ -423,7 +423,7 @@ WHERE pd.audit_boundary <> cd.audit_boundary;`;
 // ─── Bundle ───────────────────────────────────────────────────────────────
 
 const bundle: AppBundle = {
-  appId: 'federal-data-mesh',
+  appId: 'app-federal-data-mesh',
   intro:
     '## Federal Data Mesh\n\n' +
     'A federal department running multiple agencies as **autonomous domains** ' +

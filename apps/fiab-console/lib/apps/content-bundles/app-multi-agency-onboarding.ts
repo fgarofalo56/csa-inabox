@@ -678,7 +678,7 @@ const PIPELINE_ACTIVITIES = [
 // ─── Semantic Model + Report measures ───────────────────────────────────
 
 const bundle: AppBundle = {
-  appId: 'multi-agency-onboarding',
+  appId: 'app-multi-agency-onboarding',
   intro:
     '# Multi-Agency Onboarding\n\n' +
     'The operational + governance analytics estate for onboarding additional ' +

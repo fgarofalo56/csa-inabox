@@ -486,7 +486,7 @@ const TILE_ERROR_PIE =
 // ════════════════════════════════════════════════════════════════════════
 
 const bundle: AppBundle = {
-  appId: 'azure-realtime-analytics',
+  appId: 'app-azure-realtime-analytics',
   intro:
     '## Azure Real-Time Analytics — Kafka/Event Hubs → Databricks → Delta → Power BI\n\n' +
     'The full enterprise real-time analytics reference architecture, ' +

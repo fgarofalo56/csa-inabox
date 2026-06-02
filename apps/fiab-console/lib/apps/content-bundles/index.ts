@@ -30,7 +30,10 @@ import mlPipeline from './app-ml-pipeline';
 import multiAgencyOnboarding from './app-multi-agency-onboarding';
 import azureRealtimeAnalytics from './app-azure-realtime-analytics';
 import sovereignAiAgents from './app-sovereign-ai-agents';
-import logicAppsIntegration from './app-app-logic-apps-integration';
+import logicAppsIntegration from './app-logic-apps-integration';
+import dataGovernance from './app-data-governance';
+import realTimeDashboards from './app-real-time-dashboards';
+import hybridTopology from './app-hybrid-topology';
 
 const REGISTRY: Record<string, AppBundle> = {
   [casinoAnalytics.appId]: casinoAnalytics,
@@ -51,6 +54,9 @@ const REGISTRY: Record<string, AppBundle> = {
   [azureRealtimeAnalytics.appId]: azureRealtimeAnalytics,
   [sovereignAiAgents.appId]: sovereignAiAgents,
   [logicAppsIntegration.appId]: logicAppsIntegration,
+  [dataGovernance.appId]: dataGovernance,
+  [realTimeDashboards.appId]: realTimeDashboards,
+  [hybridTopology.appId]: hybridTopology,
 };
 
 export function getBundle(appId: string): AppBundle | undefined {

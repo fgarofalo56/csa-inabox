@@ -564,7 +564,7 @@ const TILE_OP_TABLE = `CosmosDBRequests
 // ─── Bundle ──────────────────────────────────────────────────────────────
 
 const bundle: AppBundle = {
-  appId: 'change-feed-processor',
+  appId: 'app-change-feed-processor',
   intro:
     '# Change Feed Processor\n\n' +
     'Event-driven data synchronization on the **Azure Cosmos DB change feed**. ' +

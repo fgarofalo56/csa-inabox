@@ -469,7 +469,7 @@ const WAREHOUSE_DDL = [
 // ════════════════════════════════════════════════════════════════════════
 
 const bundle: AppBundle = {
-  appId: 'ml-pipeline',
+  appId: 'app-ml-pipeline',
   intro:
     '## ML Pipeline — End-to-end MLOps (Databricks + Azure ML)\n\n' +
     'A complete customer-churn MLOps loop, materialized as a Loom workspace:\n\n' +
