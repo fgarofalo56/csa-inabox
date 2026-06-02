@@ -175,47 +175,34 @@ jobs:
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
               "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
             }
-      - name: Get ACR admin credentials
-        id: acr_creds
-        run: |
-          ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
-          echo "::add-mask::$(az acr credential show --name "$ACR_NAME" --query 'passwords[0].value' -o tsv)"
-          echo "user=$(az acr credential show --name "$ACR_NAME" --query username -o tsv)" >> "$GITHUB_OUTPUT"
-          echo "pass=$(az acr credential show --name "$ACR_NAME" --query 'passwords[0].value' -o tsv)" >> "$GITHUB_OUTPUT"
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Docker login (integrates with Buildx)
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ needs.resolve.outputs.acr_login_server }}
-          username: ${{ steps.acr_creds.outputs.user }}
-          password: ${{ steps.acr_creds.outputs.pass }}
-      # Build + push via buildx directly, wrapped in a retry loop. The slowest
-      # image (loom-console) pushes ~10+ min after open-acr ran, and the ACR
-      # firewall intermittently denies the runner's push IP ("client with IP
-      # '…' is not allowed access") — a transient that previously failed the
-      # whole deploy and required a manual `gh run rerun --failed`. Re-assert
-      # the ACR public-access rule from THIS runner and retry up to 3×. SHA is
-      # stamped so /build-marker.txt matches what loom-roll-and-validate probes.
-      - name: Build + push (ACR-flake retry)
+      # Build + push via ACR Tasks (`az acr build`) — the image is built and
+      # pushed SERVER-SIDE inside Azure by ACR, which is a trusted Azure service
+      # (the registry has networkRuleBypassOptions: AzureServices). This works
+      # even though the registry is publicNetworkAccess=Disabled, so it does NOT
+      # depend on the runner's public IP being allow-listed — eliminating the
+      # recurring "client with IP '…' is not allowed access" push failures that
+      # an external private-by-default Azure Policy kept re-triggering by
+      # reverting the temporary public-access toggle mid-build. SHA is stamped so
+      # /build-marker.txt matches what loom-roll-and-validate probes. Retried 3×
+      # for transient ACR Task scheduling hiccups.
+      - name: Build + push via ACR Tasks (az acr build)
         shell: bash
         run: |
           ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
-          SERVER="${{ needs.resolve.outputs.acr_login_server }}"
           APP="${{ matrix.app }}"; CTX="${{ matrix.ctx }}"; TAG="${{ inputs.tag || 'v0.1' }}"
           build() {
-            docker buildx build "$CTX" --file "$CTX/Dockerfile" --push \
-              --tag "$SERVER/$APP:$TAG" --tag "$SERVER/$APP:${{ github.sha }}" --tag "$SERVER/$APP:latest" \
-              --build-arg "LOOM_BUILD_SHA=${{ github.sha }}" --build-arg "LOOM_BUILD_TIMESTAMP=${{ github.run_id }}" \
-              --cache-from "type=gha,scope=$APP" --cache-to "type=gha,mode=max,scope=$APP"
+            az acr build --registry "$ACR_NAME" \
+              --image "$APP:$TAG" --image "$APP:${{ github.sha }}" --image "$APP:latest" \
+              --build-arg "LOOM_BUILD_SHA=${{ github.sha }}" \
+              --build-arg "LOOM_BUILD_TIMESTAMP=${{ github.run_id }}" \
+              --file "$CTX/Dockerfile" "$CTX"
           }
           for attempt in 1 2 3; do
-            if build; then echo "✓ $APP pushed on attempt $attempt"; exit 0; fi
-            echo "::warning::$APP build+push attempt $attempt failed (likely ACR firewall flake) — re-warming ACR + retrying"
-            az acr update --name "$ACR_NAME" --public-network-enabled true --default-action Allow >/dev/null 2>&1 || true
+            if build; then echo "✓ $APP built+pushed by ACR Tasks on attempt $attempt"; exit 0; fi
+            echo "::warning::$APP ACR build attempt $attempt failed — retrying"
             sleep 30
           done
-          echo "::error::$APP build+push failed after 3 attempts"; exit 1
+          echo "::error::$APP ACR build failed after 3 attempts"; exit 1
 
   close-acr:
     name: Re-lock ACR (private endpoint only)
