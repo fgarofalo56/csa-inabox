@@ -12,7 +12,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { debugPipeline } from '@/lib/azure/synapse-dev-client';
+import { debugPipeline, getPipeline } from '@/lib/azure/synapse-dev-client';
 import { resolveBinding, bindingErrorResponse } from '@/lib/azure/pipeline-binding';
 
 export const runtime = 'nodejs';
@@ -29,6 +29,28 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e) {
     const { status, body: errBody } = bindingErrorResponse(e);
     return NextResponse.json(errBody, { status });
+  }
+  // Pre-check the pipeline actually exists in the workspace. A bound name whose
+  // artifact failed to commit during install (or was deleted) otherwise yields
+  // an opaque "Entity <name> not found" 400 from createRun. Surface an
+  // actionable gate instead.
+  try {
+    await getPipeline(pipelineName);
+  } catch (e: any) {
+    const msg = e?.message || String(e);
+    if (/not found|404|does not exist/i.test(msg)) {
+      return NextResponse.json({
+        ok: false,
+        error: `Pipeline '${pipelineName}' is not present in the Synapse workspace.`,
+        hint:
+          `The pipeline's artifact did not commit during install — most often because it references a ` +
+          `dataset / linked service / Spark pool that does not exist in this workspace. Re-run the app ` +
+          `install (which now reports the exact commit error), or open the pipeline in the editor, fix the ` +
+          `unresolved reference, and Save before running Debug.`,
+        boundTo: pipelineName,
+      }, { status: 409 });
+    }
+    // Other errors (auth/network) fall through to the debug attempt below.
   }
   try {
     const res = await debugPipeline(pipelineName, body?.params || {});
