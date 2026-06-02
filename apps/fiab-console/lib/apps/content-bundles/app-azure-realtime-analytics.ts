@@ -1035,9 +1035,16 @@ const bundle: AppBundle = {
             formatString: '\\$#,0.00',
           },
         ],
-        relationships: [
-          { from: 'customer_daily_metrics.product_id', to: 'dim_product.product_id', cardinality: 'many:many' },
-        ],
+        // The gold fact `customer_daily_metrics` is aggregated at the
+        // (user_id, metric_date) grain (see the lakehouse DDL above) and
+        // therefore carries NO product_id column — so it CANNOT relate to
+        // dim_product without breaking the model (TOM rejects a relationship
+        // whose FromColumn doesn't exist). dim_product is published as a
+        // standalone dimension here; a product-grain relationship would
+        // require a separate product-level fact (e.g. gold.product_daily_*).
+        // Every relationship below references a column that exists on both
+        // sides of the join.
+        relationships: [],
       },
     },
 

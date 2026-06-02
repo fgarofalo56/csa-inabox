@@ -357,7 +357,15 @@ const bundle: AppBundle = {
     // ─── Eventhouse / KQL Database: Orders + Regions (seeded) ─────────────
     {
       itemType: 'kql-database',
-      displayName: 'RealTimeOrders Eventhouse',
+      // Single clean token (no spaces / special chars). The kqlDatabaseProvisioner
+      // derives the ARM database name from this displayName via
+      // `displayName.replace(/[^A-Za-z0-9_]/g, '_')`; a name with spaces previously
+      // produced an underscore-laden ARM resource name. Per Microsoft Learn the
+      // Microsoft.Kusto databases ARM name allows alphanumerics/hyphens/spaces/
+      // periods (1-260) — we keep it strictly alphanumeric so the ARM PUT URL and
+      // the data-plane `db` field are unambiguous and round-trip cleanly.
+      //   https://learn.microsoft.com/azure/azure-resource-manager/management/resource-name-rules#microsoftkusto
+      displayName: 'RealTimeOrders',
       description:
         'ADX/Eventhouse database with Orders (typed order events) and Regions ' +
         '(catalog) tables, the parse_orders update function and order_health ' +
@@ -429,28 +437,50 @@ const bundle: AppBundle = {
         ],
         ingestionPolicies: [
           {
-            table: 'Orders',
-            // One control command per line — executed verbatim by the
-            // provisioner (it splits on newline). Syntax grounded in Learn:
-            //  - retention uses .alter-merge (merges into existing policy):
-            //    https://learn.microsoft.com/kusto/management/alter-merge-table-retention-policy-command
-            //  - caching uses .alter (NOT .alter-merge — caching has no merge
-            //    form; `.alter table T policy caching hot = 7d`):
-            //    https://learn.microsoft.com/kusto/management/alter-table-cache-policy-command
-            //  - streamingingestion enable gives the dashboard sub-second
-            //    freshness:
-            //    https://learn.microsoft.com/kusto/management/show-table-streaming-ingestion-policy-command
+            table: 'RawOrders',
+            // RawOrders is the table the Eventstream direct-ingests into, so the
+            // streaming-ingestion policy belongs HERE (on the directly-ingested
+            // source), NOT on Orders. Microsoft Learn (streaming ingestion
+            // policy) is explicit: "If a table doesn't get streaming ingestion
+            // directly, but only via an update policy, no streaming ingestion
+            // policy has to be defined on this table." Orders only receives data
+            // via the RawOrders -> Orders update policy, so giving Orders a
+            // streaming policy is both unnecessary and the kind of mismatched
+            // config that fails on a shared cluster. We use the documented
+            // serialized JSON PolicyObject form ('{"IsEnabled": true}') rather
+            // than the bare `enable` keyword for parity with the proven bundles.
+            //   https://learn.microsoft.com/kusto/management/streaming-ingestion-policy
+            //   https://learn.microsoft.com/kusto/management/alter-table-streaming-ingestion-policy-command
+            // One control command per line — the provisioner splits on newline
+            // and runs each verbatim. RawOrders is a transient landing table, so
+            // we keep only a short soft-delete window (the typed history lives in
+            // Orders); .alter-merge merges into the existing retention policy.
+            //   https://learn.microsoft.com/kusto/management/alter-merge-table-retention-policy-command
             policy:
-              '.alter-merge table Orders policy retention softdelete = 90d\n' +
-              '.alter table Orders policy caching hot = 7d\n' +
-              '.alter table Orders policy streamingingestion enable',
+              '.alter table RawOrders policy streamingingestion \'{"IsEnabled": true}\'\n' +
+              '.alter-merge table RawOrders policy retention softdelete = 1d',
           },
           {
-            table: 'RawOrders',
+            table: 'Orders',
+            // Orders is the typed target. retention uses .alter-merge (merges
+            // into the existing policy object); caching uses .alter with the bare
+            // `hot = <timespan>` form (caching policy has no .alter-merge form).
+            //   https://learn.microsoft.com/kusto/management/alter-merge-table-retention-policy-command
+            //   https://learn.microsoft.com/kusto/management/alter-table-cache-policy-command
+            policy:
+              '.alter-merge table Orders policy retention softdelete = 90d\n' +
+              '.alter table Orders policy caching hot = 7d',
+          },
+          {
+            table: 'Orders',
             // Update policy: every row landed in RawOrders is transformed by
-            // parse_orders() and appended to Orders. transactional=true so a
-            // bad row fails ingestion rather than silently dropping. Grounded
-            // in Learn (update policy):
+            // parse_orders() and appended to Orders. IsTransactional=true so a bad
+            // row fails ingestion rather than silently dropping (Learn: set true
+            // in production). The function's projected schema (event_time,
+            // order_id, region, channel, amount, latency_ms, status) matches the
+            // Orders column names/types/order, as the update-policy command
+            // requires. Single-line serialized array literal via @'...'.
+            //   https://learn.microsoft.com/kusto/management/alter-table-update-policy-command
             //   https://learn.microsoft.com/kusto/management/update-policy
             policy:
               ".alter table Orders policy update " +
