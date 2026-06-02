@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.23.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.22.0...csa-inabox-v0.23.0) (2026-06-02)
+
+
+### Features
+
+* **csa-loom:** complete backlog — studio parity, DAB, Foundry project, MIP/DLP, deploy-planner bicep ([#578](https://github.com/fgarofalo56/csa-inabox/issues/578)) ([62f2fbf](https://github.com/fgarofalo56/csa-inabox/commit/62f2fbf6b7a42bca986b62fc8e9e298eb2730afb))
+
+
+### Bug Fixes
+
+* **ci:** wait for ACR public-access propagation before build matrix ([#576](https://github.com/fgarofalo56/csa-inabox/issues/576)) ([6a75bf7](https://github.com/fgarofalo56/csa-inabox/commit/6a75bf72ee07cd857d54838531b97edc0081bb83))
+
 ## [0.22.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.21.0...csa-inabox-v0.22.0) (2026-06-01)
 
 
