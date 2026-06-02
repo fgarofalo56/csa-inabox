@@ -2247,6 +2247,15 @@ nav:
               - "06 — Mirroring from Cosmos DB to Lakehouse": fiab/tutorials/06-mirroring-cosmos.md
               - "07 — Marketplace data product publishing": fiab/tutorials/07-marketplace-data-product.md
               - "08 — Forward-migrate a Lakehouse to Fabric": fiab/tutorials/08-forward-migrate-to-fabric.md
+          - "Learn — core surfaces":
+              - "Lakehouse shortcuts": fiab/learn/lakehouse-shortcuts.md
+              - "Data pipelines & Mapping Data Flow": fiab/learn/data-pipelines-and-dataflows.md
+              - "Notebooks (Spark)": fiab/learn/notebooks-spark.md
+              - "Warehouse SQL": fiab/learn/warehouse-sql.md
+              - "KQL / Real-time intelligence": fiab/learn/kql-real-time-intelligence.md
+              - "Purview governance (classic Data Map)": fiab/learn/purview-governance.md
+              - "Cosmos Data Explorer": fiab/learn/cosmos-data-explorer.md
+              - "Deployment & BYO": fiab/learn/deployment-and-byo.md
           - Industry Examples:
               - Index: fiab/examples/index.md
               - Retail E2E: fiab/examples/retail-e2e.md

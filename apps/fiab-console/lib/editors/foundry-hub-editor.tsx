@@ -276,6 +276,24 @@ function ModelsPanel({ active, nonce, acct }: { active: boolean; nonce: number; 
   const [dep, reloadDep] = useLazyFetch<{ ok: boolean; account?: any; deployments: ModelDeployment[] }>(`/api/foundry/model-deployments`, active, nonce, acct);
   const [eps] = useLazyFetch<{ ok: boolean; endpoints: any[] }>(`/api/foundry/deployments`, active, nonce);
   const [deployOpen, setDeployOpen] = useState(false);
+  // Delete-deployment flow (confirm dialog → real DELETE ARM call).
+  const [delTarget, setDelTarget] = useState<string | null>(null);
+  const [delBusy, setDelBusy] = useState(false);
+  const [delMsg, setDelMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const doDelete = useCallback(async () => {
+    if (!delTarget) return;
+    setDelBusy(true); setDelMsg(null);
+    try {
+      const url = withAccount(`/api/foundry/model-deployments?name=${encodeURIComponent(delTarget)}`, acct);
+      const r = await fetch(url, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) { setDelMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setDelMsg({ intent: 'success', text: `Deleted deployment "${delTarget}".` });
+      setDelTarget(null);
+      reloadDep();
+    } catch (e: any) { setDelMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setDelBusy(false); }
+  }, [delTarget, acct, reloadDep]);
   if (!active) return null;
   const regModels = Array.isArray(models.data?.models) ? models.data!.models : [];
   const deployments = Array.isArray(dep.data?.deployments) ? dep.data!.deployments : [];
@@ -283,12 +301,27 @@ function ModelsPanel({ active, nonce, acct }: { active: boolean; nonce: number; 
   return (
     <div className={s.pad}>
       <DeployModelDialog open={deployOpen} onClose={() => setDeployOpen(false)} onDeployed={reloadDep} acct={acct} />
+      <Dialog open={!!delTarget} onOpenChange={(_, d) => { if (!d.open) setDelTarget(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Delete deployment</DialogTitle>
+            <DialogContent>
+              <Body1>Permanently delete the model deployment <strong>{delTarget}</strong> from this account? Apps calling this deployment name will start returning 404. This issues a real ARM <code>DELETE</code> on the Cognitive Services deployment.</Body1>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setDelTarget(null)}>Cancel</Button>
+              <Button appearance="primary" disabled={delBusy} onClick={doDelete}>{delBusy ? 'Deleting…' : 'Delete'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
       <div className={s.toolbar}>
         <Subtitle2>Model deployments</Subtitle2>
         <Button appearance="primary" onClick={() => setDeployOpen(true)}>+ Deploy a model</Button>
         <Button onClick={reloadDep}>Reload</Button>
         {dep.data?.account && <Badge appearance="outline">{dep.data.account.name} · {dep.data.account.location}</Badge>}
       </div>
+      {delMsg && <MessageBar intent={delMsg.intent}><MessageBarBody>{delMsg.text}</MessageBarBody></MessageBar>}
       {dep.loading ? <Spinner size="small" /> : dep.error ? <GateBar msg={dep.error} hint={dep.hint} notDeployed={dep.notDeployed} /> : deployments.length === 0 ? (
         <EmptyText>No model deployments yet. Click “Deploy a model”.</EmptyText>
       ) : (
@@ -298,6 +331,7 @@ function ModelsPanel({ active, nonce, acct }: { active: boolean; nonce: number; 
               <TableHeaderCell>Deployment</TableHeaderCell><TableHeaderCell>Model</TableHeaderCell>
               <TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>SKU</TableHeaderCell>
               <TableHeaderCell>Capacity</TableHeaderCell><TableHeaderCell>State</TableHeaderCell>
+              <TableHeaderCell>Actions</TableHeaderCell>
             </TableRow></TableHeader>
             <TableBody>
               {deployments.map((d) => (
@@ -308,6 +342,9 @@ function ModelsPanel({ active, nonce, acct }: { active: boolean; nonce: number; 
                   <TableCell className={s.cell}>{d.skuName || '—'}</TableCell>
                   <TableCell className={s.cell}>{d.capacity ?? '—'}</TableCell>
                   <TableCell className={s.cell}>{d.provisioningState || '—'}</TableCell>
+                  <TableCell className={s.cell}>
+                    <Button size="small" appearance="subtle" onClick={() => { setDelMsg(null); setDelTarget(d.name); }}>Delete</Button>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -737,6 +774,175 @@ function JobsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   );
 }
 
+// ---- Evaluations: list evals → select → list runs; create-eval dialog ----
+
+interface EvalSummary { id: string; name?: string; createdAt?: number; testingCriteria?: unknown; metadata?: Record<string, string> }
+interface EvalRunSummary { id: string; name?: string; status?: string; model?: string; createdAt?: number; resultCounts?: { passed?: number; failed?: number; errored?: number; total?: number }; reportUrl?: string }
+
+function fmtEpoch(s?: number): string {
+  if (!s) return '—';
+  try { return new Date(s * 1000).toLocaleString(); } catch { return String(s); }
+}
+
+function CreateEvalDialog({ open, onClose, onCreated, acct }: { open: boolean; onClose: () => void; onCreated: () => void; acct: FoundryAccount | null }) {
+  const [name, setName] = useState('');
+  const [grader, setGrader] = useState('string_check');
+  const [reference, setReference] = useState('{{item.expected}}');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string; hint?: string } | null>(null);
+
+  const submit = async () => {
+    setBusy(true); setMsg(null);
+    // Minimal but REAL AOAI Evals schema: a custom data source + one grader.
+    // string_check compares model output to a reference field; label_model uses
+    // a model grader. Both are valid testing_criteria per the Evals REST schema.
+    const testingCriteria = grader === 'label_model'
+      ? [{ type: 'label_model', name: 'quality', model: 'gpt-4o-mini', input: [{ role: 'user', content: 'Grade the answer {{sample.output_text}} against {{item.expected}}. Reply pass or fail.' }], labels: ['pass', 'fail'], passing_labels: ['pass'] }]
+      : [{ type: 'string_check', name: 'exact-match', input: '{{sample.output_text}}', reference, operation: 'eq' }];
+    const dataSourceConfig = { type: 'custom', item_schema: { type: 'object', properties: { input: { type: 'string' }, expected: { type: 'string' } } }, include_sample_schema: true };
+    try {
+      const r = await fetch('/api/foundry/evaluations', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), testingCriteria, dataSourceConfig, ...acctBody(acct) }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
+      setMsg({ intent: 'success', text: `Created evaluation "${j.eval?.name || j.eval?.id}".` });
+      onCreated();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Create an evaluation</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <Caption1>Defines an evaluation structure (data schema + a grader). After creating, upload a JSONL dataset and start a run from the Foundry Evaluation surface or the Evals REST API.</Caption1>
+              <Field label="Evaluation name" required><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="qa-accuracy-eval" /></Field>
+              <Field label="Grader (testing criteria)">
+                <Dropdown value={grader} selectedOptions={[grader]} onOptionSelect={(_, d) => d.optionValue && setGrader(d.optionValue)}>
+                  <Option value="string_check">String check (exact / reference match)</Option>
+                  <Option value="label_model">Label model (LLM-graded pass/fail)</Option>
+                </Dropdown>
+              </Field>
+              {grader === 'string_check' && (
+                <Field label="Reference template (compared to sample output)">
+                  <Input value={reference} onChange={(_, d) => setReference(d.value)} placeholder="{{item.expected}}" />
+                </Field>
+              )}
+              {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={onClose}>Close</Button>
+            <Button appearance="primary" disabled={busy || !name.trim()} onClick={submit}>{busy ? 'Creating…' : 'Create'}</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: number; acct: FoundryAccount | null }) {
+  const s = useStyles();
+  const [st, reload] = useLazyFetch<{ ok: boolean; account?: any; evals: EvalSummary[] }>(`/api/foundry/evaluations`, active, nonce, acct);
+  const [selected, setSelected] = useState<EvalSummary | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [runs, setRuns] = useState<{ loading: boolean; list: EvalRunSummary[]; error?: string; hint?: string }>({ loading: false, list: [] });
+
+  const loadRuns = useCallback(async (e: EvalSummary) => {
+    setRuns({ loading: true, list: [] });
+    try {
+      const r = await fetch(withAccount(`/api/foundry/evaluations?evalId=${encodeURIComponent(e.id)}`, acct));
+      const j = await r.json();
+      if (!j.ok) { setRuns({ loading: false, list: [], error: j.error, hint: j.hint }); return; }
+      setRuns({ loading: false, list: Array.isArray(j.runs) ? j.runs : [] });
+    } catch (err: any) { setRuns({ loading: false, list: [], error: err?.message || String(err) }); }
+  }, [acct]);
+
+  // Drop the open eval when the account changes / panel reloads.
+  useEffect(() => { setSelected(null); setRuns({ loading: false, list: [] }); }, [acct, nonce]);
+  useEffect(() => { if (selected) loadRuns(selected); }, [selected, loadRuns]);
+
+  if (!active) return null;
+  const evals = Array.isArray(st.data?.evals) ? st.data!.evals : [];
+
+  return (
+    <div className={s.pad}>
+      <CreateEvalDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreated={reload} acct={acct} />
+      <div className={s.toolbar}>
+        <Subtitle2>Evaluations</Subtitle2>
+        <Button appearance="primary" onClick={() => setCreateOpen(true)}>+ New evaluation</Button>
+        <Button onClick={reload}>Reload</Button>
+        {st.data?.account && <Badge appearance="outline">{st.data.account.name}{st.data.account.location ? ` · ${st.data.account.location}` : ''}</Badge>}
+      </div>
+      <Caption1>Quality, safety and performance evaluations against your deployed models (Azure OpenAI Evals). Select an evaluation to view its grading runs.</Caption1>
+      {st.loading ? <Spinner size="small" /> : st.error ? <GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /> : evals.length === 0 ? (
+        <EmptyText>No evaluations on this account yet. Click “New evaluation”.</EmptyText>
+      ) : (
+        <div className={s.tableWrap}>
+          <Table aria-label="Evaluations" size="small">
+            <TableHeader><TableRow>
+              <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>ID</TableHeaderCell>
+              <TableHeaderCell>Created</TableHeaderCell><TableHeaderCell>Actions</TableHeaderCell>
+            </TableRow></TableHeader>
+            <TableBody>
+              {evals.map((e) => (
+                <TableRow key={e.id} style={{ background: selected?.id === e.id ? tokens.colorNeutralBackground2 : undefined }}>
+                  <TableCell className={s.cell}><strong>{e.name || '(unnamed)'}</strong></TableCell>
+                  <TableCell className={s.cell}>{e.id}</TableCell>
+                  <TableCell className={s.cell}>{fmtEpoch(e.createdAt)}</TableCell>
+                  <TableCell className={s.cell}>
+                    <Button size="small" appearance="subtle" onClick={() => setSelected(e)}>View runs</Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {selected && (
+        <>
+          <Subtitle2 style={{ marginTop: 12 }}>Runs · {selected.name || selected.id}</Subtitle2>
+          {runs.loading ? <Spinner size="small" /> : runs.error ? <GateBar msg={runs.error} hint={runs.hint} /> : runs.list.length === 0 ? (
+            <EmptyText>No runs for this evaluation yet. Start a run with a JSONL dataset via the Evals REST API or the Foundry Evaluation surface.</EmptyText>
+          ) : (
+            <div className={s.tableWrap}>
+              <Table aria-label="Evaluation runs" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Run</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Model</TableHeaderCell><TableHeaderCell>Passed</TableHeaderCell>
+                  <TableHeaderCell>Failed</TableHeaderCell><TableHeaderCell>Total</TableHeaderCell>
+                  <TableHeaderCell>Report</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {runs.list.map((r) => (
+                    <TableRow key={r.id}>
+                      <TableCell className={s.cell}><strong>{r.name || r.id}</strong></TableCell>
+                      <TableCell className={s.cell}>
+                        <Badge appearance="tint" color={r.status === 'completed' ? 'success' : r.status === 'failed' ? 'danger' : 'informative'}>{r.status || '—'}</Badge>
+                      </TableCell>
+                      <TableCell className={s.cell}>{r.model || '—'}</TableCell>
+                      <TableCell className={s.cell}>{r.resultCounts?.passed ?? '—'}</TableCell>
+                      <TableCell className={s.cell}>{r.resultCounts?.failed ?? '—'}</TableCell>
+                      <TableCell className={s.cell}>{r.resultCounts?.total ?? '—'}</TableCell>
+                      <TableCell className={s.cell}>{r.reportUrl ? <a href={r.reportUrl} target="_blank" rel="noopener noreferrer">Open</a> : '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---------- Account picker (drives every tab) ----------
 
 const usePickerStyles = makeStyles({
@@ -864,6 +1070,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
       ]},
       { label: 'Models', actions: [
         { label: 'Models + deployments', onClick: () => setTab('models') },
+        { label: 'Evaluations', onClick: () => setTab('evaluations') },
         { label: 'Quota + deploy gpt-4o-mini', onClick: () => setTab('quota') },
       ]},
     ]},
@@ -901,6 +1108,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
             <Tab value="chat">Chat</Tab>
             <Tab value="connections">Connections</Tab>
             <Tab value="models">Models + endpoints</Tab>
+            <Tab value="evaluations">Evaluations</Tab>
             <Tab value="quota">Quota + usage</Tab>
             <Tab value="networking">Networking</Tab>
             <Tab value="identity">Identity / RBAC</Tab>
@@ -918,6 +1126,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
         <ChatPlaygroundPanel active={tab === 'chat'} nonce={nonce} acct={acct} />
         <ConnectionsPanel active={tab === 'connections'} nonce={nonce} />
         <ModelsPanel active={tab === 'models'} nonce={nonce} acct={acct} />
+        <EvaluationsPanel active={tab === 'evaluations'} nonce={nonce} acct={acct} />
         <QuotaPanel active={tab === 'quota'} nonce={nonce} acct={acct} />
         <NetworkingPanel active={tab === 'networking'} nonce={nonce} acct={acct} />
         <IdentityPanel active={tab === 'identity'} nonce={nonce} acct={acct} />

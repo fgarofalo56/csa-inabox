@@ -153,6 +153,60 @@ param existingFoundryAccountName string = ''
 @description('Resource group of the existing Foundry/AOAI account.')
 param existingFoundryRg string = ''
 
+// ---------- Deploy-planner service toggles ----------
+// Each flag wires a self-contained module under modules/deploy-planner/** that
+// provisions a REAL Azure resource (secure-by-default: Entra-only auth where
+// supported, public blob disabled, TLS 1.2). The deploy-planner catalog
+// (apps/fiab-console/lib/components/deploy-planner/service-catalog.ts) maps its
+// tiles to these flags so the visual plan and `az deployment sub create` stay
+// in sync. All default false — opt-in per plan. Modules deploy into the DLZ RG
+// (single-sub) so they sit alongside the lake + Cosmos data plane.
+
+@description('Deploy an Azure Database for PostgreSQL Flexible Server (Entra-only auth) + starter DB.')
+param postgresEnabled bool = false
+
+@description('Deploy an Azure Database for MySQL Flexible Server + starter DB.')
+param mysqlEnabled bool = false
+
+@description('Deploy an Azure Cache for Redis (Basic C0, Entra auth enabled).')
+param redisEnabled bool = false
+
+@description('Deploy an Azure Event Grid custom topic (local-auth disabled).')
+param eventGridEnabled bool = false
+
+@description('Deploy an Azure Service Bus namespace (Standard, SAS disabled) + starter queue/topic.')
+param serviceBusEnabled bool = false
+
+@description('Deploy an Azure SignalR Service (Standard_S1, AAD-only).')
+param signalrEnabled bool = false
+
+@description('Deploy a Storage Queues account (StorageV2, shared-key disabled) + starter queue.')
+param storageQueuesEnabled bool = false
+
+@description('Deploy a multi-service Azure AI Services (Cognitive Services) account (Entra-only).')
+param aiServicesEnabled bool = false
+
+@description('Deploy a Document Intelligence (FormRecognizer) account (Entra-only).')
+param documentIntelligenceEnabled bool = false
+
+@description('Deploy a Content Safety account (Entra-only).')
+param contentSafetyEnabled bool = false
+
+@description('Deploy an Azure App Service (Linux B1 plan + web app, HTTPS-only).')
+param appServiceEnabled bool = false
+
+@description('Deploy an Azure Functions app (Consumption Linux plan + backing storage).')
+param functionsEnabled bool = false
+
+@description('Deploy an Azure Container Instances group (sample image, start/stop-able).')
+param containerInstancesEnabled bool = false
+
+@description('Deploy an Azure Stream Analytics job (Standard, created Stopped).')
+param streamAnalyticsEnabled bool = false
+
+@description('Deploy an Azure Data Factory (v2) for the ADF editors.')
+param dataFactoryEnabled bool = false
+
 // ---------- User access patterns ----------
 
 @description('Deploy a P2S VPN Gateway (AAD-auth, OpenVPN) in the hub VNet. ~30 min provisioning, ~$30/mo. Default off.')
@@ -348,6 +402,185 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     skipRoleGrants: skipRoleGrants
   }
 }]
+
+// =====================================================================
+// Deploy-planner service toggles (single-sub mode) — each provisions a
+// real, self-contained Azure resource into the DLZ RG when its flag is on.
+// consolePrincipalId wires the Loom Console UAMI so the matching navigator
+// /editor can drive the resource over Entra-only data/control planes.
+// =====================================================================
+
+var dpConsolePrincipalId = adminPlane.outputs.uamiConsolePrincipalId
+
+module dpPostgres 'modules/deploy-planner/postgres.bicep' = if (deploymentMode == 'single-sub' && postgresEnabled) {
+  name: 'dp-postgres'
+  scope: singleDlzRg
+  params: {
+    location: location
+    entraAdminObjectId: dpConsolePrincipalId
+    entraAdminName: adminPlane.outputs.uamiConsoleName
+    complianceTags: complianceTags
+  }
+}
+
+module dpMysql 'modules/deploy-planner/mysql.bicep' = if (deploymentMode == 'single-sub' && mysqlEnabled) {
+  name: 'dp-mysql'
+  scope: singleDlzRg
+  params: {
+    location: location
+    entraAdminObjectId: dpConsolePrincipalId
+    entraAdminName: adminPlane.outputs.uamiConsoleName
+    complianceTags: complianceTags
+  }
+}
+
+module dpRedis 'modules/deploy-planner/redis.bicep' = if (deploymentMode == 'single-sub' && redisEnabled) {
+  name: 'dp-redis'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    complianceTags: complianceTags
+  }
+}
+
+module dpEventGrid 'modules/deploy-planner/event-grid.bicep' = if (deploymentMode == 'single-sub' && eventGridEnabled) {
+  name: 'dp-eventgrid'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpServiceBus 'modules/deploy-planner/service-bus.bicep' = if (deploymentMode == 'single-sub' && serviceBusEnabled) {
+  name: 'dp-servicebus'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpSignalr 'modules/deploy-planner/signalr.bicep' = if (deploymentMode == 'single-sub' && signalrEnabled) {
+  name: 'dp-signalr'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpStorageQueues 'modules/deploy-planner/storage-queues.bicep' = if (deploymentMode == 'single-sub' && storageQueuesEnabled) {
+  name: 'dp-storagequeues'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpAiServices 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && aiServicesEnabled) {
+  name: 'dp-aiservices'
+  scope: singleDlzRg
+  params: {
+    location: location
+    kind: 'CognitiveServices'
+    nameFragment: 'aiservices'
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpDocIntel 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && documentIntelligenceEnabled) {
+  name: 'dp-docintel'
+  scope: singleDlzRg
+  params: {
+    location: location
+    kind: 'FormRecognizer'
+    nameFragment: 'docintel'
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpContentSafety 'modules/deploy-planner/cognitive-account.bicep' = if (deploymentMode == 'single-sub' && contentSafetyEnabled) {
+  name: 'dp-contentsafety'
+  scope: singleDlzRg
+  params: {
+    location: location
+    kind: 'ContentSafety'
+    nameFragment: 'contentsafety'
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpAppService 'modules/deploy-planner/app-service.bicep' = if (deploymentMode == 'single-sub' && appServiceEnabled) {
+  name: 'dp-appservice'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpFunctions 'modules/deploy-planner/functions.bicep' = if (deploymentMode == 'single-sub' && functionsEnabled) {
+  name: 'dp-functions'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpContainerInstances 'modules/deploy-planner/container-instances.bicep' = if (deploymentMode == 'single-sub' && containerInstancesEnabled) {
+  name: 'dp-aci'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpStreamAnalytics 'modules/deploy-planner/stream-analytics.bicep' = if (deploymentMode == 'single-sub' && streamAnalyticsEnabled) {
+  name: 'dp-streamanalytics'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+module dpDataFactory 'modules/deploy-planner/data-factory.bicep' = if (deploymentMode == 'single-sub' && dataFactoryEnabled) {
+  name: 'dp-datafactory'
+  scope: singleDlzRg
+  params: {
+    location: location
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
 
 output dlzSynapseWorkspaceName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseWorkspaceName : ''
 output dlzSynapseDedicatedPoolName string = deploymentMode == 'single-sub' ? singleDlz.outputs.synapseDedicatedPoolName : ''

@@ -41,6 +41,29 @@ export class KustoError extends Error {
   }
 }
 
+/**
+ * The `Visualization` annotation produced by the KQL `render` operator and
+ * carried in the v1 response's `@ExtendedProperties` table. The ADX web UI uses
+ * exactly this to auto-pick the chart for a query result. Grounded in Microsoft
+ * Learn (Query/management HTTP response — `@ExtendedProperties`; render operator
+ * supported properties):
+ *   https://learn.microsoft.com/kusto/api/rest/response#the-meaning-of-tables-in-the-response
+ *   https://learn.microsoft.com/kusto/query/render-operator
+ */
+export interface KustoVisualization {
+  /** timechart | columnchart | barchart | piechart | linechart | scatterchart | card | … */
+  Visualization?: string;
+  Title?: string;
+  XColumn?: string;
+  YColumns?: string | string[];
+  Series?: string | string[];
+  Kind?: string;
+  Accumulate?: boolean;
+  XTitle?: string;
+  YTitle?: string;
+  [k: string]: unknown;
+}
+
 export interface KustoQueryResult {
   columns: string[];
   columnTypes: string[];
@@ -48,6 +71,11 @@ export interface KustoQueryResult {
   rowCount: number;
   executionMs: number;
   truncated: boolean;
+  /**
+   * The parsed `render` visualization hint, when the query ended with a
+   * `| render <viz>` operator. Absent for queries / mgmt commands with no render.
+   */
+  visualization?: KustoVisualization;
 }
 
 export function clusterUri(): string {
@@ -121,15 +149,44 @@ function shapeTable(table: any, executionMs: number): KustoQueryResult {
   };
 }
 
+/**
+ * Pull the `render`-produced Visualization annotation out of the v1
+ * `@ExtendedProperties` table. In the v1 protocol that table has a single
+ * string column whose value is a JSON-encoded string such as
+ * `{"Visualization":"piechart", …}` (or `{"Cursor":"…"}` for non-render rows).
+ * We scan every cell for the one whose parsed JSON carries a `Visualization`.
+ * Returns undefined when the query had no `| render`. Grounded in Learn
+ * (Query/management HTTP response — `@ExtendedProperties`).
+ */
+function parseVisualization(tables: any[]): KustoVisualization | undefined {
+  const ep = (tables || []).find((t: any) => t?.TableName === '@ExtendedProperties');
+  if (!ep) return undefined;
+  for (const row of ep.Rows || []) {
+    for (const cell of row || []) {
+      if (typeof cell !== 'string' || cell.indexOf('Visualization') < 0) continue;
+      try {
+        const parsed = JSON.parse(cell);
+        if (parsed && typeof parsed === 'object' && 'Visualization' in parsed && parsed.Visualization) {
+          return parsed as KustoVisualization;
+        }
+      } catch { /* not the JSON cell — keep scanning */ }
+    }
+  }
+  return undefined;
+}
+
 /** Execute a KQL query. Returns the primary results table (Table_0). */
 export async function executeQuery(database: string, kql: string): Promise<KustoQueryResult> {
   const started = Date.now();
   const json = await postRest('/v1/rest/query', database || DEFAULT_DB, kql);
-  const primary = (json?.Tables || []).find((t: any) => t?.TableName === 'Table_0') || json?.Tables?.[0];
+  const tables = json?.Tables || [];
+  const primary = tables.find((t: any) => t?.TableName === 'Table_0') || tables[0];
+  const visualization = parseVisualization(tables);
   if (!primary) {
-    return { columns: [], columnTypes: [], rows: [], rowCount: 0, executionMs: Date.now() - started, truncated: false };
+    return { columns: [], columnTypes: [], rows: [], rowCount: 0, executionMs: Date.now() - started, truncated: false, visualization };
   }
-  return shapeTable(primary, Date.now() - started);
+  const shaped = shapeTable(primary, Date.now() - started);
+  return visualization ? { ...shaped, visualization } : shaped;
 }
 
 /** Execute a Kusto control command (`.show`, `.create`, `.add`, `.ingest`, etc.). */

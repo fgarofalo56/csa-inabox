@@ -922,6 +922,18 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     } },
 
   // APIs and functions
+  { slug: 'data-api-builder', displayName: 'Data API', restType: 'DataApi', category: 'APIs and functions',
+    description: 'Data API builder — expose Azure SQL / PostgreSQL / Cosmos tables as secured REST + GraphQL.',
+    learnContent: {
+      "overview": "Data API builder (DAB) generates secured REST and GraphQL endpoints over a relational or Cosmos source from a single dab-config.json. In Loom the editor introspects the database schema, maps tables/views/SPs to entities with per-role permissions, relationships, and policies, emits the canonical dab-config.json, and (when a DAB runtime Container App is deployed) tests the live REST + GraphQL endpoints and publishes through APIM.",
+      "steps": [
+        { "title": "Pick a data source", "body": "Choose Azure SQL / PostgreSQL / Cosmos and the connection — the connection string is referenced via @env(), never stored as a literal." },
+        { "title": "Add entities", "body": "Introspect the schema and map tables/views to entities with REST paths, GraphQL types, and field aliases." },
+        { "title": "Secure with permissions", "body": "Grant per-role create/read/update/delete with field-level include/exclude and database policies." },
+        { "title": "Preview and publish", "body": "Validate the config, test the live REST + GraphQL endpoints, then publish the API through API Management." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/data-api-builder/overview"
+    } },
   { slug: 'graphql-api', displayName: 'API for GraphQL', restType: 'GraphQLApi', category: 'APIs and functions',
     description: 'Single GraphQL endpoint over Warehouse / Lakehouse / SQL DB / mirrored DBs.',
     learnContent: {
@@ -1020,6 +1032,18 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
         }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-overview-what-is"
+    } },
+  { slug: 'synapse-notebook',            displayName: 'Synapse notebook',            restType: 'SynapseNotebook',          category: 'Synapse Analytics',
+    description: 'Spark notebook designer — multi-cell PySpark/Scala/SQL on a Synapse Big Data pool.',
+    learnContent: {
+      "overview": "A Synapse notebook is the Spark authoring surface in Synapse Studio — multi-language cells (PySpark, Spark Scala, Spark SQL, SparkR) run interactively on a Synapse Big Data pool via Livy. In Loom it reads/writes the workspace notebook artifact over the Synapse dev plane and runs cells against a live Livy session through the Console MI.",
+      "steps": [
+        { "title": "Attach a Spark pool", "body": "Pick a Big Data pool from the attach picker; the first run cold-starts the session (about 2-3 minutes)." },
+        { "title": "Author cells", "body": "Add code or markdown cells, set the per-cell language, and reorder them in the designer." },
+        { "title": "Run and inspect", "body": "Run a cell or Run all; output and error tracebacks render inline from the Livy statement result." },
+        { "title": "Publish", "body": "Save publishes the notebook back to the Synapse workspace as an artifact." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-development-using-notebooks"
     } },
   { slug: 'synapse-serverless-sql-pool', displayName: 'Synapse serverless SQL pool', restType: 'SynapseServerlessSqlPool', category: 'Synapse Analytics',
     description: 'Pay-per-query T-SQL over ADLS. OPENROWSET, external tables, ad-hoc analytics.',

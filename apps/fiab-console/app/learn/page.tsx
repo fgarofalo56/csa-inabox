@@ -32,6 +32,7 @@ import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { LearnTopicCard } from '@/lib/components/learn/learn-topic-card';
+import { getCoreSurfaceTutorials } from '@/lib/components/learn/core-surface-tutorials';
 import {
   getLearnCatalog, loomDocUrl, type LearnTopic, type LearnSection,
 } from '@/lib/learn/content';
@@ -149,7 +150,12 @@ function matches(t: LearnTopic, q: string): boolean {
 
 export default function LearnPage(): React.ReactElement {
   const s = useStyles();
-  const all = React.useMemo(() => getLearnCatalog(), []);
+  // The hand-authored core-surface tutorials (docs/fiab/learn/*) lead the
+  // catalog so the portal's "Loom doc first" links resolve to them, not a 404.
+  const all = React.useMemo(
+    () => [...getCoreSurfaceTutorials(), ...getLearnCatalog()],
+    [],
+  );
 
   const [query, setQuery] = React.useState('');
   const [section, setSection] = React.useState<'all' | LearnSection>('all');

@@ -26,6 +26,8 @@ import {
   isVectorFieldType,
   semanticConfigNames,
   vectorProfileNames,
+  scoringProfileNames,
+  facetableFieldNames,
   type FieldRow,
 } from '../search-field-shapes';
 
@@ -105,6 +107,36 @@ describe('buildSearchBody — Search Explorer query options', () => {
     });
     expect(body.vectorQueries[0]).toEqual({ kind: 'vector', fields: 'embedding', vector: [0.1, 0.2, 0.3], k: 7, exhaustive: true });
     expect(body.vectorQueries[0].text).toBeUndefined();
+  });
+
+  it('emits searchMode, scoringProfile + scoringParameters, facets, and highlight with custom tags', () => {
+    const body = buildSearchBody({
+      search: 'hotel',
+      searchMode: 'all',
+      scoringProfile: 'geo',
+      scoringParameters: ['mylocation--122.2,44.8'],
+      facets: ['category', 'rating'],
+      highlight: 'title-3,description-10',
+      highlightPreTag: '<b>',
+      highlightPostTag: '</b>',
+    });
+    expect(body.searchMode).toBe('all');
+    expect(body.scoringProfile).toBe('geo');
+    expect(body.scoringParameters).toEqual(['mylocation--122.2,44.8']);
+    expect(body.facets).toEqual(['category', 'rating']);
+    expect(body.highlight).toBe('title-3,description-10');
+    expect(body.highlightPreTag).toBe('<b>');
+    expect(body.highlightPostTag).toBe('</b>');
+  });
+
+  it('drops highlight tags when no highlight field is set', () => {
+    const body = buildSearchBody({
+      search: 'x',
+      highlightPreTag: '<b>', // dangling — no `highlight`, so tags must be dropped
+    });
+    expect(body.highlight).toBeUndefined();
+    expect(body.highlightPreTag).toBeUndefined();
+    expect(body.highlightPostTag).toBeUndefined();
   });
 
   it('supports a hybrid query (search text + vector query together)', () => {
@@ -223,5 +255,23 @@ describe('semanticConfigNames / vectorProfileNames — picker sources', () => {
   it('lists vector profile names from an index definition', () => {
     expect(vectorProfileNames({ vectorSearch: { profiles: [{ name: 'vp' }] } })).toEqual(['vp']);
     expect(vectorProfileNames({})).toEqual([]);
+  });
+  it('lists scoring profile names from an index definition', () => {
+    expect(scoringProfileNames({ scoringProfiles: [{ name: 'geo' }, { name: 'boost' }] })).toEqual(['geo', 'boost']);
+    expect(scoringProfileNames({})).toEqual([]);
+    expect(scoringProfileNames(null)).toEqual([]);
+  });
+  it('lists only facetable, non-vector fields as faceting targets', () => {
+    const index = {
+      fields: [
+        { name: 'id', type: 'Edm.String', key: true },
+        { name: 'category', type: 'Edm.String', facetable: true },
+        { name: 'rating', type: 'Edm.Int32', facetable: true },
+        { name: 'descriptionVector', type: 'Collection(Edm.Single)', facetable: true }, // vector → excluded
+        { name: 'body', type: 'Edm.String', facetable: false },
+      ],
+    };
+    expect(facetableFieldNames(index)).toEqual(['category', 'rating']);
+    expect(facetableFieldNames({})).toEqual([]);
   });
 });

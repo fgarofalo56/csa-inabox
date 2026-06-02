@@ -26,7 +26,7 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Stop20Regular,
   ArrowSync20Regular, Folder20Regular, Document20Regular,
-  Save20Regular, Delete20Regular, Add20Regular,
+  Save20Regular, Delete20Regular, Add20Regular, Key20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
@@ -196,8 +196,424 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
   );
 }
 
+// ============================================================
+// Unity Catalog WRITE dialogs — create catalog / schema / table +
+// manage grants. All on the real UC REST surface under
+// /api/databricks/unity-catalog/*. Drives the same UC tree the editor browses.
+// ============================================================
+
+// Privileges the UC grant editor offers per securable type. Grounded in the
+// Unity Catalog privileges reference (Learn). Catalog/Schema are container
+// objects (CREATE…/USE…); Table/Volume/Function are leaf securables.
+const UC_PRIVILEGES: Record<string, string[]> = {
+  CATALOG: [
+    'ALL PRIVILEGES', 'USE CATALOG', 'USE SCHEMA', 'CREATE SCHEMA', 'CREATE TABLE',
+    'CREATE FUNCTION', 'CREATE VOLUME', 'CREATE MATERIALIZED VIEW', 'CREATE MODEL',
+    'SELECT', 'MODIFY', 'EXECUTE', 'READ VOLUME', 'WRITE VOLUME', 'REFRESH',
+    'BROWSE', 'APPLY TAG', 'MANAGE',
+  ],
+  SCHEMA: [
+    'ALL PRIVILEGES', 'USE SCHEMA', 'CREATE TABLE', 'CREATE FUNCTION', 'CREATE VOLUME',
+    'CREATE MATERIALIZED VIEW', 'CREATE MODEL', 'SELECT', 'MODIFY', 'EXECUTE',
+    'READ VOLUME', 'WRITE VOLUME', 'REFRESH', 'APPLY TAG', 'MANAGE',
+  ],
+  TABLE: ['ALL PRIVILEGES', 'SELECT', 'MODIFY', 'APPLY TAG', 'MANAGE'],
+  VOLUME: ['ALL PRIVILEGES', 'READ VOLUME', 'WRITE VOLUME', 'APPLY TAG', 'MANAGE'],
+  FUNCTION: ['ALL PRIVILEGES', 'EXECUTE', 'APPLY TAG', 'MANAGE'],
+};
+
+const UC_COLUMN_TYPES = [
+  'STRING', 'INT', 'BIGINT', 'SMALLINT', 'TINYINT', 'DOUBLE', 'FLOAT',
+  'DECIMAL', 'BOOLEAN', 'DATE', 'TIMESTAMP', 'TIMESTAMP_NTZ', 'BINARY',
+];
+
+interface UcGrant { principal: string; privileges: string[] }
+type UcSecurable = 'CATALOG' | 'SCHEMA' | 'TABLE' | 'VOLUME' | 'FUNCTION';
+
+interface UcWriteDialogsProps {
+  catalogs: string[];
+  activeCatalog: string | null;
+  schemas: string[];
+  activeSchema: string | null;
+  tables: string[];
+  onChanged: () => void;            // re-list the tree after a mutation
+  // controlled open state per dialog
+  createCatalogOpen: boolean; setCreateCatalogOpen: (v: boolean) => void;
+  createSchemaOpen: boolean; setCreateSchemaOpen: (v: boolean) => void;
+  createTableOpen: boolean; setCreateTableOpen: (v: boolean) => void;
+  grantsOpen: boolean; setGrantsOpen: (v: boolean) => void;
+}
+
+interface NewColumn { name: string; type_name: string; nullable: boolean; comment: string }
+
+function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
+  const s = useStyles();
+  const {
+    catalogs, activeCatalog, schemas, activeSchema, tables, onChanged,
+    createCatalogOpen, setCreateCatalogOpen,
+    createSchemaOpen, setCreateSchemaOpen,
+    createTableOpen, setCreateTableOpen,
+    grantsOpen, setGrantsOpen,
+  } = props;
+
+  // ---- Create catalog ----
+  const [catName, setCatName] = useState('');
+  const [catComment, setCatComment] = useState('');
+  const [catStorage, setCatStorage] = useState('');
+  const [catBusy, setCatBusy] = useState(false);
+  const [catErr, setCatErr] = useState<string | null>(null);
+
+  const createCatalog = useCallback(async () => {
+    if (!catName.trim()) return;
+    setCatBusy(true); setCatErr(null);
+    try {
+      const r = await fetch('/api/databricks/unity-catalog/catalogs', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: catName.trim(), comment: catComment.trim() || undefined, storage_root: catStorage.trim() || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCatErr(j.error || `HTTP ${r.status}`); return; }
+      setCreateCatalogOpen(false); setCatName(''); setCatComment(''); setCatStorage('');
+      onChanged();
+    } catch (e: any) { setCatErr(e?.message || String(e)); }
+    finally { setCatBusy(false); }
+  }, [catName, catComment, catStorage, onChanged, setCreateCatalogOpen]);
+
+  // ---- Create schema ----
+  const [schCatalog, setSchCatalog] = useState(activeCatalog || '');
+  const [schName, setSchName] = useState('');
+  const [schComment, setSchComment] = useState('');
+  const [schBusy, setSchBusy] = useState(false);
+  const [schErr, setSchErr] = useState<string | null>(null);
+  useEffect(() => { if (createSchemaOpen) setSchCatalog(activeCatalog || catalogs[0] || ''); }, [createSchemaOpen, activeCatalog, catalogs]);
+
+  const createSchema = useCallback(async () => {
+    if (!schCatalog || !schName.trim()) return;
+    setSchBusy(true); setSchErr(null);
+    try {
+      const r = await fetch('/api/databricks/unity-catalog/schemas', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: schName.trim(), catalog_name: schCatalog, comment: schComment.trim() || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSchErr(j.error || `HTTP ${r.status}`); return; }
+      setCreateSchemaOpen(false); setSchName(''); setSchComment('');
+      onChanged();
+    } catch (e: any) { setSchErr(e?.message || String(e)); }
+    finally { setSchBusy(false); }
+  }, [schCatalog, schName, schComment, onChanged, setCreateSchemaOpen]);
+
+  // ---- Create table ----
+  const [tblCatalog, setTblCatalog] = useState(activeCatalog || '');
+  const [tblSchema, setTblSchema] = useState(activeSchema || '');
+  const [tblName, setTblName] = useState('');
+  const [tblComment, setTblComment] = useState('');
+  const [tblType, setTblType] = useState<'MANAGED' | 'EXTERNAL'>('MANAGED');
+  const [tblFormat, setTblFormat] = useState('DELTA');
+  const [tblStorage, setTblStorage] = useState('');
+  const [tblCols, setTblCols] = useState<NewColumn[]>([{ name: 'id', type_name: 'BIGINT', nullable: false, comment: '' }]);
+  const [tblBusy, setTblBusy] = useState(false);
+  const [tblErr, setTblErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (createTableOpen) { setTblCatalog(activeCatalog || catalogs[0] || ''); setTblSchema(activeSchema || ''); }
+  }, [createTableOpen, activeCatalog, activeSchema, catalogs]);
+
+  const addCol = useCallback(() => setTblCols((c) => [...c, { name: '', type_name: 'STRING', nullable: true, comment: '' }]), []);
+  const patchCol = useCallback((i: number, p: Partial<NewColumn>) => setTblCols((c) => c.map((col, j) => (j === i ? { ...col, ...p } : col))), []);
+  const delCol = useCallback((i: number) => setTblCols((c) => (c.length <= 1 ? c : c.filter((_, j) => j !== i))), []);
+
+  const createTable = useCallback(async () => {
+    if (!tblCatalog || !tblSchema || !tblName.trim()) return;
+    if (tblCols.some((c) => !c.name.trim())) { setTblErr('Every column needs a name.'); return; }
+    if (tblType === 'EXTERNAL' && !tblStorage.trim()) { setTblErr('EXTERNAL tables require a storage location (abfss://…).'); return; }
+    setTblBusy(true); setTblErr(null);
+    try {
+      const r = await fetch('/api/databricks/unity-catalog/tables', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: tblName.trim(), catalog_name: tblCatalog, schema_name: tblSchema,
+          table_type: tblType, data_source_format: tblFormat,
+          storage_location: tblStorage.trim() || undefined,
+          comment: tblComment.trim() || undefined,
+          columns: tblCols.map((c, i) => ({ name: c.name.trim(), type_name: c.type_name, nullable: c.nullable, position: i, comment: c.comment.trim() || undefined })),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setTblErr(j.error || `HTTP ${r.status}`); return; }
+      setCreateTableOpen(false); setTblName(''); setTblComment(''); setTblStorage('');
+      setTblCols([{ name: 'id', type_name: 'BIGINT', nullable: false, comment: '' }]);
+      onChanged();
+    } catch (e: any) { setTblErr(e?.message || String(e)); }
+    finally { setTblBusy(false); }
+  }, [tblCatalog, tblSchema, tblName, tblComment, tblType, tblFormat, tblStorage, tblCols, onChanged, setCreateTableOpen]);
+
+  // ---- Grants ----
+  const [grSecurable, setGrSecurable] = useState<UcSecurable>('SCHEMA');
+  const [grFullName, setGrFullName] = useState('');
+  const [grGrants, setGrGrants] = useState<UcGrant[] | null>(null);
+  const [grEffective, setGrEffective] = useState(false);
+  const [grBusy, setGrBusy] = useState(false);
+  const [grErr, setGrErr] = useState<string | null>(null);
+  const [grPrincipal, setGrPrincipal] = useState('');
+  const [grPrivs, setGrPrivs] = useState<Set<string>>(new Set());
+
+  // Seed full_name from the current tree context when the dialog opens.
+  useEffect(() => {
+    if (!grantsOpen) return;
+    if (activeSchema && activeCatalog) { setGrSecurable('SCHEMA'); setGrFullName(`${activeCatalog}.${activeSchema}`); }
+    else if (activeCatalog) { setGrSecurable('CATALOG'); setGrFullName(activeCatalog); }
+  }, [grantsOpen, activeCatalog, activeSchema]);
+
+  const loadGrants = useCallback(async () => {
+    if (!grFullName.trim() && grSecurable !== 'METASTORE' as any) { setGrErr('Enter the securable full name.'); return; }
+    setGrBusy(true); setGrErr(null); setGrGrants(null);
+    try {
+      const params = new URLSearchParams({ securable_type: grSecurable, full_name: grFullName.trim() });
+      if (grEffective) params.set('effective', 'true');
+      const r = await fetch(`/api/databricks/unity-catalog/grants?${params.toString()}`);
+      const j = await r.json();
+      if (!j.ok) { setGrErr(j.error || `HTTP ${r.status}`); return; }
+      // effective shape differs (privileges is array of objects) — normalize for display.
+      const grants: UcGrant[] = (j.grants || []).map((g: any) => ({
+        principal: g.principal,
+        privileges: Array.isArray(g.privileges)
+          ? g.privileges.map((p: any) => (typeof p === 'string' ? p : `${p.privilege}${p.inherited_from_type ? ` (inherited)` : ''}`))
+          : [],
+      }));
+      setGrGrants(grants);
+    } catch (e: any) { setGrErr(e?.message || String(e)); }
+    finally { setGrBusy(false); }
+  }, [grSecurable, grFullName, grEffective]);
+
+  const applyGrant = useCallback(async (mode: 'add' | 'remove') => {
+    if (!grPrincipal.trim() || grPrivs.size === 0) { setGrErr('Pick a principal and at least one privilege.'); return; }
+    setGrBusy(true); setGrErr(null);
+    try {
+      const change = mode === 'add'
+        ? { principal: grPrincipal.trim(), add: [...grPrivs] }
+        : { principal: grPrincipal.trim(), remove: [...grPrivs] };
+      const r = await fetch('/api/databricks/unity-catalog/grants', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ securable_type: grSecurable, full_name: grFullName.trim(), changes: [change] }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setGrErr(j.error || `HTTP ${r.status}`); return; }
+      setGrGrants((j.grants || []).map((g: any) => ({ principal: g.principal, privileges: g.privileges || [] })));
+      setGrPrivs(new Set());
+    } catch (e: any) { setGrErr(e?.message || String(e)); }
+    finally { setGrBusy(false); }
+  }, [grSecurable, grFullName, grPrincipal, grPrivs]);
+
+  const togglePriv = useCallback((p: string) => setGrPrivs((s) => {
+    const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n;
+  }), []);
+
+  return (
+    <>
+      {/* Create catalog */}
+      <Dialog open={createCatalogOpen} onOpenChange={(_, d) => setCreateCatalogOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 520 }}>
+          <DialogBody>
+            <DialogTitle>Create catalog</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {catErr && <MessageBar intent="error"><MessageBarBody>{catErr}</MessageBarBody></MessageBar>}
+                <Field label="Catalog name" required><Input value={catName} onChange={(_, d) => setCatName(d.value)} placeholder="sales" /></Field>
+                <Field label="Comment"><Input value={catComment} onChange={(_, d) => setCatComment(d.value)} /></Field>
+                <Field label="Managed storage root (optional)" hint="abfss://container@account.dfs.core.windows.net/path — omit to use the metastore default">
+                  <Input value={catStorage} onChange={(_, d) => setCatStorage(d.value)} placeholder="abfss://…" />
+                </Field>
+                <Caption1>POST <code>/api/2.1/unity-catalog/catalogs</code> — requires CREATE CATALOG on the metastore.</Caption1>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCreateCatalogOpen(false)} disabled={catBusy}>Cancel</Button>
+              <Button appearance="primary" onClick={createCatalog} disabled={catBusy || !catName.trim()}>{catBusy ? 'Creating…' : 'Create catalog'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Create schema */}
+      <Dialog open={createSchemaOpen} onOpenChange={(_, d) => setCreateSchemaOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 520 }}>
+          <DialogBody>
+            <DialogTitle>Create schema</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {schErr && <MessageBar intent="error"><MessageBarBody>{schErr}</MessageBarBody></MessageBar>}
+                <Field label="Catalog" required>
+                  <Dropdown value={schCatalog} selectedOptions={schCatalog ? [schCatalog] : []} onOptionSelect={(_, d) => d.optionValue && setSchCatalog(d.optionValue)} placeholder="Select catalog">
+                    {catalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Schema name" required><Input value={schName} onChange={(_, d) => setSchName(d.value)} placeholder="bronze" /></Field>
+                <Field label="Comment"><Input value={schComment} onChange={(_, d) => setSchComment(d.value)} /></Field>
+                <Caption1>POST <code>/api/2.1/unity-catalog/schemas</code> — requires CREATE SCHEMA + USE CATALOG on the parent.</Caption1>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCreateSchemaOpen(false)} disabled={schBusy}>Cancel</Button>
+              <Button appearance="primary" onClick={createSchema} disabled={schBusy || !schCatalog || !schName.trim()}>{schBusy ? 'Creating…' : 'Create schema'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Create table */}
+      <Dialog open={createTableOpen} onOpenChange={(_, d) => setCreateTableOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 720, width: '95vw' }}>
+          <DialogBody>
+            <DialogTitle>Create table</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {tblErr && <MessageBar intent="error"><MessageBarBody>{tblErr}</MessageBarBody></MessageBar>}
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Field label="Catalog" required style={{ flex: 1 }}>
+                    <Dropdown value={tblCatalog} selectedOptions={tblCatalog ? [tblCatalog] : []} onOptionSelect={(_, d) => d.optionValue && setTblCatalog(d.optionValue)} placeholder="catalog">
+                      {catalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Schema" required style={{ flex: 1 }}>
+                    {schemas.length > 0 && tblCatalog === activeCatalog ? (
+                      <Dropdown value={tblSchema} selectedOptions={tblSchema ? [tblSchema] : []} onOptionSelect={(_, d) => d.optionValue && setTblSchema(d.optionValue)} placeholder="schema">
+                        {schemas.map((sc) => <Option key={sc} value={sc} text={sc}>{sc}</Option>)}
+                      </Dropdown>
+                    ) : (
+                      <Input value={tblSchema} onChange={(_, d) => setTblSchema(d.value)} placeholder="schema" />
+                    )}
+                  </Field>
+                  <Field label="Table name" required style={{ flex: 1 }}><Input value={tblName} onChange={(_, d) => setTblName(d.value)} placeholder="orders" /></Field>
+                </div>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Field label="Type" style={{ flex: 1 }}>
+                    <Dropdown value={tblType} selectedOptions={[tblType]} onOptionSelect={(_, d) => d.optionValue && setTblType(d.optionValue as 'MANAGED' | 'EXTERNAL')}>
+                      <Option value="MANAGED" text="MANAGED">MANAGED</Option>
+                      <Option value="EXTERNAL" text="EXTERNAL">EXTERNAL</Option>
+                    </Dropdown>
+                  </Field>
+                  <Field label="Format" style={{ flex: 1 }}>
+                    <Dropdown value={tblFormat} selectedOptions={[tblFormat]} onOptionSelect={(_, d) => d.optionValue && setTblFormat(d.optionValue)}>
+                      {['DELTA', 'PARQUET', 'CSV', 'JSON', 'ORC', 'AVRO', 'TEXT'].map((f) => <Option key={f} value={f} text={f}>{f}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Comment" style={{ flex: 2 }}><Input value={tblComment} onChange={(_, d) => setTblComment(d.value)} /></Field>
+                </div>
+                {tblType === 'EXTERNAL' && (
+                  <Field label="Storage location" required hint="abfss://… — required for EXTERNAL tables">
+                    <Input value={tblStorage} onChange={(_, d) => setTblStorage(d.value)} placeholder="abfss://container@account.dfs.core.windows.net/path" />
+                  </Field>
+                )}
+                <Divider>Columns</Divider>
+                {tblCols.map((c, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <Input style={{ flex: 2 }} value={c.name} onChange={(_, d) => patchCol(i, { name: d.value })} placeholder="column name" aria-label={`Column ${i + 1} name`} />
+                    <Dropdown style={{ flex: 1, minWidth: 120 }} value={c.type_name} selectedOptions={[c.type_name]} onOptionSelect={(_, d) => d.optionValue && patchCol(i, { type_name: d.optionValue })} aria-label={`Column ${i + 1} type`}>
+                      {UC_COLUMN_TYPES.map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
+                    </Dropdown>
+                    <Switch checked={c.nullable} label="nullable" onChange={(_, d) => patchCol(i, { nullable: !!d.checked })} />
+                    <Input style={{ flex: 2 }} value={c.comment} onChange={(_, d) => patchCol(i, { comment: d.value })} placeholder="comment" aria-label={`Column ${i + 1} comment`} />
+                    <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Remove column ${i + 1}`} disabled={tblCols.length <= 1} onClick={() => delCol(i)} />
+                  </div>
+                ))}
+                <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addCol}>Add column</Button>
+                <Caption1>POST <code>/api/2.1/unity-catalog/tables</code> — requires CREATE TABLE + USE SCHEMA + USE CATALOG.</Caption1>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCreateTableOpen(false)} disabled={tblBusy}>Cancel</Button>
+              <Button appearance="primary" onClick={createTable} disabled={tblBusy || !tblCatalog || !tblSchema || !tblName.trim()}>{tblBusy ? 'Creating…' : 'Create table'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Manage grants */}
+      <Dialog open={grantsOpen} onOpenChange={(_, d) => setGrantsOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 760, width: '95vw' }}>
+          <DialogBody>
+            <DialogTitle>Manage grants (Unity Catalog permissions)</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {grErr && <MessageBar intent="error"><MessageBarBody>{grErr}</MessageBarBody></MessageBar>}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+                  <Field label="Securable type" style={{ minWidth: 140 }}>
+                    <Dropdown value={grSecurable} selectedOptions={[grSecurable]} onOptionSelect={(_, d) => { if (d.optionValue) { setGrSecurable(d.optionValue as UcSecurable); setGrPrivs(new Set()); } }}>
+                      {(['CATALOG', 'SCHEMA', 'TABLE', 'VOLUME', 'FUNCTION'] as UcSecurable[]).map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Full name" style={{ flex: 1 }} hint="catalog · catalog.schema · catalog.schema.object">
+                    <Input value={grFullName} onChange={(_, d) => setGrFullName(d.value)} placeholder="main.sales" />
+                  </Field>
+                  <Switch checked={grEffective} label="effective (incl. inherited)" onChange={(_, d) => setGrEffective(!!d.checked)} />
+                  <Button appearance="primary" onClick={loadGrants} disabled={grBusy}>{grBusy ? 'Loading…' : 'Load grants'}</Button>
+                </div>
+
+                {grGrants && (
+                  <div className={s.tableWrap}>
+                    <Table aria-label="Grants" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Principal</TableHeaderCell>
+                        <TableHeaderCell>Privileges</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {grGrants.length === 0 && <TableRow><TableCell colSpan={2}><Caption1>No direct grants.</Caption1></TableCell></TableRow>}
+                        {grGrants.map((g) => (
+                          <TableRow key={g.principal}>
+                            <TableCell>{g.principal}</TableCell>
+                            <TableCell><div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{g.privileges.map((p) => <Badge key={p} appearance="outline">{p}</Badge>)}</div></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+
+                {!grEffective && (
+                  <>
+                    <Divider>Grant / revoke</Divider>
+                    <Field label="Principal" hint="user email, group name, or service-principal applicationId">
+                      <Input value={grPrincipal} onChange={(_, d) => setGrPrincipal(d.value)} placeholder="data-engineers" />
+                    </Field>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {(UC_PRIVILEGES[grSecurable] || []).map((p) => (
+                        <Badge
+                          key={p}
+                          appearance={grPrivs.has(p) ? 'filled' : 'outline'}
+                          color={grPrivs.has(p) ? 'brand' : 'informative'}
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => togglePriv(p)}
+                        >
+                          {p}
+                        </Badge>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Button appearance="primary" onClick={() => applyGrant('add')} disabled={grBusy || !grPrincipal.trim() || grPrivs.size === 0}>Grant selected</Button>
+                      <Button appearance="outline" onClick={() => applyGrant('remove')} disabled={grBusy || !grPrincipal.trim() || grPrivs.size === 0}>Revoke selected</Button>
+                    </div>
+                    <Caption1>PATCH <code>/api/2.1/unity-catalog/permissions/&#123;type&#125;/&#123;full_name&#125;</code> — requires object ownership / MANAGE / metastore admin.</Caption1>
+                  </>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setGrantsOpen(false)} disabled={grBusy}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </>
+  );
+}
+
 export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  // Unity Catalog WRITE dialog open-state (create catalog/schema/table + grants).
+  const [ucCreateCatalogOpen, setUcCreateCatalogOpen] = useState(false);
+  const [ucCreateSchemaOpen, setUcCreateSchemaOpen] = useState(false);
+  const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
+  const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
 
   const [sqlText, setSqlText] = useState<string>(
     `-- Databricks SQL Warehouse — Unity Catalog.\n-- Click a table on the left to insert a SELECT.\nSELECT current_catalog() AS catalog, current_database() AS schema, current_user() AS upn;`,
@@ -472,6 +888,14 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const canStart = !!warehouseId && !starting && (state === 'STOPPED' || state === 'STOPPING' || state === 'UNKNOWN');
   const canStop = !!warehouseId && isRunning;
   const canRun = !!warehouseId && isRunning && !loading;
+  // Re-list the tree level a UC write touched, so created catalogs/schemas/
+  // tables appear immediately. Re-runs the deepest active query.
+  const ucChanged = useCallback(() => {
+    if (activeCatalog && activeSchema) { void openSchema(activeCatalog, activeSchema); }
+    else if (activeCatalog) { void openCatalog(activeCatalog); }
+    void refreshCatalogs();
+  }, [activeCatalog, activeSchema, openCatalog, openSchema, refreshCatalogs]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
@@ -485,6 +909,12 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Edit', onClick: warehouseId ? openEdit : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless' },
         { label: 'Refresh', onClick: warehouseId ? refreshAll : undefined, disabled: !warehouseId },
       ]},
+      { label: 'Unity Catalog', actions: [
+        { label: 'Create catalog', onClick: () => setUcCreateCatalogOpen(true), title: 'Create a UC catalog (api 2.1 — requires CREATE CATALOG on the metastore)' },
+        { label: 'Create schema', onClick: () => setUcCreateSchemaOpen(true), title: 'Create a UC schema under a catalog' },
+        { label: 'Create table', onClick: () => setUcCreateTableOpen(true), title: 'Create a managed/external UC table' },
+        { label: 'Manage grants', onClick: () => setUcGrantsOpen(true), title: 'View / grant / revoke UC privileges' },
+      ]},
     ]},
   ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit]);
 
@@ -495,6 +925,20 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
+          <div style={{ display: 'flex', gap: 4, marginBottom: 6, flexWrap: 'wrap' }}>
+            <Tooltip content="Create catalog (UC REST)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setUcCreateCatalogOpen(true)}>Catalog</Button>
+            </Tooltip>
+            <Tooltip content="Create schema (UC REST)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setUcCreateSchemaOpen(true)}>Schema</Button>
+            </Tooltip>
+            <Tooltip content="Create table (UC REST)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setUcCreateTableOpen(true)}>Table</Button>
+            </Tooltip>
+            <Tooltip content="Manage grants (UC permissions)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Key20Regular />} onClick={() => setUcGrantsOpen(true)} aria-label="Manage grants" />
+            </Tooltip>
+          </div>
           <Tree aria-label="Unity Catalog" defaultOpenItems={['catalogs']}>
             <TreeItem itemType="branch" value="catalogs">
               <TreeItemLayout iconBefore={<Database20Regular />}>
@@ -800,6 +1244,19 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          <UnityCatalogWriteDialogs
+            catalogs={catalogs}
+            activeCatalog={activeCatalog}
+            schemas={schemas}
+            activeSchema={activeSchema}
+            tables={tables}
+            onChanged={ucChanged}
+            createCatalogOpen={ucCreateCatalogOpen} setCreateCatalogOpen={setUcCreateCatalogOpen}
+            createSchemaOpen={ucCreateSchemaOpen} setCreateSchemaOpen={setUcCreateSchemaOpen}
+            createTableOpen={ucCreateTableOpen} setCreateTableOpen={setUcCreateTableOpen}
+            grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
+          />
         </div>
       }
     />
