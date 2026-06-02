@@ -20,6 +20,8 @@ const reg = (loader: () => Promise<{ [k: string]: EditorComponent }>, name: stri
   dynamic(() => loader().then((m) => ({ default: m[name] })), { ssr: false });
 
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
+  // Fabric Apps (Build 2026 preview)
+  'rayfin-app':           reg(() => import('./rayfin-app-editor'),        'RayfinAppEditor'),
   // Phase 2
   'lakehouse':            reg(() => import('./lakehouse-editor'),         'LakehouseEditor'),
   'notebook':             reg(() => import('./notebook-editor'),          'NotebookEditor'),
