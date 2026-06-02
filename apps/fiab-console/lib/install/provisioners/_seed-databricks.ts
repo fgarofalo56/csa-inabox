@@ -125,6 +125,10 @@ export interface NotebookRunResult {
   notebookPath?: string;
   /** True if a run was submitted. */
   triggered: boolean;
+  /** True only if the run reached a TERMINAL life-cycle state within the
+   * short settle window. False means it was submitted and is still executing
+   * (tracked by runId) — NOT a failure. */
+  settled?: boolean;
   runId?: number;
   /** life_cycle_state (TERMINATED/INTERNAL_ERROR/…) + result_state (SUCCESS/FAILED). */
   lifeCycleState?: string;
@@ -135,8 +139,20 @@ export interface NotebookRunResult {
   gate?: { reason: string; remediation: string };
 }
 
-const RUN_POLL_MS = 6000;
-const RUN_MAX_POLLS = 40; // ~4 min budget — enough for a small medallion build.
+// Short SYNCHRONOUS settle window only. The Databricks run is submitted via
+// real REST and keeps executing on the cluster; we poll just long enough to
+// catch an instant auth/submit failure, then return the live run id so the
+// install request finishes well under the Azure Front Door ~30s gateway
+// window. Blocking the HTTP request on the full Spark medallion build (which
+// can take minutes) was the root cause of the 504 on deploy:true — the FD
+// abort killed the request before the route could stamp the items. A long
+// budget can be opted into out-of-band (e.g. a background re-run worker) via
+// LOOM_DATABRICKS_RUN_POLLS, but the install path stays short by default.
+const RUN_POLL_MS = 3000;
+const RUN_SETTLE_POLLS = (() => {
+  const n = Number(process.env.LOOM_DATABRICKS_RUN_POLLS);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 80) : 3; // ~9s settle by default
+})();
 const RUN_TERMINAL = new Set(['TERMINATED', 'SKIPPED', 'INTERNAL_ERROR']);
 
 /**
@@ -219,9 +235,14 @@ export async function importAndRunNotebook(
     return { triggered: false, notebookPath: nbPath, steps };
   }
 
-  // Poll the run to terminal.
+  // Short settle poll: catch an instant terminal (e.g. immediate
+  // INTERNAL_ERROR / config failure) without blocking the HTTP request on the
+  // full medallion build. A still-running Spark job is reported as PENDING and
+  // tracked by run id — it continues executing on the cluster and the Gold
+  // commit → eventstream → Activator path (and any re-run worker) observes its
+  // completion. This is what keeps deploy:true under the Front Door window.
   let run: JobRun | undefined;
-  for (let i = 0; i < RUN_MAX_POLLS; i++) {
+  for (let i = 0; i < RUN_SETTLE_POLLS; i++) {
     await new Promise((r) => setTimeout(r, RUN_POLL_MS));
     try {
       run = await getJobRun(runId);
@@ -236,9 +257,12 @@ export async function importAndRunNotebook(
   const lifeCycleState = run?.state?.life_cycle_state;
   const resultState = run?.state?.result_state;
   const stateMessage = run?.state?.state_message;
+  const settled = lifeCycleState ? RUN_TERMINAL.has(lifeCycleState) : false;
   steps.push(
-    `Run ${runId} → ${lifeCycleState || 'IN_PROGRESS'}${resultState ? `/${resultState}` : ''}${stateMessage ? ` (${stateMessage})` : ''}.`,
+    settled
+      ? `Run ${runId} → ${lifeCycleState}${resultState ? `/${resultState}` : ''}${stateMessage ? ` (${stateMessage})` : ''}.`
+      : `Run ${runId} submitted and executing (${lifeCycleState || 'PENDING'}); not blocking install on the full medallion build — tracked by run id.`,
   );
 
-  return { triggered: true, notebookPath: nbPath, runId, lifeCycleState, resultState, stateMessage, steps };
+  return { triggered: true, settled, notebookPath: nbPath, runId, lifeCycleState, resultState, stateMessage, steps };
 }

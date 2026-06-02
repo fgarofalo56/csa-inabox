@@ -127,7 +127,11 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   for (const ref of refs) {
     // Resolve rich starter content (notebook cells, KQL DDL, dbt models,
     // dashboard tiles, etc.) from the in-process bundle registry.
-    const bundle = resolveBundleItem(app.id, ref.type);
+    // Pass ref.displayName so bundles with multiple items of the same
+    // itemType (e.g. logic-apps-integration's three distinct logic-app
+    // workflows) resolve to the RIGHT item instead of collapsing onto the
+    // first one — keeping each workflow's own name + WDL content.
+    const bundle = resolveBundleItem(app.id, ref.type, ref.displayName);
     const displayName = bundle?.displayName || ref.displayName || `${app.name} · ${ref.type}`;
     const description = bundle?.description || `Installed from app '${app.name}'${ref.template ? ` · template: ${ref.template}` : ''}`;
     const state: Record<string, unknown> = {

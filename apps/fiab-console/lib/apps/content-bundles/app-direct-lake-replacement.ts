@@ -38,12 +38,23 @@
  *                           install time, before the notebooks finish.
  *   3,4. databricks-notebook → databricks-notebook.ts: Databricks
  *                           workspace/import + jobs/runs/submit on a live
- *                           cluster + poll to terminal → actually RUNS the
- *                           Silver/Gold transforms (produces live Delta).
+ *                           cluster → actually RUNS the Silver/Gold transforms
+ *                           (produces live Delta). The submit is real REST and
+ *                           the run id is stamped to Cosmos; the install does
+ *                           NOT block the HTTP request on the full medallion
+ *                           build (a multi-minute Spark job would blow the
+ *                           Azure Front Door ~30s gateway window → the prior
+ *                           504). It polls a short settle window to catch an
+ *                           instant failure, then returns status:'created' with
+ *                           the run id while the job finishes on the cluster.
  *                           Honest gate: LOOM_DATABRICKS_HOSTNAME / a runnable
  *                           cluster / UAMI workspace access.
  *   5. eventstream        → eventstream.ts (Fabric POST /eventstreams).
- *   6. data-pipeline      → data-pipeline.ts (Fabric pipeline + on-demand run).
+ *   6. data-pipeline      → data-pipeline.ts (Fabric pipeline + on-demand run;
+ *                           the on-demand run is triggered via real REST and
+ *                           reported by its live job-instance id without
+ *                           blocking the request to terminal, same Front Door
+ *                           budget reason as the notebooks above).
  *   7. semantic-model     → semantic-model.ts (Fabric POST /semanticModels, TMSL).
  *   8. report             → report.ts: Fabric POST /reports with a PBIR
  *                           definition bound byConnection to the semantic

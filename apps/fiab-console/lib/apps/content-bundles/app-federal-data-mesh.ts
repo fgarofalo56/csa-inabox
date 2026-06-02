@@ -941,7 +941,7 @@ const bundle: AppBundle = {
             table: 'DomainCost',
             policy:
               '.alter-merge table DomainCost policy retention softdelete = 730d\n' +
-              '.alter-merge table DomainCost policy caching   hot        =  90d',
+              '.alter table DomainCost policy caching hot = 90d',
           },
         ],
         starterQueries: [

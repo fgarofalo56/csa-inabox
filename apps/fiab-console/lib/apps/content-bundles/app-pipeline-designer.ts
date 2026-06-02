@@ -314,6 +314,90 @@ ORDER BY margin DESC;
 GO
 `;
 
+// ─── Seed rows — a coherent mini gold star so the warehouse + views +
+//     starter queries return non-empty result sets the moment the app opens.
+//     Column order matches the gold.* DDL above exactly; the provisioner
+//     emits explicit (col, …) lists so order is enforced. Dates are emitted
+//     as ISO-8601 string literals (DATETIME2 / DATE), bits as 0/1.
+//     These are clearly synthetic reference rows for the medallion demo —
+//     NOT production data — and exist so the data-bearing item actually
+//     bears data per .claude/rules/no-vaporware.md. ────────────────────────
+
+// dim_date: 8 calendar days across two quarters of 2026. date_key = yyyymmdd
+// (matches the dbt dim_date model). Role-played as both order + ship date.
+const DIM_DATE_ROWS: any[][] = [
+  // date_key, date, year, quarter, month, day, day_of_week, day_name, month_name, iso_week, is_weekend
+  [20260105, '2026-01-05', 2026, 1, 1,  5, 2, 'Monday',    'January', 2,  0],
+  [20260106, '2026-01-06', 2026, 1, 1,  6, 3, 'Tuesday',   'January', 2,  0],
+  [20260212, '2026-02-12', 2026, 1, 2, 12, 5, 'Thursday',  'February',7,  0],
+  [20260214, '2026-02-14', 2026, 1, 2, 14, 7, 'Saturday',  'February',7,  1],
+  [20260403, '2026-04-03', 2026, 2, 4,  3, 6, 'Friday',    'April',   14, 0],
+  [20260405, '2026-04-05', 2026, 2, 4,  5, 1, 'Sunday',    'April',   14, 1],
+  [20260518, '2026-05-18', 2026, 2, 5, 18, 2, 'Monday',    'May',     21, 0],
+  [20260520, '2026-05-20', 2026, 2, 5, 20, 4, 'Wednesday', 'May',     21, 0],
+];
+
+// dim_customer (SCD-2, all is_current=1): customer_key, customer_id,
+// customer_name, customer_segment, country, region, valid_from, valid_to,
+// is_current
+const DIM_CUSTOMER_ROWS: any[][] = [
+  [1, 'C-1001', 'Contoso Retail Group',  'Enterprise', 'United States', 'East',    '2025-01-01T00:00:00', null, 1],
+  [2, 'C-1002', 'Fabrikam Outfitters',   'Mid-Market', 'United States', 'West',    '2025-01-01T00:00:00', null, 1],
+  [3, 'C-1003', 'Northwind Traders',     'Enterprise', 'Canada',        'Central', '2025-01-01T00:00:00', null, 1],
+  [4, 'C-1004', 'Adventure Works Cycles','SMB',        'United States', 'South',   '2025-01-01T00:00:00', null, 1],
+];
+
+// dim_product (SCD-2, all is_current=1): product_key, product_id,
+// product_name, category, subcategory, brand, list_price, valid_from,
+// valid_to, is_current
+const DIM_PRODUCT_ROWS: any[][] = [
+  [1, 'P-2001', 'Trail Frame 29"',     'Bikes',       'Mountain',    'Summit',  1899.00, '2025-01-01T00:00:00', null, 1],
+  [2, 'P-2002', 'Road Helmet Aero',    'Accessories', 'Helmets',     'Velo',      129.00, '2025-01-01T00:00:00', null, 1],
+  [3, 'P-2003', 'All-Season Tire 700c','Components',  'Tires',       'GripCo',     64.50, '2025-01-01T00:00:00', null, 1],
+  [4, 'P-2004', 'Hydration Pack 2L',   'Accessories', 'Hydration',   'TrailH2O',   79.00, '2025-01-01T00:00:00', null, 1],
+];
+
+// fact_sales: sales_key, customer_key, product_key, order_date_key,
+// ship_date_key, order_id, quantity, unit_price, discount_pct,
+// extended_amount, cost_amount, margin_amount.
+//   extended = qty * unit_price * (1 - discount)
+//   cost     = qty * list_price * 0.55
+//   margin   = extended - cost
+const FACT_SALES_ROWS: any[][] = [
+  // k  cust prod  order_dk  ship_dk   order_id   qty  unit_price disc   extended  cost      margin
+  [1,  1,   1,    20260105, 20260106, 'SO-30001',  2,  1899.00,  0.0500, 3608.10, 2088.90, 1519.20],
+  [2,  2,   2,    20260106, 20260106, 'SO-30002', 10,   129.00,  0.0000, 1290.00,  709.50,  580.50],
+  [3,  3,   3,    20260212, 20260214, 'SO-30003', 40,    64.50,  0.1000, 2322.00, 1419.00,  903.00],
+  [4,  1,   4,    20260214, 20260214, 'SO-30004',  6,    79.00,  0.0000,  474.00,  260.70,  213.30],
+  [5,  4,   1,    20260403, 20260405, 'SO-30005',  1,  1899.00,  0.0000, 1899.00, 1044.45,  854.55],
+  [6,  2,   3,    20260405, 20260405, 'SO-30006', 80,    64.50,  0.1500, 4386.00, 2838.00, 1548.00],
+  [7,  3,   2,    20260518, 20260520, 'SO-30007', 25,   129.00,  0.0500, 3063.75, 1773.75, 1290.00],
+  [8,  4,   4,    20260520, 20260520, 'SO-30008', 12,    79.00,  0.0000,  948.00,  521.40,  426.60],
+];
+
+const SAMPLE_ROWS = [
+  {
+    table: 'gold.dim_date',
+    columns: ['date_key', 'date', 'year', 'quarter', 'month', 'day', 'day_of_week', 'day_name', 'month_name', 'iso_week', 'is_weekend'],
+    rows: DIM_DATE_ROWS,
+  },
+  {
+    table: 'gold.dim_customer',
+    columns: ['customer_key', 'customer_id', 'customer_name', 'customer_segment', 'country', 'region', 'valid_from', 'valid_to', 'is_current'],
+    rows: DIM_CUSTOMER_ROWS,
+  },
+  {
+    table: 'gold.dim_product',
+    columns: ['product_key', 'product_id', 'product_name', 'category', 'subcategory', 'brand', 'list_price', 'valid_from', 'valid_to', 'is_current'],
+    rows: DIM_PRODUCT_ROWS,
+  },
+  {
+    table: 'gold.fact_sales',
+    columns: ['sales_key', 'customer_key', 'product_key', 'order_date_key', 'ship_date_key', 'order_id', 'quantity', 'unit_price', 'discount_pct', 'extended_amount', 'cost_amount', 'margin_amount'],
+    rows: FACT_SALES_ROWS,
+  },
+];
+
 // ─── Bundle ──────────────────────────────────────────────────────────
 
 const bundle: AppBundle = {
@@ -755,6 +839,7 @@ of them and see the result in the warehouse editor.
       content: {
         kind: 'warehouse',
         ddl: WAREHOUSE_DDL,
+        sampleRows: SAMPLE_ROWS,
         dbtProject: DBT_PROJECT_YML,
         dbtModels: [
           { layer: 'bronze', name: 'bronze_sales',    sql: BRONZE_SALES_SQL },

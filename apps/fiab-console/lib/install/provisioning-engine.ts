@@ -39,6 +39,7 @@ import { dataProductProvisioner } from './provisioners/data-product';
 import { mlModelProvisioner } from './provisioners/ml-model';
 import { promptFlowProvisioner } from './provisioners/prompt-flow';
 import { evaluationProvisioner } from './provisioners/evaluation';
+import { logicAppProvisioner } from './provisioners/logic-app';
 
 /** Mapping from editor item type → provisioner.  Item types not listed
  * here are Cosmos-only (no Phase-2 backend side-effect). */
@@ -62,6 +63,7 @@ const PROVISIONERS: Record<string, Provisioner> = {
   'ml-model': mlModelProvisioner, // import + run the bundle's training script → trains & registers the model in MLflow/UC
   'prompt-flow': promptFlowProvisioner, // create the grounded RAG flow in the AI Foundry project (AML data-plane)
   'evaluation': evaluationProvisioner, // submit a real AI Foundry evaluation run (no hard-coded scores)
+  'logic-app': logicAppProvisioner, // PUT Microsoft.Logic/workflows + fire manual trigger run + poll run history (real ARM)
 };
 
 /** Item types that have a Phase-2 provisioner — exposed for the wizard
