@@ -78,8 +78,16 @@ export function buildRunParameters(
  * @param fabricWorkspaceId  the Fabric workspace the pipeline lives in
  * @param pipelineId         the created/updated pipeline item id
  * @param parameters         flat name→value run parameters (already projected)
- * @param opts.maxPolls      max GET-history polls (default 6)
- * @param opts.pollMs        delay between polls in ms (default 5000)
+ * @param opts.maxPolls      max GET-history polls (default 2 — short settle)
+ * @param opts.pollMs        delay between polls in ms (default 3000)
+ *
+ * Settle, don't block: the on-demand run is TRIGGERED via real Fabric REST and
+ * keeps running on the capacity. We poll only a few seconds to surface the new
+ * job-instance id (and catch an instant auth gate / failure), then return —
+ * the install request must finish under the Azure Front Door ~30s gateway
+ * window, and a Fabric pipeline run can outlast that. A still-running instance
+ * is reported with its live id + InProgress status, not blocked on. Callers
+ * needing a longer wait pass opts explicitly (e.g. a background worker).
  */
 export async function triggerAndPollPipelineRun(
   fabricWorkspaceId: string,
@@ -88,8 +96,8 @@ export async function triggerAndPollPipelineRun(
   opts: { maxPolls?: number; pollMs?: number } = {},
 ): Promise<SeedRunResult> {
   const steps: string[] = [];
-  const maxPolls = opts.maxPolls ?? 6;
-  const pollMs = opts.pollMs ?? 5000;
+  const maxPolls = opts.maxPolls ?? 2;
+  const pollMs = opts.pollMs ?? 3000;
 
   // Snapshot existing instances so we can identify the NEW one created by
   // our run (Fabric's run-on-demand returns 202 + a Location header but

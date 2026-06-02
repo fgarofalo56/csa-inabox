@@ -819,16 +819,21 @@ const bundle: AppBundle = {
         ],
         ingestionPolicies: [
           {
+            // Retention uses `.alter-merge … policy retention softdelete = …`;
+            // caching uses `.alter … policy caching hot = …` (NO `-merge`, and
+            // the `=` is required). Grounded in Microsoft Learn:
+            //   .alter-merge table policy retention command, and
+            //   .alter table policy caching command (`.alter table T policy caching hot = 30d`).
             table: 'PipelineLatency',
             policy:
               '.alter-merge table PipelineLatency policy retention softdelete = 30d\n' +
-              '.alter-merge table PipelineLatency policy caching   hot        =  7d',
+              '.alter table PipelineLatency policy caching hot = 7d',
           },
           {
             table: 'IngestionThroughput',
             policy:
               '.alter-merge table IngestionThroughput policy retention softdelete = 90d\n' +
-              '.alter-merge table IngestionThroughput policy caching   hot        = 14d',
+              '.alter table IngestionThroughput policy caching hot = 14d',
           },
         ],
         starterQueries: [

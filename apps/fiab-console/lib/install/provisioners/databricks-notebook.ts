@@ -65,9 +65,11 @@ export const databricksNotebookProvisioner: Provisioner = async (input): Promise
   if (run.lifeCycleState) secondaryIds.lifeCycleState = run.lifeCycleState;
   if (run.resultState) secondaryIds.resultState = run.resultState;
 
-  // A FAILED Spark run means the data-production path errored — surface it as
-  // a failure (not silent success) so the operator fixes it, per no-vaporware.
-  if (run.resultState && run.resultState !== 'SUCCESS') {
+  // A TERMINAL non-SUCCESS Spark run means the data-production path errored —
+  // surface it as a failure (not silent success) so the operator fixes it,
+  // per no-vaporware. We only judge result_state once the run has actually
+  // settled; a still-running job has no result_state and must NOT be flagged.
+  if (run.settled && run.resultState && run.resultState !== 'SUCCESS') {
     return {
       status: 'failed',
       error: `Notebook run ${run.runId} finished ${run.lifeCycleState}/${run.resultState}${run.stateMessage ? `: ${run.stateMessage}` : ''}.`,
@@ -77,7 +79,13 @@ export const databricksNotebookProvisioner: Provisioner = async (input): Promise
     };
   }
 
-  // Still in progress at the end of the poll budget — created, run tracked.
+  // Created. The notebook was imported and a real run was submitted. If it
+  // settled to SUCCESS within the short window the medallion data is live now;
+  // otherwise it is still executing on the cluster (tracked by runId) and the
+  // install request returns promptly instead of blocking past the Front Door
+  // gateway window. The lakehouse provisioner's seeded Gold/dim rows mean the
+  // semantic model + report render immediately regardless.
+  if (!run.settled) secondaryIds.runProgress = 'executing';
   return {
     status: 'created',
     resourceId: run.runId !== undefined ? String(run.runId) : run.notebookPath,

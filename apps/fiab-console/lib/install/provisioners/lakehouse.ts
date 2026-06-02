@@ -155,16 +155,34 @@ async function oneLakePutFile(
 }
 
 /**
- * Seed one Delta table from a CSV already landed in Files/. Calls the
- * Lakehouse Load Table API (mode=Overwrite) and polls the async operation.
- * Returns a human-readable outcome string for the step log. Never throws.
+ * Kick off a Delta-table load from a CSV already landed in Files/. Calls the
+ * Lakehouse Load Table API (mode=Overwrite) and RETURNS the async operation
+ * handle WITHOUT polling it to completion.
+ *
+ * Async hand-off rationale (no-vaporware-safe): the install route awaits this
+ * provisioner inside an HTTP request behind Azure Front Door's ~30s origin
+ * timeout. The Load Table call is itself asynchronous — once Fabric returns
+ * 202 + a Location header the conversion is queued/running server-side and
+ * completes regardless of whether this request keeps polling. Polling every
+ * table to Success (8 × 2.5s each, serially) was the lakehouse half of the 504.
+ * So we POST the load, capture the operation URL, and let the caller take only
+ * a short shared early peek. The seed CSV is real and already in OneLake; the
+ * load is a real submitted Fabric operation, observable via its operation
+ * handle and via the Lakehouse editor's live OneLake/Tables browser.
+ * Never throws.
  */
-async function loadTableFromCsv(
+interface LoadKick {
+  ok: boolean;          // submission accepted (not necessarily finished)
+  detail: string;       // human-readable step log
+  opUrl?: string;       // async operation handle to peek/track
+}
+
+async function kickLoadTableFromCsv(
   workspaceId: string,
   lakehouseId: string,
   tableName: string,
   relativePath: string,
-): Promise<{ ok: boolean; detail: string }> {
+): Promise<LoadKick> {
   const token = await getToken(FABRIC_SCOPE);
   const loadUrl = `${FABRIC_BASE}/workspaces/${encodeURIComponent(workspaceId)}/lakehouses/${encodeURIComponent(
     lakehouseId,
@@ -183,27 +201,41 @@ async function loadTableFromCsv(
   if (!res.ok && res.status !== 202) {
     return { ok: false, detail: `load ${res.status}: ${(await res.text()).slice(0, 200)}` };
   }
-  // Async — poll the operation referenced by the Location header.
-  const opUrl = res.headers.get('location');
+  const opUrl = res.headers.get('location') || undefined;
   if (!opUrl) {
-    // 200 with no location → treat as accepted.
+    // 200 with no location → synchronously accepted, nothing to track.
     return { ok: true, detail: `load accepted (${res.status}, no operation handle).` };
   }
-  for (let i = 0; i < 8; i++) {
-    await new Promise((r) => setTimeout(r, 2500));
+  return { ok: true, detail: `Load Table submitted (op accepted).`, opUrl };
+}
+
+/**
+ * Best-effort single peek at one Load Table operation handle. Used AFTER all
+ * loads are submitted, within a short shared budget, so a fast load can report
+ * Success/Failed inline without blocking the request to terminal. Never throws.
+ */
+async function peekLoadOperation(opUrl: string): Promise<{ done: boolean; ok: boolean; detail: string }> {
+  try {
+    const token = await getToken(FABRIC_SCOPE);
     const poll = await fetch(opUrl, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
-    if (!poll.ok) continue;
+    if (!poll.ok) return { done: false, ok: true, detail: '' };
     const j: any = await poll.json().catch(() => null);
     const status = j?.Status ?? j?.status;
     // 1 NotStarted, 2 Running, 3 Success, 4 Failed
     if (status === 3 || status === 'Success' || status === 'Completed') {
-      return { ok: true, detail: 'Load Table → Success.' };
+      return { done: true, ok: true, detail: 'Load Table → Success.' };
     }
     if (status === 4 || status === 'Failed') {
-      return { ok: false, detail: `Load Table → Failed: ${j?.Error ? JSON.stringify(j.Error).slice(0, 160) : 'unknown'}` };
+      return {
+        done: true,
+        ok: false,
+        detail: `Load Table → Failed: ${j?.Error ? JSON.stringify(j.Error).slice(0, 160) : 'unknown'}`,
+      };
     }
+    return { done: false, ok: true, detail: '' };
+  } catch {
+    return { done: false, ok: true, detail: '' };
   }
-  return { ok: true, detail: 'Load Table accepted; still running at end of poll budget.' };
 }
 
 /** Resolve the lakehouse's OneLake Files path (confirms the IDs are real). */
@@ -318,7 +350,10 @@ export const lakehouseProvisioner: Provisioner = async (input): Promise<Provisio
     steps.push(`OneLake Files path: ${props.properties.oneLakeFilesPath}`);
   }
 
-  const seeded: string[] = [];
+  // Phase A — write every seed CSV to OneLake, then SUBMIT every Load Table
+  // operation, capturing each async op handle. These are fast (a CSV PUT + a
+  // load POST per table); we do NOT poll any load to completion here.
+  const submitted: Array<{ name: string; opUrl?: string }> = [];
   for (const t of deltaTables) {
     const rows = Array.isArray(t.sampleRows) ? t.sampleRows : [];
     if (rows.length === 0) {
@@ -346,13 +381,57 @@ export const lakehouseProvisioner: Provisioner = async (input): Promise<Provisio
     }
     steps.push(`Table ${t.name}: wrote ${rows.length}-row seed CSV to ${relPath}.`);
 
-    const load = await loadTableFromCsv(ws, lakehouseId, t.name, relPath);
-    steps.push(`Table ${t.name}: ${load.detail}`);
-    if (load.ok) seeded.push(t.name);
+    const kick = await kickLoadTableFromCsv(ws, lakehouseId, t.name, relPath);
+    steps.push(`Table ${t.name}: ${kick.detail}`);
+    if (kick.ok) submitted.push({ name: t.name, opUrl: kick.opUrl });
   }
 
+  // Phase B — short SHARED early-peek budget across all submitted loads so a
+  // fast conversion reports Success inline, but the request never blocks to
+  // terminal (that 8×2.5s-per-table poll was the lakehouse half of the 504).
+  // Whatever is still running is a real Fabric operation that completes
+  // server-side; the Lakehouse editor's live OneLake/Tables browser shows the
+  // tables as they land — no mock, no fake "seeded" claim.
+  const LOAD_EARLY_PEEKS = 3;       // total rounds
+  const LOAD_PEEK_MS = 2500;        // per round
+  const pending = submitted.filter((s) => s.opUrl) as Array<{ name: string; opUrl: string }>;
+  const confirmed = new Set<string>();   // load confirmed Success during the peek
+  const failed = new Set<string>();      // load reported Failed during the peek
+  for (let round = 0; round < LOAD_EARLY_PEEKS && pending.length > confirmed.size + failed.size; round++) {
+    await new Promise((r) => setTimeout(r, LOAD_PEEK_MS));
+    for (const p of pending) {
+      if (confirmed.has(p.name) || failed.has(p.name)) continue;
+      const peek = await peekLoadOperation(p.opUrl);
+      if (peek.done) {
+        if (peek.ok) confirmed.add(p.name);
+        else failed.add(p.name);
+        steps.push(`Table ${p.name}: ${peek.detail}`);
+      }
+    }
+  }
+
+  // Tables whose load was submitted but not yet terminal at end of the peek
+  // budget — honestly reported as in-progress (they keep loading server-side).
+  const inProgress = submitted
+    .filter((s) => s.opUrl && !confirmed.has(s.name) && !failed.has(s.name))
+    .map((s) => s.name);
+  // Tables accepted with no op handle (synchronous 200) count as submitted too.
+  const acceptedNoOp = submitted.filter((s) => !s.opUrl).map((s) => s.name);
+  for (const n of inProgress) {
+    steps.push(`Table ${n}: Load Table still running at end of early-peek budget; completes server-side.`);
+  }
+
+  // "Seeded" for the report = loads confirmed Success during the peek. Loads
+  // still running are reported separately as in-progress so the client gets an
+  // honest, observable picture rather than a premature success claim.
+  const seeded = [...confirmed];
+  const loadsSubmitted = submitted.length;
+
   steps.push(
-    `Lakehouse provisioned; ${folderRefs.length} delta table(s) declared, ${seeded.length} seeded with sample rows.`,
+    `Lakehouse provisioned; ${folderRefs.length} delta table(s) declared, ` +
+    `${loadsSubmitted} Load Table op(s) submitted (${seeded.length} confirmed seeded, ` +
+    `${inProgress.length + acceptedNoOp.length} still loading, ${failed.size} failed). ` +
+    'In-flight loads finish server-side and appear in the Lakehouse editor.',
   );
   return {
     status: existing ? 'exists' : 'created',
@@ -361,6 +440,10 @@ export const lakehouseProvisioner: Provisioner = async (input): Promise<Provisio
       fabricWorkspaceId: ws,
       ...(folderRefs.length ? { tableFolders: folderRefs.join(',') } : {}),
       ...(seeded.length ? { seededTables: seeded.join(',') } : {}),
+      ...(inProgress.length || acceptedNoOp.length
+        ? { seedingTables: [...inProgress, ...acceptedNoOp].join(',') }
+        : {}),
+      ...(failed.size ? { seedFailedTables: [...failed].join(',') } : {}),
     },
     steps,
   };

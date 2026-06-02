@@ -132,11 +132,19 @@ const ES_DEST_LAKEHOUSE = {
 // ════════════════════════════════════════════════════════════════════════
 
 // update-policy style enrichment function: parse raw → typed Orders rows.
-const KQL_FN_PARSE_ORDERS = `// Shapes a raw streamed order envelope into a typed Orders row. Wired as the
-// table update policy so streaming-ingested RawOrders fan out into Orders.
 //
+// Each KQL function below is a COMPLETE `.create-or-alter function …{…}`
+// control command (the shape the kqlDatabaseProvisioner runs verbatim — it
+// detects a full command past any leading `//` comment lines and does NOT
+// re-wrap it, which is what previously caused the SYN0002 double-wrap). Both
+// functions are valid CSL; `parse_orders` reads the real RawOrders landing
+// table declared in `tables[]` below so it passes Kusto semantic validation
+// at create time. Wired as the Orders update policy (see ingestionPolicies):
 //   .alter table Orders policy update
-//   @'[{"Source":"RawOrders","Query":"parse_orders()","IsEnabled":true}]'
+//   @'[{"IsEnabled":true,"Source":"RawOrders","Query":"parse_orders()", … }]'
+const KQL_FN_PARSE_ORDERS = `// Shapes a raw streamed order envelope into a typed Orders row. Wired as the
+// Orders table update policy so streaming-ingested RawOrders fan out into
+// Orders.
 .create-or-alter function parse_orders()
 {
     RawOrders
@@ -152,11 +160,11 @@ const KQL_FN_PARSE_ORDERS = `// Shapes a raw streamed order envelope into a type
     | where isnotempty(order_id)
 }`;
 
-// Rolling-window revenue + error-rate health, parameterized by time range so
-// the dashboard time-range parameter (_startTime/_endTime) flows in.
+// Rolling-window revenue + error-rate health, parameterized by time window so
+// the dashboard time-range parameter flows in.
 const KQL_FN_ORDER_HEALTH = `// Per-region order health over a window: order count, revenue, p95 latency,
 // and error rate. Used by the dashboard's per-region table tile.
-.create-or-alter function order_health(window: timespan = 1h)
+.create-or-alter function order_health(window:timespan = 1h)
 {
     Orders
     | where event_time > ago(window)
@@ -323,6 +331,10 @@ const bundle: AppBundle = {
     'https://learn.microsoft.com/kusto/query/series-decompose-anomalies-function',
     'https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/overview',
     'https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/add-source-events-hub',
+    'https://learn.microsoft.com/kusto/management/create-alter-function',
+    'https://learn.microsoft.com/kusto/management/update-policy',
+    'https://learn.microsoft.com/kusto/management/alter-table-cache-policy-command',
+    'https://learn.microsoft.com/kusto/management/alter-merge-table-retention-policy-command',
   ],
   items: [
     // ─── Eventstream: live source → Eventhouse + cold Lakehouse ───────────
@@ -355,6 +367,23 @@ const bundle: AppBundle = {
       content: {
         kind: 'kql-database',
         tables: [
+          {
+            // Raw streaming landing table. The Eventstream direct-ingestion
+            // destination lands the unparsed JSON envelope here; the
+            // `parse_orders` update function fans each row out into the typed
+            // Orders table (see the update policy in `ingestionPolicies`).
+            // Declared first so `parse_orders` passes Kusto semantic
+            // validation when the function is created.
+            name: 'RawOrders',
+            columns: [
+              { name: 'payload',     type: 'string'   },
+              { name: 'enqueued_at', type: 'datetime' },
+            ],
+            sample: [
+              ['{"ts":"2026-06-01T14:00:00Z","orderId":"ord-100001","region":"us-east","channel":"web","amount":42.50,"latencyMs":180,"status":"completed","kind":"order"}', '2026-06-01T14:00:00Z'],
+              ['{"ts":"2026-06-01T14:00:07Z","orderId":"ord-100004","region":"us-east","channel":"partner","amount":0.00,"latencyMs":2100,"status":"failed","kind":"order"}', '2026-06-01T14:00:07Z'],
+            ],
+          },
           {
             name: 'Orders',
             columns: [
@@ -401,10 +430,31 @@ const bundle: AppBundle = {
         ingestionPolicies: [
           {
             table: 'Orders',
+            // One control command per line — executed verbatim by the
+            // provisioner (it splits on newline). Syntax grounded in Learn:
+            //  - retention uses .alter-merge (merges into existing policy):
+            //    https://learn.microsoft.com/kusto/management/alter-merge-table-retention-policy-command
+            //  - caching uses .alter (NOT .alter-merge — caching has no merge
+            //    form; `.alter table T policy caching hot = 7d`):
+            //    https://learn.microsoft.com/kusto/management/alter-table-cache-policy-command
+            //  - streamingingestion enable gives the dashboard sub-second
+            //    freshness:
+            //    https://learn.microsoft.com/kusto/management/show-table-streaming-ingestion-policy-command
             policy:
               '.alter-merge table Orders policy retention softdelete = 90d\n' +
-              '.alter-merge table Orders policy caching   hot        =  7d\n' +
+              '.alter table Orders policy caching hot = 7d\n' +
               '.alter table Orders policy streamingingestion enable',
+          },
+          {
+            table: 'RawOrders',
+            // Update policy: every row landed in RawOrders is transformed by
+            // parse_orders() and appended to Orders. transactional=true so a
+            // bad row fails ingestion rather than silently dropping. Grounded
+            // in Learn (update policy):
+            //   https://learn.microsoft.com/kusto/management/update-policy
+            policy:
+              ".alter table Orders policy update " +
+              "@'[{\"IsEnabled\":true,\"Source\":\"RawOrders\",\"Query\":\"parse_orders()\",\"IsTransactional\":true,\"PropagateIngestionProperties\":false}]'",
           },
         ],
         starterQueries: [

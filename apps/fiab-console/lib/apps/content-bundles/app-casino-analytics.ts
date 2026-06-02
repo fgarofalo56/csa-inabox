@@ -1164,6 +1164,94 @@ print("  gold.gld_machine_performance")
 print("  MLflow experiment: /Casino/floor_optimization")
 `;
 
+// ─── Synthetic seed rows ────────────────────────────────────────────────
+// Inserted after the DDL by the warehouse provisioner so the warehouse is
+// data-bearing on first open. Five players, five tables/machines, three
+// gaming days, five rated sessions, and six handle events — enough for every
+// starter query (VIP, hold-by-zone, CTR pre-alert, churn, floor performance)
+// and the silver/gold dbt views to return non-empty result sets.
+// ALL DATA IS ENTIRELY SYNTHETIC — no real player or financial data.
+
+const WAREHOUSE_SAMPLE_ROWS: { table: string; columns?: string[]; rows: any[][] }[] = [
+  {
+    table: 'casino.dim_player',
+    columns: [
+      'player_sk', 'player_id', 'player_first_name', 'player_last_name',
+      'enrollment_date', 'tier', 'home_state', 'date_of_birth',
+      'self_excluded', 'do_not_market', 'lifetime_adt', 'last_visit_date',
+      'is_current', 'valid_from',
+    ],
+    rows: [
+      [1, 'P100001', 'Avery',  'Nguyen',   '2019-03-14', 'DIAMOND',  'NV', '1971-07-02', 0, 0, 2150.00, '2026-05-30', 1, '2019-03-14T00:00:00'],
+      [2, 'P100002', 'Jordan', 'Whitfield','2020-08-01', 'PLATINUM', 'CA', '1980-11-21', 0, 0,  620.00, '2026-05-28', 1, '2020-08-01T00:00:00'],
+      [3, 'P100003', 'Riley',  'Okafor',   '2021-01-19', 'GOLD',     'AZ', '1965-02-09', 0, 0,  205.00, '2026-04-12', 1, '2021-01-19T00:00:00'],
+      [4, 'P100004', 'Sasha',  'Delgado',  '2022-06-30', 'SILVER',   'OR', '1990-09-15', 0, 0,   72.00, '2026-03-02', 1, '2022-06-30T00:00:00'],
+      [5, 'P100005', 'Morgan', 'Bauer',    '2018-12-05', 'BRONZE',   'WA', '1958-04-27', 0, 0,   18.00, '2025-12-20', 1, '2018-12-05T00:00:00'],
+    ],
+  },
+  {
+    table: 'casino.dim_table',
+    columns: [
+      'table_sk', 'table_id', 'table_type', 'game_theme', 'denomination',
+      'floor_zone', 'min_bet', 'max_bet', 'target_hold_pct',
+      'par_sheet_rtp_pct', 'install_date', 'is_active',
+    ],
+    rows: [
+      [1, 'SLT-0001', 'SLOT',      'Buffalo Gold',   1.00, 'A1',  1.00,  500.00, 8.00, 92.50, '2023-02-01', 1],
+      [2, 'SLT-0002', 'SLOT',      'Lightning Link', 0.25, 'A2',  0.25,  250.00, 9.00, 91.00, '2023-02-01', 1],
+      [3, 'BJ-0007',  'BLACKJACK', 'Classic 21',     5.00, 'VIP', 25.00, 5000.00, 6.00, 99.50, '2022-11-15', 1],
+      [4, 'SLT-0034', 'SLOT',      'Dragon Cash',    0.50, 'B1',  0.50,  300.00, 8.50, 92.00, '2024-01-20', 1],
+      [5, 'ROU-0003', 'ROULETTE',  'Double Zero',    1.00, 'C1',  5.00, 10000.00, 5.26, 94.74, '2021-09-10', 1],
+    ],
+  },
+  {
+    table: 'casino.dim_date',
+    columns: [
+      'date_sk', 'full_date', 'day_of_week', 'day_name', 'is_weekend',
+      'week_of_year', 'month_num', 'month_name', 'quarter_num', 'year_num',
+      'gaming_day_start',
+    ],
+    rows: [
+      [20260530, '2026-05-30', 7, 'Saturday', 1, 22, 5, 'May', 2, 2026, '2026-05-30T06:00:00'],
+      [20260529, '2026-05-29', 6, 'Friday',   1, 22, 5, 'May', 2, 2026, '2026-05-29T06:00:00'],
+      [20260528, '2026-05-28', 5, 'Thursday', 0, 22, 5, 'May', 2, 2026, '2026-05-28T06:00:00'],
+    ],
+  },
+  {
+    table: 'casino.fact_session',
+    columns: [
+      'session_sk', 'session_id', 'player_sk', 'table_sk', 'date_sk',
+      'session_start', 'session_end', 'duration_minutes', 'game_type',
+      'coin_in', 'coin_out', 'theoretical_win', 'actual_win', 'avg_bet',
+      'rated_play', 'comp_value', 'session_rating', 'floor_zone', 'ingest_ts',
+    ],
+    rows: [
+      [1, 'S2026053000001', 1, 3, 20260530, '2026-05-30T20:15:00', '2026-05-30T23:40:00', 205, 'BLACKJACK', 84000.00, 31000.00, 5040.00, 53000.00, 250.00, 1, 1200.00, 5, 'VIP', '2026-05-31T06:05:00'],
+      [2, 'S2026053000002', 2, 1, 20260530, '2026-05-30T18:30:00', '2026-05-30T20:05:00',  95, 'SLOT',      12500.00,  9800.00,  1000.00,  2700.00,   5.00, 1,  150.00, 4, 'A1',  '2026-05-31T06:05:00'],
+      [3, 'S2026052900001', 3, 4, 20260529, '2026-05-29T13:10:00', '2026-05-29T15:00:00', 110, 'SLOT',       3400.00,  3050.00,   289.00,   350.00,   2.50, 1,   40.00, 3, 'B1',  '2026-05-30T06:05:00'],
+      [4, 'S2026052900002', 4, 2, 20260529, '2026-05-29T11:00:00', '2026-05-29T11:45:00',  45, 'SLOT',        900.00,   840.00,    81.00,    60.00,   1.25, 1,   10.00, 2, 'A2',  '2026-05-30T06:05:00'],
+      [5, 'S2026052800001', 5, 5, 20260528, '2026-05-28T22:05:00', '2026-05-28T22:35:00',  30, 'ROULETTE',     600.00,   570.00,    31.56,    30.00,  20.00, 1,    5.00, 1, 'C1',  '2026-05-29T06:05:00'],
+    ],
+  },
+  {
+    table: 'casino.fact_handle',
+    columns: [
+      'handle_sk', 'event_id', 'session_sk', 'player_sk', 'table_sk',
+      'date_sk', 'event_ts', 'event_type', 'denomination', 'credits_wagered',
+      'credits_won', 'jackpot_amount', 'hand_pay_amount', 'rtp_contribution',
+      'floor_zone', 'ctr_trigger', 'ingest_ts',
+    ],
+    rows: [
+      [1, 'E20260530A0001', 2, 2, 1, 20260530, '2026-05-30T18:31:12', 'SPIN',     1.00,  500,    0, null,     null, 0.9100, 'A1',  0, '2026-05-31T06:05:00'],
+      [2, 'E20260530A0002', 2, 2, 1, 20260530, '2026-05-30T18:42:55', 'JACKPOT',  1.00,  500, 2500, 2500.00,  null, 0.9100, 'A1',  0, '2026-05-31T06:05:00'],
+      [3, 'E20260530V0001', 1, 1, 3, 20260530, '2026-05-30T21:05:00', 'CASH_IN',  1.00, 12000,   0, null,     null, null,   'VIP', 1, '2026-05-31T06:05:00'],
+      [4, 'E20260530V0002', 1, 1, 3, 20260530, '2026-05-30T22:50:00', 'HAND_PAY', 1.00,     0, 9000, null,  9000.00, null,   'VIP', 0, '2026-05-31T06:05:00'],
+      [5, 'E20260529B0001', 3, 3, 4, 20260529, '2026-05-29T13:15:30', 'SPIN',     0.50,  100,   80, null,     null, 0.9200, 'B1',  0, '2026-05-30T06:05:00'],
+      [6, 'E20260528C0001', 5, 5, 5, 20260528, '2026-05-28T22:10:00', 'SPIN',     1.00,   20,    0, null,     null, 0.9474, 'C1',  0, '2026-05-29T06:05:00'],
+    ],
+  },
+];
+
 // ─── Bundle ─────────────────────────────────────────────────────────────
 
 const bundle: AppBundle = {
@@ -1214,6 +1302,16 @@ const bundle: AppBundle = {
           { name: 'Churn-risk players for win-back campaign', sql: STARTER_QUERY_CHURN },
           { name: 'Daily floor performance by zone with hold variance flag', sql: STARTER_QUERY_FLOOR_PERF },
         ],
+        // Synthetic seed so the warehouse lands 'seeded' (not empty) the moment
+        // the install finishes: the starter queries + dbt views over these base
+        // tables return real result sets. Inserted by the warehouse provisioner
+        // (seedSampleRows → multi-row INSERT + SELECT COUNT(*) verify) over the
+        // same Synapse TDS target the DDL ran on. Column lists are explicit so
+        // the computed/STORED columns (net_result, coin_in_amount, coin_out_amount)
+        // are left for the engine and the FK order (players → tables → dates →
+        // sessions → handles) is respected by the array order below.
+        // ALL VALUES ARE ENTIRELY SYNTHETIC — no real player data.
+        sampleRows: WAREHOUSE_SAMPLE_ROWS,
       },
     },
     {

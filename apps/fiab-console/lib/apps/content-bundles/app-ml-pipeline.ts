@@ -20,16 +20,25 @@
  *     -> Lakehouse-Monitoring quality monitor on inference table,
  *        drift Databricks-SQL alert + Activator rule (Step 5)
  *
- * Items map to provisioners where one exists today:
+ * Every item maps to a real Phase-2 provisioner:
  *   lakehouse        -> lakehouseProvisioner      (delta tables + seeded rows)
- *   notebook (x5)    -> notebookProvisioner       (real runnable .ipynb cells)
+ *   notebook (x5)    -> notebookProvisioner       (real Fabric .ipynb items)
  *   warehouse        -> warehouseProvisioner       (inference-log + drift DDL + rows)
  *   data-pipeline    -> dataPipelineProvisioner    (Test->Train->Validate->Deploy)
  *   activator        -> activatorProvisioner       (drift alert rule)
- *   ml-model         -> (registry editor only; NO Phase-2 provisioner yet —
- *                        integrator/verify pass should flag the gap. Kept per
- *                        the no-vaporware "include it, flag the gap" rule
- *                        because the doc's whole point is a registered model.)
+ *   ml-model         -> mlModelProvisioner         (imports trainingCode as a
+ *                        Databricks notebook and submits a real runs/submit
+ *                        that trains + registers customer_churn_model in the
+ *                        MLflow / Unity Catalog registry)
+ *
+ * Provisioning is async-safe: long-running operations (Lakehouse Load Table,
+ * the pipeline run, and the Databricks training run) are SUBMITTED via real
+ * REST and handed off with their live operation / run id — install does not
+ * block to terminal, so the full 10-item install finishes inside Azure Front
+ * Door's ~30s origin-response window (the prior synchronous poll-to-terminal
+ * blew that ceiling and 504'd). Each editor + /api/databricks/jobs observe the
+ * work completing server-side; re-running install reconciles anything still in
+ * flight. Backends that aren't wired surface honest remediation gates.
  *
  * Every Databricks/MLflow detail is grounded in the doc + Microsoft Learn:
  *   - FeatureEngineeringClient.create_table / create_training_set / log_model
@@ -483,10 +492,21 @@ const bundle: AppBundle = {
     '+ promotion to **Production** with inference auto-capture.\n' +
     '5. **Operations** — Lakehouse-Monitoring quality monitor, drift metrics ' +
     'warehouse, and an Activator drift-alert rule.\n\n' +
-    'The five notebooks, the lakehouse, the warehouse, the orchestration ' +
-    'pipeline, and the activator rule are all provisioned + seeded at install. ' +
-    'The registered model surface (`ml-model`) renders but has no Phase-2 ' +
-    'auto-provisioner yet — run the training notebook to register it.',
+    'Install provisions all ten items against real backends — the lakehouse + ' +
+    'its Delta tables, the warehouse DDL + seed rows, the five Fabric ' +
+    'notebooks, the orchestration pipeline, the Activator rule, and the ' +
+    'registered model. Long-running operations (the Lakehouse Load Table ' +
+    'conversions, the pipeline run, and the model-training Databricks run) are ' +
+    'SUBMITTED with real REST and then handed off: install returns as soon as ' +
+    'each operation is accepted rather than blocking on it, so the whole ' +
+    '10-item install completes well inside the gateway timeout. Each item ' +
+    'carries its live operation / run id, so the editors and ' +
+    '`/api/databricks/jobs` show the work finishing server-side. Re-running ' +
+    'install is idempotent and reconciles any operation still in flight. Where ' +
+    'a backend is not wired for the deployment (no bound Fabric workspace, no ' +
+    'Databricks cluster, a paused Synapse pool, …), that item surfaces an ' +
+    'honest remediation gate naming the exact env var / role / action instead ' +
+    'of a fake success.',
   sourceDocs: ['docs/learn/08-solutions/ml-pipeline'],
   items: [
     // ─── Lakehouse: raw bronze + features + labels + validation (seeded) ──
@@ -496,8 +516,11 @@ const bundle: AppBundle = {
       description:
         'OneLake lakehouse holding the raw bronze tables (transactions, ' +
         'customers), the engineered feature table, the churn labels, and the ' +
-        'held-out validation set used across the MLOps loop. Seeded with ' +
-        'sample rows so the training notebook runs end-to-end on first open.',
+        'held-out validation set used across the MLOps loop. Install lands a ' +
+        'seed CSV per table in OneLake and submits a real Lakehouse Load Table ' +
+        'conversion for each, so the sample rows become queryable Delta tables ' +
+        '(the conversions finish server-side; the editor\'s Tables browser ' +
+        'shows them as they land) — the training notebook then runs end-to-end.',
       learnDoc: 'ml-pipeline',
       content: {
         kind: 'lakehouse',
@@ -682,15 +705,23 @@ const bundle: AppBundle = {
       content: { kind: 'notebook', defaultLang: 'pyspark', cells: NB_MONITOR_CELLS },
     },
 
-    // ─── Registered model (ml-model) — editor exists, provisioner gap ─────
+    // ─── Registered model (ml-model) — real Phase-2 training run at install ──
     {
       itemType: 'ml-model',
       displayName: 'customer_churn_model',
       description:
-        'Registered XGBoost churn classifier. Editor renders the algorithm, ' +
-        'hyperparameters, feature schema, and training code; the model itself ' +
-        'is registered to Unity Catalog when notebook "02 — Model Training" ' +
-        'runs (no standalone Phase-2 provisioner yet).',
+        'Registered XGBoost churn classifier. The editor renders the algorithm, ' +
+        'hyperparameters, feature schema, and training code. At install the ' +
+        'ml-model provisioner imports this trainingCode as a Databricks notebook ' +
+        'and submits a real one-time run (api/2.1/jobs/runs/submit) that trains ' +
+        'the model and registers it to the MLflow / Unity Catalog registry via ' +
+        'log_model(registered_model_name="customer_churn_model"). The run is ' +
+        'submitted and tracked (not blocked on) so install stays under the ' +
+        'gateway timeout; track it via /api/databricks/jobs by its run id, then ' +
+        'bind this editor to the registered version. When Databricks is not ' +
+        'wired (no hostname / no runnable cluster / UAMI lacks workspace access) ' +
+        'the item surfaces an honest remediation gate naming the exact env var / ' +
+        'role instead of a fake registration.',
       learnDoc: 'ml-pipeline',
       content: {
         kind: 'ml-model',

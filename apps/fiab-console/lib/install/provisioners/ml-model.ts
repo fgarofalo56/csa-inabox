@@ -66,8 +66,20 @@ interface MlModelContentLike {
   target?: string;
 }
 
-const RUN_POLL_MS = 6000;
-const RUN_MAX_POLLS = 50; // ~5 min budget — a small XGBoost fit + register fits.
+// Async hand-off budget. The install route awaits this provisioner inside the
+// HTTP request, which sits behind Azure Front Door's ~30s origin-response
+// timeout. Submitting the Databricks training run is the real, durable side
+// effect — once `runs/submit` returns a run_id the run is queued/executing on
+// the cluster regardless of whether this request keeps polling. So we do NOT
+// block to terminal here (a PENDING cluster + a real XGBoost fit + UC register
+// can take minutes). Instead we submit, take a SHORT best-effort early peek so
+// a genuinely fast run can report SUCCESS inline, and otherwise return
+// status:'created' with the live run_id immediately. The ML Model editor binds
+// to the live MLflow / Unity Catalog registered model and `/api/databricks/jobs`
+// exposes the run, so progress + terminal state stay fully observable to the
+// client (no mock, no fake "registered" status) per no-vaporware.
+const EARLY_POLL_MS = 4000;
+const EARLY_MAX_POLLS = 2; // ~8s peek — keeps the whole request well under AFD's 30s.
 const RUN_TERMINAL = new Set(['TERMINATED', 'SKIPPED', 'INTERNAL_ERROR']);
 
 /**
@@ -274,14 +286,19 @@ export const mlModelProvisioner: Provisioner = async (input): Promise<ProvisionR
     };
   }
 
-  // 3. Poll the run to terminal.
+  // 3. Async hand-off: take a SHORT best-effort early peek (≤ ~8s) so a
+  // genuinely fast run can report its terminal state inline, but never block
+  // to terminal — a PENDING cluster + real XGBoost fit + UC register can take
+  // minutes and would blow Azure Front Door's ~30s origin timeout (the 504 the
+  // caller was seeing). The run is already executing on the cluster; the editor
+  // and /api/databricks/jobs observe it the rest of the way.
   let run: JobRun | undefined;
-  for (let i = 0; i < RUN_MAX_POLLS; i++) {
-    await new Promise((r) => setTimeout(r, RUN_POLL_MS));
+  for (let i = 0; i < EARLY_MAX_POLLS; i++) {
+    await new Promise((r) => setTimeout(r, EARLY_POLL_MS));
     try {
       run = await getJobRun(runId);
     } catch (e: any) {
-      steps.push(`Run poll ${i + 1} failed: ${e?.message || String(e)}`);
+      steps.push(`Run peek ${i + 1} failed (non-fatal; run continues): ${e?.message || String(e)}`);
       continue;
     }
     const life = run?.state?.life_cycle_state;
@@ -291,31 +308,47 @@ export const mlModelProvisioner: Provisioner = async (input): Promise<ProvisionR
   const lifeCycleState = run?.state?.life_cycle_state;
   const resultState = run?.state?.result_state;
   const stateMessage = run?.state?.state_message;
-  steps.push(
-    `Training run ${runId} → ${lifeCycleState || 'IN_PROGRESS'}` +
-    `${resultState ? `/${resultState}` : ''}${stateMessage ? ` (${stateMessage})` : ''}.`,
-  );
 
   const secondaryIds: Record<string, string> = { notebookPath: nbPath, runId: String(runId) };
   if (lifeCycleState) secondaryIds.lifeCycleState = lifeCycleState;
   if (resultState) secondaryIds.resultState = resultState;
 
-  // A FAILED run means training/registration errored — surface it as a failure
-  // (not silent success) per no-vaporware, so the operator fixes it.
-  if (resultState && resultState !== 'SUCCESS') {
-    return {
-      status: 'failed',
-      error: `Training run ${runId} finished ${lifeCycleState}/${resultState}${stateMessage ? `: ${stateMessage}` : ''}.`,
-      resourceId: String(runId),
-      secondaryIds,
-      steps,
-    };
+  // If the run already reached a terminal state during the early peek, report
+  // it honestly: a non-SUCCESS terminal result is a real training/registration
+  // failure (no silent success per no-vaporware); SUCCESS is a created model.
+  if (resultState) {
+    if (resultState !== 'SUCCESS') {
+      steps.push(
+        `Training run ${runId} → ${lifeCycleState}/${resultState}${stateMessage ? ` (${stateMessage})` : ''}.`,
+      );
+      return {
+        status: 'failed',
+        error: `Training run ${runId} finished ${lifeCycleState}/${resultState}${stateMessage ? `: ${stateMessage}` : ''}.`,
+        resourceId: String(runId),
+        secondaryIds,
+        steps,
+      };
+    }
+    steps.push(
+      `Training run ${runId} → ${lifeCycleState}/SUCCESS; model registered in the ` +
+      'MLflow / Unity Catalog registry (registered_model_name in log_model). ' +
+      'Bind this editor to that registered model to view versions + deploy.',
+    );
+    return { status: 'created', resourceId: String(runId), secondaryIds, steps };
   }
 
+  // Still running (the common case with a cold/PENDING cluster). Return the
+  // live run_id NOW so the install request finishes under the AFD timeout. The
+  // run keeps executing and registers the model; the editor + /api/databricks/jobs
+  // surface its progress and the registered version. This is a real submitted
+  // run, not a mock — status:'created' reflects the durable Databricks-side
+  // resource that exists.
   steps.push(
-    'Training run submitted + tracked; the script registers the model in the ' +
-    'MLflow / Unity Catalog model registry (registered_model_name in log_model). ' +
-    'Bind this editor to that registered model to view versions + deploy.',
+    `Training run ${runId} submitted and executing on cluster ${cluster.clusterId} ` +
+    `(${lifeCycleState || 'PENDING/RUNNING'}). Not blocking to terminal to stay under the ` +
+    'gateway timeout. The run registers the model in the MLflow / Unity Catalog registry ' +
+    `(registered_model_name in log_model); track it via /api/databricks/jobs (run ${runId}) ` +
+    'and bind this editor to the registered model once the version appears.',
   );
   return {
     status: 'created',

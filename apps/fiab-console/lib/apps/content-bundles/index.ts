@@ -68,18 +68,34 @@ export function listBundleIds(): string[] {
 }
 
 /**
- * Resolve the rich content for a single ref `{ type, template? }` from
- * Cosmos against an app's bundle. Returns undefined if the bundle is not
+ * Resolve the rich content for a single ref `{ type, template?, displayName? }`
+ * from Cosmos against an app's bundle. Returns undefined if the bundle is not
  * registered or the type isn't part of the bundle.
+ *
+ * When a bundle ships MORE THAN ONE item of the same `itemType` (e.g. the
+ * logic-apps-integration bundle has three distinct `logic-app` workflows —
+ * Order Intake, Nightly Invoice Sync, Support Ticket Triage), matching on
+ * `itemType` alone collapses every one of them onto the FIRST item, so all
+ * copies install with the same displayName AND the same WDL `content`. To
+ * disambiguate, the install path passes the per-ref `displayName`; when given
+ * we match on (itemType, displayName) so each distinct workflow keeps its own
+ * name and data-bearing content. Falls back to itemType-only match (legacy
+ * behaviour) when no displayName is supplied.
  */
 export function resolveBundleItem(
   appId: string,
   itemType: string,
+  displayName?: string,
 ): { displayName: string; description: string; content: unknown; learnDoc?: string } | undefined {
   const b = REGISTRY[appId];
   if (!b) return undefined;
-  const match = b.items.find((i) => i.itemType === itemType);
-  if (!match) return undefined;
+  const ofType = b.items.filter((i) => i.itemType === itemType);
+  if (ofType.length === 0) return undefined;
+  // Disambiguate by displayName when the bundle has multiple items of this
+  // type and the caller told us which one this ref is.
+  const match =
+    (displayName && ofType.find((i) => i.displayName === displayName)) ||
+    ofType[0];
   return {
     displayName: match.displayName,
     description: match.description,

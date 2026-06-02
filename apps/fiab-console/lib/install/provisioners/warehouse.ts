@@ -18,14 +18,120 @@
  *   - 401/403 on TDS → UAMI not added as a member of the warehouse DB.
  */
 import { executeQuery as synapseExec, dedicatedTarget, type SynapseTarget } from '@/lib/azure/synapse-sql-client';
-import type { Provisioner, ProvisionResult } from './types';
+import { getPoolState, resumePool, waitForOnline } from '@/lib/azure/synapse-pool-arm';
+import type { Provisioner, ProvisionResult, RemediationGate } from './types';
 
 const BACKEND = process.env.LOOM_WAREHOUSE_BACKEND || 'synapse-dedicated';
+
+/**
+ * A dedicated SQL pool refuses TDS connections while Paused — surfaced as
+ * MSSQLSERVER_42108 ("Can not connect to the SQL pool since it is paused.
+ * Please resume the SQL pool and try again.") or the friendlier
+ * "Cannot connect to database when it is paused." Per Microsoft Learn this
+ * is a resumable transient, NOT a permanent infra gate: the documented user
+ * action is "Resume a SQL pool and retry connecting."
+ *   https://learn.microsoft.com/sql/relational-databases/errors-events/mssqlserver-42108-database-engine-error
+ */
+function isPausedError(msg: string): boolean {
+  return /paused|42108|resume the sql pool|cannot connect to database when it is paused/i.test(msg);
+}
+
+/** Login / authorization failures are a one-time RBAC gate, not transient. */
+function isAuthError(msg: string): boolean {
+  return /login failed|cannot open server|not authorized|permission/i.test(msg);
+}
+
+const RESUME_GATE: RemediationGate = {
+  reason:
+    'Synapse dedicated SQL pool is paused and Loom could not resume it automatically.',
+  remediation:
+    'Resume the dedicated SQL pool, or grant the Console managed identity (LOOM_UAMI_CLIENT_ID) the Synapse Administrator / Contributor role on the workspace so it can call the ARM resume API. Manual resume: az synapse sql pool resume --name $LOOM_SYNAPSE_DEDICATED_POOL --workspace-name $LOOM_SYNAPSE_WORKSPACE --resource-group $LOOM_DLZ_RG. After ~3 minutes online, click Retry.',
+  link: 'https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/pause-and-resume-compute-portal',
+};
+
+/**
+ * Ensure the dedicated pool is Online before issuing DDL. If it is Paused (or
+ * mid-pause), issue an ARM resume and poll to Online. Returns null on success,
+ * or a RemediationGate when the pool can't be brought online (e.g. the Console
+ * MI lacks the ARM role to resume). ARM/network failures here degrade to a
+ * step note and let the DDL loop attempt the connection — the in-loop paused
+ * handler is the second line of defence.
+ */
+async function ensurePoolOnline(steps: string[]): Promise<RemediationGate | null> {
+  let state: Awaited<ReturnType<typeof getPoolState>>['state'];
+  try {
+    ({ state } = await getPoolState());
+    steps.push(`Dedicated SQL pool state: ${state}.`);
+  } catch (e: any) {
+    // Can't read state (no ARM role / env) — let the TDS path try and handle
+    // a paused error there. Don't hard-fail the whole provision on a probe.
+    steps.push(`Could not read pool state via ARM (${e?.message || String(e)}); proceeding to connect.`);
+    return null;
+  }
+
+  if (state === 'Online') return null;
+
+  if (state === 'Paused' || state === 'Pausing' || state === 'Resuming') {
+    try {
+      if (state !== 'Resuming') {
+        steps.push('Pool is paused; issuing ARM resume…');
+        await resumePool();
+      } else {
+        steps.push('Pool is already resuming; waiting for Online…');
+      }
+      const finalState = await waitForOnline();
+      steps.push(`Pool state after wait: ${finalState}.`);
+      if (finalState !== 'Online') {
+        // resume() was accepted but pool didn't reach Online within the wait
+        // window — surface the resume gate so the user can Retry shortly.
+        return RESUME_GATE;
+      }
+      // Microsoft Learn: the pool can report Online while still finishing the
+      // online workflow, so the first TDS reconnect can still fail. Add the
+      // documented grace delay before letting the DDL loop connect.
+      // https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-manage-compute-rest-api#check-database-state
+      await new Promise((r) => setTimeout(r, 20_000));
+      return null;
+    } catch (e: any) {
+      steps.push(`ARM resume failed: ${e?.message || String(e)}`);
+      return RESUME_GATE;
+    }
+  }
+
+  // Scaling / Unknown — give it a chance to settle, then proceed.
+  steps.push(`Pool in transient state ${state}; waiting for Online…`);
+  try {
+    const finalState = await waitForOnline();
+    steps.push(`Pool state after wait: ${finalState}.`);
+    if (finalState === 'Online') return null;
+    if (finalState === 'Paused') {
+      await resumePool();
+      const afterResume = await waitForOnline();
+      steps.push(`Pool state after resume: ${afterResume}.`);
+      if (afterResume !== 'Online') return RESUME_GATE;
+      // Grace delay before the DDL loop reconnects (see note above).
+      await new Promise((r) => setTimeout(r, 20_000));
+      return null;
+    }
+    return RESUME_GATE;
+  } catch (e: any) {
+    steps.push(`Wait/resume failed: ${e?.message || String(e)}`);
+    return RESUME_GATE;
+  }
+}
 
 function splitBatches(sql: string): string[] {
   return sql
     .split(/;\s*\n/)
-    .map((b) => b.trim())
+    .map((b) =>
+      b
+        // Strip SSMS-style `GO` batch separators. `GO` is a client directive,
+        // not T-SQL — the mssql TDS driver throws "Could not find stored
+        // procedure 'GO'" if it leaks into request.query(). It is only a
+        // separator when alone on its own line; remove every such line.
+        .replace(/^[ \t]*GO[ \t]*$/gim, '')
+        .trim(),
+    )
     .filter((b) => b.length > 0);
 }
 
@@ -58,6 +164,16 @@ function quoteIdent(name: string): string {
   return `[${String(name).replace(/]/g, ']]')}]`;
 }
 
+/** Quote a possibly schema-qualified table name: 'gold.fact_sales' →
+ * [gold].[fact_sales]; 'staging' → [staging]. Only the first dot is treated
+ * as the schema separator. */
+function quoteTable(name: string): string {
+  const raw = String(name);
+  const dot = raw.indexOf('.');
+  if (dot === -1) return quoteIdent(raw);
+  return `${quoteIdent(raw.slice(0, dot))}.${quoteIdent(raw.slice(dot + 1))}`;
+}
+
 /**
  * Seed the bundle's sampleRows into their tables over the same Synapse TDS
  * target the DDL ran on. Each table is inserted as one multi-row INSERT
@@ -72,7 +188,7 @@ async function seedSampleRows(
 ): Promise<void> {
   for (const entry of sampleRows) {
     if (!entry?.table || !Array.isArray(entry.rows) || entry.rows.length === 0) continue;
-    const table = quoteIdent(entry.table);
+    const table = quoteTable(entry.table);
     const colClause =
       Array.isArray(entry.columns) && entry.columns.length > 0
         ? ` (${entry.columns.map(quoteIdent).join(', ')})`
@@ -128,26 +244,58 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
     }
     steps.push(`Synapse target: ${target.server} / ${target.database}`);
 
+    // A paused dedicated pool can't accept TDS connections. Auto-resume it
+    // (and wait for Online) BEFORE issuing any DDL so the data-bearing seed
+    // actually lands. If it can't be brought online, gate honestly.
+    const preGate = await ensurePoolOnline(steps);
+    if (preGate) {
+      return { status: 'remediation', gate: preGate, steps };
+    }
+
     const batches = splitBatches(ddl);
+    let resumedMidLoop = false;
     for (const sql of batches) {
-      try {
-        await synapseExec(target, sql);
-        steps.push(`Ran DDL batch (${sql.slice(0, 80).replace(/\s+/g, ' ')}…).`);
-      } catch (e: any) {
-        const msg = e?.message || String(e);
-        if (/login failed|cannot open server|not authorized|permission/i.test(msg)) {
-          return {
-            status: 'remediation',
-            gate: {
-              reason: `Synapse T-SQL ${e?.status || 401}: ${msg}`,
-              remediation:
-                'In the Synapse workspace > Manage > Security > add the Console UAMI as a member of the dedicated SQL pool. Use the AAD admin to run: CREATE USER [<uami>] FROM EXTERNAL PROVIDER; ALTER ROLE db_owner ADD MEMBER [<uami>];',
-              link: 'https://learn.microsoft.com/azure/synapse-analytics/security/how-to-set-up-access-control',
-            },
-            steps,
-          };
+      let attempted = false;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        try {
+          await synapseExec(target, sql);
+          steps.push(`Ran DDL batch (${sql.slice(0, 80).replace(/\s+/g, ' ')}…).`);
+          break;
+        } catch (e: any) {
+          const msg = e?.message || String(e);
+          if (isAuthError(msg)) {
+            return {
+              status: 'remediation',
+              gate: {
+                reason: `Synapse T-SQL ${e?.status || 401}: ${msg}`,
+                remediation:
+                  'In the Synapse workspace > Manage > Security > add the Console UAMI as a member of the dedicated SQL pool. Use the AAD admin to run: CREATE USER [<uami>] FROM EXTERNAL PROVIDER; ALTER ROLE db_owner ADD MEMBER [<uami>];',
+                link: 'https://learn.microsoft.com/azure/synapse-analytics/security/how-to-set-up-access-control',
+              },
+              steps,
+            };
+          }
+          // Paused mid-loop (e.g. the pool auto-paused between batches, or the
+          // pre-flight ARM probe couldn't read state). Resume once and retry
+          // this batch before giving up.
+          if (isPausedError(msg) && !attempted && !resumedMidLoop) {
+            attempted = true;
+            resumedMidLoop = true;
+            steps.push(`DDL batch hit a paused pool; resuming and retrying: ${msg}`);
+            const gate = await ensurePoolOnline(steps);
+            if (gate) {
+              return { status: 'remediation', gate, steps };
+            }
+            continue; // retry the same batch now that the pool is online
+          }
+          if (isPausedError(msg)) {
+            // Resume already attempted and the pool is still rejecting — gate
+            // honestly rather than surface a bare failed.
+            return { status: 'remediation', gate: RESUME_GATE, steps };
+          }
+          return { status: 'failed', error: msg, steps };
         }
-        return { status: 'failed', error: msg, steps };
       }
     }
 

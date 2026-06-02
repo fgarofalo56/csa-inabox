@@ -981,9 +981,15 @@ const bundle: AppBundle = {
         ingestionPolicies: [
           {
             table: 'DeploymentEvent',
+            // Retention supports `.alter-merge` (merge into the existing
+            // retention policy bag). Caching does NOT — its supported form is
+            // `.alter table T policy caching hot = <span>` (no merge variant);
+            // `.alter-merge … policy caching hot = 30d` is rejected SYN0002.
+            // https://learn.microsoft.com/kusto/management/alter-table-cache-policy-command
+            // https://learn.microsoft.com/kusto/management/alter-merge-table-retention-policy-command
             policy:
               '.alter-merge table DeploymentEvent policy retention softdelete = 365d\n' +
-              '.alter-merge table DeploymentEvent policy caching hot = 30d',
+              '.alter table DeploymentEvent policy caching hot = 30d',
           },
         ],
         starterQueries: [

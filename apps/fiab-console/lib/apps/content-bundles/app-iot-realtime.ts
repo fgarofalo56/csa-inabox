@@ -475,16 +475,23 @@ const bundle: AppBundle = {
         ingestionPolicies: [
           {
             table: 'Telemetry',
+            // Retention uses .alter-merge (merges into the existing policy
+            // object); caching uses .alter and the bare `hot = <timespan>`
+            // form — caching policy does NOT support .alter-merge and the
+            // column-aligned spaces around `=` were what tripped SYN0002.
+            // Streaming-ingestion is enabled via the dedicated .alter command.
+            // Ref: learn.microsoft.com/kusto/management/alter-table-cache-policy-command
+            //      learn.microsoft.com/kusto/management/alter-merge-table-retention-policy-command
             policy:
               '.alter-merge table Telemetry policy retention softdelete = 90d\n' +
-              '.alter-merge table Telemetry policy caching   hot        =  7d\n' +
-              '.alter table Telemetry policy streamingingestion enable',
+              '.alter table Telemetry policy caching hot = 7d\n' +
+              '.alter table Telemetry policy streamingingestion \'{"IsEnabled": true}\'',
           },
           {
             table: 'Anomalies',
             policy:
               '.alter-merge table Anomalies policy retention softdelete = 365d\n' +
-              '.alter-merge table Anomalies policy caching   hot        =  30d',
+              '.alter table Anomalies policy caching hot = 30d',
           },
         ],
         starterQueries: [
