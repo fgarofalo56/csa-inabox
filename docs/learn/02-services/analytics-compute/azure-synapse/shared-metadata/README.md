@@ -223,7 +223,7 @@ spark.sql("""
 
 - [__Delta Lake Metadata__](../spark-pools/delta-lakehouse/README.md)
 - __Security Best Practices__
-- [__Data Governance__](../../../../05-best-practices/cross-cutting-concerns/governance/metadata-governance.md)
+- [__Data Governance__](../../../../05-best-practices/cross-cutting-concerns/data-governance/metadata-governance.md)
 
 ---
 

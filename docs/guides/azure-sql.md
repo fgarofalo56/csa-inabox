@@ -14,6 +14,9 @@ tags:
 
 # Azure SQL — Comprehensive Guide
 
+!!! note "Freshness"
+    **Validated against:** Azure SQL Database (vCore + serverless), Azure SQL Managed Instance, and SQL Server on Azure VMs — on the TDS protocol + ARM control plane — **as of 2026-06-02.** Service-tier, vCore/serverless scaling, and AAD-auth behavior track the current Azure SQL service; verify against the Azure SQL docs before deploying.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

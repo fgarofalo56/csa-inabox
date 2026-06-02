@@ -13,6 +13,9 @@ status: published
 
 # Databricks Unity Catalog
 
+!!! note "Freshness"
+    **Validated against:** Azure Databricks Unity Catalog (three-level namespace, metastore, external locations + storage credentials, lineage) on ADLS Gen2 · `dbt-databricks` — **as of 2026-06-02.** GRANT/privilege syntax and external-location behavior track the current Databricks runtime; verify against the Unity Catalog docs before applying.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

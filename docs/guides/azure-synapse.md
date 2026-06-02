@@ -12,6 +12,9 @@ tags:
 
 # Azure Synapse Analytics Guide
 
+!!! note "Freshness"
+    **Validated against:** Azure Synapse Analytics — Serverless SQL (`OPENROWSET` over Delta/Parquet on ADLS Gen2), Dedicated SQL pools (DWU scale + pause), Spark pools, and Synapse pipelines — **as of 2026-06-02.** T-SQL serverless and dedicated-pool behavior tracks the current Synapse runtime; verify against the Synapse docs before deploying.
+
 <!-- cross-link-admonition -->
 !!! info "See also: generic Azure reference"
     For service-agnostic deep-dive content on Azure Synapse Analytics — architecture, feature reference, code samples, and patterns independent of CSA-in-a-Box — see [`Azure Synapse Analytics` in the reference library](../learn/02-services/analytics-compute/azure-synapse/README.md).

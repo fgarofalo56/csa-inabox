@@ -1,5 +1,8 @@
 # Data Quality Playbook — Testing, Contracts, and Monitoring
 
+!!! note "Freshness"
+    **Validated against:** dbt Core (model contracts require dbt **1.5+**) on `dbt-databricks` · Great Expectations (via the CSA governance runner `csa_platform/governance/dataquality/ge_runner.py`) · Azure Monitor / Log Analytics (KQL alert rules) · Power BI (DQ dashboard) — **as of 2026-06-02.** Verify dbt contract syntax and GE expectation APIs against the vendor docs before adopting; the dbt `contract: { enforced: true }` and `constraints` blocks shown here track dbt 1.5+ behavior.
+
 > **TL;DR** — Data quality in CSA-in-a-Box is enforced at four levels: dbt
 > tests, data contracts, monitoring dashboards, and anomaly detection. This
 > guide covers all four, from schema-level column tests to composite quality

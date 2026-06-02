@@ -1,5 +1,8 @@
 # Performance Testing — Benchmarking and Capacity Planning
 
+!!! note "Freshness"
+    **Validated against:** the CSA-in-a-Box compute/query engines under test — Azure Databricks (Spark), Synapse (Serverless + Dedicated SQL), Azure Data Explorer (KQL), and Event Hubs throughput — **as of 2026-06-02.** Benchmark numbers depend on SKU, region, and data volume; treat figures as illustrative and re-baseline against your own deployment.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

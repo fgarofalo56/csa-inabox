@@ -2,7 +2,7 @@
 title: "Documentation Project Task List"
 tags:
   - examples
-  - solution_refrances
+  - solution-references
   - azure-realtime-analytics
 ---
 # 📋 Documentation Project Task List

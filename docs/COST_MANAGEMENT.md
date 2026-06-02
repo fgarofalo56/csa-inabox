@@ -9,6 +9,7 @@ This document covers cost estimation, budget guardrails, and FinOps practices fo
 
 ## 📑 Table of Contents
 
+- [⚖️ Cost Shape: CSA/Loom à-la-carte vs. Fabric capacity](#cost-shape-csaloom-a-la-carte-vs-fabric-capacity)
 - [💰 Cost Estimation Approach](#cost-estimation-approach)
     - [Bicep Path (Primary)](#bicep-path-primary)
     - **Terraform Path (Future)**
@@ -42,9 +43,60 @@ This document covers cost estimation, budget guardrails, and FinOps practices fo
 
 ---
 
+## ⚖️ Cost Shape: CSA/Loom à-la-carte vs. Fabric capacity
+
+Before estimating individual resources, understand the **cost shape** you are
+signing up for. CSA-in-a-Box / CSA Loom and Microsoft Fabric bill in
+fundamentally different ways, and the right choice depends on your workload
+profile, not on a single sticker price. I am not going to quote dollar figures
+here — list prices move, and EA/CSP/Gov discounts make any headline number
+misleading. What matters is the **shape** of the bill and the **levers** you
+control.
+
+### Two different billing models
+
+| | **CSA / Loom (this platform)** | **Microsoft Fabric (F SKU)** |
+| --- | --- | --- |
+| **Billing model** | À-la-carte Azure consumption — you pay each service's own meter (Databricks DBU/hour, Synapse Serverless per-TB-scanned, ADX cluster-hour, Container Apps vCPU-s + GiB-s, ADLS Gen2 per-GB + per-transaction, Event Hubs TU/hour, Cosmos RU + storage). | A single pooled **Capacity Unit (CU)** meter. One F SKU (F2…F2048) backs *every* workload — Lakehouse, Warehouse, pipelines, Spark, KQL, Power BI — drawing from the same CU pool. Storage (OneLake) and networking bill separately. ([Learn](https://learn.microsoft.com/fabric/data-factory/pricing-overview)) |
+| **Granularity** | Per-service, per-meter. You see exactly which service drives the bill and can tune each independently. | Per-capacity. Individual items (a Warehouse, a Lakehouse) **cannot** be paused alone — only the whole capacity pauses. ([Learn](https://learn.microsoft.com/fabric/data-warehouse/pause-resume)) |
+| **Idle cost** | Pay only for what runs. Serverless/consumption services (Synapse Serverless, Functions, Container Apps scale-to-zero, Cosmos serverless) cost ~nothing when idle; always-on services (a running Databricks cluster, an ADX cluster, provisioned Cosmos) bill continuously until paused/stopped. | The F SKU bills per second (1-minute minimum) whenever the capacity is **resumed**, regardless of whether anyone is running a query. Cost control = explicitly **pause** the capacity when idle. ([Learn](https://learn.microsoft.com/fabric/enterprise/pause-resume)) |
+| **Commitment discount** | Reserved Instances / savings plans per service (Databricks DBU pre-purchase, Cosmos/ADX reserved capacity, VM RIs for SHIR). Each negotiated independently. | A single **Fabric capacity reservation** (1-year or 3-year) discounts the CU meter. It does **not** cover OneLake storage or networking. ([Learn](https://learn.microsoft.com/azure/cost-management-billing/reservations/fabric-capacity)) |
+| **Scaling** | Scale each service independently (cluster size, DWU, TU, RU/s, replica count). | Scale the whole capacity up/down (SKU change), or layer pay-as-you-go on top of a reserved F SKU for predictable peaks. ([Learn](https://learn.microsoft.com/fabric/enterprise/capacity-planning-manage-capacity-growth-governance)) |
+
+### When each is cheaper
+
+**Fabric (fixed capacity) tends to win when:**
+
+- You have **many concurrent workloads** with **bursty but continuous** usage that keep a capacity busy through the day. A fixed CU pool with Fabric's background-operation *smoothing* (Spark/SQL spread over ~24h) absorbs spikes without you provisioning each engine for peak.
+- You want **one bill, one number to reserve, one thing to size** — the operational simplicity of capacity sizing beats tuning a dozen meters.
+- Your team will **actually pause** the capacity off-hours, or runs it hot enough that a 1- or 3-year reservation pays off (the reservation breaks even only if the capacity is genuinely consumed).
+- You add users freely — Fabric does **not** charge per-user for capacity consumption, so wide read/consume audiences are cheap.
+
+**CSA / Loom (à-la-carte) tends to win when:**
+
+- Your usage is **spiky and intermittent** — a nightly batch, an occasional ad-hoc query, a streaming pipeline that idles. Serverless/consumption meters (Synapse Serverless per-TB, Functions, Container Apps scale-to-zero, Cosmos serverless) charge near-zero between runs, where a resumed F SKU bills continuously.
+- One engine **dominates** your cost and you want to optimize *only* it — e.g. a Databricks-heavy shop buying DBU commitments, or an ADLS-archive-heavy workload riding storage lifecycle tiering — without paying for a capacity that bundles engines you barely touch.
+- You need **Azure Government / sovereign / dedicated-compute** placement where Fabric is not GA, so the comparison is moot: à-la-carte is the only option.
+- You want **per-service granularity** for chargeback — attributing exact cost to a pipeline, a query, or a domain is native to per-meter billing and harder to disentangle from a shared CU pool.
+
+### The honest caveats
+
+- **No clean break-even line.** Whether Fabric or à-la-carte is cheaper depends on concurrency, idle ratio, reservation discipline, and your discount agreements. The only reliable method is to **measure**: provision a trial/pay-as-you-go F SKU and watch the [Fabric Capacity Metrics app](https://learn.microsoft.com/fabric/enterprise/metrics-app) against your real workload, and run the [`estimate-costs.sh`](#cost-estimation-approach) à-la-carte estimate in parallel. ([Learn](https://learn.microsoft.com/fabric/enterprise/optimize-capacity))
+- **À-la-carte is more knobs, more responsibility.** The flexibility that makes CSA/Loom cheaper for spiky workloads is also the thing that lets idle always-on resources (a forgotten Databricks cluster, an un-paused ADX cluster) quietly burn money. The optimization levers in [Cost Optimization Tips](#cost-optimization-tips) below — auto-pause, auto-stop, scale-to-zero, storage tiering, RIs — are **mandatory hygiene**, not nice-to-haves. A Fabric capacity has exactly one knob (pause); CSA/Loom has a dozen, and all of them have to be set.
+- **Fabric's single-pause granularity cuts both ways.** You cannot pause one noisy Warehouse without pausing every workload on that capacity, so a single hot item forces the whole capacity to stay resumed. À-la-carte lets you stop exactly the one service.
+- **Reservations don't cover everything.** A Fabric reservation discounts only CU usage — OneLake storage and networking stay pay-as-you-go. À-la-carte RIs are per-service and equally partial (DBU commit ≠ storage discount). Model storage and egress separately in both worlds.
+- **Migration cost is real but one-directional.** CSA/Loom is designed as an on-ramp: components compose into a future Fabric migration, so starting à-la-carte and moving to a capacity later is a supported path. Going the other way (Fabric → self-operated PaaS) is the harder lift. Factor the on-ramp value into the comparison, not just this month's bill.
+
+> **Bottom line:** Fabric trades flexibility for simplicity — one capacity, one bill, one pause button, best for sustained multi-workload usage by a team that will size and pause it well. CSA/Loom trades simplicity for control — per-service meters that idle cheaply and tune precisely, best for spiky/intermittent workloads, single-engine-dominant cost shapes, sovereign/Gov placement, and granular chargeback — at the price of having many more cost levers you are obligated to manage.
+
+---
+
 ## 💰 Cost Estimation Approach
 
 CSA-in-a-Box supports two IaC paths, each with its own cost estimation strategy.
+
+!!! tip "First, understand the cost shape"
+    Before estimating individual resources, read **[Cost Shape: CSA/Loom à-la-carte vs. Fabric capacity](#cost-shape-csaloom-a-la-carte-vs-fabric-capacity)** (above) — it explains how this platform's per-service consumption billing differs from a fixed Fabric F-SKU capacity, when each is cheaper, and the levers you control.
 
 ### Bicep Path (Primary)
 

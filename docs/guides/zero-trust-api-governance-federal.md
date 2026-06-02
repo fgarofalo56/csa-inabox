@@ -7,6 +7,9 @@ last_updated: 2026-05-15
 
 # Guide — Zero-Trust API Governance for Federal Mission Environments
 
+!!! note "Freshness"
+    **Validated against:** Azure Government / GCC High / DoD (IL5/IL6) — Microsoft Entra ID Conditional Access + Continuous Access Evaluation (CAE), API Management, and FedRAMP High posture — **as of 2026-06-02.** Gov service availability, Conditional Access, and CAE behavior track the current Azure Government services; verify against the Azure Government and Entra docs before deploying. Compliance content is a control mapping, not an ATO.
+
 ## What zero-trust for APIs actually requires
 
 Zero-trust is overused as a marketing term and underused as an architectural discipline. For an API estate in a federal mission environment, the working definition is:

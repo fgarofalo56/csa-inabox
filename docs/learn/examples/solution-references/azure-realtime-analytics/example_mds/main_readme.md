@@ -3,7 +3,7 @@ title: "Azure Real-Time Analytics Platform Documentation"
 description: "Enterprise-grade real-time data analytics platform built on Microsoft Azure"
 tags:
   - examples
-  - solution_refrances
+  - solution-references
   - azure-realtime-analytics
   - example_mds
 ---
