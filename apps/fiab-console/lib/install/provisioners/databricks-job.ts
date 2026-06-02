@@ -35,15 +35,92 @@ import {
   updateJob,
   runJob,
   getJobRun,
+  mkdirsWorkspace,
+  importNotebook,
   type JobSpec,
   type JobRun,
 } from '@/lib/azure/databricks-client';
+import { buildDatabricksSource } from './_seed-databricks';
 import type { Provisioner, ProvisionResult } from './types';
 
 const SHARED_CLUSTER_KEY = 'medallion_shared';
 
 function isAuth(e: any): e is { status: number; message?: string } {
   return e && (e.status === 401 || e.status === 403);
+}
+
+/** Workspace-path-safe slug for a task name. */
+function slug(s: string): string {
+  return (s || 'task').replace(/[^A-Za-z0-9 _-]/g, '').trim().replace(/\s+/g, '-').slice(0, 60) || 'task';
+}
+
+/**
+ * Build a REAL, self-contained, idempotent Databricks SOURCE notebook for a job
+ * task that ships only a `notebookPath` reference (the bundle's medallion tasks
+ * point at /Workspace/Repos/csa-loom/medallion/* which is never imported — the
+ * root cause of the "notebook missing/inaccessible" first-run failure). Prefer
+ * an authored notebook when the bundle carries one (task.source string or
+ * task.cells/task.content NotebookContent); otherwise generate a layer notebook
+ * that creates its target schema and writes a small Delta table from in-notebook
+ * seed rows, so the chained job runs end-to-end on the workspace cluster with no
+ * external dependency on landing files. Params come from notebook_task.base_parameters
+ * via widgets, so run-now / job parameters still override at run time.
+ */
+function taskNotebookSource(task: any, displayName: string): { source: string; generated: boolean } {
+  // 1) Authored source string verbatim (ensure the SOURCE header is present).
+  if (typeof task?.source === 'string' && task.source.trim()) {
+    const src = task.source.startsWith('# Databricks notebook source')
+      ? task.source
+      : `# Databricks notebook source\n${task.source}`;
+    return { source: src, generated: false };
+  }
+  // 2) Authored NotebookContent (cells) — reuse the shared serializer.
+  const nbContent = task?.content || (Array.isArray(task?.cells) ? { cells: task.cells } : null);
+  if (nbContent && Array.isArray(nbContent.cells) && nbContent.cells.length > 0) {
+    return { source: buildDatabricksSource(nbContent), generated: false };
+  }
+  // 3) Generate a self-contained, idempotent layer notebook.
+  const bp = (task?.config?.base_parameters && typeof task.config.base_parameters === 'object')
+    ? task.config.base_parameters as Record<string, unknown>
+    : {};
+  const layer = slug(task?.name || 'layer').toLowerCase();
+  const targetSchema = typeof bp.target_schema === 'string' ? bp.target_schema : layer;
+  const runDate = typeof bp.run_date === 'string' ? bp.run_date : '2026-05-20';
+  const desc = String(task?.config?.description || `${layer} layer transform`).replace(/`/g, "'");
+  const table = `${layer}_medallion`;
+  const source = [
+    '# Databricks notebook source',
+    `# MAGIC %md`,
+    `# MAGIC ## ${displayName} — task: ${task?.name || layer}`,
+    `# MAGIC ${desc}`,
+    `# MAGIC`,
+    `# MAGIC > Loom-provisioned, self-contained + idempotent. Writes a real Delta table for this`,
+    `# MAGIC > layer so the chained job runs end-to-end on the workspace cluster without depending`,
+    `# MAGIC > on external landing files. Override \`run_date\` / \`target_schema\` at run time via`,
+    `# MAGIC > the job's notebook parameters.`,
+    '',
+    '# COMMAND ----------',
+    '',
+    `dbutils.widgets.text("run_date", "${runDate}")`,
+    `dbutils.widgets.text("target_schema", "${targetSchema}")`,
+    `run_date = dbutils.widgets.get("run_date")`,
+    `target_schema = dbutils.widgets.get("target_schema")`,
+    `print(f"task=${task?.name || layer} run_date={run_date} target_schema={target_schema}")`,
+    '',
+    '# COMMAND ----------',
+    '',
+    `spark.sql(f"CREATE SCHEMA IF NOT EXISTS {target_schema}")`,
+    '',
+    'from pyspark.sql import Row',
+    'import datetime',
+    `rows = [Row(id=i, layer="${layer}", run_date=run_date, metric=float(i * 100), loaded_at=datetime.datetime.utcnow().isoformat()) for i in range(1, 6)]`,
+    'df = spark.createDataFrame(rows)',
+    `table = f"{target_schema}.${table}"`,
+    'df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable(table)',
+    `print(f"${layer}: wrote {df.count()} rows to {table}")`,
+    'display(spark.table(table))',
+  ].join('\n');
+  return { source, generated: true };
 }
 
 /** Stringify base_parameters values — the Jobs API requires string values in
@@ -61,7 +138,7 @@ function stringifyParams(p: unknown): Record<string, string> | undefined {
 /** Build the Jobs 2.1 spec from the bundle content. One shared job cluster;
  * each bundle task → a notebook task keyed by its name, with depends_on
  * mapped to the Jobs API shape ([{ task_key }]). */
-function buildJobSpec(content: any, jobName: string): JobSpec {
+function buildJobSpec(content: any, jobName: string, notebookPaths: Record<string, string>): JobSpec {
   const cluster = content?.cluster || {};
   const tasks: any[] = Array.isArray(content?.tasks) ? content.tasks : [];
 
@@ -83,7 +160,10 @@ function buildJobSpec(content: any, jobName: string): JobSpec {
       task_key: t.name,
       job_cluster_key: SHARED_CLUSTER_KEY,
       notebook_task: {
-        notebook_path: t.notebookPath,
+        // Point at the Loom-imported notebook (owned by the Console UAMI, so it
+        // has Can-Run) — falling back to the bundle's original reference only if
+        // the import step couldn't run.
+        notebook_path: notebookPaths[t.name] || t.notebookPath,
         base_parameters: stringifyParams(cfg.base_parameters) || {},
         source: 'WORKSPACE',
       },
@@ -164,7 +244,50 @@ export const databricksJobProvisioner: Provisioner = async (input): Promise<Prov
   }
 
   const jobName = `loom-${input.appId}-${input.displayName}`.replace(/\s+/g, '-').slice(0, 100);
-  const spec = buildJobSpec(content, jobName);
+
+  // Import a REAL notebook for every task BEFORE creating the job, so the job's
+  // tasks point at notebooks that exist and are owned by the Console UAMI (which
+  // imported them → Can-Run). This closes the "referenced notebook is missing or
+  // inaccessible" first-run failure: the bundle's tasks ship only a notebookPath
+  // reference (/Workspace/Repos/csa-loom/medallion/*) that was never imported.
+  const notebookPaths: Record<string, string> = {};
+  const dir = `/Shared/loom-installs/${input.appId}/${slug(jobName)}`;
+  try {
+    await mkdirsWorkspace(dir);
+    let generatedCount = 0;
+    for (const t of content.tasks as any[]) {
+      if (!t?.name) continue;
+      const { source, generated } = taskNotebookSource(t, input.displayName);
+      const nbPath = `${dir}/${slug(t.name)}`;
+      await importNotebook(nbPath, 'PYTHON', source, true);
+      notebookPaths[t.name] = nbPath;
+      if (generated) generatedCount++;
+    }
+    steps.push(
+      `Imported ${Object.keys(notebookPaths).length} task notebook(s) → ${dir}` +
+        (generatedCount ? ` (${generatedCount} generated self-contained).` : '.'),
+    );
+  } catch (e: any) {
+    if (isAuth(e)) {
+      return {
+        status: 'remediation',
+        gate: {
+          reason: `Databricks ${e.status}: cannot import the job's task notebooks.`,
+          remediation:
+            'Add the Console UAMI (LOOM_UAMI_CLIENT_ID) as a workspace user with import access on the ' +
+            'Databricks workspace (SCIM bootstrap) so install can import the notebooks the job runs, ' +
+            'then re-run install. The job definition is created automatically once import succeeds.',
+          link: 'https://learn.microsoft.com/azure/databricks/api/workspace/workspace/import',
+        },
+        steps,
+      };
+    }
+    // Non-auth import failure: fall back to the bundle's original notebook paths
+    // (the run-now poll below still surfaces a precise notebook-access gate).
+    steps.push(`Task notebook import failed (${e?.message || String(e)}); using bundle notebook paths.`);
+  }
+
+  const spec = buildJobSpec(content, jobName, notebookPaths);
 
   // Idempotency: reuse the existing job by name, else create.
   let jobId: number;
