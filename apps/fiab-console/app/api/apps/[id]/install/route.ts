@@ -247,6 +247,14 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
             nextState.factory = process.env.LOOM_ADF_NAME;
           }
         }
+        // Logic App items bind to a live Microsoft.Logic/workflows resource via
+        // state.logicAppName — the logic-app GET/run routes resolve this (plus
+        // secondaryIds.subscriptionId/resourceGroup) to fetch + run the real
+        // workflow; without it the editor still opens built-out from
+        // state.content.definition. Don't clobber a name already bound.
+        if (step.itemType === 'logic-app' && sec.workflowName && !(cur.state as any)?.logicAppName) {
+          nextState.logicAppName = sec.workflowName;
+        }
         await items.item(step.cosmosItemId, workspaceId).replace({ ...cur, state: nextState, updatedAt: new Date().toISOString() });
       } catch { /* swallow — provisioning record is best-effort */ }
     }

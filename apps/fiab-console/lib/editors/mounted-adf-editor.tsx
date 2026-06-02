@@ -137,6 +137,22 @@ export function MountedAdfEditor({ item, id }: Props) {
     }
   }, []);
 
+  // Auto-resolve this item's workspace from the route id so a deep-linked /
+  // app-installed mounted ADF loads immediately instead of waiting on a manual
+  // workspace pick (mirrors the data-pipeline + notebook editors).
+  useEffect(() => {
+    if (!id || id === 'new' || workspaceId) return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/mounted-adf/${encodeURIComponent(id)}`);
+        const j = await r.json().catch(() => ({}));
+        if (alive && j?.workspaceId) setWorkspaceId(j.workspaceId);
+      } catch { /* fall back to manual pick */ }
+    })();
+    return () => { alive = false; };
+  }, [id, workspaceId]);
+
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && mountId) loadDetail(workspaceId, mountId); }, [workspaceId, mountId, loadDetail]);
 

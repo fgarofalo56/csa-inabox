@@ -154,6 +154,12 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'data-product-template':       reg(() => import('./data-product-editors'),   'DataProductTemplateEditor'),
   'data-product-instance':       reg(() => import('./data-product-editors'),   'DataProductInstanceEditor'),
 
+  // v3 — Azure Logic Apps (Consumption) — WDL workflow designer + code view.
+  // Opens fully built-out from the bundle's state.content.definition (or the
+  // live Microsoft.Logic/workflows resource when bound); Run trigger fires a
+  // real manual run via /api/items/logic-app/[id]/run or an honest infra gate.
+  'logic-app':                   reg(() => import('./logic-app-editor'),       'LogicAppEditor'),
+
   // v3 — Microsoft Data API builder (DAB) — WYSIWYG dab-config.json builder
   // (real REST/GraphQL entity authoring, per-role permissions, relationships,
   // runtime/host; emits real dab-config.json + publishes via APIM).
