@@ -1469,6 +1469,45 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
   }, [rootPath]);
   useEffect(() => { void loadClusters(); }, [loadClusters]);
 
+  // ---- Hydrate from the installed item's bundle cells ----
+  // A bundle-installed databricks-notebook has its NotebookContent cells
+  // stamped into Cosmos (state.cells, or state.content.cells when only the
+  // NotebookContent shape was written). The live-workspace tree on the left
+  // doesn't surface those, so on mount we open the item populated with every
+  // markdown + code cell instead of a single empty cell — the bundle content
+  // is no longer stranded. Once the user clicks a real workspace path the
+  // openNotebook flow takes over (export from the live Databricks workspace).
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/databricks-notebook/${encodeURIComponent(id)}`);
+        if (!r.ok) return;
+        const item = await r.json();
+        if (cancelled) return;
+        const st = (item?.state as any) || {};
+        const raw: any[] = (Array.isArray(st.cells) && st.cells.length > 0)
+          ? st.cells
+          : (st.content?.kind === 'notebook' && Array.isArray(st.content.cells) ? st.content.cells : []);
+        if (raw.length === 0) return;
+        const hydrated: NotebookCell[] = raw.map((c, i) => ({
+          id: typeof c?.id === 'string' && c.id ? c.id : `bundle-${i}`,
+          type: c?.type === 'markdown' ? 'markdown' : 'code',
+          lang: (c?.lang || c?.language || st.defaultLang || st.content?.defaultLang || 'python') as NotebookCell['lang'],
+          source: typeof c?.source === 'string' ? c.source : Array.isArray(c?.source) ? c.source.join('') : '',
+        }));
+        setCells(hydrated);
+        setBaseLanguage('PYTHON');
+        setOrigSerialized(serializeCells(hydrated, 'PYTHON'));
+        setActiveCellId(hydrated[0]?.id || null);
+        setFileMessage('Loaded notebook cells from the installed app bundle. Click a workspace notebook on the left to open the deployed copy.');
+      } catch { /* fall back to the empty starter cell */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   const toggle = useCallback((path: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);

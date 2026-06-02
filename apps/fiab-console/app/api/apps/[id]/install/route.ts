@@ -140,6 +140,16 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       ...(bundle?.content ? { content: bundle.content } : {}),
       ...(bundle?.learnDoc ? { learnDoc: bundle.learnDoc } : {}),
     };
+    // Notebook items: project the bundle's NotebookContent.cells into the
+    // editor's read shape (state.cells / state.defaultLang) so the notebook
+    // opens FULLY POPULATED with every markdown + code cell — instead of an
+    // empty notebook whose content is stranded in the "bundle" pane. Covers
+    // notebook, synapse-notebook, and databricks-notebook item types.
+    const nbc = bundle?.content as { kind?: string; cells?: unknown[]; defaultLang?: string } | undefined;
+    if (nbc?.kind === 'notebook' && Array.isArray(nbc.cells) && nbc.cells.length > 0) {
+      state.cells = nbc.cells;
+      state.defaultLang = nbc.defaultLang || 'pyspark';
+    }
     const key = `${ref.type}::${displayName.toLowerCase()}`;
     if (existsKey.has(key)) {
       const match = (existing as any[]).find(e => e.itemType === ref.type && (e.displayName || '').toLowerCase() === displayName.toLowerCase());
@@ -158,6 +168,30 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       installed.push({ itemType: ref.type, displayName, status: 'failed', error: r.error });
     }
   }
+
+  // Auto-attach the app's installed lakehouse(s) to its notebooks, so each
+  // notebook opens with the data sources it needs already attached (no manual
+  // wiring). First lakehouse is the default source.
+  try {
+    const lakehouses = installed
+      .filter((i) => i.itemType === 'lakehouse' && i.id)
+      .map((i, idx) => ({ kind: 'lakehouse' as const, id: i.id!, displayName: i.displayName, isDefault: idx === 0 }));
+    if (lakehouses.length > 0) {
+      const itemsC = await itemsContainer();
+      const nbItems = installed.filter(
+        (i) => i.id && ['notebook', 'databricks-notebook', 'synapse-notebook'].includes(i.itemType),
+      );
+      for (const nb of nbItems) {
+        try {
+          const { resource } = await itemsC.item(nb.id!, workspaceId).read<any>();
+          if (resource) {
+            resource.state = { ...(resource.state || {}), attachedSources: lakehouses };
+            await itemsC.item(nb.id!, workspaceId).replace(resource);
+          }
+        } catch { /* best-effort attach */ }
+      }
+    }
+  } catch { /* best-effort */ }
 
   // Phase 2: run live-service provisioning.
   let provision: ProvisionReport | undefined;

@@ -206,6 +206,40 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 
   useEffect(() => { refreshList(); refreshPools(); }, [refreshList, refreshPools]);
 
+  // ---- Hydrate from the installed item's bundle cells ----
+  // A bundle-installed synapse-notebook has its NotebookContent cells stamped
+  // into Cosmos (state.cells, or state.content.cells when only the
+  // NotebookContent shape was written). The live Synapse workspace list on the
+  // left doesn't surface those, so on mount we open the item populated with
+  // every markdown + code cell instead of a single empty cell — the bundle
+  // content is no longer stranded. /api/items/synapse-notebook/[id] returns the
+  // stamped cells in the IPYNB shape ipynbToCells() already parses. Once the
+  // user opens a real workspace notebook on the left, openNotebook() takes over.
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // Resolve the owning workspace, then pull the Cosmos-backed cells.
+        const lookup = await fetch(`/api/cosmos-items/synapse-notebook/${encodeURIComponent(id)}`);
+        if (!lookup.ok) return;
+        const item = await lookup.json();
+        if (cancelled || !item?.workspaceId) return;
+        const r = await fetch(`/api/items/synapse-notebook/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(item.workspaceId)}`);
+        const j = await r.json();
+        if (cancelled || !j?.ok) return;
+        const props = j.notebook?.properties || {};
+        if (!Array.isArray(props.cells) || props.cells.length === 0) return;
+        setOpenName(j.notebook?.name || item.displayName || 'notebook');
+        setCells(ipynbToCells(props));
+        setAttachedPool(props?.bigDataPool?.referenceName ?? null);
+        setSessionId(null); setSessionState('none'); setDirty(false);
+        setBanner({ intent: 'info', text: 'Loaded notebook cells from the installed app bundle. Open a workspace notebook on the left to edit the published copy.' });
+      } catch { /* fall back to the empty starter cell */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id]);
+
   const openNotebook = useCallback(async (name: string) => {
     setBanner(null);
     try {
