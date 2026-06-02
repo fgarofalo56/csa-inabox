@@ -635,5 +635,60 @@ export async function saveItemState(item: KustoItem, patch: Record<string, any>)
 export function resolveDatabase(item: KustoItem | null): string {
   const name = item?.state?.databaseName;
   if (typeof name === 'string' && name.trim()) return name.trim();
+  // App-install provisioning creates a DEDICATED ADX database for a
+  // bundle-installed kql-database (e.g. 'Change_Feed_Monitoring') and seeds its
+  // tables there, recording the real database name on
+  // `state.provisioning.secondaryIds.database` / `state.provisioning.resourceId`.
+  // Honor it so the query route + sibling Real-Time Dashboard target the
+  // database where the tables ACTUALLY live — instead of the shared default DB
+  // (which has none of those tables, surfacing as "Failed to resolve table").
+  const prov = (item?.state as any)?.provisioning;
+  if (prov && (prov.status === 'created' || prov.status === 'exists')) {
+    const provDb = prov.secondaryIds?.database || prov.resourceId;
+    if (typeof provDb === 'string' && provDb.trim()) return provDb.trim();
+  }
   return DEFAULT_DB;
+}
+
+/**
+ * Resolve the ADX database a kql-dashboard's tiles should query.
+ *
+ * A bundle-installed Real-Time Dashboard (e.g. "Change Feed Health") has no
+ * database of its own — its tiles query the DEDICATED database that the sibling
+ * `kql-database` item in the SAME app install provisions (e.g.
+ * 'Change_Feed_Monitoring'). When the dashboard item itself carries no resolved
+ * database, find that sibling and use its provisioned database, so the tiles
+ * run against the database where the seeded tables actually live instead of the
+ * shared default DB (where they don't exist → "Failed to resolve table").
+ *
+ * Falls back to the dashboard item's own resolveDatabase() when no provisioned
+ * sibling is found (a hand-authored dashboard, or one whose db is explicit).
+ */
+export async function resolveDashboardDatabase(item: KustoItem | null): Promise<string> {
+  if (!item) return DEFAULT_DB;
+  // Explicit/own provisioned DB on the dashboard item wins.
+  const own = resolveDatabase(item);
+  if (own !== DEFAULT_DB) return own;
+  try {
+    const items = await itemsContainer();
+    const { resources } = await items.items
+      .query<KustoItem>({
+        query: 'SELECT * FROM c WHERE c.workspaceId = @w AND c.itemType = @t',
+        parameters: [
+          { name: '@w', value: item.workspaceId },
+          { name: '@t', value: 'kql-database' },
+        ],
+      }, { partitionKey: item.workspaceId })
+      .fetchAll();
+    // Prefer a sibling sharing the dashboard's sourceApp, else any provisioned one.
+    const sourceApp = (item.state as any)?.sourceApp;
+    const candidates = sourceApp
+      ? resources.filter((r) => (r.state as any)?.sourceApp === sourceApp)
+      : resources;
+    for (const cand of (candidates.length ? candidates : resources)) {
+      const db = resolveDatabase(cand);
+      if (db !== DEFAULT_DB) return db;
+    }
+  } catch { /* best-effort — fall through to default */ }
+  return own;
 }

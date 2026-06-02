@@ -47,7 +47,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const cellSource = typeof body?.source === 'string' ? body.source : '';
     const cellLang = typeof body?.lang === 'string' ? body.lang : '';
     const cellId = typeof body?.cellId === 'string' ? body.cellId : '';
-    const code = cellSource || state.code || '';
+    // Whole-notebook run: when no per-cell source is passed, assemble the code
+    // from the notebook's cells. Falls back to state.cells, then the bundle-
+    // stamped state.content.cells (same fallback the GET route uses), then the
+    // legacy state.code blob — so a bundle-installed notebook runs even before
+    // its first Save (which is when state.code would otherwise get written).
+    const allCells: any[] = (Array.isArray(state.cells) && state.cells.length > 0)
+      ? state.cells
+      : (state.content?.kind === 'notebook' && Array.isArray(state.content.cells) ? state.content.cells : []);
+    const codeFromCells = allCells.filter((c) => c?.type === 'code' && typeof c.source === 'string')
+      .map((c) => c.source).join('\n\n');
+    const code = cellSource || state.code || codeFromCells || '';
     if (!code.trim()) return err('notebook is empty — write code before running', 400);
 
     // Map cell-lang to the statement-kind that Livy / Databricks expects.

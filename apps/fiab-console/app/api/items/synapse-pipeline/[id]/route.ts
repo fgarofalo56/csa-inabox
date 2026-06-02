@@ -12,7 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getPipeline, upsertPipeline, deletePipeline, type SynapsePipeline } from '@/lib/azure/synapse-dev-client';
-import { resolveBinding, bindingErrorResponse, pipelineDefinitionFromContent } from '@/lib/azure/pipeline-binding';
+import { resolveBinding, bindingErrorResponse, pipelineDefinitionFromContent, loadPipelineItem } from '@/lib/azure/pipeline-binding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,6 +27,20 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     binding = await resolveBinding(id, ITEM_TYPE, session.claims.oid);
   } catch (e) {
+    // Unbound item: a bundle-installed pipeline that was never bound to a live
+    // Azure pipeline (e.g. the Synapse workspace env vars weren't set at
+    // install time, so the provisioner config-gated and never stamped
+    // state.pipelineName). Rather than 412 → empty canvas, surface the stamped
+    // state.content so the designer opens FULLY BUILT-OUT. Save/Run still gate
+    // on a real binding. Only fall through to the bind-picker 412 when the item
+    // genuinely has no content to render.
+    if ((e as any)?.code === 'unbound') {
+      const item = await loadPipelineItem(id, ITEM_TYPE, session.claims.oid).catch(() => null);
+      const fromContent = pipelineDefinitionFromContent(item?.state?.content);
+      if (fromContent) {
+        return NextResponse.json({ ok: true, pipeline: fromContent, boundTo: null, fromContent: true, unbound: true });
+      }
+    }
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });
   }
