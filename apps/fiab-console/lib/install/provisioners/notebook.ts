@@ -37,15 +37,24 @@ function buildDefinition(content: any, displayName: string): { format: string; p
       language_info: { name: defaultLang === 'sparksql' ? 'sql' : 'python' },
       microsoft: { language: defaultLang, language_group: 'synapse_pyspark' },
     },
-    cells: cells.map((c) => ({
-      cell_type: c.kind === 'markdown' ? 'markdown' : 'code',
-      execution_count: null,
-      metadata: c.language ? { microsoft: { language: c.language } } : {},
-      outputs: c.kind === 'markdown' ? undefined : [],
-      source: typeof c.source === 'string'
-        ? c.source.split('\n').map((line: string, i: number, arr: string[]) => i < arr.length - 1 ? line + '\n' : line)
-        : (Array.isArray(c.source) ? c.source : []),
-    })),
+    cells: cells.map((c) => {
+      // Canonical NotebookCell schema (lib/types/notebook-cell.ts) uses
+      // `type` ('code'|'markdown') and `lang`. Accept the legacy
+      // `kind`/`language` aliases too so older bundles keep working.
+      const cellType = (c.type ?? c.kind) === 'markdown' ? 'markdown' : 'code';
+      const cellLang = c.lang ?? c.language;
+      const isMarkdown = cellType === 'markdown';
+      return {
+        cell_type: cellType,
+        execution_count: null,
+        // Per-cell language metadata only meaningful for code cells.
+        metadata: !isMarkdown && cellLang ? { microsoft: { language: cellLang } } : {},
+        outputs: isMarkdown ? undefined : [],
+        source: typeof c.source === 'string'
+          ? c.source.split('\n').map((line: string, i: number, arr: string[]) => i < arr.length - 1 ? line + '\n' : line)
+          : (Array.isArray(c.source) ? c.source : []),
+      };
+    }),
   };
   const payload = Buffer.from(JSON.stringify(ipynb), 'utf-8').toString('base64');
   return {

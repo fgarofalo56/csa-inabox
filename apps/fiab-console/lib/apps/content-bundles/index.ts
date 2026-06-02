@@ -23,6 +23,14 @@ import lakehouseInspector from './app-lakehouse-inspector';
 import dataSteward from './app-data-steward';
 import finopsCost from './app-finops-cost';
 import fabricMirrorOnboard from './app-fabric-mirror-onboard';
+import changeFeedProcessor from './app-change-feed-processor';
+import directLakeReplacement from './app-direct-lake-replacement';
+import federalDataMesh from './app-federal-data-mesh';
+import mlPipeline from './app-ml-pipeline';
+import multiAgencyOnboarding from './app-multi-agency-onboarding';
+import azureRealtimeAnalytics from './app-azure-realtime-analytics';
+import sovereignAiAgents from './app-sovereign-ai-agents';
+import logicAppsIntegration from './app-app-logic-apps-integration';
 
 const REGISTRY: Record<string, AppBundle> = {
   [casinoAnalytics.appId]: casinoAnalytics,
@@ -35,6 +43,14 @@ const REGISTRY: Record<string, AppBundle> = {
   [dataSteward.appId]: dataSteward,
   [finopsCost.appId]: finopsCost,
   [fabricMirrorOnboard.appId]: fabricMirrorOnboard,
+  [changeFeedProcessor.appId]: changeFeedProcessor,
+  [directLakeReplacement.appId]: directLakeReplacement,
+  [federalDataMesh.appId]: federalDataMesh,
+  [mlPipeline.appId]: mlPipeline,
+  [multiAgencyOnboarding.appId]: multiAgencyOnboarding,
+  [azureRealtimeAnalytics.appId]: azureRealtimeAnalytics,
+  [sovereignAiAgents.appId]: sovereignAiAgents,
+  [logicAppsIntegration.appId]: logicAppsIntegration,
 };
 
 export function getBundle(appId: string): AppBundle | undefined {

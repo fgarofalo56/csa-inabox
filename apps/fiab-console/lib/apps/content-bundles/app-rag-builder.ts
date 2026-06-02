@@ -1,27 +1,31 @@
 /**
- * RAG Builder app bundle — Phase 1 starter content.
+ * RAG Builder app bundle.
  *
- * Provisions a fully-formed Retrieval-Augmented Generation workspace
- * with three runnable surfaces:
+ * Provisions a fully-formed Retrieval-Augmented Generation workspace with
+ * four workspace items. Each item is HONEST about which backend it hits at
+ * install time (per .claude/rules/no-vaporware.md):
  *
- *   1. AI Search index    (rag-default)  — vector + keyword corpus
- *      with HNSW vector profile, a title-boost scoring profile,
- *      and 10 seed documents about CSA Loom architecture, FedRAMP,
- *      and Fabric workspaces.
+ *   1. AI Search index  — REAL backend. The aiSearchProvisioner does a
+ *      live PUT /indexes/<name> (HNSW vector + scoring profiles) and pushes
+ *      the 10 sample documents. Honest remediation gate when
+ *      LOOM_AI_SEARCH_SERVICE is unset or the UAMI lacks Search Service
+ *      Contributor.
  *
- *   2. Prompt-flow        (rag-basic)    — 5-node flow: input → query
- *      rephrase → AI Search lookup → grounded synthesis → output.
- *      Every node carries production-grade config (model, temperature,
- *      tool refs, citation-mandatory system prompt).
+ *   2. Prompt-flow  — REAL backend (this PR). The promptFlowProvisioner
+ *      creates the grounded RAG flow in the AI Foundry project via the AML
+ *      data-plane, and it is invoked by POST /api/items/prompt-flow/<id>/run
+ *      ({project, inputs} → {ok, result}). Honest remediation gate when
+ *      LOOM_FOUNDRY_PROJECT is unset or the UAMI lacks AzureML Data Scientist.
  *
- *   3. Evaluation suite   (rag-quality)  — 7 metrics covering
- *      groundedness, retrieval recall / precision, answer relevance,
- *      citation coverage, latency, hallucination rate, with a baseline
- *      run pre-populated.
+ *   3. Evaluation  — REAL backend (this PR). The evaluationProvisioner
+ *      submits a real AI Foundry evaluation run; results are read by
+ *      GET /api/items/evaluation/<id>?project=&results=1 → {ok, evaluation,
+ *      results}. Honest remediation gate naming LOOM_FOUNDRY_PROJECT /
+ *      LOOM_FOUNDRY_EVAL_DATASET / LOOM_FOUNDRY_EVAL_DEPLOYMENT. NO
+ *      hard-coded scores — numbers come only from a live run.
  *
- * A walkthrough notebook is also provisioned so a new tenant can
- * step through chunking → embedding → index push → Q&A → eval in
- * one place.
+ *   4. Walkthrough notebook  — Cosmos-only starter content. Its runnable
+ *      cells call ONLY the real routes above (no invented endpoints).
  *
  * Source examples this bundle draws from:
  *   - examples/ai-agents/README.md
@@ -166,39 +170,60 @@ the caller. This consistently beats either single-mode strategy on the \
 seed eval set, particularly on questions that mix proper nouns (which \
 BM25 wins on) with conceptual phrasing (which vectors win on).`;
 
+// The AI Search index name the aiSearchProvisioner creates is derived from
+// the index item's displayName: lowercase, non-[a-z0-9-] → '-', capped 128.
+// The prompt-flow's search node MUST target that exact name so the flow
+// queries the index this bundle actually provisions.
+const RAG_INDEX_DISPLAY_NAME = 'RAG Corpus — CSA Loom Knowledge Base';
+const RAG_INDEX_NAME = RAG_INDEX_DISPLAY_NAME
+  .toLowerCase()
+  .replace(/[^a-z0-9-]/g, '-')
+  .slice(0, 128);
+
 const bundle: AppBundle = {
   appId: 'app-rag-builder',
   intro: `# RAG Builder
 
 A turnkey Retrieval-Augmented Generation workspace built on Azure AI Search,
-Azure AI Foundry prompt-flow, and a baked-in evaluation suite.
+Azure AI Foundry prompt-flow, and an evaluation suite.
 
-You get three runnable surfaces from the first install:
+You get four workspace items. Each is **honest about its backend** — it
+either hits a real Azure service at install time or shows a Fluent
+MessageBar naming the exact env var / role to provision (no fake data):
 
-1. **AI Search index** \`rag-default\` — hybrid (BM25 + HNSW vector) corpus
-   with 10 seed documents about CSA Loom architecture, FedRAMP, and Fabric.
-   1536-dim text-embedding-3-small vectors, title-boost + recency-boost
-   scoring profiles, schema documented inline.
+1. **AI Search index** — **real backend.** The installer does a live
+   \`PUT /indexes/<name>\` (HNSW vector + scoring profiles) and pushes 10
+   **SAMPLE** documents about CSA Loom architecture, FedRAMP, and Fabric.
+   1536-dim text-embedding-3-small vectors; tenant-scoped via a
+   \`tenantId\` filter field. Gate: set \`LOOM_AI_SEARCH_SERVICE\` + grant
+   the Console UAMI **Search Service Contributor** if you see a 403.
 
-2. **Prompt-flow** \`rag-basic\` — 5-node flow: input → query rephrase →
-   AI Search lookup → grounded synthesis → output. Citation mandatory,
-   PII refusal, no-grounding fallback. Each node has model / temperature /
-   max-tokens dialed in.
+2. **Prompt-flow** — **real backend.** The installer creates a grounded
+   5-node flow (input → query rephrase → AI Search lookup → grounded
+   synthesis → output; citation-mandatory, PII refusal, no-grounding
+   fallback) in your AI Foundry project. Invoke it via
+   \`POST /api/items/prompt-flow/<flowId>/run\` (body \`{project, inputs}\`).
+   Gate: set \`LOOM_FOUNDRY_PROJECT\` + grant **AzureML Data Scientist**.
 
-3. **Evaluation** \`rag-quality\` — 7 metrics including groundedness,
-   retrieval recall/precision @5, citation coverage, hallucination rate.
-   Baseline run pre-populated against the bundled seed dataset.
+3. **Evaluation** — **real backend.** The installer submits a real AI
+   Foundry evaluation run; results are read by
+   \`GET /api/items/evaluation/<id>?project=&results=1\`. **No scores are
+   hard-coded** — numbers appear only after a live run. Gate: set
+   \`LOOM_FOUNDRY_PROJECT\`, \`LOOM_FOUNDRY_EVAL_DATASET\`,
+   \`LOOM_FOUNDRY_EVAL_DEPLOYMENT\`.
 
-A walkthrough notebook is also included so you can step through
-chunking → embedding → index push → Q&A → evaluation in one place.
+4. **Walkthrough notebook** — steps through chunking → embedding → index
+   push → Q&A → evaluation. Its runnable cells call **only the real
+   routes above** (no invented endpoints).
 
 ## Next steps
 
-- Open the index editor and review the seed documents.
-- Open the prompt-flow editor and adjust the system prompt to your domain.
-- Open the evaluation editor and run \`rag-quality\` against the seed
-  dataset. If baseline groundedness drops below 0.80 after your edits,
-  revisit the system prompt.`,
+- Open the index editor and review the SAMPLE documents (then push your own).
+- Open the prompt-flow editor and adjust the system prompt to your domain,
+  then run a question through \`POST /api/items/prompt-flow/<flowId>/run\`.
+- Open the evaluation editor; if the Foundry env vars are set it shows the
+  live run's scores, otherwise it shows the metric definitions + the
+  precise env vars to provision.`,
   sourceDocs: [
     'examples/ai-agents/README.md',
     'examples/ai-agents/data-analyst-agent/agent.py',
@@ -215,23 +240,36 @@ chunking → embedding → index push → Q&A → evaluation in one place.
     // ─── AI Search Index ───────────────────────────────────────────────
     {
       itemType: 'ai-search-index',
-      displayName: 'RAG Corpus — CSA Loom Knowledge Base',
+      displayName: RAG_INDEX_DISPLAY_NAME,
       description:
-        'Hybrid (BM25 + HNSW vector) Azure AI Search index seeded with 10 documents covering CSA Loom architecture, FedRAMP, and Fabric. 1536-dim text-embedding-3-small vectors.',
+        'Hybrid (BM25 + HNSW vector) Azure AI Search index. Provisioned for real (PUT /indexes + sample-doc push) by the aiSearchProvisioner. Seeded with 10 SAMPLE documents about CSA Loom architecture, FedRAMP, and Fabric — replace with your own corpus. 1536-dim text-embedding-3-small vectors, tenant-scoped via the tenantId filter field.',
       learnDoc: 'rag/ai-search-index',
       content: {
         kind: 'ai-search-index',
         schema: {
           fields: [
             { name: 'id', type: 'Edm.String', key: true, filterable: true },
+            // tenantId is the filter the prompt-flow search node applies
+            // ("tenantId eq '<tid>'"), so it MUST exist + be filterable.
+            { name: 'tenantId', type: 'Edm.String', filterable: true },
             { name: 'title', type: 'Edm.String', searchable: true, filterable: false },
             { name: 'content', type: 'Edm.String', searchable: true },
             { name: 'source_url', type: 'Edm.String', filterable: true },
             { name: 'chunk_index', type: 'Edm.Int32', filterable: true },
             { name: 'document_id', type: 'Edm.String', filterable: true },
-            { name: 'created_at', type: 'Edm.DateTimeOffset', filterable: true },
+            { name: 'created_at', type: 'Edm.DateTimeOffset', filterable: true, sortable: true },
             { name: 'tags', type: 'Collection(Edm.String)', filterable: true },
-            { name: 'embedding', type: 'Collection(Edm.Single)', searchable: true },
+            // Vector field: a Collection(Edm.Single) PUT requires `dimensions`
+            // + a `vectorSearchProfile` that names a profile in vectorSearch.
+            // The aiSearchProvisioner synthesizes that profile as
+            // 'default-profile' from `vectorConfig` below.
+            {
+              name: 'embedding',
+              type: 'Collection(Edm.Single)',
+              searchable: true,
+              dimensions: 1536,
+              vectorSearchProfile: 'default-profile',
+            },
           ],
         },
         scoringProfiles: [
@@ -253,9 +291,10 @@ chunking → embedding → index push → Q&A → evaluation in one place.
         sampleDocs: [
           {
             id: 'doc-001-chunk-0',
+            tenantId: 'tenant-demo',
             title: 'CSA Loom: tenant-aware admin plane on FiaB',
             content: SEED_DOC_1,
-            source_url: 'https://docs.csa-loom.io/architecture/overview',
+            source_url: 'https://sample.docs.csa-loom.invalid/architecture/overview',
             chunk_index: 0,
             document_id: 'doc-001',
             created_at: '2026-04-12T10:00:00Z',
@@ -263,9 +302,10 @@ chunking → embedding → index push → Q&A → evaluation in one place.
           },
           {
             id: 'doc-002-chunk-0',
+            tenantId: 'tenant-demo',
             title: 'Loom workspace items: Cosmos schema and starter content',
             content: SEED_DOC_2,
-            source_url: 'https://docs.csa-loom.io/architecture/workspace-items',
+            source_url: 'https://sample.docs.csa-loom.invalid/architecture/workspace-items',
             chunk_index: 0,
             document_id: 'doc-002',
             created_at: '2026-05-02T14:20:00Z',
@@ -273,9 +313,10 @@ chunking → embedding → index push → Q&A → evaluation in one place.
           },
           {
             id: 'doc-003-chunk-0',
+            tenantId: 'tenant-demo',
             title: 'FedRAMP Moderate control mapping for CSA Loom',
             content: SEED_DOC_3,
-            source_url: 'https://docs.csa-loom.io/compliance/fedramp-mapping',
+            source_url: 'https://sample.docs.csa-loom.invalid/compliance/fedramp-mapping',
             chunk_index: 0,
             document_id: 'doc-003',
             created_at: '2026-03-18T09:00:00Z',
@@ -283,9 +324,10 @@ chunking → embedding → index push → Q&A → evaluation in one place.
           },
           {
             id: 'doc-004-chunk-0',
+            tenantId: 'tenant-demo',
             title: 'Per-tenant Fabric workspaces in FiaB',
             content: SEED_DOC_4,
-            source_url: 'https://docs.csa-loom.io/fabric/workspaces',
+            source_url: 'https://sample.docs.csa-loom.invalid/fabric/workspaces',
             chunk_index: 0,
             document_id: 'doc-004',
             created_at: '2026-04-26T11:30:00Z',
@@ -293,9 +335,10 @@ chunking → embedding → index push → Q&A → evaluation in one place.
           },
           {
             id: 'doc-005-chunk-0',
+            tenantId: 'tenant-demo',
             title: 'loom-items: the per-tenant AI Search index',
             content: SEED_DOC_5,
-            source_url: 'https://docs.csa-loom.io/ai-search/loom-items',
+            source_url: 'https://sample.docs.csa-loom.invalid/ai-search/loom-items',
             chunk_index: 0,
             document_id: 'doc-005',
             created_at: '2026-05-14T16:45:00Z',
@@ -303,9 +346,10 @@ chunking → embedding → index push → Q&A → evaluation in one place.
           },
           {
             id: 'doc-006-chunk-0',
+            tenantId: 'tenant-demo',
             title: 'Prompt-flow topology for RAG Builder',
             content: SEED_DOC_6,
-            source_url: 'https://docs.csa-loom.io/rag/prompt-flow',
+            source_url: 'https://sample.docs.csa-loom.invalid/rag/prompt-flow',
             chunk_index: 0,
             document_id: 'doc-006',
             created_at: '2026-05-08T13:15:00Z',
@@ -313,9 +357,10 @@ chunking → embedding → index push → Q&A → evaluation in one place.
           },
           {
             id: 'doc-007-chunk-0',
+            tenantId: 'tenant-demo',
             title: 'RAG Builder evaluation methodology',
             content: SEED_DOC_7,
-            source_url: 'https://docs.csa-loom.io/rag/evaluation',
+            source_url: 'https://sample.docs.csa-loom.invalid/rag/evaluation',
             chunk_index: 0,
             document_id: 'doc-007',
             created_at: '2026-05-10T08:00:00Z',
@@ -323,9 +368,10 @@ chunking → embedding → index push → Q&A → evaluation in one place.
           },
           {
             id: 'doc-008-chunk-0',
+            tenantId: 'tenant-demo',
             title: 'Chunking and embedding for the retrieval pipeline',
             content: SEED_DOC_8,
-            source_url: 'https://docs.csa-loom.io/rag/chunking',
+            source_url: 'https://sample.docs.csa-loom.invalid/rag/chunking',
             chunk_index: 0,
             document_id: 'doc-008',
             created_at: '2026-05-12T12:00:00Z',
@@ -333,9 +379,10 @@ chunking → embedding → index push → Q&A → evaluation in one place.
           },
           {
             id: 'doc-009-chunk-0',
+            tenantId: 'tenant-demo',
             title: 'Tenant isolation in AI Search',
             content: SEED_DOC_9,
-            source_url: 'https://docs.csa-loom.io/ai-search/tenant-isolation',
+            source_url: 'https://sample.docs.csa-loom.invalid/ai-search/tenant-isolation',
             chunk_index: 0,
             document_id: 'doc-009',
             created_at: '2026-04-30T15:30:00Z',
@@ -343,9 +390,10 @@ chunking → embedding → index push → Q&A → evaluation in one place.
           },
           {
             id: 'doc-010-chunk-0',
+            tenantId: 'tenant-demo',
             title: 'HNSW vector indexing and hybrid retrieval',
             content: SEED_DOC_10,
-            source_url: 'https://docs.csa-loom.io/ai-search/vector-config',
+            source_url: 'https://sample.docs.csa-loom.invalid/ai-search/vector-config',
             chunk_index: 0,
             document_id: 'doc-010',
             created_at: '2026-05-16T17:00:00Z',
@@ -406,7 +454,7 @@ chunking → embedding → index push → Q&A → evaluation in one place.
             name: 'search_index',
             config: {
               toolType: 'azure-ai-search',
-              indexName: 'rag-default',
+              indexName: RAG_INDEX_NAME,
               endpointEnv: 'AZURE_AI_SEARCH_ENDPOINT',
               authMode: 'managed-identity',
               queryType: 'hybrid',
@@ -501,9 +549,9 @@ Write the grounded answer per the system rules. End with a "Citations:" block li
     // ─── Evaluation ────────────────────────────────────────────────────
     {
       itemType: 'evaluation',
-      displayName: 'RAG Quality — 7-metric baseline',
+      displayName: 'RAG Quality — 7-metric suite',
       description:
-        'Production-grade evaluation suite covering groundedness, retrieval recall/precision, answer relevance, citation coverage, p95 latency, and hallucination rate. Baseline run pre-populated against the rag-eval-seed dataset.',
+        'Evaluation suite covering groundedness, retrieval recall/precision, answer relevance, citation coverage, p95 latency, and hallucination rate. The evaluationProvisioner submits a REAL AI Foundry evaluation run when LOOM_FOUNDRY_PROJECT / LOOM_FOUNDRY_EVAL_DATASET / LOOM_FOUNDRY_EVAL_DEPLOYMENT are set; scores come only from that live run (read via GET /api/items/evaluation/<id>?project=&results=1). No baseline numbers are hard-coded.',
       learnDoc: 'rag/evaluation',
       content: {
         kind: 'evaluation',
@@ -545,18 +593,12 @@ Write the grounded answer per the system rules. End with a "Citations:" block li
               'Computed as 1 - groundedness, surfaced as a top-line dashboard metric. Reported as a percentage. Target ≤ 10%. Sustained > 15% triggers a rollback to the previous prompt-flow version via the Loom prompt-flow editor.',
           },
         ],
-        baseline: {
-          runId: 'baseline-2026-05-20-prod',
-          results: {
-            groundedness: 0.92,
-            retrieval_recall: 0.88,
-            retrieval_precision: 0.71,
-            answer_relevance: 0.84,
-            citation_coverage: 0.97,
-            latency_p95: 3450,
-            hallucination_rate: 0.08,
-          },
-        },
+        // No `baseline` is stamped here on purpose. Baseline scores must
+        // come from a real AI Foundry evaluation run (submitted by the
+        // evaluationProvisioner and read via the GET results route) — not
+        // from hard-coded numbers. The editor shows the metric definitions
+        // + their targets and an honest "run the suite to populate scores"
+        // state until a live run completes.
       },
     },
 
@@ -578,16 +620,20 @@ Write the grounded answer per the system rules. End with a "Citations:" block li
 
 This notebook takes you through the **full RAG lifecycle** in CSA Loom:
 
-1. Load a small corpus (the 10 seed documents that ship with the index)
+1. Load a small SAMPLE corpus (the 10 documents that ship with the index)
 2. Chunk each document at 1000 tokens with 100-token overlap
 3. Generate \`text-embedding-3-small\` (1536-dim) embeddings via Azure OpenAI
-4. Push chunks to the \`rag-default\` AI Search index
-5. Ask a grounded question through the \`rag-basic\` prompt-flow
-6. Run the \`rag-quality\` evaluation against the bundled seed dataset
+4. Push chunks to the AI Search index this app provisioned
+5. Ask a grounded question through the prompt flow via the real
+   \`POST /api/items/prompt-flow/<flowId>/run\` route
+6. Read the evaluation results via the real
+   \`GET /api/items/evaluation/<id>?project=&results=1\` route
 
-You should be able to run every cell top-to-bottom on a clean install
-and see the baseline numbers (groundedness ≈ 0.92, recall @5 ≈ 0.88)
-within a few minutes.
+Every cell calls only real routes. Cells that need Foundry config
+(prompt-flow / evaluation) print an **honest gate** message naming the
+missing env var instead of fabricating output. Actual metric values
+(groundedness, recall, …) appear only once a live AI Foundry evaluation
+run has completed — this notebook never hard-codes them.
 
 > **Prerequisites.** The notebook authenticates with the Loom container
 > app's managed identity. Outside Loom you can fall back to
@@ -626,7 +672,9 @@ from openai import AzureOpenAI
 AOAI_ENDPOINT     = os.environ["AZURE_OPENAI_ENDPOINT"]
 AOAI_EMBED_DEPL   = os.environ.get("AZURE_OPENAI_EMBED_DEPLOYMENT", "text-embedding-3-small")
 SEARCH_ENDPOINT   = os.environ["AZURE_AI_SEARCH_ENDPOINT"]
-INDEX_NAME        = "rag-default"
+# Same index name the install-time aiSearchProvisioner created (derived
+# from the index item's display name). Override with LOOM_RAG_INDEX_NAME.
+INDEX_NAME        = os.environ.get("LOOM_RAG_INDEX_NAME", "rag-corpus---csa-loom-knowledge-base")
 TENANT_ID         = os.environ.get("LOOM_TENANT_ID", "tenant-demo")
 
 credential = DefaultAzureCredential()
@@ -664,6 +712,9 @@ def chunk_documents(docs: list[dict]) -> list[dict]:
         for i, chunk in enumerate(chunks):
             out.append({
                 "id":           f"{d['document_id']}-chunk-{i}",
+                # tenantId is required for the prompt-flow tenant filter to
+                # return these docs ("tenantId eq '<tid>'").
+                "tenantId":     d.get("tenantId", TENANT_ID),
                 "document_id":  d["document_id"],
                 "chunk_index":  i,
                 "title":        d["title"],
@@ -734,6 +785,7 @@ bundle.`,
 # Idempotent (re-)create — safe to run on every notebook execution.
 fields = [
     SimpleField(name="id", type=SearchFieldDataType.String, key=True, filterable=True),
+    SimpleField(name="tenantId", type=SearchFieldDataType.String, filterable=True),
     SearchableField(name="title", type=SearchFieldDataType.String),
     SearchableField(name="content", type=SearchFieldDataType.String),
     SimpleField(name="source_url", type=SearchFieldDataType.String, filterable=True),
@@ -767,86 +819,135 @@ print(f"Uploaded {sum(1 for r in result if r.succeeded)}/{len(chunks)} chunks.")
             type: 'markdown',
             source: `## 4 — Ask a grounded question
 
-We hit the \`rag-basic\` prompt-flow via the Loom BFF route. The route
-applies the tenant filter, calls the flow, returns the grounded answer +
-citation block + raw documents. If you want to skip the BFF, you can
-call the flow directly via the Foundry control plane — the cell below
-does the BFF version because it is the supported surface.`,
+We hit the prompt flow via the **real** Loom BFF route
+\`POST /api/items/prompt-flow/<flowId>/run\`. The route proxies the Azure
+AI Foundry data-plane *submit* endpoint, so its body and response are the
+data-plane's, not an invented shape:
+
+- **Request body:** \`{ "project": "<aml-project>", "inputs": { ... } }\`
+  — \`project\` is the AI Foundry project workspace name
+  (\`LOOM_FOUNDRY_PROJECT\`); \`inputs\` are the flow's declared inputs.
+- **Response:** \`{ "ok": true, "result": <flow run output> }\` on success,
+  or \`{ "ok": false, "error": "...", "notDeployed": true }\` with HTTP 503
+  when \`LOOM_FOUNDRY_PROJECT\` is unset / the UAMI lacks AzureML Data
+  Scientist. We handle both honestly below.
+
+\`<flowId>\` is the id the installer's promptFlowProvisioner created —
+surfaced in the install report and stored on this item. Set it via
+\`LOOM_RAG_FLOW_ID\` (or paste it from the prompt-flow editor's header).`,
           },
           {
             id: 'cell-ask',
             type: 'code',
             lang: 'pyspark',
-            source: `import urllib.request
+            source: `import urllib.request, urllib.error, urllib.parse
 
 LOOM_BFF = os.environ.get("LOOM_BFF_BASE", "https://loom.example.com")
+FLOW_ID  = os.environ.get("LOOM_RAG_FLOW_ID")   # set from the install report / editor header
+PROJECT  = os.environ.get("LOOM_FOUNDRY_PROJECT")
 
-req = urllib.request.Request(
-    f"{LOOM_BFF}/api/items/prompt-flow/rag-basic/invoke",
-    method="POST",
-    headers={"Content-Type": "application/json"},
-    data=json.dumps({
-        "question": "How does CSA Loom enforce tenant isolation in AI Search?",
-        "tenantId": TENANT_ID,
-    }).encode(),
-)
-with urllib.request.urlopen(req, timeout=15) as resp:
-    payload = json.loads(resp.read())
+if not FLOW_ID or not PROJECT:
+    print("Honest gate: set LOOM_RAG_FLOW_ID (from the install report) and "
+          "LOOM_FOUNDRY_PROJECT before invoking the flow.")
+else:
+    # Real route: POST /api/items/prompt-flow/<flowId>/run  body {project, inputs}
+    req = urllib.request.Request(
+        f"{LOOM_BFF}/api/items/prompt-flow/{FLOW_ID}/run",
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        data=json.dumps({
+            "project": PROJECT,
+            "inputs": {
+                "question": "How does CSA Loom enforce tenant isolation in AI Search?",
+                "tenantId": TENANT_ID,
+            },
+        }).encode(),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            payload = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        # 503 + notDeployed is the honest infra-gate from the run route.
+        payload = json.loads(e.read())
 
-print(payload["answer"])
-print()
-print("Citations:", payload["citations"])
-print("Documents grounding:", [d["document_id"] for d in payload["documents"]])
-print(f"Latency p50 = {payload['latency_ms']} ms | grounded = {payload['grounded']}")`,
+    if not payload.get("ok"):
+        print(f"Flow not runnable yet: {payload.get('error')}")
+        if payload.get("hint"):
+            print(f"Remediation: {payload['hint']}")
+    else:
+        # 'result' is the raw Foundry data-plane submit response. Its exact
+        # keys depend on the flow's outputs block; print it verbatim.
+        print(json.dumps(payload["result"], indent=2)[:2000])`,
           },
           {
             id: 'cell-md-eval',
             type: 'markdown',
-            source: `## 5 — Run the evaluation
+            source: `## 5 — Read the evaluation results
 
-The \`rag-quality\` evaluation suite reads its dataset from the
-\`rag-eval-seed\` Cosmos container. The Loom evaluation editor surfaces
-each metric — running it from the notebook here is for CI / scheduled
-re-runs. The output below is the same JSON the Loom UI renders into
-its score cards.`,
+The evaluation **run** is submitted at install time by the
+evaluationProvisioner (a real AI Foundry evaluation), not from this
+notebook — there is no \`.../evaluation/<id>/run\` route. To read the
+scores we GET the **real** route:
+
+\`GET /api/items/evaluation/<evalId>?project=<project>&results=1\`
+
+which returns \`{ "ok": true, "evaluation": {...}, "results": {...} }\`
+(the \`results\` table is the live run's metrics) or a 503 honest-gate
+when Foundry isn't configured. \`<evalId>\` comes from the install
+report; set it via \`LOOM_RAG_EVAL_ID\`.`,
           },
           {
             id: 'cell-eval',
             type: 'code',
             lang: 'pyspark',
-            source: `req = urllib.request.Request(
-    f"{LOOM_BFF}/api/items/evaluation/rag-quality/run",
-    method="POST",
-    headers={"Content-Type": "application/json"},
-    data=json.dumps({"datasetRef": "rag-eval-seed", "tenantId": TENANT_ID}).encode(),
-)
-with urllib.request.urlopen(req, timeout=120) as resp:
-    eval_result = json.loads(resp.read())
+            source: `EVAL_ID = os.environ.get("LOOM_RAG_EVAL_ID")   # from the install report / editor header
 
-print(json.dumps(eval_result["results"], indent=2))
-print()
-print(f"Run id        = {eval_result['runId']}")
-print(f"Cases scored  = {eval_result['casesScored']}")
-print(f"Grounded ≥ 0.90 ? {eval_result['results']['groundedness'] >= 0.90}")
-print(f"Recall   ≥ 0.85 ? {eval_result['results']['retrieval_recall'] >= 0.85}")
-print(f"Citation ≥ 0.95 ? {eval_result['results']['citation_coverage'] >= 0.95}")`,
+if not EVAL_ID or not PROJECT:
+    print("Honest gate: set LOOM_RAG_EVAL_ID (from the install report) and "
+          "LOOM_FOUNDRY_PROJECT to read evaluation results. "
+          "If Foundry eval env vars were unset at install, the evaluation "
+          "item is in its honest config-only state and has no scores yet.")
+else:
+    # Real route: GET /api/items/evaluation/<id>?project=<p>&results=1
+    url = (f"{LOOM_BFF}/api/items/evaluation/{EVAL_ID}"
+           f"?project={urllib.parse.quote(PROJECT)}&results=1")
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            payload = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        payload = json.loads(e.read())
+
+    if not payload.get("ok"):
+        print(f"Evaluation not readable yet: {payload.get('error')}")
+        if payload.get("hint"):
+            print(f"Remediation: {payload['hint']}")
+    else:
+        print("Evaluation:", json.dumps(payload.get("evaluation"), indent=2)[:1200])
+        print()
+        # 'results' is null until the live run finishes; print it as-is.
+        print("Results:", json.dumps(payload.get("results"), indent=2)[:1500])`,
           },
           {
             id: 'cell-md-next',
             type: 'markdown',
             source: `## What to try next
 
-- **Edit the system prompt** in the \`rag-basic\` prompt-flow editor and
-  re-run cell 5. If groundedness drops, the prompt is leaking
-  flexibility.
+- **Edit the system prompt** in the prompt-flow editor and re-run cell 4
+  (the \`.../run\` call). Inspect the returned \`result\` for grounding.
+- **Re-run the evaluation.** The evaluation run is submitted by the
+  installer; to score a new prompt-flow version, re-install the app (or
+  submit a new evaluation from the evaluation editor) and re-read scores
+  with cell 5's GET-results call.
 - **Add your own documents.** Cells 1–3 work on any list of
-  \`{title, content, document_id, source_url, tags, created_at}\` dicts.
+  \`{title, content, document_id, source_url, tags, created_at, tenantId}\`
+  dicts — push them to the same index the prompt-flow searches.
 - **Tune retrieval.** Swap the prompt-flow's \`search_index\` node from
   hybrid → vector-only or → keyword-only and watch recall +
   groundedness move in opposite directions.
-- **Wire production telemetry.** The Loom BFF emits Application Insights
-  events tagged with the run id; build a workbook from
-  \`customEvents | where name == "rag.invoke"\`.`,
+- **Wire production telemetry.** The flow node config sets an App Insights
+  trace scope; build a workbook from your Foundry hub's Application
+  Insights \`customEvents\`.`,
           },
         ],
       },

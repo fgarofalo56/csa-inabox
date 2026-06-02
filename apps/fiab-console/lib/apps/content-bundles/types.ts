@@ -97,7 +97,21 @@ export interface DataProductContent {
 
 export interface AiSearchIndexContent {
   kind: 'ai-search-index';
-  schema: { fields: { name: string; type: string; searchable?: boolean; filterable?: boolean; key?: boolean }[] };
+  schema: {
+    fields: {
+      name: string;
+      type: string;
+      searchable?: boolean;
+      filterable?: boolean;
+      sortable?: boolean;
+      retrievable?: boolean;
+      key?: boolean;
+      /** Vector fields only — embedding length (e.g. 1536 for text-embedding-3-small). */
+      dimensions?: number;
+      /** Vector fields only — must reference a vectorSearch profile name the provisioner creates. */
+      vectorSearchProfile?: string;
+    }[];
+  };
   scoringProfiles?: { name: string; description: string }[];
   sampleDocs?: any[];
   vectorConfig?: { dimensions: number; algorithm: string };
