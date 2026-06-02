@@ -17,8 +17,9 @@ export const activatorProvisioner: Provisioner = async (input): Promise<Provisio
     return {
       status: 'remediation',
       gate: {
-        reason: 'No bound Fabric workspace.',
-        remediation: 'Bind a Fabric workspace, or set LOOM_DEFAULT_FABRIC_WORKSPACE.',
+        reason: 'This is a Microsoft Fabric Activator (Reflex) — it needs a Fabric workspace bound to this Loom workspace.',
+        remediation:
+          'Bind a capacity-backed Microsoft Fabric workspace to this Loom workspace at /admin/workspaces → Bind capacity (or set LOOM_DEFAULT_FABRIC_WORKSPACE). This is a real Fabric/Power BI workspace on a Fabric capacity — NOT the Loom workspace itself. The rest of this app installs without it.',
         link: '/admin/workspaces',
       },
       steps,

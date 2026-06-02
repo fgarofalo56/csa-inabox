@@ -59,6 +59,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   // Phase-2 flags
   const deploy = body?.deploy !== false; // default true
   const mode = body?.mode === 'dedicated' ? 'dedicated' : 'shared';
+  // Optional install target folder inside the workspace (null/'' = root).
+  const folderId = (body?.folderId || '').toString().trim() || null;
   const targetOverrides = body?.targetOverrides && typeof body.targetOverrides === 'object'
     ? body.targetOverrides
     : undefined;
@@ -161,6 +163,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       displayName,
       description,
       state,
+      folderId,
     });
     if (r.ok) {
       installed.push({ itemType: ref.type, id: r.item.id, displayName, status: 'created', content: bundle?.content });
