@@ -36,7 +36,7 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
   Toast, ToastTitle, useToastController, Toaster, useId,
 } from '@fluentui/react-components';
 import {
@@ -78,6 +78,39 @@ const useStyles = makeStyles({
   centerCol: { flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 },
   treePad: { padding: '8px' },
   tabBody: { padding: '12px', overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' },
+
+  // ── ADF-Studio designer layout: palette | (canvas over a resizable config dock) ──
+  // The canvas FILLS the space above the dock; the dock has an explicit,
+  // user-dragged height with its own internal scroll, so expanding/collapsing
+  // sections inside the activity config NEVER resizes the canvas.
+  designerRow: { display: 'flex', flex: 1, minHeight: '560px', gap: '8px', minWidth: 0 },
+  designerMain: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 },
+  canvasWrap: { flex: 1, minHeight: '180px', display: 'flex', overflow: 'hidden' },
+  splitter: {
+    flexShrink: 0,
+    height: '10px',
+    cursor: 'row-resize',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    touchAction: 'none',
+    ':hover': { backgroundColor: tokens.colorNeutralBackground3 },
+  },
+  splitterActive: { backgroundColor: tokens.colorBrandBackground2 },
+  splitterGrip: {
+    width: '44px',
+    height: '4px',
+    borderRadius: '2px',
+    backgroundColor: tokens.colorNeutralStroke1,
+  },
+  configDock: {
+    flexShrink: 0,
+    overflow: 'auto',
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '4px',
+    minHeight: '120px',
+  },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -149,6 +182,30 @@ export function DataPipelineEditor({ item, id }: Props) {
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
   const [outputPinned, setOutputPinned] = useState(false);
+
+  // Activity-config dock height (ADF Studio docks config at the bottom of the
+  // canvas with a draggable divider). Explicit height + internal scroll means
+  // expanding/collapsing sections never resizes the canvas above it.
+  const [configHeight, setConfigHeight] = useState(300);
+  const [resizing, setResizing] = useState(false);
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = configHeight;
+    setResizing(true);
+    const onMove = (ev: MouseEvent) => {
+      // Dragging up (clientY decreases) grows the bottom dock.
+      const next = Math.max(120, Math.min(680, startH - (ev.clientY - startY)));
+      setConfigHeight(next);
+    };
+    const onUp = () => {
+      setResizing(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [configHeight]);
 
   // Lifecycle state
   const [saving, setSaving] = useState(false);
@@ -657,33 +714,52 @@ export function DataPipelineEditor({ item, id }: Props) {
                 pipeline: activities.length,
               }}>
               {topTab === 'pipeline' && (
-                <div className={s.threePane}>
+                <div className={s.designerRow}>
                   <div className={s.paletteCol}>
                     <ActivityPalette onInsert={(d) => insertActivity(d)} />
                   </div>
-                  <div className={s.centerCol}>
-                    <PipelineCanvas
-                      ref={canvasRef}
-                      activities={activities}
-                      selectedName={selectedActivity || undefined}
-                      onSelect={setSelectedActivity}
-                      snapToGrid={snapToGrid}
-                      showGrid={showGrid}
-                      onDropPaletteKey={(key) => {
-                        const def = findByKey(key);
-                        if (def) insertActivity(def);
-                      }}
-                      onConnect={connect}
-                    />
+                  <div className={s.designerMain}>
+                    {/* Canvas FILLS the space above the dock — fixed relative to
+                        the dock height, never resized by config expand/collapse. */}
+                    <div className={s.canvasWrap}>
+                      <PipelineCanvas
+                        ref={canvasRef}
+                        activities={activities}
+                        selectedName={selectedActivity || undefined}
+                        onSelect={setSelectedActivity}
+                        snapToGrid={snapToGrid}
+                        showGrid={showGrid}
+                        onDropPaletteKey={(key) => {
+                          const def = findByKey(key);
+                          if (def) insertActivity(def);
+                        }}
+                        onConnect={connect}
+                      />
+                    </div>
+                    {/* Draggable divider — drag up/down to resize the config dock. */}
+                    <div
+                      className={mergeClasses(s.splitter, resizing && s.splitterActive)}
+                      onMouseDown={startResize}
+                      role="separator"
+                      aria-orientation="horizontal"
+                      aria-label="Resize activity configuration panel"
+                      title="Drag to resize the configuration panel"
+                    >
+                      <div className={s.splitterGrip} />
+                    </div>
+                    {/* Bottom-docked activity configuration — explicit height + own scroll. */}
+                    <div className={s.configDock} style={{ height: configHeight }}>
+                      <PropertiesPanel
+                        activity={selected}
+                        allActivities={activities}
+                        parameters={parameters}
+                        variables={variables}
+                        layout="dock"
+                        onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
+                        onDelete={() => { if (selected) deleteActivity(selected.name); }}
+                      />
+                    </div>
                   </div>
-                  <PropertiesPanel
-                    activity={selected}
-                    allActivities={activities}
-                    parameters={parameters}
-                    variables={variables}
-                    onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
-                    onDelete={() => { if (selected) deleteActivity(selected.name); }}
-                  />
                 </div>
               )}
 

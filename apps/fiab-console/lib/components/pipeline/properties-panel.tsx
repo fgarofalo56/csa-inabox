@@ -19,10 +19,11 @@ import {
   Tab, TabList, Input, Field, Textarea, Caption1, Button, Subtitle2,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, Badge, makeStyles, tokens, Select, Switch,
-  Dropdown, Option,
+  Dropdown, Option, Accordion, AccordionItem, AccordionHeader, AccordionPanel,
 } from '@fluentui/react-components';
 import { Add20Regular, Delete20Regular } from '@fluentui/react-icons';
 import { findByType } from './activity-catalog';
+import { ActivityForm, hasActivityForm } from './activity-forms';
 import type { PipelineActivity, PipelineParameter, PipelineParameterType, PipelineVariable } from './types';
 
 const useStyles = makeStyles({
@@ -38,11 +39,12 @@ const useStyles = makeStyles({
   // Bottom-dock layout (ADF Studio parity) — full width, fixed height,
   // header + horizontal tab strip + scrollable body.
   dockRoot: {
+    // Fills the resizable bottom dock (height is owned by the parent splitter
+    // pane); the body scrolls internally so section expand/collapse never grows
+    // the dock or resizes the canvas above it.
     display: 'flex', flexDirection: 'column',
-    width: '100%', height: 260,
+    width: '100%', height: '100%', minHeight: 0,
     backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
     overflow: 'hidden',
   },
   header: {
@@ -291,23 +293,59 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
 
         {tab === 'settings' && (
           <>
-            <Field label="typeProperties (JSON)" validationMessage={typePropsErr || undefined}
-              validationState={typePropsErr ? 'error' : 'none'}>
-              <textarea
-                className={s.jsonArea}
-                value={typePropsText}
-                onChange={(e) => {
-                  setTypePropsText(e.target.value);
-                  try {
-                    const v = JSON.parse(e.target.value);
-                    setTypePropsErr(null);
-                    onPatch({ typeProperties: v });
-                  } catch (err: any) {
-                    setTypePropsErr(err?.message || 'invalid JSON');
-                  }
-                }}
-              />
-            </Field>
+            {hasActivityForm(activity.type) ? (
+              <>
+                <ActivityForm
+                  activity={activity}
+                  onPatch={onPatch}
+                  parameters={parameters}
+                  variables={variables}
+                  allActivities={allActivities}
+                />
+                <Accordion collapsible>
+                  <AccordionItem value="raw-json">
+                    <AccordionHeader>Advanced — raw typeProperties JSON</AccordionHeader>
+                    <AccordionPanel>
+                      <Field validationMessage={typePropsErr || undefined}
+                        validationState={typePropsErr ? 'error' : 'none'}>
+                        <textarea
+                          className={s.jsonArea}
+                          value={typePropsText}
+                          onChange={(e) => {
+                            setTypePropsText(e.target.value);
+                            try {
+                              const v = JSON.parse(e.target.value);
+                              setTypePropsErr(null);
+                              onPatch({ typeProperties: v });
+                            } catch (err: any) {
+                              setTypePropsErr(err?.message || 'invalid JSON');
+                            }
+                          }}
+                        />
+                      </Field>
+                    </AccordionPanel>
+                  </AccordionItem>
+                </Accordion>
+              </>
+            ) : (
+              <Field label="typeProperties (JSON)" validationMessage={typePropsErr || undefined}
+                validationState={typePropsErr ? 'error' : 'none'}>
+                <textarea
+                  className={s.jsonArea}
+                  value={typePropsText}
+                  onChange={(e) => {
+                    setTypePropsText(e.target.value);
+                    try {
+                      const v = JSON.parse(e.target.value);
+                      setTypePropsErr(null);
+                      onPatch({ typeProperties: v });
+                    } catch (err: any) {
+                      setTypePropsErr(err?.message || 'invalid JSON');
+                    }
+                  }}
+                />
+              </Field>
+            )}
             <Subtitle2>Activity policy</Subtitle2>
             <Caption1>Run-time behaviour (ADF activity policy). Defaults: timeout 7 days, retry 0, retry interval 30s.</Caption1>
             <Field label="Timeout (D.HH:MM:SS)">
