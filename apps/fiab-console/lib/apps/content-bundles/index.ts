@@ -29,6 +29,8 @@ import federalDataMesh from './app-federal-data-mesh';
 import mlPipeline from './app-ml-pipeline';
 import multiAgencyOnboarding from './app-multi-agency-onboarding';
 import azureRealtimeAnalytics from './app-azure-realtime-analytics';
+import sovereignAiAgents from './app-sovereign-ai-agents';
+import logicAppsIntegration from './app-app-logic-apps-integration';
 
 const REGISTRY: Record<string, AppBundle> = {
   [casinoAnalytics.appId]: casinoAnalytics,
@@ -47,6 +49,8 @@ const REGISTRY: Record<string, AppBundle> = {
   [mlPipeline.appId]: mlPipeline,
   [multiAgencyOnboarding.appId]: multiAgencyOnboarding,
   [azureRealtimeAnalytics.appId]: azureRealtimeAnalytics,
+  [sovereignAiAgents.appId]: sovereignAiAgents,
+  [logicAppsIntegration.appId]: logicAppsIntegration,
 };
 
 export function getBundle(appId: string): AppBundle | undefined {

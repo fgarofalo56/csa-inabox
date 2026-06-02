@@ -142,7 +142,7 @@ function buildDashboardJson(
     schema_version: '52',
     title,
     autoRefresh: { enabled: true, defaultInterval: '5m', minInterval: '30s' },
-    pages: [{ id: pageId, name: 'Change Feed Health' }],
+    pages: [{ id: pageId, name: title }],
     dataSources: [
       {
         id: dataSource.id,
@@ -219,12 +219,32 @@ export const kqlDashboardProvisioner: Provisioner = async (input): Promise<Provi
       steps,
     };
   }
-  // The bundle's monitoring tiles target the "Change Feed Monitoring"
-  // database the kql-database provisioner creates from that item's
-  // displayName (same slugging rule). Fall back to the default DB.
+  // Resolve the Kusto database the tiles query.  The dashboard's data
+  // source is the database the sibling `kql-database` item in the same app
+  // bundle provisions — kql-db.ts derives that DB name from its item's
+  // displayName via displayName.replace(/[^A-Za-z0-9_]/g,'_').slice(0,50).
+  //
+  // Resolution order (app-agnostic — no hard-coded per-app DB name):
+  //   1. content.database — explicit sibling DB name carried on the bundle
+  //      content (set by app bundles whose dashboard + kql-database items
+  //      live in the same install).
+  //   2. input.target.kustoDatabase — the install's resolved target DB
+  //      (LOOM_KUSTO_DEFAULT_DB), passed by the provisioning engine.
+  //   3. Slug of the dashboard's own displayName, stripped of a trailing
+  //      " Dashboard" suffix and re-suffixed to match the conventional
+  //      "<App> KQL Database" item naming — a best-effort last resort that
+  //      keeps every app's dashboard pointed at a real DB rather than one
+  //      app's hard-coded name.
+  const contentDb = typeof (input.content as any)?.database === 'string'
+    ? String((input.content as any).database).replace(/[^A-Za-z0-9_]/g, '_').slice(0, 50)
+    : undefined;
   const database =
-    process.env.LOOM_KUSTO_CHANGE_FEED_DB ||
-    'Change_Feed_Monitoring'; // kql-db.ts: displayName.replace(/[^A-Za-z0-9_]/g,'_')
+    contentDb ||
+    input.target.kustoDatabase ||
+    `${input.displayName.replace(/\s+Dashboard$/i, '')} KQL Database`
+      .replace(/[^A-Za-z0-9_]/g, '_')
+      .slice(0, 50) ||
+    'loomdb';
   const dataSource = { id: stableId(`${input.displayName}::ds::${database}`), clusterUri, database };
   steps.push(`Dashboard data source: ${clusterUri} / ${database}`);
 

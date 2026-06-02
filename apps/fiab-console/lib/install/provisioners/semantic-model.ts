@@ -47,11 +47,19 @@ function buildTmsl(content: any, displayName: string): string {
           name: m.name, expression: m.expression, ...(m.formatString ? { formatString: m.formatString } : {}),
         })),
       })),
+      // Power BI / Tabular permits only ONE active relationship between any two
+      // tables. Bundles must declare a valid active set (the SemanticModelContent
+      // schema has no active/inactive flag, so each table-pair appears at most
+      // once as active). If a bundle ever carries an explicit `isActive: false`
+      // (additive, optional), we honor it so a role-playing inactive relationship
+      // can be emitted for USERELATIONSHIP use. TMSL `isActive` defaults to true.
+      // https://learn.microsoft.com/analysis-services/tmsl/relationships-object-tmsl
       relationships: relationships.map((r: any, i: number) => ({
         name: `rel${i}`,
         fromTable: r.from.split('.')[0], fromColumn: r.from.split('.')[1] || 'Id',
         toTable: r.to.split('.')[0], toColumn: r.to.split('.')[1] || 'Id',
         crossFilteringBehavior: 'oneDirection',
+        ...(r.isActive === false ? { isActive: false } : {}),
       })),
     },
   }, null, 2);

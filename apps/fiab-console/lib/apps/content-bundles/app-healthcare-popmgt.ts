@@ -14,7 +14,28 @@ const bundle: AppBundle = {
     'and is logged to MLflow on every training run.\n\n' +
     '> **No real PHI.** All sample data is synthetic and satisfies HIPAA Safe Harbor ' +
     '(45 CFR 164.514(b)(2)). Complete a HIPAA security risk assessment and execute BAAs ' +
-    'with all cloud providers before loading real patient data.',
+    'with all cloud providers before loading real patient data.\n\n' +
+    '## How install materializes this content\n\n' +
+    'This bundle does **not** leave its starter content as inert text. At install time:\n\n' +
+    '- **Lakehouse** — the medallion `deltaTables[]` below carry real DDL + `sampleRows`. ' +
+    'The lakehouse provisioner lands each table\'s rows as a seed CSV in OneLake and calls ' +
+    'the Fabric **Load Table** API, so `bronze.patients`, `bronze.encounters`, ' +
+    '`bronze.diagnoses`, `silver.dim_patients`, `silver.fct_encounters`, and ' +
+    '`gold.rpt_readmission_risk` exist as **queryable Delta tables** the moment install ' +
+    'finishes. The Lakehouse editor is a live ADLS Gen2 / OneLake browser — it shows ' +
+    'those real seeded tables (not the bundle JSON). The 3 declared shortcuts ' +
+    '(`cms-public-data`, `npi-registry`, `ahrq-ccs-mapping`) are managed live in the ' +
+    'editor\'s Shortcuts tab against the real public REST targets listed below.\n' +
+    '- **ML model** — the `trainingCode` below is a complete, runnable MLflow script. The ' +
+    'ml-model provisioner imports it as a Databricks notebook and runs it, which **trains ' +
+    'the XGBoost classifier and registers it** in the MLflow / Unity Catalog model registry ' +
+    '(`registered_model_name`). The ML Model editor then binds to that **real registered ' +
+    'model** to browse versions and deploy a real-time endpoint — the seeded ' +
+    'hyperparameters / features / target drive the run that produces it.\n\n' +
+    '> If Databricks or a Fabric workspace is not yet wired for this deployment, install ' +
+    'still creates the workspace items and the provisioner returns a precise remediation ' +
+    'gate (the exact `LOOM_DATABRICKS_HOSTNAME` / `LOOM_DEFAULT_FABRIC_WORKSPACE` env var or ' +
+    'RBAC role to set) instead of pretending the data/model was produced.',
   sourceDocs: [
     'examples/healthcare-clinical/README.md',
     'examples/healthcare-clinical/contracts/readmission-risk.yaml',
@@ -240,7 +261,13 @@ const bundle: AppBundle = {
               "  distinct_ccs_categories INT,\n" +
               "  has_high_risk_condition INT COMMENT '1 iff any of HF/COPD/T2D/CKD/CVA on encounter',\n" +
               "  readmission_risk_score DECIMAL(5,1) NOT NULL COMMENT '0-100 composite weighted score',\n" +
-              "  risk_tier STRING NOT NULL COMMENT 'Low | Moderate | High | Critical',\n" +
+              // risk_tier values track the gold dbt model verbatim
+              // (examples/healthcare-clinical/domains/gold/rpt_readmission_risk.sql
+              //  emits 'Critical' >=70, 'High' >=50, 'Moderate' >=30, else 'Low').
+              // NOTE: contracts/readmission-risk.yaml lists LOW|MODERATE|HIGH|VERY_HIGH
+              // — that contract enum is stale vs. the SQL that actually produces the
+              // column; the bundle deliberately mirrors the data-producing SQL.
+              "  risk_tier STRING NOT NULL COMMENT 'Low | Moderate | High | Critical (matches gold rpt_readmission_risk.sql; contract yaml enum is stale)',\n" +
               "  top_risk_factors STRING COMMENT 'Comma-separated list of contributing factors',\n" +
               "  scored_at TIMESTAMP NOT NULL\n" +
               ") USING DELTA\n" +
@@ -281,7 +308,10 @@ const bundle: AppBundle = {
       description:
         '30-day inpatient readmission probability scoring model. XGBoost binary classifier ' +
         'trained on gold.rpt_readmission_risk with MLflow tracking, early stopping, and ' +
-        'SHAP feature importance. Per the readmission-risk.yaml data contract.',
+        'SHAP feature importance. Per the readmission-risk.yaml data contract. At install the ' +
+        'ml-model provisioner imports + runs the trainingCode below on Databricks, which ' +
+        'registers the model in the MLflow / Unity Catalog registry; open the editor and bind ' +
+        'to that registered model to view versions and deploy a real-time endpoint.',
       learnDoc: 'examples/healthcare-clinical/contracts',
       content: {
         kind: 'ml-model',

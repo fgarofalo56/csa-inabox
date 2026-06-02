@@ -1,6 +1,20 @@
-// app-data-steward — provisions a Data Steward Console with a certified
-// data product (4 datasets + 15+ business glossary terms) and a starter
+// app-data-steward — provisions a Data Steward Console with a promoted
+// data product (4 datasets + 17 business glossary terms) and a starter
 // semantic model representing the steward's curated business view.
+//
+// Endorsement is seeded as 'promoted' (ready-for-review), NOT 'certified':
+// certification is the steward's own governance sign-off, performed from the
+// data-product editor after review. Date relationships follow Power BI's
+// single-active-relationship rule (one FactSales -> DimDate, via OrderDateKey),
+// so the DAX measures stay internally consistent — no USERELATIONSHIP against a
+// relationship the SemanticModelContent schema can't mark inactive.
+//
+// Backend (Phase 2 provisioners, real REST):
+//   - data-product  -> Microsoft Purview Unified Catalog (data products + glossary
+//                      terms); honest remediation gate when no governance domain /
+//                      endpoint / role is bound (LOOM_PURVIEW_*).
+//   - semantic-model -> Fabric POST /v1/workspaces/{ws}/semanticModels (TMSL);
+//                       honest remediation gate when no Fabric workspace is bound.
 import type { AppBundle } from './types';
 
 const bundle: AppBundle = {
@@ -11,10 +25,14 @@ const bundle: AppBundle = {
     'inventory-feed, fraud-scores), a **15+ term business glossary**, and a starter ' +
     '**semantic model** that joins the four core fact + dim tables your stewards will ' +
     'certify.\n\n' +
-    'Use the data product to manage classification (Public / Internal / Confidential / ' +
-    'Restricted), endorsement (Promoted / Certified), and ownership. The semantic model ' +
-    'is the "shared business definitions" layer: dim_customer, dim_product, dim_date, ' +
-    'fact_sales, fact_inventory with 10+ DAX measures already authored.',
+    'The four products install as **Promoted** (ready-for-review); promoting to ' +
+    '**Certified** is your steward sign-off, done from the data-product editor after ' +
+    'you review classification, lineage, and ownership. Use the data product to manage ' +
+    'classification (Public / Internal / Confidential / Restricted), endorsement, and ' +
+    'ownership. The semantic model is the "shared business definitions" layer: ' +
+    'DimCustomer, DimProduct, DimDate, FactSales, FactInventory with 13 DAX measures ' +
+    'already authored, joined on a single active FactSales→DimDate (order date) ' +
+    'relationship per Power BI\'s one-active-relationship rule.',
   sourceDocs: [
     'docs/best-practices/data-governance.md',
     'docs/guides/purview.md',
@@ -40,8 +58,10 @@ const bundle: AppBundle = {
               'Refreshed every 4 hours from silver-layer feeds; SCD2 history is retained ' +
               'for 7 years to satisfy regulatory record-keeping. Primary consumers: ' +
               'Customer Success, Renewals, and the Churn Risk model in AI Foundry. ' +
-              'Field-level lineage is published to Purview and the curated semantic model ' +
-              'exposes the "customer" entity through Power BI Direct Lake.',
+              'On install (Phase 2), field-level lineage is registered in Microsoft ' +
+              'Purview and the curated semantic model surfaces the "customer" entity ' +
+              'via Power BI Direct Lake — both are provisioning outcomes, gated on a ' +
+              'bound governance domain and Fabric workspace.',
             classification: 'Confidential',
           },
           {
@@ -52,9 +72,10 @@ const bundle: AppBundle = {
               'derived from the gold-layer fact_sales table in the retail-sales lakehouse. ' +
               'Includes revenue, margin, units, and discount metrics with role-playing date ' +
               'dimensions (order, ship, recognized). Stewarded by Finance Analytics with ' +
-              'sign-off from Revenue Accounting before each month-end close. The downstream ' +
-              'FinOps Cost Optimizer and Casino Analytics apps consume this as a certified ' +
-              'shortcut. SLA: 99.5% availability, max 30-minute freshness lag.',
+              'sign-off from Revenue Accounting before each month-end close. Intended ' +
+              'downstream consumers are the FinOps Cost Optimizer and Casino Analytics ' +
+              'apps, which can bind this as a certified shortcut once the steward ' +
+              'certifies it. Target SLA: 99.5% availability, max 30-minute freshness lag.',
             classification: 'Internal',
           },
           {
@@ -208,7 +229,11 @@ const bundle: AppBundle = {
           },
         ],
         owner: { name: 'Data Steward Team', email: 'data-stewards@csa.example.com' },
-        endorsement: 'certified',
+        // Seeded as 'promoted', not 'certified': certification is the steward's
+        // own governance sign-off action. Promotion marks these products as
+        // ready-for-review without pre-empting the certify workflow. The steward
+        // upgrades to 'certified' from the data-product editor after review.
+        endorsement: 'promoted',
       },
     },
     {
@@ -324,10 +349,27 @@ const bundle: AppBundle = {
           },
           {
             table: 'FactSales',
+            // First-purchase ("new") customers in the filter context, measured
+            // against the single ACTIVE FactSales[OrderDateKey] -> DimDate[DateKey]
+            // relationship. We intentionally do NOT use USERELATIONSHIP here:
+            // the SemanticModelContent schema has no active/inactive flag, so the
+            // bundle declares exactly one FactSales -> DimDate relationship (order
+            // date) and this measure stays consistent with it. A customer is "new"
+            // when their earliest order date falls inside the current filter range.
+            // See https://learn.microsoft.com/power-bi/guidance/relationships-active-inactive
             name: 'New Customers',
             expression:
-              "CALCULATE ( DISTINCTCOUNT ( FactSales[CustomerKey] ), FILTER ( ALL ( DimDate ), DimDate[Date] <= MAX ( DimDate[Date] ) ), USERELATIONSHIP ( FactSales[OrderDateKey], DimDate[DateKey] ) ) - " +
-              "CALCULATE ( DISTINCTCOUNT ( FactSales[CustomerKey] ), FILTER ( ALL ( DimDate ), DimDate[Date] < MIN ( DimDate[Date] ) ) )",
+              "VAR _MaxDate = MAX ( DimDate[Date] ) " +
+              "VAR _MinDate = MIN ( DimDate[Date] ) " +
+              "RETURN " +
+              "COUNTROWS ( " +
+              "  FILTER ( " +
+              "    VALUES ( FactSales[CustomerKey] ), " +
+              "    VAR _FirstOrder = " +
+              "      CALCULATE ( MIN ( DimDate[Date] ), ALL ( DimDate ), DimDate[Date] <= _MaxDate ) " +
+              "    RETURN _FirstOrder >= _MinDate && _FirstOrder <= _MaxDate " +
+              "  ) " +
+              ")",
             formatString: '#,0',
           },
           {
@@ -383,11 +425,21 @@ const bundle: AppBundle = {
             formatString: '#,0',
           },
         ],
+        // NOTE on date relationships: Power BI / Tabular allows only ONE active
+        // relationship between any two tables (see
+        // https://learn.microsoft.com/analysis-services/tabular-models/relationships-ssas-tabular#requirements-for-relationships).
+        // FactSales has two date roles (OrderDateKey, ShipDateKey), but the
+        // SemanticModelContent schema cannot carry an isActive flag, so we
+        // declare exactly the active set here: FactSales -> DimDate via
+        // OrderDateKey (the canonical sales date all measures resolve against).
+        // ShipDateKey remains a queryable degenerate column for ship-date
+        // analysis via TREATAS/explicit filters; the steward can add a second
+        // (inactive) role relationship in the model editor after install if
+        // they prefer a USERELATIONSHIP pattern.
         relationships: [
           { from: 'FactSales.CustomerKey', to: 'DimCustomer.CustomerKey', cardinality: '1:many' },
           { from: 'FactSales.ProductKey', to: 'DimProduct.ProductKey', cardinality: '1:many' },
           { from: 'FactSales.OrderDateKey', to: 'DimDate.DateKey', cardinality: '1:many' },
-          { from: 'FactSales.ShipDateKey', to: 'DimDate.DateKey', cardinality: '1:many' },
           { from: 'FactInventory.ProductKey', to: 'DimProduct.ProductKey', cardinality: '1:many' },
           { from: 'FactInventory.SnapshotDateKey', to: 'DimDate.DateKey', cardinality: '1:many' },
         ],

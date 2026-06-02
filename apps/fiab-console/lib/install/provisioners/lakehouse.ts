@@ -54,16 +54,40 @@ async function getToken(scope: string): Promise<string> {
   return t.token;
 }
 
-/** Extract column names from a `CREATE TABLE name ( col TYPE, … )` DDL. */
+/**
+ * Extract column names from a `CREATE TABLE name ( col TYPE, … )` DDL.
+ *
+ * Splits the column list on top-level commas (commas inside type parens such
+ * as DECIMAL(18,2) or a CHECK (... BETWEEN x AND y) are NOT column separators)
+ * and skips table-level constraint clauses (CONSTRAINT/PRIMARY/FOREIGN/UNIQUE/
+ * CHECK) so they don't leak in as phantom columns and misalign the seed CSV.
+ */
 function columnsFromDdl(ddl: string): string[] {
   const open = ddl.indexOf('(');
   const close = ddl.lastIndexOf(')');
   if (open < 0 || close <= open) return [];
   const inner = ddl.slice(open + 1, close);
-  return inner
-    .split(',')
+
+  // Split on commas that are at paren-depth 0 only.
+  const segments: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of inner) {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    if (ch === ',' && depth === 0) {
+      segments.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) segments.push(cur);
+
+  const CONSTRAINT_KEYWORDS = new Set(['CONSTRAINT', 'PRIMARY', 'FOREIGN', 'UNIQUE', 'CHECK', 'KEY']);
+  return segments
     .map((seg) => seg.trim().split(/\s+/)[0])
-    .filter((c) => c && /^[A-Za-z_][A-Za-z0-9_]*$/.test(c));
+    .filter((c) => c && /^[A-Za-z_][A-Za-z0-9_]*$/.test(c) && !CONSTRAINT_KEYWORDS.has(c.toUpperCase()));
 }
 
 /** CSV-escape a single value (RFC-4180-ish: quote if it has comma/quote/newline). */

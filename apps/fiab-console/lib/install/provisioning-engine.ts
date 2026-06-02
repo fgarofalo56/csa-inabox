@@ -36,6 +36,9 @@ import { mirroredDatabaseProvisioner } from './provisioners/mirrored-database';
 import { databricksNotebookProvisioner } from './provisioners/databricks-notebook';
 import { reportProvisioner } from './provisioners/report';
 import { dataProductProvisioner } from './provisioners/data-product';
+import { mlModelProvisioner } from './provisioners/ml-model';
+import { promptFlowProvisioner } from './provisioners/prompt-flow';
+import { evaluationProvisioner } from './provisioners/evaluation';
 
 /** Mapping from editor item type → provisioner.  Item types not listed
  * here are Cosmos-only (no Phase-2 backend side-effect). */
@@ -56,6 +59,9 @@ const PROVISIONERS: Record<string, Provisioner> = {
   'databricks-notebook': databricksNotebookProvisioner, // import + run the Silver/Gold medallion notebooks
   'report': reportProvisioner, // create the PBIR report bound byConnection to the semantic model
   'data-product': dataProductProvisioner, // create Purview Unified Catalog data products + glossary terms
+  'ml-model': mlModelProvisioner, // import + run the bundle's training script → trains & registers the model in MLflow/UC
+  'prompt-flow': promptFlowProvisioner, // create the grounded RAG flow in the AI Foundry project (AML data-plane)
+  'evaluation': evaluationProvisioner, // submit a real AI Foundry evaluation run (no hard-coded scores)
 };
 
 /** Item types that have a Phase-2 provisioner — exposed for the wizard
