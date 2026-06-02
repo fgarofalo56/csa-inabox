@@ -1070,3 +1070,411 @@ export async function listDeploymentPipelineOperations(
   } while (token && guard < 50);
   return out;
 }
+
+// --- Pipeline management: create / assign / unassign --------------------
+//
+// Fabric REST (core/deployment-pipelines):
+//   POST /v1/deploymentPipelines                                   create
+//   POST /v1/deploymentPipelines/{id}/stages/{sid}/assignWorkspace assign
+//   POST /v1/deploymentPipelines/{id}/stages/{sid}/unassignWorkspace unassign
+//
+// Docs:
+//   https://learn.microsoft.com/rest/api/fabric/core/deployment-pipelines/create-deployment-pipeline
+//   https://learn.microsoft.com/rest/api/fabric/core/deployment-pipelines/assign-workspace-to-stage
+//   https://learn.microsoft.com/rest/api/fabric/core/deployment-pipelines/unassign-workspace-from-stage
+
+export interface CreateDeploymentPipelineStage {
+  displayName: string;
+  description?: string;
+  isPublic?: boolean;
+}
+
+/**
+ * POST /v1/deploymentPipelines — create a new deployment pipeline with an
+ * ordered set of stages (2-10). The number/names of stages are permanent.
+ * Requires the Fabric admin tenant toggle "Service principals can create …
+ * deployment pipelines" for SPN/UAMI callers.
+ */
+export async function createDeploymentPipeline(body: {
+  displayName: string;
+  description?: string;
+  stages: CreateDeploymentPipelineStage[];
+}): Promise<DeploymentPipeline & { stages?: DeploymentPipelineStage[] }> {
+  if (!body?.displayName) throw new FabricError('displayName is required', 400);
+  if (!Array.isArray(body.stages) || body.stages.length < 2) {
+    throw new FabricError('At least 2 stages are required', 400);
+  }
+  return call<DeploymentPipeline & { stages?: DeploymentPipelineStage[] }>(
+    '/deploymentPipelines',
+    {
+      method: 'POST',
+      body: {
+        displayName: body.displayName,
+        description: body.description,
+        stages: body.stages.map((s) => ({
+          displayName: s.displayName,
+          description: s.description,
+          isPublic: !!s.isPublic,
+        })),
+      },
+    },
+  );
+}
+
+/**
+ * POST /v1/deploymentPipelines/{id}/stages/{stageId}/assignWorkspace —
+ * assign a Fabric workspace to a (vacant) stage. Caller must be pipeline
+ * admin + workspace admin. Fails if the stage already has a workspace.
+ */
+export async function assignWorkspaceToStage(
+  pipelineId: string,
+  stageId: string,
+  workspaceId: string,
+): Promise<void> {
+  if (!pipelineId || !stageId) throw new FabricError('pipelineId and stageId are required', 400);
+  if (!workspaceId) throw new FabricError('workspaceId is required', 400);
+  await call<void>(
+    `/deploymentPipelines/${encodeURIComponent(pipelineId)}/stages/${encodeURIComponent(stageId)}/assignWorkspace`,
+    { method: 'POST', body: { workspaceId } },
+  );
+}
+
+/**
+ * POST /v1/deploymentPipelines/{id}/stages/{stageId}/unassignWorkspace —
+ * release the workspace from a stage. WARNING: per Fabric, unassigning loses
+ * that stage's deployment history and configured deployment rules.
+ */
+export async function unassignWorkspaceFromStage(
+  pipelineId: string,
+  stageId: string,
+): Promise<void> {
+  if (!pipelineId || !stageId) throw new FabricError('pipelineId and stageId are required', 400);
+  await call<void>(
+    `/deploymentPipelines/${encodeURIComponent(pipelineId)}/stages/${encodeURIComponent(stageId)}/unassignWorkspace`,
+    { method: 'POST' },
+  );
+}
+
+// --- Stage compare / sync status ---------------------------------------
+//
+// Fabric REST exposes no dedicated "compare" endpoint; the deployment-pipeline
+// home page computes the sync status client-side by PAIRING the items of two
+// consecutive stages (by itemType + display name, the documented pairing rule)
+// and labelling each pair:
+//   Same          — present in both, identical (paired, no diff signal)
+//   Different      — present in both but changed since last deploy
+//   OnlyInSource   — exists in source, not in target ("New" — will be cloned)
+//   NotInSource    — exists in target, not in source ("Missing from"/"Not in source")
+//
+// We approximate the changed/identical signal using lastDeploymentTime: a
+// paired target item with no lastDeploymentTime, or a source whose pairing
+// can't be confirmed, is surfaced as "Different" so the operator reviews it.
+// The honest limitation: Fabric's true per-item content hash isn't in REST, so
+// "Same vs Different" is a best-effort pairing signal — the deploy operation's
+// preDeploymentDiffInformation is the authoritative count (surfaced post-deploy).
+//
+// Pairing rule docs:
+//   https://learn.microsoft.com/fabric/cicd/deployment-pipelines/compare-pipeline-content
+//   https://learn.microsoft.com/rest/api/fabric/core/deployment-pipelines/list-deployment-pipeline-stage-items
+
+export type StageCompareStatus = 'Same' | 'Different' | 'OnlyInSource' | 'NotInSource';
+
+export interface StageComparePair {
+  itemType: string;
+  /** Source-stage item (the one that would be deployed). */
+  sourceItemId?: string;
+  sourceItemDisplayName?: string;
+  /** Target-stage item (the one that would be overwritten). */
+  targetItemId?: string;
+  targetItemDisplayName?: string;
+  status: StageCompareStatus;
+  lastDeploymentTime?: string;
+}
+
+export interface StageCompareResult {
+  sourceStageId: string;
+  targetStageId: string;
+  pairs: StageComparePair[];
+  summary: { same: number; different: number; onlyInSource: number; notInSource: number };
+}
+
+/**
+ * Compare a source stage against a target stage by pairing their item lists.
+ * Both lists come from List Stage Items (real Fabric REST). Returns per-item
+ * compare rows + a roll-up summary that mirrors the green/orange indicator.
+ */
+export async function compareDeploymentPipelineStages(
+  pipelineId: string,
+  sourceStageId: string,
+  targetStageId: string,
+): Promise<StageCompareResult> {
+  const [src, tgt] = await Promise.all([
+    listDeploymentPipelineStageItems(pipelineId, sourceStageId),
+    listDeploymentPipelineStageItems(pipelineId, targetStageId),
+  ]);
+  const key = (it: DeploymentPipelineStageItem) => `${it.itemType}::${it.itemDisplayName}`.toLowerCase();
+  const tgtByKey = new Map<string, DeploymentPipelineStageItem>();
+  for (const t of tgt) tgtByKey.set(key(t), t);
+
+  const pairs: StageComparePair[] = [];
+  const seenTargets = new Set<string>();
+
+  for (const s of src) {
+    const k = key(s);
+    const t = tgtByKey.get(k);
+    if (t) {
+      seenTargets.add(k);
+      // Paired. We mark "Different" when the target item has never been
+      // deployed-from-this-pairing (no lastDeploymentTime) OR the pairing's
+      // source/target deployment timestamps diverge — a best-effort signal.
+      const different =
+        !t.lastDeploymentTime ||
+        (!!s.lastDeploymentTime && s.lastDeploymentTime !== t.lastDeploymentTime);
+      pairs.push({
+        itemType: s.itemType,
+        sourceItemId: s.itemId,
+        sourceItemDisplayName: s.itemDisplayName,
+        targetItemId: t.itemId,
+        targetItemDisplayName: t.itemDisplayName,
+        status: different ? 'Different' : 'Same',
+        lastDeploymentTime: t.lastDeploymentTime || s.lastDeploymentTime,
+      });
+    } else {
+      pairs.push({
+        itemType: s.itemType,
+        sourceItemId: s.itemId,
+        sourceItemDisplayName: s.itemDisplayName,
+        status: 'OnlyInSource',
+        lastDeploymentTime: s.lastDeploymentTime,
+      });
+    }
+  }
+  for (const t of tgt) {
+    if (seenTargets.has(key(t))) continue;
+    pairs.push({
+      itemType: t.itemType,
+      targetItemId: t.itemId,
+      targetItemDisplayName: t.itemDisplayName,
+      status: 'NotInSource',
+      lastDeploymentTime: t.lastDeploymentTime,
+    });
+  }
+
+  const summary = { same: 0, different: 0, onlyInSource: 0, notInSource: 0 };
+  for (const p of pairs) {
+    if (p.status === 'Same') summary.same++;
+    else if (p.status === 'Different') summary.different++;
+    else if (p.status === 'OnlyInSource') summary.onlyInSource++;
+    else summary.notInSource++;
+  }
+  return { sourceStageId, targetStageId, pairs, summary };
+}
+
+// ============================================================
+// Git integration (CI side) — connect a workspace to Azure DevOps / GitHub,
+// view branch/commit/sync status, commit-to-git + update-from-git.
+//
+// Real Fabric REST (core/git):
+//   GET  /v1/workspaces/{ws}/git/connection            connection + state
+//   POST /v1/workspaces/{ws}/git/connect               connect (ADO/GitHub)
+//   POST /v1/workspaces/{ws}/git/initializeConnection  initialize after connect
+//   POST /v1/workspaces/{ws}/git/disconnect            disconnect
+//   GET  /v1/workspaces/{ws}/git/status                per-item sync status (LRO)
+//   POST /v1/workspaces/{ws}/git/commitToGit           commit (All|Selective, LRO)
+//   POST /v1/workspaces/{ws}/git/updateFromGit         update workspace (LRO)
+//
+// Docs:
+//   https://learn.microsoft.com/rest/api/fabric/core/git
+//   https://learn.microsoft.com/rest/api/fabric/core/git/connect
+//   https://learn.microsoft.com/rest/api/fabric/core/git/get-status
+//   https://learn.microsoft.com/rest/api/fabric/core/git/commit-to-git
+//   https://learn.microsoft.com/rest/api/fabric/core/git/update-from-git
+//
+// Gating: connect requires workspace *admin*; status/commit/update require
+// *contributor*. Service-principal/UAMI connect is only allowed with a
+// ConfiguredConnection (a Git provider credentials connection id). 401/403
+// surface the standard FabricError hint.
+// ============================================================
+
+export type GitProviderType = 'AzureDevOps' | 'GitHub';
+export type GitConnectionState = 'NotConnected' | 'Connected' | 'ConnectedAndInitialized';
+
+export interface GitProviderDetails {
+  gitProviderType: GitProviderType;
+  branchName?: string;
+  directoryName?: string;
+  // AzureDevOps
+  organizationName?: string;
+  projectName?: string;
+  repositoryName?: string;
+  // GitHub
+  ownerName?: string;
+  customDomainName?: string;
+}
+
+export interface GitConnection {
+  gitConnectionState: GitConnectionState;
+  gitProviderDetails: GitProviderDetails | null;
+  gitSyncDetails: { head?: string; lastSyncTime?: string } | null;
+}
+
+export interface GitItemChange {
+  itemMetadata: {
+    itemIdentifier: { logicalId?: string; objectId?: string };
+    itemType: string;
+    displayName: string;
+  };
+  workspaceChange?: 'Added' | 'Deleted' | 'Modified';
+  remoteChange?: 'Added' | 'Deleted' | 'Modified';
+  conflictType?: 'None' | 'Conflict' | 'SameChanges';
+}
+
+export interface GitStatus {
+  workspaceHead?: string;
+  remoteCommitHash?: string;
+  changes: GitItemChange[];
+}
+
+/** GET /v1/workspaces/{ws}/git/connection — provider details + connection state. */
+export async function getWorkspaceGitConnection(workspaceId: string): Promise<GitConnection> {
+  if (!workspaceId) throw new FabricError('workspaceId is required', 400);
+  const j = await call<GitConnection>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/git/connection`,
+  );
+  return {
+    gitConnectionState: j?.gitConnectionState || 'NotConnected',
+    gitProviderDetails: j?.gitProviderDetails || null,
+    gitSyncDetails: j?.gitSyncDetails || null,
+  };
+}
+
+/**
+ * POST /v1/workspaces/{ws}/git/connect — connect a workspace to an
+ * Azure DevOps or GitHub repo+branch. `connectionId` (a Git provider
+ * credentials connection) is required for GitHub and for SPN/UAMI callers.
+ */
+export async function connectWorkspaceGit(
+  workspaceId: string,
+  details: GitProviderDetails,
+  connectionId?: string,
+): Promise<void> {
+  if (!workspaceId) throw new FabricError('workspaceId is required', 400);
+  if (!details?.gitProviderType) throw new FabricError('gitProviderType is required', 400);
+  if (!details.branchName) throw new FabricError('branchName is required', 400);
+  if (details.gitProviderType === 'AzureDevOps') {
+    if (!details.organizationName || !details.projectName || !details.repositoryName) {
+      throw new FabricError('organizationName, projectName, repositoryName are required for AzureDevOps', 400);
+    }
+  } else if (details.gitProviderType === 'GitHub') {
+    if (!details.ownerName || !details.repositoryName) {
+      throw new FabricError('ownerName and repositoryName are required for GitHub', 400);
+    }
+  }
+  const body: Record<string, unknown> = { gitProviderDetails: details };
+  if (connectionId) {
+    body.myGitCredentials = { source: 'ConfiguredConnection', connectionId };
+  }
+  await call<void>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/git/connect`,
+    { method: 'POST', body },
+  );
+}
+
+/** POST /v1/workspaces/{ws}/git/initializeConnection — first-time sync handshake (LRO). */
+export async function initializeWorkspaceGitConnection(
+  workspaceId: string,
+): Promise<{ _accepted: true; location?: string } | { requiredAction?: string; remoteCommitHash?: string; workspaceHead?: string }> {
+  return call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/git/initializeConnection`,
+    { method: 'POST', body: {}, acceptLongRunning: true },
+  );
+}
+
+/** POST /v1/workspaces/{ws}/git/disconnect — sever the Git connection. */
+export async function disconnectWorkspaceGit(workspaceId: string): Promise<void> {
+  await call<void>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/git/disconnect`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * GET /v1/workspaces/{ws}/git/status — per-item sync status. LRO: a 202 means
+ * Fabric is still computing; the route returns the accepted handle so the UI
+ * can retry. On 200 returns workspaceHead + remoteCommitHash + changes[].
+ */
+export async function getWorkspaceGitStatus(
+  workspaceId: string,
+): Promise<GitStatus | { _accepted: true; location?: string }> {
+  const j = await call<any>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/git/status`,
+    { acceptLongRunning: true },
+  );
+  if (j?._accepted) return j;
+  return {
+    workspaceHead: j?.workspaceHead,
+    remoteCommitHash: j?.remoteCommitHash,
+    changes: Array.isArray(j?.changes) ? j.changes : [],
+  };
+}
+
+/**
+ * POST /v1/workspaces/{ws}/git/commitToGit — commit workspace changes to the
+ * connected branch. mode 'All' commits everything; 'Selective' commits the
+ * supplied item identifiers (objectId/logicalId from Git status). LRO.
+ */
+export async function commitWorkspaceToGit(
+  workspaceId: string,
+  body: {
+    mode: 'All' | 'Selective';
+    workspaceHead?: string;
+    comment?: string;
+    items?: Array<{ objectId?: string; logicalId?: string }>;
+  },
+): Promise<{ _accepted: true; location?: string } | void> {
+  if (!workspaceId) throw new FabricError('workspaceId is required', 400);
+  const mode = body?.mode === 'Selective' ? 'Selective' : 'All';
+  const payload: Record<string, unknown> = { mode };
+  if (body.workspaceHead) payload.workspaceHead = body.workspaceHead;
+  if (body.comment) payload.comment = String(body.comment).slice(0, 300);
+  if (mode === 'Selective') {
+    const items = (body.items || []).filter((i) => i?.objectId || i?.logicalId);
+    if (!items.length) throw new FabricError('Selective commit requires at least one item', 400);
+    payload.items = items;
+  }
+  return call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/git/commitToGit`,
+    { method: 'POST', body: payload, acceptLongRunning: true },
+  );
+}
+
+/**
+ * POST /v1/workspaces/{ws}/git/updateFromGit — pull commits from the connected
+ * branch into the workspace. workspaceHead + remoteCommitHash come from Git
+ * status. `allowOverrideItems` lets Fabric overwrite items on conflict. LRO.
+ */
+export async function updateWorkspaceFromGit(
+  workspaceId: string,
+  body: {
+    workspaceHead?: string;
+    remoteCommitHash?: string;
+    allowOverrideItems?: boolean;
+    conflictResolutionPolicy?: 'PreferWorkspace' | 'PreferRemote';
+  },
+): Promise<{ _accepted: true; location?: string } | void> {
+  if (!workspaceId) throw new FabricError('workspaceId is required', 400);
+  const payload: Record<string, unknown> = {};
+  if (body.workspaceHead) payload.workspaceHead = body.workspaceHead;
+  if (body.remoteCommitHash) payload.remoteCommitHash = body.remoteCommitHash;
+  payload.options = { allowOverrideItems: body.allowOverrideItems !== false };
+  if (body.conflictResolutionPolicy) {
+    payload.conflictResolution = {
+      conflictResolutionType: 'Workspace',
+      conflictResolutionPolicy: body.conflictResolutionPolicy,
+    };
+  }
+  return call(
+    `/workspaces/${encodeURIComponent(workspaceId)}/git/updateFromGit`,
+    { method: 'POST', body: payload, acceptLongRunning: true },
+  );
+}

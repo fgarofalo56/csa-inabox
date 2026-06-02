@@ -86,6 +86,15 @@ param aiFoundryEnabled bool = false
 @description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. Independent of aiFoundryEnabled.')
 param agentFoundryEnabled bool = false
 
+@description('Deploy the shared Data API builder preview runtime that the DAB editor\'s live REST/GraphQL testers point at via LOOM_DAB_PREVIEW_URL.')
+param dabRuntimeEnabled bool = false
+
+@description('SQL server FQDN the DAB preview runtime targets (e.g. <srv>.database.windows.net). Required when dabRuntimeEnabled.')
+param dabSqlServerFqdn string = ''
+
+@description('SQL database the DAB preview runtime targets. Required when dabRuntimeEnabled.')
+param dabSqlDatabase string = ''
+
 @description('Deploy APIM. Premium V2 takes 30+ min; default off so initial provision iterates quickly.')
 param apimEnabled bool = false
 
@@ -439,6 +448,19 @@ module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
   }
 }
 
+// Shared Data API builder preview runtime (off by default — needs a SQL target).
+module dabRuntime 'dab-runtime.bicep' = if (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) {
+  name: 'dab-runtime'
+  params: {
+    location: location
+    managedEnvironmentId: containerPlatformModule.outputs.caeId
+    uamiResourceId: identity.outputs.uamiConsoleId
+    uamiClientId: identity.outputs.uamiConsoleClientId
+    sqlServerFqdn: dabSqlServerFqdn
+    sqlDatabase: dabSqlDatabase
+  }
+}
+
 // =====================================================================
 // 9. APIM (Premium V2 or classic Premium per boundary)
 // =====================================================================
@@ -749,6 +771,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : '' }
             { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
             { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
+            { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }

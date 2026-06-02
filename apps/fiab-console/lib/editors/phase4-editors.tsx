@@ -631,6 +631,63 @@ interface FoundryJob {
   tags?: Record<string, string>; properties?: Record<string, string>;
 }
 
+// ----- MLflow tracking shapes (mirror lib/azure/mlflow-client.ts) -----
+interface MlflowMetric { key: string; value: number; timestamp?: number; step?: number }
+interface MlflowParam { key: string; value: string }
+interface MlflowRunTag { key: string; value: string }
+interface MlflowRun {
+  runId: string; runName?: string; experimentId?: string; status?: string;
+  startTime?: number; endTime?: number; artifactUri?: string; lifecycleStage?: string;
+  metrics: MlflowMetric[]; params: MlflowParam[]; tags: MlflowRunTag[];
+}
+
+function fmtEpochMs(ms?: number): string {
+  if (!ms || !Number.isFinite(ms)) return '—';
+  try { return new Date(ms).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z'); } catch { return '—'; }
+}
+
+/**
+ * Minimal self-contained SVG line chart for a single MLflow metric series
+ * (step on x, value on y) — no extra deps, consistent with the Loom theme via
+ * Fluent tokens. Returns null with fewer than 2 points; the caller shows the
+ * values table alongside so a single-point metric is still readable.
+ */
+function MetricLineChart({ points }: { points: MlflowMetric[] }) {
+  const W = 640, H = 200, padL = 48, padR = 12, padT = 12, padB = 28;
+  const series = points
+    .map((p, i) => ({ x: p.step ?? i, y: p.value }))
+    .filter((p) => Number.isFinite(p.y));
+  if (series.length < 2) return null;
+  const xs = series.map((p) => p.x), ys = series.map((p) => p.y);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const xSpan = xMax - xMin || 1, ySpan = yMax - yMin || 1;
+  const sx = (x: number) => padL + ((x - xMin) / xSpan) * (W - padL - padR);
+  const sy = (y: number) => H - padB - ((y - yMin) / ySpan) * (H - padT - padB);
+  const d = series.map((p, i) => `${i === 0 ? 'M' : 'L'}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(' ');
+  const yTicks = [yMin, (yMin + yMax) / 2, yMax];
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Metric history chart"
+      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: tokens.colorNeutralBackground2, maxWidth: W }}>
+      {yTicks.map((t, i) => (
+        <g key={i}>
+          <line x1={padL} y1={sy(t)} x2={W - padR} y2={sy(t)} stroke={tokens.colorNeutralStroke3} strokeWidth={1} />
+          <text x={padL - 6} y={sy(t) + 4} textAnchor="end" fontSize={10} fill={tokens.colorNeutralForeground3}>
+            {t.toPrecision(4)}
+          </text>
+        </g>
+      ))}
+      <text x={padL} y={H - 8} textAnchor="start" fontSize={10} fill={tokens.colorNeutralForeground3}>{xMin}</text>
+      <text x={W - padR} y={H - 8} textAnchor="end" fontSize={10} fill={tokens.colorNeutralForeground3}>{xMax}</text>
+      <text x={(padL + W - padR) / 2} y={H - 8} textAnchor="middle" fontSize={10} fill={tokens.colorNeutralForeground3}>step</text>
+      <path d={d} fill="none" stroke={tokens.colorBrandStroke1} strokeWidth={2} />
+      {series.map((p, i) => (
+        <circle key={i} cx={sx(p.x)} cy={sy(p.y)} r={2.5} fill={tokens.colorBrandForeground1} />
+      ))}
+    </svg>
+  );
+}
+
 export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const isNew = id === 'new' || !id;
   // Read-only: experiments/runs are submitted via Azure ML / MLflow. On /new,
@@ -679,6 +736,21 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
   const [regName, setRegName] = useState('');
   const [registering, setRegistering] = useState(false);
   const [regMsg, setRegMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // ---- MLflow tracking (Runs tab) ----
+  const [tab, setTab] = useState<'overview' | 'mlflowRuns'>('overview');
+  const [mlflowLoading, setMlflowLoading] = useState(false);
+  const [mlflowConfigured, setMlflowConfigured] = useState(true);
+  const [mlflowHint, setMlflowHint] = useState<string | null>(null);
+  const [mlflowError, setMlflowError] = useState<string | null>(null);
+  const [mlflowRuns, setMlflowRuns] = useState<MlflowRun[]>([]);
+  const [selMlflowRun, setSelMlflowRun] = useState<string | null>(null);
+  // Metric-history view for the selected run.
+  const [metricKeys, setMetricKeys] = useState<string[]>([]);
+  const [selMetric, setSelMetric] = useState<string>('');
+  const [metricHistory, setMetricHistory] = useState<MlflowMetric[]>([]);
+  const [metricLoading, setMetricLoading] = useState(false);
+  const [metricError, setMetricError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -740,17 +812,72 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
     finally { setRegistering(false); }
   }, [current, regName]);
 
+  // Load the experiment's MLflow runs (real run metrics + params + status that
+  // the AML job properties don't carry). `id` is the experiment name.
+  const loadMlflowRuns = useCallback(async () => {
+    setMlflowLoading(true); setMlflowError(null);
+    try {
+      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs`);
+      const j = await r.json();
+      if (!j.ok) { setMlflowError(j.error || `HTTP ${r.status}`); setMlflowRuns([]); return; }
+      setMlflowConfigured(j.configured !== false);
+      setMlflowHint(j.hint || null);
+      const rows: MlflowRun[] = Array.isArray(j.runs) ? j.runs : [];
+      setMlflowRuns(rows);
+      setSelMlflowRun((prev) => (prev && rows.some((x) => x.runId === prev)) ? prev : (rows[0]?.runId || null));
+    } catch (e: any) { setMlflowError(e?.message || String(e)); setMlflowRuns([]); }
+    finally { setMlflowLoading(false); }
+  }, [id]);
+
+  // Lazy-load runs when the user first opens the MLflow Runs tab.
+  useEffect(() => {
+    if (tab === 'mlflowRuns' && !mlflowLoading && mlflowRuns.length === 0 && mlflowConfigured && !mlflowError) {
+      loadMlflowRuns();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // When the selected run changes, fetch its available metric keys (from runs/get).
+  const selectedMlflowRun = mlflowRuns.find((r) => r.runId === selMlflowRun) || null;
+  useEffect(() => {
+    const keys = Array.from(new Set((selectedMlflowRun?.metrics || []).map((m) => m.key))).sort();
+    setMetricKeys(keys);
+    setSelMetric((prev) => (prev && keys.includes(prev)) ? prev : (keys[0] || ''));
+    setMetricHistory([]);
+    setMetricError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selMlflowRun]);
+
+  // Load the full step/value history for the chosen metric on the chosen run.
+  const loadMetricHistory = useCallback(async () => {
+    if (!selMlflowRun || !selMetric) { setMetricHistory([]); return; }
+    setMetricLoading(true); setMetricError(null);
+    try {
+      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs/${encodeURIComponent(selMlflowRun)}/metrics?metricKey=${encodeURIComponent(selMetric)}`);
+      const j = await r.json();
+      if (!j.ok) { setMetricError(j.error || `HTTP ${r.status}`); setMetricHistory([]); return; }
+      if (j.configured === false) { setMlflowConfigured(false); setMlflowHint(j.hint || null); setMetricHistory([]); return; }
+      setMetricHistory(Array.isArray(j.history) ? j.history : []);
+    } catch (e: any) { setMetricError(e?.message || String(e)); setMetricHistory([]); }
+    finally { setMetricLoading(false); }
+  }, [id, selMlflowRun, selMetric]);
+
+  useEffect(() => { if (selMlflowRun && selMetric) loadMetricHistory(); }, [selMlflowRun, selMetric, loadMetricHistory]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Runs', actions: [
         { label: loading ? 'Reloading…' : 'Reload', onClick: loading ? undefined : load, disabled: loading },
         { label: submitting ? 'Submitting…' : 'Submit run', onClick: submitRun, disabled: submitting },
       ]},
+      { label: 'Tracking', actions: [
+        { label: mlflowLoading ? 'Loading…' : 'MLflow runs', onClick: () => { setTab('mlflowRuns'); loadMlflowRuns(); }, disabled: mlflowLoading },
+      ]},
       { label: 'Model', actions: [
         { label: 'Register model', onClick: () => { setRegName(''); setRegMsg(null); setRegOpen(true); }, disabled: !current },
       ]},
     ]},
-  ], [loading, load, submitting, submitRun, current]);
+  ], [loading, load, submitting, submitRun, current, mlflowLoading, loadMlflowRuns]);
 
   return (
     <ItemEditorChrome
@@ -807,7 +934,15 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
               {job.experimentName && <Caption1>Experiment: {job.experimentName}</Caption1>}
             </>
           )}
+
           {!loading && !error && (kind === 'experiment' || kind === 'job') && (
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
+              <Tab value="overview">Overview</Tab>
+              <Tab value="mlflowRuns">Runs &amp; metrics</Tab>
+            </TabList>
+          )}
+
+          {tab === 'overview' && !loading && !error && (kind === 'experiment' || kind === 'job') && (
             <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <Subtitle2>Submit a run (Command job)</Subtitle2>
               <ComputePicker
@@ -846,7 +981,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
               </DialogBody>
             </DialogSurface>
           </Dialog>
-          {!loading && !error && runs.length > 0 && (
+          {tab === 'overview' && !loading && !error && runs.length > 0 && (
             <>
               <Table aria-label="Runs" size="small">
                 <TableHeader><TableRow>
@@ -891,6 +1026,175 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                 </>
               )}
             </>
+          )}
+
+          {/* ---- MLflow Runs & metrics (real AML MLflow tracking REST) ---- */}
+          {tab === 'mlflowRuns' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {mlflowLoading && <Spinner size="small" label="Loading MLflow runs…" labelPosition="after" />}
+
+              {!mlflowConfigured && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Azure ML MLflow tracking not configured</MessageBarTitle>
+                    {mlflowHint || 'Set LOOM_AML_WORKSPACE / LOOM_AML_REGION to a deployed Azure Machine Learning workspace and grant the Console UAMI the AzureML Data Scientist role on it.'}
+                    <br />
+                    <Caption1>
+                      Env: <code>LOOM_AML_WORKSPACE</code> (falls back to <code>LOOM_FOUNDRY_NAME</code>),{' '}
+                      <code>LOOM_AML_REGION</code> (falls back to <code>LOOM_FOUNDRY_REGION</code>),{' '}
+                      <code>LOOM_SUBSCRIPTION_ID</code>.
+                    </Caption1>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {mlflowError && (
+                <MessageBar intent="error">
+                  <MessageBarBody><MessageBarTitle>MLflow load failed</MessageBarTitle>{mlflowError}</MessageBarBody>
+                </MessageBar>
+              )}
+
+              {!mlflowLoading && mlflowConfigured && !mlflowError && mlflowRuns.length === 0 && (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>No MLflow runs for this experiment</MessageBarTitle>
+                    Submit a run that logs with MLflow (e.g. <code>mlflow.start_run()</code> +{' '}
+                    <code>mlflow.log_metric()</code>) under experiment <strong>{expName || id}</strong>.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {!mlflowLoading && mlflowConfigured && mlflowRuns.length > 0 && (
+                <>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    {mlflowRuns.length} MLflow run(s) — click a row to view its params and per-step metric history.
+                  </Caption1>
+                  <Table aria-label="MLflow runs" size="small">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Run</TableHeaderCell>
+                      <TableHeaderCell>Status</TableHeaderCell>
+                      <TableHeaderCell>Started</TableHeaderCell>
+                      <TableHeaderCell>Params</TableHeaderCell>
+                      <TableHeaderCell>Metrics (latest)</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {mlflowRuns.map((r) => (
+                        <TableRow
+                          key={r.runId}
+                          onClick={() => setSelMlflowRun(r.runId)}
+                          style={{ cursor: 'pointer', background: r.runId === selMlflowRun ? tokens.colorNeutralBackground2 : undefined }}
+                        >
+                          <TableCell><strong>{r.runName || r.runId}</strong></TableCell>
+                          <TableCell>
+                            <Badge
+                              appearance="tint"
+                              color={r.status === 'FINISHED' ? 'success' : r.status === 'FAILED' || r.status === 'KILLED' ? 'danger' : 'informative'}
+                            >
+                              {r.status || '—'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{fmtEpochMs(r.startTime)}</TableCell>
+                          <TableCell>{r.params.length}</TableCell>
+                          <TableCell>{r.metrics.length}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+
+                  {selectedMlflowRun && (
+                    <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <Subtitle2>Run: {selectedMlflowRun.runName || selectedMlflowRun.runId}</Subtitle2>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <Badge appearance="outline">{selectedMlflowRun.status || '—'}</Badge>
+                        <Badge appearance="outline">start: {fmtEpochMs(selectedMlflowRun.startTime)}</Badge>
+                        <Badge appearance="outline">end: {fmtEpochMs(selectedMlflowRun.endTime)}</Badge>
+                      </div>
+
+                      {selectedMlflowRun.params.length > 0 && (
+                        <div>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Parameters</Caption1>
+                          <Table aria-label="Run params" size="small">
+                            <TableHeader><TableRow><TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell></TableRow></TableHeader>
+                            <TableBody>
+                              {selectedMlflowRun.params.map((p) => (
+                                <TableRow key={p.key}>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{p.key}</TableCell>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{p.value}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+
+                      {selectedMlflowRun.metrics.length > 0 && (
+                        <div>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Metrics (latest logged value)</Caption1>
+                          <Table aria-label="Run metrics" size="small">
+                            <TableHeader><TableRow><TableHeaderCell>Metric</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell><TableHeaderCell>Step</TableHeaderCell></TableRow></TableHeader>
+                            <TableBody>
+                              {selectedMlflowRun.metrics.map((m) => (
+                                <TableRow key={m.key}>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.key}</TableCell>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.value}</TableCell>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.step ?? '—'}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+
+                      {/* Per-metric history (step/value over time) */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                          <Field label="Metric history">
+                            <Dropdown
+                              placeholder={metricKeys.length ? 'Select a metric' : 'No metrics logged on this run'}
+                              value={selMetric}
+                              selectedOptions={selMetric ? [selMetric] : []}
+                              onOptionSelect={(_, d) => setSelMetric(d.optionValue || '')}
+                              disabled={metricKeys.length === 0}
+                            >
+                              {metricKeys.map((k) => <Option key={k} value={k}>{k}</Option>)}
+                            </Dropdown>
+                          </Field>
+                          {metricLoading && <Spinner size="tiny" label="Loading history…" labelPosition="after" />}
+                        </div>
+
+                        {metricError && (
+                          <MessageBar intent="error"><MessageBarBody>{metricError}</MessageBarBody></MessageBar>
+                        )}
+
+                        {!metricLoading && !metricError && selMetric && metricHistory.length === 0 && (
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                            No history points for <code>{selMetric}</code>.
+                          </Caption1>
+                        )}
+
+                        {!metricLoading && metricHistory.length > 0 && (
+                          <>
+                            <MetricLineChart points={metricHistory} />
+                            <Table aria-label="Metric history" size="small">
+                              <TableHeader><TableRow><TableHeaderCell>Step</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell><TableHeaderCell>Timestamp</TableHeaderCell></TableRow></TableHeader>
+                              <TableBody>
+                                {metricHistory.map((m, i) => (
+                                  <TableRow key={`${m.step ?? i}-${m.timestamp ?? i}`}>
+                                    <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.step ?? i}</TableCell>
+                                    <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.value}</TableCell>
+                                    <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{fmtEpochMs(m.timestamp)}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           )}
         </div>
       }
