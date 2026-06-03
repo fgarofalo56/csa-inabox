@@ -354,6 +354,33 @@ export function LakehouseEditor({ item, id }: Props) {
     finally { setScSubmitting(false); }
   }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, loadShortcuts]);
 
+  // Register a PLANNED bundle shortcut into the live registry (one click) — the
+  // bundle only carries metadata, so this materializes it against the real
+  // backend (resolves the "shows in the tree but 'no shortcuts registered'"
+  // contradiction). Bundle targets are abfss ADLS Gen2 URIs (Console UAMI auth).
+  const [regBusy, setRegBusy] = useState<string | null>(null);
+  const registerBundleShortcut = useCallback(async (sc: any) => {
+    if (!shortcutLakehouseId) return;
+    setRegBusy(sc.name); setShortcutsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/shortcuts', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          lakehouseId: shortcutLakehouseId, name: sc.name,
+          kind: sc.kind || 'files', parentPath: sc.parentPath || '',
+          targetType: 'adls', targetUri: sc.target,
+        }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Register shortcut');
+      if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
+      await loadShortcuts();
+    } catch (e: any) { setShortcutsError(e?.message || String(e)); }
+    finally { setRegBusy(null); }
+  }, [shortcutLakehouseId, loadShortcuts]);
+  const registerAllBundleShortcuts = useCallback(async () => {
+    for (const sc of bundleShortcuts) await registerBundleShortcut(sc);
+  }, [bundleShortcuts, registerBundleShortcut]);
+
   const testShortcut = useCallback(async (row: ShortcutRow) => {
     setShortcutsBusy(true); setShortcutsError(null);
     try {
@@ -1242,10 +1269,15 @@ export function LakehouseEditor({ item, id }: Props) {
                     </MessageBar>
                     {bundleShortcuts.length > 0 && (
                       <>
-                        <Caption1 style={{ display: 'block', marginTop: 12 }}>
-                          <strong>Planned shortcuts from the installed app bundle</strong> — use{' '}
-                          <strong>New shortcut</strong> to register each against the live backend.
-                        </Caption1>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                          <Caption1 style={{ display: 'block' }}>
+                            <strong>Planned shortcuts from the installed app bundle</strong> — register each into the live backend.
+                          </Caption1>
+                          <Button size="small" appearance="primary" style={{ marginLeft: 'auto' }}
+                            onClick={registerAllBundleShortcuts} disabled={!!regBusy}>
+                            {regBusy ? 'Registering…' : 'Register all'}
+                          </Button>
+                        </div>
                         <div className={s.tableWrap}>
                           <Table aria-label="Planned shortcuts" size="small">
                             <TableHeader>
@@ -1253,19 +1285,32 @@ export function LakehouseEditor({ item, id }: Props) {
                                 <TableHeaderCell>Name</TableHeaderCell>
                                 <TableHeaderCell>Target</TableHeaderCell>
                                 <TableHeaderCell>Description</TableHeaderCell>
+                                <TableHeaderCell></TableHeaderCell>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
-                              {bundleShortcuts.map((sc) => (
-                                <TableRow key={sc.name}>
-                                  <TableCell>
-                                    <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
-                                    <strong>{sc.name}</strong>
-                                  </TableCell>
-                                  <TableCell><code style={{ fontSize: 11 }}>{sc.target}</code></TableCell>
-                                  <TableCell>{sc.description || '—'}</TableCell>
-                                </TableRow>
-                              ))}
+                              {bundleShortcuts.map((sc) => {
+                                const live = (shortcuts || []).some((x) => x.name === sc.name);
+                                return (
+                                  <TableRow key={sc.name}>
+                                    <TableCell>
+                                      <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                                      <strong>{sc.name}</strong>
+                                    </TableCell>
+                                    <TableCell><code style={{ fontSize: 11 }}>{sc.target}</code></TableCell>
+                                    <TableCell>{sc.description || '—'}</TableCell>
+                                    <TableCell>
+                                      {live ? (
+                                        <Badge appearance="tint" color="success">Registered</Badge>
+                                      ) : (
+                                        <Button size="small" appearance="outline" onClick={() => registerBundleShortcut(sc)} disabled={regBusy === sc.name}>
+                                          {regBusy === sc.name ? 'Registering…' : 'Register'}
+                                        </Button>
+                                      )}
+                                    </TableCell>
+                                  </TableRow>
+                                );
+                              })}
                             </TableBody>
                           </Table>
                         </div>
