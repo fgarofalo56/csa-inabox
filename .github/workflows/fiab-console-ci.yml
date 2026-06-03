@@ -1,0 +1,66 @@
+# CSA Loom console — build gate.
+#
+# WHY THIS EXISTS:
+#   The repo's required PR checks are Python / dbt / lint / secret-scan — none
+#   of them COMPILE the Next.js console in apps/fiab-console. So a TypeScript /
+#   bundling break (e.g. an import of a file that was never committed) passed
+#   every required check and only blew up later in the Docker image build inside
+#   loom-roll-and-validate / deploy-fiab-*. This workflow runs the SAME build the
+#   Dockerfile runs (`pnpm build` == `next build`, node 20, pnpm 9, 4 GB heap),
+#   so module-resolution / bundling failures are caught at PR time instead.
+#
+#   next.config sets typescript.ignoreBuildErrors + eslint.ignoreDuringBuilds, so
+#   this mirrors deploy exactly: it does NOT fail on pure type/lint nits, but it
+#   DOES fail on anything that would break the real production build (unresolved
+#   imports, bad JSX, server/client boundary violations, etc.).
+#
+# Path-filtered to apps/fiab-console/** so it only runs when the console changes.
+name: CSA Loom Console Build
+
+on:
+  pull_request:
+    paths:
+      - 'apps/fiab-console/**'
+      - '.github/workflows/fiab-console-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/fiab-console/**'
+      - '.github/workflows/fiab-console-ci.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: next build (node 20)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/fiab-console
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@9
+
+      - name: Install dependencies
+        # Match the Dockerfile (`pnpm install --no-frozen-lockfile`) so CI builds
+        # exactly what deploy builds.
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build (next build)
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: pnpm build

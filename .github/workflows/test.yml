@@ -35,14 +35,43 @@ jobs:
         python-version: ['3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          # Need the PR base in history to diff changed paths below.
+          fetch-depth: 0
+
+      # The Python suite is a REQUIRED check on every PR (branch protection),
+      # but it has nothing to test on a TS-only / docs-only PR — yet it spends
+      # ~15 min installing the full Python stack + running pytest/mypy/bandit.
+      # That made every apps/fiab-console PR wait on irrelevant work and was the
+      # main merge-queue blocker. Detect whether any Python-relevant path
+      # changed; if not, the job still runs + reports SUCCESS (so the required
+      # check is satisfied) but skips the heavy steps. Pushes / schedule always
+      # run the full suite. This is a step-level gate (not a job `if:`) so the
+      # check can never get stuck "pending" and block a merge.
+      - name: Detect Python-relevant changes
+        id: relevant
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          base='${{ github.event.pull_request.base.sha }}'
+          if git diff --name-only "$base"...HEAD \
+              | grep -qE '^(csa_platform/|domains/|scripts/|tests/|tools/|pyproject\.toml|\.github/workflows/test\.yml)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No Python-relevant changes in this PR — skipping the Python test suite (reporting success)."
+          fi
 
       - name: Set up Python
+        if: steps.relevant.outputs.run == 'true'
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
       - name: Install dependencies
+        if: steps.relevant.outputs.run == 'true'
         run: |
           python -m pip install --upgrade pip
           # Install the project with dev + governance + functions extras so
@@ -55,14 +84,17 @@ jobs:
           done
 
       - name: Lint with ruff
+        if: steps.relevant.outputs.run == 'true'
         run: |
           ruff check domains/ scripts/ csa_platform/ tools/ --output-format github
 
       - name: Security scan with Bandit
+        if: steps.relevant.outputs.run == 'true'
         run: |
           bandit -r csa_platform/ domains/ scripts/ -c pyproject.toml
 
       - name: Typecheck with mypy (strict)
+        if: steps.relevant.outputs.run == 'true'
         run: |
           # The default mypy config covers csa_platform.governance + tests. The three
           # Function apps each ship a flat function_app.py file, so they
@@ -74,14 +106,17 @@ jobs:
           mypy csa_platform/functions/secretRotation/functions/function_app.py
 
       - name: Validate data product contracts
+        if: steps.relevant.outputs.run == 'true'
         run: |
           python -m csa_platform.governance.contracts.contract_validator --ci --repo-root .
 
       - name: Check dbt schema drift against contracts
+        if: steps.relevant.outputs.run == 'true'
         run: |
           python -m csa_platform.governance.contracts.dbt_test_generator --repo-root . --check
 
       - name: Run pytest with coverage
+        if: steps.relevant.outputs.run == 'true'
         env:
           ENVIRONMENT: local
         run: |
@@ -93,7 +128,7 @@ jobs:
             --cov-fail-under=60
 
       - name: Upload coverage report (xml + html)
-        if: always()
+        if: always() && steps.relevant.outputs.run == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
         with:
           name: coverage-report-${{ matrix.python-version }}
@@ -103,7 +138,7 @@ jobs:
           retention-days: 14
 
       - name: Coverage summary
-        if: github.event_name == 'pull_request' && matrix.python-version == '3.11'
+        if: github.event_name == 'pull_request' && matrix.python-version == '3.11' && steps.relevant.outputs.run == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
