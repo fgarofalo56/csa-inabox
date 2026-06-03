@@ -324,7 +324,7 @@ export function RealTimeHubView() {
         }
       >
         <Caption1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
-          Connect Microsoft, Fabric, Azure, database CDC, and external streaming sources. Each tile creates a real Fabric
+          Connect Microsoft, Azure, database CDC, and external streaming sources. Each tile creates a real CSA Loom
           Eventstream item carrying the chosen source.
         </Caption1>
         <SourceGallery onPick={openConnect} />
@@ -348,7 +348,7 @@ export function RealTimeHubView() {
         </div>
 
         {loading ? (
-          <Spinner label="Loading data streams from Fabric…" />
+          <Spinner label="Loading data streams…" />
         ) : streams.length === 0 ? (
           <div style={{
             padding: 28, borderRadius: 12, border: `1px dashed ${tokens.colorNeutralStroke2}`,
@@ -357,7 +357,7 @@ export function RealTimeHubView() {
           }}>
             No data streams visible yet.<br />
             Use <b>Connect a source</b> above to connect a Microsoft source and create your first eventstream — it is
-            created as a real Fabric Eventstream item and will then appear here.
+            created as a real CSA Loom Eventstream item and will then appear here.
           </div>
         ) : (
           <LoomDataTable
