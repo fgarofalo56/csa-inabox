@@ -19,6 +19,31 @@ on:
         description: 'Keep resources up after smoke test (full mode only). USE WITH CAUTION — incurs ongoing spend until manually torn down.'
         type: boolean
         default: false
+      # Setup Wizard browser-driven deploy passes these (app/api/setup/deploy → workflow_dispatch).
+      subscription:
+        description: 'Target Azure subscription ID (from the Setup Wizard).'
+        type: string
+        required: false
+      region:
+        description: 'Azure region (e.g. eastus2).'
+        type: string
+        required: false
+      deployment_mode:
+        description: 'single-sub or multi-sub.'
+        type: choice
+        default: single-sub
+        options:
+          - single-sub
+          - multi-sub
+      dlz_domain_name:
+        description: 'Data Landing Zone domain name(s), comma-separated.'
+        type: string
+        required: false
+      capacity_sku:
+        description: 'Fabric/OneLake capacity SKU.'
+        type: choice
+        default: F8
+        options: [F2, F4, F8, F32, F64, F128, F512]
 
 permissions:
   contents: read
@@ -26,10 +51,13 @@ permissions:
 
 env:
   AZURE_CLOUD: AzureCloud
-  AZURE_LOCATION: eastus2
+  AZURE_LOCATION: ${{ inputs.region || 'eastus2' }}
   CSA_LOOM_BOUNDARY: Commercial
-  CSA_LOOM_DEPLOYMENT_MODE: single-sub
-  CSA_LOOM_CAPACITY_SKU: F8
+  CSA_LOOM_DEPLOYMENT_MODE: ${{ inputs.deployment_mode || 'single-sub' }}
+  CSA_LOOM_CAPACITY_SKU: ${{ inputs.capacity_sku || 'F8' }}
+  # Wizard-provided overrides consumed by the deploy step's -p flags.
+  CSA_LOOM_SUBSCRIPTION_OVERRIDE: ${{ inputs.subscription }}
+  CSA_LOOM_DLZ_DOMAIN_NAMES: ${{ inputs.dlz_domain_name }}
 
 jobs:
   deploy-validate:
