@@ -97,11 +97,19 @@ export interface QueryResult {
 
 const MAX_ROWS = 5_000;
 
-export async function executeQuery(target: SynapseTarget, sqlText: string): Promise<QueryResult> {
+export async function executeQuery(target: SynapseTarget, sqlText: string, timeoutMs = 60_000): Promise<QueryResult> {
   const started = Date.now();
   const pool = await getPool(target);
   const req = pool.request();
-  const result = await req.query(sqlText);
+  
+  // Wrap query execution with an explicit timeout to catch cold-start latency.
+  // Synapse serverless OPENROWSET on CSV files can take 30-60s on first run.
+  const queryPromise = req.query(sqlText);
+  const timeoutPromise = new Promise<never>((_, reject) => 
+    setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms — Synapse serverless pool may be cold. Retry in a moment.`)), timeoutMs)
+  );
+  
+  const result = await Promise.race([queryPromise, timeoutPromise]);
   const recordset = result.recordset || [];
   const columns = recordset.length
     ? Object.keys(recordset[0])
