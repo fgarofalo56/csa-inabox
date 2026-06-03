@@ -89,6 +89,9 @@ export interface HelpOrchestrateOptions {
   /** Tenant admin-selected Copilot config. The help agent prefers
    *  helpAgentDeployment, then copilotChatDeployment, then env. */
   tenantConfig?: TenantCopilotConfig | null;
+  /** Screen-awareness: where the user currently is in the console, so the
+   *  agent can answer "what's on this screen / help me with this" in context. */
+  pageContext?: { path?: string; label?: string; itemType?: string; itemId?: string };
 }
 
 interface ChatMessage {
@@ -493,6 +496,16 @@ export async function* orchestrateHelp(opts: HelpOrchestrateOptions): AsyncItera
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: prompt },
   ];
+
+  // Screen-awareness: tell the agent where the user is so "what's on this
+  // screen / help me here" is answered in context (without the user retyping it).
+  const pc = opts.pageContext;
+  if (pc && (pc.label || pc.path)) {
+    const parts = [`The user is currently on the "${pc.label || pc.path}" screen of CSA Loom (route: ${pc.path || 'unknown'}).`];
+    if (pc.itemType) parts.push(`They are viewing a ${pc.itemType} item${pc.itemId ? ` (id: ${pc.itemId})` : ''}.`);
+    parts.push('When their question is about "this", "this screen", "here", or "what I\'m looking at", answer for THIS surface first. You can help with anything in Loom regardless of where they are.');
+    messages.splice(1, 0, { role: 'system', content: parts.join(' ') });
+  }
 
   await persistTurn(sessionId, userId, 'user', prompt);
 
