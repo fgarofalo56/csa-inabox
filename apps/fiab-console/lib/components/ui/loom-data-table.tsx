@@ -111,7 +111,14 @@ const useStyles = makeStyles({
       paddingBottom: '10px',
       paddingLeft: tokens.spacingHorizontalM,
       paddingRight: tokens.spacingHorizontalM,
+      // Clip cell content to its column so a long value can never spill over
+      // (overlap) into the next column. minWidth:0 lets the cell shrink to its
+      // resized width; overflow:hidden trims the excess. Multi-line cells still
+      // wrap within their own width.
+      minWidth: 0,
+      overflow: 'hidden',
     },
+    '& [role="gridcell"] > *': { minWidth: 0, maxWidth: '100%' },
   },
   headerRow: {
     position: 'sticky',
