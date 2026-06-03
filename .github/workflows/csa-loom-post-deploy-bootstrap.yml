@@ -48,6 +48,25 @@ jobs:
           az account show --query "{user:user.name, sub:id}" -o table
           echo "Acting as Synapse initial admin (b9c3cc65-522e-49c9-ad02-914676aa5a6b)"
 
+      - name: Grant Console UAMI Purview Data Map roles (data-plane)
+        env:
+          PURVIEW_ACCOUNT: purview-csa-loom-eastus2
+        run: |
+          set -uo pipefail
+          # Classic Purview Data Map permissions are data-plane (collection
+          # metadata policy), not ARM RBAC — so they can't be set in bicep. The
+          # deploy SP created the Purview account, so it is the root Collection
+          # Admin and can grant the Console UAMI the roles it needs for the
+          # catalog/scan/glossary/lineage surfaces (fixes the /governance scan +
+          # sources "Not authorized to access account" 403). Idempotent.
+          chmod +x scripts/csa-loom/grant-purview-datamap-role.sh
+          for ROLE in data-curator data-source-administrator collection-administrator; do
+            echo "== granting Console UAMI '$ROLE' on $PURVIEW_ACCOUNT root collection =="
+            PURVIEW_ACCOUNT="$PURVIEW_ACCOUNT" CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" ROLE="$ROLE" \
+              bash scripts/csa-loom/grant-purview-datamap-role.sh \
+              || echo "::warning::Purview '$ROLE' grant failed — the deploy SP may not be Collection Admin on $PURVIEW_ACCOUNT (add it once in the Purview portal, then re-run)."
+          done
+
       - name: Enable Synapse public access (temp)
         run: |
           set -e

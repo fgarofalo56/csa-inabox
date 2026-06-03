@@ -48,8 +48,42 @@ export default function PoliciesPage() {
   const [busy, setBusy] = useState(false);
   const [draftName, setDraftName] = useState('');
   const [draftKind, setDraftKind] = useState<typeof KINDS[number]>('DLP');
-  const [draftScope, setDraftScope] = useState('tenant');
-  const [draftRule, setDraftRule] = useState('');
+  // Scope = selectable dropdowns (type + target) instead of a freeform string.
+  const [scopeType, setScopeType] = useState<'tenant' | 'domain' | 'workspace'>('tenant');
+  const [scopeTarget, setScopeTarget] = useState('');
+  const [workspaces, setWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
+  const [domains, setDomains] = useState<Array<{ id: string; name: string }>>([]);
+  // Per-kind rule wizard fields.
+  const [w, setW] = useState<Record<string, string>>({
+    dlpDetect: 'Email', dlpAction: 'Audit',
+    maskColumn: '', maskFn: 'Hash',
+    rlsColumn: '', rlsOp: '=', rlsValue: '',
+    retPeriod: '90', retUnit: 'Days', retAction: 'Delete',
+    accPrincipal: '', accPermission: 'Read',
+  });
+  const setWf = (k: string, v: string) => setW((p) => ({ ...p, [k]: v }));
+
+  useEffect(() => {
+    fetch('/api/workspaces').then((r) => r.json()).then((d) => {
+      const list = Array.isArray(d) ? d : (d?.workspaces || []);
+      setWorkspaces(list.map((x: any) => ({ id: x.id, name: x.name || x.displayName || x.id })));
+    }).catch(() => {});
+    fetch('/api/admin/domains').then((r) => r.json()).then((d) => {
+      setDomains((d?.domains || []).map((x: any) => ({ id: x.id, name: x.name || x.id })));
+    }).catch(() => {});
+  }, []);
+
+  const buildScope = (): string => scopeType === 'tenant' ? 'tenant' : `${scopeType}:${scopeTarget}`;
+  const buildRule = (): string => {
+    switch (draftKind) {
+      case 'DLP': return `detect:${w.dlpDetect} action:${w.dlpAction}`;
+      case 'Masking': return `mask column:${w.maskColumn || '<column>'} using:${w.maskFn}`;
+      case 'RLS': return `filter ${w.rlsColumn || '<column>'} ${w.rlsOp} ${w.rlsValue || '<value>'}`;
+      case 'Retention': return `retain ${w.retPeriod} ${w.retUnit} then:${w.retAction}`;
+      case 'Access': return `grant ${w.accPrincipal || '<principal>'} permission:${w.accPermission}`;
+      default: return '';
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -69,13 +103,13 @@ export default function PoliciesPage() {
     try {
       const r = await fetch('/api/governance/policies', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: draftName.trim(), kind: draftKind, scope: draftScope, rule: draftRule, enabled: true }),
+        body: JSON.stringify({ name: draftName.trim(), kind: draftKind, scope: buildScope(), rule: buildRule(), enabled: true }),
       });
       const j = await r.json();
       if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
       setPolicies(j.policies);
       setOpen(false);
-      setDraftName(''); setDraftScope('tenant'); setDraftRule('');
+      setDraftName(''); setScopeType('tenant'); setScopeTarget('');
     } catch (e: any) { setActionErr(e?.message || String(e)); }
     finally { setBusy(false); }
   }
@@ -173,10 +207,89 @@ export default function PoliciesPage() {
                     {KINDS.map((k) => <Option key={k} value={k}>{k}</Option>)}
                   </Dropdown>
                 </Field>
-                <Field label="Scope"><Input value={draftScope} onChange={(_, d) => setDraftScope(d.value)} placeholder="tenant / domain:finance / workspace:abc" /></Field>
-                <Field label="Rule">
-                  <Input value={draftRule} onChange={(_, d) => setDraftRule(d.value)} placeholder="e.g. column:email mask:hash" />
-                </Field>
+                {/* Scope — selectable dropdowns (type + target) */}
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Field label="Applies to" style={{ flex: 1 }}>
+                    <Dropdown value={scopeType} selectedOptions={[scopeType]}
+                      onOptionSelect={(_, d) => { setScopeType(d.optionValue as any); setScopeTarget(''); }}>
+                      <Option value="tenant">Whole tenant</Option>
+                      <Option value="domain">A domain</Option>
+                      <Option value="workspace">A workspace</Option>
+                    </Dropdown>
+                  </Field>
+                  {scopeType !== 'tenant' && (
+                    <Field label={scopeType === 'domain' ? 'Domain' : 'Workspace'} style={{ flex: 1 }}>
+                      <Dropdown value={scopeTarget} selectedOptions={[scopeTarget]} placeholder="Select…"
+                        onOptionSelect={(_, d) => setScopeTarget(d.optionValue || '')}>
+                        {(scopeType === 'domain' ? domains : workspaces).map((t) => <Option key={t.id} value={t.id}>{t.name}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  )}
+                </div>
+
+                {/* Rule wizard — fields depend on the policy kind */}
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Configure the {draftKind} rule</Caption1>
+                {draftKind === 'DLP' && (
+                  <div style={{ display: 'flex', gap: 12 }}>
+                    <Field label="Detect" style={{ flex: 1 }}>
+                      <Dropdown value={w.dlpDetect} selectedOptions={[w.dlpDetect]} onOptionSelect={(_, d) => setWf('dlpDetect', d.optionValue || '')}>
+                        {['Email', 'SSN', 'Credit card', 'Phone', 'IP address', 'Custom classification'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Action" style={{ flex: 1 }}>
+                      <Dropdown value={w.dlpAction} selectedOptions={[w.dlpAction]} onOptionSelect={(_, d) => setWf('dlpAction', d.optionValue || '')}>
+                        {['Audit', 'Block', 'Notify', 'Quarantine'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                )}
+                {draftKind === 'Masking' && (
+                  <div style={{ display: 'flex', gap: 12 }}>
+                    <Field label="Column" style={{ flex: 1 }}><Input value={w.maskColumn} placeholder="e.g. email" onChange={(_, d) => setWf('maskColumn', d.value)} /></Field>
+                    <Field label="Masking function" style={{ flex: 1 }}>
+                      <Dropdown value={w.maskFn} selectedOptions={[w.maskFn]} onOptionSelect={(_, d) => setWf('maskFn', d.optionValue || '')}>
+                        {['Full', 'Partial', 'Email', 'Hash', 'Random'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                )}
+                {draftKind === 'RLS' && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Field label="Column" style={{ flex: 1 }}><Input value={w.rlsColumn} placeholder="e.g. region" onChange={(_, d) => setWf('rlsColumn', d.value)} /></Field>
+                    <Field label="Operator" style={{ width: 100 }}>
+                      <Dropdown value={w.rlsOp} selectedOptions={[w.rlsOp]} onOptionSelect={(_, d) => setWf('rlsOp', d.optionValue || '=')}>
+                        {['=', '!=', 'IN', 'LIKE'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Value" style={{ flex: 1 }}><Input value={w.rlsValue} placeholder="@currentUser.region" onChange={(_, d) => setWf('rlsValue', d.value)} /></Field>
+                  </div>
+                )}
+                {draftKind === 'Retention' && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Field label="Keep for" style={{ width: 120 }}><Input type="number" value={w.retPeriod} onChange={(_, d) => setWf('retPeriod', d.value)} /></Field>
+                    <Field label="Unit" style={{ width: 120 }}>
+                      <Dropdown value={w.retUnit} selectedOptions={[w.retUnit]} onOptionSelect={(_, d) => setWf('retUnit', d.optionValue || 'Days')}>
+                        {['Days', 'Months', 'Years'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Then" style={{ flex: 1 }}>
+                      <Dropdown value={w.retAction} selectedOptions={[w.retAction]} onOptionSelect={(_, d) => setWf('retAction', d.optionValue || 'Delete')}>
+                        {['Delete', 'Archive', 'Review'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                )}
+                {draftKind === 'Access' && (
+                  <div style={{ display: 'flex', gap: 12 }}>
+                    <Field label="Principal (user / group)" style={{ flex: 1 }}><Input value={w.accPrincipal} placeholder="oid or group name" onChange={(_, d) => setWf('accPrincipal', d.value)} /></Field>
+                    <Field label="Permission" style={{ flex: 1 }}>
+                      <Dropdown value={w.accPermission} selectedOptions={[w.accPermission]} onOptionSelect={(_, d) => setWf('accPermission', d.optionValue || 'Read')}>
+                        {['Read', 'Write', 'Admin', 'None'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                )}
+                <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>{buildScope()} · {buildRule()}</Caption1>
               </div>
             </DialogContent>
             <DialogActions>
