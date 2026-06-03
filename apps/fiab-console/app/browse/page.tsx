@@ -36,6 +36,7 @@ import {
   Text,
 } from '@fluentui/react-components';
 import { Section, Toolbar } from '@/lib/components/ui/section';
+import { AllItemsExplorer } from '@/lib/components/browse/all-items-explorer';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
@@ -233,7 +234,7 @@ export default function BrowsePage() {
   return (
     <PageShell
       title="Browse"
-      subtitle="Pinned, recent, and every workspace your tenant owns — one filter scans across all of them."
+      subtitle="Everything in your Loom tenant — every item across every workspace, plus pinned and recent. (Workspaces lists the workspaces themselves.)"
     >
       <Toolbar
         search={q}
@@ -248,6 +249,11 @@ export default function BrowsePage() {
           ) : undefined
         }
       />
+
+      {/* ── All items (everything in the tenant) ───────────────────────── */}
+      <Section title="All items">
+        <AllItemsExplorer />
+      </Section>
 
       {/* ── Pinned ──────────────────────────────────────────────────── */}
       <Section title="Pinned">
