@@ -27,6 +27,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
+# The Next build OOMed in the ACR Tasks container (JS heap out of memory) as the
+# app grew — give Node a larger old-space heap. 4 GB fits the default ACR agent.
+ENV NODE_OPTIONS=--max-old-space-size=4096
 RUN npm install -g pnpm@9 && \
     pnpm build
 
