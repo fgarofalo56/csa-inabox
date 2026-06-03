@@ -1138,7 +1138,9 @@ export function LakehouseEditor({ item, id }: Props) {
                       <Button onClick={() => loadPaths(activeContainer, 'Tables')}>Load tables</Button>
                     );
                   }
-                  if ('error' in tableListing) {
+                  // Tables/ directory may not exist yet (404 during first provision). Gracefully fall through to bundled content.
+                  const isTablesNotFound = 'error' in tableListing && tableListing.error.toLowerCase().includes('path does not exist');
+                  if ('error' in tableListing && !isTablesNotFound) {
                     return (
                       <MessageBar intent="error">
                         <MessageBarBody>
@@ -1148,7 +1150,7 @@ export function LakehouseEditor({ item, id }: Props) {
                       </MessageBar>
                     );
                   }
-                  const tables = (tableListing as PathEntry[]).filter(e => e.isDirectory);
+                  const tables = (tableListing && !('error' in tableListing) ? (tableListing as PathEntry[]).filter(e => e.isDirectory) : []);
                   if (tables.length === 0) {
                     return (
                       <>
