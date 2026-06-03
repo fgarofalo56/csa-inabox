@@ -272,6 +272,10 @@ param loomMsalClientSecret string = ''
 @secure()
 param loomSessionSecret string = ''
 
+@description('Local admin password for the scaled self-hosted IR (SHIR) VMSS nodes in each DLZ. Empty → the SHIR is NOT deployed (honest gate); supply a Key-Vault-backed secret to enable the 4-node scale-to-0 self-hosted IR. No password is ever embedded/generated in the template.')
+@secure()
+param shirAdminPassword string = ''
+
 @description('Loom version label shown in the UI + on /api/version.')
 param loomVersion string = 'v0.1'
 
@@ -408,6 +412,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (deploymentMode == 'sing
     powerBiSku: powerBiSku
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    shirAdminPassword: shirAdminPassword
   }
 }
 
@@ -443,6 +448,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     powerBiSku: powerBiSku
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    shirAdminPassword: shirAdminPassword
   }
 }]
 
