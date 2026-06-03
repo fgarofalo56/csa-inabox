@@ -29,6 +29,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, Save20Regular, ArrowDownload20Regular, Delete20Regular, Search16Regular,
+  ChevronDown20Regular, ChevronRight20Regular,
 } from '@fluentui/react-icons';
 import { SubscriptionNode, DomainNode, ServiceNode, ServiceIconChip } from './deploy-plan-nodes';
 import {
@@ -118,8 +119,12 @@ const useStyles = makeStyles({
     alignItems: 'center', flexWrap: 'wrap',
   },
   body: {
-    display: 'grid', gridTemplateColumns: '300px 1fr',
-    gap: tokens.spacingHorizontalL, minHeight: '560px',
+    // Height-bounded to the viewport so the PALETTE scrolls internally and the
+    // CANVAS stays fixed — collapsing/expanding categories never grows the page.
+    // minmax(0,1fr) lets the canvas column shrink instead of overflowing wide.
+    display: 'grid', gridTemplateColumns: '300px minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalL,
+    height: 'calc(100vh - 220px)', minHeight: '460px',
   },
   palette: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -136,8 +141,13 @@ const useStyles = makeStyles({
   pGroup: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   pGroupHead: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
-    marginBottom: '2px',
+    marginBottom: '2px', width: '100%', cursor: 'pointer',
+    background: 'none', border: 'none', padding: '4px 2px', textAlign: 'left',
+    borderRadius: tokens.borderRadiusMedium,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
+  pGroupChevron: { flexShrink: 0, color: tokens.colorNeutralForeground3, display: 'flex' },
+  pGroupCount: { marginLeft: 'auto', color: tokens.colorNeutralForeground3, fontSize: '11px' },
   pGroupSwatch: { width: '8px', height: '8px', borderRadius: '2px', flexShrink: 0 },
   pTile: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
@@ -182,6 +192,14 @@ function PlannerInner() {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [catFilter, setCatFilter] = useState<ServiceCategory | 'all'>('all');
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
+  const toggleCat = useCallback((id: string) => {
+    setCollapsedCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
   const [exportSub, setExportSub] = useState<PlanSubscription | null>(null);
   const rectsRef = useRef<DomainRect[]>([]);
 
@@ -393,13 +411,22 @@ function PlannerInner() {
           {SERVICE_CATEGORY_ORDER.map((cat) => {
             const items = servicesByCategory(cat.id).filter(matches);
             if (!items.length) return null;
+            const collapsed = collapsedCats.has(cat.id);
             return (
               <div key={cat.id} className={s.pGroup}>
-                <div className={s.pGroupHead}>
+                <button
+                  type="button"
+                  className={s.pGroupHead}
+                  onClick={() => toggleCat(cat.id)}
+                  aria-expanded={!collapsed}
+                  aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${cat.label}`}
+                >
+                  <span className={s.pGroupChevron}>{collapsed ? <ChevronRight20Regular /> : <ChevronDown20Regular />}</span>
                   <span className={s.pGroupSwatch} style={{ background: cat.color }} />
                   <Subtitle2>{cat.label}</Subtitle2>
-                </div>
-                {items.map((def) => {
+                  <span className={s.pGroupCount}>{items.length}</span>
+                </button>
+                {!collapsed && items.map((def) => {
                   const vis = serviceVisual(def.key);
                   return (
                     <Tooltip key={def.key} content={def.description} relationship="description" positioning="after">
