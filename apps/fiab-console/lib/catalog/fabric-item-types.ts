@@ -35,7 +35,8 @@ export type WorkloadCategory =
   | 'CSA Data Products'
   | 'Copilot Studio'
   | 'Power Platform'
-  | 'AI & Agents';
+  | 'AI & Agents'
+  | 'Fabric Apps';
 
 export interface LearnStep {
   title: string;
@@ -77,6 +78,31 @@ export interface FabricItemType {
 }
 
 export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
+  // Fabric Apps — Rayfin (Build 2026 preview)
+  { slug: 'rayfin-app', displayName: 'Rayfin app', restType: 'RayfinApp', category: 'Fabric Apps', preview: true,
+    description: 'Code-first app backend (database, auth, Data APIs, storage) deployed to Fabric with the Rayfin SDK + CLI.',
+    learnContent: {
+      "overview": "Rayfin is Microsoft's open-source Backend-as-a-Service for Fabric (Build 2026 preview). You define data models, auth, APIs, storage, and business logic in TypeScript with the @microsoft/rayfin-core decorators, then `npx rayfin up` deploys it to your Fabric workspace as a Rayfin item — data lands in OneLake (no ETL) and inherits your tenant's Entra identity, security, and governance. In Loom you author the backend spec here and Loom generates the SDK model + the exact CLI commands to deploy; the Rayfin CLI runs on your dev machine.",
+      "steps": [
+        {
+          "title": "Define entities + services",
+          "body": "Add entities (with text/boolean/date/number fields) and toggle the services you need — database, storage, Fabric (Entra) auth, static hosting."
+        },
+        {
+          "title": "Generate the model + commands",
+          "body": "Loom emits a model.ts using @microsoft/rayfin-core decorators (@entity/@text/@boolean/@date) and the exact CLI sequence — copy them into your project."
+        },
+        {
+          "title": "Scaffold + deploy",
+          "body": "Run `npm create @microsoft/rayfin@latest <app> --workspace <ws>`, then `npx rayfin init --services db,storage --auth-methods fabric`, then `npx rayfin up` to deploy to Fabric."
+        },
+        {
+          "title": "It runs in your tenant",
+          "body": "The deployed Rayfin item runs on Fabric under your identity/network/governance; app data lands in OneLake so it's catalogable and governed alongside your other items."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/fabric/apps/overview"
+    } },
   // Data Engineering
   { slug: 'lakehouse', displayName: 'Lakehouse', restType: 'Lakehouse', category: 'Data Engineering',
     description: 'A unified store for files, folders, and Delta tables in OneLake.',
@@ -2396,6 +2422,7 @@ export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
   'Copilot Studio',
   'Power Platform',
   'AI & Agents',
+  'Fabric Apps',
 ];
 
 export function itemsByCategory(category: WorkloadCategory): FabricItemType[] {

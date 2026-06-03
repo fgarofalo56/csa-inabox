@@ -15,6 +15,7 @@ import {
   listSessions,
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
+import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,7 +35,12 @@ export async function GET() {
 
   let aoai: { ok: boolean; endpoint?: string; deployment?: string; apiVersion?: string; error?: string; remediation?: string } = { ok: false };
   try {
-    const t = await resolveAoaiTarget();
+    // Load the tenant's admin-selected Copilot/Foundry config and pass it —
+    // the admin picker is the source of truth. Calling resolveAoaiTarget() bare
+    // ignored the saved config and falsely reported "not reachable" even when
+    // the orchestrate route (which DOES pass the config) could chat fine.
+    const tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
+    const t = await resolveAoaiTarget(tenantConfig);
     aoai = { ok: true, endpoint: t.endpoint, deployment: t.deployment, apiVersion: t.apiVersion };
   } catch (e: any) {
     if (e instanceof NoAoaiDeploymentError) {
@@ -42,9 +48,10 @@ export async function GET() {
         ok: false,
         error: e.message,
         remediation:
-          'Deploy a gpt-4o or gpt-4 model to your Azure AI Foundry hub, then either ' +
-          '(a) register the Foundry connection so the orchestrator auto-discovers it, ' +
-          'or (b) set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT env vars on the Loom Console Container App.',
+          'Set the Copilot chat model under Admin → Tenant settings → Copilot & Agents: pick your ' +
+          'Foundry account + a deployed gpt-4o / gpt-4.1-class chat deployment (this is the source of truth). ' +
+          'Deploy such a model to your Azure AI Foundry hub first if none exists. ' +
+          '(Env fallback: LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT on the Console Container App.)',
       };
     } else {
       aoai = { ok: false, error: e?.message || String(e) };

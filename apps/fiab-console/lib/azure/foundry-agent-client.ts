@@ -341,6 +341,27 @@ function extractAssistantText(messages: any): string {
  * Throws FoundryAgentNotConfiguredError when the project endpoint isn't set so
  * the route can render an honest gate.
  */
+/**
+ * Resolve a Foundry assistant id (`asst_…`) from an agent name. The Assistants
+ * runs API requires the assistant *id*, not the display name — passing the name
+ * yields "Invalid 'assistant_id': … Expected an ID that begins with 'asst'." If
+ * the caller already passed an id we return it unchanged. */
+async function resolveAssistantId(agentNameOrId: string, override?: FoundryAgentConfigOverride): Promise<string> {
+  if (/^asst/i.test(agentNameOrId)) return agentNameOrId;
+  const agents = await listAgents('', override);
+  const match = (agents as any[]).find((a) => a?.id === agentNameOrId || a?.name === agentNameOrId);
+  const id = (match as any)?.id;
+  if (id && /^asst/i.test(id)) return id;
+  // Some deployments key the agent by an id that isn't the assistant id; fall
+  // back to any returned id, else fail with an actionable message.
+  if (id) return id;
+  throw new FoundryAgentError(
+    404, undefined,
+    `No Foundry assistant named '${agentNameOrId}' was found in the project. ` +
+    'Deploy/publish the data agent to Foundry first, then retry.',
+  );
+}
+
 export async function runAgentAndInspect(
   agentName: string,
   question: string,
@@ -350,6 +371,9 @@ export async function runAgentAndInspect(
   requireConfig(override); // throws FoundryAgentNotConfiguredError when unconfigured
   if (!agentName) throw new FoundryAgentError(400, undefined, 'agent name required');
   if (!question?.trim()) throw new FoundryAgentError(400, undefined, 'question required');
+
+  // The Assistants runs API needs the assistant id, not the display name.
+  const assistantId = await resolveAssistantId(agentName, override);
 
   const thread = await readJson<any>(await agentFetch('/threads', { method: 'POST', body: JSON.stringify({}) }, override));
   const threadId: string = thread?.id;
@@ -362,7 +386,7 @@ export async function runAgentAndInspect(
 
   let run = await readJson<any>(await agentFetch(`/threads/${encodeURIComponent(threadId)}/runs`, {
     method: 'POST',
-    body: JSON.stringify({ assistant_id: agentName }),
+    body: JSON.stringify({ assistant_id: assistantId }),
   }, override));
   const runId: string = run?.id;
   if (!runId) throw new FoundryAgentError(502, run, 'Foundry Agent Service did not return a run id');

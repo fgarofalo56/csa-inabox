@@ -9,6 +9,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface Insights {
   kpis: {
@@ -35,6 +36,19 @@ const useStyles = makeStyles({
   bar: { height: 6, background: tokens.colorNeutralBackground3, borderRadius: 3, overflow: 'hidden', marginTop: 2 },
   barFill: { height: '100%', background: tokens.colorBrandBackground, borderRadius: 3 },
 });
+
+/** Coverage cell: a thin progress bar + "n (p%)" for a sortable LoomDataTable. */
+function covCell(value: number, total: number, color: string) {
+  const pct = total ? Math.round(100 * value / total) : 0;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+      <div style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: tokens.colorNeutralBackground4, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', backgroundColor: color, borderRadius: 3 }} />
+      </div>
+      <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{value} ({pct}%)</span>
+    </div>
+  );
+}
 
 export default function InsightsPage() {
   const s = useStyles();
@@ -106,30 +120,27 @@ export default function InsightsPage() {
           {data.coverage.length === 0 ? (
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No items yet.</Caption1>
           ) : (
-            <Table aria-label="Coverage by item type" style={{ marginBottom: 20 }}>
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell>Type</TableHeaderCell>
-                  <TableHeaderCell>Total</TableHeaderCell>
-                  <TableHeaderCell>Sensitivity labeled</TableHeaderCell>
-                  <TableHeaderCell>Classified</TableHeaderCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.coverage.map((c) => {
-                  const lp = c.total ? Math.round(100 * c.labeled / c.total) : 0;
-                  const cp = c.total ? Math.round(100 * c.classified / c.total) : 0;
-                  return (
-                    <TableRow key={c.type}>
-                      <TableCell>{c.type}</TableCell>
-                      <TableCell>{c.total}</TableCell>
-                      <TableCell>{c.labeled} <span className={s.pct}>({lp}%)</span></TableCell>
-                      <TableCell>{c.classified} <span className={s.pct}>({cp}%)</span></TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+            <div style={{ marginBottom: 20 }}>
+              <LoomDataTable
+                ariaLabel="Coverage by item type"
+                getRowId={(c) => c.type}
+                rows={data.coverage}
+                columns={[
+                  { key: 'type', label: 'Type', sortable: true, filterable: true, width: 220, render: (c) => <strong>{c.type}</strong> },
+                  { key: 'total', label: 'Total', sortable: true, width: 90, getValue: (c) => c.total },
+                  {
+                    key: 'labeled', label: 'Sensitivity labeled', sortable: true, width: 260,
+                    getValue: (c) => (c.total ? c.labeled / c.total : 0),
+                    render: (c) => covCell(c.labeled, c.total, '#bc4b09'),
+                  },
+                  {
+                    key: 'classified', label: 'Classified', sortable: true, width: 260,
+                    getValue: (c) => (c.total ? c.classified / c.total : 0),
+                    render: (c) => covCell(c.classified, c.total, '#0f6cbd'),
+                  },
+                ] as LoomColumn<{ type: string; total: number; labeled: number; classified: number }>[]}
+              />
+            </div>
           )}
 
           <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Most classified items</Subtitle2>

@@ -1522,6 +1522,12 @@ const POLICY_SNIPPETS: { key: string; label: string; section: 'inbound' | 'outbo
   { key: 'mock', label: 'Mock response', section: 'inbound', xml: `<mock-response status-code="200" content-type="application/json" />` },
   { key: 'set-header-out', label: 'Set response header', section: 'outbound', xml: `<set-header name="X-Powered-By" exists-action="override">\n      <value>CSA Loom APIM</value>\n    </set-header>` },
   { key: 'cache-lookup', label: 'Cache responses', section: 'inbound', xml: `<cache-lookup vary-by-developer="false" vary-by-developer-groups="false" downstream-caching-type="none" />` },
+  // ── AI gateway (LLM) policies — for Azure OpenAI / Foundry-backed APIs ──
+  { key: 'llm-token-limit', label: 'AI: token-per-minute limit', section: 'inbound', xml: `<llm-token-limit counter-key="@(context.Subscription.Id)" tokens-per-minute="5000" estimate-prompt-tokens="true" remaining-tokens-header-name="x-remaining-tokens" tokens-consumed-header-name="x-consumed-tokens" />` },
+  { key: 'llm-content-safety', label: 'AI: content safety check', section: 'inbound', xml: `<llm-content-safety backend-id="content-safety-backend" shield-prompt="true">\n      <categories output-type="EightSeverityLevels">\n        <category name="Hate" threshold="4" />\n        <category name="Violence" threshold="4" />\n        <category name="Sexual" threshold="4" />\n        <category name="SelfHarm" threshold="4" />\n      </categories>\n    </llm-content-safety>` },
+  { key: 'llm-semantic-cache-lookup', label: 'AI: semantic cache lookup', section: 'inbound', xml: `<llm-semantic-cache-lookup score-threshold="0.05" embeddings-backend-id="embeddings-backend" embeddings-backend-auth="system-assigned">\n      <vary-by>@(context.Subscription.Id)</vary-by>\n    </llm-semantic-cache-lookup>` },
+  { key: 'llm-semantic-cache-store', label: 'AI: semantic cache store', section: 'outbound', xml: `<llm-semantic-cache-store duration="60" />` },
+  { key: 'llm-emit-token-metric', label: 'AI: emit token metrics', section: 'inbound', xml: `<llm-emit-token-metric namespace="openai">\n      <dimension name="API ID" value="@(context.Api.Id)" />\n      <dimension name="Subscription ID" value="@(context.Subscription.Id)" />\n    </llm-emit-token-metric>` },
 ];
 
 function isWellFormedXml(xml: string): { ok: true } | { ok: false; error: string } {
