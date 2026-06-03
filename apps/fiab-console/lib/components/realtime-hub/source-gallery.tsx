@@ -9,7 +9,7 @@
  * category brand colour), name, Fabric source-type enum, and a Preview badge
  * where applicable. Category filter + search narrow the grid. Clicking a tile
  * opens the real ConnectSourceDialog pre-selected on that connector, which
- * POSTs to /api/realtime-hub/connect-source and creates a real Fabric
+ * POSTs to /api/realtime-hub/connect-source and creates a real CSA Loom
  * Eventstream item.
  */
 
