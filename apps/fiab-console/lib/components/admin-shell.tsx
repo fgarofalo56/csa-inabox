@@ -22,6 +22,7 @@ const SECTIONS: Section[] = [
   { href: '/admin/tenant-settings', label: 'Tenant settings', icon: Settings24Regular, description: 'Per-area switches (Power BI, Fabric, OneLake, Real-Time, AI, Mirroring, Git).' },
   { href: '/admin/capacity', label: 'Capacity & compute', icon: Server24Regular, description: 'Underlying Azure services Loom orchestrates: ACA, Databricks, Synapse, ADF, ADLA, AML, Cosmos, ACR.' },
   { href: '/admin/scaling', label: 'Scale by SKU', icon: GaugeRegular, description: 'Scale Fabric, Synapse, ADX, Databricks, AI Search, APIM, Cosmos, Container Apps, Foundry — real ARM PATCH from inside Loom.' },
+  { href: '/admin/api-management', label: 'API Management', icon: Settings24Regular, description: 'Manage APIM APIs, products, subscriptions, policies, named values, backends — full marketplace administration.' },
   { href: '/admin/domains', label: 'Domains', icon: Organization24Regular, description: 'Organize workspaces into business domains and subdomains.' },
   { href: '/admin/deploy-planner', label: 'Deployment planner', icon: CloudArrowUp24Regular, description: 'Visually plan what deploys to which subscription and domain; generate the bicepparam for az deployment.' },
   { href: '/admin/security', label: 'Security & governance', icon: ShieldCheckmark24Regular, description: 'Sensitivity labels, DLP policies, Purview hub link, workspace identity.' },
