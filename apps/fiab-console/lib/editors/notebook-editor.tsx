@@ -346,24 +346,52 @@ export function NotebookEditor({ item, id }: Props) {
     if (availableLakehouses === null) loadLakehouses();
   }, [availableLakehouses, loadLakehouses]);
 
+  /**
+   * Persist the attached-sources list IMMEDIATELY, with the explicit next
+   * array (not the closed-over state, which is one render stale). The operator
+   * reported attachments "aren't persistent" — that was because attach/detach
+   * only mutated local state and required a manual Save / Ctrl-S. Auto-saving
+   * here means a re-open / reload keeps the attachments. Cells are saved too
+   * (output stripped) so we don't clobber in-progress edits with a half doc.
+   */
+  const persistSources = useCallback(async (next: AttachedSource[]) => {
+    if (!workspaceId || !notebookId) return;
+    try {
+      const cellsForSave = cells.map(c => ({ ...c, output: undefined }));
+      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources: next } }),
+      });
+      const j = await r.json();
+      if (j.ok) { setDirty(false); setRunMsg(`Data sources saved at ${new Date().toLocaleTimeString()}`); }
+      else { setRunMsg(`Could not save data sources: ${j.error || 'unknown'} — use Save to retry`); }
+    } catch (e: any) {
+      setRunMsg(`Could not save data sources: ${e?.message || e} — use Save to retry`);
+    }
+  }, [workspaceId, notebookId, cells, defaultLang]);
+
   const attachLakehouse = useCallback((lh: LakehouseLite) => {
     if (attachedSources.some(s => s.kind === 'lakehouse' && s.id === lh.id)) return;
-    setAttachedSources(prev => [
-      ...prev,
-      { kind: 'lakehouse', id: lh.id, displayName: lh.displayName, isDefault: prev.length === 0 },
-    ]);
-    setDirty(true);
-  }, [attachedSources]);
+    const next: AttachedSource[] = [
+      ...attachedSources,
+      { kind: 'lakehouse', id: lh.id, displayName: lh.displayName, isDefault: attachedSources.length === 0 },
+    ];
+    setAttachedSources(next);
+    void persistSources(next);   // auto-persist so the attachment survives reload
+  }, [attachedSources, persistSources]);
 
   const detachSource = useCallback((srcId: string) => {
-    setAttachedSources(prev => prev.filter(s => s.id !== srcId));
-    setDirty(true);
-  }, []);
+    const next = attachedSources.filter(s => s.id !== srcId);
+    setAttachedSources(next);
+    void persistSources(next);
+  }, [attachedSources, persistSources]);
 
   const promoteDefault = useCallback((srcId: string) => {
-    setAttachedSources(prev => prev.map(s => ({ ...s, isDefault: s.id === srcId })));
-    setDirty(true);
-  }, []);
+    const next = attachedSources.map(s => ({ ...s, isDefault: s.id === srcId }));
+    setAttachedSources(next);
+    void persistSources(next);
+  }, [attachedSources, persistSources]);
 
   const run = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
