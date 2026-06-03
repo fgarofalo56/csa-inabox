@@ -71,6 +71,25 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
     // Sanitize: never surface a raw HTML error body to the UI (a firewall /
     // gateway 403 returns an XHTML page). Strip tags + collapse whitespace.
     const raw = (e?.message || String(e)).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    
+    // Cold-start timeout: Synapse serverless OPENROWSET on CSV can take 30-60s on first run.
+    // Surface a user-friendly message with honest remediation instead of a raw 502.
+    const isColdTimeout = /timeout|cold/.test(raw);
+    if (isColdTimeout) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'synapse_cold_start',
+          error:
+            'Query took longer than 60 seconds (Synapse serverless pool cold-start). ' +
+            'OPENROWSET over CSV files can be slow on first execution. ' +
+            'Retry the query — the pool will stay warm and subsequent queries run faster. ' +
+            'For better performance, materialize the data as a Parquet or Delta table via a notebook.',
+        },
+        { status: 504 },
+      );
+    }
+    
     const is403 = /\b403\b|forbidden|not allowed|denied/i.test(raw);
     if (is403) {
       // Auth-or-firewall denial: the endpoint is provisioned but the Console
