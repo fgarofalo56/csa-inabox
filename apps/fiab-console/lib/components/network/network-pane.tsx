@@ -27,15 +27,22 @@ import {
   Copy24Regular, Checkmark24Regular, ServerMultipleRegular,
   Globe24Regular, ShieldLock24Regular, DocumentBulletList24Regular,
 } from '@fluentui/react-icons';
+import { NetworkTopologyCanvas } from './topology-canvas';
 
 interface DnsRecord { fqdn: string; ips: string[]; zone: string; }
 interface PrivateEndpoint {
   id: string; name: string; resourceGroup?: string; location?: string;
   connectedResourceName?: string; groupIds: string[]; state?: string; dns: DnsRecord[];
 }
+interface VNetLite {
+  id: string; name: string; subscriptionId: string; resourceGroup?: string;
+  addressPrefixes: string[];
+  subnets: { name: string; addressPrefix?: string; privateEndpointCount: number; delegations: string[] }[];
+}
 interface ApiResp {
   ok: boolean; count?: number; endpoints?: PrivateEndpoint[]; zones?: string[];
   hostsBlock?: string; error?: string; hint?: string;
+  vnets?: VNetLite[]; dnsZones?: { name: string; records: DnsRecord[] }[];
 }
 
 const card: React.CSSProperties = {
@@ -170,6 +177,54 @@ export function NetworkPane() {
           </Body1>
           <pre style={codeBox}>{hostsBlock}</pre>
           <div style={{ marginTop: 10 }}><CopyButton text={hostsBlock} label="Copy hosts block" /></div>
+        </div>
+      )}
+
+      {/* 2b · Virtual networks & subnets */}
+      {!loading && data?.ok && (data.vnets?.length ?? 0) > 0 && (
+        <div style={card}>
+          <div style={head}>
+            <ServerMultipleRegular />
+            <Subtitle2>Virtual networks &amp; subnets</Subtitle2>
+          </div>
+          <Table size="small" aria-label="Virtual networks">
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>vNet</TableHeaderCell>
+                <TableHeaderCell>Address space</TableHeaderCell>
+                <TableHeaderCell>Subnet</TableHeaderCell>
+                <TableHeaderCell>Prefix</TableHeaderCell>
+                <TableHeaderCell>Private endpoints</TableHeaderCell>
+                <TableHeaderCell>Delegation</TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(data.vnets || []).flatMap((v) => (v.subnets.length ? v.subnets : [{ name: '—', addressPrefix: '', privateEndpointCount: 0, delegations: [] }]).map((sn, i) => (
+                <TableRow key={`${v.id}-${sn.name}-${i}`}>
+                  <TableCell>{i === 0 ? <Body1Strong>{v.name}</Body1Strong> : ''}</TableCell>
+                  <TableCell>{i === 0 ? (v.addressPrefixes.join(', ') || '—') : ''}</TableCell>
+                  <TableCell>{sn.name}</TableCell>
+                  <TableCell>{sn.addressPrefix || '—'}</TableCell>
+                  <TableCell>{sn.privateEndpointCount || 0}</TableCell>
+                  <TableCell>{sn.delegations.join(', ') || '—'}</TableCell>
+                </TableRow>
+              )))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {/* 2c · Topology graph */}
+      {!loading && data?.ok && ((data.vnets?.length ?? 0) > 0 || (data.endpoints?.length ?? 0) > 0) && (
+        <div style={card}>
+          <div style={head}>
+            <Globe24Regular />
+            <Subtitle2>CSA Loom network topology</Subtitle2>
+          </div>
+          <Body1 style={{ display: 'block', marginBottom: 10, color: tokens.colorNeutralForeground3 }}>
+            vNets → subnets → private endpoints → the Azure service each fronts.
+          </Body1>
+          <NetworkTopologyCanvas data={{ endpoints: (data.endpoints || []) as any, vnets: (data.vnets || []) as any, zones: data.zones || [] }} />
         </div>
       )}
 
