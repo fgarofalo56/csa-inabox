@@ -3764,7 +3764,11 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed'>('tables');
+  // Power BI is opt-in (no-fabric-dependency.md): the editor renders Loom-native
+  // tabular metadata by default and only exposes Power BI actions/embed when the
+  // Console identity actually has Power BI workspace access.
+  const powerBiConfigured = !!(ws.workspaces && ws.workspaces.length > 0 && !ws.error);
 
   // --- Model builder (real Power BI push-dataset authoring) ---------------
   // Builds a NEW semantic model with tables/typed-columns/measures/relationships
@@ -4012,15 +4016,19 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
           <div className={s.pad}>
             <div className={s.toolbar}>
               <Badge appearance="filled" color="brand">Semantic model</Badge>
-              <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
-              <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
-              <Button appearance="outline" icon={<Add20Regular />} onClick={focusBuild} disabled={!workspaceId} title={!workspaceId ? 'select a workspace first' : 'Build a new semantic model (push dataset) via Power BI REST'} style={{ marginLeft: 'auto' }}>Build model</Button>
+              {powerBiConfigured && (
+                <>
+                  <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+                  <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+                </>
+              )}
+              <Button appearance="outline" icon={<Add20Regular />} onClick={focusBuild} disabled={!powerBiConfigured || !workspaceId} title={!powerBiConfigured ? 'Power BI embed is opt-in; workspace not configured' : 'Build a new semantic model (push dataset) via Power BI REST'} style={{ marginLeft: 'auto' }}>Build model</Button>
               <Button
                 appearance="primary"
                 icon={<Play20Regular />}
-                disabled={!datasetId || refreshing || detail?.dataset?.isRefreshable === false}
+                disabled={!datasetId || refreshing || detail?.dataset?.isRefreshable === false || !powerBiConfigured}
                 onClick={refreshNow}
-                title={detail?.dataset?.isRefreshable === false ? 'Dataset is not refreshable (e.g. push dataset or DirectQuery without gateway).' : undefined}
+                title={!powerBiConfigured ? 'Power BI embed is opt-in; workspace not configured' : (detail?.dataset?.isRefreshable === false ? 'Dataset is not refreshable (e.g. push dataset or DirectQuery without gateway).' : undefined)}
               >
                 {refreshing ? 'Queuing…' : 'Refresh dataset'}
               </Button>
@@ -4028,6 +4036,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
             {listErr && <MessageBar intent="error"><MessageBarBody>{listErr}</MessageBarBody></MessageBar>}
             {refreshErr && <MessageBar intent="error"><MessageBarBody>{refreshErr}</MessageBarBody></MessageBar>}
             {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+            {!powerBiConfigured && (
+              <MessageBar intent="info" style={{ marginBottom: 12 }}>
+                <MessageBarBody>
+                  <MessageBarTitle>Power BI embed is opt-in</MessageBarTitle>
+                  The Console identity isn&rsquo;t registered in Power BI / not in any workspace. This editor shows Loom-native table, relationship, and measure (DAX) metadata. To enable Build model / Refresh / the Power BI Embed tab, register the Console UAMI in your Power BI tenant and add it to a workspace. <a href="https://learn.microsoft.com/power-bi/admin/service-principal-api-considerations" target="_blank" rel="noreferrer">Power BI service principal setup</a>.
+                </MessageBarBody>
+              </MessageBar>
+            )}
             {detail?.dataset && (
               <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Caption1>Owner: <strong>{detail.dataset.configuredBy || '—'}</strong></Caption1>
@@ -4048,6 +4064,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="config">Configuration</Tab>
                   <Tab value="governance">Gateway &amp; endorsement</Tab>
                   <Tab value="access">Manage access</Tab>
+                  {powerBiConfigured && <Tab value="embed">Power BI Embed</Tab>}
                 </TabList>
               </div>
               <div className={s.pad}>
@@ -4330,6 +4347,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 {tab === 'access' && (
                   <ManageAccessPanel workspaceId={workspaceId} />
                 )}
+                {tab === 'embed' && powerBiConfigured && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      <MessageBarTitle>Power BI embedding for semantic models</MessageBarTitle>
+                      Browse the model metadata and author DAX in the Tables, Relationships, and Measures tabs above. Power BI live-query / external-tool embedding is configured here when a workspace is bound.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
               </div>
             </>
           )}
@@ -4381,6 +4406,9 @@ function ReportLikeEditor({
   const [editMode, setEditMode] = useState(false);
   const [viewerErr, setViewerErr] = useState<string | null>(null);
   const embedRef = useRef<any>(null);
+  // Power BI is opt-in (no-fabric-dependency.md): render Loom-native report
+  // metadata by default; expose embed/refresh/export only when configured.
+  const powerBiConfigured = !!(ws.workspaces && ws.workspaces.length > 0 && !ws.error);
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -4639,11 +4667,15 @@ function ReportLikeEditor({
         <div className={s.pad}>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">{kind === 'paginated' ? 'Paginated report' : 'Power BI report'}</Badge>
-            <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
-            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Reload</Button>
+            {powerBiConfigured && (
+              <>
+                <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+                <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Reload</Button>
+              </>
+            )}
             {report?.webUrl && <Button appearance="outline" onClick={openInDesktop}>Open in Power BI</Button>}
-            <Button appearance="primary" icon={refreshBusy ? <Spinner size="tiny" /> : <ArrowSync20Regular />} onClick={refreshData} disabled={!reportId || refreshBusy}>{refreshBusy ? 'Refreshing…' : 'Refresh data'}</Button>
-            {kind !== 'paginated' && (
+            <Button appearance="primary" icon={refreshBusy ? <Spinner size="tiny" /> : <ArrowSync20Regular />} onClick={refreshData} disabled={!reportId || refreshBusy || !powerBiConfigured} title={!powerBiConfigured ? 'Power BI embed is opt-in; workspace not configured' : undefined}>{refreshBusy ? 'Refreshing…' : 'Refresh data'}</Button>
+            {kind !== 'paginated' && powerBiConfigured && (
               <>
                 <Button appearance="outline" onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
                 <Button appearance="outline" onClick={() => exportReport('PPTX')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX'}</Button>
@@ -4656,15 +4688,25 @@ function ReportLikeEditor({
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           {refreshMsg && <MessageBar intent={refreshMsg.ok ? 'success' : 'error'}><MessageBarBody>{refreshMsg.text}</MessageBarBody></MessageBar>}
           {exportErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Export failed</MessageBarTitle>{exportErr}</MessageBarBody></MessageBar>}
-          <MessageBar intent="info">
-            <MessageBarBody>
-              <MessageBarTitle>Visual authoring happens in Power BI Desktop</MessageBarTitle>
-              Visuals, pages, bookmarks and the filter pane are authored in <strong>Power BI Desktop</strong> (and the
-              Power BI Web editor) — that is by design, not a gap. This pane embeds the live {kind === 'paginated' ? 'paginated ' : ''}report,
-              {kind === 'paginated' ? ' links out to Power BI,' : ' triggers a dataset refresh, and exports to PDF/PPTX —'} all against the real
-              Power BI REST API. Use <strong>Open in Power BI</strong> to author.
-            </MessageBarBody>
-          </MessageBar>
+          {!powerBiConfigured && (
+            <MessageBar intent="info" style={{ marginBottom: 12 }}>
+              <MessageBarBody>
+                <MessageBarTitle>Power BI embed is opt-in</MessageBarTitle>
+                The Console identity isn&rsquo;t registered in Power BI / not in any workspace. This editor shows report metadata. To enable embedding, dataset refresh, export, and the visual viewer, register the Console UAMI in your Power BI tenant and add it to a workspace. <a href="https://learn.microsoft.com/power-bi/admin/service-principal-api-considerations" target="_blank" rel="noreferrer">Power BI service principal setup</a>.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {powerBiConfigured && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>Visual authoring happens in Power BI Desktop</MessageBarTitle>
+                Visuals, pages, bookmarks and the filter pane are authored in <strong>Power BI Desktop</strong> (and the
+                Power BI Web editor) — that is by design, not a gap. This pane embeds the live {kind === 'paginated' ? 'paginated ' : ''}report,
+                {kind === 'paginated' ? ' links out to Power BI,' : ' triggers a dataset refresh, and exports to PDF/PPTX —'} all against the real
+                Power BI REST API. Use <strong>Open in Power BI</strong> to author.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           {report && (
             <>
               <div className={s.card}>
@@ -4681,7 +4723,18 @@ function ReportLikeEditor({
               <div className={s.card} style={{ marginTop: 8 }}>
                 <ManageAccessPanel workspaceId={workspaceId} />
               </div>
-              {kind === 'paginated' ? (
+              {!powerBiConfigured ? (
+                <div className={s.card}>
+                  <Subtitle2 style={{ marginBottom: 12 }}>Report metadata (Loom-native view)</Subtitle2>
+                  <Caption1 style={{ marginBottom: 8, display: 'block' }}>To embed the live report and enable refresh/export, configure Power BI workspace access above.</Caption1>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div><strong>Name:</strong> {report?.name || '—'}</div>
+                    <div><strong>Type:</strong> {report?.reportType || (kind === 'paginated' ? 'PaginatedReport' : 'PowerBIReport')}</div>
+                    <div><strong>Dataset ID:</strong> {report?.datasetId || '—'}</div>
+                    {report?.webUrl && <div><strong>Web URL:</strong> <a href={report.webUrl} target="_blank" rel="noreferrer">{report.webUrl}</a></div>}
+                  </div>
+                </div>
+              ) : kind === 'paginated' ? (
                 <MessageBar intent="warning">
                   <MessageBarBody>
                     <MessageBarTitle>Paginated report embed not yet wired</MessageBarTitle>
