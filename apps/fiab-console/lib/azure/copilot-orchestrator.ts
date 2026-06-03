@@ -40,6 +40,7 @@ import * as powerbi from './powerbi-client';
 import * as fabric from './fabric-client';
 import * as activator from './activator-client';
 import { copilotSessionsContainer } from './cosmos-client';
+import { runSelfAudit, applyFix } from '@/lib/admin/self-audit';
 
 // ---------- Credential ----------
 
@@ -500,6 +501,26 @@ export function buildDefaultRegistry(): LoomToolRegistry {
       await c.items.create(doc);
       return doc;
     },
+  });
+
+  // -------- agent-loom: self-audit + healer --------
+  // These let the built-in Copilot (agent-loom) review the whole deployment and
+  // apply runtime-safe fixes conversationally — the same engine the Admin →
+  // Health page uses. agent-loom understands every Loom requirement (identity,
+  // data plane, Azure services, permissions, security) via the audit registry.
+  r.register({
+    name: 'loom_self_audit',
+    service: 'Loom',
+    description: 'Run a full CSA Loom self-audit: identity, data plane (Cosmos), the Azure services each workload needs (Synapse, ADX, Event Hubs, ADLS, AI Search, AOAI/Foundry, Monitor, ADF, Purview), permissions (bootstrap admin), and security posture. Returns a scored report with the exact remediation for every warning/failure. Use this first when asked to check, validate, or fix the deployment.',
+    parameters: obj({}),
+    handler: async () => runSelfAudit(new Date().toISOString()),
+  });
+  r.register({
+    name: 'loom_heal',
+    service: 'Loom',
+    description: "Apply a runtime-safe healer fix by its fixId (from loom_self_audit results, e.g. 'ensure-cosmos'). Only fixes the Console identity can safely apply at runtime are executed; deploy-time issues (env vars / RBAC grants) return guidance to apply + redeploy instead of pretending to fix. Requires tenant-admin approval at the UI layer.",
+    parameters: obj({ fixId: S_STRING }, ['fixId']),
+    handler: async ({ fixId }) => applyFix(String(fixId)),
   });
 
   return r;
