@@ -132,6 +132,25 @@ async function armGet(path: string): Promise<any> {
   return json;
 }
 
+async function armPut(path: string, body: unknown): Promise<any> {
+  const tk = await token(ARM_SCOPE);
+  const url = path.startsWith('http') ? path : `${ARM}${path}`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${tk}`, accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok) {
+    const msg = (json?.error?.message || text || `ARM PUT failed (${res.status})`).toString();
+    throw new MonitorError(msg, res.status, json || text);
+  }
+  return json;
+}
+
 // ----------------------------------------------------------------------------
 // 1) Resource inventory — ARM list resources across the Loom RGs
 // ----------------------------------------------------------------------------
@@ -530,4 +549,127 @@ export const METRIC_CATALOG: Record<string, { metric: string; aggregation: strin
 /** Metrics catalog entries for a resource type (lower-cased lookup). */
 export function metricsForType(type: string): { metric: string; aggregation: string; label: string }[] {
   return METRIC_CATALOG[type.toLowerCase()] || [];
+}
+
+// ----------------------------------------------------------------------------
+// 7) WRITE — action groups + scheduled query alert rules
+//
+// The Azure-native backend for the Loom Activator (Reflex). A Loom activator
+// rule (condition + action) maps 1:1 to an Azure Monitor scheduled query alert
+// rule (Microsoft.Insights/scheduledQueryRules) that runs a KQL query over the
+// configured Log Analytics workspace / ADX cluster and fires an action group.
+// No Microsoft Fabric required (see .claude/rules/no-fabric-dependency.md).
+//   https://learn.microsoft.com/rest/api/monitor/scheduled-query-rules
+//   https://learn.microsoft.com/rest/api/monitor/action-groups
+// ----------------------------------------------------------------------------
+
+const ACTION_GROUPS_API = '2023-01-01';
+const SCHEDULED_QUERY_RULES_API = '2023-03-15-preview';
+
+/** Resolve the RG alert resources are written into (alert RG → admin RG). */
+function alertResourceGroup(): string {
+  const rg = process.env.LOOM_ALERT_RG || process.env.LOOM_ADMIN_RG;
+  if (!rg) throw new MonitorNotConfiguredError(['LOOM_ALERT_RG (or LOOM_ADMIN_RG)']);
+  return rg.trim();
+}
+
+/** ARM resource id of the Log Analytics workspace the alert query runs against. */
+export function logAnalyticsResourceId(): string | null {
+  const v = process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID;
+  return v && v.trim() ? v.trim() : null;
+}
+
+export interface ActionGroupInput {
+  /** Resource name e.g. 'loom-activator-ag'. */
+  name: string;
+  /** 1-12 char short name shown in notifications. */
+  shortName: string;
+  /** Email receivers; each becomes an emailReceiver. */
+  emails?: string[];
+}
+
+/** Create/update an action group (Global). Returns its ARM id. Idempotent PUT. */
+export async function upsertActionGroup(input: ActionGroupInput): Promise<string> {
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
+  if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
+  const rg = alertResourceGroup();
+  const emailReceivers = (input.emails || [])
+    .filter((e) => e && e.includes('@'))
+    .map((e, i) => ({ name: `email${i}`, emailAddress: e.trim(), useCommonAlertSchema: true }));
+  const path =
+    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/actionGroups/${encodeURIComponent(input.name)}?api-version=${ACTION_GROUPS_API}`;
+  const body = {
+    location: 'Global',
+    properties: {
+      groupShortName: input.shortName.slice(0, 12),
+      enabled: true,
+      emailReceivers,
+    },
+  };
+  const res = await armPut(path, body);
+  return res?.id || `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/microsoft.insights/actionGroups/${input.name}`;
+}
+
+export interface ScheduledQueryRuleInput {
+  name: string;
+  description?: string;
+  /** KQL the rule evaluates (returns rows when the condition is met). */
+  query: string;
+  /** ARM scope(s) — defaults to the LA workspace resource id. */
+  scopes?: string[];
+  /** GreaterThan | LessThan | Equal | GreaterThanOrEqual | LessThanOrEqual. */
+  operator?: string;
+  /** Threshold the aggregated query result is compared against. Default 0. */
+  threshold?: number;
+  /** 0 (critical) – 4 (verbose). Default 3. */
+  severity?: number;
+  /** ISO duration, default PT5M. */
+  evaluationFrequency?: string;
+  windowSize?: string;
+  /** Action group ARM ids to fire. */
+  actionGroupIds?: string[];
+}
+
+/** Create/update a scheduled query alert rule. Returns its ARM id. */
+export async function upsertScheduledQueryRule(input: ScheduledQueryRuleInput): Promise<string> {
+  const subscriptionId = process.env.LOOM_SUBSCRIPTION_ID || '';
+  if (!subscriptionId) throw new MonitorNotConfiguredError(['LOOM_SUBSCRIPTION_ID']);
+  const rg = alertResourceGroup();
+  const scopeId = logAnalyticsResourceId();
+  const scopes = input.scopes && input.scopes.length ? input.scopes : (scopeId ? [scopeId] : []);
+  if (scopes.length === 0) {
+    throw new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_RESOURCE_ID (alert query scope)']);
+  }
+  const location = process.env.LOOM_ALERT_LOCATION || process.env.LOOM_LOCATION || 'eastus';
+  const path =
+    `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Insights/scheduledQueryRules/${encodeURIComponent(input.name)}?api-version=${SCHEDULED_QUERY_RULES_API}`;
+  const body = {
+    location,
+    properties: {
+      displayName: input.name,
+      description: input.description || 'Created by CSA Loom Activator',
+      severity: input.severity ?? 3,
+      enabled: true,
+      scopes,
+      evaluationFrequency: input.evaluationFrequency || 'PT5M',
+      windowSize: input.windowSize || 'PT5M',
+      criteria: {
+        allOf: [
+          {
+            query: input.query,
+            timeAggregation: 'Count',
+            operator: input.operator || 'GreaterThan',
+            threshold: input.threshold ?? 0,
+            failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 },
+          },
+        ],
+      },
+      autoMitigate: true,
+      actions: input.actionGroupIds && input.actionGroupIds.length
+        ? { actionGroups: input.actionGroupIds }
+        : undefined,
+    },
+  };
+  const res = await armPut(path, body);
+  return res?.id || `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/microsoft.insights/scheduledQueryRules/${input.name}`;
 }

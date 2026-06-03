@@ -308,26 +308,37 @@ async function provisionAzureNative(
 export const notebookProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
   const steps: string[] = [];
   const ws = input.target.fabricWorkspaceId;
-  if (!ws) {
-    // No Fabric workspace bound — fall back to the configured Azure-native
-    // engine (Synapse → Databricks). Only gate when none is configured.
+  // Azure-native DEFAULT (Synapse Spark → Databricks), per
+  // .claude/rules/no-fabric-dependency.md. A Fabric notebook is used ONLY when
+  // explicitly opted into (LOOM_NOTEBOOK_BACKEND=fabric + bound ws) or when it
+  // is the only configured backend (ws bound, no Synapse/Databricks). We never
+  // require a Fabric workspace.
+  const forceFabric = process.env.LOOM_NOTEBOOK_BACKEND === 'fabric';
+  const azureConfigured = !!(process.env.LOOM_SYNAPSE_WORKSPACE || process.env.LOOM_DATABRICKS_HOSTNAME);
+
+  if (!(forceFabric && ws) && azureConfigured) {
     const fallback = await provisionAzureNative(
       { content: input.content, displayName: input.displayName, appId: input.appId },
       steps,
     );
     if (fallback) return fallback;
+  }
+
+  if (!ws) {
     return {
       status: 'remediation',
       gate: {
-        reason: 'No notebook backend configured for this Loom (no Fabric workspace bound, no Synapse, no Databricks).',
+        reason: 'No Azure notebook engine configured (no Synapse, no Databricks).',
         remediation:
-          'Bind a Fabric/Power BI workspace via /admin/workspaces > Bind capacity (or set LOOM_DEFAULT_FABRIC_WORKSPACE), OR set LOOM_SYNAPSE_WORKSPACE to import as a Synapse notebook, OR set LOOM_DATABRICKS_HOSTNAME to import as a Databricks notebook.',
-        link: '/admin/workspaces',
+          'Set LOOM_SYNAPSE_WORKSPACE to import + run as a Synapse Spark notebook, OR set LOOM_DATABRICKS_HOSTNAME to import as a Databricks notebook. (Binding a Fabric workspace is an optional alternative, not required.)',
+        link: 'https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-development-using-notebooks',
       },
       steps,
     };
   }
-  steps.push(`Fabric workspace: ${ws}`);
+  steps.push(forceFabric
+    ? `Fabric workspace (opt-in via LOOM_NOTEBOOK_BACKEND=fabric): ${ws}`
+    : `No Azure notebook engine configured; using the bound Fabric workspace: ${ws}`);
 
   const definition = buildDefinition(input.content, input.displayName);
   steps.push(`Built notebook definition with ${(input.content as any)?.cells?.length || 0} cells.`);
