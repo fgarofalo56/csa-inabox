@@ -24,9 +24,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Select, Caption1, Button, Badge, Spinner, MessageBar, MessageBarBody, MessageBarTitle,
-  makeStyles,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
+  Field, Input, makeStyles,
 } from '@fluentui/react-components';
-import { Play16Regular, Pause16Regular, ArrowSync16Regular } from '@fluentui/react-icons';
+import { Play16Regular, Pause16Regular, ArrowSync16Regular, Add16Regular } from '@fluentui/react-icons';
 
 export type ComputeKind = 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql';
 
@@ -85,6 +86,140 @@ function isRunning(state?: string): boolean {
   return s === 'running' || s === 'online' || s === 'available';
 }
 
+interface NodeTypeOption { node_type_id: string; label: string; category?: string }
+interface SparkVersionOption { key: string; name: string }
+
+/**
+ * NewClusterDialog — guided (no-JSON) creation of a Databricks interactive
+ * cluster. Every field is a dropdown sourced from real Databricks metadata
+ * (spark-versions, list-node-types); only the cluster name is free text (the
+ * one field the global no-freeform rule allows). POSTs to
+ * /api/loom/compute-targets and hands the new id back so the picker selects it.
+ */
+function NewClusterDialog({
+  open, onOpenChange, onCreated,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onCreated: (newId: string) => void;
+}) {
+  const [loadingOpts, setLoadingOpts] = useState(false);
+  const [optError, setOptError] = useState<string | null>(null);
+  const [nodeTypes, setNodeTypes] = useState<NodeTypeOption[]>([]);
+  const [versions, setVersions] = useState<SparkVersionOption[]>([]);
+  const [name, setName] = useState('');
+  const [sparkVersion, setSparkVersion] = useState('');
+  const [nodeType, setNodeType] = useState('');
+  const [workers, setWorkers] = useState('2');
+  const [autoterm, setAutoterm] = useState('30');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoadingOpts(true); setOptError(null);
+    fetch('/api/loom/compute-targets/databricks-options')
+      .then(r => r.json())
+      .then(j => {
+        if (!j.ok) { setOptError(j.error || 'Databricks not configured'); return; }
+        const nt = (j.nodeTypes || []) as NodeTypeOption[];
+        const vs = (j.sparkVersions || []) as SparkVersionOption[];
+        setNodeTypes(nt); setVersions(vs);
+        // Sensible defaults: first LTS-ish runtime + smallest node.
+        if (vs.length) setSparkVersion(prev => prev || vs[0].key);
+        if (nt.length) setNodeType(prev => prev || nt[0].node_type_id);
+      })
+      .catch(e => setOptError(e?.message || String(e)))
+      .finally(() => setLoadingOpts(false));
+  }, [open]);
+
+  const create = useCallback(async () => {
+    setCreating(true); setCreateError(null);
+    try {
+      const r = await fetch('/api/loom/compute-targets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'databricks-cluster',
+          cluster_name: name.trim(),
+          spark_version: sparkVersion,
+          node_type_id: nodeType,
+          num_workers: Number(workers),
+          autotermination_minutes: Number(autoterm),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCreateError(j.error || 'create failed'); return; }
+      onCreated(j.created?.id || '');
+      onOpenChange(false);
+    } catch (e: any) { setCreateError(e?.message || String(e)); }
+    finally { setCreating(false); }
+  }, [name, sparkVersion, nodeType, workers, autoterm, onCreated, onOpenChange]);
+
+  const ready = name.trim() && sparkVersion && nodeType && !creating;
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>New Databricks cluster</DialogTitle>
+          <DialogContent>
+            {loadingOpts && <Spinner size="tiny" label="Loading cluster options from Databricks…" />}
+            {optError && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>Databricks not available</MessageBarTitle>
+                  {optError}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {!loadingOpts && !optError && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 8 }}>
+                <Field label="Cluster name" required>
+                  <Input value={name} onChange={(_, d) => setName(d.value)} placeholder="e.g. loom-interactive-01" />
+                </Field>
+                <Field label="Databricks runtime" required>
+                  <Select value={sparkVersion} onChange={(_, d) => setSparkVersion(d.value)}>
+                    {versions.map(v => <option key={v.key} value={v.key}>{v.name}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Node type" required>
+                  <Select value={nodeType} onChange={(_, d) => setNodeType(d.value)}>
+                    {nodeTypes.map(n => <option key={n.node_type_id} value={n.node_type_id}>{n.label}</option>)}
+                  </Select>
+                </Field>
+                <Field label="Workers">
+                  <Select value={workers} onChange={(_, d) => setWorkers(d.value)}>
+                    {['0', '1', '2', '4', '8', '16'].map(w => (
+                      <option key={w} value={w}>{w === '0' ? 'Single node (0 workers)' : `${w} workers`}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Auto-terminate after">
+                  <Select value={autoterm} onChange={(_, d) => setAutoterm(d.value)}>
+                    {['10', '30', '60', '120', '0'].map(m => (
+                      <option key={m} value={m}>{m === '0' ? 'Never (not recommended)' : `${m} minutes idle`}</option>
+                    ))}
+                  </Select>
+                </Field>
+                {createError && (
+                  <MessageBar intent="error"><MessageBarBody>{createError}</MessageBarBody></MessageBar>
+                )}
+              </div>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button appearance="primary" onClick={create} disabled={!ready || !!optError}>
+              {creating ? 'Creating…' : 'Create cluster'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
 export interface ComputePickerProps {
   /** Currently selected compute id. */
   value: string;
@@ -95,6 +230,8 @@ export interface ComputePickerProps {
   label?: string;
   /** Show start/stop/resume actions when compute exposes that lifecycle. */
   showLifecycle?: boolean;
+  /** Show the "New cluster" button (Databricks cluster creation). Default true. */
+  allowCreate?: boolean;
 }
 
 const useStyles = makeStyles({
@@ -102,12 +239,15 @@ const useStyles = makeStyles({
   row: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
 });
 
-export function ComputePicker({ value, onChange, filter, label, showLifecycle = true }: ComputePickerProps) {
+export function ComputePicker({ value, onChange, filter, label, showLifecycle = true, allowCreate = true }: ComputePickerProps) {
   const s = useStyles();
   const { computes, loading, error, reload } = useComputes(filter);
   const selected = computes.find(c => c.id === value);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
+  // "New cluster" only makes sense when Databricks clusters are in scope.
+  const canCreate = allowCreate && (!filter || filter.includes('databricks-cluster'));
 
   const lifecycleAction = useCallback(async (verb: 'start' | 'stop' | 'restart') => {
     if (!selected) return;
@@ -142,7 +282,19 @@ export function ComputePicker({ value, onChange, filter, label, showLifecycle = 
           ))}
         </Select>
         <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={reload} disabled={loading} title="Refresh compute list" />
+        {canCreate && (
+          <Button size="small" appearance="subtle" icon={<Add16Regular />} onClick={() => setNewOpen(true)} title="Create a new Databricks cluster">
+            New cluster
+          </Button>
+        )}
       </div>
+      {canCreate && (
+        <NewClusterDialog
+          open={newOpen}
+          onOpenChange={setNewOpen}
+          onCreated={(newId) => { reload(); if (newId) onChange(newId); }}
+        />
+      )}
       {selected && (
         <div className={s.row}>
           {stateBadge(selected.state)}
