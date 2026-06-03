@@ -112,6 +112,21 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [createDb, setCreateDb] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
+  const [verify, setVerify] = useState<{ status: 'idle' | 'busy' | 'ok' | 'warn' | 'err'; msg?: string }>({ status: 'idle' });
+  const runVerify = useCallback(async () => {
+    if (!createServer.trim() || !createDb.trim()) { setVerify({ status: 'err', msg: 'Enter the server and database first.' }); return; }
+    setVerify({ status: 'busy' });
+    try {
+      const r = await fetch('/api/items/mirrored-database/verify', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sourceType: createSrc, server: createServer.trim(), database: createDb.trim() }),
+      });
+      const j = await r.json();
+      if (j.ok && j.verified) setVerify({ status: 'ok', msg: j.detail });
+      else if (j.ok) setVerify({ status: 'warn', msg: j.detail });
+      else setVerify({ status: 'err', msg: j.hint ? `${j.error} — ${j.hint}` : (j.error || 'verification failed') });
+    } catch (e: any) { setVerify({ status: 'err', msg: e?.message || String(e) }); }
+  }, [createSrc, createServer, createDb]);
 
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null); setListHint(null);
@@ -272,12 +287,20 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                     <Caption1 style={{ marginTop: 8 }}>Server</Caption1>
                     <Input value={createServer} onChange={(_, d) => setCreateServer(d.value)} placeholder="server.database.windows.net" style={{ width: '100%' }} />
                     <Caption1 style={{ marginTop: 8 }}>Database</Caption1>
-                    <Input value={createDb} onChange={(_, d) => setCreateDb(d.value)} placeholder="prod" style={{ width: '100%' }} />
+                    <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="prod" style={{ width: '100%' }} />
+                    <div style={{ marginTop: 10 }}>
+                      <Button size="small" appearance="outline" disabled={verify.status === 'busy'} onClick={runVerify}>
+                        {verify.status === 'busy' ? 'Verifying…' : 'Verify connection'}
+                      </Button>
+                    </div>
+                    {verify.status === 'ok' && <MessageBar intent="success" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
+                    {verify.status === 'warn' && <MessageBar intent="info" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
+                    {verify.status === 'err' && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
                     {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
                   </DialogContent>
                   <DialogActions>
                     <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
-                    <Button appearance="primary" disabled={createBusy || !createName.trim()} onClick={create}>{createBusy ? 'Creating…' : 'Create'}</Button>
+                    <Button appearance="primary" disabled={createBusy || !createName.trim()} onClick={create}>{createBusy ? 'Creating…' : 'Create mirror'}</Button>
                   </DialogActions>
                 </DialogBody>
               </DialogSurface>
