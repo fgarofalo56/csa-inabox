@@ -32,15 +32,32 @@ import {
 
 type ManageTab = 'linked-services' | 'datasets' | 'integration-runtimes';
 
-interface LinkedServiceRow { name: string; properties?: { type?: string; description?: string } }
-interface DatasetRow { name: string; properties?: { type?: string; linkedServiceName?: { referenceName?: string } } }
+// ADF GET returns nested `properties.type`; Synapse GET returns a flat `type`.
+// Rows tolerate both so the Type column renders on either backend.
+interface LinkedServiceRow { name: string; type?: string; properties?: { type?: string; description?: string } }
+interface DatasetRow { name: string; type?: string; properties?: { type?: string; linkedServiceName?: { referenceName?: string } } }
 interface RuntimeRow { name: string; type?: string; description?: string; state?: string }
 
 interface GateState { missing: string }
 
-const LS_ROUTE = '/api/adf/linked-services';
-const DS_ROUTE = '/api/adf/datasets';
-const IR_ROUTE = '/api/adf/integration-runtimes';
+// Backend-aware routes. ADF exposes linked services + datasets + integration
+// runtimes; Synapse exposes linked services + datasets (Synapse IRs are managed
+// at the workspace level — the scaled self-hosted IR is provisioned separately,
+// so the IR tab is hidden for the Synapse backend).
+const ROUTES = {
+  adf: {
+    ls: '/api/adf/linked-services',
+    ds: '/api/adf/datasets',
+    ir: '/api/adf/integration-runtimes',
+  },
+  synapse: {
+    ls: '/api/synapse/linkedservices',
+    ds: '/api/synapse/datasets',
+    ir: '',
+  },
+} as const;
+
+export type ManageBackend = 'adf' | 'synapse';
 
 // Common linked-service templates. The connectionString-only ones (Blob, SQL)
 // get a simple form; everything else falls back to the advanced JSON editor.
@@ -59,7 +76,12 @@ async function readJson(res: Response): Promise<any> {
   try { return text ? JSON.parse(text) : {}; } catch { return { ok: false, error: text || `HTTP ${res.status}` }; }
 }
 
-export function ManagePanel({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boolean; onOpenChange: (open: boolean) => void; backend?: ManageBackend }) {
+  const LS_ROUTE = ROUTES[backend].ls;
+  const DS_ROUTE = ROUTES[backend].ds;
+  const IR_ROUTE = ROUTES[backend].ir;
+  const showIr = backend === 'adf';
+  const backendLabel = backend === 'adf' ? 'Data Factory' : 'Synapse workspace';
   const [tab, setTab] = useState<ManageTab>('linked-services');
 
   // Shared infra-gate (set whenever any route returns 503 not_configured).
@@ -146,7 +168,7 @@ export function ManagePanel({ open, onOpenChange }: { open: boolean; onOpenChang
     if (!open) return;
     if (tab === 'linked-services') loadLs();
     else if (tab === 'datasets') { loadDs(); if (!lsList.length) loadLs(); }
-    else loadIr();
+    else if (showIr) loadIr();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, tab]);
 
@@ -280,10 +302,9 @@ export function ManagePanel({ open, onOpenChange }: { open: boolean; onOpenChang
   const gateBar = gate && (
     <MessageBar intent="warning">
       <MessageBarBody>
-        <MessageBarTitle>Data Factory not configured</MessageBarTitle>
-        Set <code>{gate.missing}</code> (plus <code>LOOM_SUBSCRIPTION_ID</code>, <code>LOOM_DLZ_RG</code>,{' '}
-        <code>LOOM_ADF_NAME</code>) so the Loom console can reach a real Azure Data Factory. The Manage
-        surface stays here; resources appear once the factory is reachable.
+        <MessageBarTitle>{backendLabel} not configured</MessageBarTitle>
+        Set <code>{gate.missing}</code> so the Loom console can reach a real {backendLabel}. The Manage
+        surface stays here; resources appear once the {backend === 'adf' ? 'factory' : 'workspace'} is reachable.
       </MessageBarBody>
     </MessageBar>
   );
@@ -300,18 +321,19 @@ export function ManagePanel({ open, onOpenChange }: { open: boolean; onOpenChang
     <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
       <DialogSurface style={{ maxWidth: '920px', width: '92vw' }}>
         <DialogBody>
-          <DialogTitle>Manage — Data Factory resources</DialogTitle>
+          <DialogTitle>Manage — {backendLabel} resources</DialogTitle>
           <DialogContent>
             <Caption1 style={{ display: 'block', marginBottom: 8, color: tokens.colorNeutralForeground3 }}>
-              Factory-level resources your pipeline activities reference. Every action below hits real
-              Azure Data Factory REST (api-version 2018-06-01).
+              {backend === 'adf' ? 'Factory-level' : 'Workspace-level'} resources your pipeline activities
+              reference. Every action below hits real{' '}
+              {backend === 'adf' ? 'Azure Data Factory REST (api-version 2018-06-01).' : 'Synapse workspace dev REST.'}
             </Caption1>
 
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as ManageTab)}
               style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: 12 }}>
               <Tab value="linked-services">Linked services</Tab>
               <Tab value="datasets">Datasets</Tab>
-              <Tab value="integration-runtimes">Integration runtimes</Tab>
+              {showIr && <Tab value="integration-runtimes">Integration runtimes</Tab>}
             </TabList>
 
             {gateBar}
@@ -336,7 +358,7 @@ export function ManagePanel({ open, onOpenChange }: { open: boolean; onOpenChang
                       {lsList.map((l) => (
                         <TableRow key={l.name}>
                           <TableCell><strong>{l.name}</strong></TableCell>
-                          <TableCell><code>{l.properties?.type || '—'}</code></TableCell>
+                          <TableCell><code>{l.properties?.type || l.type || '—'}</code></TableCell>
                           <TableCell>
                             <Button size="small" appearance="subtle" icon={<Delete20Regular />} disabled={lsBusy} onClick={() => deleteLs(l.name)}>Delete</Button>
                           </TableCell>
@@ -396,7 +418,7 @@ export function ManagePanel({ open, onOpenChange }: { open: boolean; onOpenChang
                       {dsList.map((d) => (
                         <TableRow key={d.name}>
                           <TableCell><strong>{d.name}</strong></TableCell>
-                          <TableCell><code>{d.properties?.type || '—'}</code></TableCell>
+                          <TableCell><code>{d.properties?.type || d.type || '—'}</code></TableCell>
                           <TableCell>{d.properties?.linkedServiceName?.referenceName || '—'}</TableCell>
                           <TableCell>
                             <Button size="small" appearance="subtle" icon={<Delete20Regular />} disabled={dsBusy} onClick={() => deleteDs(d.name)}>Delete</Button>
