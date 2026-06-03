@@ -2,4 +2,7 @@
 # Monaco assets copied at build time by scripts/copy-monaco-assets.mjs
 public/monaco/
 .auth/
-apps/fiab-console/test-results/
+# Patterns in this nested .gitignore are relative to apps/fiab-console/,
+# so the path must be relative (not repo-rooted) to actually match.
+test-results/
+playwright-report/
