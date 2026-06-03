@@ -21,7 +21,7 @@
  * MessageBar surfaces the bicep + role remediation payload from the API —
  * per no-vaporware.md, no source is faked.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Badge,
@@ -31,6 +31,12 @@ import {
   MessageBar,
   MessageBarBody,
   MessageBarTitle,
+  Dialog,
+  DialogSurface,
+  DialogBody,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
   makeStyles,
   tokens,
   mergeClasses,
@@ -252,6 +258,8 @@ export function FederatedSearch() {
   const [sources, setSources] = useState<Record<string, SourceResult>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Click a result row/name → open a metadata tile with the full catalog record.
+  const [detail, setDetail] = useState<FederatedHit | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -492,6 +500,7 @@ export function FederatedSearch() {
             rows={filteredHits}
             getRowId={(h) => `${h.source}:${h.id}`}
             loading={loading}
+            onRowClick={(h) => setDetail(h)}
             ariaLabel="Catalog search results"
             empty={
               <span>
@@ -502,6 +511,65 @@ export function FederatedSearch() {
           />
         )}
       </Section>
+
+      <CatalogDetailTile hit={detail} onClose={() => setDetail(null)} />
     </div>
+  );
+}
+
+/** Full-metadata tile shown when a result row/name is clicked. */
+function CatalogDetailTile({ hit, onClose }: { hit: FederatedHit | null; onClose: () => void }) {
+  const s = useStyles();
+  if (!hit) return null;
+  const visual = itemVisual(hit.type);
+  const Icon = visual.icon;
+  const meta: Array<{ label: string; value?: string }> = [
+    { label: 'Source', value: SOURCE_LABEL[hit.source] ?? hit.source },
+    { label: 'Type', value: visual.label },
+    { label: 'Workspace / Domain', value: hit.workspace_name || hit.domain },
+    { label: 'Owner', value: hit.owner },
+    { label: 'Qualified name', value: hit.qualified_name },
+    { label: 'Identifier', value: hit.id },
+    { label: 'Last updated', value: hit.updated_at },
+  ].filter((m) => m.value);
+
+  return (
+    <Dialog open onOpenChange={(_e, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 620 }}>
+        <DialogBody>
+          <DialogTitle>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 8, backgroundColor: `${visual.color}1f`, color: visual.color }}>
+                <Icon style={{ width: 20, height: 20, color: visual.color }} />
+              </span>
+              {hit.display_name}
+            </span>
+          </DialogTitle>
+          <DialogContent>
+            {hit.description && (
+              <Text style={{ display: 'block', marginBottom: 14, color: tokens.colorNeutralForeground2 }}>{hit.description}</Text>
+            )}
+            <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', rowGap: 8, columnGap: 12 }}>
+              {meta.map((m) => (
+                <Fragment key={m.label}>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{m.label}</Caption1>
+                  <Text style={{ wordBreak: 'break-word' }}>{m.value}</Text>
+                </Fragment>
+              ))}
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Classifications</Caption1>
+              <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {hit.classifications && hit.classifications.length
+                  ? hit.classifications.map((c) => <Badge key={c} appearance="tint" color="informative" size="small">{c}</Badge>)
+                  : <Text className={s.muted}>None</Text>}
+              </span>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Close</Button>
+            <Button appearance="primary" as="a" href={hit.detail_path} icon={<Open16Regular />}>Open in catalog</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }
