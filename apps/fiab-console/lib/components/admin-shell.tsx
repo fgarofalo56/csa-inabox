@@ -12,12 +12,13 @@ import {
   CloudArrowUp24Regular, ShieldCheckmark24Regular, Key24Regular,
   ClipboardTask24Regular, ChartMultiple24Regular, People24Regular,
   Building24Regular, ArrowSync24Regular, PanelLeftContract24Regular,
-  PanelLeftExpand24Regular, Globe24Regular, type FluentIcon,
+  PanelLeftExpand24Regular, Globe24Regular, Heart24Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 
 interface Section { href: string; label: string; description: string; icon: FluentIcon; }
 
 const SECTIONS: Section[] = [
+  { href: '/admin/health', label: 'Health & self-audit', icon: Heart24Regular, description: 'Self-review: identity, data plane, Azure services, permissions, and security posture — with one-click healer (admin-approved) for fixable issues.' },
   { href: '/admin/tenant-settings', label: 'Tenant settings', icon: Settings24Regular, description: 'Per-area switches (Power BI, Fabric, OneLake, Real-Time, AI, Mirroring, Git).' },
   { href: '/admin/capacity', label: 'Capacity & compute', icon: Server24Regular, description: 'Underlying Azure services Loom orchestrates: ACA, Databricks, Synapse, ADF, ADLA, AML, Cosmos, ACR.' },
   { href: '/admin/scaling', label: 'Scale by SKU', icon: GaugeRegular, description: 'Scale Fabric, Synapse, ADX, Databricks, AI Search, APIM, Cosmos, Container Apps, Foundry — real ARM PATCH from inside Loom.' },
