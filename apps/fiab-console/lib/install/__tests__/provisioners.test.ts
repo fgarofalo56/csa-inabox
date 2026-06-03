@@ -78,6 +78,14 @@ const baseTarget = {
 
 // ---- Notebook ----
 describe('notebookProvisioner', () => {
+  // Notebooks default to the Azure-native engine (Synapse/Databricks) per
+  // no-fabric-dependency.md. These tests exercise the Fabric notebook backend,
+  // so opt into it explicitly. forceFabric only takes effect when a Fabric
+  // workspace is also bound, so the no-workspace fallback/gate tests below are
+  // unaffected (they still exercise Synapse / the honest gate).
+  beforeEach(() => { process.env.LOOM_NOTEBOOK_BACKEND = 'fabric'; });
+  afterEach(() => { delete process.env.LOOM_NOTEBOOK_BACKEND; });
+
   it('creates a new Fabric notebook when none exists by displayName', async () => {
     const { calls } = captureFetch([
       { status: 200, body: { value: [] } },                  // list notebooks
@@ -158,7 +166,9 @@ describe('notebookProvisioner', () => {
       appId: 'a',
     });
     expect(r.status).toBe('remediation');
-    expect(r.gate?.remediation).toMatch(/LOOM_DEFAULT_FABRIC_WORKSPACE/);
+    // Azure-first gate (no-fabric-dependency.md): names the Azure notebook
+    // engines, not a Fabric workspace, as the way to unblock.
+    expect(r.gate?.remediation).toMatch(/LOOM_SYNAPSE_WORKSPACE|LOOM_DATABRICKS_HOSTNAME/);
   });
 
   it('falls back to Synapse notebook artifact when no Fabric workspace bound', async () => {
@@ -320,14 +330,23 @@ describe('runProvisioning engine', () => {
       return new Response(JSON.stringify({ id: 'nb-1', displayName: 'NB' }), { status: 201, headers: { 'content-type': 'application/json' } });
     });
     vi.stubGlobal('fetch', fetchMock);
-    const { runProvisioning } = await import('../provisioning-engine');
-    const r = await runProvisioning(baseSession, 'app-test', 'ws-1', [
-      { itemType: 'notebook', id: 'i1', displayName: 'NB', content: { kind: 'notebook', defaultLang: 'pyspark', cells: [] } },
-      { itemType: 'ai-search-index', id: 'i2', displayName: 'IDX', content: { kind: 'ai-search-index', schema: { fields: [{ name: 'id', type: 'Edm.String', key: true }] } } },
-    ], { deploy: true, mode: 'shared' });
-    expect(r.outcome).toBe('partial');
-    expect(r.steps[0].result.status).toBe('created');
-    expect(r.steps[1].result.status).toBe('remediation');
+    // Notebooks now default to the Azure-native engine (Synapse) per
+    // no-fabric-dependency.md; this test exercises the Fabric notebook path it
+    // mocks, so opt into Fabric explicitly. (The assertion is about the engine's
+    // partial-outcome aggregation, not which notebook backend is used.)
+    process.env.LOOM_NOTEBOOK_BACKEND = 'fabric';
+    try {
+      const { runProvisioning } = await import('../provisioning-engine');
+      const r = await runProvisioning(baseSession, 'app-test', 'ws-1', [
+        { itemType: 'notebook', id: 'i1', displayName: 'NB', content: { kind: 'notebook', defaultLang: 'pyspark', cells: [] } },
+        { itemType: 'ai-search-index', id: 'i2', displayName: 'IDX', content: { kind: 'ai-search-index', schema: { fields: [{ name: 'id', type: 'Edm.String', key: true }] } } },
+      ], { deploy: true, mode: 'shared' });
+      expect(r.outcome).toBe('partial');
+      expect(r.steps[0].result.status).toBe('created');
+      expect(r.steps[1].result.status).toBe('remediation');
+    } finally {
+      delete process.env.LOOM_NOTEBOOK_BACKEND;
+    }
   }, COLD_TRANSFORM_TIMEOUT_MS);
 
   it('marks unsupported itemType as skipped (Cosmos-only)', async () => {

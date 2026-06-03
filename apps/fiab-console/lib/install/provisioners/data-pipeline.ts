@@ -1,26 +1,28 @@
 /**
- * Phase 2 — Data Pipeline (Fabric) provisioner.
+ * Phase 2 — Data Pipeline provisioner.
  *
- * Real REST + sample-data exercise:
- *   1. Translate the bundle's activity graph + parameters to the Fabric
- *      pipeline JSON schema and upsert the item (create or update by id)
- *      via upsertDataPipeline() in fabric-client.
- *   2. Prove the pipeline is REAL by triggering an on-demand pipeline job
- *      run (the documented "Run on demand pipeline job" REST call) and
- *      polling its job-instance history until terminal — the data-pipeline
- *      analogue of kql-db.ts ingesting sample rows / ai-search.ts pushing
- *      sample docs. The install receipt then carries a live job instance
- *      id + status, not a dead shell.
+ * Per .claude/rules/no-fabric-dependency.md a Loom data-pipeline NEVER requires
+ * a real Fabric workspace. It defaults to the Azure-native **Synapse pipeline**
+ * backend (Synapse Studio dev REST — real PUT + on-demand run), and can route to
+ * **ADF** instead. A Fabric Data pipeline is an opt-in alternative selected via
+ * LOOM_PIPELINE_BACKEND=fabric AND a bound workspace; if fabric is selected but
+ * no workspace is bound, we transparently fall back to Synapse — no gate.
  *
- * Idempotency: list first, update existing by id or create new.
+ * All three backends consume the same bundle `content.activities` graph, so the
+ * Azure-native path is a straight delegation to the Synapse / ADF sibling
+ * provisioner (which carries its own real REST + run-and-poll + honest Azure
+ * RBAC/env gates).
  *
- * Docs:
+ * Fabric path (opt-in only):
+ *   1. Translate the activity graph to the Fabric pipeline JSON and upsert.
+ *   2. Trigger an on-demand job run + poll job-instance history.
  *   https://learn.microsoft.com/fabric/data-factory/pipeline-rest-api-capabilities
- *   https://learn.microsoft.com/rest/api/fabric/core/job-scheduler/run-on-demand-item-job
  */
 import { listDataPipelines, upsertDataPipeline, FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import type { Provisioner, ProvisionResult } from './types';
 import { buildRunParameters, triggerAndPollPipelineRun } from './_seed-data-pipeline';
+import { synapsePipelineProvisioner } from './synapse-pipeline';
+import { adfPipelineProvisioner } from './adf-pipeline';
 
 function buildPipelineDefinition(content: any, displayName: string): { format: string; parts: Array<{ path: string; payload: string; payloadType: 'InlineBase64' }> } {
   const activities = Array.isArray(content?.activities) ? content.activities : [];
@@ -55,18 +57,22 @@ function buildPipelineDefinition(content: any, displayName: string): { format: s
 export const dataPipelineProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
   const steps: string[] = [];
   const ws = input.target.fabricWorkspaceId;
-  if (!ws) {
-    return {
-      status: 'remediation',
-      gate: {
-        reason: 'This is a Microsoft Fabric Data pipeline — it needs a Fabric workspace bound to this Loom workspace.',
-        remediation:
-          'Bind a capacity-backed Microsoft Fabric workspace to this Loom workspace at /admin/workspaces → Bind capacity (or set LOOM_DEFAULT_FABRIC_WORKSPACE). This is a real Fabric/Power BI workspace on a Fabric capacity — NOT the Loom workspace itself. (For a non-Fabric pipeline, use the Synapse or ADF pipeline item instead.)',
-        link: '/admin/workspaces',
-      },
-      steps,
-    };
+  const backend = input.target.pipelineBackend || 'synapse';
+
+  // Azure-native DEFAULT. Fabric is opt-in only AND requires a bound workspace;
+  // anything else delegates to the Synapse (default) or ADF sibling. Never gate
+  // on a missing Fabric workspace (no-fabric-dependency.md).
+  if (backend !== 'fabric' || !ws) {
+    if (backend === 'fabric' && !ws) {
+      steps.push('LOOM_PIPELINE_BACKEND=fabric but no Fabric workspace bound — falling back to the Azure-native Synapse pipeline backend.');
+    }
+    const delegate = backend === 'adf' ? adfPipelineProvisioner : synapsePipelineProvisioner;
+    steps.push(`Provisioning data pipeline on the Azure-native ${backend === 'adf' ? 'ADF' : 'Synapse'} backend.`);
+    const result = await delegate(input);
+    return { ...result, steps: [...steps, ...(result.steps || [])] };
   }
+
+  // ── Fabric Data pipeline (opt-in: LOOM_PIPELINE_BACKEND=fabric + bound ws) ──
   const content = input.content as any;
   const def = buildPipelineDefinition(content, input.displayName);
   const runParams = buildRunParameters(content?.parameters);

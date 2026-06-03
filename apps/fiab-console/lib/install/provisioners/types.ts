@@ -48,6 +48,22 @@ export interface ProvisionTarget {
   /** ADLS Gen2 account + container for Lakehouse / Bronze-Silver-Gold. */
   adlsAccount?: string;
   adlsContainer?: string;
+  /**
+   * Per-item backend selectors (see .claude/rules/no-fabric-dependency.md).
+   * Each DEFAULTS to its Azure-native option; 'fabric' is opt-in only and
+   * additionally requires a bound fabricWorkspaceId. No item may hard-gate on
+   * Fabric — when fabric is selected but no workspace is bound, the provisioner
+   * silently falls back to the Azure-native path.
+   */
+  pipelineBackend?: 'synapse' | 'adf' | 'fabric';   // data-pipeline → Synapse (default) / ADF / Fabric
+  eventBackend?: 'eventhubs' | 'fabric';            // eventstream → Event Hubs (default) / Fabric
+  activatorBackend?: 'azure-monitor' | 'fabric';    // activator → Azure Monitor alert (default) / Fabric Reflex
+  dashboardBackend?: 'adx' | 'fabric';              // kql-dashboard → Loom-native over ADX (default) / Fabric RTD
+  mirrorBackend?: 'adf-cdc' | 'synapse-link' | 'fabric'; // mirrored-database → ADF CDC → ADLS Bronze (default) / Fabric Mirroring
+  lakehouseBackend?: 'adls' | 'fabric';             // lakehouse → ADLS Gen2 + Delta (default) / OneLake
+  semanticBackend?: 'loom-native' | 'analysis-services' | 'powerbi'; // semantic-model → Loom-native tabular over warehouse (default)
+  /** Event Hubs namespace for the eventstream Azure-native backend. */
+  eventhubsNamespace?: string;
 }
 
 export type ProvisionStatus =
