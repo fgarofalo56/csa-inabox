@@ -13,7 +13,10 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { listPrivateEndpoints, NetworkDiscoveryError } from '@/lib/azure/network-discovery';
+import {
+  listPrivateEndpoints, listPrivateDnsZones, listVirtualNetworks, buildHostsBlock,
+  NetworkDiscoveryError, type PrivateDnsZoneInfo, type VNetInfo,
+} from '@/lib/azure/network-discovery';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,26 +27,30 @@ export async function GET() {
 
   try {
     const endpoints = await listPrivateEndpoints();
-    const records = endpoints.flatMap((e) => e.dns);
-    // hosts-file block: one "<ip>\t<fqdn>" line per A record (first IP wins).
-    const seen = new Set<string>();
-    const hostLines: string[] = [];
-    for (const r of records) {
-      if (!r.ips[0] || seen.has(r.fqdn)) continue;
-      seen.add(r.fqdn);
-      hostLines.push(`${r.ips[0]}\t${r.fqdn}`);
-    }
-    hostLines.sort((a, b) => a.split('\t')[1].localeCompare(b.split('\t')[1]));
-    const zones = Array.from(new Set(records.map((r) => r.zone))).sort();
+    // Private DNS zone A-records are the AUTHORITATIVE FQDN→IP source — enumerate
+    // them so the hosts block covers EVERY private-only service, not just the
+    // endpoints that echoed an IP. vNets/subnets power the topology view. Both
+    // are best-effort: a missing Reader on these scopes never blanks the PEs.
+    let dnsZones: PrivateDnsZoneInfo[] = [];
+    let vnets: VNetInfo[] = [];
+    try { dnsZones = await listPrivateDnsZones(); } catch { /* keep PE-derived hosts */ }
+    try { vnets = await listVirtualNetworks(); } catch { /* topology degrades gracefully */ }
+
+    const hostsBlock = buildHostsBlock(endpoints, dnsZones);
+    // Union of zone names from PE records + the discovered private DNS zones.
+    const zones = Array.from(new Set([
+      ...endpoints.flatMap((e) => e.dns.map((r) => r.zone)),
+      ...dnsZones.map((z) => z.name),
+    ])).filter(Boolean).sort();
 
     return NextResponse.json({
       ok: true,
       count: endpoints.length,
       endpoints,
       zones,
-      hostsBlock: hostLines.length
-        ? ['# CSA Loom — Azure private endpoints (dev hosts override)', ...hostLines].join('\n')
-        : '',
+      dnsZones,
+      vnets,
+      hostsBlock: hostsBlock.split('\n').length > 1 ? hostsBlock : '',
     });
   } catch (e: any) {
     const status = e instanceof NetworkDiscoveryError ? e.status : 502;
