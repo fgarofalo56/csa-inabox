@@ -59,12 +59,43 @@ const ROUTES = {
 
 export type ManageBackend = 'adf' | 'synapse';
 
-// Common linked-service templates. The connectionString-only ones (Blob, SQL)
-// get a simple form; everything else falls back to the advanced JSON editor.
-const LS_TYPES = [
-  { value: 'AzureBlobStorage', label: 'Azure Blob Storage (connection string)' },
-  { value: 'AzureSqlDatabase', label: 'Azure SQL Database (connection string)' },
-  { value: '__advanced__', label: 'Advanced (raw typeProperties JSON)' },
+// Guided linked-service connectors (no raw JSON — see loom_no_freeform_config).
+// Each field maps into ADF/Synapse `typeProperties`; `secret` fields are sent as
+// a SecureString so credentials are encrypted at rest. The CUSTOM option lets an
+// advanced user add any connector via a structured key/value table (still no
+// freeform JSON blob).
+interface LsField { key: string; label: string; placeholder?: string; hint?: string; secret?: boolean; required?: boolean }
+interface LsForm { value: string; label: string; fields: LsField[] }
+
+const CUSTOM_LS = '__custom__';
+
+const LS_FORMS: LsForm[] = [
+  { value: 'AzureBlobStorage', label: 'Azure Blob Storage', fields: [
+    { key: 'connectionString', label: 'Connection string', secret: true, required: true, placeholder: 'DefaultEndpointsProtocol=https;AccountName=…;AccountKey=…' } ] },
+  { value: 'AzureBlobFS', label: 'ADLS Gen2 (Data Lake Storage)', fields: [
+    { key: 'url', label: 'Endpoint URL', required: true, placeholder: 'https://<account>.dfs.core.windows.net' },
+    { key: 'accountKey', label: 'Account key', secret: true, hint: 'Leave blank to use the Console managed identity (recommended).' } ] },
+  { value: 'AzureSqlDatabase', label: 'Azure SQL Database', fields: [
+    { key: 'connectionString', label: 'Connection string', secret: true, required: true, placeholder: 'Server=tcp:…database.windows.net;Database=…;' } ] },
+  { value: 'AzureSqlDW', label: 'Azure Synapse (dedicated SQL)', fields: [
+    { key: 'connectionString', label: 'Connection string', secret: true, required: true, placeholder: 'Server=tcp:…sql.azuresynapse.net;Database=…;' } ] },
+  { value: 'CosmosDb', label: 'Azure Cosmos DB', fields: [
+    { key: 'connectionString', label: 'Connection string', secret: true, required: true, placeholder: 'AccountEndpoint=…;AccountKey=…;Database=…' } ] },
+  { value: 'AzurePostgreSql', label: 'Azure Database for PostgreSQL', fields: [
+    { key: 'connectionString', label: 'Connection string', secret: true, required: true, placeholder: 'host=…;port=5432;database=…;user=…;password=…;sslmode=require' } ] },
+  { value: 'AzureKeyVault', label: 'Azure Key Vault', fields: [
+    { key: 'baseUrl', label: 'Vault base URL', required: true, placeholder: 'https://<vault>.vault.azure.net/' } ] },
+  { value: 'AzureDatabricks', label: 'Azure Databricks', fields: [
+    { key: 'domain', label: 'Workspace URL', required: true, placeholder: 'https://adb-….azuredatabricks.net' },
+    { key: 'accessToken', label: 'Access token', secret: true, required: true },
+    { key: 'existingClusterId', label: 'Existing cluster ID', hint: 'Optional — leave blank to use job clusters.' } ] },
+  { value: 'RestService', label: 'REST endpoint', fields: [
+    { key: 'url', label: 'Base URL', required: true, placeholder: 'https://api.example.com' } ] },
+  { value: 'Snowflake', label: 'Snowflake', fields: [
+    { key: 'connectionString', label: 'Connection string', secret: true, required: true, placeholder: 'jdbc:snowflake://<account>.snowflakecomputing.com/?user=…&db=…&warehouse=…' } ] },
+  { value: 'AmazonS3', label: 'Amazon S3', fields: [
+    { key: 'accessKeyId', label: 'Access key ID', required: true },
+    { key: 'secretAccessKey', label: 'Secret access key', secret: true, required: true } ] },
 ];
 
 const DS_TYPES = [
@@ -93,8 +124,11 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
   const [lsError, setLsError] = useState<string | null>(null);
   const [lsName, setLsName] = useState('');
   const [lsType, setLsType] = useState('AzureBlobStorage');
-  const [lsConn, setLsConn] = useState('');
-  const [lsAdvanced, setLsAdvanced] = useState('{\n  "type": "AzureBlobStorage",\n  "typeProperties": {}\n}');
+  // Field values for the selected connector form, keyed by field.key.
+  const [lsFields, setLsFields] = useState<Record<string, string>>({});
+  // Custom connector (structured, no JSON): a type token + key/value rows.
+  const [lsCustomType, setLsCustomType] = useState('');
+  const [lsKv, setLsKv] = useState<{ key: string; value: string }[]>([{ key: '', value: '' }]);
   const [lsBusy, setLsBusy] = useState(false);
 
   // ---- Datasets ----
@@ -177,15 +211,34 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
     if (!lsName.trim()) return;
     setLsBusy(true); setLsError(null);
     try {
-      let properties: any;
-      if (lsType === '__advanced__') {
-        try { properties = JSON.parse(lsAdvanced); }
-        catch (e: any) { setLsError(`Advanced JSON invalid: ${e?.message || e}`); setLsBusy(false); return; }
-        if (!properties.type) { setLsError('Advanced JSON must include a top-level "type".'); setLsBusy(false); return; }
+      let type: string;
+      const typeProperties: Record<string, unknown> = {};
+      if (lsType === CUSTOM_LS) {
+        type = lsCustomType.trim();
+        if (!type) { setLsError('Connector type is required.'); setLsBusy(false); return; }
+        for (const { key, value } of lsKv) {
+          if (key.trim()) typeProperties[key.trim()] = value;
+        }
       } else {
-        if (!lsConn.trim()) { setLsError('Connection string is required.'); setLsBusy(false); return; }
-        properties = { type: lsType, typeProperties: { connectionString: lsConn.trim() } };
+        const form = LS_FORMS.find((f) => f.value === lsType);
+        if (!form) { setLsError('Select a connector type.'); setLsBusy(false); return; }
+        type = form.value;
+        for (const f of form.fields) {
+          const v = (lsFields[f.key] || '').trim();
+          if (!v) {
+            if (f.required) { setLsError(`${f.label} is required.`); setLsBusy(false); return; }
+            continue;
+          }
+          // Secrets ride as a SecureString so they're encrypted at rest.
+          typeProperties[f.key] = f.secret ? { type: 'SecureString', value: v } : v;
+        }
+        // REST linked services require an authenticationType; default to Anonymous
+        // when the user didn't specify one (matches ADF's "Anonymous" preset).
+        if (type === 'RestService' && !('authenticationType' in typeProperties)) {
+          typeProperties.authenticationType = 'Anonymous';
+        }
       }
+      const properties = { type, typeProperties };
       const res = await fetch(LS_ROUTE, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: lsName.trim(), properties }),
@@ -193,11 +246,11 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
       const body = await readJson(res);
       if (applyGate(body)) return;
       if (!body.ok) { setLsError(body.error || 'create failed'); return; }
-      setLsName(''); setLsConn('');
+      setLsName(''); setLsFields({}); setLsCustomType(''); setLsKv([{ key: '', value: '' }]);
       await loadLs();
     } catch (e: any) { setLsError(e?.message || String(e)); }
     finally { setLsBusy(false); }
-  }, [lsName, lsType, lsConn, lsAdvanced, loadLs]);
+  }, [lsName, lsType, lsFields, lsCustomType, lsKv, LS_ROUTE, loadLs]);
 
   const deleteLs = useCallback(async (name: string) => {
     setLsBusy(true); setLsError(null);
@@ -370,25 +423,52 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                 <Subtitle2>New linked service</Subtitle2>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
                   <Field label="Name"><Input value={lsName} onChange={(_, d) => setLsName(d.value)} placeholder="blob_landing" /></Field>
-                  <Field label="Type">
-                    <Dropdown value={LS_TYPES.find((t) => t.value === lsType)?.label} selectedOptions={[lsType]}
-                      onOptionSelect={(_, d) => setLsType(d.optionValue || 'AzureBlobStorage')}>
-                      {LS_TYPES.map((t) => <Option key={t.value} value={t.value} text={t.label}>{t.label}</Option>)}
+                  <Field label="Connector type">
+                    <Dropdown
+                      value={lsType === CUSTOM_LS ? 'Custom connector…' : (LS_FORMS.find((t) => t.value === lsType)?.label || '')}
+                      selectedOptions={[lsType]}
+                      onOptionSelect={(_, d) => { setLsType(d.optionValue || 'AzureBlobStorage'); setLsError(null); }}>
+                      {LS_FORMS.map((t) => <Option key={t.value} value={t.value} text={t.label}>{t.label}</Option>)}
+                      <Option key={CUSTOM_LS} value={CUSTOM_LS} text="Custom connector…">Custom connector…</Option>
                     </Dropdown>
                   </Field>
                 </div>
-                {lsType === '__advanced__' ? (
-                  <Field label="typeProperties JSON (full properties object incl. type)" style={{ marginTop: 8 }}>
-                    <Textarea value={lsAdvanced} onChange={(_, d) => setLsAdvanced(d.value)} rows={6}
-                      style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }} />
-                  </Field>
+
+                {lsType === CUSTOM_LS ? (
+                  <div style={{ marginTop: 8 }}>
+                    <Field label="Connector type identifier" hint="The ADF/Synapse linked-service type, e.g. ServiceNow, Oracle, SapHana.">
+                      <Input value={lsCustomType} onChange={(_, d) => setLsCustomType(d.value)} placeholder="ServiceNow" />
+                    </Field>
+                    <Caption1 style={{ display: 'block', marginTop: 8, marginBottom: 4 }}>Properties (key / value)</Caption1>
+                    {lsKv.map((row, i) => (
+                      <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                        <Input style={{ flex: 1 }} placeholder="key (e.g. endpoint)" value={row.key}
+                          onChange={(_, d) => setLsKv((rows) => rows.map((r, j) => (j === i ? { ...r, key: d.value } : r)))} />
+                        <Input style={{ flex: 2 }} placeholder="value" value={row.value}
+                          onChange={(_, d) => setLsKv((rows) => rows.map((r, j) => (j === i ? { ...r, value: d.value } : r)))} />
+                        <Button size="small" appearance="subtle" icon={<Delete20Regular />} title="Remove property"
+                          onClick={() => setLsKv((rows) => (rows.length > 1 ? rows.filter((_, j) => j !== i) : rows))} />
+                      </div>
+                    ))}
+                    <Button size="small" appearance="subtle" icon={<Add20Regular />}
+                      onClick={() => setLsKv((rows) => [...rows, { key: '', value: '' }])}>Add property</Button>
+                  </div>
                 ) : (
-                  <Field label="Connection string" style={{ marginTop: 8 }}
-                    hint={lsType === 'AzureSqlDatabase' ? 'Server=tcp:...;Database=...;' : 'DefaultEndpointsProtocol=https;AccountName=...;'}>
-                    <Input value={lsConn} onChange={(_, d) => setLsConn(d.value)} placeholder="connection string" />
-                  </Field>
+                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {(LS_FORMS.find((f) => f.value === lsType)?.fields || []).map((f) => (
+                      <Field key={f.key} label={f.required ? f.label : `${f.label} (optional)`} hint={f.hint}>
+                        <Input
+                          type={f.secret ? 'password' : 'text'}
+                          value={lsFields[f.key] || ''}
+                          placeholder={f.placeholder}
+                          onChange={(_, d) => setLsFields((prev) => ({ ...prev, [f.key]: d.value }))}
+                        />
+                      </Field>
+                    ))}
+                  </div>
                 )}
-                <div style={{ marginTop: 8 }}>
+
+                <div style={{ marginTop: 12 }}>
                   <Button appearance="primary" icon={<Add20Regular />} disabled={lsBusy || !lsName.trim()} onClick={createLs}>
                     {lsBusy ? 'Saving…' : 'Create linked service'}
                   </Button>
