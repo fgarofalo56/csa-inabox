@@ -70,7 +70,7 @@ async function loadOrSeed(tenantId: string, _who: string): Promise<DomainsDoc> {
  */
 async function purviewStatus(): Promise<
   | { configured: true; domains: Array<{ id?: string; name: string }> }
-  | { configured: false; gated: true; hint: string }
+  | { configured: false; gated: false; hint: string }
 > {
   try {
     const domains = await listBusinessDomains();
@@ -82,16 +82,16 @@ async function purviewStatus(): Promise<
     if (e instanceof PurviewNotConfiguredError) {
       return {
         configured: false,
-        gated: true,
+        gated: false,
         hint:
-          'Microsoft Purview is not provisioned in this deployment. Domains created here live in the Loom Cosmos store and organize workspaces today. To also govern them, set LOOM_PURVIEW_ACCOUNT (admin-plane/main.bicep apps[] env) and deploy with purviewEnabled=true — the account is provisioned by platform/fiab/bicep/modules/admin-plane/catalog.bicep, and the Console UAMI is granted the Purview Data Map data-plane roles automatically by the csa-loom-post-deploy-bootstrap workflow. NOTE: classic Purview Data Map (what Loom uses) has no "business domains" — that is a NEW unified-catalog concept and is not ARM-provisionable; Loom maps domains to Atlas collections/assets instead.',
+          "Purview mirror inactive — domains live in Loom's Cosmos store and fully work. To also mirror them in Purview, set LOOM_PURVIEW_ACCOUNT (admin-plane/main.bicep apps[] env) and deploy with purviewEnabled=true. NOTE: classic Purview Data Map has no \"business domains\"; Loom maps domains to Atlas collections/assets instead.",
       };
     }
     // Any other Purview error (auth, transient) is still non-fatal here.
     return {
       configured: false,
-      gated: true,
-      hint: `Purview business domains unavailable: ${e?.message || String(e)}`,
+      gated: false,
+      hint: `Purview mirror unavailable: ${e?.message || String(e)}. Domains are stored in Loom and work offline.`,
     };
   }
 }
