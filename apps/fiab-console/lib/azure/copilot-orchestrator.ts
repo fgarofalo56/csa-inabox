@@ -619,6 +619,13 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   }
 
   const reg = getRegistry();
+  // Register any connected external MCP tool servers (Build 2026 "Connect MCP
+  // tools") so agent-loom can call them alongside the built-in Loom tools.
+  // Best-effort: a missing/unreachable MCP server never breaks the chat.
+  try {
+    const { buildMcpShim } = await import('./mcp-shim');
+    await buildMcpShim(reg, userOid);
+  } catch { /* MCP shim optional — continue with built-in tools */ }
   const tools = reg.toAoaiTools();
 
   const messages: ChatMessage[] = [
