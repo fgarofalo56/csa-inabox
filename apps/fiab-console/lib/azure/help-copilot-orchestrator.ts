@@ -412,19 +412,29 @@ export async function getHelpSession(sessionId: string, userId: string): Promise
 
 // ---------- AOAI plumbing ----------
 
+/** Newer reasoning models (o1/o3/gpt-5/MAI-*) reject any non-default
+ *  temperature/top_p; detect that 400 so we can retry without it. */
+function isUnsupportedSamplingParam(body: string): boolean {
+  return /unsupported_value|does not support|Only the default \(1\) value is supported/i.test(body)
+    && /temperature|top_p/i.test(body);
+}
+
 async function callAoai(target: AoaiTarget, messages: ChatMessage[], tools: unknown[]): Promise<any> {
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      messages,
-      tools,
-      tool_choice: 'auto',
-      temperature: 0.2,
-    }),
-  });
+  const base: Record<string, unknown> = { messages, tools, tool_choice: 'auto' };
+  const send = async (withTemperature: boolean) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(withTemperature ? { ...base, temperature: 0.2 } : base),
+    });
+  let res = await send(true);
+  if (res.status === 400) {
+    const t = await res.text();
+    if (isUnsupportedSamplingParam(t)) res = await send(false);
+    else throw new Error(`AOAI chat-completions failed 400: ${t.slice(0, 400)}`);
+  }
   if (!res.ok) {
     const t = await res.text();
     throw new Error(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
