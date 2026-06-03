@@ -40,6 +40,7 @@ import * as powerbi from './powerbi-client';
 import * as fabric from './fabric-client';
 import * as activator from './activator-client';
 import { copilotSessionsContainer } from './cosmos-client';
+import { runSelfAudit, applyFix } from '@/lib/admin/self-audit';
 
 // ---------- Credential ----------
 
@@ -502,6 +503,26 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     },
   });
 
+  // -------- agent-loom: self-audit + healer --------
+  // These let the built-in Copilot (agent-loom) review the whole deployment and
+  // apply runtime-safe fixes conversationally — the same engine the Admin →
+  // Health page uses. agent-loom understands every Loom requirement (identity,
+  // data plane, Azure services, permissions, security) via the audit registry.
+  r.register({
+    name: 'loom_self_audit',
+    service: 'Loom',
+    description: 'Run a full CSA Loom self-audit: identity, data plane (Cosmos), the Azure services each workload needs (Synapse, ADX, Event Hubs, ADLS, AI Search, AOAI/Foundry, Monitor, ADF, Purview), permissions (bootstrap admin), and security posture. Returns a scored report with the exact remediation for every warning/failure. Use this first when asked to check, validate, or fix the deployment.',
+    parameters: obj({}),
+    handler: async () => runSelfAudit(new Date().toISOString()),
+  });
+  r.register({
+    name: 'loom_heal',
+    service: 'Loom',
+    description: "Apply a runtime-safe healer fix by its fixId (from loom_self_audit results, e.g. 'ensure-cosmos'). Only fixes the Console identity can safely apply at runtime are executed; deploy-time issues (env vars / RBAC grants) return guidance to apply + redeploy instead of pretending to fix. Requires tenant-admin approval at the UI layer.",
+    parameters: obj({ fixId: S_STRING }, ['fixId']),
+    handler: async ({ fixId }) => applyFix(String(fixId)),
+  });
+
   return r;
 }
 
@@ -532,11 +553,22 @@ interface ChatMessage {
   name?: string;
 }
 
-const SYSTEM_PROMPT = `You are CSA Loom Copilot, a cross-item orchestrator for Microsoft Fabric, Synapse, Databricks, ADF, APIM, ADX, Power BI, AI Foundry, and ADLS.
+const SYSTEM_PROMPT = `You are CSA Loom Copilot — the assistant for CSA Loom, a self-contained data + AI platform that runs on Azure (Synapse, Databricks, ADF, APIM, Azure Data Explorer, AI Foundry, ADLS, Event Hubs, Azure Monitor). CSA Loom is its OWN product, NOT Microsoft Fabric. When you describe a feature, describe it as a CSA Loom feature (e.g. "the CSA Loom Real-Time hub", "a CSA Loom Eventstream", "the CSA Loom lakehouse") — never say "in Microsoft Fabric". You may name the underlying Azure services since those are the real backends.
 
-You decompose user requests into concrete tool calls against the registered Loom tools. Always prefer real tool calls over describing what you would do. Chain results: feed output of one call into the next. Be concise in your final summary; the user already sees the step trace.
+You decompose user requests into concrete tool calls against the registered CSA Loom tools. Always prefer real tool calls over describing what you would do. Chain results: feed output of one call into the next. Be concise in your final summary; the user already sees the step trace.
 
 If a tool errors, surface the error clearly and either retry with corrected inputs or abandon that branch and explain why.`;
+
+/**
+ * True when an AOAI 400 body is the "this model only supports the default
+ * temperature" rejection that newer reasoning models (o1/o3/gpt-5/MAI-*) emit.
+ * Those deployments reject any non-default temperature (and top_p); the right
+ * move is to retry without the sampling params, not to fail the chat.
+ */
+function isUnsupportedSamplingParam(body: string): boolean {
+  return /unsupported_value|does not support|Only the default \(1\) value is supported/i.test(body)
+    && /temperature|top_p/i.test(body);
+}
 
 async function callAoai(
   target: AoaiTarget,
@@ -545,19 +577,27 @@ async function callAoai(
 ): Promise<any> {
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      messages,
-      tools,
-      tool_choice: 'auto',
-      temperature: 0.2,
-    }),
-  });
+  const base: Record<string, unknown> = { messages, tools, tool_choice: 'auto' };
+
+  // First attempt sends temperature for determinism; if the model rejects it,
+  // retry once with the default sampling (no temperature). Works by default
+  // across both classic chat models and the newer reasoning models.
+  const send = async (withTemperature: boolean) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(withTemperature ? { ...base, temperature: 0.2 } : base),
+    });
+
+  let res = await send(true);
+  if (res.status === 400) {
+    const t = await res.text();
+    if (isUnsupportedSamplingParam(t)) {
+      res = await send(false);
+    } else {
+      throw new Error(`AOAI chat-completions failed 400: ${t.slice(0, 400)}`);
+    }
+  }
   if (!res.ok) {
     const t = await res.text();
     throw new Error(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
@@ -619,6 +659,13 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   }
 
   const reg = getRegistry();
+  // Register any connected external MCP tool servers (Build 2026 "Connect MCP
+  // tools") so agent-loom can call them alongside the built-in Loom tools.
+  // Best-effort: a missing/unreachable MCP server never breaks the chat.
+  try {
+    const { buildMcpShim } = await import('./mcp-shim');
+    await buildMcpShim(reg, userOid);
+  } catch { /* MCP shim optional — continue with built-in tools */ }
   const tools = reg.toAoaiTools();
 
   const messages: ChatMessage[] = [

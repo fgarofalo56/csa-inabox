@@ -67,7 +67,7 @@ const QUERY_LANG: Record<DataAgentSourceType, string> = {
 
 function composeSystemPrompt(cfg: DataAgentConfig): string {
   const lines: string[] = [];
-  lines.push('You are a Microsoft Fabric data agent. Answer the user\'s question in natural language, grounded ONLY in the attached data sources below.');
+  lines.push('You are a CSA Loom data agent (CSA Loom is its own Azure-based data + AI platform, not Microsoft Fabric). Answer the user\'s question in natural language, grounded ONLY in the attached data sources below.');
   lines.push('For every answer, also emit the query you would run against the chosen source, fenced in a code block, and name the source you used.');
   lines.push('');
   if (cfg.instructions?.trim()) {
@@ -140,11 +140,22 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
     { role: 'user', content: question },
   ];
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const res = await fetch(url, {
+  const base: Record<string, unknown> = { messages, max_tokens: 1200 };
+  // Newer reasoning models reject a non-default temperature; retry without it.
+  const send = async (withTemp: boolean) => fetch(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ messages, temperature: 0.2, max_tokens: 1200 }),
+    body: JSON.stringify(withTemp ? { ...base, temperature: 0.2 } : base),
   });
+  let res = await send(true);
+  if (res.status === 400) {
+    const t = await res.text();
+    if (/unsupported_value|does not support|Only the default \(1\) value is supported/i.test(t) && /temperature|top_p/i.test(t)) {
+      res = await send(false);
+    } else {
+      throw new Error(`Data agent chat failed (400): ${t.slice(0, 400)}`);
+    }
+  }
   if (!res.ok) {
     const t = await res.text();
     throw new Error(`Data agent chat failed (${res.status}): ${t.slice(0, 400)}`);

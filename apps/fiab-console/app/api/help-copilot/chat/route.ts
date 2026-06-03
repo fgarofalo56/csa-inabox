@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   }
 
-  let body: { prompt?: string; sessionId?: string } = {};
+  let body: { prompt?: string; sessionId?: string; context?: { path?: string; label?: string; itemType?: string; itemId?: string } } = {};
   try { body = await req.json(); } catch {}
   const prompt = (body.prompt || '').trim();
   if (!prompt) {
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
       };
       send('session', { sessionId });
       try {
-        for await (const step of orchestrateHelp({ prompt, sessionId, userId, tenantConfig })) {
+        for await (const step of orchestrateHelp({ prompt, sessionId, userId, tenantConfig, pageContext: body.context })) {
           send('step', step);
           if (step.kind === 'final' || step.kind === 'error') break;
         }

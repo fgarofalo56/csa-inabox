@@ -42,6 +42,8 @@ import {
   createTableColumn,
   Spinner,
   Input,
+  Dropdown,
+  Option,
   Text,
   makeStyles,
   tokens,
@@ -63,8 +65,18 @@ export interface LoomColumn<T> {
   getValue?: (row: T) => string | number;
   /** Enable click-to-sort on this column. Default true. */
   sortable?: boolean;
-  /** Show a per-column filter input under the header. Default true. */
+  /** Show a per-column filter under the header. Default true. */
   filterable?: boolean;
+  /**
+   * Filter control kind. Per the Loom filter standard, free-form text is for
+   * Name-like columns ONLY; enumerable columns get a multi-select dropdown of
+   * their distinct values; date columns get a from/to calendar range (gt/lt).
+   * When unset it is inferred: name/title → 'text', date-like → 'date',
+   * low-cardinality → 'select', otherwise 'text'.
+   */
+  filterType?: 'text' | 'select' | 'date';
+  /** Explicit dropdown options for filterType 'select' (else distinct values are derived from the rows). */
+  filterOptions?: string[];
   /** Initial/ideal column width in px (still user-resizable). */
   width?: number;
   /** Min width in px for resize. */
@@ -111,7 +123,14 @@ const useStyles = makeStyles({
       paddingBottom: '10px',
       paddingLeft: tokens.spacingHorizontalM,
       paddingRight: tokens.spacingHorizontalM,
+      // Clip cell content to its column so a long value can never spill over
+      // (overlap) into the next column. minWidth:0 lets the cell shrink to its
+      // resized width; overflow:hidden trims the excess. Multi-line cells still
+      // wrap within their own width.
+      minWidth: 0,
+      overflow: 'hidden',
     },
+    '& [role="gridcell"] > *': { minWidth: 0, maxWidth: '100%' },
   },
   headerRow: {
     position: 'sticky',
@@ -154,6 +173,17 @@ const useStyles = makeStyles({
   filterInput: {
     width: '100%',
   },
+  dateInput: {
+    flex: 1,
+    minWidth: 0,
+    fontFamily: tokens.fontFamilyBase,
+    fontSize: tokens.fontSizeBase200,
+    padding: '3px 6px',
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
+  },
   // empty + loading states: padded, centered, never edge-to-edge
   stateBox: {
     display: 'flex',
@@ -176,6 +206,37 @@ function defaultGetValue<T>(col: LoomColumn<T>, row: T): string | number {
   return String(v);
 }
 
+type FilterKind = 'text' | 'select' | 'date';
+/** Per-column filter value. text: substring; select: value ∈ set; date: from/to (gt/lt). */
+interface ColFilter { text?: string; selected?: string[]; from?: string; to?: string }
+
+const NAME_RE = /(^|_|\b)(name|title|displayname|label)(\b|_|$)/i;
+const DATE_RE = /(date|time|created|modified|updated|timestamp|lastrun|expires|expiry|when)/i;
+const SELECT_CARDINALITY_CAP = 40;
+
+function looksDate(v: string): boolean {
+  if (!v) return false;
+  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return true; // ISO-ish
+  const t = Date.parse(v);
+  return Number.isFinite(t) && /[-/:]/.test(v);
+}
+
+/** Resolve the filter control kind for a column (explicit → inferred). */
+function resolveFilterKind<T>(col: LoomColumn<T>, distinct: string[]): FilterKind {
+  if (col.filterType) return col.filterType;
+  const k = `${col.key} ${col.label}`;
+  if (NAME_RE.test(k)) return 'text';
+  if (DATE_RE.test(k) || (distinct.length > 0 && distinct.slice(0, 8).every(looksDate))) return 'date';
+  // Enumerable → dropdown; high-cardinality free-text → text.
+  if (distinct.length > 0 && distinct.length <= SELECT_CARDINALITY_CAP) return 'select';
+  return 'text';
+}
+
+function asDateMs(v: string | number): number | null {
+  const t = Date.parse(String(v));
+  return Number.isFinite(t) ? t : null;
+}
+
 export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactElement {
   const {
     columns,
@@ -189,24 +250,62 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
   } = props;
   const styles = useStyles();
 
-  // per-column filter text, keyed by column.key
-  const [filters, setFilters] = React.useState<Record<string, string>>({});
+  // per-column filter value, keyed by column.key
+  const [filters, setFilters] = React.useState<Record<string, ColFilter>>({});
   const anyFilterable =
     !noFilters && columns.some((c) => c.filterable !== false);
 
-  // client-side substring filtering, per column
+  // Distinct values per column (for select dropdowns) + the resolved kind.
+  const colMeta = React.useMemo(() => {
+    const m: Record<string, { kind: FilterKind; options: string[] }> = {};
+    for (const col of columns) {
+      if (col.filterable === false) continue;
+      let options = col.filterOptions;
+      if (!options) {
+        const set = new Set<string>();
+        for (const row of rows) {
+          const v = String(defaultGetValue(col, row)).trim();
+          if (v) set.add(v);
+          if (set.size > SELECT_CARDINALITY_CAP + 1) break;
+        }
+        options = Array.from(set).sort((a, b) => a.localeCompare(b));
+      }
+      m[col.key] = { kind: resolveFilterKind(col, options), options };
+    }
+    return m;
+  }, [columns, rows]);
+
+  // client-side filtering per column kind: text=substring, select=membership,
+  // date=from/to range (gt/lt when one bound is blank).
   const filteredRows = React.useMemo(() => {
-    const active = Object.entries(filters).filter(([, v]) => v.trim() !== '');
+    const active = Object.entries(filters).filter(([key, f]) => {
+      if (!f) return false;
+      return (f.text && f.text.trim() !== '') || (f.selected && f.selected.length > 0) || f.from || f.to;
+    });
     if (active.length === 0) return rows;
     return rows.filter((row) =>
-      active.every(([key, needle]) => {
+      active.every(([key, f]) => {
         const col = columns.find((c) => c.key === key);
         if (!col) return true;
-        const hay = String(defaultGetValue(col, row)).toLowerCase();
-        return hay.includes(needle.toLowerCase());
+        const kind = colMeta[key]?.kind ?? 'text';
+        const raw = defaultGetValue(col, row);
+        if (kind === 'select') {
+          if (!f.selected || f.selected.length === 0) return true;
+          return f.selected.includes(String(raw).trim());
+        }
+        if (kind === 'date') {
+          const ms = asDateMs(raw);
+          if (ms == null) return false;
+          if (f.from) { const fm = Date.parse(f.from); if (Number.isFinite(fm) && ms < fm) return false; }
+          if (f.to) { const tm = Date.parse(f.to); if (Number.isFinite(tm) && ms > tm + 86_399_999) return false; }
+          return true;
+        }
+        const needle = (f.text || '').trim().toLowerCase();
+        if (!needle) return true;
+        return String(raw).toLowerCase().includes(needle);
       }),
     );
-  }, [rows, filters, columns]);
+  }, [rows, filters, columns, colMeta]);
 
   // Fluent column definitions with compareItems (sort) + renderCell.
   const fluentColumns: TableColumnDefinition<T>[] = React.useMemo(
@@ -262,8 +361,53 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
     <div className={styles.root}>
       {anyFilterable && (
         <div className={styles.filterRow} role="search">
-          {columns.map((col) =>
-            col.filterable !== false ? (
+          {columns.map((col) => {
+            if (col.filterable === false) return null;
+            const meta = colMeta[col.key];
+            const f = filters[col.key] || {};
+            const setF = (patch: Partial<ColFilter>) =>
+              setFilters((prev) => ({ ...prev, [col.key]: { ...prev[col.key], ...patch } }));
+
+            // Enumerable column → multi-select dropdown of distinct values.
+            if (meta?.kind === 'select') {
+              const sel = f.selected || [];
+              return (
+                <div key={col.key} className={styles.filterField}>
+                  <Dropdown
+                    className={styles.filterInput}
+                    size="small"
+                    multiselect
+                    placeholder={`Filter ${col.label}`}
+                    aria-label={`Filter by ${col.label}`}
+                    selectedOptions={sel}
+                    value={sel.length ? `${sel.length} selected` : ''}
+                    onOptionSelect={(_e, d) => setF({ selected: d.selectedOptions })}
+                  >
+                    {meta.options.map((o) => (
+                      <Option key={o} value={o}>{o}</Option>
+                    ))}
+                  </Dropdown>
+                </div>
+              );
+            }
+
+            // Date column → from/to calendar range (gt/lt when one side blank).
+            if (meta?.kind === 'date') {
+              return (
+                <div key={col.key} className={styles.filterField} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <span style={{ fontSize: '11px', color: tokens.colorNeutralForeground3 }}>{col.label}</span>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <input type="date" aria-label={`${col.label} from (on or after)`} value={f.from || ''}
+                      onChange={(e) => setF({ from: e.target.value })} className={styles.dateInput} />
+                    <input type="date" aria-label={`${col.label} to (on or before)`} value={f.to || ''}
+                      onChange={(e) => setF({ to: e.target.value })} className={styles.dateInput} />
+                  </div>
+                </div>
+              );
+            }
+
+            // Name-like / free-text column → text substring (the only free-form case).
+            return (
               <div key={col.key} className={styles.filterField}>
                 <Input
                   className={styles.filterInput}
@@ -271,27 +415,23 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
                   contentBefore={<Search16Regular />}
                   placeholder={`Filter ${col.label}`}
                   aria-label={`Filter by ${col.label}`}
-                  value={filters[col.key] ?? ''}
-                  onChange={(_e, data) =>
-                    setFilters((f) => ({ ...f, [col.key]: data.value }))
-                  }
+                  value={f.text ?? ''}
+                  onChange={(_e, data) => setF({ text: data.value })}
                   contentAfter={
-                    filters[col.key] ? (
+                    f.text ? (
                       <DismissCircle24Regular
                         role="button"
                         aria-label={`Clear ${col.label} filter`}
                         tabIndex={0}
                         style={{ cursor: 'pointer', width: 16, height: 16 }}
-                        onClick={() =>
-                          setFilters((f) => ({ ...f, [col.key]: '' }))
-                        }
+                        onClick={() => setF({ text: '' })}
                       />
                     ) : undefined
                   }
                 />
               </div>
-            ) : null,
-          )}
+            );
+          })}
         </div>
       )}
 
