@@ -223,3 +223,102 @@ export async function listPrivateEndpoints(): Promise<PrivateEndpointInfo[]> {
   all.sort((a, b) => (a.connectedResourceName || a.name).localeCompare(b.connectedResourceName || b.name));
   return all;
 }
+
+// ── Private DNS zones + A-records (authoritative FQDN→IP for the hosts file) ──
+const PRIVATE_DNS_API = '2020-06-01';
+const VNET_API = '2023-09-01';
+
+export interface PrivateDnsZoneInfo {
+  name: string; subscriptionId: string; resourceGroup?: string; records: PrivateDnsRecord[];
+}
+export interface SubnetInfo {
+  name: string; addressPrefix?: string; privateEndpointCount: number; delegations: string[];
+}
+export interface VNetInfo {
+  id: string; name: string; subscriptionId: string; resourceGroup?: string;
+  addressPrefixes: string[]; subnets: SubnetInfo[];
+}
+
+/**
+ * Every `privatelink.*` private DNS zone + its A recordsets across the target
+ * subscription(s). This is the AUTHORITATIVE source for the hosts-file override:
+ * a private endpoint registers its FQDN→IP here even when the PE's
+ * customDnsConfigs echoes nothing, so enumerating these zones captures every
+ * private-only service (Databricks UI, Synapse Studio, storage dfs/blob, KQL,
+ * Key Vault, …) — which is what the PE-only scan was missing.
+ */
+export async function listPrivateDnsZones(): Promise<PrivateDnsZoneInfo[]> {
+  const subs = await targetSubscriptionIds();
+  const out: PrivateDnsZoneInfo[] = [];
+  for (const sub of subs) {
+    let zones: any[] = [];
+    try {
+      zones = await armList<any>(`/subscriptions/${sub}/providers/Microsoft.Network/privateDnsZones?api-version=${PRIVATE_DNS_API}`);
+    } catch { continue; }
+    for (const z of zones) {
+      const name: string = z?.name || '';
+      if (!/privatelink/i.test(name)) continue;
+      const rg = /\/resourceGroups\/([^/]+)\//i.exec(z?.id || '')?.[1];
+      let records: PrivateDnsRecord[] = [];
+      try {
+        const recs = await armList<any>(
+          `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Network/privateDnsZones/${encodeURIComponent(name)}/A?api-version=${PRIVATE_DNS_API}`,
+        );
+        records = recs.map((r: any) => {
+          const label: string = r?.name || '@';
+          const fqdn = label === '@' ? name : `${label}.${name}`;
+          const ips = (r?.properties?.aRecords || []).map((a: any) => a?.ipv4Address).filter(Boolean);
+          return { fqdn, ips, zone: name };
+        }).filter((r: PrivateDnsRecord) => r.ips.length > 0);
+      } catch { /* zone records unreadable — skip, keep the zone listed */ }
+      out.push({ name, subscriptionId: sub, resourceGroup: rg, records });
+    }
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+/** Every virtual network + its subnets (address space, delegations, PE count). */
+export async function listVirtualNetworks(): Promise<VNetInfo[]> {
+  const subs = await targetSubscriptionIds();
+  const out: VNetInfo[] = [];
+  for (const sub of subs) {
+    let vnets: any[] = [];
+    try {
+      vnets = await armList<any>(`/subscriptions/${sub}/providers/Microsoft.Network/virtualNetworks?api-version=${VNET_API}`);
+    } catch { continue; }
+    for (const v of vnets) {
+      const rg = /\/resourceGroups\/([^/]+)\//i.exec(v?.id || '')?.[1];
+      const subnets: SubnetInfo[] = (v?.properties?.subnets || []).map((s: any) => ({
+        name: s?.name || '',
+        addressPrefix: s?.properties?.addressPrefix || (s?.properties?.addressPrefixes || [])[0],
+        privateEndpointCount: (s?.properties?.privateEndpoints || []).length,
+        delegations: (s?.properties?.delegations || []).map((d: any) => d?.properties?.serviceName).filter(Boolean),
+      }));
+      out.push({
+        id: v?.id || '', name: v?.name || '', subscriptionId: sub, resourceGroup: rg,
+        addressPrefixes: v?.properties?.addressSpace?.addressPrefixes || [], subnets,
+      });
+    }
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+/**
+ * Build the COMPLETE hosts-file override from the union of every private DNS
+ * zone A-record AND every private-endpoint DNS record (dedup by FQDN, first IP
+ * wins). This guarantees every private-only service gets an `IP  FQDN` line —
+ * not just the endpoints that echoed an IP in customDnsConfigs.
+ */
+export function buildHostsBlock(endpoints: PrivateEndpointInfo[], zones: PrivateDnsZoneInfo[]): string {
+  const map = new Map<string, string>();
+  for (const z of zones) for (const r of z.records) for (const ip of r.ips) {
+    if (r.fqdn && !map.has(r.fqdn)) map.set(r.fqdn, ip);
+  }
+  for (const pe of endpoints) for (const d of pe.dns) for (const ip of d.ips) {
+    if (d.fqdn && !map.has(d.fqdn)) map.set(d.fqdn, ip);
+  }
+  const lines = [...map.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([fqdn, ip]) => `${ip}\t${fqdn}`);
+  return ['# CSA Loom — Azure private endpoints (dev hosts override)', ...lines].join('\n');
+}

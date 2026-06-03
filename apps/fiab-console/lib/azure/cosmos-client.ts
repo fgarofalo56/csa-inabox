@@ -39,6 +39,7 @@ let _featurePermissions: Container | null = null;
 let _lakehouseShortcuts: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
+let _mcpServers: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -120,11 +121,14 @@ async function ensure() {
   // ARM/Bicep step beyond the account+database.
   _copilotConfig = await mk('copilot-config', '/tenantId');
   _workspaceAgentConfig = await mk('workspace-agent-config', '/workspaceId');
+  // "Connect MCP tools" — external MCP tool-server connections per tenant.
+  _mcpServers = await mk('mcp-servers', '/tenantId');
   _ensured = true;
 }
 
 export async function copilotConfigContainer(): Promise<Container> { await ensure(); return _copilotConfig!; }
 export async function workspaceAgentConfigContainer(): Promise<Container> { await ensure(); return _workspaceAgentConfig!; }
+export async function mcpServersContainer(): Promise<Container> { await ensure(); return _mcpServers!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
