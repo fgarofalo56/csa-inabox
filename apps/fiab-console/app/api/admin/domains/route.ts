@@ -84,7 +84,7 @@ async function purviewStatus(): Promise<
         configured: false,
         gated: true,
         hint:
-          'Microsoft Purview is not provisioned in this deployment. Domains created here live in the Loom Cosmos store and organize workspaces today. To also govern them as Purview business domains, set LOOM_PURVIEW_ACCOUNT (admin-plane/main.bicep apps[] env), deploy platform/fiab/bicep/modules/purview/purview.bicep, and grant the Loom UAMI the Purview data-plane roles.',
+          'Microsoft Purview is not provisioned in this deployment. Domains created here live in the Loom Cosmos store and organize workspaces today. To also govern them, set LOOM_PURVIEW_ACCOUNT (admin-plane/main.bicep apps[] env) and deploy with purviewEnabled=true — the account is provisioned by platform/fiab/bicep/modules/admin-plane/catalog.bicep, and the Console UAMI is granted the Purview Data Map data-plane roles automatically by the csa-loom-post-deploy-bootstrap workflow. NOTE: classic Purview Data Map (what Loom uses) has no "business domains" — that is a NEW unified-catalog concept and is not ARM-provisionable; Loom maps domains to Atlas collections/assets instead.',
       };
     }
     // Any other Purview error (auth, transient) is still non-fatal here.
