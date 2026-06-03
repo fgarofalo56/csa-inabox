@@ -253,10 +253,17 @@ export function LakehouseEditor({ item, id }: Props) {
   const SHORTCUT_SOURCES: { type: ShortcutTargetType; label: string; ready: boolean }[] = [
     { type: 'internal', label: 'Internal Loom lakehouse', ready: true },
     { type: 'adls', label: 'ADLS Gen2 / Azure Blob', ready: true },
-    { type: 's3', label: 'Amazon S3', ready: false },
-    { type: 'gcs', label: 'Google Cloud Storage', ready: false },
-    { type: 'dataverse', label: 'Dataverse', ready: false },
+    { type: 's3', label: 'Amazon S3', ready: true },
+    { type: 'gcs', label: 'Google Cloud Storage', ready: true },
+    { type: 'dataverse', label: 'Dataverse', ready: true },
   ];
+  // In-tenant ADLS/Blob account picker (vs typing the abfss URI) + external SAS.
+  const [scAdlsMode, setScAdlsMode] = useState<'picker' | 'external'>('picker');
+  const [storageAccts, setStorageAccts] = useState<Array<{ name: string; dfsHost?: string; blobHost?: string; isHns: boolean; resourceGroup?: string }>>([]);
+  const [storageAcctsLoading, setStorageAcctsLoading] = useState(false);
+  const [scAcctHost, setScAcctHost] = useState(''); // selected dfs/blob host
+  const [scAdlsContainer, setScAdlsContainer] = useState('');
+  const [scAdlsPath, setScAdlsPath] = useState('');
   const [shortcuts, setShortcuts] = useState<ShortcutRow[] | null>(null);
   const [shortcutsBusy, setShortcutsBusy] = useState(false);
   const [shortcutsError, setShortcutsError] = useState<string | null>(null);
@@ -273,6 +280,16 @@ export function LakehouseEditor({ item, id }: Props) {
   const [scFormat, setScFormat] = useState<'delta' | 'parquet' | 'csv' | 'json'>('delta');
   const [scSubmitting, setScSubmitting] = useState(false);
   const [scSubmitError, setScSubmitError] = useState<string | null>(null);
+
+  // Discover in-tenant storage accounts for the ADLS picker when the wizard is
+  // on the ADLS source in picker mode.
+  useEffect(() => {
+    if (!scWizardOpen || scType !== 'adls' || scAdlsMode !== 'picker' || storageAccts.length) return;
+    setStorageAcctsLoading(true);
+    fetch('/api/storage/accounts').then((r) => r.json()).then((j) => {
+      if (j?.ok && Array.isArray(j.accounts)) setStorageAccts(j.accounts);
+    }).catch(() => {}).finally(() => setStorageAcctsLoading(false));
+  }, [scWizardOpen, scType, scAdlsMode, storageAccts.length]);
 
   // The lakehouse identity for the registry = the selected ADLS container
   // (the Loom "lakehouse" is a medallion container). Falls back to the item id.
@@ -311,6 +328,11 @@ export function LakehouseEditor({ item, id }: Props) {
       const c = scInternalContainer.trim();
       const p = scInternalPath.trim().replace(/^\/+/, '');
       targetUri = `internal://${c}${p ? `/${p}` : ''}`;
+    } else if (scType === 'adls' && scAdlsMode === 'picker' && scAcctHost) {
+      // Build abfss from the picked account + container + path (no typed URI).
+      const c = scAdlsContainer.trim();
+      const p = scAdlsPath.trim().replace(/^\/+/, '');
+      targetUri = `abfss://${c}@${scAcctHost}/${p}`;
     }
     const credentialRef = scKvSecret.trim()
       ? { kind: scType === 's3' ? 'awsKeys' : scType === 'gcs' ? 'gcsServiceAccount' : 'sas', keyVaultSecret: scKvSecret.trim() }
@@ -330,7 +352,7 @@ export function LakehouseEditor({ item, id }: Props) {
       await loadShortcuts();
     } catch (e: any) { setScSubmitError(e?.message || String(e)); }
     finally { setScSubmitting(false); }
-  }, [shortcutLakehouseId, scName, scTargetUri, scType, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, loadShortcuts]);
+  }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, loadShortcuts]);
 
   // Register a PLANNED bundle shortcut into the live registry (one click) — the
   // bundle only carries metadata, so this materializes it against the real
@@ -1564,11 +1586,54 @@ export function LakehouseEditor({ item, id }: Props) {
                         </>
                       )}
                       {scType === 'adls' && (
-                        <Field label="Target URI" required
-                          hint="abfss://<container>@<account>.dfs.core.windows.net/<path> or https://<account>.dfs.core.windows.net/<container>/<path>">
-                          <Input value={scTargetUri} onChange={(_, d) => setScTargetUri(d.value)}
-                            placeholder="abfss://data@acct.dfs.core.windows.net/partner/exports" />
-                        </Field>
+                        <>
+                          <Field label="Source">
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <Button size="small" appearance={scAdlsMode === 'picker' ? 'primary' : 'outline'} onClick={() => setScAdlsMode('picker')}>In-tenant account</Button>
+                              <Button size="small" appearance={scAdlsMode === 'external' ? 'primary' : 'outline'} onClick={() => setScAdlsMode('external')}>External (URI + SAS/key)</Button>
+                            </div>
+                          </Field>
+                          {scAdlsMode === 'picker' ? (
+                            <>
+                              <Field label="Storage account" required hint={storageAcctsLoading ? 'Discovering accounts…' : 'ADLS Gen2 / Blob accounts you can access across the tenant'}>
+                                <Dropdown
+                                  value={scAcctHost ? (storageAccts.find((a) => (a.dfsHost || a.blobHost) === scAcctHost)?.name || scAcctHost) : ''}
+                                  selectedOptions={scAcctHost ? [scAcctHost] : []}
+                                  placeholder={storageAcctsLoading ? 'Loading…' : 'Select a storage account'}
+                                  onOptionSelect={(_, d) => setScAcctHost(d.optionValue || '')}>
+                                  {storageAccts.map((a) => {
+                                    const host = a.dfsHost || a.blobHost || '';
+                                    return <Option key={a.name} value={host} text={a.name}>{a.name}{a.isHns ? ' (ADLS Gen2)' : ' (Blob)'}{a.resourceGroup ? ` · ${a.resourceGroup}` : ''}</Option>;
+                                  })}
+                                </Dropdown>
+                              </Field>
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <Field label="Container / filesystem" required style={{ flex: 1 }}>
+                                  <Input value={scAdlsContainer} onChange={(_, d) => setScAdlsContainer(d.value)} placeholder="landing" />
+                                </Field>
+                                <Field label="Path" hint="folder under the container (optional)" style={{ flex: 1 }}>
+                                  <Input value={scAdlsPath} onChange={(_, d) => setScAdlsPath(d.value)} placeholder="eventhub-capture" />
+                                </Field>
+                              </div>
+                              {scAcctHost && scAdlsContainer && (
+                                <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
+                                  abfss://{scAdlsContainer}@{scAcctHost}/{scAdlsPath.replace(/^\/+/, '')}
+                                </Caption1>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <Field label="Target URI" required
+                                hint="abfss://<container>@<account>.dfs.core.windows.net/<path>">
+                                <Input value={scTargetUri} onChange={(_, d) => setScTargetUri(d.value)}
+                                  placeholder="abfss://data@acct.dfs.core.windows.net/partner/exports" />
+                              </Field>
+                              <Field label="Key Vault secret (SAS token or storage key)" hint="admin-plane Key Vault secret name holding the external account's SAS/key">
+                                <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)} placeholder="shortcut-ext-adls-sas" />
+                              </Field>
+                            </>
+                          )}
+                        </>
                       )}
                       {(scType === 's3' || scType === 'gcs' || scType === 'dataverse') && (
                         <>
