@@ -512,8 +512,8 @@ const bundle: AppBundle = {
     'carries its live operation / run id, so the editors and ' +
     '`/api/databricks/jobs` show the work finishing server-side. Re-running ' +
     'install is idempotent and reconciles any operation still in flight. Where ' +
-    'a backend is not wired for the deployment (no bound Fabric workspace, no ' +
-    'Databricks cluster, a paused Synapse pool, …), that item surfaces an ' +
+    'a backend is not wired for the deployment (no bound compute backend like a ' +
+    'Databricks cluster or Synapse pool — Fabric optional), that item surfaces an ' +
     'honest remediation gate naming the exact env var / role / action instead ' +
     'of a fake success.',
   sourceDocs: ['docs/learn/08-solutions/ml-pipeline'],

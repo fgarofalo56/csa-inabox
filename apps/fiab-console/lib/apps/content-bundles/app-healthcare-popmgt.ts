@@ -32,10 +32,11 @@ const bundle: AppBundle = {
     '(`registered_model_name`). The ML Model editor then binds to that **real registered ' +
     'model** to browse versions and deploy a real-time endpoint — the seeded ' +
     'hyperparameters / features / target drive the run that produces it.\n\n' +
-    '> If Databricks or a Fabric workspace is not yet wired for this deployment, install ' +
-    'still creates the workspace items and the provisioner returns a precise remediation ' +
-    'gate (the exact `LOOM_DATABRICKS_HOSTNAME` / `LOOM_DEFAULT_FABRIC_WORKSPACE` env var or ' +
-    'RBAC role to set) instead of pretending the data/model was produced.',
+    '> If the compute backend (Databricks or Synapse Spark by default — Fabric notebooks ' +
+    'optional) is not yet wired for this deployment, install still creates the workspace ' +
+    'items and the provisioner returns a precise remediation gate (the exact ' +
+    '`LOOM_DATABRICKS_HOSTNAME` / `LOOM_SYNAPSE_WORKSPACE` env var or RBAC role to set) ' +
+    'instead of pretending the data/model was produced.',
   sourceDocs: [
     'examples/healthcare-clinical/README.md',
     'examples/healthcare-clinical/contracts/readmission-risk.yaml',

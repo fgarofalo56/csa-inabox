@@ -381,14 +381,69 @@ async function provisionViaPowerBi(input: any, steps: string[]): Promise<Provisi
   };
 }
 
+/**
+ * Azure-native DEFAULT: Loom-native tabular semantic model.
+ *
+ * The model's tables/measures/relationships (from the bundle content) are the
+ * source of truth on the Cosmos item; measures are evaluated live against the
+ * underlying Synapse warehouse / lakehouse via the SQL client when the editor
+ * or a report queries the model. No Power BI / Fabric / Analysis Services
+ * workspace is required (no-fabric-dependency.md). "Provisioning" here validates
+ * the model shape + records the backing data source so the model is queryable.
+ */
+async function provisionLoomNative(input: any, steps: string[]): Promise<ProvisionResult> {
+  const content = input.content as any;
+  const tables: any[] = Array.isArray(content?.tables) ? content.tables : [];
+  const measures = tables.reduce((n, t) => n + (Array.isArray(t?.measures) ? t.measures.length : 0), 0)
+    + (Array.isArray(content?.measures) ? content.measures.length : 0);
+  if (tables.length === 0) {
+    return {
+      status: 'remediation',
+      gate: {
+        reason: 'Semantic model has no tables defined.',
+        remediation: 'Add at least one table (mapped to a warehouse/lakehouse table) in the semantic-model editor. No Microsoft Fabric or Power BI workspace required.',
+        link: '/docs/fiab/operations/app-install-provisioning',
+      },
+      steps,
+    };
+  }
+  const backing = input.target.warehouseServer
+    ? `${input.target.warehouseServer}/${input.target.warehouseDatabase || ''}`
+    : (input.target.synapseWorkspace || input.target.adlsAccount || 'the installed warehouse/lakehouse');
+  steps.push(`Loom-native tabular model: ${tables.length} table(s), ${measures} measure(s), backed by ${backing}. Measures evaluate live over the warehouse via SQL — no Power BI / Fabric workspace required.`);
+  return {
+    status: 'created',
+    resourceId: input.cosmosItemId,
+    secondaryIds: { backend: 'loom-native', tables: String(tables.length), measures: String(measures) },
+    steps,
+  };
+}
+
 export const semanticModelProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
   const steps: string[] = [];
   const ws = input.target.fabricWorkspaceId;
-  if (!ws) {
-    // No Fabric workspace — author the model directly in Power BI as a push
-    // dataset and seed sample rows. Honest-gate only if no PBI target resolves.
+  const backend = input.target.semanticBackend || 'loom-native';
+
+  // Azure-native DEFAULT: Loom-native tabular model over the warehouse.
+  if (backend === 'loom-native' || backend === 'analysis-services') {
+    if (backend === 'analysis-services') {
+      steps.push('analysis-services backend not yet wired — using the Loom-native tabular model (equivalent, no extra infra).');
+    }
+    steps.push('Provisioning semantic model on the Azure-native Loom-native backend.');
+    return provisionLoomNative(input, steps);
+  }
+  // Power BI is opt-in only (it is Fabric-family).
+  if (backend === 'powerbi') {
+    steps.push('Provisioning semantic model on the Power BI backend (opt-in).');
     return provisionViaPowerBi(input, steps);
   }
+  // Fabric is opt-in AND requires a bound workspace; else fall back to native.
+  if (backend === 'fabric' && !ws) {
+    steps.push('LOOM_SEMANTIC_BACKEND=fabric but no Fabric workspace bound — using the Azure-native Loom-native backend.');
+    return provisionLoomNative(input, steps);
+  }
+  if (!ws) return provisionLoomNative(input, steps);
+  steps.push(`Fabric semantic model workspace: ${ws} (opt-in).`);
   const tmsl = buildTmsl(input.content, input.displayName, steps);
   steps.push(`Built TMSL payload (${tmsl.length} bytes).`);
 

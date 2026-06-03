@@ -142,6 +142,9 @@ param loomSynapseDedicatedPool string = 'loompool'
 @description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
 param loomAdfName string = 'adf-loom-default-${location}'
 
+@description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
+param loomAdfRg string = ''
+
 @description('Loom DLZ resource group (for ARM REST pause/resume from the Console BFF).')
 param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
 
@@ -159,6 +162,9 @@ param loomEventHubRg string = ''
 
 @description('Loom Event Hubs subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
 param loomEventHubSub string = ''
+
+@description('Loom Alert Rules resource group (for monitoring alerts/rules). Empty defaults to LOOM_DLZ_RG.')
+param loomAlertRg string = ''
 
 @description('Loom Storage account name (for ADLS Gen2 lake URLs). When empty, env vars omitted and the Lakehouse editor surfaces a config message.')
 param loomStorageAccount string = ''
@@ -267,6 +273,41 @@ param loomDefaultFabricWorkspace string = ''
 @description('Phase-2 warehouse provisioner backend. synapse-dedicated (default) runs DDL against the dedicated Synapse pool via TDS+AAD; fabric-warehouse is on the v3.5 roadmap.')
 @allowed(['synapse-dedicated', 'fabric-warehouse'])
 param loomWarehouseBackend string = 'synapse-dedicated'
+
+// =====================================================================
+// Azure-native backend selectors (no-fabric-dependency)
+// =====================================================================
+
+@description('Azure Data Lake Storage Gen2 bronze container name. Default: bronze.')
+param loomBronzeContainer string = 'bronze'
+
+@description('Pipeline orchestrator backend selector. Default: synapse. Alternatives: adf, fabric.')
+@allowed(['synapse', 'adf', 'fabric'])
+param loomPipelineBackend string = 'synapse'
+
+@description('Event ingestion backend selector. Default: eventhubs (Azure Event Hubs). Alternatives: fabric.')
+@allowed(['eventhubs', 'fabric'])
+param loomEventBackend string = 'eventhubs'
+
+@description('Activator rule backend selector. Default: azure-monitor (Azure Monitor). Alternatives: fabric.')
+@allowed(['azure-monitor', 'fabric'])
+param loomActivatorBackend string = 'azure-monitor'
+
+@description('Dashboard backend selector. Default: adx (Azure Data Explorer/Kusto). Alternatives: fabric.')
+@allowed(['adx', 'fabric'])
+param loomDashboardBackend string = 'adx'
+
+@description('Data mirroring backend selector. Default: adf-cdc (Azure Data Factory Change Data Capture). Alternatives: synapse-link, fabric.')
+@allowed(['adf-cdc', 'synapse-link', 'fabric'])
+param loomMirrorBackend string = 'adf-cdc'
+
+@description('Lakehouse storage backend selector. Default: adls (Azure Data Lake Storage Gen2). Alternatives: fabric.')
+@allowed(['adls', 'fabric'])
+param loomLakehouseBackend string = 'adls'
+
+@description('Semantic model backend selector. Default: loom-native. Alternatives: analysis-services, powerbi.')
+@allowed(['loom-native', 'analysis-services', 'powerbi'])
+param loomSemanticBackend string = 'loom-native'
 
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
@@ -598,9 +639,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // "Log Analytics Reader" on this workspace + "Monitoring Reader"
             // on the sub for metrics/activity/health/alerts.
             { name: 'LOOM_LOG_ANALYTICS_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
+            { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
+            { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : loomDlzRg }
             // Stream Analytics — defaults to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID
             // when blank (see lib/azure/stream-analytics-client.ts). Override
             // when ASA lives in a different RG / sub than the DLZ.
@@ -670,6 +714,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_TENANT_ADMIN_OID', value: loomTenantAdminOid }
             { name: 'LOOM_DEFAULT_FABRIC_WORKSPACE', value: loomDefaultFabricWorkspace }
             { name: 'LOOM_WAREHOUSE_BACKEND', value: loomWarehouseBackend }
+            // ----------------------------------------------------------------
+            // Azure-native backend selectors (no-fabric-dependency)
+            // ----------------------------------------------------------------
+            { name: 'LOOM_BRONZE_CONTAINER', value: loomBronzeContainer }
+            { name: 'LOOM_PIPELINE_BACKEND', value: loomPipelineBackend }
+            { name: 'LOOM_EVENT_BACKEND', value: loomEventBackend }
+            { name: 'LOOM_ACTIVATOR_BACKEND', value: loomActivatorBackend }
+            { name: 'LOOM_DASHBOARD_BACKEND', value: loomDashboardBackend }
+            { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
+            { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
+            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
           ],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path

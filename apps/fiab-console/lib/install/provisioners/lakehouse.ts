@@ -347,15 +347,15 @@ async function provisionAzureNative(
   }
 
   if (!container) {
-    // Neither Fabric nor any internal DLZ ADLS is available — honest gate.
+    // The Azure-native DLZ ADLS isn't configured — honest ADLS gate (no Fabric).
     return {
       status: 'remediation',
       gate: {
         reason:
-          'No bound Fabric workspace AND no internal DLZ ADLS configured — cannot materialise a lakehouse.',
+          'No internal DLZ ADLS Gen2 container is configured — cannot materialise the lakehouse.',
         remediation:
-          'Either bind a Fabric workspace via /admin/workspaces > Bind capacity, OR configure the internal Data Landing Zone by setting LOOM_LANDING_URL (and/or LOOM_BRONZE_URL / LOOM_SILVER_URL / LOOM_GOLD_URL) to the DLZ ADLS Gen2 container URLs the DLZ Bicep deploy emits.',
-        link: '/admin/workspaces',
+          'Configure the internal Data Landing Zone by setting LOOM_LANDING_URL (and/or LOOM_BRONZE_URL / LOOM_SILVER_URL / LOOM_GOLD_URL) to the DLZ ADLS Gen2 container URLs the DLZ Bicep deploy emits. No Microsoft Fabric required. (OneLake is an optional opt-in via LOOM_LAKEHOUSE_BACKEND=fabric.)',
+        link: 'https://learn.microsoft.com/azure/storage/blobs/data-lake-storage-introduction',
       },
       steps,
     };
@@ -549,13 +549,21 @@ async function provisionAzureNative(
 export const lakehouseProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
   const steps: string[] = [];
   const ws = input.target.fabricWorkspaceId;
-  if (!ws) {
-    // Azure-native Loom: no Fabric workspace bound. Fall back to the internal
-    // DLZ ADLS so the lakehouse is still browsable + seeded with real data.
-    steps.push('No bound Fabric workspace; using Azure-native DLZ ADLS backend.');
+  const backend = input.target.lakehouseBackend || 'adls';
+
+  // Azure-native DEFAULT: materialise the lakehouse in the internal DLZ ADLS
+  // Gen2 (Delta) — no Microsoft Fabric required (no-fabric-dependency.md).
+  // OneLake is opt-in only via LOOM_LAKEHOUSE_BACKEND=fabric + a bound
+  // workspace; otherwise we always use ADLS, even when a workspace is bound.
+  if (backend !== 'fabric' || !ws) {
+    if (backend === 'fabric' && !ws) {
+      steps.push('LOOM_LAKEHOUSE_BACKEND=fabric but no Fabric workspace bound — using the Azure-native DLZ ADLS backend.');
+    } else {
+      steps.push('Using the Azure-native DLZ ADLS Gen2 (Delta) backend.');
+    }
     return provisionAzureNative(input, steps);
   }
-  steps.push(`Fabric workspace: ${ws}`);
+  steps.push(`Fabric (OneLake) workspace: ${ws} (opt-in).`);
 
   // 1. List existing lakehouses (idempotency).
   const list = await fabricCall(`/workspaces/${encodeURIComponent(ws)}/lakehouses`, 'GET');

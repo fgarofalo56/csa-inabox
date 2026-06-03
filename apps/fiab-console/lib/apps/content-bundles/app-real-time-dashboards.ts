@@ -35,8 +35,8 @@
  * The dashboard's tile viz hints (card/line/bar/pie/table) are exactly the
  * KqlDashboardContent.tiles enum the kqlDashboardProvisioner compiles into a
  * real RealTimeDashboard.json definition, so the surface is runnable the
- * moment it lands in a bound Fabric workspace (or surfaces the documented
- * remediation gate naming LOOM_KUSTO_CLUSTER_URI / the Fabric workspace).
+ * moment it lands with a bound ADX/Kusto cluster — no Fabric workspace needed
+ * (or surfaces the documented remediation gate naming LOOM_KUSTO_CLUSTER_URI).
  */
 
 import type { AppBundle } from './types';

@@ -27,7 +27,8 @@
  * the PBIR docs only `semanticmodelid=<id>` is needed.
  *
  * Honest gates (per .claude/rules/no-vaporware.md):
- *   - No bound Fabric workspace                → bind workspace.
+ *   - Default backend is Loom-native (no Fabric). Power BI report authoring is
+ *     opt-in only (LOOM_SEMANTIC_BACKEND=powerbi + a bound workspace).
  *   - Semantic model not found in workspace    → the model item must be
  *       provisioned first (it is, by the semantic-model provisioner). Surfaces
  *       remediation if the model id can't be resolved this pass.
@@ -232,21 +233,47 @@ async function resolveSemanticModelId(
   return { id: byBase?.id, candidates };
 }
 
+/**
+ * Azure-native DEFAULT: Loom-native report.
+ *
+ * A Loom report is a surface that renders its pages/visuals by querying the
+ * bound Loom-native semantic model (which in turn queries the warehouse/
+ * lakehouse over SQL). The report definition (pages, visuals, field bindings)
+ * lives on the Cosmos item and renders in the Loom report viewer — no Power BI
+ * / Fabric workspace required (no-fabric-dependency.md).
+ */
+async function provisionLoomNativeReport(input: any, steps: string[]): Promise<ProvisionResult> {
+  const content = input.content as any;
+  const pages: any[] = Array.isArray(content?.pages) ? content.pages : (Array.isArray(content?.sections) ? content.sections : []);
+  const visuals = pages.reduce((n, p) => n + (Array.isArray(p?.visuals) ? p.visuals.length : 0), 0);
+  const model = content?.semanticModel || content?.datasetName || content?.model || 'its semantic model';
+  steps.push(`Loom-native report: ${pages.length || 1} page(s), ${visuals} visual(s), bound to ${typeof model === 'string' ? model : 'its semantic model'}. Renders in the Loom report viewer over the warehouse via SQL — no Power BI / Fabric workspace required.`);
+  return {
+    status: 'created',
+    resourceId: input.cosmosItemId,
+    secondaryIds: { backend: 'loom-native', pages: String(pages.length), visuals: String(visuals) },
+    steps,
+  };
+}
+
 export const reportProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
   const steps: string[] = [];
   const ws = input.target.fabricWorkspaceId;
-  if (!ws) {
-    return {
-      status: 'remediation',
-      gate: {
-        reason: 'No bound Fabric workspace for this Loom workspace.',
-        remediation: 'Bind a Fabric workspace via /admin/workspaces > Bind capacity, OR set LOOM_DEFAULT_FABRIC_WORKSPACE.',
-        link: '/admin/workspaces',
-      },
-      steps,
-    };
+  // Reports follow the semantic model's backend. Power BI / Fabric reports are
+  // opt-in only (Fabric-family) AND require a bound workspace; the DEFAULT is
+  // the Azure-native Loom-native report viewer — never gate on Fabric.
+  const backend = input.target.semanticBackend || 'loom-native';
+  // Power BI / Fabric report authoring is opt-in (Fabric-family) AND needs a
+  // bound workspace; the DEFAULT is the Azure-native Loom-native report viewer.
+  if (backend !== 'powerbi' || !ws) {
+    if (backend === 'powerbi' && !ws) {
+      steps.push('Report backend is powerbi but no workspace bound — using the Azure-native Loom-native report viewer.');
+    } else {
+      steps.push('Provisioning report on the Azure-native Loom-native backend.');
+    }
+    return provisionLoomNativeReport(input, steps);
   }
-  steps.push(`Fabric workspace: ${ws}`);
+  steps.push(`Power BI / Fabric report workspace: ${ws} (opt-in).`);
 
   let tok: string;
   try {
