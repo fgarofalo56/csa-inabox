@@ -43,6 +43,7 @@ import { logicAppProvisioner } from './provisioners/logic-app';
 import { synapsePipelineProvisioner } from './provisioners/synapse-pipeline';
 import { adfPipelineProvisioner } from './provisioners/adf-pipeline';
 import { databricksJobProvisioner } from './provisioners/databricks-job';
+import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
 
 /** Mapping from editor item type → provisioner.  Item types not listed
  * here are Cosmos-only (no Phase-2 backend side-effect). */
@@ -198,6 +199,45 @@ async function provisionOne(
   return { itemType: it.itemType, displayName: it.displayName, cosmosItemId: it.id, result };
 }
 
+/**
+ * Pre-warm the Synapse dedicated SQL pool at the very START of an install that
+ * includes a warehouse on the dedicated backend.
+ *
+ * A dedicated pool auto-pauses on idle and refuses TDS while offline, so the
+ * warehouse provisioner otherwise has to fire the resume only when ITS step
+ * runs — and a cold resume takes 1-3 min (far past the gateway window), forcing
+ * a "Retry" round-trip on essentially every install. Firing the resume here,
+ * before the batched fan-out, starts the resume clock as early as possible so
+ * the pool is warming through the lakehouse / KQL / notebook / semantic-model
+ * steps. In the common case it's Online (or nearly) by the time the warehouse
+ * step runs, so the DDL + seed lands inline with no Retry. Best-effort and
+ * fully non-blocking: any failure (no ARM role, missing env) is swallowed — the
+ * warehouse provisioner still handles the resume + honest gate on its own.
+ */
+async function prewarmDedicatedPool(
+  installed: Array<{ itemType: string }>,
+  steps: string[],
+): Promise<void> {
+  const backend = process.env.LOOM_WAREHOUSE_BACKEND || 'synapse-dedicated';
+  if (backend !== 'synapse-dedicated') return;
+  if (!installed.some((it) => it.itemType === 'warehouse')) return;
+  try {
+    const { state } = await getPoolState();
+    if (state === 'Online') {
+      steps.push('Pre-warm: dedicated SQL pool already Online.');
+      return;
+    }
+    if (state === 'Paused' || state === 'Pausing' || state === 'Unknown') {
+      await resumePool();
+      steps.push(`Pre-warm: dedicated SQL pool was ${state}; fired ARM resume at install start (non-blocking).`);
+    } else {
+      steps.push(`Pre-warm: dedicated SQL pool already ${state}; resume in progress.`);
+    }
+  } catch (e: any) {
+    steps.push(`Pre-warm skipped (${e?.message || String(e)}); warehouse step will handle resume.`);
+  }
+}
+
 /** Run provisioning across an installed app's Cosmos items.  Each
  * `installed[i]` is an item just created by createOwnedItem(). */
 export async function runProvisioning(
@@ -223,6 +263,11 @@ export async function runProvisioning(
     };
   }
 
+  // Pre-warm the dedicated SQL pool BEFORE the fan-out so a warehouse install
+  // doesn't pay a cold 1-3 min resume + Retry round-trip on its own step.
+  const prewarmSteps: string[] = [];
+  await prewarmDedicatedPool(installed, prewarmSteps);
+
   // Provision items CONCURRENTLY in bounded batches. Serial provisioning of a
   // 10-12 item app blew the ~30s gateway timeout (504); fanning out
   // PROVISION_CONCURRENCY at a time cuts wall-clock to roughly the slowest
@@ -238,6 +283,13 @@ export async function runProvisioning(
     settled.forEach((step, j) => {
       out[start + j] = step;
     });
+  }
+
+  // Surface the pre-warm log on the warehouse step so the report explains the
+  // early resume that ran before this item's own provisioner.
+  if (prewarmSteps.length > 0) {
+    const wh = out.find((s) => s.itemType === 'warehouse');
+    if (wh) wh.result.steps = [...prewarmSteps, ...(wh.result.steps || [])];
   }
 
   // Aggregate outcome.
