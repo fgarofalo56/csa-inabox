@@ -211,6 +211,7 @@ const SECTIONS: {
     group: 'Governance & health',
     items: [
       { href: '/governance/policies', label: 'Access policies', desc: 'DLP, masking, RLS, retention, access.', icon: Shield20Regular, color: '#c2410c' },
+      { href: '/catalog/data-quality', label: 'Data quality rules', desc: 'Define + manage data-quality checks (Loom-native).', icon: Beaker20Regular, color: '#0a7ea4' },
       { href: '/governance/insights', label: 'Insights & reports', desc: 'Coverage KPIs, data-health reporting.', icon: DataTrending20Regular, color: '#ad6800' },
       { href: '/governance/purview', label: 'Microsoft Purview', desc: 'Connection status + embedded portal.', icon: Beaker20Regular, color: '#0d7377' },
     ],
