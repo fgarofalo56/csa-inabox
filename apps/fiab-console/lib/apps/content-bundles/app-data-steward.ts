@@ -61,7 +61,7 @@ const bundle: AppBundle = {
               'On install (Phase 2), field-level lineage is registered in Microsoft ' +
               'Purview and the curated semantic model surfaces the "customer" entity ' +
               'via Power BI Direct Lake — both are provisioning outcomes, gated on a ' +
-              'bound governance domain and Fabric workspace.',
+              'bound governance domain (Fabric workspace optional for Direct Lake).',
             classification: 'Confidential',
           },
           {
