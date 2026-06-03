@@ -189,23 +189,11 @@ function platformPart(displayName: string): { path: string; payload: string; pay
 export const kqlDashboardProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
   const steps: string[] = [];
   const ws = input.target.fabricWorkspaceId;
-  if (!ws) {
-    return {
-      status: 'remediation',
-      gate: {
-        reason: 'This is a Microsoft Fabric item — it needs a Fabric workspace bound to this Loom workspace.',
-        remediation:
-          'Bind a capacity-backed Microsoft Fabric workspace to this Loom workspace at /admin/workspaces → Bind capacity (or set LOOM_DEFAULT_FABRIC_WORKSPACE to a default Fabric workspace GUID). This is a real Fabric/Power BI workspace on a Fabric capacity — NOT the Loom workspace itself. The rest of this app (lakehouse, notebooks, warehouse, KQL database, semantic model) installs without it.',
-        link: '/admin/workspaces',
-      },
-      steps,
-    };
-  }
-  steps.push(`Fabric workspace: ${ws}`);
+  const backend = input.target.dashboardBackend || 'adx';
 
   // The tiles query an ADX/Kusto database — the same one the sibling
   // kql-database item provisions. Without a cluster URI the dashboard would
-  // have no runnable data source, so gate honestly.
+  // have no runnable data source, so gate honestly (an ADX gate, not Fabric).
   const clusterUri = input.target.kustoClusterUri || process.env.LOOM_KUSTO_CLUSTER_URI;
   if (!clusterUri) {
     return {
@@ -248,8 +236,33 @@ export const kqlDashboardProvisioner: Provisioner = async (input): Promise<Provi
   const dataSource = { id: stableId(`${input.displayName}::ds::${database}`), clusterUri, database };
   steps.push(`Dashboard data source: ${clusterUri} / ${database}`);
 
-  const dashboardJson = buildDashboardJson(input.content, input.displayName, dataSource);
   const tileCount = Array.isArray((input.content as any)?.tiles) ? (input.content as any).tiles.length : 0;
+
+  // ── Azure-native DEFAULT: Loom-native Real-Time Dashboard over ADX ────────
+  // The dashboard is a Loom-native surface — kql-dashboard-model.ts + the
+  // /api/items/kql-dashboard/[id]?run=1 route execute each tile's KQL directly
+  // against the ADX cluster and render the visual in the Loom dashboard UI. No
+  // Microsoft Fabric workspace is required (no-fabric-dependency.md). The tile
+  // model is already persisted on the Cosmos item by Phase-1 install; here we
+  // confirm the ADX data source is configured so the tiles are runnable.
+  if (backend !== 'fabric' || !ws) {
+    if (backend === 'fabric' && !ws) {
+      steps.push('LOOM_DASHBOARD_BACKEND=fabric but no Fabric workspace bound — falling back to the Azure-native Loom dashboard over ADX.');
+    }
+    const tiles: Array<{ kql?: string }> = Array.isArray((input.content as any)?.tiles) ? (input.content as any).tiles : [];
+    const runnable = tiles.filter((t) => typeof t.kql === 'string' && t.kql.trim().length > 0).length;
+    steps.push(`Loom-native KQL dashboard ready: ${runnable}/${tileCount} tile(s) bound to ADX ${clusterUri} / ${database}. Renders in the Loom dashboard surface; tiles run live KQL via /run. No Fabric workspace required.`);
+    return {
+      status: 'created',
+      resourceId: input.cosmosItemId,
+      secondaryIds: { backend: 'adx', clusterUri, database, tiles: String(runnable) },
+      steps,
+    };
+  }
+
+  // ── Fabric Real-Time Dashboard (opt-in: LOOM_DASHBOARD_BACKEND=fabric + ws) ─
+  steps.push(`Fabric workspace: ${ws}`);
+  const dashboardJson = buildDashboardJson(input.content, input.displayName, dataSource);
   steps.push(`Built Real-Time Dashboard definition with ${tileCount} tiles.`);
 
   const definition = {

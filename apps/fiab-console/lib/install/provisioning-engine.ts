@@ -117,6 +117,16 @@ export function resolveTarget(mode: DeploymentMode, overrides?: Partial<Provisio
     aiSearchService: process.env.LOOM_AI_SEARCH_SERVICE,
     adlsAccount: process.env.LOOM_ADLS_ACCOUNT,
     adlsContainer: process.env.LOOM_ADLS_CONTAINER,
+    // Per-item backends DEFAULT to Azure-native (no-fabric-dependency.md).
+    // Fabric is opt-in only via LOOM_<ITEM>_BACKEND=fabric.
+    pipelineBackend: (process.env.LOOM_PIPELINE_BACKEND as ProvisionTarget['pipelineBackend']) || 'synapse',
+    eventBackend: (process.env.LOOM_EVENT_BACKEND as ProvisionTarget['eventBackend']) || 'eventhubs',
+    activatorBackend: (process.env.LOOM_ACTIVATOR_BACKEND as ProvisionTarget['activatorBackend']) || 'azure-monitor',
+    dashboardBackend: (process.env.LOOM_DASHBOARD_BACKEND as ProvisionTarget['dashboardBackend']) || 'adx',
+    mirrorBackend: (process.env.LOOM_MIRROR_BACKEND as ProvisionTarget['mirrorBackend']) || 'adf-cdc',
+    lakehouseBackend: (process.env.LOOM_LAKEHOUSE_BACKEND as ProvisionTarget['lakehouseBackend']) || 'adls',
+    semanticBackend: (process.env.LOOM_SEMANTIC_BACKEND as ProvisionTarget['semanticBackend']) || 'loom-native',
+    eventhubsNamespace: process.env.LOOM_EVENTHUB_NAMESPACE,
   };
   return { ...base, ...(overrides || {}) };
 }
