@@ -2857,19 +2857,23 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   }, [publishResult, inspectAgent]);
   const runInspect = useCallback(async () => {
     const agent = inspectAgent.trim(); const q = inspectQuestion.trim();
-    if (!agent || !q || inspecting) return;
+    // The agent name is OPTIONAL now — without a published Foundry agent the
+    // inspector runs the Azure-native grounded backend over this item's sources
+    // (no Microsoft Fabric / published asst_ required). Only the question + the
+    // item id are needed.
+    if (!q || inspecting) return;
     setInspecting(true); setInspectResult(null); setInspectGate(null);
     try {
       const r = await fetch('/api/data-agent/run-steps', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ agent, question: q }),
+        body: JSON.stringify({ agent: agent || undefined, question: q, id }),
       });
       const j = await r.json();
-      if (r.status === 501 || j?.code === 'not_configured') { setInspectGate(j?.hint || j?.error || 'Foundry Agent Service not configured.'); return; }
+      if (r.status === 501 || j?.code === 'not_configured') { setInspectGate(j?.hint || j?.error || 'No AOAI model deployed. Deploy one from the AI Foundry hub.'); return; }
       setInspectResult(j);
     } catch (e: any) { setInspectResult({ ok: false, error: e?.message || String(e) }); }
     finally { setInspecting(false); }
-  }, [inspectAgent, inspectQuestion, inspecting]);
+  }, [inspectAgent, inspectQuestion, inspecting, id]);
 
   // One-time migration: if a legacy record persisted `sources` as a string (or
   // any non-array shape), rewrite state to a clean DaSource[] so the agent both
