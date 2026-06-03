@@ -23,7 +23,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Caption1, Badge, Spinner, Tooltip, Divider,
+  Button, Caption1, Badge, Spinner, Tooltip, Divider, Switch, Input, Field,
   Table, TableHeader, TableHeaderCell, TableRow, TableCell, TableBody,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -37,6 +37,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const ITEMS_ROUTE = '/api/cosmos/items';
 const ACTION_ROUTE = '/api/cosmos/items/action';
+const RERANK_ROUTE = '/api/cosmos/items/rerank';
 const DEFAULT_QUERY = 'SELECT * FROM c';
 
 const useStyles = makeStyles({
@@ -108,6 +109,13 @@ export function CosmosDataExplorer({ db, container, partitionKey, initialQuery }
   const [configGate, setConfigGate] = useState<{ missing: string; hint?: string } | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
+  // Semantic reranker (Cosmos NoSQL public preview): re-order docs by semantic
+  // relevance of a text field to an intent. Honest-gated when not enabled.
+  const [rerankOn, setRerankOn] = useState(false);
+  const [rerankIntent, setRerankIntent] = useState('');
+  const [rerankField, setRerankField] = useState('');
+  const [rerankGate, setRerankGate] = useState<string | null>(null);
+
   // ---- item editor dialog ----
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<'new' | 'edit'>('new');
@@ -141,9 +149,27 @@ export function CosmosDataExplorer({ db, container, partitionKey, initialQuery }
   }
 
   const runQuery = useCallback(async (opts: { append?: boolean } = {}) => {
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setRerankGate(null);
     if (!opts.append) { setRbacGate(null); setConfigGate(null); }
     try {
+      // Semantic-rerank path: route through the reranker BFF (no pagination).
+      if (rerankOn && rerankIntent.trim() && rerankField.trim()) {
+        const rr = await fetch(RERANK_ROUTE, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ db, container, intent: rerankIntent.trim(), field: rerankField.trim(), maxItems: 50 }),
+        }).then(readJson);
+        if (rr?.code === 'rerank_preview') { setRerankGate(rr.hint || rr.error); setLoading(false); return; }
+        if (applyGates(rr)) { setLoading(false); return; }
+        if (!rr.ok) { setError(rr.error || 'rerank failed'); setLoading(false); return; }
+        const rpage = rr.documents || [];
+        setDocs(rpage);
+        setContinuation(null);
+        setRequestCharge(rr.requestCharge || 0);
+        setLastStats({ charge: rr.requestCharge || 0, count: rpage.length });
+        setExpanded(new Set());
+        setLoading(false);
+        return;
+      }
       const r = await fetch(ITEMS_ROUTE, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -168,7 +194,7 @@ export function CosmosDataExplorer({ db, container, partitionKey, initialQuery }
     } finally {
       setLoading(false);
     }
-  }, [db, container, query, continuation, requestCharge]);
+  }, [db, container, query, continuation, requestCharge, rerankOn, rerankIntent, rerankField]);
 
   // Auto-run the default query when a container is first selected.
   useEffect(() => {
@@ -309,6 +335,35 @@ export function CosmosDataExplorer({ db, container, partitionKey, initialQuery }
           {loading && <Spinner size="tiny" />}
         </div>
       </div>
+
+      {/* Semantic reranker (Cosmos NoSQL public preview) */}
+      <div className={s.toolbar} style={{ alignItems: 'flex-end' }}>
+        <Field label="Semantic rerank" hint="Re-order docs by relevance of a text field to your intent (preview)">
+          <Switch checked={rerankOn} onChange={(_, d) => setRerankOn(!!d.checked)}
+            label={rerankOn ? 'On' : 'Off'} />
+        </Field>
+        {rerankOn && (
+          <>
+            <Field label="Intent (query text)" style={{ flex: 1, minWidth: 220 }}>
+              <Input value={rerankIntent} placeholder="e.g. customers unhappy about latency"
+                onChange={(_, d) => setRerankIntent(d.value)} />
+            </Field>
+            <Field label="Rerank on field" hint="document text property, e.g. text or content.body">
+              <Input value={rerankField} placeholder="text"
+                onChange={(_, d) => setRerankField(d.value)} />
+            </Field>
+            <Badge appearance="outline" color="warning">Preview</Badge>
+          </>
+        )}
+      </div>
+      {rerankGate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Semantic reranker not available</MessageBarTitle>
+            {rerankGate}
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       <div className={s.queryRow}>
         <div className={s.queryBox}>
