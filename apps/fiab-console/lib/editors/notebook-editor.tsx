@@ -172,6 +172,27 @@ export function NotebookEditor({ item, id }: Props) {
     }
   }, [cp.computes, computeId]);
 
+  // Pre-warm session on compute selection: if a Synapse Spark compute is picked,
+  // immediately POST to /run with no code to initialize the Livy session in the background.
+  // This amortizes the 60-90s cold-start across the idle time before the user's first cell run.
+  const prewarmSession = useCallback(async (cId: string) => {
+    if (!workspaceId || !notebookId || !cId.startsWith('spark:')) return;
+    try {
+      await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ compute: cId, cellId: '__prewarm__' }),
+      }).catch(() => { /* silent — warmup is best-effort */ });
+    } catch { /* ignore */ }
+  }, [workspaceId, notebookId]);
+
+  useEffect(() => {
+    if (computeId && workspaceId && notebookId) {
+      const debounce = setTimeout(() => prewarmSession(computeId), 500);
+      return () => clearTimeout(debounce);
+    }
+  }, [computeId, workspaceId, notebookId, prewarmSession]);
+
   // v3.28: honor URL deep-link — when /items/notebook/{id} loads, discover
   // the owning workspace from the Cosmos record and auto-select it so the
   // cells actually render. Previously workspaceId stayed empty until the
@@ -370,15 +391,18 @@ export function NotebookEditor({ item, id }: Props) {
       let runId: string = j.runId;
       setRunMsg(`${j.compute?.kind || 'compute'} ${j.compute?.pool || j.compute?.clusterId} — ${j.status} (runId ${runId})`);
       const start = Date.now();
-      const MAX_MS = 8 * 60 * 1000;
+      const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
+      let pollInterval = 2000; // 2s during session-starting, 1s during statement
       while (Date.now() - start < MAX_MS) {
-        await new Promise(res => setTimeout(res, 4000));
+        await new Promise(res => setTimeout(res, pollInterval));
         const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const p = await pollRes.json();
         if (!p.ok) { setRunMsg(`Poll error: ${p.error || pollRes.status}`); break; }
         if (p.runId && p.runId !== runId) runId = p.runId; // promotion when statement is submitted
         const phase = p.phase ? ` · ${p.phase}` : '';
         setRunMsg(`Status: ${p.status}${phase}`);
+        // Adaptive polling: speed up after session is idle
+        if (p.phase === 'statement-running') pollInterval = 1000;
         if (p.output) {
           if (p.output.status === 'ok') {
             const txt = p.output.textPlain || JSON.stringify(p.output.data || {}, null, 2);
@@ -572,9 +596,10 @@ export function NotebookEditor({ item, id }: Props) {
       }
       let runId: string = j.runId;
       const start = Date.now();
-      const MAX_MS = 8 * 60 * 1000;
+      const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
+      let pollInterval = 2000; // 2s during session-starting, 1s during statement
       while (Date.now() - start < MAX_MS) {
-        await new Promise(res => setTimeout(res, 4000));
+        await new Promise(res => setTimeout(res, pollInterval));
         const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const p = await pollRes.json();
         if (!p.ok) {
@@ -587,6 +612,8 @@ export function NotebookEditor({ item, id }: Props) {
           ? ` · cold-start: Spark pool warming up (~60-90s on first cell)`
           : p.phase ? ` · ${p.phase}` : '';
         setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${phaseHint} · ${elapsed}s`);
+        // Adaptive polling: speed up after session is idle
+        if (p.phase === 'statement-running') pollInterval = 1000;
         if (p.output) {
           patchCell(cell.id, {
             executionCount: prevExec + 1,
@@ -739,14 +766,27 @@ export function NotebookEditor({ item, id }: Props) {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
               <Caption1>Compute target</Caption1>
-              <Select aria-label="Compute target" value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
-                {!computeId && <option value="">{cp.loading ? 'Loading compute…' : 'Select compute'}</option>}
-                {cp.computes
-                  .filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster')
-                  .map(c => (
-                    <option key={c.id} value={c.id}>{c.name}{c.state ? ` · ${c.state}` : ''}</option>
-                  ))}
-              </Select>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <div style={{ flex: 1 }}>
+                  <Select aria-label="Compute target" value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
+                    {!computeId && <option value="">{cp.loading ? 'Loading compute…' : 'Select compute'}</option>}
+                    {cp.computes
+                      .filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster')
+                      .map(c => (
+                        <option key={c.id} value={c.id}>{c.name}{c.state ? ` · ${c.state}` : ''}</option>
+                      ))}
+                  </Select>
+                </div>
+                {computeId && (
+                  <Badge
+                    appearance="filled"
+                    color={['Available', 'Online', 'Running', 'RUNNING', 'idle'].includes(cp.computes.find(c => c.id === computeId)?.state || '') ? 'success' : 'warning'}
+                    size="small"
+                  >
+                    {cp.computes.find(c => c.id === computeId)?.state || 'unknown'}
+                  </Badge>
+                )}
+              </div>
             </div>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
             {/* Import a desktop notebook file directly into this workspace. */}
