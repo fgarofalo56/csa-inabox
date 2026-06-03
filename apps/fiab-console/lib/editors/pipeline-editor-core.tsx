@@ -409,13 +409,15 @@ export function PipelineEditorCore({
         { label: busy ? 'Validating…' : 'Validate', icon: <Checkmark20Regular />, onClick: !busy && bound ? validate : undefined, disabled: busy || !bound, title: !bound ? 'Bind a pipeline first' : undefined },
       ],
     }] : [];
-    // Manage hub (factory-level: linked services / datasets / integration
-    // runtimes) — ADF only, available regardless of pipeline binding.
-    const manageGroup: RibbonTab['groups'] = isAdf ? [{
+    // Manage hub — linked services / datasets (+ integration runtimes for ADF).
+    // Available for BOTH ADF and Synapse pipelines, regardless of pipeline
+    // binding. Synapse pipelines reach their own /api/synapse/* resources; the
+    // backend is selected on the ManagePanel below.
+    const manageGroup: RibbonTab['groups'] = [{
       label: 'Manage', actions: [
-        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services, datasets and integration runtimes' },
+        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: isAdf ? 'Linked services, datasets and integration runtimes' : 'Linked services and datasets' },
       ],
-    }] : [];
+    }];
     return [
       { id: 'home', label: 'Home', groups: [
         { label: 'Save', actions: [
@@ -678,17 +680,19 @@ export function PipelineEditorCore({
             </>
           )}
 
-          {isAdf && (
-            <ManagePanel
-              open={manageOpen}
-              onOpenChange={(open) => {
-                setManageOpen(open);
-                // On close, the navigator re-lists so linked-service / dataset /
-                // IR changes made in the Manage hub reflect in the counts.
-                if (!open) setFactoryRefreshKey((k) => k + 1);
-              }}
-            />
-          )}
+          <ManagePanel
+            open={manageOpen}
+            backend={isAdf ? 'adf' : 'synapse'}
+            onOpenChange={(open) => {
+              setManageOpen(open);
+              // On close, the navigator re-lists so linked-service / dataset /
+              // IR changes made in the Manage hub reflect in the counts.
+              if (!open) {
+                if (isAdf) setFactoryRefreshKey((k) => k + 1);
+                else setWorkspaceRefreshKey((k) => k + 1);
+              }
+            }}
+          />
 
           <Dialog open={triggersOpen} onOpenChange={(_, d) => setTriggersOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '760px', width: '90vw' }}>

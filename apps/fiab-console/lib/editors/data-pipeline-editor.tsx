@@ -41,9 +41,10 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
-  Checkmark20Regular, Bug20Regular, Clock20Regular,
+  Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { ActivityPalette } from '@/lib/components/pipeline/palette';
 import { PipelineCanvas, type CanvasHandle } from '@/lib/components/pipeline/canvas';
 import { PropertiesPanel } from '@/lib/components/pipeline/properties-panel';
@@ -222,6 +223,9 @@ export function DataPipelineEditor({ item, id }: Props) {
 
   // Schedule dialog
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  // Manage hub (linked services / datasets) — Synapse-backed, the Azure-native
+  // default for the Fabric data pipeline item.
+  const [manageOpen, setManageOpen] = useState(false);
   const [triggerName, setTriggerName] = useState('');
   const [triggerCron, setTriggerCron] = useState('0 0 * * *');
   const [triggerBusy, setTriggerBusy] = useState(false);
@@ -596,6 +600,9 @@ export function DataPipelineEditor({ item, id }: Props) {
         { label: 'Validate', actions: [
           { label: validating ? 'Validating…' : 'Validate', icon: <Checkmark20Regular />, onClick: canValidate ? validate : undefined, disabled: !canValidate },
         ]},
+        { label: 'Manage', actions: [
+          { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services and datasets' },
+        ]},
         { label: 'Run', actions: [
           { label: running ? 'Queuing…' : 'Run', icon: <Play20Regular />, onClick: canRun ? run : undefined, disabled: !canRun },
           { label: debugging ? 'Debugging…' : 'Debug', icon: <Bug20Regular />, onClick: canDebug ? debug : undefined, disabled: !canDebug },
@@ -962,6 +969,9 @@ export function DataPipelineEditor({ item, id }: Props) {
               )}
             </TopTabs>
           )}
+
+          {/* Manage hub — linked services / datasets (Synapse-backed) */}
+          <ManagePanel open={manageOpen} backend="synapse" onOpenChange={setManageOpen} />
 
           {/* Create dialog */}
           <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
