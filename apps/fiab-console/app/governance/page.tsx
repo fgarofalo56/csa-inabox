@@ -203,8 +203,8 @@ const SECTIONS: {
     group: 'Data Map',
     items: [
       { href: '/governance/scans', label: 'Scans & sources', desc: 'Register sources, schedule + run scans.', icon: ArrowSync20Regular, color: '#0050b3' },
-      { href: '/governance/classifications', label: 'Classifications', desc: 'Sensitive-info types across the estate.', icon: Tag20Regular, color: '#117865' },
-      { href: '/governance/sensitivity', label: 'Sensitivity labels', desc: 'MIP label distribution and coverage.', icon: Shield20Regular, color: '#7c3aed' },
+      { href: '/admin/classifications', label: 'Classification rules', desc: 'Define custom classification rules (Loom-native, no Purview).', icon: Tag20Regular, color: '#117865' },
+      { href: '/admin/sensitivity-labels', label: 'Sensitivity labels', desc: 'Define + manage sensitivity labels (Loom-native).', icon: Shield20Regular, color: '#7c3aed' },
     ],
   },
   {
