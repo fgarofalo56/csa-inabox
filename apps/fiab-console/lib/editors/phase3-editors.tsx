@@ -2965,8 +2965,13 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   // new rule
   const [ruleOpen, setRuleOpen] = useState(false);
   const [ruleName, setRuleName] = useState('');
-  const [ruleCondition, setRuleCondition] = useState('{ "operator": "GreaterThan", "value": 20 }');
-  const [ruleAction, setRuleAction] = useState('{ "kind": "TeamsMessage", "config": {} }');
+  // Rule wizard (no JSON): condition (property/operator/value) + action (kind + target/message).
+  const [condProperty, setCondProperty] = useState('');
+  const [condOperator, setCondOperator] = useState('GreaterThan');
+  const [condValue, setCondValue] = useState('20');
+  const [actKind, setActKind] = useState<'TeamsMessage' | 'Email' | 'Webhook' | 'AdfPipelineRun' | 'NotebookRun' | 'PowerAutomateFlow'>('TeamsMessage');
+  const [actTarget, setActTarget] = useState('');
+  const [actMessage, setActMessage] = useState('Loom alert: {{eventValue}}');
   const [ruleBusy, setRuleBusy] = useState(false);
   const [ruleErr, setRuleErr] = useState<string | null>(null);
 
@@ -3032,9 +3037,21 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const addRule = useCallback(async () => {
     if (!ruleName.trim() || !workspaceId || !selectedId) return;
     setRuleBusy(true); setRuleErr(null);
-    let condition: any; let action: any;
-    try { condition = JSON.parse(ruleCondition); } catch (e: any) { setRuleErr(`condition JSON: ${e?.message}`); setRuleBusy(false); return; }
-    try { action = JSON.parse(ruleAction); } catch (e: any) { setRuleErr(`action JSON: ${e?.message}`); setRuleBusy(false); return; }
+    // Build the structured condition + action from the wizard fields (no JSON).
+    const condition = {
+      ...(condProperty.trim() ? { property: condProperty.trim() } : {}),
+      operator: condOperator,
+      value: condValue.trim() === '' ? null : (Number.isNaN(Number(condValue)) ? condValue.trim() : Number(condValue)),
+    };
+    const cfgByKind: Record<string, Record<string, string>> = {
+      TeamsMessage: { webhookUrl: actTarget, message: actMessage },
+      Email: { to: actTarget, subject: actMessage },
+      Webhook: { url: actTarget },
+      AdfPipelineRun: { pipeline: actTarget },
+      NotebookRun: { notebookId: actTarget },
+      PowerAutomateFlow: { triggerUrl: actTarget },
+    };
+    const action = { kind: actKind, config: cfgByKind[actKind] || {} };
     try {
       const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
@@ -3045,7 +3062,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       if (!j.ok) { setRuleErr(j.error || 'add rule failed'); }
       else { setRuleOpen(false); setRuleName(''); loadRules(workspaceId, selectedId); }
     } finally { setRuleBusy(false); }
-  }, [ruleName, ruleCondition, ruleAction, workspaceId, selectedId, loadRules]);
+  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, workspaceId, selectedId, loadRules]);
 
   const triggerNow = useCallback(async (ruleId: string) => {
     if (!workspaceId || !selectedId) return;
@@ -3077,19 +3094,21 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     }
   }, [workspaceId, selectedId, loadRules]);
 
-  // Action template — pre-fill the New Rule dialog with the common shape.
+  // Action template — pre-select the action kind + a sensible target/message in
+  // the wizard (no JSON). The user refines via the dropdowns/inputs.
   const openTemplate = useCallback((kind: 'Email' | 'Teams' | 'Pipeline' | 'Notebook' | 'PowerAutomate') => {
-    const templates: Record<typeof kind, string> = {
-      Email: JSON.stringify({ kind: 'Email', config: { to: 'alerts@example.com', subject: 'Loom alert', body: '{{eventValue}}' } }, null, 2),
-      Teams: JSON.stringify({ kind: 'TeamsMessage', config: { webhookUrl: 'https://outlook.office.com/webhook/...', message: 'Loom alert: {{eventValue}}' } }, null, 2),
-      Pipeline: JSON.stringify({ kind: 'AdfPipelineRun', config: { factory: 'adf-loom-default-eastus2', pipeline: 'pl_alert_handler', parameters: {} } }, null, 2),
-      Notebook: JSON.stringify({ kind: 'NotebookRun', config: { workspaceId: workspaceId, notebookId: '<notebook-guid>', parameters: {} } }, null, 2),
-      PowerAutomate: JSON.stringify({ kind: 'PowerAutomateFlow', config: { triggerUrl: 'https://prod-xx.westus.logic.azure.com/workflows/.../triggers/...' } }, null, 2),
-    } as const;
+    const map = {
+      Email: { k: 'Email' as const, t: 'alerts@example.com', m: 'Loom alert' },
+      Teams: { k: 'TeamsMessage' as const, t: 'https://outlook.office.com/webhook/...', m: 'Loom alert: {{eventValue}}' },
+      Pipeline: { k: 'AdfPipelineRun' as const, t: 'pl_alert_handler', m: '' },
+      Notebook: { k: 'NotebookRun' as const, t: '', m: '' },
+      PowerAutomate: { k: 'PowerAutomateFlow' as const, t: 'https://prod-xx.logic.azure.com/workflows/.../triggers/...', m: '' },
+    };
+    const sel = map[kind];
     setRuleName(`alert-${kind.toLowerCase()}-${Date.now().toString(36)}`);
-    setRuleAction(templates[kind]);
+    setActKind(sel.k); setActTarget(sel.t); setActMessage(sel.m);
     setRuleOpen(true);
-  }, [workspaceId]);
+  }, []);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -3177,12 +3196,58 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                     <DialogBody>
                       <DialogTitle>Add rule</DialogTitle>
                       <DialogContent>
-                        <Input placeholder="rule name" value={ruleName} onChange={(_: unknown, d: any) => setRuleName(d.value)} style={{ width: '100%' }} />
-                        <Caption1 style={{ marginTop: 8 }}>condition JSON</Caption1>
-                        <Textarea value={ruleCondition} onChange={(_: unknown, d: any) => setRuleCondition(d.value)} rows={3} style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }} />
-                        <Caption1 style={{ marginTop: 8 }}>action JSON</Caption1>
-                        <Textarea value={ruleAction} onChange={(_: unknown, d: any) => setRuleAction(d.value)} rows={3} style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }} />
-                        {ruleErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{ruleErr}</MessageBarBody></MessageBar>}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                          <Field label="Rule name" required>
+                            <Input placeholder="e.g. Latency SLA breach" value={ruleName} onChange={(_: unknown, d: any) => setRuleName(d.value)} />
+                          </Field>
+
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>WHEN — condition</Caption1>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <Field label="Property" style={{ flex: 1 }}>
+                              <Input placeholder="e.g. latency_ms" value={condProperty} onChange={(_: unknown, d: any) => setCondProperty(d.value)} />
+                            </Field>
+                            <Field label="Operator" style={{ width: 180 }}>
+                              <Select value={condOperator} onChange={(_: unknown, d: any) => setCondOperator(d.value)}>
+                                {['GreaterThan', 'GreaterThanOrEqual', 'LessThan', 'LessThanOrEqual', 'Equals', 'NotEquals', 'BecomesTrue', 'ChangesTo'].map((o) => <option key={o} value={o}>{o}</option>)}
+                              </Select>
+                            </Field>
+                            <Field label="Value" style={{ width: 120 }}>
+                              <Input placeholder="20" value={condValue} onChange={(_: unknown, d: any) => setCondValue(d.value)} />
+                            </Field>
+                          </div>
+
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>THEN — action</Caption1>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <Field label="Do" style={{ width: 200 }}>
+                              <Select value={actKind} onChange={(_: unknown, d: any) => setActKind(d.value)}>
+                                <option value="TeamsMessage">Post to Teams</option>
+                                <option value="Email">Send email</option>
+                                <option value="Webhook">Call webhook</option>
+                                <option value="AdfPipelineRun">Run a pipeline</option>
+                                <option value="NotebookRun">Run a notebook</option>
+                                <option value="PowerAutomateFlow">Trigger Power Automate</option>
+                              </Select>
+                            </Field>
+                            <Field label={
+                              actKind === 'TeamsMessage' ? 'Teams webhook URL' :
+                              actKind === 'Email' ? 'To address' :
+                              actKind === 'Webhook' ? 'Webhook URL' :
+                              actKind === 'AdfPipelineRun' ? 'Pipeline name' :
+                              actKind === 'NotebookRun' ? 'Notebook id' : 'Flow trigger URL'
+                            } style={{ flex: 1 }}>
+                              <Input value={actTarget} onChange={(_: unknown, d: any) => setActTarget(d.value)} />
+                            </Field>
+                          </div>
+                          {(actKind === 'TeamsMessage' || actKind === 'Email') && (
+                            <Field label={actKind === 'Email' ? 'Subject' : 'Message'}>
+                              <Input value={actMessage} onChange={(_: unknown, d: any) => setActMessage(d.value)} />
+                            </Field>
+                          )}
+                          <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
+                            when {condProperty || '<property>'} {condOperator} {condValue || '<value>'} → {actKind}
+                          </Caption1>
+                          {ruleErr && <MessageBar intent="error"><MessageBarBody>{ruleErr}</MessageBarBody></MessageBar>}
+                        </div>
                       </DialogContent>
                       <DialogActions>
                         <Button appearance="secondary" onClick={() => setRuleOpen(false)}>Cancel</Button>
