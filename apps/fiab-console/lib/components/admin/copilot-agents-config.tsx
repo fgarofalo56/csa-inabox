@@ -26,6 +26,7 @@ import {
 } from '@fluentui/react-components';
 import { Save24Regular, ArrowClockwise20Regular, Sparkle20Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
+import { McpServersPanel } from '@/lib/components/admin/mcp-servers-panel';
 import {
   RECOMMENDED_CHAT_MODELS, RECOMMENDED_EMBED_MODELS, looksLikeEmbedding,
   type TenantCopilotConfig,
@@ -202,6 +203,7 @@ export function CopilotAgentsConfig() {
   }
 
   return (
+    <>
     <Section title="Copilot & Agents">
       <Body1 className={s.hint}>
         Pick the default Azure AI Foundry account and model deployments the Loom
@@ -352,5 +354,7 @@ export function CopilotAgentsConfig() {
         </Button>
       </div>
     </Section>
+    <McpServersPanel />
+    </>
   );
 }

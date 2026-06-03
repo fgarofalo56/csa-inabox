@@ -21,10 +21,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Spinner, Caption1, makeStyles, tokens, MessageBar, MessageBarBody, MessageBarTitle,
-  Link,
+  Link, Button, Tooltip,
 } from '@fluentui/react-components';
 import {
   ChevronRight16Regular, ChevronDown16Regular,
+  ChevronDoubleRight16Regular, ChevronDoubleLeft16Regular,
   Folder16Regular, Document16Regular,
   Database16Regular, DatabaseStack16Regular, Table16Regular, FolderOpen16Regular,
   Box16Regular, DocumentData16Regular, Notebook16Regular, Flow16Regular,
@@ -132,8 +133,8 @@ const SOURCE_BANNER: Record<Props['source'], { title: string; body: string } | n
   'unity-catalog': null,
   purview: null,
   onelake: {
-    title: 'OneLake — Loom workspaces (live Microsoft Fabric)',
-    body: 'These are the real Fabric workspaces the Console identity can see (api.fabric.microsoft.com). Expand a workspace to browse its OneLake items — lakehouses, warehouses, semantic models, reports, KQL databases, notebooks, and pipelines.',
+    title: 'OneLake — CSA Loom workspaces',
+    body: 'The CSA Loom workspaces the Console identity can see. Expand a workspace to browse its OneLake items — lakehouses, warehouses, semantic models, reports, KQL databases, notebooks, and pipelines.',
   },
 };
 
@@ -301,9 +302,26 @@ export function TreeBrowser({ source, onSelect }: Props) {
       {(!roots || roots.length === 0)
         ? <Caption1>No nodes returned for this source.</Caption1>
         : (
-          <div className={s.root} role="tree" aria-label={`Browse ${source}`}>
-            {roots.map((r) => renderNode(r, 0, []))}
-          </div>
+          <>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center', padding: '2px 0 6px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, marginBottom: 4 }}>
+              <Tooltip content="Expand all top-level nodes" relationship="label">
+                <Button size="small" appearance="subtle" icon={<ChevronDoubleRight16Regular />}
+                  onClick={() => { (roots || []).forEach((r) => { if (r.hasChildren && !expanded.has(r.id)) toggle(r, []); }); }}>
+                  Expand all
+                </Button>
+              </Tooltip>
+              <Tooltip content="Collapse every expanded node" relationship="label">
+                <Button size="small" appearance="subtle" icon={<ChevronDoubleLeft16Regular />}
+                  onClick={() => setExpanded(new Set())} disabled={expanded.size === 0}>
+                  Collapse all
+                </Button>
+              </Tooltip>
+              <Caption1 style={{ marginLeft: 'auto', color: tokens.colorNeutralForeground3 }}>{expanded.size} open</Caption1>
+            </div>
+            <div className={s.root} role="tree" aria-label={`Browse ${source}`}>
+              {roots.map((r) => renderNode(r, 0, []))}
+            </div>
+          </>
         )}
     </div>
   );
