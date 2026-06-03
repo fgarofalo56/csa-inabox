@@ -113,6 +113,26 @@ function makeAddConstraintIdempotent(batch: string): string {
   return `IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE name = N'${c}')\n${batch}`;
 }
 
+/**
+ * A dbt model belongs on Spark/Delta (a lakehouse dbt run), NOT the Synapse
+ * dedicated SQL pool, when it is Jinja-templated OR uses Spark/Delta-only SQL
+ * that TDS rejects. The dedicated pool runs PLAIN T-SQL views only — sending a
+ * Spark model raises "Incorrect syntax near '{'" (Jinja) or a function/keyword
+ * error (e.g. OPTIMIZE/ZORDER/MERGE-incremental/MODE()/DAYOFWEEK()). An explicit
+ * per-model `engine` tag wins; otherwise we sniff. This is the guard that keeps
+ * every casino/fedramp/pipeline-designer Spark model off the dedicated pool.
+ */
+function isSparkModel(m: { sql: string; engine?: string }): boolean {
+  const eng = (m.engine || '').toLowerCase();
+  if (eng === 'spark' || eng === 'lakehouse' || eng === 'databricks') return true;
+  if (eng === 'tsql' || eng === 'synapse' || eng === 'synapse-dedicated') return false;
+  const sql = m.sql || '';
+  if (/\{\{|\{%/.test(sql)) return true; // Jinja
+  // Spark/Delta-only tokens that have no valid T-SQL form on the dedicated pool.
+  return /\b(OPTIMIZE|ZORDER|MERGE\s+INTO|input_file_name|concat_ws|explode|explode_outer|posexplode|dayofweek|date_format|current_timestamp\s*\(\s*\)|to_json|from_json|named_struct|mode\s*\()\b/i.test(sql)
+    || /materialized\s*=\s*'incremental'/i.test(sql);
+}
+
 function splitBatches(sql: string): string[] {
   return sql
     .split(/;\s*\n/)
@@ -353,7 +373,7 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
   const steps: string[] = [];
   const content = input.content as any;
   const ddl = typeof content?.ddl === 'string' ? content.ddl : '';
-  const dbtModels: Array<{ layer: string; name: string; sql: string }> = Array.isArray(content?.dbtModels) ? content.dbtModels : [];
+  const dbtModels: Array<{ layer: string; name: string; sql: string; engine?: string }> = Array.isArray(content?.dbtModels) ? content.dbtModels : [];
   const sampleRows: SampleRowsEntry[] = Array.isArray(content?.sampleRows) ? content.sampleRows : [];
 
   if (!ddl && dbtModels.length === 0 && sampleRows.length === 0) {
@@ -465,13 +485,15 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
 
     for (const m of dbtModels) {
       const viewName = `${m.layer}_${m.name}`;
-      // dbt models authored with Jinja ({{ config }}, {{ ref/source }}, {% if %})
-      // are compiled by a dbt RUN, not executable as a raw CREATE VIEW — sending
-      // them to TDS raises "Incorrect syntax near '{'". Skip them honestly: the
-      // model SQL ships as project source for `dbt run`, and the bronze/silver/
-      // gold data path is already served by the seeded tables above.
-      if (/\{\{|\{%/.test(m.sql)) {
-        steps.push(`Skipped dbt model [${viewName}] (${m.layer}): Jinja-templated — compiled by a dbt run, not a direct view. Seeded tables already serve the data path.`);
+      // Spark/Delta dbt models (Jinja, or Spark-only SQL like OPTIMIZE/ZORDER/
+      // MERGE-incremental/MODE()/DAYOFWEEK()) are compiled by a dbt RUN on the
+      // lakehouse/Spark (the dbt-job item), NOT executable as a raw CREATE VIEW
+      // on the dedicated SQL pool — sending them to TDS raises "Incorrect syntax
+      // near '{'" or a function error. Route them to the Spark/dbt path instead
+      // of attempting TDS. The bronze/silver/gold data path is already served by
+      // the seeded tables above; the model SQL ships as dbt project source.
+      if (isSparkModel(m)) {
+        steps.push(`dbt model [${viewName}] (${m.layer}) is a Spark/Delta model — runs via the Databricks/Spark dbt-job, not the dedicated SQL pool. Skipped on TDS by design (no syntax error). Seeded tables serve the data path now.`);
         continue;
       }
       // Synapse DEDICATED SQL pool does NOT support CREATE OR ALTER VIEW, and
