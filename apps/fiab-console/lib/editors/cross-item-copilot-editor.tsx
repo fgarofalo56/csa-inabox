@@ -18,7 +18,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Accordion, AccordionHeader, AccordionItem, AccordionPanel,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Field,
+  Field, Input, Dropdown, Option, Switch,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -204,20 +204,97 @@ function StepCard({ step }: { step: Step }) {
  * isn't deployed at all — the underlying tool handler still works
  * if its own backing service is reachable).
  */
+/**
+ * Guided argument form generated from a tool's JSON-Schema `parameters`
+ * (no JSON typing — loom_no_freeform_config). Each property becomes the right
+ * control: enum → Dropdown, boolean → Switch, number/integer → number Input,
+ * string → Input. Nested object/array params fall back to a labeled value box
+ * (rare — only a couple of tools take object params like pipeline parameters).
+ */
+function SchemaArgForm({ schema, value, onChange }: { schema: any; value: Record<string, any>; onChange: (v: Record<string, any>) => void }) {
+  const props: Record<string, any> = schema?.properties || {};
+  const required: string[] = Array.isArray(schema?.required) ? schema.required : [];
+  const keys = Object.keys(props);
+  if (keys.length === 0) {
+    return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>This tool takes no parameters — just run it.</Caption1>;
+  }
+  const set = (k: string, v: any) => onChange({ ...value, [k]: v });
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {keys.map((k) => {
+        const p = props[k] || {};
+        const label = `${k}${required.includes(k) ? ' *' : ''}`;
+        const hint = p.description as string | undefined;
+        const enumVals: any[] | undefined = Array.isArray(p.enum) ? p.enum : undefined;
+        if (enumVals) {
+          const cur = value[k] != null ? String(value[k]) : '';
+          return (
+            <Field key={k} label={label} hint={hint}>
+              <Dropdown placeholder={`Select ${k}`} selectedOptions={cur ? [cur] : []} value={cur}
+                onOptionSelect={(_e, d) => set(k, d.optionValue)}>
+                {enumVals.map((o) => <Option key={String(o)} value={String(o)}>{String(o)}</Option>)}
+              </Dropdown>
+            </Field>
+          );
+        }
+        if (p.type === 'boolean') {
+          return (
+            <Field key={k} label={label} hint={hint}>
+              <Switch checked={!!value[k]} onChange={(_e, d) => set(k, d.checked)} />
+            </Field>
+          );
+        }
+        if (p.type === 'number' || p.type === 'integer') {
+          return (
+            <Field key={k} label={label} hint={hint}>
+              <Input type="number" value={value[k] != null ? String(value[k]) : ''}
+                onChange={(_e, d) => set(k, d.value === '' ? undefined : Number(d.value))} />
+            </Field>
+          );
+        }
+        if (p.type === 'object' || p.type === 'array') {
+          // Rare: a structured param (e.g. pipeline parameters). Offer a clearly
+          // labeled key:value value box rather than raw "args JSON".
+          return (
+            <Field key={k} label={`${label} (one key=value per line)`} hint={hint}>
+              <Textarea rows={3}
+                value={typeof value[`__kv_${k}`] === 'string' ? value[`__kv_${k}`] : ''}
+                onChange={(_e, d) => {
+                  const obj: Record<string, string> = {};
+                  for (const line of d.value.split('\n')) {
+                    const i = line.indexOf('=');
+                    if (i > 0) obj[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+                  }
+                  onChange({ ...value, [`__kv_${k}`]: d.value, [k]: p.type === 'array' ? Object.values(obj) : obj });
+                }} />
+            </Field>
+          );
+        }
+        return (
+          <Field key={k} label={label} hint={hint}>
+            <Input value={value[k] != null ? String(value[k]) : ''} onChange={(_e, d) => set(k, d.value)} />
+          </Field>
+        );
+      })}
+    </div>
+  );
+}
+
 function ToolRow({ tool }: { tool: Tool }) {
   const [open, setOpen] = useState(false);
-  const [args, setArgs] = useState('{}');
+  const [argv, setArgv] = useState<Record<string, any>>({});
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
   const invoke = useCallback(async () => {
-    let parsed: any = {};
-    try {
-      parsed = args.trim() ? JSON.parse(args) : {};
-    } catch (e: any) {
-      setError(`Invalid JSON args: ${e?.message || e}`);
-      return;
+    // Build the args object from the guided form, dropping UI-only helper keys
+    // and empty values so the tool receives a clean payload.
+    const parsed: Record<string, any> = {};
+    for (const [k, v] of Object.entries(argv)) {
+      if (k.startsWith('__kv_')) continue;
+      if (v === undefined || v === '') continue;
+      parsed[k] = v;
     }
     setBusy(true);
     setError(null);
@@ -237,7 +314,7 @@ function ToolRow({ tool }: { tool: Tool }) {
     } finally {
       setBusy(false);
     }
-  }, [tool.name, args]);
+  }, [tool.name, argv]);
 
   return (
     <>
@@ -263,15 +340,9 @@ function ToolRow({ tool }: { tool: Tool }) {
           <DialogBody>
             <DialogTitle>{tool.name}</DialogTitle>
             <DialogContent>
-              <Caption1 style={{ display: 'block', marginBottom: 8 }}>{tool.description}</Caption1>
-              <Field label="Args (JSON)" hint='e.g. {"sql":"SELECT 1","database":"master"}'>
-                <Textarea
-                  value={args}
-                  onChange={(_, d) => setArgs(d.value)}
-                  rows={6}
-                  style={{ fontFamily: 'JetBrains Mono, Consolas, monospace', fontSize: 12 }}
-                />
-              </Field>
+              <Caption1 style={{ display: 'block', marginBottom: 12 }}>{tool.description}</Caption1>
+              <SchemaArgForm schema={tool.parameters} value={argv} onChange={setArgv} />
+              <Button appearance="subtle" size="small" style={{ marginTop: 8 }} onClick={() => setArgv({})}>Reset inputs</Button>
               {error && (
                 <MessageBar intent="error" style={{ marginTop: 12 }}>
                   <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{error}</MessageBarBody>
@@ -556,7 +627,7 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
           />
           <div style={{ display: 'flex', gap: 8 }}>
             <Button appearance="primary" disabled={running || !prompt.trim()} onClick={runOrchestrate}>
-              {running ? 'Running…' : 'Orchestrate'}
+              {running ? 'Working…' : 'Ask CSA Loom Copilot'}
             </Button>
             {running && <Spinner size="tiny" />}
             <div style={{ flex: 1 }} />
@@ -597,7 +668,7 @@ export function CopilotConsoleView({ embedded = false }: { embedded?: boolean })
   return (
     <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12, height: 'calc(100vh - 52px)', minHeight: 0, overflow: 'hidden', boxSizing: 'border-box' }}>
       <Title2>Loom Copilot</Title2>
-      <Caption1>Orchestrate across every wired service from a single natural-language prompt.</Caption1>
+      <Caption1>Ask CSA Loom Copilot anything — it plans + runs the right tools across every wired CSA Loom service from one natural-language prompt.</Caption1>
       {body}
     </div>
   );

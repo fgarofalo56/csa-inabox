@@ -67,7 +67,7 @@ const QUERY_LANG: Record<DataAgentSourceType, string> = {
 
 function composeSystemPrompt(cfg: DataAgentConfig): string {
   const lines: string[] = [];
-  lines.push('You are a Microsoft Fabric data agent. Answer the user\'s question in natural language, grounded ONLY in the attached data sources below.');
+  lines.push('You are a CSA Loom data agent (CSA Loom is its own Azure-based data + AI platform, not Microsoft Fabric). Answer the user\'s question in natural language, grounded ONLY in the attached data sources below.');
   lines.push('For every answer, also emit the query you would run against the chosen source, fenced in a code block, and name the source you used.');
   lines.push('');
   if (cfg.instructions?.trim()) {
