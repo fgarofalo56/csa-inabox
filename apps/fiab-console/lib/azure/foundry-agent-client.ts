@@ -352,13 +352,14 @@ async function resolveAssistantId(agentNameOrId: string, override?: FoundryAgent
   const match = (agents as any[]).find((a) => a?.id === agentNameOrId || a?.name === agentNameOrId);
   const id = (match as any)?.id;
   if (id && /^asst/i.test(id)) return id;
-  // Some deployments key the agent by an id that isn't the assistant id; fall
-  // back to any returned id, else fail with an actionable message.
-  if (id) return id;
+  // The Assistants runs API STRICTLY requires an `asst_…` id. Never pass a
+  // non-asst id (e.g. the Loom display name keyed as id) — that yields the
+  // confusing "Invalid 'assistant_id'" 400. Fail with a 404 the caller can
+  // detect to fall back to the Azure-native grounded-chat path.
   throw new FoundryAgentError(
     404, undefined,
-    `No Foundry assistant named '${agentNameOrId}' was found in the project. ` +
-    'Deploy/publish the data agent to Foundry first, then retry.',
+    `No PUBLISHED Foundry assistant (asst_…) named '${agentNameOrId}' was found in the project. ` +
+    'Either publish the data agent to Foundry first, or use the Azure-native grounded run (default).',
   );
 }
 
