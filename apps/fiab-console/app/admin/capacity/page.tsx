@@ -12,6 +12,7 @@ import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { ScaleManagePanel } from '@/lib/components/admin/scale-manage-panel';
 
 function portalUrl(id: string): string {
   // Azure portal deep-link to the resource Overview blade.
@@ -212,6 +213,17 @@ export default function CapacityPage() {
               </MessageBarBody>
             </MessageBar>
           )}
+
+          <Section
+            title="Scale & manage"
+            actions={
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Change SKUs, pause / resume, scale — live Azure-native compute
+              </Caption1>
+            }
+          >
+            <ScaleManagePanel />
+          </Section>
 
           <Section
             title="Resources"
