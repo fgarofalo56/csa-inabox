@@ -206,10 +206,10 @@ function provStateBadge(state?: string) {
  */
 function stageVisual(order: number, displayName?: string) {
   const name = (displayName || '').toLowerCase();
-  if (order === 0 || name.includes('dev')) return { color: '#0078d4', Icon: BranchFork20Regular };   // Development — blue
-  if (name.includes('prod')) return { color: '#1a7f4e', Icon: Globe20Regular };                       // Production — green
-  if (order === 1 || name.includes('test') || name.includes('stag')) return { color: '#c2410c', Icon: Beaker20Regular }; // Test — orange
-  return { color: '#7c3aed', Icon: Server20Regular };                                                  // extra stages — purple
+  if (order === 0 || name.includes('dev')) return { color: 'var(--loom-accent-blue)', Icon: BranchFork20Regular };   // Development — blue
+  if (name.includes('prod')) return { color: 'var(--loom-accent-green)', Icon: Globe20Regular };                       // Production — green
+  if (order === 1 || name.includes('test') || name.includes('stag')) return { color: 'var(--loom-accent-orange)', Icon: Beaker20Regular }; // Test — orange
+  return { color: 'var(--loom-accent-violet)', Icon: Server20Regular };                                                  // extra stages — purple
 }
 
 type TabKey = 'pipelines' | 'git' | 'infra';
