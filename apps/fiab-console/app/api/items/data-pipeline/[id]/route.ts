@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
-import { getPipeline, upsertPipeline, deletePipeline, type AdfPipeline } from '@/lib/azure/adf-client';
+import { getPipeline, upsertPipeline, deletePipeline, adfConfigGate, type AdfPipeline } from '@/lib/azure/adf-client';
 import { pipelineDefinitionFromContent } from '@/lib/azure/pipeline-binding';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
@@ -68,24 +68,38 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     const items = await itemsContainer();
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!existing || existing.itemType !== 'data-pipeline') return err('pipeline not found', 404);
-    const adfName = (existing.state as any)?.adfPipelineName;
-    if (body?.definition && adfName) {
+    let adfName = (existing.state as any)?.adfPipelineName;
+    const props = body?.definition ? (body.definition.properties || body.definition) : null;
+    // Save = publish: when ADF is configured, ensure a LIVE ADF pipeline backs
+    // this item. On first save of a new / bundle-installed pipeline there is no
+    // adfPipelineName yet, so we mint one and create the ADF pipeline — without
+    // this the pipeline saved to Cosmos but never got an ADF backing, and Run
+    // gated forever ("no ADF backing — publish it first") with no way out.
+    // When ADF isn't configured we still persist the definition to Cosmos; Run
+    // surfaces the honest env-var gate instead.
+    if (props && !adfConfigGate()) {
+      if (!adfName) {
+        const base = (body?.displayName?.trim() || existing.displayName || 'pipeline')
+          .replace(/[^A-Za-z0-9 _()-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200) || 'pipeline';
+        adfName = `${base}_${(existing.id || '').replace(/[^A-Za-z0-9]/g, '').slice(-6) || 'loom'}`;
+      }
       try {
-        await upsertPipeline(adfName, {
-          name: adfName,
-          properties: body.definition.properties || body.definition,
-        });
+        await upsertPipeline(adfName, { name: adfName, properties: props });
       } catch (e: any) { return err(`ADF write failed: ${e?.message || e}`, 502); }
     }
     const next: WorkspaceItem = {
       ...existing,
       displayName: body?.displayName?.trim() || existing.displayName,
       description: 'description' in body ? body.description : existing.description,
-      state: { ...(existing.state || {}), ...(body?.definition ? { definition: body.definition } : {}) },
+      state: {
+        ...(existing.state || {}),
+        ...(body?.definition ? { definition: body.definition } : {}),
+        ...(adfName ? { adfPipelineName: adfName } : {}),
+      },
       updatedAt: new Date().toISOString(),
     };
     const { resource } = await items.item(existing.id, workspaceId).replace(next);
-    return NextResponse.json({ ok: true, pipeline: resource });
+    return NextResponse.json({ ok: true, pipeline: resource, adfPipelineName: adfName, published: !!adfName });
   } catch (e: any) { return err(e?.message || String(e), 500); }
 }
 
