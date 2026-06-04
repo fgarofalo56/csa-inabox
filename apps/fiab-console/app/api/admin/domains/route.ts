@@ -23,7 +23,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
-import { listBusinessDomains, PurviewNotConfiguredError } from '@/lib/azure/purview-client';
+import {
+  listBusinessDomains,
+  createBusinessDomain,
+  deleteBusinessDomain,
+  isPurviewConfigured,
+  PurviewNotConfiguredError,
+} from '@/lib/azure/purview-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -136,17 +142,31 @@ export async function POST(req: NextRequest) {
     if (doc.items.some((d) => d.id === id)) {
       return NextResponse.json({ ok: false, error: `domain '${id}' already exists` }, { status: 409 });
     }
-    doc.items.push({
+    const newItem: DomainItem = {
       id, name,
       description: body?.description || undefined,
       color: body?.color || undefined,
       owners: normalizeOwners(body?.owners),
       createdAt: new Date().toISOString(),
       createdBy: s.claims.upn || tenantId,
-    });
+    };
+    // Best-effort Purview mirror: a Loom domain ⇄ a Purview collection on the
+    // classic Data Map account. Never blocks the Cosmos write (Purview is
+    // optional); a grant/auth error is surfaced in `purviewMirror` for the UI.
+    let purviewMirror: { ok: boolean; id?: string; error?: string } | undefined;
+    if (isPurviewConfigured()) {
+      try {
+        const mirrored = await createBusinessDomain({ id, name, description: newItem.description });
+        newItem.purviewDomainId = mirrored.id;
+        purviewMirror = { ok: true, id: mirrored.id };
+      } catch (e: any) {
+        purviewMirror = { ok: false, error: e?.message || String(e) };
+      }
+    }
+    doc.items.push(newItem);
     doc.updatedAt = new Date().toISOString();
     await c.item(docId, tenantId).replace(doc);
-    return NextResponse.json({ ok: true, domain: doc.items[doc.items.length - 1], domains: doc.items });
+    return NextResponse.json({ ok: true, domain: newItem, domains: doc.items, purviewMirror });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
@@ -163,11 +183,18 @@ export async function DELETE(req: NextRequest) {
     const docId = `domains:${tenantId}`;
     const doc = await loadOrSeed(tenantId, s.claims.upn || tenantId);
     const before = doc.items.length;
+    const removed = doc.items.find((d) => d.id === id);
     doc.items = doc.items.filter((d) => d.id !== id);
     if (doc.items.length === before) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+    // Best-effort: remove the mirrored Purview collection too. Non-fatal.
+    let purviewMirror: { ok: boolean; error?: string } | undefined;
+    if (isPurviewConfigured() && removed?.purviewDomainId) {
+      try { await deleteBusinessDomain(removed.purviewDomainId); purviewMirror = { ok: true }; }
+      catch (e: any) { purviewMirror = { ok: false, error: e?.message || String(e) }; }
+    }
     doc.updatedAt = new Date().toISOString();
     await c.item(docId, tenantId).replace(doc);
-    return NextResponse.json({ ok: true, domains: doc.items });
+    return NextResponse.json({ ok: true, domains: doc.items, purviewMirror });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }

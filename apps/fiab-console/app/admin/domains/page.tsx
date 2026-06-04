@@ -197,12 +197,13 @@ export default function DomainsPage() {
       {purview && purview.configured && (
         <MessageBar intent="success" style={{ marginBottom: 16 }}>
           <MessageBarBody>
-            <MessageBarTitle>Purview connected</MessageBarTitle>
-            {purview.domains.length} Purview business domain{purview.domains.length === 1 ? '' : 's'} found.
-            Loom domains whose name matches a Purview business domain are marked
+            <MessageBarTitle>Purview mirror active</MessageBarTitle>
+            {purview.domains.length} mirrored domain{purview.domains.length === 1 ? '' : 's'} in Purview.
+            On the classic Data Map account each Loom domain mirrors to a Purview
+            <strong> collection</strong> (classic Data Map has no &quot;business domain&quot; concept). Domains
+            whose name matches a Purview collection are marked
             <Badge appearance="tint" color="brand" size="small" style={{ margin: '0 4px' }}>Governed</Badge>
-            below. Create/manage Purview business domains from
-            <a href="/admin/security" style={{ marginLeft: 4 }}>Security &amp; governance → Purview</a>.
+            below. New domains created here are mirrored automatically.
           </MessageBarBody>
         </MessageBar>
       )}

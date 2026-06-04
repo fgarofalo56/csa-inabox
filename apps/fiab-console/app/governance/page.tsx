@@ -64,11 +64,11 @@ interface StatDef {
 
 // Accent palette echoes the governance/teal family used across Loom tiles.
 const STATS: StatDef[] = [
-  { key: 'totalItems', label: 'Governed items', icon: Box20Regular, color: '#0d7377' },
-  { key: 'sensitiveCoveragePct', label: 'Sensitivity coverage', icon: Shield20Regular, color: '#7c3aed', pct: true },
-  { key: 'classificationCoveragePct', label: 'Classification coverage', icon: Tag20Regular, color: '#0078d4', pct: true },
-  { key: 'activePolicies', label: 'Active policies', icon: ShieldCheckmark20Regular, color: '#117865' },
-  { key: 'auditEvents30d', label: 'Audit events (30d)', icon: History20Regular, color: '#c2410c' },
+  { key: 'totalItems', label: 'Governed items', icon: Box20Regular, color: 'var(--loom-accent-teal)' },
+  { key: 'sensitiveCoveragePct', label: 'Sensitivity coverage', icon: Shield20Regular, color: 'var(--loom-accent-violet)', pct: true },
+  { key: 'classificationCoveragePct', label: 'Classification coverage', icon: Tag20Regular, color: 'var(--loom-accent-blue)', pct: true },
+  { key: 'activePolicies', label: 'Active policies', icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-green)' },
+  { key: 'auditEvents30d', label: 'Audit events (30d)', icon: History20Regular, color: 'var(--loom-accent-orange)' },
 ];
 
 const useStyles = makeStyles({
@@ -188,32 +188,32 @@ const SECTIONS: {
   {
     group: 'Catalog management',
     items: [
-      { href: '/governance/catalog', label: 'Data catalog', desc: 'Unified inventory across OneLake, Synapse, Databricks, ADLS.', icon: DatabaseSearch20Regular, color: '#0d7377' },
-      { href: '/catalog/domains', label: 'Governance domains', desc: 'Domains, data products, glossary terms.', icon: DocumentBulletList20Regular, color: '#3d2e80' },
+      { href: '/governance/catalog', label: 'Data catalog', desc: 'Unified inventory across OneLake, Synapse, Databricks, ADLS.', icon: DatabaseSearch20Regular, color: 'var(--loom-accent-teal)' },
+      { href: '/catalog/domains', label: 'Governance domains', desc: 'Domains, data products, glossary terms.', icon: DocumentBulletList20Regular, color: 'var(--loom-accent-indigo)' },
     ],
   },
   {
     group: 'Discovery & lineage',
     items: [
-      { href: '/governance/lineage', label: 'Lineage', desc: 'End-to-end column & item lineage graph.', icon: Branch20Regular, color: '#5e4dc0' },
-      { href: '/catalog', label: 'Search', desc: 'Federated search across Purview, Unity, OneLake.', icon: DatabaseSearch20Regular, color: '#0078d4' },
+      { href: '/governance/lineage', label: 'Lineage', desc: 'End-to-end column & item lineage graph.', icon: Branch20Regular, color: 'var(--loom-accent-indigo2)' },
+      { href: '/catalog', label: 'Search', desc: 'Federated search across Purview, Unity, OneLake.', icon: DatabaseSearch20Regular, color: 'var(--loom-accent-blue)' },
     ],
   },
   {
     group: 'Data Map',
     items: [
-      { href: '/governance/scans', label: 'Scans & sources', desc: 'Register sources, schedule + run scans.', icon: ArrowSync20Regular, color: '#0050b3' },
-      { href: '/admin/classifications', label: 'Classification rules', desc: 'Define custom classification rules (Loom-native, no Purview).', icon: Tag20Regular, color: '#117865' },
-      { href: '/admin/sensitivity-labels', label: 'Sensitivity labels', desc: 'Define + manage sensitivity labels (Loom-native).', icon: Shield20Regular, color: '#7c3aed' },
+      { href: '/governance/scans', label: 'Scans & sources', desc: 'Register sources, schedule + run scans.', icon: ArrowSync20Regular, color: 'var(--loom-accent-azure)' },
+      { href: '/admin/classifications', label: 'Classification rules', desc: 'Define custom classification rules (Loom-native, no Purview).', icon: Tag20Regular, color: 'var(--loom-accent-green)' },
+      { href: '/admin/sensitivity-labels', label: 'Sensitivity labels', desc: 'Define + manage sensitivity labels (Loom-native).', icon: Shield20Regular, color: 'var(--loom-accent-violet)' },
     ],
   },
   {
     group: 'Governance & health',
     items: [
-      { href: '/governance/policies', label: 'Access policies', desc: 'DLP, masking, RLS, retention, access.', icon: Shield20Regular, color: '#c2410c' },
-      { href: '/catalog/data-quality', label: 'Data quality rules', desc: 'Define + manage data-quality checks (Loom-native).', icon: Beaker20Regular, color: '#0a7ea4' },
-      { href: '/governance/insights', label: 'Insights & reports', desc: 'Coverage KPIs, data-health reporting.', icon: DataTrending20Regular, color: '#ad6800' },
-      { href: '/governance/purview', label: 'Microsoft Purview', desc: 'Connection status + embedded portal.', icon: Beaker20Regular, color: '#0d7377' },
+      { href: '/governance/policies', label: 'Access policies', desc: 'DLP, masking, RLS, retention, access.', icon: Shield20Regular, color: 'var(--loom-accent-orange)' },
+      { href: '/catalog/data-quality', label: 'Data quality rules', desc: 'Define + manage data-quality checks (Loom-native).', icon: Beaker20Regular, color: 'var(--loom-accent-cyan)' },
+      { href: '/governance/insights', label: 'Insights & reports', desc: 'Coverage KPIs, data-health reporting.', icon: DataTrending20Regular, color: 'var(--loom-accent-amber)' },
+      { href: '/governance/purview', label: 'Microsoft Purview', desc: 'Connection status + embedded portal.', icon: Beaker20Regular, color: 'var(--loom-accent-teal)' },
     ],
   },
 ];
@@ -300,7 +300,7 @@ export default function GovernancePage() {
         return (
           <span className={s.pctCell}>
             <span className={s.miniBar}>
-              <span className={s.barFill} style={{ width: `${p}%`, backgroundColor: '#7c3aed', display: 'block', height: '100%' }} />
+              <span className={s.barFill} style={{ width: `${p}%`, backgroundColor: 'var(--loom-accent-violet)', display: 'block', height: '100%' }} />
             </span>
             <Text size={200}>{p}%</Text>
           </span>
@@ -315,7 +315,7 @@ export default function GovernancePage() {
         return (
           <span className={s.pctCell}>
             <span className={s.miniBar}>
-              <span className={s.barFill} style={{ width: `${p}%`, backgroundColor: '#0078d4', display: 'block', height: '100%' }} />
+              <span className={s.barFill} style={{ width: `${p}%`, backgroundColor: 'var(--loom-accent-blue)', display: 'block', height: '100%' }} />
             </span>
             <Text size={200}>{p}%</Text>
           </span>

@@ -898,19 +898,88 @@ export async function listDataProducts(_domain?: string): Promise<PurviewDataPro
   throw new PurviewUnifiedCatalogGateError('Data products');
 }
 
+/**
+ * Business-domain mirror on CLASSIC Data Map.
+ *
+ * The unified-catalog `/datagovernance` business-domains surface does NOT exist
+ * on the deployed classic Purview Data Map account. Rather than honest-gate the
+ * whole feature, Loom mirrors each domain to the closest 1:1 governance grouping
+ * the classic account DOES expose: a Purview **collection** (Account data-plane,
+ * api-version 2019-11-01-preview). A Loom domain ⇄ a Purview collection under the
+ * root collection. This keeps the mirror REAL (no-vaporware) without requiring a
+ * new-experience unified-catalog account or any Microsoft Fabric.
+ *
+ * Reads need the Loom UAMI a Data Map "Data Reader" role on the root collection;
+ * writes need "Collection Admin" — both are classic Data Map metadata-policy
+ * roles (NOT ARM RBAC), granted via scripts/csa-loom/grant-purview-datamap-role.sh.
+ * A 401/403 surfaces as the honest infra-gate, not a Fabric dependency.
+ */
+async function rootCollectionName(): Promise<string | undefined> {
+  const cols = await listCollections();
+  // The root collection is the one with no parent (its name === the account's
+  // root collection referenceName, usually the account name).
+  return cols.find((c) => !c.parentCollection)?.name;
+}
+
+/** Stable Purview collection referenceName for a Loom domain (≤ 36 chars). */
+function domainCollectionName(idOrName: string): string {
+  return (idOrName || 'domain')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 36) || 'domain';
+}
+
 export async function listBusinessDomains(): Promise<PurviewBusinessDomain[]> {
   purviewAccount();
-  throw new PurviewUnifiedCatalogGateError('Business / governance domains');
+  const cols = await listCollections();
+  const root = cols.find((c) => !c.parentCollection);
+  // Surface every non-root collection as a mirrored business domain.
+  return cols
+    .filter((c) => c.name !== root?.name)
+    .map((c): PurviewBusinessDomain => ({
+      id: c.name,
+      name: c.friendlyName || c.name,
+      description: c.description,
+      parentId: c.parentCollection,
+      raw: c.raw,
+    }));
 }
 
-export async function createBusinessDomain(_body: { name: string; description?: string; type?: string; parentId?: string }): Promise<PurviewBusinessDomain> {
+export async function createBusinessDomain(body: { name: string; description?: string; type?: string; parentId?: string; id?: string }): Promise<PurviewBusinessDomain> {
   purviewAccount();
-  throw new PurviewUnifiedCatalogGateError('Business / governance domains');
+  const colName = domainCollectionName(body.id || body.name);
+  const root = body.parentId || (await rootCollectionName());
+  const res = await purviewFetch(`/collections/${encodeURIComponent(colName)}`, {
+    method: 'PUT',
+    apiVersion: ACCOUNT_API_VERSION,
+    body: JSON.stringify({
+      friendlyName: body.name,
+      description: body.description || undefined,
+      ...(root ? { parentCollection: { referenceName: root } } : {}),
+    }),
+  });
+  const j = await readJson<any>(res);
+  if (!res.ok) throw new PurviewError(res.status, j, `Create Purview collection (domain mirror) failed: ${res.status}`);
+  return {
+    id: j?.name || colName,
+    name: j?.friendlyName || body.name,
+    description: j?.description,
+    parentId: j?.parentCollection?.referenceName,
+    raw: j,
+  };
 }
 
-export async function deleteBusinessDomain(_id: string): Promise<void> {
+export async function deleteBusinessDomain(id: string): Promise<void> {
   purviewAccount();
-  throw new PurviewUnifiedCatalogGateError('Business / governance domains');
+  const res = await purviewFetch(`/collections/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    apiVersion: ACCOUNT_API_VERSION,
+  });
+  if (!res.ok && res.status !== 404) {
+    const j = await readJson<any>(res);
+    throw new PurviewError(res.status, j, `Delete Purview collection (domain mirror) failed: ${res.status}`);
+  }
 }
 
 /**

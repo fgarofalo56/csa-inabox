@@ -431,7 +431,7 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
             }}
           >
             <TreeItemLayout
-              iconBefore={<Folder20Filled style={{ color: '#d8a200' }} />}
+              iconBefore={<Folder20Filled style={{ color: 'var(--loom-accent-gold)' }} />}
               className={isDropTarget ? s.treeItemDragOver : undefined}
               {...{
                 onDragOver: (e: React.DragEvent) => onFolderDragOver(e, f.id),
@@ -775,7 +775,7 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
                   <Button
                     key={f.id}
                     appearance="subtle"
-                    icon={<Folder20Filled style={{ color: '#d8a200' }} />}
+                    icon={<Folder20Filled style={{ color: 'var(--loom-accent-gold)' }} />}
                     onClick={async () => {
                       if (moveItem) await onMoveItem(moveItem.id, f.id);
                       setMoveItem(null);
