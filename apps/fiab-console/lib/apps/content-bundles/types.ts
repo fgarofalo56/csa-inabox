@@ -30,6 +30,15 @@ export interface KqlDatabaseContent {
 
 export interface KqlDashboardContent {
   kind: 'kql-dashboard';
+  /**
+   * ADX/Kusto database the tiles query. Set this to the DB name the sibling
+   * `kql-database` item provisions (kql-db.ts derives it from that item's
+   * displayName, e.g. 'Real-Time Ops KQL Database' → 'Real_Time_Ops_KQL_Database')
+   * so the dashboard resolves the seeded tables. When omitted the dashboard
+   * provisioner falls back to LOOM_KUSTO_DEFAULT_DB — which only works when the
+   * tiles' tables live in the default database.
+   */
+  database?: string;
   tiles: { title: string; kql: string; viz: 'card' | 'line' | 'bar' | 'table' | 'pie' }[];
 }
 

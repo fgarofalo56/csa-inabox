@@ -912,6 +912,15 @@ const bundle: AppBundle = {
       learnDoc: 'azure-realtime-analytics',
       content: {
         kind: 'kql-dashboard',
+        // Bind the dashboard's data source to the SAME ADX database the sibling
+        // "Real-Time Ops KQL Database" item provisions, so its tiles resolve the
+        // seeded tables (IngestionThroughput / PipelineLatency / QualityMetrics /
+        // ValidationErrors). kql-db.ts derives the DB name from that item's
+        // displayName: 'Real-Time Ops KQL Database' → 'Real_Time_Ops_KQL_Database'.
+        // Without this the dashboard fell back to LOOM_KUSTO_DEFAULT_DB (where the
+        // tables don't exist) and every tile failed with SEM0100 "Failed to
+        // resolve table or column expression named 'QualityMetrics'".
+        database: 'Real_Time_Ops_KQL_Database',
         tiles: [
           { title: 'Events / sec (1m)',                 viz: 'card',  kql: TILE_THROUGHPUT_CARD },
           { title: 'p99 latency (ms)',                  viz: 'card',  kql: TILE_LATENCY_CARD },
