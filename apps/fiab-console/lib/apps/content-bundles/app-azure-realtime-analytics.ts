@@ -971,14 +971,22 @@ const bundle: AppBundle = {
             },
           },
           {
+            // ADF has no "DatabricksSparkSql" activity type (only
+            // DatabricksNotebook / DatabricksSparkJar / DatabricksSparkPython),
+            // so a DatabricksSparkSql activity fails the run with "unrecognized
+            // activity type". The OPTIMIZE/Z-ORDER/VACUUM maintenance runs as a
+            // Databricks notebook, with the table + tuning passed as parameters.
             name: 'OptimizeGold',
-            type: 'DatabricksSparkSql',
+            type: 'DatabricksNotebook',
             dependsOn: ['GoldAggregation'],
             config: {
-              query:
-                'OPTIMIZE realtime_analytics.gold.customer_daily_metrics ZORDER BY (metric_date, user_id); ' +
-                'VACUUM realtime_analytics.gold.customer_daily_metrics RETAIN 168 HOURS;',
-              description: 'Compaction + Z-order + vacuum of the gold fact.',
+              notebookPath: '/Shared/RealTimeAnalytics/04_optimize_gold',
+              baseParameters: {
+                target_table: 'realtime_analytics.gold.customer_daily_metrics',
+                zorder_by: 'metric_date,user_id',
+                vacuum_retain_hours: '168',
+              },
+              description: 'OPTIMIZE + Z-order + VACUUM of the gold fact (Step 4) via the maintenance notebook (spark.sql).',
             },
           },
         ],
