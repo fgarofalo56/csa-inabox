@@ -26,6 +26,7 @@ import {
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Dropdown, Option, Switch,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -2790,7 +2791,44 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const [chat, setChat] = useState<DaChatMsg[]>([]);
   const [question, setQuestion] = useState('');
   const [asking, setAsking] = useState(false);
+  // Conversation history (persisted to Cosmos via /conversations).
+  const [convId, setConvId] = useState<string | null>(null);
+  const [convos, setConvos] = useState<{ id: string; title: string; updatedAt: string; turns: number }[]>([]);
   const threadRef = useRef<HTMLDivElement | null>(null);
+
+  const loadConvos = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) setConvos(j.conversations || []);
+    } catch { /* non-fatal */ }
+  }, [id]);
+  useEffect(() => { if (id && id !== 'new') loadConvos(); }, [id, loadConvos]);
+
+  const saveConvo = useCallback(async (thread: DaChatMsg[]) => {
+    if (!thread.length || id === 'new') return;
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ conversationId: convId || undefined, messages: thread }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok && j.conversation?.id) { setConvId(j.conversation.id); loadConvos(); }
+    } catch { /* non-fatal */ }
+  }, [id, convId, loadConvos]);
+
+  const loadConvo = useCallback(async (cid: string) => {
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations?conversationId=${encodeURIComponent(cid)}`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok && Array.isArray(j.conversation?.messages)) {
+        setChat(j.conversation.messages as DaChatMsg[]);
+        setConvId(cid);
+      }
+    } catch { /* non-fatal */ }
+  }, [id]);
+
+  const newChat = useCallback(() => { setChat([]); setConvId(null); }, []);
   // Keep the latest turn in view as the thread grows / a turn lands.
   useEffect(() => {
     const el = threadRef.current;
@@ -2803,8 +2841,10 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     if (dirty) await save();
     // Build history from the thread BEFORE we append the new user turn.
     const history = shapeDaHistory(chat);
-    setChat((c) => [...c, { role: 'user', content: q }]);
+    const userTurn: DaChatMsg = { role: 'user', content: q };
+    setChat((c) => [...c, userTurn]);
     setQuestion(''); setAsking(true);
+    let assistantTurn: DaChatMsg;
     try {
       const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/chat`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -2815,16 +2855,20 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string; usage?: { totalTokens?: number }; model?: string }>(r);
       const j = res.data;
       if (res.ok && j) {
-        setChat((c) => [...c, { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed, usage: j.usage, model: j.model }]);
+        assistantTurn = { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed, usage: j.usage, model: j.model };
       } else {
         const detail = res.error || j?.error || `HTTP ${res.status}`;
         const hint = j?.hint ? `\n\n${j.hint}` : '';
-        setChat((c) => [...c, { role: 'assistant', content: `${detail}${hint}`, error: true }]);
+        assistantTurn = { role: 'assistant', content: `${detail}${hint}`, error: true };
       }
     } catch (e: any) {
-      setChat((c) => [...c, { role: 'assistant', content: e?.message || String(e), error: true }]);
+      assistantTurn = { role: 'assistant', content: e?.message || String(e), error: true };
     } finally { setAsking(false); }
-  }, [question, asking, chat, dirty, save, id]);
+    setChat((c) => [...c, assistantTurn]);
+    // Persist the conversation (only when the turn succeeded) so it survives
+    // reload + can be resumed from History.
+    if (!assistantTurn.error) void saveConvo([...chat, userTurn, assistantTurn]);
+  }, [question, asking, chat, dirty, save, id, saveConvo]);
 
   // ---- publish ----
   const [publishing, setPublishing] = useState(false);
@@ -2997,7 +3041,23 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                   <Subtitle2>Test chat</Subtitle2>
                   <Badge appearance="tint" color="brand">live · grounded</Badge>
                   <div style={{ flex: 1 }} />
-                  <Button size="small" appearance="subtle" onClick={() => { setChat([]); setQuestion(''); }} disabled={asking || (chat.length === 0 && !question)}>+ New thread</Button>
+                  {convos.length > 0 && (
+                    <Menu>
+                      <MenuTrigger disableButtonEnhancement>
+                        <Button size="small" appearance="subtle">History ({convos.length})</Button>
+                      </MenuTrigger>
+                      <MenuPopover>
+                        <MenuList>
+                          {convos.slice(0, 25).map((cv) => (
+                            <MenuItem key={cv.id} onClick={() => loadConvo(cv.id)}>
+                              {cv.title} · {cv.turns} msg · {new Date(cv.updatedAt).toLocaleDateString()}
+                            </MenuItem>
+                          ))}
+                        </MenuList>
+                      </MenuPopover>
+                    </Menu>
+                  )}
+                  <Button size="small" appearance="subtle" onClick={() => { newChat(); setQuestion(''); }} disabled={asking || (chat.length === 0 && !question)}>+ New thread</Button>
                 </div>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   Each turn runs against the live AOAI deployment on the Foundry hub, grounded on the {sources.length} source{sources.length === 1 ? '' : 's'} + instructions in Build.
