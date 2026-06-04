@@ -183,7 +183,7 @@ const useStyles = makeStyles({
     height: '36px',
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: 'rgba(75,29,143,0.12)', // fabric-iq deep purple tint
-    color: '#4b1d8f',
+    color: 'var(--loom-accent-purple)',
   },
   agentMeta: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, flex: 1 },
   agentName: {
@@ -257,7 +257,7 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     padding: tokens.spacingHorizontalXXL,
   },
-  emptyGlyph: { color: '#4b1d8f', opacity: 0.85 },
+  emptyGlyph: { color: 'var(--loom-accent-purple)', opacity: 0.85 },
   starters: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -511,7 +511,7 @@ export function DataAgentPane() {
       {/* ---------------- LEFT RAIL: selectable agents ---------------- */}
       <div className={s.rail}>
         <div className={s.railHead}>
-          <ChatMultiple24Regular style={{ color: '#4b1d8f' }} />
+          <ChatMultiple24Regular style={{ color: 'var(--loom-accent-purple)' }} />
           <Text className={s.railTitle}>Data agents</Text>
           {workspaceId && (
             <Button
@@ -611,7 +611,7 @@ export function DataAgentPane() {
           <Avatar
             icon={<Bot24Regular />}
             color="colorful"
-            style={{ backgroundColor: '#4b1d8f', color: '#fff' }}
+            style={{ backgroundColor: 'var(--loom-accent-purple)', color: '#fff' }}
             aria-hidden
           />
           <div className={s.chatHeadMeta}>

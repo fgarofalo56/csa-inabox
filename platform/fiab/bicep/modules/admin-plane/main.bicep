@@ -978,6 +978,23 @@ param loomVanityDomain string = ''
 // Outputs
 // =====================================================================
 
+// =====================================================================
+// Scale-by-SKU console (/admin/scaling) — the Console UAMI scales compute
+// SKUs that all live in THIS admin RG: ADX/Kusto cluster, Synapse dedicated
+// SQL pool (DWU), APIM, Container Apps, Fabric/foundry compute, AI Search.
+// Those are ARM control-plane PATCH calls, so the UAMI needs write here.
+// Without this grant the UAMI has only narrow per-resource + Reader roles in
+// this RG and EVERY scale operation returns 403. Delegated to a sub-module so
+// the principalId (a module output) is start-time-known inside it (BCP177).
+// =====================================================================
+module scalingRbac 'scaling-rbac.bicep' = {
+  name: 'console-scaling-rbac'
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 output hubVnetId string = network.outputs.hubVnetId
 
 output consoleUrl string = containerPlatform == 'containerApps'
