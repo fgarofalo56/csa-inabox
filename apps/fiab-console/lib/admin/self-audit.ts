@@ -60,8 +60,13 @@ const anyHas = (...ks: string[]) => ks.some(has);
 // THIS deployment — only the missing value the admin owns is left as a <token>.
 const CTX = {
   app: env('LOOM_CONSOLE_APP_NAME') || 'loom-console',
-  adminRg: env('LOOM_ADMIN_RG') || env('LOOM_DLZ_RG') || '<admin-resource-group>',
-  dlzRg: env('LOOM_DLZ_RG') || env('LOOM_ADMIN_RG') || '<dlz-resource-group>',
+  // The Console container app lives in the ADMIN resource group. Do NOT fall back
+  // to LOOM_DLZ_RG here — that produced fix scripts targeting the DLZ RG
+  // (`az containerapp update --resource-group <dlz-rg>` → "containerapp loom-console
+  // does not exist"). Admin-plane fixes must target the admin RG; only the env-var
+  // VALUE_HINT placeholder is used when LOOM_ADMIN_RG is unset.
+  adminRg: env('LOOM_ADMIN_RG') || '<admin-resource-group>',
+  dlzRg: env('LOOM_DLZ_RG') || '<dlz-resource-group>',
   sub: env('LOOM_SUBSCRIPTION_ID') || '<subscription-id>',
   uamiClientId: env('LOOM_UAMI_CLIENT_ID') || '<uami-client-id>',
   tenant: env('LOOM_ENTRA_TENANT_ID') || env('AZURE_TENANT_ID') || '<tenant-id>',

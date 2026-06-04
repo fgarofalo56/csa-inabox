@@ -106,6 +106,8 @@ interface WizardState {
   location?: string;
   domainName?: string;
   capacitySku?: string;
+  /** Optional vanity console URL (e.g. csa-loom.contoso.ai). Empty = generated Front Door host. */
+  vanityDomain?: string;
   /** Multi-sub mode only: the deployment sub in which the DLZ lands (distinct from admin-plane sub) */
   dlzSubscriptionId?: string;
   dlzSubscriptionName?: string;
@@ -774,6 +776,18 @@ export function SetupWizardPane() {
                   value={state.domainName ?? ''}
                   onChange={(_, d) => setState((s) => ({ ...s, domainName: d.value.toLowerCase().replace(/[^a-z0-9-]/g, '') }))}
                   placeholder="finance, procurement, mission-ops…"
+                />
+              </Field>
+              <Field
+                label="Vanity URL (optional)"
+                hint={state.vanityDomain
+                  ? `Console will be reachable at https://${state.vanityDomain} — the deploy outputs the 2 DNS records (CNAME + _dnsauth TXT) to add at your DNS provider.`
+                  : 'e.g. csa-loom.contoso.ai — a friendly URL instead of the long generated Front Door host. Leave blank to skip.'}
+              >
+                <Input
+                  value={state.vanityDomain ?? ''}
+                  onChange={(_, d) => setState((s) => ({ ...s, vanityDomain: d.value.toLowerCase().replace(/[^a-z0-9.-]/g, '') }))}
+                  placeholder="csa-loom.contoso.ai"
                 />
               </Field>
             </div>
