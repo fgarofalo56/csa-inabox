@@ -16,3 +16,42 @@ The console reads `LOOM_DATABRICKS_HOSTNAMES` (comma-separated) and falls back t
 - Unity → if `LOOM_DATABRICKS_HOSTNAMES`/`LOOM_DATABRICKS_HOSTNAME` is unset, the page shows the structured hint with the env var name + bicep module
 - Fabric → if the UAMI is not in the Fabric service-principals tenant setting, the upstream 403 surfaces verbatim
 - Purview → if `LOOM_PURVIEW_ACCOUNT` is unset, the page renders an account-not-configured MessageBar
+
+## Enabling Unity Catalog on a Loom Databricks workspace (one-time, account-admin)
+
+If the catalog tree / metastore list is empty or shows "metastore not listable",
+the Databricks **workspace is not attached to a Unity Catalog metastore** (UC is
+not enabled on it). UC is an account-level construct: a metastore is created once
+per region by a **Databricks account admin** and assigned to the workspace. This
+is NOT an Azure ARM action, so the Loom bicep deploy cannot do it for you — it
+requires the Databricks **account console**.
+
+### Step 1 — create + assign a metastore (Databricks account admin)
+1. Open the Databricks **account** console: <https://accounts.azuredatabricks.net>.
+2. **Catalog** → **Create metastore**: pick the workspace region (e.g. `eastus2`),
+   name it (e.g. `loom-eastus2`), and (optionally) a root ADLS Gen2 container.
+3. On the new metastore → **Workspaces** → **Assign to workspace** → select your
+   Loom workspace (`adb-loom-default-<region>`).
+
+### Step 2 — make the Loom Console UAMI a metastore admin (least-privilege)
+Prefer this over granting the UAMI full **Account Admin**. Run the bundled script
+(needs `az` logged in as a Databricks workspace admin + `jq`):
+
+```bash
+scripts/csa-loom/add-loom-uami-to-uc-metastore-admin.sh \
+  --workspace-hostname <adb-xxxx.region.azuredatabricks.net> \
+  --uami-principal-id  <Console-UAMI-objectId>   # az identity show -g <admin-rg> -n uami-loom-console-<region> --query principalId -o tsv
+```
+
+The UAMI's **applicationId** (client id, e.g. `LOOM_UAMI_CLIENT_ID`) is what
+Databricks SCIM uses — the script resolves it from the object id automatically.
+
+### Alternative — Account Admin (broader)
+Databricks account console → **User management** → **Service principals** → add the
+UAMI by its **Application ID** (`LOOM_UAMI_CLIENT_ID`) → **Roles** → **Account admin**.
+
+### After either step
+The catalog metastore list + per-workspace catalogs light up immediately (no
+redeploy). Loom already lists a workspace's **catalogs** without account-admin —
+account-admin / metastore-admin is only needed for the account-level *metastore*
+list and UC privilege management.
