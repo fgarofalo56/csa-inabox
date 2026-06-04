@@ -267,6 +267,9 @@ param appGatewayEnabled bool = false
 @description('Deploy Front Door Premium with Private Link to the ACA env. ~5 min provisioning + manual PE approval, ~$330/mo. Default off.')
 param frontDoorEnabled bool = false
 
+@description('Optional vanity URL for the console (e.g. csa-loom.contoso.ai) — set in the Setup Wizard. Creates a Front Door managed-cert custom domain; the deploy outputs the CNAME + _dnsauth TXT to add at your DNS provider. Empty = use the generated Front Door host.')
+param loomVanityDomain string = ''
+
 @description('Entra app client ID for Loom Console MSAL. When empty, Console runs unauth.')
 param loomMsalClientId string = ''
 
@@ -355,6 +358,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     vpnGatewayEnabled: vpnGatewayEnabled
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
+    loomVanityDomain: loomVanityDomain
     loomStorageAccount: take('saloomdefault${uniqueString(singleDlzRg.id)}', 24)
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
     // Forward the Cosmos data-plane endpoints to the console so the vector-store
@@ -797,3 +801,8 @@ output adminPlaneRgName string = adminPlaneRgName
 output vpnGatewayPublicIp string = adminPlane.outputs.vpnGatewayPublicIp
 output appGatewayPublicFqdn string = adminPlane.outputs.appGatewayPublicFqdn
 output frontDoorPublicUrl string = adminPlane.outputs.frontDoorPublicUrl
+// Vanity URL + the DNS records the admin must add to activate it.
+output vanityPublicUrl string = adminPlane.outputs.vanityPublicUrl
+output vanityCnameTarget string = adminPlane.outputs.vanityCnameTarget
+output vanityDnsTxtName string = adminPlane.outputs.vanityDnsTxtName
+output vanityValidationToken string = adminPlane.outputs.vanityValidationToken
