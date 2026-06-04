@@ -142,6 +142,9 @@ param loomSynapseDedicatedPool string = 'loompool'
 @description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
 param loomAdfName string = 'adf-loom-default-${location}'
 
+@description('Scaled self-hosted IR VMSS name (backs the SHIR metrics tile + scale controls). Defaults to the single-sub DLZ name; empty disables the SHIR surface (honest gate).')
+param loomShirVmssName string = 'vmss-loom-shir-default'
+
 @description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
 param loomAdfRg string = ''
 
@@ -644,6 +647,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
             { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : loomDlzRg }
             // Stream Analytics — defaults to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID
             // when blank (see lib/azure/stream-analytics-client.ts). Override

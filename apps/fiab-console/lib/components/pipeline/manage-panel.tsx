@@ -149,6 +149,13 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
   const [irType, setIrType] = useState<'Managed' | 'SelfHosted'>('SelfHosted');
   const [irBusy, setIrBusy] = useState(false);
 
+  // ---- Scaled self-hosted IR (VMSS, scale-to-0) ----
+  interface ShirStatus { name: string; capacity: number; nodeCount: number; runningNodes: number; state: string; provisioningState?: string }
+  const [shir, setShir] = useState<ShirStatus | null>(null);
+  const [shirGate, setShirGate] = useState<string | null>(null);
+  const [shirBusy, setShirBusy] = useState(false);
+  const [shirError, setShirError] = useState<string | null>(null);
+
   function applyGate(body: any): boolean {
     if (body?.code === 'not_configured' && body?.missing) {
       setGate({ missing: body.missing });
@@ -202,7 +209,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
     if (!open) return;
     if (tab === 'linked-services') loadLs();
     else if (tab === 'datasets') { loadDs(); if (!lsList.length) loadLs(); }
-    else if (showIr) loadIr();
+    else if (showIr) { loadIr(); loadShir(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, tab]);
 
@@ -351,6 +358,35 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
     } catch (e: any) { setIrError(e?.message || String(e)); }
     finally { setIrBusy(false); }
   }, [loadIr]);
+
+  // -------------------- scaled self-hosted IR (VMSS) --------------------
+  const loadShir = useCallback(async () => {
+    setShirError(null);
+    try {
+      const res = await fetch('/api/loom/shir');
+      const body = await readJson(res);
+      if (body?.code === 'not_configured') { setShirGate(body.error || 'SHIR not deployed'); setShir(null); return; }
+      if (!body.ok) { setShirError(body.error || 'failed to read SHIR'); setShir(null); return; }
+      setShirGate(null);
+      setShir(body as ShirStatus);
+    } catch (e: any) { setShirError(e?.message || String(e)); }
+  }, []);
+
+  const scaleShir = useCallback(async (capacity: number) => {
+    setShirBusy(true); setShirError(null);
+    try {
+      const res = await fetch('/api/loom/shir', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ capacity }),
+      });
+      const body = await readJson(res);
+      if (!body.ok) { setShirError(body.error || 'scale failed'); return; }
+      // Capacity change takes a moment to reflect; re-read after a short beat.
+      setTimeout(() => { void loadShir(); }, 1500);
+      await loadShir();
+    } catch (e: any) { setShirError(e?.message || String(e)); }
+    finally { setShirBusy(false); }
+  }, [loadShir]);
 
   const gateBar = gate && (
     <MessageBar intent="warning">
@@ -541,6 +577,31 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
             {/* ---------------- Integration runtimes ---------------- */}
             {tab === 'integration-runtimes' && !gate && (
               <>
+                {/* Loom scaled self-hosted IR (VMSS, scale-to-0) */}
+                {shirGate ? (
+                  <MessageBar intent="info" style={{ marginBottom: 12 }}>
+                    <MessageBarBody><MessageBarTitle>Scaled self-hosted IR</MessageBarTitle>{shirGate}</MessageBarBody>
+                  </MessageBar>
+                ) : shir ? (
+                  <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, marginBottom: 12, backgroundColor: tokens.colorNeutralBackground2 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <Subtitle2>Scaled self-hosted IR</Subtitle2>
+                      <Badge appearance="filled" color={shir.capacity === 0 ? 'informative' : (shir.runningNodes >= shir.capacity ? 'success' : 'warning')}>{shir.state}</Badge>
+                      <Caption1>· {shir.name}</Caption1>
+                      <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={loadShir} disabled={shirBusy} title="Refresh" />
+                    </div>
+                    <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                      A 4-node cluster that costs nothing while idle — start it before a run, stop it after. {shir.runningNodes}/{shir.capacity} node(s) online.
+                    </Caption1>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      <Button size="small" appearance="primary" icon={<Play20Regular />} disabled={shirBusy || shir.capacity > 0} onClick={() => scaleShir(4)}>
+                        {shirBusy ? 'Working…' : 'Start (scale to 4)'}
+                      </Button>
+                      <Button size="small" icon={<Stop20Regular />} disabled={shirBusy || shir.capacity === 0} onClick={() => scaleShir(0)}>Stop (scale to 0)</Button>
+                    </div>
+                    {shirError && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{shirError}</MessageBarBody></MessageBar>}
+                  </div>
+                ) : null}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                   <Subtitle2>Integration runtimes ({irList.length})</Subtitle2>
                   <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={loadIr} disabled={irLoading}>Refresh</Button>
