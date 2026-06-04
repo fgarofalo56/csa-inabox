@@ -36,6 +36,7 @@ interface SetupConfig {
   subscriptionId?: string;
   subscriptionName?: string;
   location?: string;
+  vanityDomain?: string;
 }
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -111,6 +112,7 @@ export async function POST(req: NextRequest) {
       capacity_sku: body.capacitySku!,
       keep_resources: 'false',
     };
+    if (body.vanityDomain) dispatchInputs.vanity_domain = body.vanityDomain;
     if ((body.boundary === 'GCC-High' || body.boundary === 'IL5') && body.mode === 'multi-sub') {
       dispatchInputs.deployment_mode = 'multi-sub';
     }
