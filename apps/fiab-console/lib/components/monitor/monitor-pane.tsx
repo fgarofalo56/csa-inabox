@@ -130,7 +130,7 @@ function StatCardSkeleton() {
   );
 }
 
-type TabKey = 'overview' | 'metrics' | 'logs' | 'activity' | 'items' | 'alerts';
+type TabKey = 'overview' | 'metrics' | 'logs' | 'activity' | 'items' | 'alerts' | 'cost';
 
 export function MonitorPane() {
   const styles = useStyles();
@@ -152,6 +152,7 @@ export function MonitorPane() {
         <Tab value="activity">Activity log</Tab>
         <Tab value="items">Deployed items</Tab>
         <Tab value="alerts">Alerts</Tab>
+        <Tab value="cost">Cost</Tab>
       </TabList>
 
       {/* Only the active tab mounts → its fetch only fires when shown. */}
@@ -161,6 +162,7 @@ export function MonitorPane() {
       {tab === 'activity' && <ActivityTab onUnauth={onUnauth} />}
       {tab === 'items' && <ActivityFeedPane />}
       {tab === 'alerts' && <AlertsTab onUnauth={onUnauth} />}
+      {tab === 'cost' && <CostTab onUnauth={onUnauth} />}
     </div>
   );
 }
@@ -827,6 +829,124 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
           loading={rules === null}
           empty={gate ? 'Configure the Loom subscription to list alert rules.' : 'No metric-alert rules defined for the Loom resource groups.'}
           ariaLabel="Azure Monitor alert rules"
+        />
+      </Section>
+    </div>
+  );
+}
+
+// ── Cost (M3: Cost Management spend + month-end forecast) ────────────────────
+interface CostBreakdownRow { key: string; cost: number; }
+interface CostSummary {
+  currency: string;
+  monthToDate: number;
+  forecast: number;
+  byService: CostBreakdownRow[];
+  byResourceGroup: CostBreakdownRow[];
+  daily: { date: string; cost: number }[];
+  loomResourceGroups: string[];
+}
+
+function CostTab({ onUnauth }: { onUnauth: () => void }) {
+  const styles = useStyles();
+  const [data, setData] = useState<CostSummary | null>(null);
+  const [gate, setGate] = useState<Gate | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setData(null); setGate(null); setErr(null);
+    fetch('/api/monitor/cost').then(async (r) => {
+      if (!alive) return;
+      if (r.status === 401 || r.status === 403) { onUnauth(); setData(null); return; }
+      const j = await r.json();
+      if (j.gate) { setGate(j.gate); setData(null); return; }
+      if (!j.ok) { setErr(j.error || 'Failed to load cost'); setData(null); return; }
+      setData(j.data as CostSummary);
+    }).catch((e) => { if (alive) { setErr(String(e)); setData(null); } });
+    return () => { alive = false; };
+  }, [tick, onUnauth]);
+
+  const money = (n: number, cur: string) => `${cur === 'USD' ? '$' : ''}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur !== 'USD' ? ' ' + cur : ''}`;
+
+  const kpis = useMemo(() => {
+    if (!data) return [];
+    const topSvc = data.byService[0];
+    return [
+      { label: 'Month-to-date', value: money(data.monthToDate, data.currency), accent: undefined as string | undefined },
+      { label: 'Forecast (month-end)', value: money(data.forecast, data.currency), accent: styles.statAccentWarn },
+      { label: 'Top service', value: topSvc ? topSvc.key.replace(/^Microsoft\.?/, '') : '—', accent: undefined },
+      { label: 'Resource groups', value: data.byResourceGroup.length, accent: undefined },
+    ];
+  }, [data, styles]);
+
+  const svcColumns: LoomColumn<CostBreakdownRow>[] = useMemo(() => [
+    { key: 'key', label: 'Service', width: 320, render: (r) => <strong>{r.key}</strong> },
+    { key: 'cost', label: 'Cost (MTD)', width: 160, getValue: (r) => r.cost, render: (r) => money(r.cost, data?.currency || 'USD') },
+  ], [data]);
+  const rgColumns: LoomColumn<CostBreakdownRow>[] = useMemo(() => [
+    { key: 'key', label: 'Resource group', width: 320, render: (r) => <strong>{r.key}</strong> },
+    { key: 'cost', label: 'Cost (MTD)', width: 160, getValue: (r) => r.cost, render: (r) => money(r.cost, data?.currency || 'USD') },
+  ], [data]);
+
+  return (
+    <div>
+      <Section
+        title="Cost"
+        actions={<Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
+      >
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Month-to-date Azure spend for the Loom resource groups (Microsoft.CostManagement query REST) with a
+            linear month-end forecast from the daily run-rate.
+          </MessageBarBody>
+        </MessageBar>
+        {gate && <GateBar gate={gate} subject="Cost" />}
+        {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+        {data === null && !gate && !err ? (
+          <StatCardSkeleton />
+        ) : data ? (
+          <div className={styles.stats}>
+            {kpis.map((s) => (
+              <div key={s.label} className={styles.stat}>
+                <span className={styles.statLabel}>{s.label}</span>
+                <span className={`${styles.statValue} ${s.accent ?? ''}`}>{s.value}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </Section>
+
+      {data && data.daily.length > 0 && (
+        <Section title="Daily spend (month-to-date)">
+          <MetricChart
+            title="Daily cost"
+            unit={data.currency}
+            points={data.daily.map((d) => ({ timeStamp: d.date, value: d.cost }))}
+          />
+        </Section>
+      )}
+
+      <Section title="Cost by service">
+        <LoomDataTable
+          columns={svcColumns}
+          rows={data?.byService ?? []}
+          getRowId={(r) => r.key}
+          loading={data === null && !gate && !err}
+          empty={gate ? 'Grant the Console UAMI Cost Management Reader to see spend by service.' : 'No cost recorded this month for the Loom resource groups.'}
+          ariaLabel="Cost by service"
+        />
+      </Section>
+
+      <Section title="Cost by resource group">
+        <LoomDataTable
+          columns={rgColumns}
+          rows={data?.byResourceGroup ?? []}
+          getRowId={(r) => r.key}
+          loading={data === null && !gate && !err}
+          empty={gate ? 'Grant the Console UAMI Cost Management Reader to see spend by resource group.' : 'No cost recorded this month.'}
+          ariaLabel="Cost by resource group"
         />
       </Section>
     </div>
