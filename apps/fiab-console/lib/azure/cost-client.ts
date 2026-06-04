@@ -30,24 +30,43 @@ const credential = uamiClientId
   ? new ChainedTokenCredential(new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
   : new DefaultAzureCredential();
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Cost Management is aggressively rate-limited (HTTP 429 "Too many requests").
+ * It returns a Retry-After header; we honor it (capped) with a few attempts +
+ * jittered exponential backoff so the Cost tab loads instead of erroring.
+ */
 async function costQuery(subscriptionId: string, body: unknown): Promise<any> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new MonitorError('Failed to acquire ARM token for Cost Management', 401);
   const url = `${ARM}/subscriptions/${subscriptionId}/providers/Microsoft.CostManagement/query?api-version=${COST_API}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify(body),
-    cache: 'no-store',
-  });
-  const text = await res.text();
-  let json: any = null;
-  try { json = text ? JSON.parse(text) : null; } catch { /* leave */ }
-  if (!res.ok) {
+  const maxAttempts = 5;
+  let lastErr: MonitorError | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    });
+    const text = await res.text();
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch { /* leave */ }
+    if (res.ok) return json;
     const msg = (json?.error?.message || text || `Cost query failed (${res.status})`).toString();
+    // 429 (throttle) and 503/504 (transient) → retry with backoff. Honor Retry-After.
+    if ((res.status === 429 || res.status === 503 || res.status === 504) && attempt < maxAttempts) {
+      const retryAfter = Number(res.headers.get('retry-after')) || Number(res.headers.get('x-ms-ratelimit-microsoft.costmanagement-client-retry-after'));
+      const backoff = Math.min((Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 0) || 2000 * 2 ** (attempt - 1), 30_000);
+      const wait = Math.round(backoff / 2 + Math.random() * (backoff / 2));
+      lastErr = new MonitorError(msg, res.status, json || text);
+      await sleep(wait);
+      continue;
+    }
     throw new MonitorError(msg, res.status, json || text);
   }
-  return json;
+  throw lastErr || new MonitorError('Cost query failed after retries', 429);
 }
 
 /** Column index by name (Cost Management returns columns + rows). */
