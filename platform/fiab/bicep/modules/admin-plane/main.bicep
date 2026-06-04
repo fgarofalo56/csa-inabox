@@ -966,9 +966,13 @@ module frontDoor 'front-door.bicep' = if (frontDoorEnabled && containerPlatform 
     caeId: containerPlatformModule.outputs.caeId
     caeDefaultDomain: containerPlatformModule.outputs.caeDefaultDomain
     consoleFqdn: 'loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
+    vanityDomain: loomVanityDomain
     complianceTags: complianceTags
   }
 }
+
+@description('Optional vanity hostname for the console (e.g. csa-loom.contoso.ai). Empty = generated Front Door host only. The deploy emits the CNAME + _dnsauth TXT to add at your DNS provider.')
+param loomVanityDomain string = ''
 
 // =====================================================================
 // Outputs
@@ -1013,3 +1017,10 @@ output appInsightsId string = monitoring.outputs.appInsightsId
 output vpnGatewayPublicIp string = vpnGatewayEnabled ? vpnGateway.outputs.vpnPublicIp : ''
 output appGatewayPublicFqdn string = (appGatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled) ? appGateway.outputs.publicFqdn : ''
 output frontDoorPublicUrl string = (frontDoorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled) ? frontDoor.outputs.frontDoorPublicUrl : ''
+var fdOn = frontDoorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+@description('Vanity console URL (empty if no vanity domain set).')
+output vanityPublicUrl string = fdOn ? frontDoor.outputs.vanityPublicUrl : ''
+@description('DNS the admin must add at their provider to activate the vanity domain: CNAME <vanityDomain> → vanityCnameTarget, and TXT vanityDnsTxtName → vanityValidationToken.')
+output vanityCnameTarget string = fdOn ? frontDoor.outputs.vanityCnameTarget : ''
+output vanityDnsTxtName string = fdOn ? frontDoor.outputs.vanityDnsTxtName : ''
+output vanityValidationToken string = fdOn ? frontDoor.outputs.vanityValidationToken : ''
