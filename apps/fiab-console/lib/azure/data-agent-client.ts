@@ -107,11 +107,19 @@ async function aoaiToken(): Promise<string> {
 
 export interface ChatTurn { role: 'user' | 'assistant'; content: string }
 
+export interface DataAgentUsage { promptTokens: number; completionTokens: number; totalTokens: number; }
+
 export interface DataAgentAnswer {
   answer: string;
   query?: string;       // extracted fenced query block
   sourceUsed?: string;  // best-effort source name parsed from the answer
   raw: string;
+  /** Token/context usage for this turn (from the AOAI response). */
+  usage?: DataAgentUsage;
+  /** The model deployment that answered. */
+  model?: string;
+  /** Names of the sources attached to the agent (grounding context surfaced). */
+  sourcesAvailable?: string[];
 }
 
 /** Extract the first fenced code block + a "source used" hint from the model output. */
@@ -162,7 +170,16 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
   }
   const j: any = await res.json();
   const content = j?.choices?.[0]?.message?.content || '';
-  return parseAnswer(content, cfg.sources);
+  const parsed = parseAnswer(content, cfg.sources);
+  const u = j?.usage || {};
+  return {
+    ...parsed,
+    usage: (u.total_tokens != null)
+      ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0, totalTokens: u.total_tokens ?? 0 }
+      : undefined,
+    model: target.deployment,
+    sourcesAvailable: cfg.sources.map((s) => s.name).filter(Boolean),
+  };
 }
 
 /** Map typed sources to Foundry Agent Service tool entries (for publish). */

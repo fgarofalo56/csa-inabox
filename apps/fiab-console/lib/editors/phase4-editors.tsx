@@ -2733,7 +2733,7 @@ const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n
 // `_family-utils` (vitest coverage at lib/editors/__tests__/family-utils.test.ts)
 // so the legacy-string migration is unit-tested without the Fluent UI bundle.
 
-interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean }
+interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean; usage?: { totalTokens?: number }; model?: string }
 
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -2812,10 +2812,10 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       });
       // Content-type guard: a 404/500 returns an HTML page, not JSON — calling
       // r.json() on that throws "Unexpected token <" and the answer is lost.
-      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string }>(r);
+      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string; usage?: { totalTokens?: number }; model?: string }>(r);
       const j = res.data;
       if (res.ok && j) {
-        setChat((c) => [...c, { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed }]);
+        setChat((c) => [...c, { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed, usage: j.usage, model: j.model }]);
       } else {
         const detail = res.error || j?.error || `HTTP ${res.status}`;
         const hint = j?.hint ? `\n\n${j.hint}` : '';
@@ -3016,7 +3016,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                 )}
                 {chat.map((m, i) => (
                   <div key={i} className={m.role === 'user' ? s.chatRowUser : s.chatRowBot}>
-                    <span className={s.chatMeta}>{m.role === 'user' ? 'You' : m.error ? 'Agent · error' : 'Agent'}{m.sourceUsed && !m.error ? ` · ${m.sourceUsed}` : ''}</span>
+                    <span className={s.chatMeta}>{m.role === 'user' ? 'You' : m.error ? 'Agent · error' : 'Agent'}{m.sourceUsed && !m.error ? ` · source: ${m.sourceUsed}` : ''}{m.model && !m.error ? ` · ${m.model}` : ''}{m.usage?.totalTokens && !m.error ? ` · ${m.usage.totalTokens} tokens` : ''}</span>
                     <div className={m.role === 'user' ? s.bubbleUser : m.error ? s.bubbleErr : s.bubbleBot}>
                       {m.content || (m.error ? 'Unknown error' : '')}
                     </div>
