@@ -558,13 +558,13 @@ interface DfStream {
 interface DfModel { streams: DfStream[] }
 
 const TRANSFORMS: Array<{ kind: StreamKind; label: string; color: string; desc: string }> = [
-  { kind: 'source',    label: 'Source',         color: '#107c10', desc: 'Read from a dataset / inline store.' },
-  { kind: 'select',    label: 'Select',         color: '#0078d4', desc: 'Choose, rename, reorder columns.' },
-  { kind: 'filter',    label: 'Filter',         color: '#bd7800', desc: 'Keep rows matching an expression.' },
-  { kind: 'join',      label: 'Join',           color: '#5c2d91', desc: 'Join two streams on key columns.' },
-  { kind: 'aggregate', label: 'Aggregate',      color: '#7719aa', desc: 'Group by + aggregate expressions.' },
-  { kind: 'derive',    label: 'Derived column', color: '#c239b3', desc: 'Add / overwrite columns by expression.' },
-  { kind: 'sink',      label: 'Sink',           color: '#d13438', desc: 'Write to a dataset destination.' },
+  { kind: 'source',    label: 'Source',         color: 'var(--loom-accent-emerald)', desc: 'Read from a dataset / inline store.' },
+  { kind: 'select',    label: 'Select',         color: 'var(--loom-accent-blue)', desc: 'Choose, rename, reorder columns.' },
+  { kind: 'filter',    label: 'Filter',         color: 'var(--loom-accent-amber)', desc: 'Keep rows matching an expression.' },
+  { kind: 'join',      label: 'Join',           color: 'var(--loom-accent-plum)', desc: 'Join two streams on key columns.' },
+  { kind: 'aggregate', label: 'Aggregate',      color: 'var(--loom-accent-plum)', desc: 'Group by + aggregate expressions.' },
+  { kind: 'derive',    label: 'Derived column', color: 'var(--loom-accent-magenta)', desc: 'Add / overwrite columns by expression.' },
+  { kind: 'sink',      label: 'Sink',           color: 'var(--loom-accent-red)', desc: 'Write to a dataset destination.' },
 ];
 
 const KIND_COLOR: Record<StreamKind, string> = Object.fromEntries(TRANSFORMS.map((t) => [t.kind, t.color])) as Record<StreamKind, string>;
