@@ -74,6 +74,14 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Item-route persistence guard
+        if: steps.changed.outputs.console == 'true'
+        working-directory: apps/fiab-console
+        # Fails if any editor's useItemState(<type>) lacks a matching
+        # /api/items/<type>/[id]/route.ts (GET+PATCH) — the silent edit-loss
+        # class the 2026-06-04 scaffold audit caught. Pure node, no install.
+        run: node scripts/check-item-routes.mjs
+
       - name: Install pnpm
         if: steps.changed.outputs.console == 'true'
         run: npm install -g pnpm@9
