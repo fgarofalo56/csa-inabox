@@ -7,6 +7,7 @@ import {
 import {
   Database24Filled, Flash24Filled, ChartMultiple24Filled, ShieldCheckmark24Filled,
   Sparkle24Filled, Bot24Filled, Apps24Filled, ServerLink24Filled,
+  HatGraduation24Filled,
 } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { PageShell } from '@/lib/components/page-shell';
@@ -85,6 +86,8 @@ interface Quick {
 }
 
 const QUICK_LINKS: Quick[] = [
+  { href: '/learn', title: 'Learning Hub', body: 'Step-by-step tutorials, real-world use-case walkthroughs, sample data, and shortcuts — learn by building in Loom.',
+    icon: <HatGraduation24Filled />, tint: 'linear-gradient(135deg, #0b6a53, #21c08a)' },
   { href: '/workspaces', title: 'Workspaces', body: 'Open or create a workspace. Items live inside workspaces.',
     icon: <Apps24Filled />, tint: 'linear-gradient(135deg, #3d2e80, #5e4dc0)' },
   { href: '/onelake', title: 'OneLake catalog', body: 'Find data across every workspace, with lineage and sensitivity labels.',

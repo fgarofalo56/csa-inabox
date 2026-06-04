@@ -30,6 +30,7 @@ type AuditCategory = 'identity' | 'data-plane' | 'azure-services' | 'permissions
 interface CheckResult {
   id: string; category: AuditCategory; title: string; severity: AuditSeverity; status: AuditStatus;
   detail: string; remediation?: string; fixId?: string; redeploy?: boolean; docs?: string;
+  portalSteps?: string[]; fixScript?: string;
 }
 interface AuditReport {
   generatedAt: string; score: number;
@@ -74,6 +75,14 @@ export function HealthPane() {
   const [healing, setHealing] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ kind: 'one' | 'all'; fixId?: string } | null>(null);
   const [healMsg, setHealMsg] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [openFix, setOpenFix] = useState<Record<string, boolean>>({});
+
+  const copyScript = useCallback((id: string, text: string) => {
+    try { void navigator.clipboard?.writeText(text); } catch { /* clipboard blocked */ }
+    setCopiedId(id);
+    setTimeout(() => setCopiedId((c) => (c === id ? null : c)), 2000);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -198,6 +207,45 @@ export function HealthPane() {
                       {r.docs && (
                         <a href={r.docs} target={r.docs.startsWith('http') ? '_blank' : undefined} rel="noreferrer"
                           style={{ color: tokens.colorBrandForeground1, fontSize: 12 }}>Open reference →</a>
+                      )}
+                    </div>
+                  )}
+                  {r.status !== 'pass' && (r.portalSteps?.length || r.fixScript) && (
+                    <div style={{ marginTop: 8 }}>
+                      <Button size="small" appearance="subtle"
+                        onClick={() => setOpenFix((o) => ({ ...o, [r.id]: !o[r.id] }))}>
+                        {openFix[r.id] ? '▾ Hide fix instructions' : '▸ How to fix (portal + PowerShell)'}
+                      </Button>
+                      {openFix[r.id] && (
+                        <div style={{ marginTop: 8, padding: 12, borderRadius: 6, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground2 }}>
+                          {r.portalSteps?.length ? (
+                            <>
+                              <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>Fix via the Azure portal</Caption1>
+                              <ol style={{ margin: '6px 0 12px', paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                {r.portalSteps.map((step, si) => (
+                                  <li key={si}><Body1>{step}</Body1></li>
+                                ))}
+                              </ol>
+                            </>
+                          ) : null}
+                          {r.fixScript ? (
+                            <>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                                <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>Fix via PowerShell (Az CLI — copy &amp; run)</Caption1>
+                                <Button size="small" appearance="outline"
+                                  onClick={() => copyScript(r.id, r.fixScript!)}>
+                                  {copiedId === r.id ? 'Copied ✓' : 'Copy script'}
+                                </Button>
+                              </div>
+                              <pre style={{ marginTop: 6, padding: 10, borderRadius: 6, background: tokens.colorNeutralBackground4, color: tokens.colorNeutralForeground1, overflowX: 'auto', fontSize: 12, fontFamily: 'Consolas, "Cascadia Code", monospace', whiteSpace: 'pre', lineHeight: 1.5 }}>
+                                {r.fixScript}
+                              </pre>
+                              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                                Run in Azure Cloud Shell (PowerShell) or local pwsh with the Az CLI signed in to this tenant. Replace any &lt;…&gt; placeholders with your values.
+                              </Caption1>
+                            </>
+                          ) : null}
+                        </div>
                       )}
                     </div>
                   )}

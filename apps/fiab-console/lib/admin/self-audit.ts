@@ -44,11 +44,87 @@ export interface CheckResult {
   redeploy?: boolean;
   /** Optional doc/portal link. */
   docs?: string;
+  /** Step-by-step fix via the Azure portal (UI path). Present on warn/fail. */
+  portalSteps?: string[];
+  /** Copy-paste-ready PowerShell (Az CLI) fix, pre-filled with this deployment's
+   * resource group / app / subscription / identity. Present on warn/fail. */
+  fixScript?: string;
 }
 
 const env = (k: string) => (process.env[k] || '').trim();
 const has = (k: string) => env(k).length > 0;
 const anyHas = (...ks: string[]) => ks.some(has);
+
+// ── deployment context (used to pre-fill the copy-paste fix scripts) ─────────
+// Resolved from the live env so the PowerShell a user copies already targets
+// THIS deployment — only the missing value the admin owns is left as a <token>.
+const CTX = {
+  app: env('LOOM_CONSOLE_APP_NAME') || 'loom-console',
+  adminRg: env('LOOM_ADMIN_RG') || env('LOOM_DLZ_RG') || '<admin-resource-group>',
+  dlzRg: env('LOOM_DLZ_RG') || env('LOOM_ADMIN_RG') || '<dlz-resource-group>',
+  sub: env('LOOM_SUBSCRIPTION_ID') || '<subscription-id>',
+  uamiClientId: env('LOOM_UAMI_CLIENT_ID') || '<uami-client-id>',
+  tenant: env('LOOM_ENTRA_TENANT_ID') || env('AZURE_TENANT_ID') || '<tenant-id>',
+  cosmosAccount: env('LOOM_COSMOS_ACCOUNT')
+    || (env('LOOM_COSMOS_ENDPOINT').match(/https:\/\/([^.]+)\./)?.[1])
+    || '<cosmos-account-name>',
+};
+
+// Friendly placeholder for the value an admin must supply for a given env var.
+const VALUE_HINT: Record<string, string> = {
+  SESSION_SECRET: '<32+char-random-secret-from-key-vault>',
+  LOOM_ENTRA_CLIENT_ID: '<entra-app-client-id>',
+  LOOM_ENTRA_TENANT_ID: CTX.tenant,
+  LOOM_UAMI_CLIENT_ID: '<uami-client-id>',
+  LOOM_COSMOS_ENDPOINT: 'https://<account>.documents.azure.com:443/',
+  LOOM_COSMOS_DATABASE: 'loom',
+  LOOM_SUBSCRIPTION_ID: '<subscription-id>',
+  LOOM_DLZ_RG: '<dlz-resource-group>',
+  LOOM_ADMIN_RG: '<admin-resource-group>',
+  LOOM_TENANT_ADMIN_OID: '<your-entra-user-object-id>',
+  LOOM_SYNAPSE_WORKSPACE: '<synapse-workspace-name>',
+  LOOM_SYNAPSE_DEDICATED_POOL: '<dedicated-sql-pool-name>',
+  LOOM_KUSTO_CLUSTER_URI: 'https://<adx-cluster>.<region>.kusto.windows.net',
+  LOOM_KUSTO_DEFAULT_DB: 'loomdb-default',
+  LOOM_EVENTHUB_NAMESPACE: '<eventhubs-namespace>',
+  LOOM_ADLS_ACCOUNT: '<adls-gen2-account-name>',
+  LOOM_AI_SEARCH_SERVICE: '<ai-search-service-name>',
+  LOOM_AOAI_ENDPOINT: 'https://<aoai-or-foundry>.openai.azure.com/',
+  LOOM_AOAI_DEPLOYMENT: 'gpt-4o-mini',
+  LOOM_LOG_ANALYTICS_RESOURCE_ID: '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<law>',
+  LOOM_ALERT_RG: '<alert-resource-group>',
+  LOOM_ADF_FACTORY: '<data-factory-name>',
+  LOOM_PURVIEW_ACCOUNT: '<purview-account-name>',
+  LOOM_GRAPH_USERS_ENABLED: 'true',
+};
+
+/** Pick the concrete env vars an admin should set from a missing-list that may
+ * contain `A | B` anyOf groups — choose the first (preferred) var of each group. */
+function varsToSet(missing: string[]): string[] {
+  return missing.map((m) => (m.includes(' | ') ? m.split(' | ')[0].trim() : m.trim()));
+}
+
+/** Build portal steps + a pre-filled PowerShell snippet that sets the given env
+ * vars on the Console container app (the most common Loom fix). */
+function envVarFix(vars: string[]): { portalSteps: string[]; fixScript: string } {
+  const setArgs = vars.map((v) => `"${v}=${VALUE_HINT[v] || `<set-${v}>`}"`).join(' ');
+  const portalSteps = [
+    `Azure portal → Container Apps → open "${CTX.app}" (resource group "${CTX.adminRg}").`,
+    'In the left menu choose Application → Containers, then select "Edit and deploy".',
+    'Open the Environment variables tab.',
+    `Add or update: ${vars.join(', ')} — set each to your value, then click Save.`,
+    'Confirm "Create" to roll a new revision; the change is live in ~1–2 minutes.',
+    'Return here and click Re-run audit — the check turns green once the revision is active.',
+  ];
+  const fixScript = [
+    '# CSA Loom — set the missing config on the Console container app, then it auto-rolls a new revision.',
+    '# Run in Azure Cloud Shell (PowerShell) or local pwsh with the Az CLI. Replace any <...> with your value.',
+    `az account set --subscription "${CTX.sub}"`,
+    `az containerapp update --name "${CTX.app}" --resource-group "${CTX.adminRg}" \``,
+    `  --set-env-vars ${setArgs}`,
+  ].join('\n');
+  return { portalSteps, fixScript };
+}
 
 // ── env-presence check helper ──────────────────────────────────────────────
 interface EnvSpec {
@@ -72,6 +148,7 @@ function evalEnv(spec: EnvSpec): CheckResult {
   for (const group of spec.anyOf || []) if (!group.some(has)) missing.push(group.join(' | '));
   const ok = missing.length === 0;
   const failStatus: AuditStatus = spec.warnOnMiss || spec.severity !== 'critical' ? 'warn' : 'fail';
+  const fix = ok ? null : envVarFix(varsToSet(missing));
   return {
     id: spec.id,
     category: spec.category,
@@ -82,6 +159,8 @@ function evalEnv(spec: EnvSpec): CheckResult {
     remediation: ok ? undefined : spec.remediation,
     redeploy: ok ? undefined : true,
     docs: spec.docs,
+    portalSteps: fix?.portalSteps,
+    fixScript: fix?.fixScript,
   };
 }
 
@@ -198,6 +277,13 @@ async function probeCosmos(): Promise<CheckResult> {
   } catch (e: any) {
     const msg = e?.message || String(e);
     const denied = /403|forbidden|not authorized/i.test(msg);
+    const grantScript = [
+      '# Grant the Console managed identity data-plane read/write on Cosmos.',
+      '# Cosmos DB data-plane RBAC is assigned via CLI/ARM (NOT the portal IAM blade). Run in Cloud Shell / pwsh.',
+      `az account set --subscription "${CTX.sub}"`,
+      `$pid = az ad sp show --id "${CTX.uamiClientId}" --query id -o tsv`,
+      `az cosmosdb sql role assignment create --account-name "${CTX.cosmosAccount}" --resource-group "${CTX.dlzRg}" --role-definition-id "00000000-0000-0000-0000-000000000002" --principal-id $pid --scope "/"`,
+    ].join('\n');
     return {
       ...base, status: 'fail',
       detail: `Cosmos probe failed: ${msg}`,
@@ -206,6 +292,18 @@ async function probeCosmos(): Promise<CheckResult> {
         : 'Verify LOOM_COSMOS_ENDPOINT + network access (private endpoint / firewall) to the Cosmos account.',
       fixId: denied ? undefined : 'ensure-cosmos',
       redeploy: denied,
+      portalSteps: denied
+        ? [
+            'Cosmos DB data-plane RBAC is assigned via CLI/ARM, not the portal Access control (IAM) blade — use the script below.',
+            'It assigns the Console UAMI the built-in "Cosmos DB Built-in Data Contributor" role (id ...0002) at account scope.',
+            'After it completes, return here and click Re-run audit.',
+          ]
+        : [
+            `Azure portal → Cosmos DB account "${CTX.cosmosAccount}" → Networking.`,
+            'Ensure a private endpoint exists for the Console subnet, or the Console outbound IP is allowed by the firewall.',
+            'Confirm LOOM_COSMOS_ENDPOINT points at this account, then click Re-run audit.',
+          ],
+      fixScript: denied ? grantScript : `az account set --subscription "${CTX.sub}"\naz cosmosdb show --name "${CTX.cosmosAccount}" --resource-group "${CTX.dlzRg}" --query "{publicNetworkAccess:publicNetworkAccess, ipRules:ipRules, privateEndpoints:privateEndpointConnections[].name}"`,
     };
   }
 }
@@ -220,14 +318,45 @@ async function probeAoai(): Promise<CheckResult> {
     return { ...base, status: 'pass', detail: `AOAI target resolved: ${t.deployment} @ ${t.endpoint}.` };
   } catch (e: any) {
     if (e instanceof NoAoaiDeploymentError) {
+      const fix = envVarFix(['LOOM_AOAI_ENDPOINT', 'LOOM_AOAI_DEPLOYMENT']);
       return {
         ...base, status: 'warn',
         detail: 'No AOAI model deployment resolved.',
         remediation: 'Deploy a model from the AI Foundry hub ("Quota + usage" → Deploy gpt-4o-mini), or set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT. Copilot, the help agent, and data agents all use it.',
         redeploy: true,
+        portalSteps: [
+          'Azure AI Foundry portal → your hub/project → Deployments → "Deploy model".',
+          'Pick a chat model (e.g. gpt-4o-mini), name the deployment, and Deploy.',
+          `Then set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT on the "${CTX.app}" container app (see the env-var portal steps), or use the script.`,
+          'Re-run audit once the revision is live.',
+        ],
+        fixScript: [
+          '# Option A — deploy a model with the CLI (replace <aoai-account> + <rg>):',
+          `az account set --subscription "${CTX.sub}"`,
+          'az cognitiveservices account deployment create --name "<aoai-account>" --resource-group "<rg>" --deployment-name "gpt-4o-mini" --model-name "gpt-4o-mini" --model-version "2024-07-18" --model-format OpenAI --sku-capacity 10 --sku-name "Standard"',
+          '',
+          '# Option B — point Loom at an existing deployment:',
+          fix.fixScript.split('\n').slice(2).join('\n'),
+        ].join('\n'),
       };
     }
-    return { ...base, status: 'warn', detail: `AOAI probe failed: ${e?.message || String(e)}`, remediation: 'Verify the Foundry/AOAI endpoint + that the Console UAMI has "Cognitive Services OpenAI User" on the account.', redeploy: true };
+    return {
+      ...base, status: 'warn', detail: `AOAI probe failed: ${e?.message || String(e)}`,
+      remediation: 'Verify the Foundry/AOAI endpoint + that the Console UAMI has "Cognitive Services OpenAI User" on the account.',
+      redeploy: true,
+      portalSteps: [
+        'Azure portal → your Azure OpenAI / AI Foundry resource → Access control (IAM).',
+        'Add role assignment → role "Cognitive Services OpenAI User".',
+        `Assign access to → Managed identity → pick the Console UAMI (client id ${CTX.uamiClientId}). Review + assign.`,
+        'Re-run audit (grant propagation can take a minute).',
+      ],
+      fixScript: [
+        '# Grant the Console UAMI "Cognitive Services OpenAI User" on the AOAI/Foundry resource.',
+        `az account set --subscription "${CTX.sub}"`,
+        `$pid = az ad sp show --id "${CTX.uamiClientId}" --query id -o tsv`,
+        'az role assignment create --assignee-object-id $pid --assignee-principal-type ServicePrincipal --role "Cognitive Services OpenAI User" --scope "<aoai-resource-id>"',
+      ].join('\n'),
+    };
   }
 }
 
@@ -270,6 +399,33 @@ export async function runSelfAudit(now: string): Promise<AuditReport> {
   const results: CheckResult[] = ENV_CHECKS.map(evalEnv);
   const [cosmos, aoai] = await Promise.all([probeCosmos(), probeAoai()]);
   results.push(cosmos, aoai, ...securityChecks());
+
+  // Augment specific findings whose fix needs more than (or wasn't given) the
+  // generic env-var recipe — RBAC/Graph grants, and the security env-checks.
+  for (const r of results) {
+    if (r.status === 'pass') continue;
+    if (r.id === 'graph-users') {
+      const grant = [
+        '',
+        '# Then grant the Console UAMI the Microsoft Graph Directory.Read.All application permission:',
+        `$uami = az ad sp show --id "${CTX.uamiClientId}" --query id -o tsv`,
+        '$graph = az ad sp show --id "00000000-0000-0000-c000-000000000000" --query id -o tsv',
+        `$role = az ad sp show --id "00000000-0000-0000-c000-000000000000" --query "appRoles[?value=='Directory.Read.All'].id | [0]" -o tsv`,
+        '$body = @{ principalId=$uami; resourceId=$graph; appRoleId=$role } | ConvertTo-Json',
+        'az rest --method POST --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$uami/appRoleAssignments" --headers "Content-Type=application/json" --body $body',
+      ].join('\n');
+      r.fixScript = `${r.fixScript || ''}\n${grant}`;
+      r.portalSteps = [
+        ...(r.portalSteps || []),
+        'Entra admin center → Enterprise applications → the Console UAMI → Permissions, or via Graph: grant Directory.Read.All (application) + admin consent (the script does this).',
+      ];
+    }
+    if ((r.id === 'sec-tenant-isolation' || r.id === 'sec-session-secret-strength') && !r.fixScript) {
+      const f = envVarFix(r.id === 'sec-tenant-isolation' ? ['LOOM_TENANT_ADMIN_OID'] : ['SESSION_SECRET']);
+      r.portalSteps = f.portalSteps;
+      r.fixScript = f.fixScript;
+    }
+  }
 
   const weight: Record<AuditSeverity, number> = { critical: 3, recommended: 2, optional: 1 };
   const scoreOf: Record<AuditStatus, number> = { pass: 1, warn: 0.5, fail: 0 };
