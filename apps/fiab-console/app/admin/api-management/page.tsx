@@ -37,14 +37,28 @@ export default function ApiManagementPage() {
   const [activeTab, setActiveTab] = useState<string>('service');
 
   useEffect(() => {
-    // Fetch APIM gate config from marketplace _gate endpoint
-    fetch('/api/marketplace/_gate')
-      .then((r) => {
-        if (r.status === 401 || r.status === 403) { setUnauth(true); return null; }
-        return r.json();
+    // Resolve the APIM gate config. The spinner shows only while `gate === null`,
+    // so EVERY path below must end with setGate/​setUnauth — otherwise the page
+    // spins forever (the bug this fixes: it used to fetch the non-existent
+    // /api/marketplace/_gate and only console.error on failure). A 6s timeout
+    // guarantees the UI resolves even if the route hangs.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    fetch('/api/marketplace/gate', { signal: ctrl.signal, cache: 'no-store' })
+      .then(async (r) => {
+        if (r.status === 401 || r.status === 403) { setUnauth(true); return; }
+        const d = await r.json().catch(() => null);
+        setGate(d && typeof d.configured === 'boolean'
+          ? d
+          : { configured: false, reason: 'Could not read APIM configuration.', hint: 'Verify the deployment env (LOOM_APIM_NAME / resource group / subscription).' });
       })
-      .then((d) => { if (d) setGate(d); })
-      .catch((e) => console.error('Gate check failed:', e));
+      .catch(() => {
+        // Network error / abort / timeout — render the honest not-configured
+        // state instead of an endless spinner.
+        setGate({ configured: false, reason: 'APIM configuration check timed out or failed.', hint: 'Reload the page; if it persists, verify APIM is provisioned + the env vars are set.' });
+      })
+      .finally(() => clearTimeout(timer));
+    return () => { clearTimeout(timer); ctrl.abort(); };
   }, []);
 
   if (unauth) return <AdminShell sectionTitle="API Management"><SignInRequired subject="APIM admin" /></AdminShell>;
