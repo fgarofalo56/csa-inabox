@@ -54,6 +54,21 @@ export async function POST(req: NextRequest) {
     if (e instanceof SearchNotConfiguredError) {
       return NextResponse.json({ ok: false, error: e.message }, { status: 503 });
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    const msg = (e?.message || String(e)).toString();
+    const status = e?.status || 502;
+    // Azure AI Search SKU TIER is immutable once the service exists — only
+    // replicas + partitions scale. ARM rejects a SKU change (400). Surface an
+    // honest, actionable message instead of a raw "updateSearchService 400".
+    if (body.sku && (status === 400 || /sku|immutable|cannot be (changed|updated)/i.test(msg))) {
+      return NextResponse.json({
+        ok: false,
+        error: 'Azure AI Search SKU tier is immutable after the service is created — it cannot be changed in place (e.g. basic → standard).',
+        gate: {
+          reason: 'Changing the AI Search SKU requires creating a NEW search service and re-indexing.',
+          remediation: 'Scale replicas + partitions here (those ARE adjustable on the current SKU). To change the tier, provision a new Search service via platform/fiab/bicep/modules/ai/ai-search.bicep and migrate indexes.',
+        },
+      }, { status: 409 });
+    }
+    return NextResponse.json({ ok: false, error: msg }, { status });
   }
 }

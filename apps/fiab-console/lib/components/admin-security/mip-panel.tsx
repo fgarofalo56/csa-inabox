@@ -34,10 +34,13 @@ const useStyles = makeStyles({
   },
   toolbar: { display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' },
   fieldStack: { display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 720 },
-  swatch: (color?: string) => ({
-    display: 'inline-block', width: 12, height: 12, borderRadius: 2,
-    backgroundColor: color || '#888', marginRight: 6, verticalAlign: 'middle',
-  }) as React.CSSProperties,
+  // NOTE: makeStyles entries must resolve to class-name strings — a function
+  // here makes `s.swatch` a non-callable string and crashed the panel with
+  // "s.swatch is not a function". The per-label color is applied inline instead.
+  swatch: {
+    display: 'inline-block', width: '12px', height: '12px', borderRadius: '2px',
+    marginRight: '6px', verticalAlign: 'middle', backgroundColor: '#888',
+  },
 });
 
 interface ApiState<T> {
@@ -162,7 +165,7 @@ function LabelsSection({ state, onRefresh }: { state: ApiState<LabelsPayload>; o
             {state.data.labels!.map((l) => (
               <TableRow key={l.id}>
                 <TableCell>
-                  <span style={s.swatch(l.color)} />
+                  <span className={s.swatch} style={{ backgroundColor: l.color || '#888' }} />
                   <strong>{l.displayName || l.name}</strong>
                 </TableCell>
                 <TableCell>{l.sensitivity ?? '—'}</TableCell>
