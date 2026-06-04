@@ -55,3 +55,22 @@ The catalog metastore list + per-workspace catalogs light up immediately (no
 redeploy). Loom already lists a workspace's **catalogs** without account-admin —
 account-admin / metastore-admin is only needed for the account-level *metastore*
 list and UC privilege management.
+
+### Already have a metastore? Just assign it (don't create another)
+If a metastore already exists for the region (e.g. `metastore_azure_eastus2`),
+**do not create a second one** — assign the existing one to the workspace:
+
+- **UI (1 click):** account console → **Catalog** → open the existing metastore →
+  **Workspaces** → **Assign to workspace** → pick `adb-loom-default-<region>`.
+- **Scripted (fully automated, reuses the existing metastore):**
+  ```bash
+  DATABRICKS_ACCOUNT_ID=<account-guid> \
+  scripts/csa-loom/enable-unity-catalog.sh \
+    --region eastus2 --workspace-id <workspaceId> \
+    --uami-app-id <LOOM_UAMI_CLIENT_ID>
+  ```
+  The script finds the existing regional metastore, assigns it, and sets the
+  Loom UAMI as metastore owner/admin — idempotent. Runs against the Databricks
+  **account API** (not the network-restricted workspace host), so it works even
+  when the workspace blocks public network access. Caller must be a Databricks
+  account admin (one-time; can be a service principal for unattended bootstrap).
