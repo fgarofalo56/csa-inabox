@@ -108,6 +108,12 @@ param dlzDomainNames array = []
 @description('Admin Entra group object ID for FiaB Admins')
 param adminEntraGroupId string
 
+@description('Entra group object ID whose members bootstrap the Loom Feature-Permissions admin (bypass the gate before any grants exist). Passed to the admin plane → LOOM_TENANT_ADMIN_GROUP_ID.')
+param loomTenantAdminGroupId string = ''
+
+@description('Entra user object ID that bootstraps the Loom Feature-Permissions admin (single-user bootstrap). Passed to the admin plane → LOOM_TENANT_ADMIN_OID.')
+param loomTenantAdminOid string = ''
+
 @description('Hub VNet CIDR')
 param hubVnetCidr string = '10.0.0.0/16'
 
@@ -328,6 +334,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     openaiEmbeddingsModel: openaiEmbeddingsModel
     keyVaultHsmIsolated: keyVaultHsmIsolated
     adminEntraGroupId: adminEntraGroupId
+    loomTenantAdminGroupId: loomTenantAdminGroupId
+    loomTenantAdminOid: loomTenantAdminOid
     hubVnetCidr: hubVnetCidr
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
