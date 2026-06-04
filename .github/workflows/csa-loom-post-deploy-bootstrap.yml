@@ -196,6 +196,37 @@ jobs:
             echo
           fi
 
+      - name: Enable Unity Catalog (assign metastore + UAMI account-admin)
+        # Opt-in + best-effort. Runs against the Databricks ACCOUNT API (not the
+        # network-locked workspace), so no public-access toggle needed. Requires:
+        #   - var/secret DATABRICKS_ACCOUNT_ID (the account GUID), AND
+        #   - the deploy SP to be a Databricks ACCOUNT ADMIN (one-time human step).
+        # If either is absent the step prints how to do it and continues — UC
+        # enablement is never a hard deploy blocker. Without it the catalog still
+        # lists per-workspace catalogs once a metastore is assigned manually.
+        env:
+          DATABRICKS_ACCOUNT_ID: ${{ vars.DATABRICKS_ACCOUNT_ID || secrets.DATABRICKS_ACCOUNT_ID }}
+        run: |
+          if [ -z "$DATABRICKS_ACCOUNT_ID" ]; then
+            echo "::notice::DATABRICKS_ACCOUNT_ID not set — skipping UC auto-enable."
+            echo "To automate: set repo var DATABRICKS_ACCOUNT_ID (account console → ⊙ menu → Account ID)"
+            echo "and make the deploy SP a Databricks account admin once. Or assign the metastore manually:"
+            echo "  docs/fiab/catalog/metastores.md#enabling-unity-catalog"
+            exit 0
+          fi
+          WS_ID=$(az databricks workspace show -g "$DLZ_RG" -n "$DBX_WS" --query workspaceId -o tsv 2>/dev/null \
+                  || az databricks workspace show -g "$ADMIN_RG" -n "$DBX_WS" --query workspaceId -o tsv 2>/dev/null)
+          REGION=$(az databricks workspace show -g "$DLZ_RG" -n "$DBX_WS" --query location -o tsv 2>/dev/null \
+                   || az databricks workspace show -g "$ADMIN_RG" -n "$DBX_WS" --query location -o tsv 2>/dev/null)
+          if [ -z "$WS_ID" ] || [ -z "$REGION" ]; then
+            echo "::warning::Could not resolve Databricks workspaceId/region — skipping UC auto-enable."; exit 0
+          fi
+          chmod +x scripts/csa-loom/enable-unity-catalog.sh
+          # Tolerate non-account-admin deploy SP: warn, don't fail the bootstrap.
+          bash scripts/csa-loom/enable-unity-catalog.sh \
+            --region "$REGION" --workspace-id "$WS_ID" --uami-app-id "$CONSOLE_UAMI_CLIENT" \
+            || echo "::warning::UC auto-enable failed (deploy SP likely not a Databricks account admin). See docs/fiab/catalog/metastores.md"
+
       - name: Restore Databricks public access disabled
         if: always()
         run: |

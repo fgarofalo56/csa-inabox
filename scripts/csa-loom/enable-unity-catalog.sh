@@ -79,17 +79,25 @@ curl -s "${auth[@]}" -X PUT "${API}/workspaces/${WORKSPACE_ID}/metastore" \
 echo "    assigned."
 
 if [[ -n "$UAMI_APP_ID" ]]; then
-  echo ">>> Ensuring UAMI ${UAMI_APP_ID} is an account service principal + metastore admin"
-  # Account-level SCIM: add the SP by its applicationId.
-  SP_ID="$(curl -s "${auth[@]}" "${API}/scim/v2/ServicePrincipals?filter=applicationId+eq+${UAMI_APP_ID}" | jq -r '.Resources[0].id // empty')"
+  echo ">>> Ensuring UAMI ${UAMI_APP_ID} is an account service principal + account admin"
+  # Account-level SCIM: find or add the SP by its applicationId (URL-encoded filter).
+  ENC_FILTER="applicationId%20eq%20%22${UAMI_APP_ID}%22"
+  SP_ID="$(curl -s "${auth[@]}" "${API}/scim/v2/ServicePrincipals?filter=${ENC_FILTER}" | jq -r '.Resources[0].id // empty')"
   if [[ -z "$SP_ID" ]]; then
     SP_ID="$(curl -s "${auth[@]}" -X POST "${API}/scim/v2/ServicePrincipals" \
       -d "$(jq -n --arg a "$UAMI_APP_ID" '{schemas:["urn:ietf:params:scim:schemas:core:2.0:ServicePrincipal"], applicationId:$a, displayName:"loom-console-uami", active:true}')" | jq -r '.id // empty')"
   fi
-  # Set the SP as the metastore owner/admin (PATCH metastore owner to the SP).
-  curl -s "${auth[@]}" -X PATCH "${API}/metastores/${METASTORE_ID}" \
-    -d "$(jq -n --arg a "$UAMI_APP_ID" '{metastore_info:{owner:$a}, update_mask:"owner"}')" >/dev/null || true
-  echo "    UAMI SCIM id=${SP_ID:-unknown}; metastore owner set to the UAMI."
+  if [[ -n "$SP_ID" ]]; then
+    # Grant the account_admin role so the Loom console can LIST metastores +
+    # manage UC. This is the reliable, verified path (PATCH SCIM roles) — owner
+    # transfer of a system-owned metastore is a no-op. account_admin supersedes
+    # metastore admin; the Loom console identity legitimately manages UC.
+    curl -s "${auth[@]}" -X PATCH "${API}/scim/v2/ServicePrincipals/${SP_ID}" \
+      -d '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"add","path":"roles","value":[{"value":"account_admin"}]}]}' >/dev/null
+    echo "    UAMI SCIM id=${SP_ID}; granted account_admin."
+  else
+    echo "    WARN: could not resolve/create the UAMI account service principal — grant it account_admin manually." >&2
+  fi
 fi
 
 echo ""
