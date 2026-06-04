@@ -103,10 +103,17 @@ export default function CapacityPage() {
   const [provider, setProvider] = useState('');
 
   useEffect(() => {
-    fetch('/api/admin/azure-resources').then(r => {
+    // Timeout so a slow/hung ARM enumeration can't leave the page spinning
+    // forever (data===null). Every path resolves data or unauth.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    fetch('/api/admin/azure-resources', { signal: ctrl.signal, cache: 'no-store' }).then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); return null; }
       return r.json();
-    }).then(d => { if (d) setData(d); }).catch(e => setData({ ok: false, error: String(e) }));
+    }).then(d => { if (d) setData(d); })
+      .catch((e) => setData({ ok: false, error: e?.name === 'AbortError' ? 'Azure resource query timed out (15s). Reload to retry.' : String(e) }))
+      .finally(() => clearTimeout(timer));
+    return () => { clearTimeout(timer); ctrl.abort(); };
   }, []);
 
   const visibleResources = useMemo(() => {
