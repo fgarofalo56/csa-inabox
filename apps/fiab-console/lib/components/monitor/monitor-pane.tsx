@@ -130,7 +130,7 @@ function StatCardSkeleton() {
   );
 }
 
-type TabKey = 'overview' | 'metrics' | 'logs' | 'activity' | 'items' | 'alerts' | 'cost';
+type TabKey = 'overview' | 'metrics' | 'logs' | 'activity' | 'items' | 'alerts' | 'cost' | 'security';
 
 export function MonitorPane() {
   const styles = useStyles();
@@ -153,6 +153,7 @@ export function MonitorPane() {
         <Tab value="items">Deployed items</Tab>
         <Tab value="alerts">Alerts</Tab>
         <Tab value="cost">Cost</Tab>
+        <Tab value="security">Security</Tab>
       </TabList>
 
       {/* Only the active tab mounts → its fetch only fires when shown. */}
@@ -163,6 +164,7 @@ export function MonitorPane() {
       {tab === 'items' && <ActivityFeedPane />}
       {tab === 'alerts' && <AlertsTab onUnauth={onUnauth} />}
       {tab === 'cost' && <CostTab onUnauth={onUnauth} />}
+      {tab === 'security' && <SecurityTab onUnauth={onUnauth} />}
     </div>
   );
 }
@@ -947,6 +949,135 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           loading={data === null && !gate && !err}
           empty={gate ? 'Grant the Console UAMI Cost Management Reader to see spend by resource group.' : 'No cost recorded this month.'}
           ariaLabel="Cost by resource group"
+        />
+      </Section>
+    </div>
+  );
+}
+
+// ── Security (Defender for Cloud — M5 + action-required) ─────────────────────
+interface DefenderRec { id: string; name: string; status: string; severity: string; resource?: string; remediation?: string; category?: string; }
+interface DefenderAlertRow { id: string; name: string; severity: string; status: string; description?: string; resource?: string; time?: string; }
+interface DefenderData {
+  secureScore: { current: number; max: number; percentage: number } | null;
+  recommendations: DefenderRec[];
+  unhealthyCount: number;
+  highSeverityCount: number;
+  alerts: DefenderAlertRow[];
+  portalUrl: string;
+}
+
+function sevBadge(sev: string) {
+  const s = (sev || '').toLowerCase();
+  if (s === 'high') return <Badge color="danger" appearance="filled">High</Badge>;
+  if (s === 'medium') return <Badge color="warning" appearance="filled">Medium</Badge>;
+  return <Badge color="subtle" appearance="outline">{sev || 'Low'}</Badge>;
+}
+
+function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
+  const styles = useStyles();
+  const [data, setData] = useState<DefenderData | null>(null);
+  const [gate, setGate] = useState<Gate | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setData(null); setGate(null); setErr(null);
+    fetch('/api/monitor/defender').then(async (r) => {
+      if (!alive) return;
+      if (r.status === 401 || r.status === 403) { onUnauth(); setData(null); return; }
+      const j = await r.json();
+      if (j.gate) { setGate(j.gate); setData(null); return; }
+      if (!j.ok) { setErr(j.error || 'Failed to load Defender'); setData(null); return; }
+      setData(j.data as DefenderData);
+    }).catch((e) => { if (alive) { setErr(String(e)); setData(null); } });
+    return () => { alive = false; };
+  }, [tick, onUnauth]);
+
+  const kpis = useMemo(() => {
+    if (!data) return [];
+    return [
+      { label: 'Secure score', value: data.secureScore ? `${data.secureScore.percentage}%` : '—', accent: data.secureScore && data.secureScore.percentage < 60 ? styles.statAccentWarn : styles.statAccentSuccess },
+      { label: 'Action required', value: data.unhealthyCount, accent: data.unhealthyCount > 0 ? styles.statAccentWarn : styles.statAccentSuccess },
+      { label: 'High severity', value: data.highSeverityCount, accent: data.highSeverityCount > 0 ? styles.statAccentDanger : undefined },
+      { label: 'Active alerts', value: data.alerts.length, accent: data.alerts.length > 0 ? styles.statAccentDanger : undefined },
+    ];
+  }, [data, styles]);
+
+  const recColumns: LoomColumn<DefenderRec>[] = useMemo(() => [
+    { key: 'name', label: 'Recommendation', width: 320, render: (r) => <strong>{r.name}</strong> },
+    { key: 'severity', label: 'Severity', width: 110, getValue: (r) => r.severity, render: (r) => sevBadge(r.severity) },
+    { key: 'resource', label: 'Resource', width: 180, render: (r) => r.resource || '—' },
+    { key: 'remediation', label: 'Action / resolution', width: 420, render: (r) => r.remediation || '—' },
+  ], []);
+  const alertColumns: LoomColumn<DefenderAlertRow>[] = useMemo(() => [
+    { key: 'name', label: 'Alert', width: 300, render: (r) => <strong>{r.name}</strong> },
+    { key: 'severity', label: 'Severity', width: 110, getValue: (r) => r.severity, render: (r) => sevBadge(r.severity) },
+    { key: 'resource', label: 'Resource', width: 180, render: (r) => r.resource || '—' },
+    { key: 'description', label: 'Description', width: 380, render: (r) => r.description || '—' },
+  ], []);
+
+  // Action-required = unhealthy recommendations (already sorted server-side).
+  const actionItems = (data?.recommendations || []).filter((r) => r.status === 'Unhealthy');
+
+  return (
+    <div>
+      <Section
+        title="Security (Microsoft Defender for Cloud)"
+        actions={<Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
+      >
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Live Defender for Cloud posture for the Loom subscription — secure score, recommendations (each
+            <strong> action-required</strong> item carries its resolution), and active security alerts (Microsoft.Security REST).
+            {data?.portalUrl && <> Open the <a href={data.portalUrl} target="_blank" rel="noreferrer">Defender portal</a> to remediate.</>}
+          </MessageBarBody>
+        </MessageBar>
+        {gate && <GateBar gate={gate} subject="Security" />}
+        {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+        {data === null && !gate && !err ? (
+          <StatCardSkeleton />
+        ) : data ? (
+          <div className={styles.stats}>
+            {kpis.map((s) => (
+              <div key={s.label} className={styles.stat}>
+                <span className={styles.statLabel}>{s.label}</span>
+                <span className={`${styles.statValue} ${s.accent ?? ''}`}>{s.value}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </Section>
+
+      {actionItems.length > 0 && (
+        <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+          <MessageBarBody>
+            <MessageBarTitle>{actionItems.length} action{actionItems.length === 1 ? '' : 's'} required</MessageBarTitle>
+            {data?.secureScore ? `Resolving these raises your secure score (currently ${data.secureScore.current}/${data.secureScore.max}).` : 'Resolve the unhealthy recommendations below to improve your security posture.'}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      <Section title="Recommendations (action required first)">
+        <LoomDataTable
+          columns={recColumns}
+          rows={data?.recommendations ?? []}
+          getRowId={(r) => r.id}
+          loading={data === null && !gate && !err}
+          empty={gate ? 'Grant the Console UAMI Security Reader to see Defender recommendations.' : 'No recommendations — posture is healthy.'}
+          ariaLabel="Defender recommendations"
+        />
+      </Section>
+
+      <Section title="Active security alerts">
+        <LoomDataTable
+          columns={alertColumns}
+          rows={data?.alerts ?? []}
+          getRowId={(r) => r.id}
+          loading={data === null && !gate && !err}
+          empty={gate ? 'Grant Security Reader to see alerts.' : 'No active Defender alerts.'}
+          ariaLabel="Defender security alerts"
         />
       </Section>
     </div>
