@@ -108,6 +108,12 @@ param dlzDomainNames array = []
 @description('Admin Entra group object ID for FiaB Admins')
 param adminEntraGroupId string
 
+@description('Entra group object ID whose members bootstrap the Loom Feature-Permissions admin (bypass the gate before any grants exist). Passed to the admin plane → LOOM_TENANT_ADMIN_GROUP_ID.')
+param loomTenantAdminGroupId string = ''
+
+@description('Entra user object ID that bootstraps the Loom Feature-Permissions admin (single-user bootstrap). Passed to the admin plane → LOOM_TENANT_ADMIN_OID.')
+param loomTenantAdminOid string = ''
+
 @description('Hub VNet CIDR')
 param hubVnetCidr string = '10.0.0.0/16'
 
@@ -261,6 +267,9 @@ param appGatewayEnabled bool = false
 @description('Deploy Front Door Premium with Private Link to the ACA env. ~5 min provisioning + manual PE approval, ~$330/mo. Default off.')
 param frontDoorEnabled bool = false
 
+@description('Optional vanity URL for the console (e.g. csa-loom.contoso.ai) — set in the Setup Wizard. Creates a Front Door managed-cert custom domain; the deploy outputs the CNAME + _dnsauth TXT to add at your DNS provider. Empty = use the generated Front Door host.')
+param loomVanityDomain string = ''
+
 @description('Entra app client ID for Loom Console MSAL. When empty, Console runs unauth.')
 param loomMsalClientId string = ''
 
@@ -328,6 +337,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     openaiEmbeddingsModel: openaiEmbeddingsModel
     keyVaultHsmIsolated: keyVaultHsmIsolated
     adminEntraGroupId: adminEntraGroupId
+    loomTenantAdminGroupId: loomTenantAdminGroupId
+    loomTenantAdminOid: loomTenantAdminOid
     hubVnetCidr: hubVnetCidr
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
@@ -347,6 +358,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = {
     vpnGatewayEnabled: vpnGatewayEnabled
     appGatewayEnabled: appGatewayEnabled
     frontDoorEnabled: frontDoorEnabled
+    loomVanityDomain: loomVanityDomain
     loomStorageAccount: take('saloomdefault${uniqueString(singleDlzRg.id)}', 24)
     loomCosmosAccount: take('cosmos-loom-default-${uniqueString(singleDlzRg.id)}', 44)
     // Forward the Cosmos data-plane endpoints to the console so the vector-store
@@ -789,3 +801,8 @@ output adminPlaneRgName string = adminPlaneRgName
 output vpnGatewayPublicIp string = adminPlane.outputs.vpnGatewayPublicIp
 output appGatewayPublicFqdn string = adminPlane.outputs.appGatewayPublicFqdn
 output frontDoorPublicUrl string = adminPlane.outputs.frontDoorPublicUrl
+// Vanity URL + the DNS records the admin must add to activate it.
+output vanityPublicUrl string = adminPlane.outputs.vanityPublicUrl
+output vanityCnameTarget string = adminPlane.outputs.vanityCnameTarget
+output vanityDnsTxtName string = adminPlane.outputs.vanityDnsTxtName
+output vanityValidationToken string = adminPlane.outputs.vanityValidationToken
