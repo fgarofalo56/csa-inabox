@@ -628,6 +628,8 @@ export interface ScheduledQueryRuleInput {
   windowSize?: string;
   /** Action group ARM ids to fire. */
   actionGroupIds?: string[];
+  /** Whether the rule evaluates. Default true; set false to "stop" the rule. */
+  enabled?: boolean;
 }
 
 /** Create/update a scheduled query alert rule. Returns its ARM id. */
@@ -649,7 +651,7 @@ export async function upsertScheduledQueryRule(input: ScheduledQueryRuleInput): 
       displayName: input.name,
       description: input.description || 'Created by CSA Loom Activator',
       severity: input.severity ?? 3,
-      enabled: true,
+      enabled: input.enabled ?? true,
       scopes,
       evaluationFrequency: input.evaluationFrequency || 'PT5M',
       windowSize: input.windowSize || 'PT5M',
