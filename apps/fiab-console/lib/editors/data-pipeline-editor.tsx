@@ -41,7 +41,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
-  Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular,
+  Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular, CloudArrowUp20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
@@ -211,6 +211,7 @@ export function DataPipelineEditor({ item, id }: Props) {
   // Lifecycle state
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [debugging, setDebugging] = useState(false);
   const [validating, setValidating] = useState(false);
   const [validation, setValidation] = useState<{ ok: boolean; message: string } | null>(null);
@@ -466,37 +467,75 @@ export function DataPipelineEditor({ item, id }: Props) {
     } finally { setValidating(false); }
   }, [workspaceId, pipelineId, spec, activities.length, dispatchToast]);
 
+  // Publish the current canvas to a LIVE Azure Data Factory pipeline (creates
+  // the ADF backing + stamps adfPipelineName) so Run / Debug / Schedule work.
+  // This is the concrete resolution for the "no ADF backing yet" gate. Returns
+  // true on success so Run/Debug can publish-then-retry transparently.
+  const publishToAdf = useCallback(async (): Promise<boolean> => {
+    if (!workspaceId || !pipelineId) return false;
+    const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/publish?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ definition: { name: spec.name, properties: spec.properties } }),
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      dispatchToast(<Toast><ToastTitle>Publish failed: {j.gate?.remediation || j.error}</ToastTitle></Toast>, { intent: 'error' });
+      return false;
+    }
+    setDirty(false);
+    dispatchToast(<Toast><ToastTitle>Published to ADF · {j.adfPipelineName}</ToastTitle></Toast>, { intent: 'success' });
+    return true;
+  }, [workspaceId, pipelineId, spec, dispatchToast]);
+
+  const publish = useCallback(async () => {
+    setPublishing(true);
+    try { await publishToAdf(); } finally { setPublishing(false); }
+  }, [publishToAdf]);
+
   const run = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     setRunning(true);
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
-      });
-      const j = await r.json();
-      if (!j.ok) dispatchToast(<Toast><ToastTitle>Run failed: {j.error}</ToastTitle></Toast>, { intent: 'error' });
+      const url = `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`;
+      let r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+      let j = await r.json();
+      // Not yet backed by ADF → publish, then retry once. No dead-end.
+      if (!j.ok && (j.gate || /no ADF backing/i.test(j.error || ''))) {
+        dispatchToast(<Toast><ToastTitle>Publishing to ADF first…</ToastTitle></Toast>, { intent: 'info' });
+        if (await publishToAdf()) {
+          r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+          j = await r.json();
+        }
+      }
+      if (!j.ok) dispatchToast(<Toast><ToastTitle>Run failed: {j.gate?.remediation || j.error}</ToastTitle></Toast>, { intent: 'error' });
       else {
         dispatchToast(<Toast><ToastTitle>Run queued · {j.runId?.slice(0, 8)}</ToastTitle></Toast>, { intent: 'success' });
         setTopTab('output');
       }
     } finally { setRunning(false); }
-  }, [workspaceId, pipelineId, dispatchToast]);
+  }, [workspaceId, pipelineId, dispatchToast, publishToAdf]);
 
   const debug = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     setDebugging(true);
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/debug?workspaceId=${encodeURIComponent(workspaceId)}`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
-      });
-      const j = await r.json();
-      if (!j.ok) dispatchToast(<Toast><ToastTitle>Debug failed: {j.error}</ToastTitle></Toast>, { intent: 'error' });
+      const url = `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/debug?workspaceId=${encodeURIComponent(workspaceId)}`;
+      let r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+      let j = await r.json();
+      if (!j.ok && (j.gate || /no ADF backing/i.test(j.error || ''))) {
+        dispatchToast(<Toast><ToastTitle>Publishing to ADF first…</ToastTitle></Toast>, { intent: 'info' });
+        if (await publishToAdf()) {
+          r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+          j = await r.json();
+        }
+      }
+      if (!j.ok) dispatchToast(<Toast><ToastTitle>Debug failed: {j.gate?.remediation || j.error}</ToastTitle></Toast>, { intent: 'error' });
       else {
         dispatchToast(<Toast><ToastTitle>Debug run started · {j.runId?.slice(0, 8)}</ToastTitle></Toast>, { intent: 'success' });
         setTopTab('output');
       }
     } finally { setDebugging(false); }
-  }, [workspaceId, pipelineId, dispatchToast]);
+  }, [workspaceId, pipelineId, dispatchToast, publishToAdf]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -604,6 +643,7 @@ export function DataPipelineEditor({ item, id }: Props) {
           { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services and datasets' },
         ]},
         { label: 'Run', actions: [
+          { label: publishing ? 'Publishing…' : 'Publish', icon: <CloudArrowUp20Regular />, onClick: pipelineId && !publishing ? publish : undefined, disabled: !pipelineId || publishing, title: 'Deploy this pipeline to Azure Data Factory so it can Run / Debug / schedule' },
           { label: running ? 'Queuing…' : 'Run', icon: <Play20Regular />, onClick: canRun ? run : undefined, disabled: !canRun },
           { label: debugging ? 'Debugging…' : 'Debug', icon: <Bug20Regular />, onClick: canDebug ? debug : undefined, disabled: !canDebug },
         ]},
@@ -639,6 +679,7 @@ export function DataPipelineEditor({ item, id }: Props) {
   ], [
     canCreate, saving, canSave, save, workspaceId, loadList, canDiscard, dirty, discard,
     validating, canValidate, validate, running, canRun, run, debugging, canDebug, debug,
+    publish, publishing,
     pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned,
   ]);
 
