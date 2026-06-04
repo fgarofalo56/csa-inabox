@@ -17,16 +17,17 @@
 # Path-filtered to apps/fiab-console/** so it only runs when the console changes.
 name: CSA Loom Console Build
 
+# NOTE: this job is a REQUIRED status check. It must therefore run (and report)
+# on EVERY pull request, even ones that don't touch the console — otherwise a
+# bicep/workflow-only PR deadlocks: the required `next build (node 20)` context
+# never reports and the PR can never merge. So we DON'T path-filter at the `on:`
+# level; instead the job always starts and an internal change-detection step
+# skips the heavy install/build (reporting green) when apps/fiab-console is
+# untouched. When the console DOES change, the full real `next build` runs.
 on:
   pull_request:
-    paths:
-      - 'apps/fiab-console/**'
-      - '.github/workflows/fiab-console-ci.yml'
   push:
     branches: [main]
-    paths:
-      - 'apps/fiab-console/**'
-      - '.github/workflows/fiab-console-ci.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -45,21 +46,46 @@ jobs:
         working-directory: apps/fiab-console
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect console changes
+        id: changed
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="origin/${{ github.base_ref }}"
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            range="$base...HEAD"
+          else
+            range="HEAD~1...HEAD"
+          fi
+          if git diff --name-only "$range" 2>/dev/null | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
+            echo "console=true" >> "$GITHUB_OUTPUT"
+            echo "Console changed — running full next build."
+          else
+            echo "console=false" >> "$GITHUB_OUTPUT"
+            echo "No apps/fiab-console changes — skipping build, reporting this required check green."
+          fi
 
       - name: Use Node.js 20
+        if: steps.changed.outputs.console == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
 
       - name: Install pnpm
+        if: steps.changed.outputs.console == 'true'
         run: npm install -g pnpm@9
 
       - name: Install dependencies
+        if: steps.changed.outputs.console == 'true'
         # Match the Dockerfile (`pnpm install --no-frozen-lockfile`) so CI builds
         # exactly what deploy builds.
         run: pnpm install --no-frozen-lockfile
 
       - name: Build (next build)
+        if: steps.changed.outputs.console == 'true'
         env:
           NEXT_TELEMETRY_DISABLED: '1'
           NODE_OPTIONS: --max-old-space-size=4096
