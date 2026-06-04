@@ -264,6 +264,20 @@ jobs:
             --scope "/subscriptions/$SUB/resourceGroups/$ADMIN_RG" \
             -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
 
+      - name: Grant Console UAMI Cost Management Reader + Security Reader (Monitor Cost + Security tabs)
+        # Sub-scope, so the /monitor Cost tab (Microsoft.CostManagement query) and
+        # Security/Defender tab (Microsoft.Security secureScores/assessments/alerts)
+        # show real data instead of an honest "grant X" gate. Idempotent.
+        run: |
+          for ROLE in "Cost Management Reader" "Security Reader"; do
+            az role assignment create \
+              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-principal-type ServicePrincipal \
+              --role "$ROLE" \
+              --scope "/subscriptions/$SUB" \
+              -o table 2>&1 | grep -v "already exists" || echo "$ROLE already assigned"
+          done
+
       - name: Grant Console UAMI Microsoft Graph roles (Directory.Read.All + User.Read.All)
         # Unblocks /admin/users displayName + department + license
         # enrichment so the page shows real Entra identity data instead of
