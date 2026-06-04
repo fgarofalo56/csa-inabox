@@ -663,9 +663,44 @@ export function getLearn(itemType: string): LearnEntry | null {
 /** A section the Learn portal groups topics under. */
 export type LearnSection =
   | 'Tutorials'
+  | 'Use cases'
   | 'Editor guides'
   | 'Service guides'
   | 'Reference';
+
+/**
+ * Real-world use cases from the CSA-in-a-Box docs — surfaced in the Learning Hub
+ * so users can browse/search every scenario and open the full walkthrough. Built
+ * on CSA Loom (Azure-native), never Fabric. `appId` (when set) is the matching
+ * one-click content-bundle app (installable real example with sample data) — the
+ * install/import wizard is wired in a follow-up; today the card opens the doc.
+ * primaryUrl points at the verified use-cases index (no fabricated deep links).
+ */
+const USE_CASES: ReadonlyArray<{
+  id: string; title: string; summary: string; category: string; visualType: string; appId?: string;
+}> = [
+  { id: 'doj-antitrust', title: 'DOJ Antitrust Analytics', summary: 'Antitrust compliance + investigation analytics — step-by-step domain build on Loom.', category: 'Government', visualType: 'warehouse' },
+  { id: 'gov-data-analytics', title: 'Government Data Analytics', summary: 'General government analytics platform on Azure-native Loom services.', category: 'Government', visualType: 'lakehouse' },
+  { id: 'dot-transportation', title: 'DOT Transportation Analytics', summary: 'Department of Transportation data analytics end to end.', category: 'Government', visualType: 'kql-database' },
+  { id: 'faa-aviation', title: 'FAA Aviation Analytics', summary: 'Federal Aviation Administration analytics on Loom.', category: 'Government', visualType: 'eventstream' },
+  { id: 'epa-environmental', title: 'EPA Environmental Analytics', summary: 'Environmental Protection Agency data analytics.', category: 'Government', visualType: 'lakehouse' },
+  { id: 'noaa-climate', title: 'NOAA Climate & Ocean Analytics', summary: 'Climate + oceanographic data analysis at scale.', category: 'Government', visualType: 'notebook' },
+  { id: 'nasa-earth', title: 'NASA Earth Science Analytics', summary: 'Earth-science data pipelines + analysis.', category: 'Government', visualType: 'notebook' },
+  { id: 'interior-resources', title: 'Interior Natural Resources', summary: 'Natural-resources management analytics.', category: 'Government', visualType: 'warehouse' },
+  { id: 'usda-agriculture', title: 'USDA Agricultural Analytics', summary: 'Department of Agriculture data solutions.', category: 'Government', visualType: 'lakehouse' },
+  { id: 'usps-postal', title: 'USPS Postal Operations', summary: 'Postal-service operational analytics.', category: 'Government', visualType: 'kql-dashboard' },
+  { id: 'commerce-economic', title: 'Commerce Economic Analytics', summary: 'Economic data + trade analytics.', category: 'Government', visualType: 'semantic-model' },
+  { id: 'ihs-tribal-health', title: 'IHS & Tribal Health Analytics', summary: 'Indian Health Service + tribal healthcare data.', category: 'Healthcare', visualType: 'lakehouse', appId: 'app-healthcare-popmgt' },
+  { id: 'rti-anomaly', title: 'Real-Time Anomaly Detection', summary: 'Fraud + anomaly detection on streaming data (Event Hubs → ADX → Activator).', category: 'Real-Time', visualType: 'activator', appId: 'app-iot-realtime' },
+  { id: 'casino-gaming', title: 'Casino & Gaming Analytics', summary: 'Player-grain facts, real-time win/loss, high-roller Activator alerts.', category: 'Industry', visualType: 'warehouse', appId: 'app-casino-analytics' },
+  { id: 'fed-cyber', title: 'Federal Cybersecurity & Threat Analytics', summary: 'Threat detection + security analytics on Loom.', category: 'Cybersecurity', visualType: 'kql-database' },
+  { id: 'unified-analytics', title: 'Unified Analytics', summary: 'Consolidated analytics — the Fabric experience on Azure-native Loom.', category: 'Platform', visualType: 'lakehouse' },
+  { id: 'data-virtualization', title: 'Data Virtualization', summary: 'Cross-cloud data access without copies.', category: 'Multi-Cloud', visualType: 'data-product' },
+  { id: 'api-first-ai', title: 'API-First Multi-Model AI Ecosystem', summary: 'AI + data through an API-gateway architecture (APIM).', category: 'API-First', visualType: 'apim-api' },
+  { id: 'dataverse-integration', title: 'Dataverse API Integration', summary: 'Microsoft Dataverse connectivity + analytics.', category: 'API-First', visualType: 'dataverse-table' },
+  { id: 'eam-apim', title: 'Enterprise Asset Management via APIM', summary: 'Asset management exposed + governed through API Management.', category: 'API-First', visualType: 'apim-product' },
+  { id: 'cross-platform', title: 'Cross-Platform Integration', summary: 'Integration across multiple platforms + clouds.', category: 'Multi-Cloud', visualType: 'data-pipeline' },
+];
 
 export interface LearnTopic {
   /** Item-type slug (for editor guides) or a synthetic id (tutorials/services). */
@@ -768,6 +803,15 @@ export function getLearnCatalog(): LearnTopic[] {
       id: `tutorial:${t.id}`, title: t.title, summary: t.summary,
       section: 'Tutorials', category: 'End-to-end tutorials', visualType: t.visualType,
       primaryUrl: loomDocUrl(path), primaryLabel: 'Loom guide', hasLoomDoc: true,
+    });
+  }
+
+  // Real-world use cases (CSA-in-a-Box scenarios, built on Loom).
+  for (const u of USE_CASES) {
+    topics.push({
+      id: `usecase:${u.id}`, title: u.title, summary: u.summary,
+      section: 'Use cases', category: u.category, visualType: u.visualType,
+      primaryUrl: loomDocUrl('use-cases'), primaryLabel: 'Walkthrough', hasLoomDoc: true,
     });
   }
 

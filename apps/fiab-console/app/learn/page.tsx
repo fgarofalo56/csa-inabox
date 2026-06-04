@@ -37,9 +37,10 @@ import {
   getLearnCatalog, loomDocUrl, type LearnTopic, type LearnSection,
 } from '@/lib/learn/content';
 
-const SECTION_ORDER: LearnSection[] = ['Tutorials', 'Editor guides', 'Service guides', 'Reference'];
+const SECTION_ORDER: LearnSection[] = ['Tutorials', 'Use cases', 'Editor guides', 'Service guides', 'Reference'];
 const SECTION_BLURB: Record<LearnSection, string> = {
   'Tutorials': 'End-to-end walkthroughs that take you from an empty workspace to a working scenario.',
+  'Use cases': 'Real-world reference scenarios — government, healthcare, gaming, cyber, API-first — built on CSA Loom (Azure-native, never Fabric).',
   'Editor guides': 'One guide per item type — every Azure / Fabric editor Loom builds, with full feature parity.',
   'Service guides': 'How the Loom engines work under the hood (Activator, Mirroring, Direct-Lake).',
   'Reference': 'Architecture, parity, and orientation docs for the platform as a whole.',
