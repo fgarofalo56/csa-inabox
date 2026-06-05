@@ -131,7 +131,13 @@ promotable. (Phase 2 — the first slice can write edges without the viewer.)
 - **PR 3 — API edges:** table/query → Data API Builder / APIM (+ Delta path), query → UDF REST.
 - **PR 4 — Medallion promotion + edge-graph mesh viewer:** promote bronze→silver→gold,
   lineage view over `thread-edges`.
-- **PR 5 — Power BI deepening:** embedded reports in Loom, report build from a model, XMLA DAX.
+- **PR 5 — Power BI:**
+  - ✅ *Build a Power BI model* — gold warehouse table → real Power BI **push
+    dataset** (typed columns from the catalog + a sample of real rows pushed),
+    deep-linked into the Power BI service (`/api/thread/build-powerbi-model`).
+    See `docs/fiab/thread/thread-edges.md`.
+  - ⏭ deepening: report build from the model, embedded report in Loom, and
+    data-agent **semantic-model (DAX)** execution via `executeQueries`.
 - **Cross-cutting:** Web-3.0 polish (icons/colors per type via `itemVisual`), ServiceChip
   in-place start/edit, and `ui-parity` + `no-vaporware` receipts per edge.
 

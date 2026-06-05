@@ -46,11 +46,12 @@ interface LoomItemOpt { id: string; name: string }
 
 /** One wizard field, populated from real discovery routes. */
 function ThreadFieldControl({
-  field, value, onChange,
+  field, value, onChange, from,
 }: {
   field: ThreadField;
   value: string | boolean | undefined;
   onChange: (v: string | boolean) => void;
+  from: { id: string; type: string; name: string };
 }) {
   const [opts, setOpts] = useState<{ value: string; label: string }[] | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -66,8 +67,17 @@ function ThreadFieldControl({
           const base = items.map((it) => ({ value: it.id, label: it.name }));
           if (!cancelled) setOpts(field.allowCreate ? [{ value: '__new__', label: field.createLabel || '+ Create new' }, ...base] : base);
         } else if (field.kind === 'select' && field.optionsRoute) {
-          const r = await fetch(field.optionsRoute);
+          // Substitute source-item tokens so a field can discover from the item.
+          const route = field.optionsRoute
+            .replace('{fromId}', encodeURIComponent(from.id))
+            .replace('{fromType}', encodeURIComponent(from.type));
+          const r = await fetch(route);
           const j = await r.json();
+          // Honest discovery gate (route returned ok:false with a reason).
+          if (j?.ok === false) {
+            if (!cancelled) { setLoadErr(j.error || j.gate?.missing || `HTTP ${r.status}`); setOpts([]); }
+            return;
+          }
           let mapped: { value: string; label: string }[] = [];
           if (field.optionsMap === 'powerbi-workspaces') {
             const list = j.workspaces || j.value || j.data || [];
@@ -85,7 +95,7 @@ function ThreadFieldControl({
     }
     void load();
     return () => { cancelled = true; };
-  }, [field]);
+  }, [field, from.id, from.type]);
 
   if (field.kind === 'toggle') {
     return (
@@ -179,6 +189,7 @@ function ThreadWizard({
           field={f}
           value={values[f.name]}
           onChange={(v) => setValues((prev) => ({ ...prev, [f.name]: v }))}
+          from={from}
         />
       ))}
 

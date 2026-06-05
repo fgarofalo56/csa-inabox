@@ -28,7 +28,10 @@ export interface ThreadField {
   createLabel?: string;
   /** select: static options. */
   options?: { value: string; label: string }[];
-  /** select: load options from a real discovery route (GET → { value,label } adapter). */
+  /**
+   * select: load options from a real discovery route (GET → { value,label } adapter).
+   * Supports `{fromId}` / `{fromType}` tokens, substituted from the source item.
+   */
   optionsRoute?: string;
   /** how to map the optionsRoute response into {value,label}[]. */
   optionsMap?: 'powerbi-workspaces';
@@ -66,6 +69,13 @@ const NOTEBOOK_ATTACHABLE = [
   'lakehouse', 'warehouse', 'kql-database',
   'synapse-dedicated-sql-pool', 'synapse-serverless-sql-pool', 'azure-sql-database',
 ];
+
+/**
+ * Warehouse sources whose Azure-native backend (Synapse dedicated SQL) can be
+ * read table-by-table to build a Power BI push model. Lakehouse/KQL/Azure-SQL
+ * are deferred until their schema adapter lands (only WIRED edges ship).
+ */
+const POWERBI_MODELABLE = ['warehouse', 'synapse-dedicated-sql-pool'];
 
 export const THREAD_ACTIONS: ThreadAction[] = [
   {
@@ -112,6 +122,40 @@ export const THREAD_ACTIONS: ThreadAction[] = [
       },
     ],
     route: '/api/thread/add-data-agent-source',
+    submitLabel: 'Weave',
+  },
+  {
+    id: 'build-powerbi-model',
+    label: 'Build a Power BI model',
+    description:
+      'Publish a warehouse table to Power BI as a real semantic model — columns are read from ' +
+      'the catalog and a sample of real rows is pushed so the model is queryable immediately. ' +
+      'Then build a report on it in Power BI. No connection strings to type.',
+    group: 'Visualize',
+    fromTypes: POWERBI_MODELABLE,
+    icon: 'chart',
+    fields: [
+      {
+        name: 'workspaceId',
+        label: 'Power BI workspace',
+        kind: 'select',
+        optionsRoute: '/api/powerbi/workspaces',
+        optionsMap: 'powerbi-workspaces',
+        required: true,
+        hint: 'The Power BI workspace to create the model in. The Console identity must be a Member/Contributor.',
+      },
+      {
+        name: 'table',
+        label: 'Table',
+        kind: 'select',
+        optionsRoute: '/api/thread/powerbi-model/tables?fromType={fromType}&fromId={fromId}',
+        required: true,
+        hint: 'The warehouse table to publish as a model.',
+      },
+      { name: 'modelName', label: 'Model name', kind: 'text', required: true, hint: 'A name for the new Power BI semantic model.' },
+      { name: 'includeRows', label: 'Push a sample of rows now', kind: 'toggle', default: true, hint: 'Push up to 500 rows so the model is immediately queryable. Refresh in Power BI to load all rows.' },
+    ],
+    route: '/api/thread/build-powerbi-model',
     submitLabel: 'Weave',
   },
   // More edges land per the Thread PRP (docs/fiab/thread/PRP-loom-thread.md):
