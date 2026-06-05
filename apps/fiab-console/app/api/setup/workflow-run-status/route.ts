@@ -1,8 +1,14 @@
 /**
- * GET /api/setup/workflow-run-status?workflow={workflowFile}
+ * GET /api/setup/workflow-run-status?workflow={workflowFile}&since={iso}
  *
  * Polls GitHub Actions API for the latest run of a deployment workflow.
  * Used by Setup Wizard to show live deployment progress.
+ *
+ * The optional `since` param (the ISO timestamp the wizard dispatched at,
+ * returned by POST /api/setup/deploy) pins the result to the run THIS deploy
+ * triggered: we list recent `workflow_dispatch` runs and pick the newest one
+ * created at/after `since`. Without it the route would happily return a stale,
+ * already-completed prior run and the wizard would flash "Succeeded" instantly.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -33,10 +39,18 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // The wizard passes the dispatch timestamp so we return the run THIS deploy
+  // started, not an older completed run of the same workflow.
+  const sinceParam = req.nextUrl.searchParams.get('since');
+  const sinceMs = sinceParam ? Date.parse(sinceParam) : NaN;
+
   try {
     const repoOwner = process.env.LOOM_GITHUB_REPO_OWNER || 'fgarofalo56';
     const repoName = process.env.LOOM_GITHUB_REPO_NAME || 'csa-inabox';
-    const runUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/actions/workflows/${workflowFile}/runs?branch=main&per_page=1&status=in_progress,completed`;
+    // `event=workflow_dispatch` scopes to wizard-triggered runs; we fetch a few
+    // and choose the newest at/after `since` in code (GitHub's `status` filter
+    // takes a single value, so the old comma-joined filter was silently ignored).
+    const runUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/actions/workflows/${workflowFile}/runs?branch=main&event=workflow_dispatch&per_page=10`;
 
     const runRes = await fetch(runUrl, {
       headers: {
@@ -54,15 +68,21 @@ export async function GET(req: NextRequest) {
     }
 
     const j: any = await runRes.json();
-    const runs = j.workflow_runs || [];
-    if (runs.length === 0) {
+    const runs: any[] = j.workflow_runs || [];
+    // Newest run created at/after the dispatch timestamp (with a 60s grace for
+    // clock skew). Falls back to the newest run when `since` is absent/unparseable.
+    const candidates = Number.isFinite(sinceMs)
+      ? runs.filter((r) => Date.parse(r.created_at) >= sinceMs - 60_000)
+      : runs;
+    const latestRun = candidates[0] ?? (Number.isFinite(sinceMs) ? undefined : runs[0]);
+    if (!latestRun) {
+      // Dispatch accepted but the run row hasn't materialized yet (a few seconds).
       return NextResponse.json(
-        { ok: true, status: 'not_found' },
-        { status: 404 },
+        { ok: true, status: 'pending' },
+        { status: 200 },
       );
     }
 
-    const latestRun = runs[0];
     return NextResponse.json(
       {
         ok: true,
@@ -70,6 +90,7 @@ export async function GET(req: NextRequest) {
         conclusion: latestRun.conclusion,
         runId: latestRun.id,
         runUrl: latestRun.html_url,
+        createdAt: latestRun.created_at,
       },
       { status: 200 },
     );

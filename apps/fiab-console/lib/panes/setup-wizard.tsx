@@ -70,6 +70,7 @@ import {
   Branch24Regular,
   SquareMultiple24Regular,
   CheckmarkCircle48Filled,
+  ErrorCircle48Filled,
   Rocket24Regular,
 } from '@fluentui/react-icons';
 import type { FluentIcon } from '@fluentui/react-icons';
@@ -121,6 +122,13 @@ interface WizardState {
   deployStage?: string;
   deployError?: string;
   deploymentId?: string;
+  /** GitHub-workflow-dispatch streaming: the workflow file + dispatch time we poll against. */
+  workflowFile?: string;
+  dispatchedAt?: string;
+  /** Live run status streamed from /api/setup/workflow-run-status. */
+  runStatus?: 'pending' | 'queued' | 'in_progress' | 'completed' | 'not_found';
+  runConclusion?: string | null;
+  runUrl?: string;
 }
 
 const REGIONS_COMMERCIAL = ['eastus2', 'eastus', 'westus2', 'westus3', 'centralus', 'westeurope', 'northeurope'];
@@ -181,6 +189,28 @@ const CAPACITY_SERVICES: { type: string; label: string }[] = [
   { type: 'kql-database', label: 'ADX (Kusto)' },
   { type: 'synapse-spark-pool', label: 'Synapse Spark' },
 ];
+
+/** Map the streamed GitHub run status → a Fluent Badge color + human label. */
+function runStatusDisplay(s: WizardState): {
+  label: string;
+  color: 'informative' | 'success' | 'danger' | 'warning';
+  spinning: boolean;
+  done: boolean;
+} {
+  if (s.runStatus === 'completed') {
+    const ok = s.runConclusion === 'success';
+    return {
+      label: ok ? 'Succeeded' : `Finished (${s.runConclusion ?? 'unknown'})`,
+      color: ok ? 'success' : 'danger',
+      spinning: false,
+      done: true,
+    };
+  }
+  if (s.runStatus === 'in_progress') return { label: 'Running', color: 'informative', spinning: true, done: false };
+  if (s.runStatus === 'queued') return { label: 'Queued', color: 'informative', spinning: true, done: false };
+  // pending / not_found → run row not visible yet
+  return { label: 'Starting…', color: 'warning', spinning: true, done: false };
+}
 
 function renderBicepParam(s: WizardState): string {
   const isGov = s.boundary === 'GCC-High' || s.boundary === 'IL5';
@@ -465,6 +495,50 @@ export function SetupWizardPane() {
     }
   }, [state.step, subs.length, subsLoading, subsError, loadSubscriptions]);
 
+  // Stream the GitHub Actions deploy run status while the wizard is on the
+  // "done" step after a workflow-dispatch. Polls every 6s until the run
+  // completes; cleans up on unmount / step change / completion.
+  const isStreaming =
+    state.step === 'done' &&
+    !!state.workflowFile &&
+    state.runStatus !== 'completed';
+
+  useEffect(() => {
+    if (!isStreaming || !state.workflowFile) return;
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const qs = new URLSearchParams({ workflow: state.workflowFile! });
+        if (state.dispatchedAt) qs.set('since', state.dispatchedAt);
+        const res = await fetch(`/api/setup/workflow-run-status?${qs.toString()}`);
+        const j = await res.json().catch(() => ({}));
+        if (cancelled || !j?.ok) return;
+        setState((s) =>
+          s.step === 'done'
+            ? {
+                ...s,
+                runStatus: j.status,
+                runConclusion: j.conclusion ?? null,
+                runUrl: j.runUrl ?? s.runUrl,
+                deployProgress:
+                  j.status === 'completed' ? 1 : j.status === 'in_progress' ? 0.66 : 0.3,
+              }
+            : s,
+        );
+      } catch {
+        /* transient — next tick retries */
+      }
+    }
+
+    void poll();
+    const id = setInterval(poll, 6000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [isStreaming, state.workflowFile, state.dispatchedAt]);
+
   async function deploy() {
     // The backend validates the captured config and returns 400 if anything is
     // missing, or 503 with a copy-paste `az deployment sub create` (pre-filled
@@ -488,6 +562,11 @@ export function SetupWizardPane() {
         setState((s) => ({
           ...s,
           deploymentId: j.workflowFile,
+          workflowFile: j.workflowFile,
+          dispatchedAt: j.dispatchedAt,
+          runStatus: 'pending',
+          runConclusion: undefined,
+          runUrl: undefined,
           deployStage: `Queued on GitHub Actions (${j.workflowFile})`,
           deployProgress: 0.3,
           step: 'done',
@@ -907,21 +986,45 @@ export function SetupWizardPane() {
         {state.step === 'done' && (
           <div className={styles.doneCenter}>
             {state.deployStage?.includes('GitHub Actions') ? (
-              <>
-                <Spinner size="large" />
-                <Title2>Deployment queued on GitHub Actions</Title2>
-                <Body1>
-                  The workflow <code>{state.deploymentId}</code> is running. Monitor it on GitHub.
-                </Body1>
-                <Button
-                  appearance="primary"
-                  as="a"
-                  href={`https://github.com/fgarofalo56/csa-inabox/actions/workflows/${state.deploymentId}`}
-                  target="_blank"
-                >
-                  Watch workflow run
-                </Button>
-              </>
+              (() => {
+                const rs = runStatusDisplay(state);
+                return (
+                  <>
+                    {rs.done && rs.color === 'success' ? (
+                      <CheckmarkCircle48Filled style={{ color: tokens.colorPaletteGreenForeground1 }} aria-hidden />
+                    ) : rs.done ? (
+                      <ErrorCircle48Filled style={{ color: tokens.colorPaletteRedForeground1 }} aria-hidden />
+                    ) : (
+                      <Spinner size="large" />
+                    )}
+                    <Title2>
+                      {rs.done && rs.color === 'success'
+                        ? 'Data Landing Zone deployed'
+                        : rs.done
+                          ? 'Deployment finished with errors'
+                          : 'Deploying on GitHub Actions'}
+                    </Title2>
+                    <div className={styles.inlineLoad}>
+                      <Badge appearance="filled" color={rs.color}>{rs.label}</Badge>
+                      <Caption1 className={styles.summaryLabel}>workflow: <code>{state.workflowFile}</code></Caption1>
+                    </div>
+                    <ProgressBar value={state.deployProgress ?? 0.3} thickness="large" />
+                    <Body1>
+                      {rs.done
+                        ? 'The deployment workflow has finished. Open the run on GitHub for the full log.'
+                        : 'Live status is streamed from GitHub Actions below — this page updates every few seconds.'}
+                    </Body1>
+                    <Button
+                      appearance="primary"
+                      as="a"
+                      href={state.runUrl || `https://github.com/fgarofalo56/csa-inabox/actions/workflows/${state.workflowFile}`}
+                      target="_blank"
+                    >
+                      {rs.done ? 'Open run on GitHub' : 'Watch workflow run'}
+                    </Button>
+                  </>
+                );
+              })()
             ) : (
               <>
                 <CheckmarkCircle48Filled style={{ color: tokens.colorPaletteGreenForeground1 }} aria-hidden />
