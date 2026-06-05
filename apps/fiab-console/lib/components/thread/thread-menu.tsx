@@ -22,7 +22,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Branch20Regular, Dismiss24Regular, Bot20Regular, DataBarVertical20Regular,
-  Open16Regular, Sparkle20Regular,
+  Open16Regular, Sparkle20Regular, Notebook20Regular,
 } from '@fluentui/react-icons';
 import { groupedActionsFor, type ThreadAction, type ThreadField } from '@/lib/thread/thread-actions';
 
@@ -38,6 +38,7 @@ const useStyles = makeStyles({
 function actionIcon(icon?: string) {
   if (icon === 'bot') return <Bot20Regular />;
   if (icon === 'chart') return <DataBarVertical20Regular />;
+  if (icon === 'notebook') return <Notebook20Regular />;
   return <Sparkle20Regular />;
 }
 
