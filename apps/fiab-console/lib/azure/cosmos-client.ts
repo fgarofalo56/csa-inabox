@@ -40,6 +40,7 @@ let _lakehouseShortcuts: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
 let _mcpServers: Container | null = null;
+let _threadEdges: Container | null = null;
 let _ensured = false;
 
 function endpoint(): string {
@@ -123,12 +124,16 @@ async function ensure() {
   _workspaceAgentConfig = await mk('workspace-agent-config', '/workspaceId');
   // "Connect MCP tools" — external MCP tool-server connections per tenant.
   _mcpServers = await mk('mcp-servers', '/tenantId');
+  // Loom Thread edge graph — one row per "Weave" integration (from → to),
+  // partitioned by tenant so the lineage view hits a single physical partition.
+  _threadEdges = await mk('thread-edges', '/tenantId');
   _ensured = true;
 }
 
 export async function copilotConfigContainer(): Promise<Container> { await ensure(); return _copilotConfig!; }
 export async function workspaceAgentConfigContainer(): Promise<Container> { await ensure(); return _workspaceAgentConfig!; }
 export async function mcpServersContainer(): Promise<Container> { await ensure(); return _mcpServers!; }
+export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
@@ -189,7 +194,7 @@ const KNOWN_CONTAINER_IDS = [
   'shares', 'folders', 'downloads', 'search-history',
   'workspace-permissions', 'workspace-git',
   'tenant-themes', 'tenant-settings', 'marketplace-listings',
-  'feature-permissions', 'lakehouse-shortcuts',
+  'feature-permissions', 'lakehouse-shortcuts', 'thread-edges',
 ];
 
 /** List all Loom containers with their current throughput shape. */

@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem, createOwnedItem } from '../../items/_lib/item-crud';
+import { recordThreadEdge } from '@/lib/thread/thread-edges';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -61,6 +62,11 @@ export async function POST(req: NextRequest) {
       },
     });
     if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: res.status });
+    await recordThreadEdge(session, {
+      fromItemId: from.id, fromType: from.type, fromName: source.name,
+      toItemId: res.item.id, toType: 'data-agent', toName: res.item.displayName,
+      action: 'add-data-agent-source',
+    });
     return NextResponse.json({
       ok: true,
       message: `Created Data Agent "${res.item.displayName}" grounded on ${source.name}.`,
@@ -88,6 +94,11 @@ export async function POST(req: NextRequest) {
   sources.push(source);
   const updated = await updateOwnedItem(agentId, 'data-agent', oid, { state: { ...state, sources } });
   if (!updated) return NextResponse.json({ ok: false, error: 'failed to update the Data Agent' }, { status: 500 });
+  await recordThreadEdge(session, {
+    fromItemId: from.id, fromType: from.type, fromName: source.name,
+    toItemId: agent.id, toType: 'data-agent', toName: agent.displayName,
+    action: 'add-data-agent-source',
+  });
   return NextResponse.json({
     ok: true,
     message: `Added ${source.name} as a source on "${agent.displayName}".`,

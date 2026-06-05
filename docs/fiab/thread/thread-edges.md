@@ -15,6 +15,24 @@ BFF route that calls a real Azure / Power BI backend (or shows an honest gate).
 
 Warehouse table pickers share one discovery route: `GET /api/thread/warehouse-tables?fromType=&fromId=` (lists the Synapse dedicated pool's tables; honest gate if unconfigured).
 
+## The edge graph + Lineage view (PR4 spine)
+
+Every Weave records a row in the Cosmos `thread-edges` container (PK
+`/tenantId`) via `recordThreadEdge` (`lib/thread/thread-edges.ts`). The write is
+**best-effort** — it never blocks the edge action (the integration itself is the
+real backend; the graph is an observability layer). Re-weaving the same
+source→target/action **upserts** (no duplicates).
+
+- **Read API:** `GET /api/thread/edges` → the caller's edges, newest first.
+- **Lineage page:** `/thread` (left nav → **Lineage**) renders the graph as KPI
+  cards (totals + per-action counts) + a sortable/filterable `LoomDataTable`
+  (Source → Weave → Target, When, By). Loom targets deep-link to their editor;
+  external targets (a Power BI model) open in the service. Empty graph = honest
+  empty state.
+
+A node-link (React Flow) rendering of the same graph is a follow-up; the data +
+list view ship first.
+
 ## Build a Power BI model — detail
 
 The headline of Thread **PR5**. It turns a gold warehouse table into a real
