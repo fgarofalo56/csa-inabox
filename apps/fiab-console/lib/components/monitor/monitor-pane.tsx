@@ -1021,29 +1021,50 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
   );
 }
 
-// ── Cost (M3: Cost Management spend + month-end forecast) ────────────────────
+// ── Cost (M3: multi-subscription Cost Management spend + forecast + budgets) ──
 interface CostBreakdownRow { key: string; cost: number; }
+interface CostBudget { name: string; subscription: string; amount: number; currentSpend: number; percentUsed: number; timeGrain: string; scope: string; }
 interface CostSummary {
   currency: string;
+  timeframe: string;
   monthToDate: number;
+  previousPeriod: number | null;
+  trendPct: number | null;
   forecast: number;
   byService: CostBreakdownRow[];
   byResourceGroup: CostBreakdownRow[];
+  bySubscription: CostBreakdownRow[];
+  byResource: CostBreakdownRow[];
+  byLocation: CostBreakdownRow[];
   daily: { date: string; cost: number }[];
+  budgets: CostBudget[];
   loomResourceGroups: string[];
+  subscriptions: string[];
+  subscriptionErrors: { subscription: string; error: string }[];
 }
+
+const COST_TIMEFRAMES: { value: string; label: string }[] = [
+  { value: 'MonthToDate', label: 'Month to date' },
+  { value: 'BillingMonthToDate', label: 'Billing month to date' },
+  { value: 'TheLastMonth', label: 'Last month' },
+  { value: 'Last30Days', label: 'Last 30 days' },
+  { value: 'Last7Days', label: 'Last 7 days' },
+];
+
+const shortSub = (s: string) => (s.length > 12 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s);
 
 function CostTab({ onUnauth }: { onUnauth: () => void }) {
   const styles = useStyles();
   const [data, setData] = useState<CostSummary | null>(null);
   const [gate, setGate] = useState<Gate | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [timeframe, setTimeframe] = useState('MonthToDate');
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
     setData(null); setGate(null); setErr(null);
-    fetch('/api/monitor/cost').then(async (r) => {
+    fetch(`/api/monitor/cost?timeframe=${encodeURIComponent(timeframe)}`).then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setData(null); return; }
       const j = await r.json();
@@ -1052,50 +1073,80 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
       setData(j.data as CostSummary);
     }).catch((e) => { if (alive) { setErr(String(e)); setData(null); } });
     return () => { alive = false; };
-  }, [tick, onUnauth]);
+  }, [tick, timeframe, onUnauth]);
 
   const money = (n: number, cur: string) => `${cur === 'USD' ? '$' : ''}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur !== 'USD' ? ' ' + cur : ''}`;
+  const tfLabel = COST_TIMEFRAMES.find((t) => t.value === timeframe)?.label || timeframe;
+  const isMtd = timeframe === 'MonthToDate' || timeframe === 'BillingMonthToDate';
 
   const kpis = useMemo(() => {
     if (!data) return [];
-    const topSvc = data.byService[0];
-    return [
-      { label: 'Month-to-date', value: money(data.monthToDate, data.currency), accent: undefined as string | undefined },
-      { label: 'Forecast (month-end)', value: money(data.forecast, data.currency), accent: styles.statAccentWarn },
-      { label: 'Top service', value: topSvc ? topSvc.key.replace(/^Microsoft\.?/, '') : '—', accent: undefined },
-      { label: 'Resource groups', value: data.byResourceGroup.length, accent: undefined },
+    const cur = data.currency;
+    const trend = data.trendPct;
+    const out: { label: string; value: string | number; accent?: string }[] = [
+      { label: `Total (${tfLabel})`, value: money(data.monthToDate, cur) },
     ];
-  }, [data, styles]);
+    if (isMtd) out.push({ label: 'Forecast (period end)', value: money(data.forecast, cur), accent: styles.statAccentWarn });
+    if (trend != null) {
+      out.push({
+        label: 'Trend vs prior period',
+        value: `${trend > 0 ? '▲' : trend < 0 ? '▼' : ''} ${Math.abs(trend)}%`,
+        accent: trend > 0 ? styles.statAccentDanger : styles.statAccentSuccess,
+      });
+    }
+    out.push({ label: 'Subscriptions', value: data.subscriptions.length });
+    out.push({ label: 'Top service', value: data.byService[0] ? data.byService[0].key.replace(/^Microsoft\.?/, '') : '—' });
+    return out;
+  }, [data, styles, tfLabel, isMtd]);
 
-  const svcColumns: LoomColumn<CostBreakdownRow>[] = useMemo(() => [
-    { key: 'key', label: 'Service', width: 320, render: (r) => <strong>{r.key}</strong> },
-    { key: 'cost', label: 'Cost (MTD)', width: 160, getValue: (r) => r.cost, render: (r) => money(r.cost, data?.currency || 'USD') },
-  ], [data]);
-  const rgColumns: LoomColumn<CostBreakdownRow>[] = useMemo(() => [
-    { key: 'key', label: 'Resource group', width: 320, render: (r) => <strong>{r.key}</strong> },
-    { key: 'cost', label: 'Cost (MTD)', width: 160, getValue: (r) => r.cost, render: (r) => money(r.cost, data?.currency || 'USD') },
-  ], [data]);
+  const mkCols = (label: string): LoomColumn<CostBreakdownRow>[] => [
+    { key: 'key', label, width: 340, render: (r) => <strong>{r.key}</strong>, getValue: (r) => r.key },
+    { key: 'cost', label: `Cost (${tfLabel})`, width: 170, getValue: (r) => r.cost, render: (r) => money(r.cost, data?.currency || 'USD') },
+  ];
+  const loading = data === null && !gate && !err;
 
   return (
     <div>
       <Section
         title="Cost"
-        actions={<Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
+        actions={
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Dropdown
+              aria-label="Timeframe"
+              value={tfLabel}
+              selectedOptions={[timeframe]}
+              onOptionSelect={(_, d) => d.optionValue && setTimeframe(d.optionValue)}
+              style={{ minWidth: 200 }}
+            >
+              {COST_TIMEFRAMES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
+            </Dropdown>
+            <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>
+          </div>
+        }
       >
         <MessageBar intent="info">
           <MessageBarBody>
-            Month-to-date Azure spend for the Loom resource groups (Microsoft.CostManagement query REST) with a
-            linear month-end forecast from the daily run-rate.
+            Azure spend across <strong>every CSA Loom subscription</strong> ({data ? data.subscriptions.length : '…'}) and
+            resource group (Microsoft.CostManagement query REST), with breakdowns by subscription, service, resource group,
+            top resource, and region — plus a run-rate forecast and Consumption budgets.
           </MessageBarBody>
         </MessageBar>
         {gate && <GateBar gate={gate} subject="Cost" />}
         {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-        {data === null && !gate && !err ? (
+        {data?.subscriptionErrors?.length ? (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              Some subscriptions couldn&apos;t be queried (grant the Console UAMI <strong>Cost Management Reader</strong> there):{' '}
+              {data.subscriptionErrors.map((s) => shortSub(s.subscription)).join(', ')}.
+            </MessageBarBody>
+          </MessageBar>
+        ) : null}
+        {loading ? (
           <StatCardSkeleton />
         ) : data ? (
           <div className={styles.stats}>
-            {kpis.map((s) => (
-              <div key={s.label} className={styles.stat}>
+            {kpis.map((s, i) => (
+              <div key={i} className={styles.stat}>
                 <span className={styles.statLabel}>{s.label}</span>
                 <span className={`${styles.statValue} ${s.accent ?? ''}`}>{s.value}</span>
               </div>
@@ -1105,35 +1156,66 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
       </Section>
 
       {data && data.daily.length > 0 && (
-        <Section title="Daily spend (month-to-date)">
-          <MetricChart
-            title="Daily cost"
-            unit={data.currency}
-            points={data.daily.map((d) => ({ timeStamp: d.date, value: d.cost }))}
-          />
+        <Section title={`Daily spend (${tfLabel})`}>
+          <MetricChart title="Daily cost" unit={data.currency}
+            points={data.daily.map((d) => ({ timeStamp: d.date, value: d.cost }))} />
         </Section>
       )}
 
+      {data && data.budgets.length > 0 && (
+        <Section title="Budgets">
+          <div className={styles.breakdown}>
+            {data.budgets.map((b) => {
+              const pct = Math.min(b.percentUsed, 100);
+              const over = b.percentUsed >= 100;
+              const near = b.percentUsed >= 80;
+              const color = over ? tokens.colorPaletteRedBackground3 : near ? tokens.colorPaletteYellowBackground3 : tokens.colorBrandBackground;
+              return (
+                <div key={`${b.subscription}-${b.name}`} className={styles.breakdownRow} style={{ gridTemplateColumns: '240px 1fr 120px' }}>
+                  <span className={styles.breakdownLabel} title={`${b.name} · ${shortSub(b.subscription)}`}>
+                    {b.name} <span style={{ color: tokens.colorNeutralForeground3 }}>· {b.timeGrain}</span>
+                  </span>
+                  <span className={styles.breakdownTrack}>
+                    <span className={styles.breakdownFill} style={{ width: `${pct}%`, backgroundColor: color }} />
+                  </span>
+                  <span className={styles.breakdownCount}>
+                    {money(b.currentSpend, data.currency)} / {money(b.amount, data.currency)} ({b.percentUsed}%)
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </Section>
+      )}
+
+      <Section title="Cost by subscription">
+        <LoomDataTable columns={mkCols('Subscription')} rows={data?.bySubscription ?? []} getRowId={(r) => r.key}
+          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by subscription.' : 'No cost recorded.'}
+          ariaLabel="Cost by subscription" />
+      </Section>
+
       <Section title="Cost by service">
-        <LoomDataTable
-          columns={svcColumns}
-          rows={data?.byService ?? []}
-          getRowId={(r) => r.key}
-          loading={data === null && !gate && !err}
-          empty={gate ? 'Grant the Console UAMI Cost Management Reader to see spend by service.' : 'No cost recorded this month for the Loom resource groups.'}
-          ariaLabel="Cost by service"
-        />
+        <LoomDataTable columns={mkCols('Service')} rows={data?.byService ?? []} getRowId={(r) => r.key}
+          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by service.' : 'No cost recorded.'}
+          ariaLabel="Cost by service" />
       </Section>
 
       <Section title="Cost by resource group">
-        <LoomDataTable
-          columns={rgColumns}
-          rows={data?.byResourceGroup ?? []}
-          getRowId={(r) => r.key}
-          loading={data === null && !gate && !err}
-          empty={gate ? 'Grant the Console UAMI Cost Management Reader to see spend by resource group.' : 'No cost recorded this month.'}
-          ariaLabel="Cost by resource group"
-        />
+        <LoomDataTable columns={mkCols('Resource group')} rows={data?.byResourceGroup ?? []} getRowId={(r) => r.key}
+          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by resource group.' : 'No cost recorded.'}
+          ariaLabel="Cost by resource group" />
+      </Section>
+
+      <Section title="Top resources by cost">
+        <LoomDataTable columns={mkCols('Resource')} rows={data?.byResource ?? []} getRowId={(r) => r.key}
+          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by resource.' : 'No cost recorded.'}
+          ariaLabel="Top resources by cost" />
+      </Section>
+
+      <Section title="Cost by region">
+        <LoomDataTable columns={mkCols('Region')} rows={data?.byLocation ?? []} getRowId={(r) => r.key}
+          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by region.' : 'No cost recorded.'}
+          ariaLabel="Cost by region" />
       </Section>
     </div>
   );

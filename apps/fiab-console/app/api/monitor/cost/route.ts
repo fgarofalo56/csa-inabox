@@ -6,19 +6,23 @@
  *
  * Shape: { ok, data: CostSummary } | { ok:false, gate } | { ok:false, error }
  */
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { getLoomCostSummary } from '@/lib/azure/cost-client';
+import { getLoomCostSummary, type CostTimeframe } from '@/lib/azure/cost-client';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+const TIMEFRAMES: CostTimeframe[] = ['MonthToDate', 'BillingMonthToDate', 'TheLastMonth', 'Last7Days', 'Last30Days'];
+
+export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const tfParam = req.nextUrl.searchParams.get('timeframe') as CostTimeframe | null;
+  const timeframe = tfParam && TIMEFRAMES.includes(tfParam) ? tfParam : 'MonthToDate';
   try {
-    const data = await getLoomCostSummary();
+    const data = await getLoomCostSummary({ timeframe });
     return NextResponse.json({ ok: true, data });
   } catch (e) {
     if (e instanceof MonitorNotConfiguredError) {
