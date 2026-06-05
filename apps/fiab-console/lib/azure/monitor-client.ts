@@ -579,6 +579,116 @@ export function logAnalyticsResourceId(): string | null {
   return v && v.trim() ? v.trim() : null;
 }
 
+// ----------------------------------------------------------------------------
+// Diagnostic-settings coverage — "are all logs ON and flowing to the Loom LAW?"
+//
+// Loom's bicep wires diagnostic settings on the first-class resources at deploy
+// (modules/shared/diagnostic-settings.bicep). This pair lets the Monitor pane
+// AUDIT every live resource and ENABLE the standardized setting on any that is
+// missing it — covering runtime-created resources + config drift. The standard
+// setting routes categoryGroup=allLogs + AllMetrics to LOOM_LOG_ANALYTICS_RESOURCE_ID.
+// ----------------------------------------------------------------------------
+
+const DIAG_API = '2021-05-01-preview';
+/** Consistent name so bicep + console + DSC tooling all reference one setting. */
+export const DIAG_SETTING_NAME = 'diag-loom-stdz';
+
+export interface DiagCoverage {
+  id: string;
+  name: string;
+  type: string;
+  resourceGroup: string;
+  /** Resource type supports diagnostic settings at all. */
+  supported: boolean;
+  /** A setting exists that routes to the Loom Log Analytics workspace. */
+  routesToLoomLaw: boolean;
+  /** Names of existing diagnostic settings (any destination). */
+  settingNames: string[];
+  /** Set when the per-resource probe failed for a non-"unsupported" reason. */
+  note?: string;
+}
+
+/** Resource types that never support diagnostic settings — skip the probe. */
+const DIAG_UNSUPPORTED = [
+  'microsoft.managedidentity/userassignedidentities',
+  'microsoft.network/privateendpoints',
+  'microsoft.network/privatednszones',
+  'microsoft.network/networkinterfaces',
+  'microsoft.network/privatednszones/virtualnetworklinks',
+  'microsoft.compute/disks',
+  'microsoft.alertsmanagement/smartdetectoralertrules',
+  'microsoft.insights/actiongroups',
+  'microsoft.insights/components',
+  'microsoft.insights/scheduledqueryrules',
+  'microsoft.operationalinsights/workspaces',
+  'microsoft.portal/dashboards',
+];
+
+function sameLaw(workspaceId: string | undefined, loomLaw: string): boolean {
+  if (!workspaceId) return false;
+  return workspaceId.replace(/\/+$/, '').toLowerCase() === loomLaw.replace(/\/+$/, '').toLowerCase();
+}
+
+/** Audit diagnostic-settings coverage for every Loom resource. */
+export async function getDiagnosticsCoverage(): Promise<DiagCoverage[]> {
+  const loomLaw = logAnalyticsResourceId();
+  if (!loomLaw) throw new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_RESOURCE_ID']);
+  const resources = await listResources();
+
+  const probes = resources.map(async (r): Promise<DiagCoverage> => {
+    const base: DiagCoverage = {
+      id: r.id, name: r.name, type: r.type, resourceGroup: r.resourceGroup,
+      supported: true, routesToLoomLaw: false, settingNames: [],
+    };
+    if (DIAG_UNSUPPORTED.includes(r.type.toLowerCase())) {
+      return { ...base, supported: false };
+    }
+    try {
+      const j = await armGet(`${r.id}/providers/microsoft.insights/diagnosticSettings?api-version=${DIAG_API}`);
+      const settings: any[] = j?.value || [];
+      base.settingNames = settings.map((s) => s?.name).filter(Boolean);
+      base.routesToLoomLaw = settings.some((s) => sameLaw(s?.properties?.workspaceId, loomLaw));
+      return base;
+    } catch (e) {
+      const status = e instanceof MonitorError ? e.status : 0;
+      // 404 / NotSupported / BadRequest → the type can't take diag settings.
+      if (status === 404 || status === 400 || status === 405) return { ...base, supported: false };
+      return { ...base, note: (e as Error).message };
+    }
+  });
+
+  return Promise.all(probes);
+}
+
+/**
+ * Enable the standardized Loom diagnostic setting on a resource. Tries
+ * allLogs+AllMetrics first; if the resource rejects one half (logs-only or
+ * metrics-only types), retries with the surviving half so the call still
+ * succeeds. Idempotent (PUT to the fixed setting name).
+ */
+export async function enableDiagnostics(resourceId: string): Promise<{ settingName: string; mode: string }> {
+  const loomLaw = logAnalyticsResourceId();
+  if (!loomLaw) throw new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_RESOURCE_ID']);
+  const path = `${resourceId}/providers/microsoft.insights/diagnosticSettings/${DIAG_SETTING_NAME}?api-version=${DIAG_API}`;
+  const withLogs = { logs: [{ categoryGroup: 'allLogs', enabled: true }] };
+  const withMetrics = { metrics: [{ category: 'AllMetrics', enabled: true }] };
+
+  const attempts: Array<{ mode: string; props: Record<string, unknown> }> = [
+    { mode: 'allLogs+AllMetrics', props: { workspaceId: loomLaw, ...withLogs, ...withMetrics } },
+    { mode: 'AllMetrics', props: { workspaceId: loomLaw, ...withMetrics } },
+    { mode: 'allLogs', props: { workspaceId: loomLaw, ...withLogs } },
+  ];
+
+  let lastErr: unknown;
+  for (const a of attempts) {
+    try {
+      await armPut(path, { properties: a.props });
+      return { settingName: DIAG_SETTING_NAME, mode: a.mode };
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr instanceof Error ? lastErr : new MonitorError('enableDiagnostics failed', 500);
+}
+
 export interface ActionGroupInput {
   /** Resource name e.g. 'loom-activator-ag'. */
   name: string;
