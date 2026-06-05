@@ -41,17 +41,30 @@ export async function GET() {
       items = resources;
     }
 
+    // Real per-item governance signals (no invented fields):
+    //   labeled    = state.sensitivityLabel set
+    //   classified = ≥1 state.classifications entry
+    //   owned      = an explicit data owner (state.owner / ownerUpn / contact / steward)
+    //   endorsed   = Fabric-style endorsement: state.endorsement Certified/Promoted, or state.certified
+    const isOwned = (st: any) => !!(st?.owner || st?.ownerUpn || st?.contact || st?.steward);
+    const isEndorsed = (st: any) =>
+      st?.endorsement === 'Certified' || st?.endorsement === 'Promoted' || st?.certified === true;
+
     const total = items.length;
     const labeled = items.filter((i) => i.state?.sensitivityLabel).length;
     const classified = items.filter((i) => Array.isArray(i.state?.classifications) && i.state.classifications.length).length;
+    const owned = items.filter((i) => isOwned(i.state)).length;
+    const endorsed = items.filter((i) => isEndorsed(i.state)).length;
 
     // Per-type coverage
-    const byType = new Map<string, { type: string; total: number; labeled: number; classified: number }>();
+    const byType = new Map<string, { type: string; total: number; labeled: number; classified: number; owned: number; endorsed: number }>();
     for (const i of items) {
-      const cur = byType.get(i.itemType) || { type: i.itemType, total: 0, labeled: 0, classified: 0 };
+      const cur = byType.get(i.itemType) || { type: i.itemType, total: 0, labeled: 0, classified: 0, owned: 0, endorsed: 0 };
       cur.total++;
       if (i.state?.sensitivityLabel) cur.labeled++;
       if (Array.isArray(i.state?.classifications) && i.state.classifications.length) cur.classified++;
+      if (isOwned(i.state)) cur.owned++;
+      if (isEndorsed(i.state)) cur.endorsed++;
       byType.set(i.itemType, cur);
     }
     const coverage = Array.from(byType.values()).sort((a, b) => b.total - a.total);
@@ -67,11 +80,21 @@ export async function GET() {
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
 
-    // Active policy count
+    // Active policies (count + list for the policy-effectiveness table)
     let policyCount = 0;
+    let policies: Array<{ name: string; type?: string; scope?: string; enabled: boolean; updatedAt?: string }> = [];
     try {
       const { resource: pd } = await tsC.item(`policies:${tenantId}`, tenantId).read<any>();
-      if (pd?.items) policyCount = pd.items.filter((p: any) => p.enabled).length;
+      if (Array.isArray(pd?.items)) {
+        policyCount = pd.items.filter((p: any) => p.enabled).length;
+        policies = pd.items.map((p: any) => ({
+          name: String(p.name || p.id || 'policy'),
+          type: p.type ? String(p.type) : undefined,
+          scope: p.scope ? String(p.scope) : (p.itemType ? String(p.itemType) : undefined),
+          enabled: !!p.enabled,
+          updatedAt: p.updatedAt || p.modifiedAt || undefined,
+        }));
+      }
     } catch { /* no policy doc yet */ }
 
     // Audit events 30d
@@ -85,17 +108,27 @@ export async function GET() {
       auditEvents30d = resources[0] || 0;
     } catch { /* container may be empty */ }
 
+    const pct = (n: number) => (total ? Math.round(100 * n / total) : 0);
+    // Composite compliance score = mean of the four coverage dimensions.
+    const complianceScorePct = total
+      ? Math.round((pct(labeled) + pct(classified) + pct(owned) + pct(endorsed)) / 4)
+      : 0;
+
     return NextResponse.json({
       ok: true,
       kpis: {
         totalItems: total,
-        sensitiveCoveragePct: total ? Math.round(100 * labeled / total) : 0,
-        classificationCoveragePct: total ? Math.round(100 * classified / total) : 0,
+        sensitiveCoveragePct: pct(labeled),
+        classificationCoveragePct: pct(classified),
+        ownershipCoveragePct: pct(owned),
+        endorsementCoveragePct: pct(endorsed),
+        complianceScorePct,
         activePolicies: policyCount,
         auditEvents30d,
       },
       coverage,
       topClassified,
+      policies,
       source: 'cosmos',
     });
   } catch (e: any) {

@@ -11,13 +11,17 @@ import { ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
+interface CoverageRow { type: string; total: number; labeled: number; classified: number; owned: number; endorsed: number }
+interface PolicyRow { name: string; type?: string; scope?: string; enabled: boolean; updatedAt?: string }
 interface Insights {
   kpis: {
     totalItems: number; sensitiveCoveragePct: number; classificationCoveragePct: number;
+    ownershipCoveragePct: number; endorsementCoveragePct: number; complianceScorePct: number;
     activePolicies: number; auditEvents30d: number;
   };
-  coverage: Array<{ type: string; total: number; labeled: number; classified: number }>;
+  coverage: CoverageRow[];
   topClassified: Array<{ id: string; displayName: string; itemType: string; count: number; classifications: string[] }>;
+  policies: PolicyRow[];
 }
 
 const useStyles = makeStyles({
@@ -93,6 +97,11 @@ export default function InsightsPage() {
         <>
           <div className={s.statsRow}>
             <div className={s.statCard}>
+              <div className={s.statVal}>{data.kpis.complianceScorePct}%</div>
+              <div className={s.statLabel}>compliance score</div>
+              <div className={s.bar}><div className={s.barFill} style={{ width: `${data.kpis.complianceScorePct}%` }} /></div>
+            </div>
+            <div className={s.statCard}>
               <div className={s.statVal}>{data.kpis.totalItems}</div>
               <div className={s.statLabel}>total items</div>
             </div>
@@ -105,6 +114,16 @@ export default function InsightsPage() {
               <div className={s.statVal}>{data.kpis.classificationCoveragePct}%</div>
               <div className={s.statLabel}>classification coverage</div>
               <div className={s.bar}><div className={s.barFill} style={{ width: `${data.kpis.classificationCoveragePct}%` }} /></div>
+            </div>
+            <div className={s.statCard}>
+              <div className={s.statVal}>{data.kpis.ownershipCoveragePct}%</div>
+              <div className={s.statLabel}>ownership coverage</div>
+              <div className={s.bar}><div className={s.barFill} style={{ width: `${data.kpis.ownershipCoveragePct}%` }} /></div>
+            </div>
+            <div className={s.statCard}>
+              <div className={s.statVal}>{data.kpis.endorsementCoveragePct}%</div>
+              <div className={s.statLabel}>endorsement coverage</div>
+              <div className={s.bar}><div className={s.barFill} style={{ width: `${data.kpis.endorsementCoveragePct}%` }} /></div>
             </div>
             <div className={s.statCard}>
               <div className={s.statVal}>{data.kpis.activePolicies}</div>
@@ -134,11 +153,51 @@ export default function InsightsPage() {
                     render: (c) => covCell(c.labeled, c.total, '#bc4b09'),
                   },
                   {
-                    key: 'classified', label: 'Classified', sortable: true, width: 260,
+                    key: 'classified', label: 'Classified', sortable: true, width: 220,
                     getValue: (c) => (c.total ? c.classified / c.total : 0),
                     render: (c) => covCell(c.classified, c.total, '#0f6cbd'),
                   },
-                ] as LoomColumn<{ type: string; total: number; labeled: number; classified: number }>[]}
+                  {
+                    key: 'owned', label: 'Owned', sortable: true, width: 220,
+                    getValue: (c) => (c.total ? c.owned / c.total : 0),
+                    render: (c) => covCell(c.owned, c.total, '#8764b8'),
+                  },
+                  {
+                    key: 'endorsed', label: 'Endorsed', sortable: true, width: 220,
+                    getValue: (c) => (c.total ? c.endorsed / c.total : 0),
+                    render: (c) => covCell(c.endorsed, c.total, '#107c10'),
+                  },
+                ] as LoomColumn<CoverageRow>[]}
+              />
+            </div>
+          )}
+
+          <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>Policy effectiveness</Subtitle2>
+          {(!data.policies || data.policies.length === 0) ? (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 20 }}>
+              No governance policies defined yet. Create policies in Governance → Policies.
+            </Caption1>
+          ) : (
+            <div style={{ marginBottom: 20 }}>
+              <LoomDataTable
+                ariaLabel="Policy effectiveness"
+                getRowId={(p) => p.name}
+                rows={data.policies}
+                columns={[
+                  { key: 'name', label: 'Policy', sortable: true, filterable: true, width: 260, render: (p) => <strong>{p.name}</strong> },
+                  { key: 'type', label: 'Type', sortable: true, filterable: true, width: 160, getValue: (p) => p.type || '', render: (p) => p.type || '—' },
+                  { key: 'scope', label: 'Scope', sortable: true, filterable: true, width: 200, getValue: (p) => p.scope || '', render: (p) => p.scope || 'All items' },
+                  {
+                    key: 'enabled', label: 'Status', sortable: true, width: 130,
+                    getValue: (p) => (p.enabled ? 1 : 0),
+                    render: (p) => <Badge appearance="tint" color={p.enabled ? 'success' : 'warning'} size="small">{p.enabled ? 'Active' : 'Disabled'}</Badge>,
+                  },
+                  {
+                    key: 'updatedAt', label: 'Updated', sortable: true, width: 170,
+                    getValue: (p) => (p.updatedAt ? new Date(p.updatedAt).getTime() : 0),
+                    render: (p) => p.updatedAt ? new Date(p.updatedAt).toLocaleDateString() : '—',
+                  },
+                ] as LoomColumn<PolicyRow>[]}
               />
             </div>
           )}
