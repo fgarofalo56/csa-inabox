@@ -74,6 +74,31 @@ resource spokeVnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
           addressPrefix: '${prefix}.10.0/24'
         }
       }
+      {
+        // Dedicated subnet for the Power BI / Fabric VNet data gateway. Delegated
+        // to Microsoft.PowerPlatform/vnetaccesslinks so Power BI connects to Loom
+        // data PRIVATELY (managed gateway containers inject here; traffic stays on
+        // the Azure backbone, never the public internet). Must NOT be shared with
+        // other resources. /27 = 32 IPs (5 reserved + nodes + buffer per MS sizing).
+        // Storage service endpoint added for in-region ADLS per MS guidance.
+        // The gateway itself is created once in the Fabric "Manage connections and
+        // gateways" portal bound to this subnet (tenant action — needs Power BI
+        // Premium A4+/P or any Fabric SKU). Supported in sovereign clouds.
+        name: 'snet-pbi-vnet-gateway'
+        properties: {
+          addressPrefix: '${prefix}.11.0/27'
+          delegations: [
+            {
+              name: 'powerplatform-vnetaccesslinks'
+              properties: { serviceName: 'Microsoft.PowerPlatform/vnetaccesslinks' }
+            }
+          ]
+          serviceEndpoints: [
+            { service: 'Microsoft.Storage' }
+          ]
+          privateEndpointNetworkPolicies: 'Disabled'
+        }
+      }
     ]
   }
 }
@@ -166,3 +191,5 @@ output databricksPrivateSubnetName string = 'snet-databricks-private'
 output privateEndpointSubnetId string = '${spokeVnet.id}/subnets/snet-private-endpoints'
 output synapseSubnetId string = '${spokeVnet.id}/subnets/snet-synapse'
 output workloadsSubnetId string = '${spokeVnet.id}/subnets/snet-workloads'
+output pbiVnetGatewaySubnetId string = '${spokeVnet.id}/subnets/snet-pbi-vnet-gateway'
+output pbiVnetGatewaySubnetName string = 'snet-pbi-vnet-gateway'

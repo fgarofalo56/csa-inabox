@@ -1,0 +1,97 @@
+# CSA Loom — scale the shared self-hosted IR (SHIR) VMSS to zero when idle.
+#
+# The SHIR (shir.bicep) runs on a VMSS deployed at scale-to-zero. Loom's Manage
+# hub "Start" button (or a pipeline trigger) scales it up to run a pipeline; this
+# scheduled job is the other half of the cost model — it scales the VMSS back to
+# 0 once there are no in-progress / queued ADF pipeline runs, so idle nodes never
+# burn money. Runs every 15 minutes.
+#
+# Honest + safe by design:
+#   - If the VMSS doesn't exist (no SHIR deployed) the job no-ops and exits 0.
+#   - If it's already at 0, no-op.
+#   - It ONLY scales down when ADF reports zero active runs in the idle window —
+#     never interrupts a running pipeline.
+#   - Real `az` calls against the live factory + VMSS; no mock state.
+name: csa-loom SHIR idle-stop
+
+on:
+  schedule:
+    - cron: '*/15 * * * *' # every 15 minutes
+  workflow_dispatch:
+    inputs:
+      idle_minutes:
+        description: 'Minutes with no active runs before scaling to 0'
+        required: false
+        default: '30'
+
+permissions:
+  contents: read
+
+env:
+  SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+  DLZ_RG: rg-csa-loom-dlz-default-eastus2
+  ADF: adf-loom-default-eastus2
+  VMSS: vmss-loom-shir-default
+
+concurrency:
+  group: shir-idle-stop
+  cancel-in-progress: false
+
+jobs:
+  idle-stop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Azure login (limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+
+      - name: Scale SHIR VMSS to zero when idle
+        env:
+          IDLE_MIN: ${{ github.event.inputs.idle_minutes || '30' }}
+        run: |
+          set -uo pipefail
+          az account set --subscription "$SUB"
+
+          # 1) Does the SHIR VMSS exist + what's its current capacity?
+          CAP="$(az vmss show -g "$DLZ_RG" -n "$VMSS" --query 'sku.capacity' -o tsv 2>/dev/null || echo '')"
+          if [ -z "$CAP" ]; then
+            echo "::notice::SHIR VMSS '$VMSS' not found in $DLZ_RG — no SHIR deployed. No-op."
+            exit 0
+          fi
+          echo "SHIR VMSS '$VMSS' current capacity: $CAP"
+          if [ "$CAP" = "0" ]; then
+            echo "::notice::Already scaled to zero. No-op."
+            exit 0
+          fi
+
+          # 2) Any in-progress / queued ADF pipeline runs in the idle window?
+          AFTER="$(date -u -d "-${IDLE_MIN} minutes" +%Y-%m-%dT%H:%M:%SZ)"
+          BEFORE="$(date -u -d '+5 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+          ACTIVE="$(az datafactory pipeline-run query-by-factory \
+            --factory-name "$ADF" --resource-group "$DLZ_RG" \
+            --last-updated-after "$AFTER" --last-updated-before "$BEFORE" \
+            --query "length(value[?status=='InProgress' || status=='Queued'])" -o tsv 2>/dev/null || echo 'ERR')"
+
+          if [ "$ACTIVE" = "ERR" ]; then
+            echo "::warning::Could not query ADF runs (factory missing or no permission). Leaving VMSS as-is (fail-safe — never scale down on uncertainty)."
+            exit 0
+          fi
+          echo "Active (InProgress/Queued) runs in last ${IDLE_MIN}m: $ACTIVE"
+
+          if [ "$ACTIVE" != "0" ]; then
+            echo "::notice::$ACTIVE active run(s) — keeping the SHIR up."
+            exit 0
+          fi
+
+          # 3) Idle → scale to zero.
+          echo "Idle — scaling SHIR VMSS '$VMSS' to 0."
+          az vmss scale -g "$DLZ_RG" -n "$VMSS" --new-capacity 0
+          echo "::notice::SHIR VMSS '$VMSS' scaled to 0 (idle ${IDLE_MIN}m+)."
