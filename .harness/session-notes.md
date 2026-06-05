@@ -122,3 +122,27 @@ is template boilerplate that doesn't apply to a verification-only Phase-0 task).
   (relates to tasks 013–016 A+ edges), not a guided-forms fix.
 
 **Next:** task-006 (Phase 2 — Functions-hosted MCP tool server, bicep + REST).
+
+### task-006 — Functions-hosted MCP tool server (bicep + REST) ✅ (PR # pending)
+- New `azure-functions/mcp-server/` (Python Functions v2):
+  - `function_app.py` — MCP Streamable-HTTP (stateless JSON) JSON-RPC server:
+    initialize / tools/list / tools/call over POST /api/mcp + GET /api/health.
+    API-key auth (x-api-key / Bearer) vs LOOM_MCP_API_KEY; 503 honest gate when
+    key unset; never serves anonymously.
+  - `mcp_tools.py` — 3 REAL read-only tools (loom_search_catalog → AI Search,
+    loom_list_resources / loom_list_deployments → ARM REST) via managed identity;
+    ToolError honest gates when a backend/role is missing. No mocks.
+  - `deploy/main.bicep` — deploy-from-scratch Function App + storage + App
+    Insights + Y1 Linux plan + system MI + KV-referenced LOOM_MCP_API_KEY +
+    Reader(RG) + KV Secrets User RBAC. `az bicep build` clean.
+  - `tests/` — 9 unit tests (JSON-RPC + auth, no Azure) GREEN.
+  - `DEPLOYMENT.md` + `docs/fiab/console/mcp-tool-server.md`.
+- Console env wiring + honest gate: `GET /api/admin/mcp-servers/builtin` reads
+  `LOOM_BUILTIN_MCP_URL` → returns endpoint when set, else honest gate naming the
+  bicep module + env var. tsc clean. (Connect-panel consumption = task-007.)
+- Opt-in: not wired into the main orchestrator (mirrors copilot-chat precedent);
+  a Loom deploy is fully functional without it. LIVE-DEPLOY of the Function is the
+  operator step (can't deploy a new Function to the live sub from here) — honest
+  gates + DEPLOYMENT.md cover it.
+
+**Next:** task-007 (Connect MCP tools agent panel — surfaces builtin + external).

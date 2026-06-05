@@ -51,7 +51,7 @@
       "id": "task-006",
       "title": "Phase 2 \u2014 Functions-hosted MCP tool server (bicep + REST)",
       "feature": "MCP",
-      "status": "todo",
+      "status": "done",
       "task_order": 84,
       "assignee": "harness-coder",
       "description": "## Goal\nAzure Functions-hosted MCP server exposing a vetted subset of Loom orchestrator tools over MCP; bicep module + env wiring; honest gate if not provisioned.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-001"
