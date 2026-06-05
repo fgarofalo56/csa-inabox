@@ -20,7 +20,7 @@ import { Field, Input, Dropdown, Option, Switch, Caption1 } from '@fluentui/reac
 import { ExpressionField } from './dynamic-content';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
 
-type FieldKind = 'text' | 'number' | 'bool' | 'select' | 'expr' | 'expr-multiline';
+type FieldKind = 'text' | 'number' | 'bool' | 'select' | 'multiselect' | 'expr' | 'expr-multiline';
 
 interface FieldSpec {
   /** Dotted path under activity.typeProperties (e.g. 'waitTimeInSeconds', 'value'). */
@@ -115,6 +115,57 @@ export const ACTIVITY_FORMS: Record<string, FieldSpec[]> = {
     { path: 'scripts[0].text', label: 'Script', kind: 'expr-multiline', required: true,
       placeholder: 'SELECT COUNT(*) FROM gold.fact_sales' },
   ],
+  GetMetadata: [
+    { path: 'dataset.referenceName', label: 'Dataset', kind: 'text', required: true,
+      hint: 'The dataset whose metadata to retrieve (file, folder, or table).' },
+    { path: 'fieldList', label: 'Field list', kind: 'multiselect', required: true,
+      hint: 'Which metadata fields to return. Reference results via @activity(\'…\').output.<field>.',
+      options: [
+        'itemName', 'itemType', 'size', 'created', 'lastModified', 'childItems',
+        'contentMD5', 'structure', 'columnCount', 'exists',
+      ].map((v) => ({ value: v, label: v })) },
+  ],
+  Delete: [
+    { path: 'dataset.referenceName', label: 'Dataset', kind: 'text', required: true,
+      hint: 'The file/folder dataset to delete.' },
+    { path: 'recursive', label: 'Recursive', kind: 'bool',
+      hint: 'Delete files in all subfolders, not just the top level.' },
+    { path: 'enableLogging', label: 'Enable logging', kind: 'bool',
+      hint: 'Write the list of deleted files to a log store.' },
+    { path: 'maxConcurrentConnections', label: 'Max concurrent connections', kind: 'number',
+      hint: 'Parallel connections to the store when deleting.' },
+  ],
+  SqlServerStoredProcedure: [
+    { path: 'storedProcedureName', label: 'Stored procedure name', kind: 'expr', required: true,
+      placeholder: '[dbo].[usp_LoadGold]',
+      hint: 'Name of the stored procedure to run on the linked SQL service.' },
+  ],
+  WebHook: [
+    { path: 'method', label: 'Method', kind: 'select', required: true,
+      options: [{ value: 'POST', label: 'POST' }] },
+    { path: 'url', label: 'URL', kind: 'expr', required: true, placeholder: 'https://api.example.com/callback' },
+    { path: 'timeout', label: 'Timeout', kind: 'text', placeholder: '00:10:00',
+      hint: 'How long to wait for the callBackUri before failing (hh:mm:ss).' },
+    { path: 'body', label: 'Body', kind: 'expr-multiline', hint: 'Request body. Accepts an expression.' },
+    { path: 'reportStatusOnCallBack', label: 'Report status on callback', kind: 'bool',
+      hint: 'Let the callback report a failure status back to the activity.' },
+  ],
+  Validation: [
+    { path: 'dataset.referenceName', label: 'Dataset', kind: 'text', required: true,
+      hint: 'The file/folder dataset to validate exists.' },
+    { path: 'timeout', label: 'Timeout', kind: 'text', placeholder: '7.00:00:00',
+      hint: 'Max time to wait for validation (d.hh:mm:ss).' },
+    { path: 'sleep', label: 'Sleep (seconds)', kind: 'number',
+      hint: 'Seconds between validation retries.' },
+    { path: 'minimumSize', label: 'Minimum size (bytes)', kind: 'number',
+      hint: 'For a file: minimum size required to pass.' },
+    { path: 'childItems', label: 'Folder must contain children', kind: 'bool',
+      hint: 'For a folder: require at least one child item.' },
+  ],
+  SynapseSparkJobDefinitionActivity: [
+    { path: 'sparkJob.referenceName', label: 'Spark job definition', kind: 'text', required: true,
+      hint: 'The Synapse Spark job definition to run.' },
+  ],
 };
 
 export function hasActivityForm(type: string | undefined): boolean {
@@ -197,6 +248,22 @@ export function ActivityForm({ activity, onPatch, parameters, variables, allActi
                 value={strVal}
                 selectedOptions={strVal ? [strVal] : []}
                 onOptionSelect={(_, d) => patchTp(fld.path, d.optionValue)}
+              >
+                {(fld.options || []).map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+              </Dropdown>
+            </Field>
+          );
+        }
+        if (fld.kind === 'multiselect') {
+          const selected: string[] = Array.isArray(raw) ? raw.map(String) : [];
+          return (
+            <Field key={fld.path} label={fld.label} required={fld.required} hint={fld.hint}>
+              <Dropdown
+                multiselect
+                placeholder="Select one or more…"
+                value={selected.join(', ')}
+                selectedOptions={selected}
+                onOptionSelect={(_, d) => patchTp(fld.path, d.selectedOptions)}
               >
                 {(fld.options || []).map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
               </Dropdown>
