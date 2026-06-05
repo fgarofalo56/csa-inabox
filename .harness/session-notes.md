@@ -146,3 +146,17 @@ is template boilerplate that doesn't apply to a verification-only Phase-0 task).
   gates + DEPLOYMENT.md cover it.
 
 **Next:** task-007 (Connect MCP tools agent panel — surfaces builtin + external).
+
+### task-007 — Connect MCP tools agent panel ✅ (PR # pending)
+- The External MCP Tools panel (lib/components/admin/mcp-servers-panel.tsx,
+  mounted in Copilot & Agents) already did register (URL + header/key-vault
+  secretRef) + Test-Connection (real tools/list) + enable/disable/edit/delete.
+- Added the increment that surfaces task-006's server: a **BuiltinMcpCard** at the
+  top reading GET /api/admin/mcp-servers/builtin →
+  one-click "Register built-in tools" (key-vault auth → loom-mcp-api-key) when
+  LOOM_BUILTIN_MCP_URL is set, "Registered" badge if already added, or honest gate
+  (env var + bicep module + DEPLOYMENT.md) when not provisioned. tsc clean (the one
+  tsc error in the file is the PRE-EXISTING Body2 weight line, not mine).
+- docs/fiab/console/mcp-tool-server.md updated.
+
+**Next:** task-008 (data-agent EXECUTES its generated query on real rows).

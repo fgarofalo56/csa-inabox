@@ -22,9 +22,18 @@ import {
   Caption1, Body2, Body1, makeStyles, tokens, Divider,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
 } from '@fluentui/react-components';
-import { Add20Regular, Edit20Regular, Delete20Regular, ArrowClockwise20Regular, Checkmark20Regular } from '@fluentui/react-icons';
+import { Add20Regular, Edit20Regular, Delete20Regular, ArrowClockwise20Regular, Checkmark20Regular, Sparkle20Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
+
+interface BuiltinStatus {
+  configured: boolean;
+  endpoint?: string;
+  healthEndpoint?: string;
+  name?: string;
+  description?: string;
+  gate?: { message: string; envVar: string; deployModule: string; deploymentDoc: string };
+}
 
 const useStyles = makeStyles({
   grid: {
@@ -198,6 +207,97 @@ function McpServerForm({
   );
 }
 
+/**
+ * BuiltinMcpCard — surfaces the Loom built-in MCP tool server (the Azure
+ * Functions app in azure-functions/mcp-server/). One-click register when
+ * LOOM_BUILTIN_MCP_URL is wired in; honest gate (env var + bicep module) when
+ * it isn't. Read from GET /api/admin/mcp-servers/builtin.
+ */
+function BuiltinMcpCard({
+  servers,
+  onRegister,
+  busy,
+}: {
+  servers: McpServerConfigDoc[];
+  onRegister: (config: McpServerConfig) => Promise<void>;
+  busy: boolean;
+}) {
+  const [status, setStatus] = useState<BuiltinStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [registering, setRegistering] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/admin/mcp-servers/builtin')
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled) setStatus(j.ok ? j : null); })
+      .catch(() => { if (!cancelled) setStatus(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading || !status) return null;
+
+  // Not provisioned → honest gate.
+  if (!status.configured) {
+    return (
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Loom built-in MCP tools (optional, not provisioned)</MessageBarTitle>
+          {status.gate?.message}
+          <div style={{ marginTop: 6, fontSize: 12 }}>
+            Set <code>{status.gate?.envVar}</code> on the console after deploying{' '}
+            <code>{status.gate?.deployModule}</code> (see <code>{status.gate?.deploymentDoc}</code>).
+          </div>
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+
+  const alreadyRegistered = servers.some((s) => s.endpoint === status.endpoint);
+
+  const register = async () => {
+    setRegistering(true); setError(null);
+    try {
+      await onRegister({
+        name: status.name || 'Loom built-in tools',
+        endpoint: status.endpoint!,
+        authMethod: 'key-vault',
+        authValue: 'loom-mcp-api-key',
+        description: status.description || 'Vetted read-only Loom tools.',
+        enabled: true,
+      });
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally { setRegistering(false); }
+  };
+
+  return (
+    <MessageBar intent={alreadyRegistered ? 'success' : 'info'} icon={<Sparkle20Regular />}>
+      <MessageBarBody>
+        <MessageBarTitle>{status.name || 'Loom built-in tools'}</MessageBarTitle>
+        {status.description}{' '}
+        <span style={{ fontSize: 12, color: tokens.colorNeutralForeground3 }}>({status.endpoint})</span>
+        {error && <div style={{ marginTop: 6, color: tokens.colorPaletteRedForeground1, fontSize: 12 }}>{error}</div>}
+      </MessageBarBody>
+      {alreadyRegistered ? (
+        <Badge appearance="tint" color="success">Registered</Badge>
+      ) : (
+        <Button
+          appearance="primary"
+          size="small"
+          icon={<Add20Regular />}
+          disabled={registering || busy}
+          onClick={() => void register()}
+        >
+          {registering ? 'Registering…' : 'Register built-in tools'}
+        </Button>
+      )}
+    </MessageBar>
+  );
+}
+
 export function McpServersPanel() {
   const s = useStyles();
   const [servers, setServers] = useState<McpServerConfigDoc[]>([]);
@@ -279,6 +379,8 @@ export function McpServersPanel() {
           <MessageBarBody><MessageBarTitle>Load failed</MessageBarTitle>{loadError}</MessageBarBody>
         </MessageBar>
       )}
+
+      <BuiltinMcpCard servers={servers} onRegister={(config) => save(undefined, config)} busy={saving} />
 
       {servers.length === 0 ? (
         <Caption1>No MCP servers registered yet.</Caption1>

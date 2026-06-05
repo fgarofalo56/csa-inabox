@@ -43,6 +43,20 @@ The console reads `LOOM_BUILTIN_MCP_URL` (the deployed `/api/mcp` URL). The rout
 - an **honest gate** naming `LOOM_BUILTIN_MCP_URL` + the bicep module when it
   isn't. A Loom deployment is fully functional without the MCP server.
 
+The **External MCP Tools** panel (Admin → Tenant Settings → Copilot & Agents,
+`lib/components/admin/mcp-servers-panel.tsx`) renders a **built-in tools card**
+above the server table:
+- configured + not yet registered → **Register built-in tools** one-click (saves
+  it as a `key-vault`-auth server pointing at `loom-mcp-api-key`);
+- configured + already registered → a **Registered** badge;
+- not provisioned → the honest gate (env var + bicep module + DEPLOYMENT.md).
+
+The panel already supports the rest of task-007 for any server (built-in or
+external): register (URL + `key-vault` secretRef or header auth), **Test
+Connection** (real `tools/list` round-trip showing the discovered tool names),
+enable/disable, edit, delete. The agent loop discovers each enabled server's
+tools at orchestrate time.
+
 ## Deploy
 
 See `azure-functions/mcp-server/DEPLOYMENT.md`. Summary: create the
