@@ -357,3 +357,22 @@ beautify, or Thread PR2. Continue down the ledger.
 
 **Next:** task-014 (Azure SQL mirroring Azure-native) or task-016 (geo/graph +
 postgres + #655 auto-mount) or task-017/018 UI. Continue down the ledger.
+
+### task-018 (slice) — Data Catalog → LoomDataTable ✅ (PR # pending)
+- Converted /governance/catalog's raw Fluent `<Table>` to the shared
+  **LoomDataTable** (sortable + filterable + resizable + sticky header + the
+  standard loading/empty states) — directly the task-018 mandate ("sortable/
+  resizable/filterable tables", "no smushed tables"). Columns: Name (+ endorsement
+  badge), Type, Workspace, Owner, Classifications (chips), Sensitivity (badge),
+  Size, Updated, Open. Row click still opens the task-012 detail drawer.
+- tsc clean (only pre-existing borderColor/px noise in the untouched useStyles).
+- task-018 stays `todo` (multi-page beautify; this is the catalog slice). Other
+  high-traffic pages (Home, Browse, Monitor, editors) remain.
+- Investigated but NOT taken (need operator decisions, documented for resume):
+  task-016 **postgres query** needs the `pg` npm driver added (supply-chain
+  decision on this enterprise repo) — gate is correctly honest meanwhile;
+  task-014 Azure-SQL→ADF-CDC mirroring + #655 Spark auto-mount need live
+  Spark/ADF verification.
+
+**Next:** more task-018 page slices (Home/Browse/Monitor), or operator picks a
+heavy item (pg driver / CDC mirroring / live app-install tasks 019-021).

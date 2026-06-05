@@ -13,7 +13,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Input, Button, Subtitle2, Title3,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   Field, Dropdown, Option, Textarea, Divider,
@@ -25,6 +24,7 @@ import {
 } from '@fluentui/react-icons';
 import { useRouter } from 'next/navigation';
 import { GovernanceShell } from '@/lib/components/governance-shell';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface Asset {
   id: string;
@@ -161,6 +161,52 @@ export default function GovernanceCatalogPage() {
     return [...TYPE_ORDER.filter((t) => seen.includes(t)), ...seen.filter((t) => !TYPE_ORDER.includes(t))];
   }, [typeCounts]);
 
+  // Sortable / filterable / resizable columns for the shared LoomDataTable.
+  const catalogColumns: LoomColumn<Asset>[] = useMemo(() => [
+    {
+      key: 'displayName', label: 'Name', sortable: true, filterable: true,
+      getValue: (a) => a.displayName,
+      render: (a) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <strong>{a.displayName}</strong>
+          {a.endorsement && (
+            <Badge appearance="tint" color={a.endorsement === 'Certified' ? 'success' : 'brand'} size="small" icon={<ShieldCheckmark16Regular />}>
+              {a.endorsement}
+            </Badge>
+          )}
+        </span>
+      ),
+    },
+    { key: 'itemType', label: 'Type', sortable: true, filterable: true, getValue: (a) => typeLabel(a.itemType), render: (a) => typeLabel(a.itemType) },
+    { key: 'workspaceName', label: 'Workspace', sortable: true, filterable: true, getValue: (a) => a.workspaceName },
+    { key: 'owner', label: 'Owner', sortable: true, filterable: true, getValue: (a) => a.ownerUpn || a.owner, render: (a) => a.ownerUpn || a.owner },
+    {
+      key: 'classifications', label: 'Classifications', sortable: false, filterable: true,
+      getValue: (a) => (a.classifications || []).join(' '),
+      render: (a) => a.classifications?.length
+        ? <div className={s.classChips}>{a.classifications.map((c) => <span key={c} className={s.classChip}>{c}</span>)}</div>
+        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>,
+    },
+    {
+      key: 'sensitivity', label: 'Sensitivity', sortable: true, filterable: true,
+      getValue: (a) => a.sensitivity || '',
+      render: (a) => a.sensitivity
+        ? <Badge appearance="filled" size="small" color={a.sensitivity === 'Highly Confidential' ? 'danger' : a.sensitivity === 'Confidential' ? 'warning' : 'subtle'}>{a.sensitivity}</Badge>
+        : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>,
+    },
+    { key: 'sizeBytes', label: 'Size', sortable: true, filterable: false, width: 110, getValue: (a) => a.sizeBytes || 0, render: (a) => fmtBytes(a.sizeBytes) },
+    { key: 'updatedAt', label: 'Updated', sortable: true, filterable: false, width: 130, getValue: (a) => a.updatedAt || '', render: (a) => a.updatedAt ? new Date(a.updatedAt).toLocaleDateString() : '—' },
+    {
+      key: 'open', label: '', sortable: false, filterable: false, width: 90,
+      render: (a) => (
+        <a href={`/items/${a.itemType}/${a.id}`} onClick={(e) => e.stopPropagation()}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+          Open <Open16Regular />
+        </a>
+      ),
+    },
+  ], [s.classChips, s.classChip]);
+
   return (
     <GovernanceShell sectionTitle="Data catalog">
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
@@ -220,71 +266,17 @@ export default function GovernanceCatalogPage() {
         </MessageBar>
       )}
 
-      {loading && !error && <Spinner label="Loading catalog…" />}
-
-      {!loading && !error && (assets?.length ?? 0) === 0 && (
-        <div style={{ padding: 32, color: tokens.colorNeutralForeground3, fontSize: 13, textAlign: 'center' }}>
-          {q || typeFilter
-            ? <>No assets match the current filters.</>
-            : <>No data assets in your tenant yet. Create a lakehouse, warehouse, or semantic model and it will appear here.</>}
-        </div>
-      )}
-
-      {!loading && !error && (assets?.length ?? 0) > 0 && (
-        <div className={s.tableWrap}>
-          <Table aria-label="Data catalog">
-            <TableHeader>
-              <TableRow>
-                <TableHeaderCell>Name</TableHeaderCell>
-                <TableHeaderCell>Type</TableHeaderCell>
-                <TableHeaderCell>Workspace</TableHeaderCell>
-                <TableHeaderCell>Owner</TableHeaderCell>
-                <TableHeaderCell>Classifications</TableHeaderCell>
-                <TableHeaderCell>Sensitivity</TableHeaderCell>
-                <TableHeaderCell>Size</TableHeaderCell>
-                <TableHeaderCell>Updated</TableHeaderCell>
-                <TableHeaderCell></TableHeaderCell>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(assets || []).map((a) => (
-                <TableRow key={a.id} className={s.clickRow}
-                  onClick={() => openAsset(a)}
-                  onContextMenu={(e) => { e.preventDefault(); openAsset(a); }}>
-                  <TableCell><strong>{a.displayName}</strong></TableCell>
-                  <TableCell>{typeLabel(a.itemType)}</TableCell>
-                  <TableCell>{a.workspaceName}</TableCell>
-                  <TableCell>{a.owner}</TableCell>
-                  <TableCell>
-                    {a.classifications?.length ? (
-                      <div className={s.classChips}>
-                        {a.classifications.map((c) => <span key={c} className={s.classChip}>{c}</span>)}
-                      </div>
-                    ) : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>}
-                  </TableCell>
-                  <TableCell>
-                    {a.sensitivity ? (
-                      <Badge appearance="filled" color={a.sensitivity === 'Highly Confidential' ? 'danger' : a.sensitivity === 'Confidential' ? 'warning' : 'subtle'} size="small">
-                        {a.sensitivity}
-                      </Badge>
-                    ) : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>}
-                  </TableCell>
-                  <TableCell>{fmtBytes(a.sizeBytes)}</TableCell>
-                  <TableCell>{a.updatedAt ? new Date(a.updatedAt).toLocaleDateString() : '—'}</TableCell>
-                  <TableCell>
-                    <a
-                      href={`/items/${a.itemType}/${a.id}`}
-                      onClick={(e) => e.stopPropagation()}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}
-                    >
-                      Open <Open16Regular />
-                    </a>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+      {!error && (
+        <LoomDataTable<Asset>
+          columns={catalogColumns}
+          rows={assets || []}
+          getRowId={(a) => a.id}
+          loading={loading}
+          onRowClick={openAsset}
+          empty={q || typeFilter
+            ? 'No assets match the current filters.'
+            : 'No data assets in your tenant yet. Create a lakehouse, warehouse, or semantic model and it will appear here.'}
+        />
       )}
 
       <Drawer type="overlay" position="end" open={!!selected} onOpenChange={(_, d) => { if (!d.open) setSelected(null); }} className={s.drawer}>
