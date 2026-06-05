@@ -273,3 +273,16 @@ report in Loom; data-agent semantic-model (DAX) execution via `executeQueries`.
 **Next:** Thread PR2 finish (lakehouse → Synapse Serverless SQL view edge +
 columns adapter), or extend the Weave registry further, then numbered ledger
 task-010+ (Purview web-3.0, access-policy enforcement, catalog detail…).
+
+### task-010 — Purview portal page web-3.0 cleanup ✅ (PR # pending)
+- Rewrote app/governance/purview/page.tsx with loom-design-standards: all raw
+  px → Loom tokens (also clears the makeStyles px tsc errors in this file), a
+  branded gradient connected-status hero Card, and the 8 native governance
+  surfaces rendered as per-surface **icon cards** (icon tile + label + one-line
+  desc, hover lift) in a responsive grid — replacing the plain text-link list.
+  Honest PurviewGate + live-only rendering preserved; portal launch unchanged.
+- tsc clean on the file (zero errors). UI-only; backend (purview/status probe)
+  untouched. Live-verify = operator browser (VNet); probe already GREEN.
+
+**Next:** task-011 (non-ADLS access-policy enforcement: warehouse Synapse SQL
+GRANT + kql ADX role) or continue Thread. Then task-012 (catalog detail).
