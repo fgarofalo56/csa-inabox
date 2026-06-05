@@ -59,6 +59,10 @@ interface ArmDeployment {
   id: string; name: string; resourceGroup: string; provisioningState?: string;
   timestamp?: string; durationSec?: number; mode?: string; resourceCount?: number; error?: string;
 }
+interface ArmDeploymentOperation {
+  provisioningState?: string; timestamp?: string; resourceType?: string;
+  resourceName?: string; statusCode?: string; durationSec?: number;
+}
 interface Gate { missing: string[]; message: string }
 interface WorkspaceOpt { id: string; name: string }
 
@@ -1384,6 +1388,10 @@ function InfraTab({ onUnauth }: { onUnauth: () => void }) {
     { key: 'durationSec', label: 'Duration', sortable: true, filterable: false, width: 110, getValue: (d) => d.durationSec ?? 0, render: (d) => d.durationSec != null ? `${Math.round(d.durationSec)}s` : '—' },
     { key: 'mode', label: 'Mode', sortable: true, filterable: true, width: 120, render: (d) => d.mode || '—' },
     { key: 'resourceCount', label: 'Resources', sortable: true, filterable: false, width: 110, getValue: (d) => d.resourceCount ?? 0, render: (d) => d.resourceCount != null ? String(d.resourceCount) : '—' },
+    {
+      key: 'steps', label: 'Steps', sortable: false, filterable: false, width: 120,
+      render: (d) => <OperationsDialog deployment={d} />,
+    },
   ];
 
   return (
@@ -1410,5 +1418,78 @@ function InfraTab({ onUnauth }: { onUnauth: () => void }) {
         />
       </Section>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Per-resource operation breakdown for one ARM deployment — the "steps" the
+// Azure portal shows when you expand a deployment. Real REST via
+// GET /api/deployment-pipelines/arm/{name}/operations?rg={rg}.
+// ---------------------------------------------------------------------------
+
+function OperationsDialog({ deployment }: { deployment: ArmDeployment }) {
+  const [open, setOpen] = useState(false);
+  const [ops, setOps] = useState<ArmDeploymentOperation[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setOps(null); setErr(null);
+    const url = `/api/deployment-pipelines/arm/${encodeURIComponent(deployment.name)}/operations?rg=${encodeURIComponent(deployment.resourceGroup)}`;
+    fetch(url)
+      .then(async (r) => {
+        const j = await r.json().catch(() => ({}));
+        if (cancelled) return;
+        if (j.gate) { setErr(j.gate.message || 'Infra deployments not configured'); setOps([]); return; }
+        if (!j.ok) { setErr(j.error || 'Failed to load deployment operations'); setOps([]); return; }
+        setOps(j.data.operations || []);
+      })
+      .catch((e) => { if (!cancelled) { setErr(String(e)); setOps([]); } });
+    return () => { cancelled = true; };
+  }, [open, deployment.name, deployment.resourceGroup]);
+
+  const opCols: LoomColumn<ArmDeploymentOperation>[] = [
+    { key: 'resourceName', label: 'Resource', sortable: true, filterable: true, width: 220, render: (o) => <strong title={o.resourceName}>{o.resourceName || '—'}</strong> },
+    { key: 'resourceType', label: 'Type', sortable: true, filterable: true, width: 240, render: (o) => <Text size={200}>{o.resourceType || '—'}</Text> },
+    { key: 'provisioningState', label: 'State', sortable: true, filterable: true, width: 140, getValue: (o) => o.provisioningState || '', render: (o) => provStateBadge(o.provisioningState) },
+    { key: 'statusCode', label: 'Status', sortable: true, filterable: true, width: 120, render: (o) => o.statusCode || '—' },
+    { key: 'durationSec', label: 'Duration', sortable: true, filterable: false, width: 110, getValue: (o) => o.durationSec ?? 0, render: (o) => o.durationSec != null ? `${Math.round(o.durationSec)}s` : '—' },
+    { key: 'timestamp', label: 'Timestamp', sortable: true, filterable: false, width: 180, getValue: (o) => o.timestamp ? new Date(o.timestamp).getTime() : 0, render: (o) => o.timestamp ? new Date(o.timestamp).toLocaleString() : '—' },
+  ];
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
+      <DialogTrigger disableButtonEnhancement>
+        <Button appearance="subtle" size="small" icon={<ChevronRight24Regular />} iconPosition="after">Steps</Button>
+      </DialogTrigger>
+      <DialogSurface style={{ maxWidth: '1080px' }}>
+        <DialogBody>
+          <DialogTitle>Deployment steps — {deployment.name}</DialogTitle>
+          <DialogContent>
+            <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+              Per-resource operations for this rollout in <strong>{deployment.resourceGroup}</strong>{' '}
+              (Azure <code>Microsoft.Resources/deployments/operations</code> REST).
+            </Caption1>
+            {ops === null && <Spinner label="Loading deployment operations…" />}
+            {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+            {ops && ops.length >= 0 && !err && (
+              <LoomDataTable
+                ariaLabel={`Operations for ${deployment.name}`}
+                columns={opCols}
+                rows={ops}
+                getRowId={(o) => `${o.resourceType || ''}/${o.resourceName || 'op'}-${o.timestamp || ''}`}
+                empty="No per-resource operations returned for this deployment."
+              />
+            )}
+          </DialogContent>
+          <DialogActions>
+            <DialogTrigger disableButtonEnhancement>
+              <Button appearance="primary">Close</Button>
+            </DialogTrigger>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }

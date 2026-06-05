@@ -82,7 +82,7 @@ history as a second section.
 | 9 | Public stage badge | ✅ built | `Public` badge |
 | 11 | ARM deployment history | ✅ built | Infra deployments tab — table across Loom RGs |
 | 12 | State/duration/mode/resources/error | ✅ built | Columns + Failed-deployment error text |
-| 13 | Per-resource operations | ⚙ client-only | `listArmDeploymentOperations()` shipped; not yet surfaced in UI (history table is sufficient for the operator's ask) |
+| 13 | Per-resource operations | ✅ built | Each ARM deployment row has a **Steps** button → `OperationsDialog` fetches `GET /api/deployment-pipelines/arm/{name}/operations?rg={rg}` (real `Microsoft.Resources/deployments/{name}/operations` REST) and renders a sortable/filterable `LoomDataTable` of per-resource operations (resource, type, state, status code, duration, timestamp) — the portal's expand-deployment view. |
 | 10 | Create pipeline | ✅ built | "New pipeline" dialog — name + 2–10 named stages (add/remove, public toggle) → `POST /v1/deploymentPipelines` |
 | 11 | Assign workspace to stage | ✅ built | Inline workspace dropdown on each empty stage → assign |
 | 12 | Unassign workspace from stage | ✅ built | "Unassign workspace" with the history/rules-loss warning |
@@ -136,4 +136,13 @@ stage workspaces; ARM calls need **Reader** on the Loom subscription/RGs.
   - `lib/azure/__tests__/fabric-deployment-pipelines.test.ts` — list/stages/items/deploy (all+selective)/operations + 403 hint
   - `lib/azure/__tests__/arm-deployments-client.test.ts` — config gate, list shape, ISO-duration parse, sort, operations
   - `app/api/deployment-pipelines/__tests__/deployment-pipelines-routes.test.ts` — 401/gate/happy-path + **content-type guard** (JSON not HTML) + deploy payload forwarding
-- `pnpm build` clean (the `/deployment-pipelines` page + all 6 API routes compile).
+- `pnpm build` clean (the `/deployment-pipelines` page + API routes compile).
+- **Guided-forms / no-JSON audit (no-freeform-config):** all three tabs use
+  guided Fluent controls only — pipelines (name/description `Input`, per-stage
+  name `Input` + public `Switch`, selective-deploy `Checkbox`, workspace
+  `Dropdown`), Git (provider/workspace `Dropdown`s, connect form), infra (ARM
+  history table + Steps drill-in). The only multi-line input is the optional
+  ≤1024-char deployment **note** (free text, not config). No raw-JSON textarea
+  anywhere on the Deployment page.
+- New route `app/api/deployment-pipelines/arm/[name]/operations/route.ts`
+  (per-resource operation drill-in) — `tsc --noEmit` clean.
