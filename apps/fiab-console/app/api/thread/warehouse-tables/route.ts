@@ -1,12 +1,13 @@
 /**
- * GET /api/thread/powerbi-model/tables?fromType=&fromId=
+ * GET /api/thread/warehouse-tables?fromType=&fromId=
  *
- * Discovery route for the Loom Thread "Build a Power BI model" edge wizard.
- * Lists the tables of the source warehouse (Azure-native default = Synapse
- * dedicated SQL pool, per no-fabric-dependency) so the wizard's table picker is
- * a real dropdown — never a typed name (loom-no-freeform-config).
+ * Shared discovery route for Loom Thread edges that act on a warehouse table
+ * (e.g. "Build a Power BI model", "Publish as an API"). Lists the tables of the
+ * Azure-native warehouse backend (Synapse dedicated SQL pool, per
+ * no-fabric-dependency) so the wizard's table picker is a real dropdown — never
+ * a typed name (loom-no-freeform-config).
  *
- * Each option's value encodes `objectId|schema|name` so the build route can
+ * Each option's value encodes `objectId|schema|name` so the executor route can
  * read the column schema by object_id and build a bracketed FROM clause from
  * catalog-verified identifiers (no string injection).
  *
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
   const fromType = req.nextUrl.searchParams.get('fromType') || '';
   if (!WAREHOUSE_TYPES.has(fromType)) {
     return NextResponse.json(
-      { ok: false, error: `Building a Power BI model from "${fromType}" is not wired yet — supported sources: warehouse.` },
+      { ok: false, error: `This edge isn't wired for "${fromType}" yet — supported sources: warehouse.` },
       { status: 400 },
     );
   }

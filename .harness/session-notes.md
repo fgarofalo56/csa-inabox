@@ -232,5 +232,26 @@ the numbered tasks 010–022, per the operator's drain order.
 PBI model (needs the per-backend schema adapter, PR4); report build + embedded
 report in Loom; data-agent semantic-model (DAX) execution via `executeQueries`.
 
-**Next:** Thread PR5 deepening (data-agent DAX via executeQueries) or PR3 (table →
-API), then down the numbered ledger from task-010.
+### Thread PR3 — *Publish as an API* edge ✅ (PR # pending)
+- New Thread edge `publish-as-api` on warehouse / synapse-dedicated-sql-pool:
+  warehouse table → a REAL `data-api-builder` Loom item (REST + GraphQL). Builds
+  a `DabConfig` from the table's catalog schema (columns + PK via `listColumns`),
+  `dwsql` source = Azure-native Synapse dedicated pool, runs `validateDabConfig`
+  (blocks on hard errors), `createOwnedItem('data-api-builder', …)` — the SAME
+  path the DAB editor uses. Deep-links to the editor; deploy is the editor's
+  existing explicit step (no hidden hosting claimed).
+- Secure by default: "Require authentication" toggle → entity permission role
+  `authenticated` (vs anonymous). NOTE/bugfix: do NOT force host authProvider
+  EntraId at creation — that fails `dab validate` without jwt issuer/audience;
+  provider+jwt is an editor/deploy-time config. Toggle controls the role only.
+- Consolidated the warehouse table discovery into one shared route
+  `/api/thread/warehouse-tables` (deleted the PR5 powerbi-model/tables route;
+  pointed the Build-a-Power-BI-model edge at the shared one). DRY.
+- New `api` menu icon (PlugConnected). Docs: thread-edges.md + PRP PR3 row.
+  tsc clean on touched files.
+- LIVE-VERIFY (operator): needs a populated Synapse dedicated pool; the item +
+  config are created regardless, deploy is the editor step. Honest gate when the
+  pool env is unset.
+
+**Next:** Thread PR2 finish (lakehouse → Synapse Serverless SQL view edge +
+columns adapter) or PR4 (medallion + mesh viewer), then numbered ledger task-010+.
