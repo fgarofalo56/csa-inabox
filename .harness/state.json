@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "current_session": 1,
+  "current_session": 2,
   "tasks": [
     {
       "id": "task-001",
@@ -15,7 +15,7 @@
       "id": "task-002",
       "title": "Phase 1 \u2014 Setup wizard real server-side deploy (no az printout)",
       "feature": "Setup/Deploy",
-      "status": "todo",
+      "status": "done",
       "task_order": 90,
       "assignee": "harness-coder",
       "description": "## Goal\nWizard Deploy action calls a BFF route that dispatches the real GitHub deploy workflow (gh/Actions API) and streams status; honest gate if deploy identity/token unconfigured.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-001"
@@ -24,7 +24,7 @@
       "id": "task-003",
       "title": "Phase 1 \u2014 deploy-dlz Feature-Permission gate",
       "feature": "Setup/Deploy",
-      "status": "todo",
+      "status": "done",
       "task_order": 89,
       "assignee": "harness-coder",
       "description": "## Goal\nAdd feature-permission capability deploy-dlz (Admin default, owner-delegable) and gate the wizard deploy action.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-002"

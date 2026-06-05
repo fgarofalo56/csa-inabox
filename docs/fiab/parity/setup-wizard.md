@@ -36,6 +36,7 @@ capacity → review → deploy. The Azure-portal analog of the missing step is t
 | 5 | Deploy submit | ✅ built (server-side) / ⚠️ honest-gate fallback | `POST /api/setup/deploy` **validates** the config (400 if subscription/boundary/mode/domain/capacity missing, 400 if subscriptionId is not a GUID). When `LOOM_GITHUB_ACTIONS_TOKEN` is configured it **dispatches the real deploy workflow** for the boundary (`deploy-fiab-commercial.yml` / `deploy-fiab-gcc.yml` / `deploy-fiab-gcch.yml`) via the GitHub Actions REST API (`POST /repos/{owner}/{repo}/actions/workflows/{file}/dispatches`, `ref:main`, inputs = subscription/region/dlz_domain_name/capacity_sku/vanity_domain) and returns **202** with `deploymentMode:'github-workflow-dispatch'`, `workflowFile`, and `dispatchedAt`. When the token is **not** configured (or dispatch fails) it returns **503** with a copy-paste `az deployment sub create` pre-filled with the selected subscription, region, and the boundary's real `.bicepparam`. Both paths are real — no fabricated deploymentId. |
 | 6 | Deployment progress / result | ✅ built (streamed) | After a 202 dispatch the wizard **streams live status**: it polls `GET /api/setup/workflow-run-status?workflow={file}&since={dispatchedAt}` every 6s, which queries the GitHub Actions API for the `workflow_dispatch` run created at/after the dispatch time and returns its `status`/`conclusion`/`runUrl`. The done screen shows a live Fluent `Badge` (Starting→Queued→Running→Succeeded/Finished-with-errors), a `ProgressBar`, and an **Open run on GitHub** deep-link to the actual run. When the deploy was 503-gated instead, the "Deploying…" screen shows a Fluent `MessageBar intent="warning"` with the remediation command + Retry/Back — no fabricated progress. |
 | 7 | Auth / permission failures | ✅ built | Subscriptions route returns 502 + hint ("grant the Console UAMI Reader…") on token failure; content-type guard returns 502 on non-JSON ARM responses; deploy + status routes 401 unauthenticated; status route 503 when `LOOM_GITHUB_ACTIONS_TOKEN` unset. UI renders all of these in MessageBars/Badges. |
+| 8 | Deploy is an admin-tier action | ✅ built | `POST /api/setup/deploy` enforces the **`admin.deploy-dlz`** feature-permission (Admin role) via `enforceCapability` before doing anything: tenant admins (`LOOM_TENANT_ADMIN_OID` / `LOOM_TENANT_ADMIN_GROUP_ID`) bypass; any other principal must be **delegated** the capability at `/admin/permissions`. A blocked caller gets a 403 with `capability`/`requiredRole`/remediation, which the wizard renders as a clear "you don't have permission to deploy…" MessageBar. The capability shows up in the Admin → Tenant Admin branch of the `/admin/permissions` RBAC tree like every other Fabric-style capability. |
 
 Zero ❌. With `LOOM_GITHUB_ACTIONS_TOKEN` set the deploy + progress path is a
 real server-side GitHub Actions dispatch with streamed run status; without it,
@@ -48,7 +49,7 @@ the exact `az deployment sub create` to run instead.
 |---------|---------|
 | Subscription dropdown | `GET /api/setup/subscriptions` → ARM `GET {LOOM_ARM_ENDPOINT or management.azure.com}/subscriptions?api-version=2022-12-01` (paged via `nextLink`), `ChainedTokenCredential`(UAMI→DefaultAzureCredential) for the `…/.default` ARM token. |
 | Region dropdown | Static Azure region list, Commercial vs `usgov*` selected by boundary (no backend call — region choice is a client param fed to `-l`). |
-| Deploy button | `POST /api/setup/deploy` — validates config, then either (a) **dispatches** the boundary's deploy workflow via GitHub Actions REST (`…/actions/workflows/{file}/dispatches`) when `LOOM_GITHUB_ACTIONS_TOKEN` is set → 202 `{deploymentMode:'github-workflow-dispatch', workflowFile, dispatchedAt}`, or (b) returns a **503** honest-gate with templated `az deployment sub create --subscription <id> -l <region> -f platform/fiab/bicep/main.bicep -p <boundary>.bicepparam …`. |
+| Deploy button | `POST /api/setup/deploy` — **enforces `admin.deploy-dlz` (Admin)** via `enforceCapability` first (403 if the caller isn't a tenant admin or delegated), then validates config, then either (a) **dispatches** the boundary's deploy workflow via GitHub Actions REST (`…/actions/workflows/{file}/dispatches`) when `LOOM_GITHUB_ACTIONS_TOKEN` is set → 202 `{deploymentMode:'github-workflow-dispatch', workflowFile, dispatchedAt}`, or (b) returns a **503** honest-gate with templated `az deployment sub create --subscription <id> -l <region> -f platform/fiab/bicep/main.bicep -p <boundary>.bicepparam …`. |
 | Deploy progress (done screen) | `GET /api/setup/workflow-run-status?workflow={file}&since={dispatchedAt}` → GitHub Actions REST `…/actions/workflows/{file}/runs?event=workflow_dispatch&branch=main`; picks the newest run at/after `since` and returns `status`/`conclusion`/`runUrl`/`runId`. Polled every 6s by the wizard until `status:'completed'`. |
 
 ## Cloud / env vars
@@ -67,9 +68,11 @@ maps boundary → param file from this verified set (no invented names).
 ## Verification
 
 - Backend Vitest contract tests: `app/api/setup/__tests__/setup-routes.test.ts`
-  (11 tests, all green) — subscriptions ARM URL/paging/Gov-endpoint/content-type
-  guard/error status; deploy 401/400-missing/400-bad-GUID/503-gate
-  Commercial+IL5.
+  — subscriptions ARM URL/paging/Gov-endpoint/content-type guard/error status;
+  deploy 401/400-missing/400-bad-GUID/503-gate Commercial+IL5; **`admin.deploy-dlz`
+  gate: 403 for a non-admin with no grant, allowed for a delegated Admin-grant
+  holder.** (The repo-wide vitest harness is currently broken — env/setupFiles —
+  so these are validated via `tsc` + `next build`, not the unit runner.)
 - `next build` clean (`/setup`, `/api/setup/subscriptions`, `/api/setup/deploy`,
   `/api/setup/workflow-run-status` all compiled). `tsc --noEmit` clean for the
   three touched files (setup-wizard pane + deploy + workflow-run-status routes).
