@@ -528,11 +528,13 @@ export function buildDefaultRegistry(): LoomToolRegistry {
 
 // ---------- Orchestrator ----------
 
+export interface OrchestratorUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
+
 export type OrchestratorStep =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; args: unknown; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
-  | { kind: 'final'; content: string }
+  | { kind: 'final'; content: string; usage?: OrchestratorUsage; model?: string }
   | { kind: 'error'; error: string };
 
 export interface OrchestrateOptions {
@@ -675,6 +677,10 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
 
   await persistStep(sessionId, userOid, { kind: 'thought', content: `User prompt: ${prompt}` }, prompt);
 
+  // Accumulate token/context usage across every AOAI round-trip in the loop so
+  // the final step can report total cost (parity with the data-agent chat).
+  const usage: OrchestratorUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, aoaiCalls: 0, toolCalls: 0 };
+
   for (let i = 0; i < maxIter; i++) {
     let resp: any;
     try {
@@ -685,6 +691,11 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       yield step;
       return;
     }
+    const u = resp?.usage || {};
+    usage.aoaiCalls += 1;
+    usage.promptTokens += u.prompt_tokens ?? 0;
+    usage.completionTokens += u.completion_tokens ?? 0;
+    usage.totalTokens += u.total_tokens ?? 0;
 
     const choice = resp?.choices?.[0];
     const msg = choice?.message;
@@ -704,11 +715,12 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
 
     const toolCalls = msg.tool_calls as ChatMessage['tool_calls'];
     if (!toolCalls || toolCalls.length === 0) {
-      const finalStep: OrchestratorStep = { kind: 'final', content: msg.content || '' };
+      const finalStep: OrchestratorStep = { kind: 'final', content: msg.content || '', usage, model: target.deployment };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
       return;
     }
+    usage.toolCalls += toolCalls.length;
 
     for (const tc of toolCalls) {
       let parsedArgs: unknown = {};
