@@ -1277,6 +1277,10 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Synchronously-readable copy of the last save error so callers (e.g. publish)
+  // can surface the REAL reason right after `await save()` returns false, rather
+  // than a generic "Save failed" (React state is stale in the same tick).
+  const saveErrorRef = useRef<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [state, setStateRaw] = useState<T>(fallback);
   // Phase 4.5 — dirty flag: any external setState call (typing, button click,
@@ -1322,7 +1326,12 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
   useEffect(() => { load(); }, [load]);
 
   const save = useCallback(async (next?: T) => {
-    setSaving(true); setError(null);
+    setSaving(true); setError(null); saveErrorRef.current = null;
+    if (!id || id === 'new') {
+      const msg = 'Cannot save: this agent has no id yet (open it from a workspace, or create it first).';
+      saveErrorRef.current = msg; setError(msg); setSaving(false);
+      return false;
+    }
     try {
       const payload = next ?? state;
       const r = await fetch(`/api/items/${slug}/${encodeURIComponent(id)}`, {
@@ -1330,8 +1339,11 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: payload }),
       });
-      const j = await r.json();
-      if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); return false; }
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = j?.error || `HTTP ${r.status}`;
+        saveErrorRef.current = msg; setError(msg); return false;
+      }
       setSavedAt(j?.updatedAt || new Date().toISOString());
       // Phase 4.5: explicit save success → no longer dirty. When called
       // programmatically with a `next` arg (publish-then-save, materialize-
@@ -1339,9 +1351,15 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
       // the snapshot we just persisted.
       setDirty(false);
       return true;
-    } catch (e: any) { setError(e?.message || String(e)); return false; }
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      saveErrorRef.current = msg; setError(msg); return false;
+    }
     finally { setSaving(false); }
   }, [slug, id, state]);
+
+  /** Synchronous getter for the last save error (valid immediately after save()). */
+  const lastSaveError = useCallback(() => saveErrorRef.current, []);
 
   // Phase 4.5 — Ctrl+S / Cmd+S shortcut.
   useEffect(() => {
@@ -1355,7 +1373,7 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, saving, save]);
 
-  return { state, setState, loading, saving, error, savedAt, save, reload: load, dirty };
+  return { state, setState, loading, saving, error, savedAt, save, reload: load, dirty, lastSaveError };
 }
 
 function SaveBar({ saving, savedAt, error, onSave, extraRight, dirty }: {
@@ -2699,6 +2717,8 @@ interface DataAgentState {
   instructions: string;
   sources: DaSource[];
   description?: string;
+  /** Optional custom display name / alias for the agent (shown in chat + on publish). */
+  alias?: string;
   // Back-compat with the legacy free-text bag (read-only on load).
   systemPrompt?: string; model?: string;
   foundryAgentId?: string; foundryProjectId?: string; publishedAt?: string;
@@ -2742,10 +2762,11 @@ interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: strin
 
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<DataAgentState>('data-agent', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty, lastSaveError } = useItemState<DataAgentState>('data-agent', id, {
     instructions: 'Route financial / aggregated metrics to the semantic model; raw exploration to the lakehouse / warehouse; log analysis to the KQL database.',
     sources: [],
     description: '',
+    alias: '',
   });
   const [tab, setTab] = useState<'build' | 'test' | 'publish' | 'inspect'>('build');
 
@@ -2880,18 +2901,45 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const publish = useCallback(async () => {
     setPublishing(true); setPublishResult(null);
     try {
-      const saved = await save();
-      if (!saved) { setPublishResult({ ok: false, error: 'Save failed before publish.' }); return; }
+      // Only persist when there are unsaved edits — a redundant save that fails
+      // (e.g. transient) shouldn't block publishing an already-saved agent.
+      if (dirty) {
+        const saved = await save();
+        if (!saved) {
+          setPublishResult({ ok: false, error: `Couldn't save before publishing: ${lastSaveError() || 'unknown save error'}` });
+          return;
+        }
+      }
       const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/publish`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ description: state.description }),
+        body: JSON.stringify({ description: state.description, alias: state.alias || undefined }),
       });
-      const j = await r.json();
+      const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+      if (!r.ok && j && j.ok === undefined) j.ok = false;
       setPublishResult(j);
       if (j.ok) await reload();
     } catch (e: any) { setPublishResult({ ok: false, error: e?.message || String(e) }); }
     finally { setPublishing(false); }
-  }, [id, save, reload, state.description]);
+  }, [id, save, reload, dirty, lastSaveError, state.description, state.alias]);
+
+  // ---- delete this agent (owner-scoped via the item DELETE route) ----
+  const [deleting, setDeleting] = useState(false);
+  const deleteAgent = useCallback(async () => {
+    if (typeof window !== 'undefined' && !window.confirm('Delete this data agent? This removes the agent and its configuration permanently. This cannot be undone.')) return;
+    setDeleting(true);
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j?.ok === false) {
+        setPublishResult({ ok: false, error: `Delete failed: ${j?.error || `HTTP ${r.status}`}` });
+        return;
+      }
+      // Back to the workspace list after a successful delete.
+      if (typeof window !== 'undefined') window.location.href = '/workspaces';
+    } catch (e: any) {
+      setPublishResult({ ok: false, error: `Delete failed: ${e?.message || String(e)}` });
+    } finally { setDeleting(false); }
+  }, [id]);
 
   // ---- run-steps inspector (debug a PUBLISHED agent via the Foundry Agent Service) ----
   const [inspectAgent, setInspectAgent] = useState('');
@@ -2965,6 +3013,14 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
 
           {tab === 'build' && (
             <>
+              <Field label="Agent name / alias" hint="A friendly name for this data agent — shown in chat and used when publishing. Leave blank to use the item's name.">
+                <Input
+                  value={state.alias || ''}
+                  maxLength={128}
+                  onChange={(_, d) => setState((p) => ({ ...p, alias: d.value }))}
+                  placeholder={item.displayName || 'e.g. Casino Revenue Analyst'}
+                />
+              </Field>
               <Subtitle2>Agent instructions ({instrLen}/15000)</Subtitle2>
               <Textarea
                 value={state.instructions} maxLength={15000} rows={5}
@@ -3034,7 +3090,15 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
               {sources.length === 0 && (
                 <MessageBar intent="info"><MessageBarBody>Attach up to five typed sources. Each becomes a grounded tool for the agent. The test chat and Publish both require at least one.</MessageBarBody></MessageBar>
               )}
-              <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+              <SaveBar
+                saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
+                extraRight={
+                  <Button appearance="subtle" disabled={deleting} onClick={deleteAgent}
+                    style={{ color: tokens.colorPaletteRedForeground1 }}>
+                    {deleting ? 'Deleting…' : 'Delete agent'}
+                  </Button>
+                }
+              />
             </>
           )}
 
