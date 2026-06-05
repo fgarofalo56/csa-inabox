@@ -298,6 +298,22 @@ jobs:
           bash scripts/csa-loom/enable-all-diagnostics.sh --resource-groups "$ADMIN_RG $DLZ_RG" || \
             echo "WARN: diagnostics sweep reported issues (non-fatal)"
 
+      - name: Grant Console UAMI constrained RBAC Admin (Governance access-policy enforcement)
+        # Lets the Governance → Policies "Access" wizard ENFORCE policies as real
+        # Storage RBAC grants (Blob Data Reader/Contributor/Owner) on the DLZ.
+        # Least-privilege: "Role Based Access Control Administrator" with a
+        # condition restricting it to ONLY assign/remove the 3 Storage Blob Data
+        # roles. Without this the access policy records with an honest error.
+        run: |
+          COND="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {2a2b9908-6ea1-4ae2-8e65-a410df84e7d1, ba92f5b4-2d11-453d-a403-e96b0029c9fe, b7e6dc6d-f1e8-4753-8033-0f276bb0955b})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {2a2b9908-6ea1-4ae2-8e65-a410df84e7d1, ba92f5b4-2d11-453d-a403-e96b0029c9fe, b7e6dc6d-f1e8-4753-8033-0f276bb0955b}))"
+          az role assignment create \
+            --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+            --assignee-principal-type ServicePrincipal \
+            --role "Role Based Access Control Administrator" \
+            --scope "/subscriptions/$SUB/resourceGroups/$DLZ_RG" \
+            --condition "$COND" --condition-version "2.0" \
+            -o table 2>&1 | grep -v "already exists" || echo "RBAC Admin (constrained) already assigned on $DLZ_RG"
+
       - name: Grant Console UAMI Microsoft Graph roles (Directory.Read.All + User.Read.All)
         # Unblocks /admin/users displayName + department + license
         # enrichment so the page shows real Entra identity data instead of
