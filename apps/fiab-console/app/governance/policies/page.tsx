@@ -3,13 +3,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Input, Button, Dropdown, Option, Switch, Field,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Add24Regular, ArrowSync24Regular, Delete20Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 interface Policy {
   id: string;
@@ -189,6 +189,39 @@ export default function PoliciesPage() {
     } catch (e: any) { setActionErr(e?.message || String(e)); }
   }
 
+  const policyColumns: LoomColumn<Policy>[] = [
+    { key: 'name', label: 'Name', sortable: true, filterable: true, getValue: (p) => p.name, render: (p) => <strong>{p.name}</strong> },
+    { key: 'kind', label: 'Kind', sortable: true, filterable: true, width: 120, getValue: (p) => p.kind, render: (p) => <Badge appearance="filled" color={kindColor(p.kind)} size="small">{p.kind}</Badge> },
+    { key: 'scope', label: 'Scope', sortable: true, filterable: true, getValue: (p) => p.scope },
+    {
+      key: 'rule', label: 'Rule', sortable: false, filterable: true, getValue: (p) => p.rule || '',
+      render: (p) => (
+        <span>
+          <code className={s.rule}>{p.rule || '—'}</code>
+          {p.enforcement && (
+            <Badge appearance="tint" size="small" style={{ marginLeft: 6 }}
+              color={p.enforcement.status === 'active' ? 'success' : p.enforcement.status === 'error' ? 'danger' : 'warning'}
+              title={p.enforcement.detail || p.enforcement.roleName}>
+              {p.enforcement.status === 'active' ? `enforced${p.enforcement.roleName ? ` · ${p.enforcement.roleName.replace('Storage Blob Data ', '')}` : ''}` : p.enforcement.status}
+            </Badge>
+          )}
+        </span>
+      ),
+    },
+    {
+      key: 'enabled', label: 'Enabled', sortable: true, filterable: false, width: 100, getValue: (p) => (p.enabled ? 1 : 0),
+      render: (p) => <span onClick={(e) => e.stopPropagation()}><Switch checked={p.enabled} onChange={() => toggle(p)} /></span>,
+    },
+    {
+      key: 'actions', label: '', sortable: false, filterable: false, width: 110,
+      render: (p) => (
+        <span onClick={(e) => e.stopPropagation()}>
+          <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => remove(p.id)}>Delete</Button>
+        </span>
+      ),
+    },
+  ];
+
   return (
     <GovernanceShell sectionTitle="Policies">
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
@@ -216,44 +249,14 @@ export default function PoliciesPage() {
         </div>
       )}
 
-      {!loading && !error && (policies?.length ?? 0) > 0 && (
-        <Table aria-label="Policies">
-          <TableHeader>
-            <TableRow>
-              <TableHeaderCell>Name</TableHeaderCell>
-              <TableHeaderCell>Kind</TableHeaderCell>
-              <TableHeaderCell>Scope</TableHeaderCell>
-              <TableHeaderCell>Rule</TableHeaderCell>
-              <TableHeaderCell>Enabled</TableHeaderCell>
-              <TableHeaderCell></TableHeaderCell>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(policies || []).map((p) => (
-              <TableRow key={p.id}>
-                <TableCell><strong>{p.name}</strong></TableCell>
-                <TableCell><Badge appearance="filled" color={kindColor(p.kind)} size="small">{p.kind}</Badge></TableCell>
-                <TableCell>{p.scope}</TableCell>
-                <TableCell>
-                  <code className={s.rule}>{p.rule || '—'}</code>
-                  {p.enforcement && (
-                    <Badge appearance="tint" size="small" style={{ marginLeft: 6 }}
-                      color={p.enforcement.status === 'active' ? 'success' : p.enforcement.status === 'error' ? 'danger' : 'warning'}
-                      title={p.enforcement.detail || p.enforcement.roleName}>
-                      {p.enforcement.status === 'active' ? `enforced${p.enforcement.roleName ? ` · ${p.enforcement.roleName.replace('Storage Blob Data ', '')}` : ''}` : p.enforcement.status}
-                    </Badge>
-                  )}
-                </TableCell>
-                <TableCell>
-                  <Switch checked={p.enabled} onChange={() => toggle(p)} />
-                </TableCell>
-                <TableCell>
-                  <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => remove(p.id)}>Delete</Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+      {!error && (
+        <LoomDataTable<Policy>
+          columns={policyColumns}
+          rows={policies || []}
+          getRowId={(p) => p.id}
+          loading={loading}
+          empty="No policies yet. Create one with “New policy”."
+        />
       )}
 
       <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
