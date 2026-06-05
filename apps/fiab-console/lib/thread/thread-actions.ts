@@ -148,7 +148,7 @@ export const THREAD_ACTIONS: ThreadAction[] = [
         name: 'table',
         label: 'Table',
         kind: 'select',
-        optionsRoute: '/api/thread/powerbi-model/tables?fromType={fromType}&fromId={fromId}',
+        optionsRoute: '/api/thread/warehouse-tables?fromType={fromType}&fromId={fromId}',
         required: true,
         hint: 'The warehouse table to publish as a model.',
       },
@@ -156,6 +156,31 @@ export const THREAD_ACTIONS: ThreadAction[] = [
       { name: 'includeRows', label: 'Push a sample of rows now', kind: 'toggle', default: true, hint: 'Push up to 500 rows so the model is immediately queryable. Refresh in Power BI to load all rows.' },
     ],
     route: '/api/thread/build-powerbi-model',
+    submitLabel: 'Weave',
+  },
+  {
+    id: 'publish-as-api',
+    label: 'Publish as an API',
+    description:
+      'Expose a warehouse table as a real REST + GraphQL API (Data API Builder). The entity is ' +
+      'built from the table’s catalog schema (columns + primary key) and points at the ' +
+      'Azure-native warehouse. Open it to review permissions, then Deploy. No connection strings.',
+    group: 'Publish',
+    fromTypes: POWERBI_MODELABLE,
+    icon: 'api',
+    fields: [
+      {
+        name: 'table',
+        label: 'Table',
+        kind: 'select',
+        optionsRoute: '/api/thread/warehouse-tables?fromType={fromType}&fromId={fromId}',
+        required: true,
+        hint: 'The warehouse table to expose as an API entity.',
+      },
+      { name: 'apiName', label: 'API name', kind: 'text', required: true, hint: 'A name for the new Data API Builder item.' },
+      { name: 'requireAuth', label: 'Require authentication', kind: 'toggle', default: true, hint: 'On: only authenticated callers (Entra ID). Off: anonymous read. You can refine roles/actions in the editor.' },
+    ],
+    route: '/api/thread/publish-as-api',
     submitLabel: 'Weave',
   },
   // More edges land per the Thread PRP (docs/fiab/thread/PRP-loom-thread.md):

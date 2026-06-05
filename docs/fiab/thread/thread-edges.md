@@ -11,6 +11,9 @@ BFF route that calls a real Azure / Power BI backend (or shows an honest gate).
 | Analyze in a Notebook | Explore | lakehouse, warehouse, kql-database, synapse pools, azure-sql-database | `createOwnedItem('notebook')` with the source attached + starter cell | `/api/thread/analyze-in-notebook` |
 | Add as a Data Agent source | Analyze with AI | warehouse, lakehouse, kql-database, semantic-model, ai-search-index, synapse pools, azure-sql-database | `createOwnedItem`/`updateOwnedItem` (data-agent `state.sources`) | `/api/thread/add-data-agent-source` |
 | Build a Power BI model | Visualize | warehouse, synapse-dedicated-sql-pool | Power BI **Push Datasets** REST (`createPushDataset` + `postPushRows`) over a real read-only SELECT on the Azure-native warehouse (Synapse dedicated SQL) | `/api/thread/build-powerbi-model` |
+| Publish as an API | Publish | warehouse, synapse-dedicated-sql-pool | Creates a real `data-api-builder` item (REST + GraphQL) whose entity is built from the table's catalog schema; `dwsql` source = Azure-native Synapse dedicated pool | `/api/thread/publish-as-api` |
+
+Warehouse table pickers share one discovery route: `GET /api/thread/warehouse-tables?fromType=&fromId=` (lists the Synapse dedicated pool's tables; honest gate if unconfigured).
 
 ## Build a Power BI model — detail
 
@@ -37,11 +40,30 @@ chose to publish to* (an opt-in Weave edge), not a hidden default dependency.
 The source warehouse is the Azure-native Synapse dedicated pool. Loom items work
 100% without Power BI; this edge only activates when a user picks it.
 
+## Publish as an API — detail (PR3)
+
+Turns a gold warehouse table into a REST + GraphQL API without leaving Loom:
+
+1. **Table picker** — shared `/api/thread/warehouse-tables` discovery route.
+2. **Execute** — `POST /api/thread/publish-as-api`: reads the table's columns +
+   primary key (`listColumns`), builds a real `DabConfig` (`dwsql` source =
+   Synapse dedicated pool; one `table` entity with REST `/`<table>` + GraphQL
+   types), runs `dab validate` parity (blocks on hard errors), and creates a
+   real `data-api-builder` Loom item (`createOwnedItem`, same path the DAB
+   editor uses). Returns a deep link to the editor.
+3. **Deploy** is the editor's existing explicit action (no hidden hosting
+   claimed — the item ships a validate-passing config ready to publish).
+
+Secure by default: the "Require authentication" toggle sets the entity
+permission role to `authenticated` (vs `anonymous`). The host auth provider
+(EntraId + jwt) is configured in the editor before deploy.
+
 ### Deferred (next Thread PRs)
 
-- lakehouse / KQL / azure-sql-database → Power BI model (needs the per-backend
-  schema adapter — lands with the columns adapter in PR4).
+- lakehouse / KQL / azure-sql-database → Power BI model + API (needs the
+  per-backend schema adapter — lands with the columns adapter in PR4).
 - Report build from the model + embedded report in Loom (PR5 deepening).
 - data-agent **semantic-model (DAX)** execution via `executeQueries` (PR5
   deepening — unblocks grounding on a Power BI model's measures).
-- table/query → API endpoint (PR3); medallion promotion + mesh viewer (PR4).
+- query → UDF REST endpoint (PR3 remainder); medallion promotion + mesh
+  viewer (PR4).

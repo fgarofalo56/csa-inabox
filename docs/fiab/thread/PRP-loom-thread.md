@@ -128,7 +128,12 @@ promotable. (Phase 2 — the first slice can write edges without the viewer.)
   - ⏭ *lakehouse → SQL endpoint* (Synapse Serverless view over Delta) — deferred:
     needs a serverless database + external-table/view DDL (CREATE DATABASE/VIEW),
     an honest infra step; lands with the columns adapter next.
-- **PR 3 — API edges:** table/query → Data API Builder / APIM (+ Delta path), query → UDF REST.
+- **PR 3 — API edges:**
+  - ✅ *Publish as an API* — warehouse table → a real `data-api-builder` item
+    (REST + GraphQL entity built from the catalog schema; `dwsql` =
+    Azure-native Synapse dedicated pool), `dab validate`-passing, deep-linked to
+    the editor for deploy (`/api/thread/publish-as-api`).
+  - ⏭ remainder: Delta/Databricks-SQL → API path; query → UDF REST.
 - **PR 4 — Medallion promotion + edge-graph mesh viewer:** promote bronze→silver→gold,
   lineage view over `thread-edges`.
 - **PR 5 — Power BI:**
