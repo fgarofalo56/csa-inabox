@@ -160,3 +160,23 @@ is template boilerplate that doesn't apply to a verification-only Phase-0 task).
 - docs/fiab/console/mcp-tool-server.md updated.
 
 **Next:** task-008 (data-agent EXECUTES its generated query on real rows).
+
+### task-008 — data-agent EXECUTES its generated query on real rows ✅ (PR # pending)
+- New `lib/azure/data-agent-execute.ts` — `executeSourceQuery(source, query)` runs
+  the model's per-source query READ-ONLY on the Azure-native backend:
+  warehouse → Synapse dedicated SQL (TDS), lakehouse → Synapse serverless SQL,
+  kql → ADX (kusto). Hard read-only guards (SELECT/WITH only; KQL mgmt/ingest
+  blocked) + 25-row cap. semantic-model/ai-search/ontology/graph → honest gate.
+  Unreachable backend → honest gate string (no mock, never throws out).
+- `chatGrounded()` (data-agent-client.ts) is now 2-phase: phase-1 AOAI proposes
+  answer+queries → execute each → phase-2 re-prompt AOAI with the REAL rows for a
+  grounded final answer. DataAgentTool carries {executed,rowCount,columns,rows,gate}.
+- Editor (phase4-editors.tsx data-agent chat): each tool shows `✓ ran · N rows`
+  badge + a compact result table, or an honest ⚠ gate. tsc clean (pre-existing
+  Option/UdfState/GraphDecl errors only).
+- Identity note: queries run under the console UAMI (ChainedTokenCredential), not
+  per-end-user passthrough; read-only enforced by query guards. Live verify is the
+  operator step (needs provisioned warehouse/ADX + AOAI).
+- parity doc data-agent.md row 7 + backend table updated.
+
+**Next:** task-009 (Governance Insights redesign — real content, sortable UI).
