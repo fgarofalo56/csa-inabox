@@ -314,3 +314,23 @@ GRANT + kql ADX role) or continue Thread. Then task-012 (catalog detail).
 
 **Next:** task-012 (Data Catalog detail + request-access + lineage), then 013+
 (kill deferred-v3 TDS-via-PE), or continue Thread PR2.
+
+### task-012 — Data Catalog detail + request-access + lineage ✅ (PR # pending)
+- governance/catalog route enriched: each asset now carries `ownerUpn`,
+  `endorsement` (state.endorsement || certified→'Certified'), `description`.
+- New `/api/catalog/request-access`: REAL durable request — writes an
+  `access-requested` audit-log entry on the asset (owner sees it in item
+  activity) + a confirmation notification to the requester (oid-keyed). Owner
+  grants via Governance → Policies (which now enforces real RBAC/SQL/ADX, task-011).
+- /governance/catalog page: click (or right-click) a row → **detail Drawer**
+  with full metadata grid + endorsement/sensitivity/type badges + description,
+  and actions: **Open in editor**, **View lineage** (→ /governance/lineage),
+  **Request access** (inline permission dropdown + justification → POST). Rows
+  clickable; Open link stopsPropagation. tsc clean on new code (only the
+  pre-existing borderColor/px shorthand errors remain in the untouched
+  useStyles block).
+- LIVE-VERIFY (operator): VNet browser; backends are Cosmos (audit-log +
+  notifications) already GREEN.
+
+**Next:** task-013 (kill deferred-v3 TDS-via-PE reads) or task-018 web-3.0
+beautify, or Thread PR2. Continue down the ledger.
