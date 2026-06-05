@@ -24,7 +24,7 @@ Editor: `apps/fiab-console/lib/editors/notebook-editor.tsx`
 | 1 | ✅ | Cell list rendered (code + markdown) |
 | 2 | ✅ | `+ Code cell` / `+ Markdown cell` (Insert ribbon) |
 | 3 | ✅ | `Run all` + per-cell run, both gated on a real compute target (Synapse Spark / Databricks); Run button carries a why-disabled tooltip and the ribbon Run mirrors the same gate |
-| 4 | ✅ | Submits via `/api/items/notebook/[id]/run`, polls `/runs/[runId]` for Spark status + output. Compute target is an enumerated picker bound to `/api/loom/compute-targets`; an honest `MessageBar` surfaces compute-discovery errors or names `LOOM_SYNAPSE_WORKSPACE` / `LOOM_DATABRICKS_HOSTNAME` when no notebook compute is deployed |
+| 4 | ✅ | Submits via `/api/items/notebook/[id]/run`, polls `/runs/[runId]` for Spark status + output. Compute target is an enumerated picker bound to `/api/loom/compute-targets`; an honest `MessageBar` surfaces compute-discovery errors or names `LOOM_SYNAPSE_WORKSPACE` / `LOOM_DATABRICKS_HOSTNAME` when no notebook compute is deployed. **A terminated Databricks cluster / paused Synapse dedicated pool now shows a "Start compute" button** (→ `POST /api/loom/compute-targets/{id}/start`, polls state to RUNNING) so it's usable without leaving the notebook and runs warm. **Result polling is now adaptive** — ~600ms while a statement executes on a warm session (matching native cadence), backing off to 2s only while a cold session/cluster is still starting; the old flat 2s floor made every fast cell feel ~2s slow. |
 | 5 | ✅ | `Attach Lakehouse` (`openAttach`) → `/api/items/lakehouse` list |
 | 6 | ✅ | `Run history` pane (`historyOpen`) via `/jobs` + `/runs` |
 | 7 | ✅ | New (`createOpen`), Delete (`del`) |

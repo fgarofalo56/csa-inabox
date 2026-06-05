@@ -120,13 +120,21 @@ function useComputes() {
   const [computes, setComputes] = useState<ComputeTarget[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    fetch('/api/loom/compute-targets').then(r => r.json()).then(j => {
+  const refresh = useCallback(async () => {
+    try {
+      const j = await (await fetch('/api/loom/compute-targets')).json();
       if (j.ok) setComputes(j.computes || []);
       else setError(j.error || 'failed to list compute');
-    }).catch(e => setError(e?.message || String(e))).finally(() => setLoading(false));
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setLoading(false); }
   }, []);
-  return { computes, loading, error };
+  useEffect(() => { void refresh(); }, [refresh]);
+  return { computes, loading, error, refresh };
+}
+
+const COMPUTE_RUNNING = ['Available', 'Online', 'Running', 'RUNNING', 'idle'];
+function isComputeRunning(state?: string): boolean {
+  return COMPUTE_RUNNING.includes(state || '');
 }
 
 export function NotebookEditor({ item, id }: Props) {
@@ -192,6 +200,37 @@ export function NotebookEditor({ item, id }: Props) {
       return () => clearTimeout(debounce);
     }
   }, [computeId, workspaceId, notebookId, prewarmSession]);
+
+  // Start a terminated compute (Databricks cluster / Synapse dedicated pool) right
+  // from the notebook, then poll its state to RUNNING. Backend already exists:
+  // POST /api/loom/compute-targets/{id}/start. This is what makes a cluster that
+  // "just shows TERMINATED" usable, and warms it so cells run at native speed
+  // instead of cold-starting on every run.
+  const [startingCompute, setStartingCompute] = useState(false);
+  const selectedCompute = cp.computes.find(c => c.id === computeId) || null;
+  const startCompute = useCallback(async () => {
+    if (!computeId) return;
+    setStartingCompute(true); setRunMsg('Starting compute…');
+    try {
+      const r = await fetch(`/api/loom/compute-targets/${encodeURIComponent(computeId)}/start`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j?.ok === false) {
+        setRunMsg(`Could not start compute: ${j?.error || `HTTP ${r.status}`}`);
+        return;
+      }
+      // Poll state until it reports running (cluster start is ~60-90s).
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 8 * 60 * 1000) {
+        await new Promise(res => setTimeout(res, 5000));
+        await cp.refresh();
+        const cur = cp.computes.find(c => c.id === computeId);
+        if (isComputeRunning(cur?.state)) { setRunMsg('Compute is running — cells will execute at full speed.'); break; }
+        setRunMsg(`Starting compute… (${cur?.state || 'pending'})`);
+      }
+    } catch (e: any) {
+      setRunMsg(`Could not start compute: ${e?.message || String(e)}`);
+    } finally { setStartingCompute(false); }
+  }, [computeId, cp]);
 
   // v3.28: honor URL deep-link — when /items/notebook/{id} loads, discover
   // the owning workspace from the Cosmos record and auto-select it so the
@@ -420,7 +459,12 @@ export function NotebookEditor({ item, id }: Props) {
       setRunMsg(`${j.compute?.kind || 'compute'} ${j.compute?.pool || j.compute?.clusterId} — ${j.status} (runId ${runId})`);
       const start = Date.now();
       const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
-      let pollInterval = 2000; // 2s during session-starting, 1s during statement
+      // Adaptive polling tuned to feel native: fast while a statement is actually
+      // executing on a WARM session (~600ms ≈ Databricks' own refresh cadence),
+      // backing off only while a COLD session/cluster is still spinning up so we
+      // don't hammer the API during a 60-90s start. The old flat 2s floor made
+      // every fast cell feel ~2s slow even on a warm cluster.
+      let pollInterval = 600; // responsive first poll for warm sessions
       while (Date.now() - start < MAX_MS) {
         await new Promise(res => setTimeout(res, pollInterval));
         const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
@@ -429,8 +473,10 @@ export function NotebookEditor({ item, id }: Props) {
         if (p.runId && p.runId !== runId) runId = p.runId; // promotion when statement is submitted
         const phase = p.phase ? ` · ${p.phase}` : '';
         setRunMsg(`Status: ${p.status}${phase}`);
-        // Adaptive polling: speed up after session is idle
-        if (p.phase === 'statement-running') pollInterval = 1000;
+        // Stay fast while a statement runs on a warm session; back off to 2s only
+        // while a cold session/cluster is still starting (PENDING/starting/queued).
+        const cold = p.phase === 'session-starting' || /^(starting|pending|queued)$/i.test(String(p.status || ''));
+        pollInterval = cold ? 2000 : 600;
         if (p.output) {
           if (p.output.status === 'ok') {
             const txt = p.output.textPlain || JSON.stringify(p.output.data || {}, null, 2);
@@ -808,11 +854,24 @@ export function NotebookEditor({ item, id }: Props) {
                 {computeId && (
                   <Badge
                     appearance="filled"
-                    color={['Available', 'Online', 'Running', 'RUNNING', 'idle'].includes(cp.computes.find(c => c.id === computeId)?.state || '') ? 'success' : 'warning'}
+                    color={isComputeRunning(selectedCompute?.state) ? 'success' : 'warning'}
                     size="small"
                   >
-                    {cp.computes.find(c => c.id === computeId)?.state || 'unknown'}
+                    {selectedCompute?.state || 'unknown'}
                   </Badge>
+                )}
+                {/* Start a terminated cluster / paused pool right here. */}
+                {computeId && selectedCompute && !isComputeRunning(selectedCompute.state) &&
+                  (selectedCompute.kind === 'databricks-cluster' || selectedCompute.kind === 'synapse-dedicated-sql') && (
+                  <Button
+                    appearance="primary"
+                    size="small"
+                    icon={<Play20Regular />}
+                    disabled={startingCompute}
+                    onClick={startCompute}
+                  >
+                    {startingCompute ? 'Starting…' : 'Start compute'}
+                  </Button>
                 )}
               </div>
             </div>
