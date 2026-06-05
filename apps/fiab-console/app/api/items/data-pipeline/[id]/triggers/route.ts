@@ -78,20 +78,19 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   try {
     const adfName = await getAdfName(ctx.params.id, workspaceId);
     if (!adfName) return err('Pipeline has no ADF backing — save first', 409);
-    // Wire trigger to this pipeline if caller didn't already.
-    const wired: AdfTrigger = {
-      name: body.name,
-      properties: {
-        ...body.properties,
-        type: body.properties.type || 'ScheduleTrigger',
-        pipelines: body.properties.pipelines && body.properties.pipelines.length > 0
-          ? body.properties.pipelines
-          : [{
-              pipelineReference: { referenceName: adfName, type: 'PipelineReference' as const },
-              parameters: {},
-            }],
-      },
-    };
+    const type = body.properties.type || 'ScheduleTrigger';
+    const pipelineRef = { referenceName: adfName, type: 'PipelineReference' as const };
+    // Wire the trigger to this pipeline if the caller didn't already. Tumbling
+    // window triggers reference a SINGLE pipeline under `pipeline` (singular);
+    // schedule/event triggers use the `pipelines[]` array.
+    const props: any = { ...body.properties, type };
+    if (type === 'TumblingWindowTrigger') {
+      if (!props.pipeline) props.pipeline = { pipelineReference: pipelineRef, parameters: {} };
+      delete props.pipelines;
+    } else if (!(props.pipelines && props.pipelines.length > 0)) {
+      props.pipelines = [{ pipelineReference: pipelineRef, parameters: {} }];
+    }
+    const wired: AdfTrigger = { name: body.name, properties: props };
     const trigger = await upsertTrigger(body.name, wired);
     return NextResponse.json({ ok: true, trigger });
   } catch (e: any) {

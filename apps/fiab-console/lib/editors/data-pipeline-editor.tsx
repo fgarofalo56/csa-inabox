@@ -49,6 +49,7 @@ import { ActivityPalette } from '@/lib/components/pipeline/palette';
 import { PipelineCanvas, type CanvasHandle } from '@/lib/components/pipeline/canvas';
 import { PropertiesPanel } from '@/lib/components/pipeline/properties-panel';
 import { TopTabs, type TopTabId } from '@/lib/components/pipeline/top-tabs';
+import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
 import { OutputPane } from '@/lib/components/pipeline/output-pane';
 import {
   ACTIVITY_CATALOG, findByKey, nextNameSuffix, type ActivityTypeDef,
@@ -228,7 +229,6 @@ export function DataPipelineEditor({ item, id }: Props) {
   // default for the Fabric data pipeline item.
   const [manageOpen, setManageOpen] = useState(false);
   const [triggerName, setTriggerName] = useState('');
-  const [triggerCron, setTriggerCron] = useState('0 0 * * *');
   const [triggerBusy, setTriggerBusy] = useState(false);
   const [triggerErr, setTriggerErr] = useState<string | null>(null);
   const [triggers, setTriggers] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
@@ -574,28 +574,15 @@ export function DataPipelineEditor({ item, id }: Props) {
     loadDetail(workspaceId, pipelineId);
   }, [workspaceId, pipelineId, dirty, loadDetail]);
 
-  const createTrigger = useCallback(async () => {
-    if (!workspaceId || !pipelineId || !triggerName.trim()) return;
+  // Create any ADF trigger type from the guided wizard's payload (no JSON/cron).
+  const createTriggerWith = useCallback(async (name: string, properties: Record<string, unknown>) => {
+    if (!workspaceId || !pipelineId || !name.trim()) return;
     setTriggerBusy(true); setTriggerErr(null);
     try {
       const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/triggers?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: triggerName.trim(),
-          properties: {
-            type: 'ScheduleTrigger',
-            runtimeState: 'Stopped',
-            typeProperties: {
-              recurrence: {
-                frequency: 'Day',
-                interval: 1,
-                startTime: new Date().toISOString(),
-                timeZone: 'UTC',
-              },
-            },
-          },
-        }),
+        body: JSON.stringify({ name: name.trim(), properties }),
       });
       const j = await r.json();
       if (!j.ok) { setTriggerErr(j.error || 'create failed'); return; }
@@ -603,7 +590,7 @@ export function DataPipelineEditor({ item, id }: Props) {
       await loadTriggers(workspaceId, pipelineId);
       dispatchToast(<Toast><ToastTitle>Trigger created — start it from the list below.</ToastTitle></Toast>, { intent: 'success' });
     } finally { setTriggerBusy(false); }
-  }, [workspaceId, pipelineId, triggerName, triggerCron, loadTriggers, dispatchToast]);
+  }, [workspaceId, pipelineId, loadTriggers, dispatchToast]);
 
   const startStopTrigger = useCallback(async (name: string, action: 'start' | 'stop') => {
     if (!workspaceId || !pipelineId) return;
@@ -1032,29 +1019,13 @@ export function DataPipelineEditor({ item, id }: Props) {
           </Dialog>
 
           {/* Schedule dialog */}
-          <Dialog open={scheduleOpen} onOpenChange={(_, d) => setScheduleOpen(d.open)}>
-            <DialogSurface>
-              <DialogBody>
-                <DialogTitle>Add schedule trigger</DialogTitle>
-                <DialogContent>
-                  <Field label="Trigger name" required>
-                    <Input value={triggerName} onChange={(_, d) => setTriggerName(d.value)} />
-                  </Field>
-                  <Field label="Recurrence cron (UTC)">
-                    <Input value={triggerCron} onChange={(_, d) => setTriggerCron(d.value)} />
-                  </Field>
-                  <Caption1>Creates a Daily ScheduleTrigger in Stopped state. Hit Start to activate it.</Caption1>
-                  {triggerErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{triggerErr}</MessageBarBody></MessageBar>}
-                </DialogContent>
-                <DialogActions>
-                  <Button appearance="secondary" onClick={() => setScheduleOpen(false)}>Cancel</Button>
-                  <Button appearance="primary" disabled={triggerBusy || !triggerName.trim()} onClick={createTrigger}>
-                    {triggerBusy ? 'Creating…' : 'Create trigger'}
-                  </Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
+          <TriggerWizard
+            open={scheduleOpen}
+            onClose={() => { setScheduleOpen(false); setTriggerErr(null); }}
+            onCreate={createTriggerWith}
+            busy={triggerBusy}
+            error={triggerErr}
+          />
         </div>
       }
     />
