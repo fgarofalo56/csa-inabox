@@ -103,3 +103,22 @@ is template boilerplate that doesn't apply to a verification-only Phase-0 task).
   cost pips, honest MessageBar. Rendered in the wizard capacity step under the
   F-SKU dropdown.
 - Parity doc row 3 enriched + backend table + (no new env var).
+
+### task-005 — WYSIWYG deploy/Git/infra wizards on Deployment page ✅ (PR # pending)
+- Audit finding: the `/deployment-pipelines` page (pipelines + Git + infra tabs)
+  was ALREADY fully guided — Field/Input/Dropdown/Checkbox/Switch, real Fabric
+  REST + ARM REST backends, comprehensive parity doc, zero ❌, NO raw-JSON config
+  (only a legit optional free-text deployment note). So task-005's "guided forms,
+  no JSON" was substantially pre-satisfied.
+- Closed the one concrete gap (parity row 13, was "⚙ client-only"): surfaced the
+  per-resource ARM **operation breakdown**. New BFF route
+  `arm/[name]/operations` (real Microsoft.Resources/deployments/{name}/operations
+  REST) + a **Steps** drill-in dialog on each infra row → sortable LoomDataTable
+  (resource/type/state/status/duration/timestamp). tsc clean.
+- OBSERVATION for operator (NOT in task-005 scope, → backlog): the pipelines +
+  Git tabs are Fabric-workspace-centric (Fabric deployment-pipelines REST, Fabric
+  git REST). The Azure-native promotion path is the ARM/bicep infra tab. If strict
+  no-fabric-dependency parity is wanted for CI promotion, that's a separate epic
+  (relates to tasks 013–016 A+ edges), not a guided-forms fix.
+
+**Next:** task-006 (Phase 2 — Functions-hosted MCP tool server, bicep + REST).
