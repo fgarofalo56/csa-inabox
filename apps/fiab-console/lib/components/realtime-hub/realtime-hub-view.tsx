@@ -272,7 +272,7 @@ export function RealTimeHubView() {
           </div>
         </div>
         <div className={styles.stat}>
-          <span className={styles.statChip} style={{ backgroundColor: '#0078d41f', color: '#0078d4' }} aria-hidden>
+          <span className={styles.statChip} style={{ backgroundColor: '#0078d41f', color: 'var(--loom-accent-blue)' }} aria-hidden>
             <PlugConnected20Regular style={{ width: 24, height: 24 }} />
           </span>
           <div>
@@ -281,7 +281,7 @@ export function RealTimeHubView() {
           </div>
         </div>
         <div className={styles.stat}>
-          <span className={styles.statChip} style={{ backgroundColor: '#4b1d8f1f', color: '#4b1d8f' }} aria-hidden>
+          <span className={styles.statChip} style={{ backgroundColor: '#4b1d8f1f', color: 'var(--loom-accent-purple)' }} aria-hidden>
             <Flow20Regular style={{ width: 24, height: 24 }} />
           </span>
           <div>

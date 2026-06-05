@@ -6,3 +6,4 @@ public/monaco/
 # so the path must be relative (not repo-rooted) to actually match.
 test-results/
 playwright-report/
+tsconfig.tsbuildinfo

@@ -263,31 +263,67 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
                 </>
               );
             })()}
-            <Caption1>Source / sink JSON. Wire up datasets via the Lookup or Copy reference list — these fields are surfaced raw so power users can target any connector type.</Caption1>
-            <Field label="source">
-              <textarea
-                className={s.jsonArea}
-                value={JSON.stringify((activity.typeProperties as any)?.source || {}, null, 2)}
-                onChange={(e) => {
-                  try {
-                    const v = JSON.parse(e.target.value);
-                    onPatch({ typeProperties: { ...(activity.typeProperties || {}), source: v } });
-                  } catch { /* let the user finish typing */ }
-                }}
-              />
-            </Field>
-            <Field label="sink">
-              <textarea
-                className={s.jsonArea}
-                value={JSON.stringify((activity.typeProperties as any)?.sink || {}, null, 2)}
-                onChange={(e) => {
-                  try {
-                    const v = JSON.parse(e.target.value);
-                    onPatch({ typeProperties: { ...(activity.typeProperties || {}), sink: v } });
-                  } catch { /* ignore */ }
-                }}
-              />
-            </Field>
+            {/* Guided Copy settings (ADF-Studio-style) — no JSON for the common
+                90%. Raw source/sink connector JSON moves to Advanced below for
+                power users / exotic connectors. */}
+            {(() => {
+              const tp = (activity.typeProperties || {}) as any;
+              const src = tp.source || {};
+              const sink = tp.sink || {};
+              const patchSrc = (patch: any) => onPatch({ typeProperties: { ...tp, source: { ...src, ...patch } } });
+              const patchSink = (patch: any) => onPatch({ typeProperties: { ...tp, sink: { ...sink, ...patch } } });
+              return (
+                <>
+                  <Field label="Parallel copies" hint="Degree of copy parallelism (blank = auto).">
+                    <Input type="number" value={tp.parallelCopies != null ? String(tp.parallelCopies) : ''}
+                      onChange={(_, d) => onPatch({ typeProperties: { ...tp, parallelCopies: d.value ? Number(d.value) : undefined } })} />
+                  </Field>
+                  <Field label="Recursive (file source)" hint="Read sub-folders recursively.">
+                    <Switch checked={!!src.recursive} onChange={(_, d) => patchSrc({ recursive: d.checked })} />
+                  </Field>
+                  <Field label="Sink write behavior">
+                    <Dropdown value={sink.writeBehavior || ''} selectedOptions={sink.writeBehavior ? [sink.writeBehavior] : []}
+                      onOptionSelect={(_, d) => patchSink({ writeBehavior: d.optionValue || undefined })}>
+                      <Option value="" text="(default)">(default)</Option>
+                      <Option value="insert" text="Insert">Insert</Option>
+                      <Option value="upsert" text="Upsert">Upsert</Option>
+                    </Dropdown>
+                  </Field>
+                </>
+              );
+            })()}
+            <Accordion collapsible>
+              <AccordionItem value="copy-advanced">
+                <AccordionHeader>Advanced — source / sink connector JSON</AccordionHeader>
+                <AccordionPanel>
+                  <Caption1>Raw connector settings — target any source/sink type (e.g. wildcards, queries, staging).</Caption1>
+                  <Field label="source">
+                    <textarea
+                      className={s.jsonArea}
+                      value={JSON.stringify((activity.typeProperties as any)?.source || {}, null, 2)}
+                      onChange={(e) => {
+                        try {
+                          const v = JSON.parse(e.target.value);
+                          onPatch({ typeProperties: { ...(activity.typeProperties || {}), source: v } });
+                        } catch { /* let the user finish typing */ }
+                      }}
+                    />
+                  </Field>
+                  <Field label="sink">
+                    <textarea
+                      className={s.jsonArea}
+                      value={JSON.stringify((activity.typeProperties as any)?.sink || {}, null, 2)}
+                      onChange={(e) => {
+                        try {
+                          const v = JSON.parse(e.target.value);
+                          onPatch({ typeProperties: { ...(activity.typeProperties || {}), sink: v } });
+                        } catch { /* ignore */ }
+                      }}
+                    />
+                  </Field>
+                </AccordionPanel>
+              </AccordionItem>
+            </Accordion>
           </>
         )}
 

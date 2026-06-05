@@ -71,6 +71,26 @@ export async function GET(req: NextRequest) {
             if (m.metastore_id.startsWith('ERROR_')) {
               const reason = m.name.replace(/^\((.*)\)$/, '$1');
               const is403 = /\b403\b/.test(reason) || /account admin/i.test(reason);
+              // Listing METASTORES needs Databricks account-admin (the 403 here).
+              // Listing this workspace's CATALOGS does NOT. So instead of a dead
+              // "gate" node, render the workspace as a NAVIGABLE node whose
+              // children come from listCatalogs(host) (path.length===1). The tree
+              // works by default with only workspace access — account-admin is an
+              // optional enrichment, never a hard requirement. Only a non-403
+              // unreachable error stays a true gate.
+              if (is403) {
+                return {
+                  id: m.workspace_hostname,
+                  label: m.workspace_hostname,
+                  kind: 'metastore',
+                  hasChildren: true,
+                  meta: {
+                    workspace_hostname: m.workspace_hostname,
+                    accountAdminEnrichment:
+                      'Metastore-level metadata (region, metastore id) needs Databricks account-admin; the catalogs below list without it.',
+                  },
+                };
+              }
               return {
                 id: m.metastore_id,
                 label: m.workspace_hostname,
@@ -79,21 +99,11 @@ export async function GET(req: NextRequest) {
                 meta: {
                   workspace_hostname: m.workspace_hostname,
                   reason,
-                  title: is403
-                    ? 'Unity Catalog metastore not listable from this workspace'
-                    : 'Workspace unreachable',
-                  detail: is403
-                    ? `Listing Unity Catalog metastores requires Databricks account-admin privileges, and this workspace returned 403. Either (a) the Console UAMI is not a Databricks account admin, or (b) ${m.workspace_hostname} is not yet attached to a Unity Catalog metastore.`
-                    : `The workspace ${m.workspace_hostname} could not be reached: ${reason}`,
-                  remediation: is403
-                    ? [
-                        'In the Databricks account console (accounts.azuredatabricks.net) → User management, grant the Console UAMI the Account Admin role, OR',
-                        'Assign the UAMI as a metastore admin on the metastore (Catalog → metastore → Metastore Admin → Edit), OR',
-                        `Enable ${m.workspace_hostname} for Unity Catalog by attaching it to a metastore (Catalog → metastore → Workspaces → Assign to workspace).`,
-                      ]
-                    : [
-                        `Confirm LOOM_DATABRICKS_HOSTNAMES lists a reachable workspace and the Console UAMI can authenticate to it.`,
-                      ],
+                  title: 'Workspace unreachable',
+                  detail: `The workspace ${m.workspace_hostname} could not be reached: ${reason}`,
+                  remediation: [
+                    `Confirm LOOM_DATABRICKS_HOSTNAMES lists a reachable workspace and the Console UAMI can authenticate to it.`,
+                  ],
                   learnMore:
                     'https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/admin-privileges#account-admins',
                 },
@@ -203,7 +213,17 @@ export async function GET(req: NextRequest) {
         });
       }
       if (path.length === 1) {
-        const products = await listDataProducts(path[0]);
+        // Data products are a unified-catalog concept that the classic Data Map
+        // account doesn't expose. On classic, a domain mirrors to a collection
+        // (see purview-client listBusinessDomains) which has no "data products"
+        // sub-list — so an empty children list is the honest, non-erroring state
+        // rather than letting the unified-catalog gate 501 the whole tree.
+        let products: Awaited<ReturnType<typeof listDataProducts>> = [];
+        try { products = await listDataProducts(path[0]); }
+        catch (e: any) {
+          if (!(e instanceof PurviewNotConfiguredError)) throw e;
+          return NextResponse.json({ ok: true, nodes: [] });
+        }
         return NextResponse.json({
           ok: true,
           nodes: products.map((p) => ({

@@ -38,6 +38,30 @@
   --loom-status-danger:   #b91c4b;
   --loom-status-info:     #0050b3;
 
+  /* Accent palette — theme-aware ICON / KPI / nav-card colors.
+     These are the decorative hues used as `color:` on cards, KPI glyphs, and
+     nav tiles. In LIGHT mode they are mid-dark (read on white surfaces); the
+     dark-theme block below swaps each for a lighter variant so the same icon
+     stays legible on the dark `--loom-surface-raised` (#1f1c2a) card. Always
+     use these vars for decorative icon/accent color — never a raw hex — so
+     readability holds in both themes. */
+  --loom-accent-teal:    #0d7377;
+  --loom-accent-green:   #117865;
+  --loom-accent-emerald: #107c10;
+  --loom-accent-blue:    #0078d4;
+  --loom-accent-azure:   #0050b3;
+  --loom-accent-cyan:    #0a7ea4;
+  --loom-accent-indigo:  #3d2e80;
+  --loom-accent-indigo2: #5e4dc0;
+  --loom-accent-violet:  #7c3aed;
+  --loom-accent-purple:  #4b1d8f;
+  --loom-accent-plum:    #5c2d91;
+  --loom-accent-magenta: #c239b3;
+  --loom-accent-orange:  #c2410c;
+  --loom-accent-amber:   #ad6800;
+  --loom-accent-gold:    #d8a200;
+  --loom-accent-red:     #d13438;
+
   /* Composed surfaces */
   --loom-topbar-bg: linear-gradient(90deg, var(--loom-navy-900) 0%, var(--loom-navy-800) 50%, var(--loom-indigo-700) 100%);
   --loom-hero-bg:   linear-gradient(135deg, var(--loom-indigo-700) 0%, var(--loom-azure-600) 55%, var(--loom-amber-500) 130%);
@@ -100,6 +124,30 @@ html[data-theme='dark'] {
   --loom-surface-raised:  #1f1c2a;
   --loom-surface-sunken:  #100e17;
   --loom-stroke-subtle:   #2a2735;
+
+  /* Status — lightened so they read on the dark canvas */
+  --loom-status-success:  #3ec9a7;
+  --loom-status-warning:  #e6b566;
+  --loom-status-danger:   #f1707a;
+  --loom-status-info:     #5a9cf0;
+
+  /* Accent palette — lighter variants for contrast on dark cards */
+  --loom-accent-teal:    #3bd6c6;
+  --loom-accent-green:   #4ed3a8;
+  --loom-accent-emerald: #5bc85b;
+  --loom-accent-blue:    #4c9bf0;
+  --loom-accent-azure:   #5a9cf0;
+  --loom-accent-cyan:    #46b6d6;
+  --loom-accent-indigo:  #aea0ff;
+  --loom-accent-indigo2: #b3a4ff;
+  --loom-accent-violet:  #b79cff;
+  --loom-accent-purple:  #c4a3ff;
+  --loom-accent-plum:    #c39cf0;
+  --loom-accent-magenta: #e87ad6;
+  --loom-accent-orange:  #f08a4b;
+  --loom-accent-amber:   #e6b566;
+  --loom-accent-gold:    #e6c34a;
+  --loom-accent-red:     #f1707a;
 
   --loom-topbar-bg: linear-gradient(90deg, #060814 0%, #0b0a26 50%, #1a1342 100%);
   --loom-hero-bg:   linear-gradient(135deg, #1a1342 0%, #3d2e80 55%, #d89f3d 140%);

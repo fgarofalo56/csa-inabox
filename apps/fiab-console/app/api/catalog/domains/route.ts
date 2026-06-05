@@ -33,7 +33,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  listCollections, listGlossaryTerms,
+  listCollections, listGlossaryTerms, listBusinessDomains,
   createBusinessDomain, deleteBusinessDomain,
   PurviewNotConfiguredError, PurviewError,
   type PurviewUnifiedCatalogGateError,
@@ -43,20 +43,20 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Honest INFO note (not an error): unified-catalog business domains require a
- * Purview account in the new experience. Mirrors the typed gate hint from
- * purview-client so the copy stays consistent with the rest of the console.
+ * Neutral INFO note (not an error): on the classic Data Map account a Loom
+ * domain maps to a Purview COLLECTION (the closest 1:1 governance grouping the
+ * classic data plane exposes). Business domains are fully usable here — they
+ * are just backed by collections, not the new-experience /datagovernance API.
  */
-const UNIFIED_CATALOG_NOTE = {
-  available: false as const,
-  title: 'Business domains live in the new Purview experience',
+const CLASSIC_DOMAIN_NOTE = {
+  available: true as const,
+  title: 'Domains mirror to Purview collections',
   detail:
-    'Unified Catalog "business / governance domains" are only exposed by a ' +
-    'Microsoft Purview account onboarded in the new experience (purview.microsoft.com). ' +
-    'The account wired into this deployment is a classic Data Map account ' +
-    '(Microsoft.Purview/accounts), which does not expose the /datagovernance ' +
-    'business-domains surface. The classic Data Map catalog below — collections ' +
-    'and glossary terms — is fully usable on this account.',
+    'This deployment uses a classic Microsoft Purview Data Map account. A Loom ' +
+    'domain mirrors 1:1 to a Purview collection (the classic equivalent of a ' +
+    'business domain) — create, list, and delete all work here. The new-' +
+    'experience unified catalog (purview.microsoft.com) additionally exposes ' +
+    'data products + governance domains, but is not required.',
   portal: 'https://purview.microsoft.com/',
   doc: 'https://github.com/fgarofalo56/csa-inabox/blob/main/docs/fiab/purview-setup.md',
 };
@@ -65,8 +65,10 @@ export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    // Both calls hit the CLASSIC Data Map data plane that this account exposes.
-    const [collections, glossaryTerms] = await Promise.all([
+    // Classic Data Map data plane. listBusinessDomains() returns the account's
+    // collections projected as domains (purview-client maps domain ⇄ collection).
+    const [domains, collections, glossaryTerms] = await Promise.all([
+      listBusinessDomains(),
       listCollections(),
       listGlossaryTerms(),
     ]);
@@ -74,11 +76,9 @@ export async function GET() {
       ok: true,
       collections,
       glossaryTerms,
-      // Unified-catalog business domains: empty on a classic Data Map account
-      // (honest, not fabricated). Kept for back-compat with other consumers
-      // (e.g. lib/editors/apim-editors.tsx) that read `domains`.
-      domains: [] as { id: string; name: string }[],
-      unifiedCatalog: UNIFIED_CATALOG_NOTE,
+      // Domains = collections on classic Data Map (real, not fabricated).
+      domains: domains.map((d) => ({ id: d.id, name: d.name, description: d.description })),
+      unifiedCatalog: CLASSIC_DOMAIN_NOTE,
     });
   } catch (e: any) {
     // Only an *unset* account (or an actual data-plane failure) reaches here —

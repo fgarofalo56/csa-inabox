@@ -159,12 +159,20 @@ async function aoaiToken(): Promise<string> {
 
 // ---------- Tool registry ----------
 
+/** Per-turn context passed to every tool handler (caller identity). Lets the
+ *  build-assist tools create/configure items OWNED by the signed-in user. */
+export interface ToolContext {
+  userOid: string;
+  /** Minimal session shape the item-crud helpers consume (claims.oid = tenant). */
+  session: { claims: { oid: string; upn?: string; email?: string } };
+}
+
 export interface ToolDef {
   name: string;
   description: string;
   service: string;
   parameters: Record<string, unknown>; // JSON Schema object
-  handler: (args: any) => Promise<unknown>;
+  handler: (args: any, ctx: ToolContext) => Promise<unknown>;
 }
 
 export class LoomToolRegistry {
@@ -477,29 +485,81 @@ export function buildDefaultRegistry(): LoomToolRegistry {
   r.register({
     name: 'workspace_create',
     service: 'Loom',
-    description: 'Create a new Loom workspace (Cosmos-backed metadata only).',
+    description: 'Create a new Loom workspace OWNED by the current user. Call this before item_create when the user has no workspace yet. Returns the new workspace id.',
     parameters: obj({ name: S_STRING, description: S_STRING }, ['name']),
-    handler: async ({ name, description }) => {
+    handler: async ({ name, description }, ctx) => {
       const { workspacesContainer } = await import('./cosmos-client');
       const c = await workspacesContainer();
-      const id = `ws-${Date.now()}`;
-      const doc = { id, name, description: description || '', tenantId: 'default', createdAt: new Date().toISOString() };
-      await c.items.create(doc);
-      return doc;
+      const now = new Date().toISOString();
+      const ws = {
+        id: crypto.randomUUID(),
+        tenantId: ctx.userOid,
+        name: String(name).trim(),
+        description: description ? String(description).trim() : undefined,
+        createdBy: ctx.userOid,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const { resource } = await c.items.create(ws);
+      return { id: resource?.id ?? ws.id, name: ws.name };
     },
   });
   r.register({
     name: 'item_create',
     service: 'Loom',
-    description: 'Create a new Loom item (Cosmos metadata) of a given type inside a workspace.',
-    parameters: obj({ workspaceId: S_STRING, type: S_STRING, displayName: S_STRING }, ['workspaceId', 'type', 'displayName']),
-    handler: async ({ workspaceId, type, displayName }) => {
-      const { itemsContainer } = await import('./cosmos-client');
-      const c = await itemsContainer();
-      const id = `item-${Date.now()}`;
-      const doc = { id, workspaceId, type, displayName, createdAt: new Date().toISOString() };
-      await c.items.create(doc);
-      return doc;
+    description:
+      'Create a new Loom item of a given type inside a workspace, OWNED by the current user. ' +
+      'Optionally pass an initial `state` object to create a PRE-CONFIGURED item — e.g. a data-agent ' +
+      'with {sources:[…], instructions}, a data-pipeline with {activities:[…]}, a lakehouse, warehouse, ' +
+      'notebook, kql-database, eventstream, activator, semantic-model, report, graph-model, etc. ' +
+      'Returns the created item id (open it in the editor to continue). This is the primary build-assist tool.',
+    parameters: obj({
+      workspaceId: S_STRING, type: S_STRING, displayName: S_STRING, description: S_STRING,
+      state: { type: 'object', description: 'Initial item state/config (item-type specific). Omit for an empty item.' },
+    }, ['workspaceId', 'type', 'displayName']),
+    handler: async ({ workspaceId, type, displayName, description, state }, ctx) => {
+      const { createOwnedItem } = await import('@/app/api/items/_lib/item-crud');
+      const res = await createOwnedItem(ctx.session as any, String(type), {
+        workspaceId: String(workspaceId),
+        displayName: String(displayName),
+        description: description ? String(description) : undefined,
+        state: state && typeof state === 'object' ? (state as Record<string, unknown>) : undefined,
+      });
+      if (!res.ok) throw new Error(res.error);
+      return { id: res.item.id, itemType: res.item.itemType, displayName: res.item.displayName, workspaceId: res.item.workspaceId };
+    },
+  });
+  r.register({
+    name: 'item_configure',
+    service: 'Loom',
+    description:
+      'Update an existing Loom item the current user owns — patch its displayName/description and/or merge a ' +
+      'new `state` config. Use this to BUILD an item incrementally (e.g. add sources to a data-agent, add ' +
+      'activities to a pipeline, set a dataset schema). Pass the item id + itemType.',
+    parameters: obj({
+      id: S_STRING, itemType: S_STRING, displayName: S_STRING, description: S_STRING,
+      state: { type: 'object', description: 'New item state to store (replaces the existing state object).' },
+    }, ['id', 'itemType']),
+    handler: async ({ id, itemType, displayName, description, state }, ctx) => {
+      const { updateOwnedItem } = await import('@/app/api/items/_lib/item-crud');
+      const updated = await updateOwnedItem(String(id), String(itemType), ctx.userOid, {
+        displayName: displayName ? String(displayName) : undefined,
+        description: description !== undefined ? String(description) : undefined,
+        state: state && typeof state === 'object' ? (state as Record<string, unknown>) : undefined,
+      });
+      if (!updated) throw new Error(`item ${id} (${itemType}) not found or not owned by you`);
+      return { id: updated.id, itemType: updated.itemType, displayName: updated.displayName, updatedAt: updated.updatedAt };
+    },
+  });
+  r.register({
+    name: 'item_list',
+    service: 'Loom',
+    description: 'List the Loom items of a given type the current user owns (id + displayName + workspace). Use to find an item to configure, or to check what already exists before creating a duplicate.',
+    parameters: obj({ itemType: S_STRING }, ['itemType']),
+    handler: async ({ itemType }, ctx) => {
+      const { listOwnedItems } = await import('@/app/api/items/_lib/item-crud');
+      const items = await listOwnedItems(String(itemType), ctx.userOid);
+      return items.map((it: any) => ({ id: it.id, displayName: it.displayName, workspaceId: it.workspaceId }));
     },
   });
 
@@ -528,11 +588,13 @@ export function buildDefaultRegistry(): LoomToolRegistry {
 
 // ---------- Orchestrator ----------
 
+export interface OrchestratorUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
+
 export type OrchestratorStep =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; args: unknown; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
-  | { kind: 'final'; content: string }
+  | { kind: 'final'; content: string; usage?: OrchestratorUsage; model?: string }
   | { kind: 'error'; error: string };
 
 export interface OrchestrateOptions {
@@ -643,6 +705,9 @@ async function persistStep(sessionId: string, userOid: string, step: Orchestrato
 export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<OrchestratorStep> {
   const { prompt, sessionId, userOid } = opts;
   const maxIter = opts.maxIterations ?? 10;
+  // Identity passed to every tool handler so build-assist tools create/configure
+  // items OWNED by this user (not the broken tenantId:'default' shells).
+  const toolCtx: ToolContext = { userOid, session: { claims: { oid: userOid, upn: userOid } } };
 
   let target: AoaiTarget;
   try {
@@ -675,6 +740,10 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
 
   await persistStep(sessionId, userOid, { kind: 'thought', content: `User prompt: ${prompt}` }, prompt);
 
+  // Accumulate token/context usage across every AOAI round-trip in the loop so
+  // the final step can report total cost (parity with the data-agent chat).
+  const usage: OrchestratorUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, aoaiCalls: 0, toolCalls: 0 };
+
   for (let i = 0; i < maxIter; i++) {
     let resp: any;
     try {
@@ -685,6 +754,11 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       yield step;
       return;
     }
+    const u = resp?.usage || {};
+    usage.aoaiCalls += 1;
+    usage.promptTokens += u.prompt_tokens ?? 0;
+    usage.completionTokens += u.completion_tokens ?? 0;
+    usage.totalTokens += u.total_tokens ?? 0;
 
     const choice = resp?.choices?.[0];
     const msg = choice?.message;
@@ -704,11 +778,12 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
 
     const toolCalls = msg.tool_calls as ChatMessage['tool_calls'];
     if (!toolCalls || toolCalls.length === 0) {
-      const finalStep: OrchestratorStep = { kind: 'final', content: msg.content || '' };
+      const finalStep: OrchestratorStep = { kind: 'final', content: msg.content || '', usage, model: target.deployment };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
       return;
     }
+    usage.toolCalls += toolCalls.length;
 
     for (const tc of toolCalls) {
       let parsedArgs: unknown = {};
@@ -743,7 +818,7 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         });
       } else {
         try {
-          const result = await tool.handler(parsedArgs as any);
+          const result = await tool.handler(parsedArgs as any, toolCtx);
           // Cap result size fed back to the model so we don't blow context
           const serialized = JSON.stringify(result);
           const truncated = serialized.length > 16_000

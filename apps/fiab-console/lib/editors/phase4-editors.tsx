@@ -26,6 +26,7 @@ import {
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Dropdown, Option, Switch,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -37,6 +38,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph';
 import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
+import { GraphTypeEditor } from '@/lib/components/graph/graph-type-editor';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
 import {
@@ -2262,12 +2264,6 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
     finally { setMaterializing(false); }
   }, [id, save, setState]);
 
-  const editJson = (key: 'nodes' | 'edges', text: string) => {
-    try {
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) setState((p) => ({ ...p, [key]: parsed }));
-    } catch { /* leave previous */ }
-  };
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -2292,11 +2288,13 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <div>
             <Subtitle2>Node types</Subtitle2>
-            <MonacoTextarea value={JSON.stringify(state.nodes, null, 2)} onChange={(v) => editJson('nodes', v)} language="json" height={260} minHeight={200} ariaLabel="Node types JSON" />
+            <GraphTypeEditor kind="node" types={arr(state.nodes)}
+              onChange={(next) => setState((p) => ({ ...p, nodes: next }))} />
           </div>
           <div>
             <Subtitle2>Edge types</Subtitle2>
-            <MonacoTextarea value={JSON.stringify(state.edges, null, 2)} onChange={(v) => editJson('edges', v)} language="json" height={260} minHeight={200} ariaLabel="Edge types JSON" />
+            <GraphTypeEditor kind="edge" types={arr(state.edges)}
+              onChange={(next) => setState((p) => ({ ...p, edges: next }))} />
           </div>
         </div>
         <Subtitle2 style={{ marginTop: 8 }}>Schema graph</Subtitle2>
@@ -2733,7 +2731,8 @@ const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n
 // `_family-utils` (vitest coverage at lib/editors/__tests__/family-utils.test.ts)
 // so the legacy-string migration is unit-tested without the Fluent UI bundle.
 
-interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean }
+interface DaTool { source: string; type?: string; action: string; query?: string }
+interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[] }
 
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -2790,7 +2789,44 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const [chat, setChat] = useState<DaChatMsg[]>([]);
   const [question, setQuestion] = useState('');
   const [asking, setAsking] = useState(false);
+  // Conversation history (persisted to Cosmos via /conversations).
+  const [convId, setConvId] = useState<string | null>(null);
+  const [convos, setConvos] = useState<{ id: string; title: string; updatedAt: string; turns: number }[]>([]);
   const threadRef = useRef<HTMLDivElement | null>(null);
+
+  const loadConvos = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) setConvos(j.conversations || []);
+    } catch { /* non-fatal */ }
+  }, [id]);
+  useEffect(() => { if (id && id !== 'new') loadConvos(); }, [id, loadConvos]);
+
+  const saveConvo = useCallback(async (thread: DaChatMsg[]) => {
+    if (!thread.length || id === 'new') return;
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ conversationId: convId || undefined, messages: thread }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok && j.conversation?.id) { setConvId(j.conversation.id); loadConvos(); }
+    } catch { /* non-fatal */ }
+  }, [id, convId, loadConvos]);
+
+  const loadConvo = useCallback(async (cid: string) => {
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations?conversationId=${encodeURIComponent(cid)}`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok && Array.isArray(j.conversation?.messages)) {
+        setChat(j.conversation.messages as DaChatMsg[]);
+        setConvId(cid);
+      }
+    } catch { /* non-fatal */ }
+  }, [id]);
+
+  const newChat = useCallback(() => { setChat([]); setConvId(null); }, []);
   // Keep the latest turn in view as the thread grows / a turn lands.
   useEffect(() => {
     const el = threadRef.current;
@@ -2803,8 +2839,10 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     if (dirty) await save();
     // Build history from the thread BEFORE we append the new user turn.
     const history = shapeDaHistory(chat);
-    setChat((c) => [...c, { role: 'user', content: q }]);
+    const userTurn: DaChatMsg = { role: 'user', content: q };
+    setChat((c) => [...c, userTurn]);
     setQuestion(''); setAsking(true);
+    let assistantTurn: DaChatMsg;
     try {
       const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/chat`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -2812,19 +2850,23 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       });
       // Content-type guard: a 404/500 returns an HTML page, not JSON — calling
       // r.json() on that throws "Unexpected token <" and the answer is lost.
-      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string }>(r);
+      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[] }>(r);
       const j = res.data;
       if (res.ok && j) {
-        setChat((c) => [...c, { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed }]);
+        assistantTurn = { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed, usage: j.usage, model: j.model, tools: j.tools };
       } else {
         const detail = res.error || j?.error || `HTTP ${res.status}`;
         const hint = j?.hint ? `\n\n${j.hint}` : '';
-        setChat((c) => [...c, { role: 'assistant', content: `${detail}${hint}`, error: true }]);
+        assistantTurn = { role: 'assistant', content: `${detail}${hint}`, error: true };
       }
     } catch (e: any) {
-      setChat((c) => [...c, { role: 'assistant', content: e?.message || String(e), error: true }]);
+      assistantTurn = { role: 'assistant', content: e?.message || String(e), error: true };
     } finally { setAsking(false); }
-  }, [question, asking, chat, dirty, save, id]);
+    setChat((c) => [...c, assistantTurn]);
+    // Persist the conversation (only when the turn succeeded) so it survives
+    // reload + can be resumed from History.
+    if (!assistantTurn.error) void saveConvo([...chat, userTurn, assistantTurn]);
+  }, [question, asking, chat, dirty, save, id, saveConvo]);
 
   // ---- publish ----
   const [publishing, setPublishing] = useState(false);
@@ -2997,7 +3039,23 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                   <Subtitle2>Test chat</Subtitle2>
                   <Badge appearance="tint" color="brand">live · grounded</Badge>
                   <div style={{ flex: 1 }} />
-                  <Button size="small" appearance="subtle" onClick={() => { setChat([]); setQuestion(''); }} disabled={asking || (chat.length === 0 && !question)}>+ New thread</Button>
+                  {convos.length > 0 && (
+                    <Menu>
+                      <MenuTrigger disableButtonEnhancement>
+                        <Button size="small" appearance="subtle">History ({convos.length})</Button>
+                      </MenuTrigger>
+                      <MenuPopover>
+                        <MenuList>
+                          {convos.slice(0, 25).map((cv) => (
+                            <MenuItem key={cv.id} onClick={() => loadConvo(cv.id)}>
+                              {cv.title} · {cv.turns} msg · {new Date(cv.updatedAt).toLocaleDateString()}
+                            </MenuItem>
+                          ))}
+                        </MenuList>
+                      </MenuPopover>
+                    </Menu>
+                  )}
+                  <Button size="small" appearance="subtle" onClick={() => { newChat(); setQuestion(''); }} disabled={asking || (chat.length === 0 && !question)}>+ New thread</Button>
                 </div>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   Each turn runs against the live AOAI deployment on the Foundry hub, grounded on the {sources.length} source{sources.length === 1 ? '' : 's'} + instructions in Build.
@@ -3014,20 +3072,35 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     <Caption1>e.g. “What was total revenue by region last quarter?”</Caption1>
                   </div>
                 )}
-                {chat.map((m, i) => (
+                {chat.map((m, i) => {
+                  const tools = m.tools && m.tools.length ? m.tools : (m.query || m.sourceUsed ? [{ source: m.sourceUsed || 'source', action: 'query', query: m.query } as DaTool] : []);
+                  const srcLabel = !m.error
+                    ? (tools.length > 1 ? ` · ${tools.length} sources` : m.sourceUsed ? ` · source: ${m.sourceUsed}` : '')
+                    : '';
+                  return (
                   <div key={i} className={m.role === 'user' ? s.chatRowUser : s.chatRowBot}>
-                    <span className={s.chatMeta}>{m.role === 'user' ? 'You' : m.error ? 'Agent · error' : 'Agent'}{m.sourceUsed && !m.error ? ` · ${m.sourceUsed}` : ''}</span>
+                    <span className={s.chatMeta}>{m.role === 'user' ? 'You' : m.error ? 'Agent · error' : 'Agent'}{srcLabel}{m.model && !m.error ? ` · ${m.model}` : ''}{m.usage?.totalTokens && !m.error ? ` · ${m.usage.totalTokens} tokens` : ''}</span>
                     <div className={m.role === 'user' ? s.bubbleUser : m.error ? s.bubbleErr : s.bubbleBot}>
                       {m.content || (m.error ? 'Unknown error' : '')}
                     </div>
-                    {m.query && (
-                      <details style={{ marginTop: 2 }}>
-                        <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground2 }}>Generated query{m.sourceUsed ? ` · ${m.sourceUsed}` : ''}</summary>
-                        <pre className={s.chatSource}>{m.query}</pre>
+                    {m.role === 'assistant' && !m.error && tools.length > 0 && (
+                      <details style={{ marginTop: 2 }} open={tools.length > 1}>
+                        <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground2 }}>
+                          🛠 Tools used ({tools.length})
+                        </summary>
+                        {tools.map((t, ti) => (
+                          <div key={ti} style={{ marginTop: 4 }}>
+                            <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
+                              <strong>{t.source}</strong>{t.type ? ` · ${t.type}` : ''} · {t.action}
+                            </Caption1>
+                            {t.query && <pre className={s.chatSource}>{t.query}</pre>}
+                          </div>
+                        ))}
                       </details>
                     )}
                   </div>
-                ))}
+                  );
+                })}
                 {asking && (
                   <div className={s.chatRowBot}>
                     <span className={s.chatMeta}>Agent</span>

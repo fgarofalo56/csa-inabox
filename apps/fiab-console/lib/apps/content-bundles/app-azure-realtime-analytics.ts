@@ -659,7 +659,7 @@ const bundle: AppBundle = {
         shortcuts: [
           {
             name: 'eventhub_capture',
-            target: 'abfss://landing@analyticsstorage.dfs.core.windows.net/eventhub-capture',
+            target: 'abfss://landing@{{ADLS_ACCOUNT}}.dfs.core.windows.net/eventhub-capture',
             description:
               'Shortcut to the Event Hubs Capture container so the raw Avro/JSON ' +
               'landing files are queryable without copying.',
@@ -912,6 +912,15 @@ const bundle: AppBundle = {
       learnDoc: 'azure-realtime-analytics',
       content: {
         kind: 'kql-dashboard',
+        // Bind the dashboard's data source to the SAME ADX database the sibling
+        // "Real-Time Ops KQL Database" item provisions, so its tiles resolve the
+        // seeded tables (IngestionThroughput / PipelineLatency / QualityMetrics /
+        // ValidationErrors). kql-db.ts derives the DB name from that item's
+        // displayName: 'Real-Time Ops KQL Database' → 'Real_Time_Ops_KQL_Database'.
+        // Without this the dashboard fell back to LOOM_KUSTO_DEFAULT_DB (where the
+        // tables don't exist) and every tile failed with SEM0100 "Failed to
+        // resolve table or column expression named 'QualityMetrics'".
+        database: 'Real_Time_Ops_KQL_Database',
         tiles: [
           { title: 'Events / sec (1m)',                 viz: 'card',  kql: TILE_THROUGHPUT_CARD },
           { title: 'p99 latency (ms)',                  viz: 'card',  kql: TILE_LATENCY_CARD },
@@ -962,14 +971,22 @@ const bundle: AppBundle = {
             },
           },
           {
+            // ADF has no "DatabricksSparkSql" activity type (only
+            // DatabricksNotebook / DatabricksSparkJar / DatabricksSparkPython),
+            // so a DatabricksSparkSql activity fails the run with "unrecognized
+            // activity type". The OPTIMIZE/Z-ORDER/VACUUM maintenance runs as a
+            // Databricks notebook, with the table + tuning passed as parameters.
             name: 'OptimizeGold',
-            type: 'DatabricksSparkSql',
+            type: 'DatabricksNotebook',
             dependsOn: ['GoldAggregation'],
             config: {
-              query:
-                'OPTIMIZE realtime_analytics.gold.customer_daily_metrics ZORDER BY (metric_date, user_id); ' +
-                'VACUUM realtime_analytics.gold.customer_daily_metrics RETAIN 168 HOURS;',
-              description: 'Compaction + Z-order + vacuum of the gold fact.',
+              notebookPath: '/Shared/RealTimeAnalytics/04_optimize_gold',
+              baseParameters: {
+                target_table: 'realtime_analytics.gold.customer_daily_metrics',
+                zorder_by: 'metric_date,user_id',
+                vacuum_retain_hours: '168',
+              },
+              description: 'OPTIMIZE + Z-order + VACUUM of the gold fact (Step 4) via the maintenance notebook (spark.sql).',
             },
           },
         ],

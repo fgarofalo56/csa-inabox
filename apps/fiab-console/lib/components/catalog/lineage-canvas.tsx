@@ -91,17 +91,17 @@ export interface CanvasLineageEdge {
 interface TypeStyle { color: string; Icon: React.FC<{ fontSize?: number }>; kind: string; }
 
 const TYPE_STYLES: Record<string, TypeStyle> = {
-  table: { color: '#0F6CBD', Icon: Table16Regular, kind: 'Table' },
-  view: { color: '#2899F5', Icon: Table16Regular, kind: 'View' },
-  dataset: { color: '#0F6CBD', Icon: Document16Regular, kind: 'Dataset' },
-  notebook: { color: '#CA5010', Icon: Notebook16Regular, kind: 'Notebook' },
-  job: { color: '#8764B8', Icon: Flow16Regular, kind: 'Job' },
-  pipeline: { color: '#8764B8', Icon: Flow16Regular, kind: 'Pipeline' },
-  dataflow: { color: '#038387', Icon: Flow16Regular, kind: 'Dataflow' },
-  semanticmodel: { color: '#C239B3', Icon: BranchFork16Regular, kind: 'Semantic model' },
-  report: { color: '#E3008C', Icon: ChartMultiple16Regular, kind: 'Report' },
-  dashboard: { color: '#E3008C', Icon: ChartMultiple16Regular, kind: 'Dashboard' },
-  lakehouse: { color: '#107C10', Icon: Database16Regular, kind: 'Lakehouse' },
+  table: { color: 'var(--loom-accent-blue)', Icon: Table16Regular, kind: 'Table' },
+  view: { color: 'var(--loom-accent-blue)', Icon: Table16Regular, kind: 'View' },
+  dataset: { color: 'var(--loom-accent-blue)', Icon: Document16Regular, kind: 'Dataset' },
+  notebook: { color: 'var(--loom-accent-orange)', Icon: Notebook16Regular, kind: 'Notebook' },
+  job: { color: 'var(--loom-accent-violet)', Icon: Flow16Regular, kind: 'Job' },
+  pipeline: { color: 'var(--loom-accent-violet)', Icon: Flow16Regular, kind: 'Pipeline' },
+  dataflow: { color: 'var(--loom-accent-teal)', Icon: Flow16Regular, kind: 'Dataflow' },
+  semanticmodel: { color: 'var(--loom-accent-magenta)', Icon: BranchFork16Regular, kind: 'Semantic model' },
+  report: { color: 'var(--loom-accent-magenta)', Icon: ChartMultiple16Regular, kind: 'Report' },
+  dashboard: { color: 'var(--loom-accent-magenta)', Icon: ChartMultiple16Regular, kind: 'Dashboard' },
+  lakehouse: { color: 'var(--loom-accent-emerald)', Icon: Database16Regular, kind: 'Lakehouse' },
   process: { color: '#605E5C', Icon: Box16Regular, kind: 'Process' },
 };
 
@@ -113,7 +113,7 @@ function styleForType(type?: string): TypeStyle {
   const t = type.toLowerCase();
   if (TYPE_STYLES[t]) return TYPE_STYLES[t];
   // Atlas type names like "azure_sql_table", "powerbi_report", "databricks_table".
-  if (t.includes('column')) return { color: '#107C10', Icon: BranchFork16Regular, kind: 'Column' };
+  if (t.includes('column')) return { color: 'var(--loom-accent-emerald)', Icon: BranchFork16Regular, kind: 'Column' };
   if (t.includes('notebook')) return TYPE_STYLES.notebook;
   if (t.includes('report')) return TYPE_STYLES.report;
   if (t.includes('dashboard')) return TYPE_STYLES.dashboard;

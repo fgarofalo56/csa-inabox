@@ -637,6 +637,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_AI_SEARCH_RG', value: byoAiSearchRg }
             { name: 'LOOM_ACA_RG', value: resourceGroup().name }
             { name: 'LOOM_DLZ_RG', value: loomDlzRg }
+            // Default ADLS Gen2 account for the Azure-native lakehouse + shortcut
+            // example targets ({{ADLS_ACCOUNT}} token). Without this the lakehouse
+            // shortcut examples resolve to a non-existent host (ENOTFOUND).
+            { name: 'LOOM_ADLS_ACCOUNT', value: loomStorageAccount }
             // /monitor observability surface — Log Analytics workspace GUID
             // (customerId) for the Logs (KQL) tab. The UAMI needs
             // "Log Analytics Reader" on this workspace + "Monitoring Reader"
@@ -829,6 +833,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Service account. Consumed by the AOAI clients (chat + embeddings).
             { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : '' }
             { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            // The copilot/data-agent orchestrators read LOOM_AOAI_DEPLOYMENT (not
+            // the _CHAT_ variant) to resolve the model — keep both in sync so the
+            // Copilot/data-agent chat works out of the box (the "no AOAI model"
+            // gap was exactly this name mismatch on the live deploy).
+            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
             { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
@@ -966,13 +975,34 @@ module frontDoor 'front-door.bicep' = if (frontDoorEnabled && containerPlatform 
     caeId: containerPlatformModule.outputs.caeId
     caeDefaultDomain: containerPlatformModule.outputs.caeDefaultDomain
     consoleFqdn: 'loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
+    vanityDomain: loomVanityDomain
     complianceTags: complianceTags
   }
 }
 
+@description('Optional vanity hostname for the console (e.g. csa-loom.contoso.ai). Empty = generated Front Door host only. The deploy emits the CNAME + _dnsauth TXT to add at your DNS provider.')
+param loomVanityDomain string = ''
+
 // =====================================================================
 // Outputs
 // =====================================================================
+
+// =====================================================================
+// Scale-by-SKU console (/admin/scaling) — the Console UAMI scales compute
+// SKUs that all live in THIS admin RG: ADX/Kusto cluster, Synapse dedicated
+// SQL pool (DWU), APIM, Container Apps, Fabric/foundry compute, AI Search.
+// Those are ARM control-plane PATCH calls, so the UAMI needs write here.
+// Without this grant the UAMI has only narrow per-resource + Reader roles in
+// this RG and EVERY scale operation returns 403. Delegated to a sub-module so
+// the principalId (a module output) is start-time-known inside it (BCP177).
+// =====================================================================
+module scalingRbac 'scaling-rbac.bicep' = {
+  name: 'console-scaling-rbac'
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
 
 output hubVnetId string = network.outputs.hubVnetId
 
@@ -1013,3 +1043,10 @@ output appInsightsId string = monitoring.outputs.appInsightsId
 output vpnGatewayPublicIp string = vpnGatewayEnabled ? vpnGateway.outputs.vpnPublicIp : ''
 output appGatewayPublicFqdn string = (appGatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled) ? appGateway.outputs.publicFqdn : ''
 output frontDoorPublicUrl string = (frontDoorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled) ? frontDoor.outputs.frontDoorPublicUrl : ''
+var fdOn = frontDoorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+@description('Vanity console URL (empty if no vanity domain set).')
+output vanityPublicUrl string = fdOn ? frontDoor.outputs.vanityPublicUrl : ''
+@description('DNS the admin must add at their provider to activate the vanity domain: CNAME <vanityDomain> → vanityCnameTarget, and TXT vanityDnsTxtName → vanityValidationToken.')
+output vanityCnameTarget string = fdOn ? frontDoor.outputs.vanityCnameTarget : ''
+output vanityDnsTxtName string = fdOn ? frontDoor.outputs.vanityDnsTxtName : ''
+output vanityValidationToken string = fdOn ? frontDoor.outputs.vanityValidationToken : ''

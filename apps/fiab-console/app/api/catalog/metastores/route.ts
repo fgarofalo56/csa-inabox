@@ -36,16 +36,17 @@ function isAccountAdmin403(status?: number, message?: string): boolean {
 }
 
 const ACCOUNT_ADMIN_GATE = {
-  title: 'Databricks account-admin role required to list metastores',
+  title: 'Unity Catalog not enabled / metastore not listable',
   detail:
-    'Listing Unity Catalog metastores needs the calling identity to be a Databricks account admin. ' +
-    'Grant the Console UAMI (LOOM_UAMI_CLIENT_ID) the Account Admin role in the Databricks account console, ' +
-    'OR register the workspace metastore manually below — selecting a workspace lists its UC catalogs directly, ' +
-    'which does not require account-admin.',
+    'Listing Unity Catalog metastores needs the workspace to be attached to a UC metastore AND the caller to be a ' +
+    'Databricks account/metastore admin. If the catalog is empty, the workspace likely has no UC metastore yet — ' +
+    'a Databricks ACCOUNT ADMIN must create one (once per region) and assign it to the workspace. ' +
+    'Selecting a workspace below still lists its UC catalogs directly (no account-admin needed) once UC is enabled.',
   remediation: {
-    role: 'Databricks "Account Admin"',
+    role: 'Databricks "Account Admin" (to enable UC) → then "Metastore Admin" for the Loom UAMI (least-privilege)',
     identity: 'The Console UAMI named by LOOM_UAMI_CLIENT_ID',
-    where: 'Databricks account console → User management → Service principals → (UAMI) → Roles → Account admin',
+    where: 'Databricks ACCOUNT console (accounts.azuredatabricks.net) → Catalog → Create metastore + Assign to workspace; then run scripts/csa-loom/add-loom-uami-to-uc-metastore-admin.sh',
+    docs: 'docs/fiab/catalog/metastores.md#enabling-unity-catalog-on-a-loom-databricks-workspace-one-time-account-admin',
   },
 };
 

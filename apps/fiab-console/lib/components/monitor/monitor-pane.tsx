@@ -38,6 +38,7 @@ import {
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
+import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
@@ -130,7 +131,7 @@ function StatCardSkeleton() {
   );
 }
 
-type TabKey = 'overview' | 'metrics' | 'logs' | 'activity' | 'items' | 'alerts';
+type TabKey = 'overview' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'alerts' | 'cost' | 'security';
 
 export function MonitorPane() {
   const styles = useStyles();
@@ -149,18 +150,24 @@ export function MonitorPane() {
         <Tab value="overview">Overview</Tab>
         <Tab value="metrics">Metrics</Tab>
         <Tab value="logs">Logs (KQL)</Tab>
+        <Tab value="diagnostics">Diagnostics</Tab>
         <Tab value="activity">Activity log</Tab>
         <Tab value="items">Deployed items</Tab>
         <Tab value="alerts">Alerts</Tab>
+        <Tab value="cost">Cost</Tab>
+        <Tab value="security">Security</Tab>
       </TabList>
 
       {/* Only the active tab mounts → its fetch only fires when shown. */}
       {tab === 'overview' && <OverviewTab onUnauth={onUnauth} />}
       {tab === 'metrics' && <MetricsTab onUnauth={onUnauth} />}
       {tab === 'logs' && <LogsTab onUnauth={onUnauth} />}
+      {tab === 'diagnostics' && <DiagnosticsTab onUnauth={onUnauth} />}
       {tab === 'activity' && <ActivityTab onUnauth={onUnauth} />}
       {tab === 'items' && <ActivityFeedPane />}
       {tab === 'alerts' && <AlertsTab onUnauth={onUnauth} />}
+      {tab === 'cost' && <CostTab onUnauth={onUnauth} />}
+      {tab === 'security' && <SecurityTab onUnauth={onUnauth} />}
     </div>
   );
 }
@@ -523,12 +530,22 @@ function MetricsTab({ onUnauth }: { onUnauth: () => void }) {
 // Logs — Log Analytics KQL
 // ---------------------------------------------------------------------------
 
+interface KqlPreset {
+  id: string; label: string; query: string; description?: string;
+  category?: string; service?: string; chart?: KqlChartType | 'table';
+}
+
 function LogsTab({ onUnauth }: { onUnauth: () => void }) {
   const styles = useStyles();
-  const [presets, setPresets] = useState<{ id: string; label: string; query: string }[]>([]);
+  const [presets, setPresets] = useState<KqlPreset[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [category, setCategory] = useState<string>('');
+  const [presetId, setPresetId] = useState<string>('');
   const [query, setQuery] = useState('AzureActivity\n| summarize count() by Category\n| order by count_ desc');
   const [span, setSpan] = useState('P1D');
   const [result, setResult] = useState<LogResult | null>(null);
+  // chart hint for the *result* currently shown (captured at run time).
+  const [resultChart, setResultChart] = useState<KqlChartType | 'table'>('table');
   const [gate, setGate] = useState<Gate | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -539,12 +556,29 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); return; }
       const j = await r.json();
-      if (j.ok) setPresets(j.data.presets);
+      if (j.ok) {
+        setPresets(j.data.presets || []);
+        setCategories(j.data.categories || []);
+      }
     }).catch(() => {});
     return () => { alive = false; };
   }, [onUnauth]);
 
-  const run = useCallback(async () => {
+  // Queries visible in the picker, filtered by the chosen category.
+  const visiblePresets = useMemo(
+    () => (category ? presets.filter((p) => p.category === category) : presets),
+    [presets, category],
+  );
+  const selectedPreset = useMemo(() => presets.find((p) => p.id === presetId), [presets, presetId]);
+
+  const applyPreset = useCallback((id: string) => {
+    const p = presets.find((x) => x.id === id);
+    if (!p) return;
+    setPresetId(id);
+    setQuery(p.query);
+  }, [presets]);
+
+  const run = useCallback(async (overrideChart?: KqlChartType | 'table') => {
     setRunning(true); setErr(null); setGate(null); setResult(null);
     try {
       const r = await fetch('/api/monitor/logs', {
@@ -556,9 +590,11 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
       if (j.gate) { setGate(j.gate); return; }
       if (!j.ok) { setErr(j.error || 'Query failed'); return; }
       setResult(j.data);
+      const chart = overrideChart ?? (selectedPreset?.chart as KqlChartType | 'table' | undefined) ?? 'table';
+      setResultChart(query === selectedPreset?.query ? chart : 'table');
     } catch (e) { setErr(String(e)); }
     finally { setRunning(false); }
-  }, [query, span]);
+  }, [query, span, selectedPreset]);
 
   // LoomDataTable rows: map each result row to a keyed object by column name.
   const logColumns: LoomColumn<Record<string, unknown>>[] = useMemo(
@@ -581,35 +617,60 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
   return (
     <Section title="Logs (Log Analytics — KQL)">
       {gate && <GateBar gate={gate} subject="Logs (Log Analytics)" />}
+      <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+        Prebuilt query library — {presets.length} curated troubleshooting, performance, audit, cost &amp; per-service
+        queries against the Loom Log Analytics workspace. Pick a category, choose a query, then Run (or edit it freely).
+      </Text>
       <div className={styles.kqlBox}>
         <div className={styles.toolbar}>
           <Dropdown
-            aria-label="Preset query"
-            placeholder="Preset queries"
-            onOptionSelect={(_, d) => {
-              const p = presets.find((x) => x.id === d.optionValue);
-              if (p) setQuery(p.query);
-            }}
-            style={{ minWidth: 280 }}
+            aria-label="Query category"
+            placeholder="All categories"
+            value={category || 'All categories'}
+            selectedOptions={category ? [category] : []}
+            onOptionSelect={(_, d) => { setCategory(d.optionValue === '__all' ? '' : (d.optionValue || '')); }}
+            style={{ minWidth: 200 }}
           >
-            {presets.map((p) => <Option key={p.id} value={p.id}>{p.label}</Option>)}
+            <Option value="__all">All categories</Option>
+            {categories.map((c) => <Option key={c} value={c}>{c}</Option>)}
+          </Dropdown>
+          <Dropdown
+            aria-label="Prebuilt query"
+            placeholder="Prebuilt queries"
+            value={selectedPreset?.label || ''}
+            selectedOptions={presetId ? [presetId] : []}
+            onOptionSelect={(_, d) => d.optionValue && applyPreset(d.optionValue)}
+            style={{ minWidth: 320 }}
+          >
+            {visiblePresets.map((p) => (
+              <Option key={p.id} value={p.id} text={p.label}>
+                {p.label}{p.chart && p.chart !== 'table' ? ` · ${p.chart}` : ''}
+              </Option>
+            ))}
           </Dropdown>
           <Dropdown
             aria-label="Timespan"
-            value={span === 'PT1H' ? 'Last hour' : span === 'P1D' ? 'Last 24 hours' : span === 'P7D' ? 'Last 7 days' : span}
+            value={span === 'PT1H' ? 'Last hour' : span === 'P1D' ? 'Last 24 hours' : span === 'P7D' ? 'Last 7 days' : span === 'P30D' ? 'Last 30 days' : span}
             selectedOptions={[span]}
             onOptionSelect={(_, d) => d.optionValue && setSpan(d.optionValue)}
           >
             <Option value="PT1H">Last hour</Option>
             <Option value="P1D">Last 24 hours</Option>
             <Option value="P7D">Last 7 days</Option>
+            <Option value="P30D">Last 30 days</Option>
           </Dropdown>
-          <Button appearance="primary" icon={<Play20Regular />} onClick={run} disabled={running}>Run query</Button>
+          <Button appearance="primary" icon={<Play20Regular />} onClick={() => run()} disabled={running}>Run query</Button>
         </div>
+        {selectedPreset?.description && (
+          <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>
+            <strong>{selectedPreset.category}{selectedPreset.service ? ` · ${selectedPreset.service}` : ''}:</strong>{' '}
+            {selectedPreset.description}
+          </Text>
+        )}
         <Textarea
           aria-label="KQL query"
           value={query}
-          onChange={(_, d) => setQuery(d.value)}
+          onChange={(_, d) => { setQuery(d.value); }}
           rows={6}
           resize="vertical"
           style={{ fontFamily: 'var(--loom-font-mono, monospace)', fontSize: 13 }}
@@ -621,6 +682,9 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
       ) : result ? (
         <>
           <Text size={200}>{result.rowCount} rows{result.rowCount > 500 ? ' (showing first 500)' : ''}</Text>
+          {resultChart !== 'table' && result.rowCount > 0 && (
+            <KqlChart type={resultChart as KqlChartType} columns={result.columns} rows={result.rows} />
+          )}
           <LoomDataTable
             columns={logColumns}
             rows={logRows}
@@ -630,6 +694,130 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
           />
         </>
       ) : null}
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics — diagnostic-settings coverage ("are all logs ON → Loom LAW?")
+// ---------------------------------------------------------------------------
+
+interface DiagItem {
+  id: string; name: string; type: string; resourceGroup: string;
+  supported: boolean; routesToLoomLaw: boolean; settingNames: string[]; note?: string;
+}
+interface DiagSummary { total: number; supported: number; covered: number; missing: number; unsupported: number; }
+
+function shortType(t: string): string {
+  // 'microsoft.documentdb/databaseaccounts' → 'documentdb/databaseaccounts'
+  return t.replace(/^microsoft\./i, '');
+}
+
+function DiagnosticsTab({ onUnauth }: { onUnauth: () => void }) {
+  const styles = useStyles();
+  const [items, setItems] = useState<DiagItem[] | null>(null);
+  const [summary, setSummary] = useState<DiagSummary | null>(null);
+  const [gate, setGate] = useState<Gate | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null); // resourceId or '__all'
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null); setGate(null);
+    try {
+      const r = await fetch('/api/monitor/diagnostics');
+      if (r.status === 401 || r.status === 403) { onUnauth(); return; }
+      const j = await r.json();
+      if (j.gate) { setGate(j.gate); setItems([]); return; }
+      if (!j.ok) { setErr(j.error || 'Failed to load coverage'); setItems([]); return; }
+      setItems(j.data.items); setSummary(j.data.summary);
+    } catch (e) { setErr(String(e)); setItems([]); }
+  }, [onUnauth]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const enable = useCallback(async (body: object, key: string) => {
+    setBusy(key); setMsg(null); setErr(null);
+    try {
+      const r = await fetch('/api/monitor/diagnostics', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (j.gate) { setGate(j.gate); return; }
+      if (!j.ok) { setErr(j.error || 'Enable failed'); return; }
+      if (j.data.enabled) {
+        setMsg(`Enabled diagnostics on ${j.data.enabled.length} of ${j.data.attempted} resource(s)${j.data.failed?.length ? ` · ${j.data.failed.length} failed` : ''}.`);
+      } else {
+        setMsg(`Diagnostics enabled (${j.data.mode}).`);
+      }
+      await load();
+    } catch (e) { setErr(String(e)); }
+    finally { setBusy(null); }
+  }, [load]);
+
+  const columns: LoomColumn<DiagItem>[] = useMemo(() => [
+    { key: 'name', label: 'Resource', width: 220, render: (r) => r.name, getValue: (r) => r.name },
+    { key: 'type', label: 'Type', width: 240, render: (r) => <Text size={200}>{shortType(r.type)}</Text>, getValue: (r) => r.type },
+    { key: 'rg', label: 'Resource group', width: 200, render: (r) => <Text size={200}>{r.resourceGroup}</Text>, getValue: (r) => r.resourceGroup },
+    {
+      key: 'status', label: 'Logs → Loom LAW', width: 150,
+      render: (r) => !r.supported
+        ? <Badge color="subtle" appearance="outline">n/a</Badge>
+        : r.routesToLoomLaw
+          ? <Badge color="success" appearance="filled">On</Badge>
+          : <Badge color="warning" appearance="filled">Off</Badge>,
+      getValue: (r) => (!r.supported ? 'na' : r.routesToLoomLaw ? 'on' : 'off'),
+    },
+    {
+      key: 'action', label: '', width: 120,
+      render: (r) => (r.supported && !r.routesToLoomLaw)
+        ? <Button size="small" disabled={busy != null} onClick={() => enable({ resourceId: r.id }, r.id)}>
+            {busy === r.id ? 'Enabling…' : 'Enable'}
+          </Button>
+        : <Text size={200}>—</Text>,
+      getValue: () => '',
+    },
+  ], [busy, enable]);
+
+  const rows = items ?? [];
+
+  return (
+    <Section title="Diagnostics — log & metric coverage">
+      {gate && <GateBar gate={gate} subject="Diagnostics coverage" />}
+      <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+        Every Loom resource should route <strong>all logs + all metrics</strong> to the Loom Log Analytics workspace.
+        Deploy-time bicep wires the first-class resources; this audits the live estate and turns diagnostics on for
+        anything created at runtime or drifted off — the standardized <code>diag-loom-stdz</code> setting
+        (categoryGroup <code>allLogs</code> + <code>AllMetrics</code>).
+      </Text>
+
+      {summary && (
+        <div className={styles.toolbar}>
+          <Badge color="success" appearance="tint">{summary.covered} on</Badge>
+          <Badge color={summary.missing ? 'warning' : 'subtle'} appearance="tint">{summary.missing} off</Badge>
+          <Badge color="subtle" appearance="tint">{summary.unsupported} n/a</Badge>
+          <Button appearance="primary" icon={<ArrowSync20Regular />} disabled={busy != null || !summary.missing}
+            onClick={() => enable({ all: true }, '__all')}>
+            {busy === '__all' ? 'Enabling all…' : `Turn on all (${summary.missing})`}
+          </Button>
+          <Button appearance="subtle" icon={<ArrowSync20Regular />} disabled={busy != null} onClick={load}>Refresh</Button>
+        </div>
+      )}
+
+      {msg && <MessageBar intent="success"><MessageBarBody>{msg}</MessageBarBody></MessageBar>}
+      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+
+      {items == null ? (
+        <Spinner label="Auditing diagnostic-settings coverage…" />
+      ) : (
+        <LoomDataTable
+          columns={columns}
+          rows={rows}
+          getRowId={(r) => r.id}
+          empty="No resources found in the Loom resource groups."
+          ariaLabel="Diagnostic settings coverage"
+        />
+      )}
     </Section>
   );
 }
@@ -827,6 +1015,335 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
           loading={rules === null}
           empty={gate ? 'Configure the Loom subscription to list alert rules.' : 'No metric-alert rules defined for the Loom resource groups.'}
           ariaLabel="Azure Monitor alert rules"
+        />
+      </Section>
+    </div>
+  );
+}
+
+// ── Cost (M3: multi-subscription Cost Management spend + forecast + budgets) ──
+interface CostBreakdownRow { key: string; cost: number; }
+interface CostBudget { name: string; subscription: string; amount: number; currentSpend: number; percentUsed: number; timeGrain: string; scope: string; }
+interface CostSummary {
+  currency: string;
+  timeframe: string;
+  monthToDate: number;
+  previousPeriod: number | null;
+  trendPct: number | null;
+  forecast: number;
+  byService: CostBreakdownRow[];
+  byResourceGroup: CostBreakdownRow[];
+  bySubscription: CostBreakdownRow[];
+  byResource: CostBreakdownRow[];
+  byLocation: CostBreakdownRow[];
+  daily: { date: string; cost: number }[];
+  budgets: CostBudget[];
+  loomResourceGroups: string[];
+  subscriptions: string[];
+  subscriptionErrors: { subscription: string; error: string }[];
+}
+
+const COST_TIMEFRAMES: { value: string; label: string }[] = [
+  { value: 'MonthToDate', label: 'Month to date' },
+  { value: 'BillingMonthToDate', label: 'Billing month to date' },
+  { value: 'TheLastMonth', label: 'Last month' },
+  { value: 'Last30Days', label: 'Last 30 days' },
+  { value: 'Last7Days', label: 'Last 7 days' },
+];
+
+const shortSub = (s: string) => (s.length > 12 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s);
+
+function CostTab({ onUnauth }: { onUnauth: () => void }) {
+  const styles = useStyles();
+  const [data, setData] = useState<CostSummary | null>(null);
+  const [gate, setGate] = useState<Gate | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [timeframe, setTimeframe] = useState('MonthToDate');
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setData(null); setGate(null); setErr(null);
+    fetch(`/api/monitor/cost?timeframe=${encodeURIComponent(timeframe)}`).then(async (r) => {
+      if (!alive) return;
+      if (r.status === 401 || r.status === 403) { onUnauth(); setData(null); return; }
+      const j = await r.json();
+      if (j.gate) { setGate(j.gate); setData(null); return; }
+      if (!j.ok) { setErr(j.error || 'Failed to load cost'); setData(null); return; }
+      setData(j.data as CostSummary);
+    }).catch((e) => { if (alive) { setErr(String(e)); setData(null); } });
+    return () => { alive = false; };
+  }, [tick, timeframe, onUnauth]);
+
+  const money = (n: number, cur: string) => `${cur === 'USD' ? '$' : ''}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur !== 'USD' ? ' ' + cur : ''}`;
+  const tfLabel = COST_TIMEFRAMES.find((t) => t.value === timeframe)?.label || timeframe;
+  const isMtd = timeframe === 'MonthToDate' || timeframe === 'BillingMonthToDate';
+
+  const kpis = useMemo(() => {
+    if (!data) return [];
+    const cur = data.currency;
+    const trend = data.trendPct;
+    const out: { label: string; value: string | number; accent?: string }[] = [
+      { label: `Total (${tfLabel})`, value: money(data.monthToDate, cur) },
+    ];
+    if (isMtd) out.push({ label: 'Forecast (period end)', value: money(data.forecast, cur), accent: styles.statAccentWarn });
+    if (trend != null) {
+      out.push({
+        label: 'Trend vs prior period',
+        value: `${trend > 0 ? '▲' : trend < 0 ? '▼' : ''} ${Math.abs(trend)}%`,
+        accent: trend > 0 ? styles.statAccentDanger : styles.statAccentSuccess,
+      });
+    }
+    out.push({ label: 'Subscriptions', value: data.subscriptions.length });
+    out.push({ label: 'Top service', value: data.byService[0] ? data.byService[0].key.replace(/^Microsoft\.?/, '') : '—' });
+    return out;
+  }, [data, styles, tfLabel, isMtd]);
+
+  const mkCols = (label: string): LoomColumn<CostBreakdownRow>[] => [
+    { key: 'key', label, width: 340, render: (r) => <strong>{r.key}</strong>, getValue: (r) => r.key },
+    { key: 'cost', label: `Cost (${tfLabel})`, width: 170, getValue: (r) => r.cost, render: (r) => money(r.cost, data?.currency || 'USD') },
+  ];
+  const loading = data === null && !gate && !err;
+
+  return (
+    <div>
+      <Section
+        title="Cost"
+        actions={
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Dropdown
+              aria-label="Timeframe"
+              value={tfLabel}
+              selectedOptions={[timeframe]}
+              onOptionSelect={(_, d) => d.optionValue && setTimeframe(d.optionValue)}
+              style={{ minWidth: 200 }}
+            >
+              {COST_TIMEFRAMES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
+            </Dropdown>
+            <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>
+          </div>
+        }
+      >
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Azure spend across <strong>every CSA Loom subscription</strong> ({data ? data.subscriptions.length : '…'}) and
+            resource group (Microsoft.CostManagement query REST), with breakdowns by subscription, service, resource group,
+            top resource, and region — plus a run-rate forecast and Consumption budgets.
+          </MessageBarBody>
+        </MessageBar>
+        {gate && <GateBar gate={gate} subject="Cost" />}
+        {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+        {data?.subscriptionErrors?.length ? (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              Some subscriptions couldn&apos;t be queried (grant the Console UAMI <strong>Cost Management Reader</strong> there):{' '}
+              {data.subscriptionErrors.map((s) => shortSub(s.subscription)).join(', ')}.
+            </MessageBarBody>
+          </MessageBar>
+        ) : null}
+        {loading ? (
+          <StatCardSkeleton />
+        ) : data ? (
+          <div className={styles.stats}>
+            {kpis.map((s, i) => (
+              <div key={i} className={styles.stat}>
+                <span className={styles.statLabel}>{s.label}</span>
+                <span className={`${styles.statValue} ${s.accent ?? ''}`}>{s.value}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </Section>
+
+      {data && data.daily.length > 0 && (
+        <Section title={`Daily spend (${tfLabel})`}>
+          <MetricChart title="Daily cost" unit={data.currency}
+            points={data.daily.map((d) => ({ timeStamp: d.date, value: d.cost }))} />
+        </Section>
+      )}
+
+      {data && data.budgets.length > 0 && (
+        <Section title="Budgets">
+          <div className={styles.breakdown}>
+            {data.budgets.map((b) => {
+              const pct = Math.min(b.percentUsed, 100);
+              const over = b.percentUsed >= 100;
+              const near = b.percentUsed >= 80;
+              const color = over ? tokens.colorPaletteRedBackground3 : near ? tokens.colorPaletteYellowBackground3 : tokens.colorBrandBackground;
+              return (
+                <div key={`${b.subscription}-${b.name}`} className={styles.breakdownRow} style={{ gridTemplateColumns: '240px 1fr 120px' }}>
+                  <span className={styles.breakdownLabel} title={`${b.name} · ${shortSub(b.subscription)}`}>
+                    {b.name} <span style={{ color: tokens.colorNeutralForeground3 }}>· {b.timeGrain}</span>
+                  </span>
+                  <span className={styles.breakdownTrack}>
+                    <span className={styles.breakdownFill} style={{ width: `${pct}%`, backgroundColor: color }} />
+                  </span>
+                  <span className={styles.breakdownCount}>
+                    {money(b.currentSpend, data.currency)} / {money(b.amount, data.currency)} ({b.percentUsed}%)
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </Section>
+      )}
+
+      <Section title="Cost by subscription">
+        <LoomDataTable columns={mkCols('Subscription')} rows={data?.bySubscription ?? []} getRowId={(r) => r.key}
+          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by subscription.' : 'No cost recorded.'}
+          ariaLabel="Cost by subscription" />
+      </Section>
+
+      <Section title="Cost by service">
+        <LoomDataTable columns={mkCols('Service')} rows={data?.byService ?? []} getRowId={(r) => r.key}
+          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by service.' : 'No cost recorded.'}
+          ariaLabel="Cost by service" />
+      </Section>
+
+      <Section title="Cost by resource group">
+        <LoomDataTable columns={mkCols('Resource group')} rows={data?.byResourceGroup ?? []} getRowId={(r) => r.key}
+          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by resource group.' : 'No cost recorded.'}
+          ariaLabel="Cost by resource group" />
+      </Section>
+
+      <Section title="Top resources by cost">
+        <LoomDataTable columns={mkCols('Resource')} rows={data?.byResource ?? []} getRowId={(r) => r.key}
+          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by resource.' : 'No cost recorded.'}
+          ariaLabel="Top resources by cost" />
+      </Section>
+
+      <Section title="Cost by region">
+        <LoomDataTable columns={mkCols('Region')} rows={data?.byLocation ?? []} getRowId={(r) => r.key}
+          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by region.' : 'No cost recorded.'}
+          ariaLabel="Cost by region" />
+      </Section>
+    </div>
+  );
+}
+
+// ── Security (Defender for Cloud — M5 + action-required) ─────────────────────
+interface DefenderRec { id: string; name: string; status: string; severity: string; resource?: string; remediation?: string; category?: string; }
+interface DefenderAlertRow { id: string; name: string; severity: string; status: string; description?: string; resource?: string; time?: string; }
+interface DefenderData {
+  secureScore: { current: number; max: number; percentage: number } | null;
+  recommendations: DefenderRec[];
+  unhealthyCount: number;
+  highSeverityCount: number;
+  alerts: DefenderAlertRow[];
+  portalUrl: string;
+}
+
+function sevBadge(sev: string) {
+  const s = (sev || '').toLowerCase();
+  if (s === 'high') return <Badge color="danger" appearance="filled">High</Badge>;
+  if (s === 'medium') return <Badge color="warning" appearance="filled">Medium</Badge>;
+  return <Badge color="subtle" appearance="outline">{sev || 'Low'}</Badge>;
+}
+
+function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
+  const styles = useStyles();
+  const [data, setData] = useState<DefenderData | null>(null);
+  const [gate, setGate] = useState<Gate | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setData(null); setGate(null); setErr(null);
+    fetch('/api/monitor/defender').then(async (r) => {
+      if (!alive) return;
+      if (r.status === 401 || r.status === 403) { onUnauth(); setData(null); return; }
+      const j = await r.json();
+      if (j.gate) { setGate(j.gate); setData(null); return; }
+      if (!j.ok) { setErr(j.error || 'Failed to load Defender'); setData(null); return; }
+      setData(j.data as DefenderData);
+    }).catch((e) => { if (alive) { setErr(String(e)); setData(null); } });
+    return () => { alive = false; };
+  }, [tick, onUnauth]);
+
+  const kpis = useMemo(() => {
+    if (!data) return [];
+    return [
+      { label: 'Secure score', value: data.secureScore ? `${data.secureScore.percentage}%` : '—', accent: data.secureScore && data.secureScore.percentage < 60 ? styles.statAccentWarn : styles.statAccentSuccess },
+      { label: 'Action required', value: data.unhealthyCount, accent: data.unhealthyCount > 0 ? styles.statAccentWarn : styles.statAccentSuccess },
+      { label: 'High severity', value: data.highSeverityCount, accent: data.highSeverityCount > 0 ? styles.statAccentDanger : undefined },
+      { label: 'Active alerts', value: data.alerts.length, accent: data.alerts.length > 0 ? styles.statAccentDanger : undefined },
+    ];
+  }, [data, styles]);
+
+  const recColumns: LoomColumn<DefenderRec>[] = useMemo(() => [
+    { key: 'name', label: 'Recommendation', width: 320, render: (r) => <strong>{r.name}</strong> },
+    { key: 'severity', label: 'Severity', width: 110, getValue: (r) => r.severity, render: (r) => sevBadge(r.severity) },
+    { key: 'resource', label: 'Resource', width: 180, render: (r) => r.resource || '—' },
+    { key: 'remediation', label: 'Action / resolution', width: 420, render: (r) => r.remediation || '—' },
+  ], []);
+  const alertColumns: LoomColumn<DefenderAlertRow>[] = useMemo(() => [
+    { key: 'name', label: 'Alert', width: 300, render: (r) => <strong>{r.name}</strong> },
+    { key: 'severity', label: 'Severity', width: 110, getValue: (r) => r.severity, render: (r) => sevBadge(r.severity) },
+    { key: 'resource', label: 'Resource', width: 180, render: (r) => r.resource || '—' },
+    { key: 'description', label: 'Description', width: 380, render: (r) => r.description || '—' },
+  ], []);
+
+  // Action-required = unhealthy recommendations (already sorted server-side).
+  const actionItems = (data?.recommendations || []).filter((r) => r.status === 'Unhealthy');
+
+  return (
+    <div>
+      <Section
+        title="Security (Microsoft Defender for Cloud)"
+        actions={<Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
+      >
+        <MessageBar intent="info">
+          <MessageBarBody>
+            Live Defender for Cloud posture for the Loom subscription — secure score, recommendations (each
+            <strong> action-required</strong> item carries its resolution), and active security alerts (Microsoft.Security REST).
+            {data?.portalUrl && <> Open the <a href={data.portalUrl} target="_blank" rel="noreferrer">Defender portal</a> to remediate.</>}
+          </MessageBarBody>
+        </MessageBar>
+        {gate && <GateBar gate={gate} subject="Security" />}
+        {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+        {data === null && !gate && !err ? (
+          <StatCardSkeleton />
+        ) : data ? (
+          <div className={styles.stats}>
+            {kpis.map((s) => (
+              <div key={s.label} className={styles.stat}>
+                <span className={styles.statLabel}>{s.label}</span>
+                <span className={`${styles.statValue} ${s.accent ?? ''}`}>{s.value}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </Section>
+
+      {actionItems.length > 0 && (
+        <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+          <MessageBarBody>
+            <MessageBarTitle>{actionItems.length} action{actionItems.length === 1 ? '' : 's'} required</MessageBarTitle>
+            {data?.secureScore ? `Resolving these raises your secure score (currently ${data.secureScore.current}/${data.secureScore.max}).` : 'Resolve the unhealthy recommendations below to improve your security posture.'}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      <Section title="Recommendations (action required first)">
+        <LoomDataTable
+          columns={recColumns}
+          rows={data?.recommendations ?? []}
+          getRowId={(r) => r.id}
+          loading={data === null && !gate && !err}
+          empty={gate ? 'Grant the Console UAMI Security Reader to see Defender recommendations.' : 'No recommendations — posture is healthy.'}
+          ariaLabel="Defender recommendations"
+        />
+      </Section>
+
+      <Section title="Active security alerts">
+        <LoomDataTable
+          columns={alertColumns}
+          rows={data?.alerts ?? []}
+          getRowId={(r) => r.id}
+          loading={data === null && !gate && !err}
+          empty={gate ? 'Grant Security Reader to see alerts.' : 'No active Defender alerts.'}
+          ariaLabel="Defender security alerts"
         />
       </Section>
     </div>

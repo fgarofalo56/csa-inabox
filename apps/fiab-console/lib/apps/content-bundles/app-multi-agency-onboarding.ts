@@ -890,7 +890,7 @@ const bundle: AppBundle = {
         shortcuts: [
           {
             name: 'admin_plane_catalog',
-            target: 'abfss://catalog@stadminplane.dfs.core.windows.net/overlay',
+            target: 'abfss://catalog@{{ADLS_ACCOUNT}}.dfs.core.windows.net/overlay',
             description: 'Read-only shortcut to the Admin Plane catalog overlay (department-wide domain hierarchy + policies).',
           },
         ],

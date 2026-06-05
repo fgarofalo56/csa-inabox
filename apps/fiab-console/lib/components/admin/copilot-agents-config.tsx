@@ -338,7 +338,7 @@ export function CopilotAgentsConfig() {
       )}
 
       <div className={s.bar}>
-        <Sparkle20Regular style={{ color: '#4b1d8f' }} />
+        <Sparkle20Regular style={{ color: 'var(--loom-accent-purple)' }} />
         <Caption1 className={s.hint}>
           {loadingDeployments
             ? 'Loading model deployments…'

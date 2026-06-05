@@ -41,7 +41,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
-  Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular,
+  Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular, CloudArrowUp20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
@@ -49,6 +49,7 @@ import { ActivityPalette } from '@/lib/components/pipeline/palette';
 import { PipelineCanvas, type CanvasHandle } from '@/lib/components/pipeline/canvas';
 import { PropertiesPanel } from '@/lib/components/pipeline/properties-panel';
 import { TopTabs, type TopTabId } from '@/lib/components/pipeline/top-tabs';
+import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
 import { OutputPane } from '@/lib/components/pipeline/output-pane';
 import {
   ACTIVITY_CATALOG, findByKey, nextNameSuffix, type ActivityTypeDef,
@@ -211,6 +212,7 @@ export function DataPipelineEditor({ item, id }: Props) {
   // Lifecycle state
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [debugging, setDebugging] = useState(false);
   const [validating, setValidating] = useState(false);
   const [validation, setValidation] = useState<{ ok: boolean; message: string } | null>(null);
@@ -227,7 +229,6 @@ export function DataPipelineEditor({ item, id }: Props) {
   // default for the Fabric data pipeline item.
   const [manageOpen, setManageOpen] = useState(false);
   const [triggerName, setTriggerName] = useState('');
-  const [triggerCron, setTriggerCron] = useState('0 0 * * *');
   const [triggerBusy, setTriggerBusy] = useState(false);
   const [triggerErr, setTriggerErr] = useState<string | null>(null);
   const [triggers, setTriggers] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
@@ -466,37 +467,75 @@ export function DataPipelineEditor({ item, id }: Props) {
     } finally { setValidating(false); }
   }, [workspaceId, pipelineId, spec, activities.length, dispatchToast]);
 
+  // Publish the current canvas to a LIVE Azure Data Factory pipeline (creates
+  // the ADF backing + stamps adfPipelineName) so Run / Debug / Schedule work.
+  // This is the concrete resolution for the "no ADF backing yet" gate. Returns
+  // true on success so Run/Debug can publish-then-retry transparently.
+  const publishToAdf = useCallback(async (): Promise<boolean> => {
+    if (!workspaceId || !pipelineId) return false;
+    const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/publish?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ definition: { name: spec.name, properties: spec.properties } }),
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      dispatchToast(<Toast><ToastTitle>Publish failed: {j.gate?.remediation || j.error}</ToastTitle></Toast>, { intent: 'error' });
+      return false;
+    }
+    setDirty(false);
+    dispatchToast(<Toast><ToastTitle>Published to ADF · {j.adfPipelineName}</ToastTitle></Toast>, { intent: 'success' });
+    return true;
+  }, [workspaceId, pipelineId, spec, dispatchToast]);
+
+  const publish = useCallback(async () => {
+    setPublishing(true);
+    try { await publishToAdf(); } finally { setPublishing(false); }
+  }, [publishToAdf]);
+
   const run = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     setRunning(true);
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
-      });
-      const j = await r.json();
-      if (!j.ok) dispatchToast(<Toast><ToastTitle>Run failed: {j.error}</ToastTitle></Toast>, { intent: 'error' });
+      const url = `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`;
+      let r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+      let j = await r.json();
+      // Not yet backed by ADF → publish, then retry once. No dead-end.
+      if (!j.ok && (j.gate || /no ADF backing/i.test(j.error || ''))) {
+        dispatchToast(<Toast><ToastTitle>Publishing to ADF first…</ToastTitle></Toast>, { intent: 'info' });
+        if (await publishToAdf()) {
+          r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+          j = await r.json();
+        }
+      }
+      if (!j.ok) dispatchToast(<Toast><ToastTitle>Run failed: {j.gate?.remediation || j.error}</ToastTitle></Toast>, { intent: 'error' });
       else {
         dispatchToast(<Toast><ToastTitle>Run queued · {j.runId?.slice(0, 8)}</ToastTitle></Toast>, { intent: 'success' });
         setTopTab('output');
       }
     } finally { setRunning(false); }
-  }, [workspaceId, pipelineId, dispatchToast]);
+  }, [workspaceId, pipelineId, dispatchToast, publishToAdf]);
 
   const debug = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     setDebugging(true);
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/debug?workspaceId=${encodeURIComponent(workspaceId)}`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
-      });
-      const j = await r.json();
-      if (!j.ok) dispatchToast(<Toast><ToastTitle>Debug failed: {j.error}</ToastTitle></Toast>, { intent: 'error' });
+      const url = `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/debug?workspaceId=${encodeURIComponent(workspaceId)}`;
+      let r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+      let j = await r.json();
+      if (!j.ok && (j.gate || /no ADF backing/i.test(j.error || ''))) {
+        dispatchToast(<Toast><ToastTitle>Publishing to ADF first…</ToastTitle></Toast>, { intent: 'info' });
+        if (await publishToAdf()) {
+          r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+          j = await r.json();
+        }
+      }
+      if (!j.ok) dispatchToast(<Toast><ToastTitle>Debug failed: {j.gate?.remediation || j.error}</ToastTitle></Toast>, { intent: 'error' });
       else {
         dispatchToast(<Toast><ToastTitle>Debug run started · {j.runId?.slice(0, 8)}</ToastTitle></Toast>, { intent: 'success' });
         setTopTab('output');
       }
     } finally { setDebugging(false); }
-  }, [workspaceId, pipelineId, dispatchToast]);
+  }, [workspaceId, pipelineId, dispatchToast, publishToAdf]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -535,28 +574,15 @@ export function DataPipelineEditor({ item, id }: Props) {
     loadDetail(workspaceId, pipelineId);
   }, [workspaceId, pipelineId, dirty, loadDetail]);
 
-  const createTrigger = useCallback(async () => {
-    if (!workspaceId || !pipelineId || !triggerName.trim()) return;
+  // Create any ADF trigger type from the guided wizard's payload (no JSON/cron).
+  const createTriggerWith = useCallback(async (name: string, properties: Record<string, unknown>) => {
+    if (!workspaceId || !pipelineId || !name.trim()) return;
     setTriggerBusy(true); setTriggerErr(null);
     try {
       const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/triggers?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: triggerName.trim(),
-          properties: {
-            type: 'ScheduleTrigger',
-            runtimeState: 'Stopped',
-            typeProperties: {
-              recurrence: {
-                frequency: 'Day',
-                interval: 1,
-                startTime: new Date().toISOString(),
-                timeZone: 'UTC',
-              },
-            },
-          },
-        }),
+        body: JSON.stringify({ name: name.trim(), properties }),
       });
       const j = await r.json();
       if (!j.ok) { setTriggerErr(j.error || 'create failed'); return; }
@@ -564,7 +590,7 @@ export function DataPipelineEditor({ item, id }: Props) {
       await loadTriggers(workspaceId, pipelineId);
       dispatchToast(<Toast><ToastTitle>Trigger created — start it from the list below.</ToastTitle></Toast>, { intent: 'success' });
     } finally { setTriggerBusy(false); }
-  }, [workspaceId, pipelineId, triggerName, triggerCron, loadTriggers, dispatchToast]);
+  }, [workspaceId, pipelineId, loadTriggers, dispatchToast]);
 
   const startStopTrigger = useCallback(async (name: string, action: 'start' | 'stop') => {
     if (!workspaceId || !pipelineId) return;
@@ -604,6 +630,7 @@ export function DataPipelineEditor({ item, id }: Props) {
           { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services and datasets' },
         ]},
         { label: 'Run', actions: [
+          { label: publishing ? 'Publishing…' : 'Publish', icon: <CloudArrowUp20Regular />, onClick: pipelineId && !publishing ? publish : undefined, disabled: !pipelineId || publishing, title: 'Deploy this pipeline to Azure Data Factory so it can Run / Debug / schedule' },
           { label: running ? 'Queuing…' : 'Run', icon: <Play20Regular />, onClick: canRun ? run : undefined, disabled: !canRun },
           { label: debugging ? 'Debugging…' : 'Debug', icon: <Bug20Regular />, onClick: canDebug ? debug : undefined, disabled: !canDebug },
         ]},
@@ -639,6 +666,7 @@ export function DataPipelineEditor({ item, id }: Props) {
   ], [
     canCreate, saving, canSave, save, workspaceId, loadList, canDiscard, dirty, discard,
     validating, canValidate, validate, running, canRun, run, debugging, canDebug, debug,
+    publish, publishing,
     pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned,
   ]);
 
@@ -991,29 +1019,13 @@ export function DataPipelineEditor({ item, id }: Props) {
           </Dialog>
 
           {/* Schedule dialog */}
-          <Dialog open={scheduleOpen} onOpenChange={(_, d) => setScheduleOpen(d.open)}>
-            <DialogSurface>
-              <DialogBody>
-                <DialogTitle>Add schedule trigger</DialogTitle>
-                <DialogContent>
-                  <Field label="Trigger name" required>
-                    <Input value={triggerName} onChange={(_, d) => setTriggerName(d.value)} />
-                  </Field>
-                  <Field label="Recurrence cron (UTC)">
-                    <Input value={triggerCron} onChange={(_, d) => setTriggerCron(d.value)} />
-                  </Field>
-                  <Caption1>Creates a Daily ScheduleTrigger in Stopped state. Hit Start to activate it.</Caption1>
-                  {triggerErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{triggerErr}</MessageBarBody></MessageBar>}
-                </DialogContent>
-                <DialogActions>
-                  <Button appearance="secondary" onClick={() => setScheduleOpen(false)}>Cancel</Button>
-                  <Button appearance="primary" disabled={triggerBusy || !triggerName.trim()} onClick={createTrigger}>
-                    {triggerBusy ? 'Creating…' : 'Create trigger'}
-                  </Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
+          <TriggerWizard
+            open={scheduleOpen}
+            onClose={() => { setScheduleOpen(false); setTriggerErr(null); }}
+            onCreate={createTriggerWith}
+            busy={triggerBusy}
+            error={triggerErr}
+          />
         </div>
       }
     />

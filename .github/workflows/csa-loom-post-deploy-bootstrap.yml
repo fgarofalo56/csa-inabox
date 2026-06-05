@@ -196,6 +196,37 @@ jobs:
             echo
           fi
 
+      - name: Enable Unity Catalog (assign metastore + UAMI account-admin)
+        # Opt-in + best-effort. Runs against the Databricks ACCOUNT API (not the
+        # network-locked workspace), so no public-access toggle needed. Requires:
+        #   - var/secret DATABRICKS_ACCOUNT_ID (the account GUID), AND
+        #   - the deploy SP to be a Databricks ACCOUNT ADMIN (one-time human step).
+        # If either is absent the step prints how to do it and continues — UC
+        # enablement is never a hard deploy blocker. Without it the catalog still
+        # lists per-workspace catalogs once a metastore is assigned manually.
+        env:
+          DATABRICKS_ACCOUNT_ID: ${{ vars.DATABRICKS_ACCOUNT_ID || secrets.DATABRICKS_ACCOUNT_ID }}
+        run: |
+          if [ -z "$DATABRICKS_ACCOUNT_ID" ]; then
+            echo "::notice::DATABRICKS_ACCOUNT_ID not set — skipping UC auto-enable."
+            echo "To automate: set repo var DATABRICKS_ACCOUNT_ID (account console → ⊙ menu → Account ID)"
+            echo "and make the deploy SP a Databricks account admin once. Or assign the metastore manually:"
+            echo "  docs/fiab/catalog/metastores.md#enabling-unity-catalog"
+            exit 0
+          fi
+          WS_ID=$(az databricks workspace show -g "$DLZ_RG" -n "$DBX_WS" --query workspaceId -o tsv 2>/dev/null \
+                  || az databricks workspace show -g "$ADMIN_RG" -n "$DBX_WS" --query workspaceId -o tsv 2>/dev/null)
+          REGION=$(az databricks workspace show -g "$DLZ_RG" -n "$DBX_WS" --query location -o tsv 2>/dev/null \
+                   || az databricks workspace show -g "$ADMIN_RG" -n "$DBX_WS" --query location -o tsv 2>/dev/null)
+          if [ -z "$WS_ID" ] || [ -z "$REGION" ]; then
+            echo "::warning::Could not resolve Databricks workspaceId/region — skipping UC auto-enable."; exit 0
+          fi
+          chmod +x scripts/csa-loom/enable-unity-catalog.sh
+          # Tolerate non-account-admin deploy SP: warn, don't fail the bootstrap.
+          bash scripts/csa-loom/enable-unity-catalog.sh \
+            --region "$REGION" --workspace-id "$WS_ID" --uami-app-id "$CONSOLE_UAMI_CLIENT" \
+            || echo "::warning::UC auto-enable failed (deploy SP likely not a Databricks account admin). See docs/fiab/catalog/metastores.md"
+
       - name: Restore Databricks public access disabled
         if: always()
         run: |
@@ -232,6 +263,56 @@ jobs:
             --role "Reader" \
             --scope "/subscriptions/$SUB/resourceGroups/$ADMIN_RG" \
             -o table 2>&1 | grep -v "already exists" || echo "Already assigned"
+
+      - name: Grant Console UAMI Cost Management Reader + Security Reader (Monitor Cost + Security tabs)
+        # Sub-scope, so the /monitor Cost tab (Microsoft.CostManagement query) and
+        # Security/Defender tab (Microsoft.Security secureScores/assessments/alerts)
+        # show real data instead of an honest "grant X" gate. Idempotent.
+        run: |
+          for ROLE in "Cost Management Reader" "Security Reader"; do
+            az role assignment create \
+              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-principal-type ServicePrincipal \
+              --role "$ROLE" \
+              --scope "/subscriptions/$SUB" \
+              -o table 2>&1 | grep -v "already exists" || echo "$ROLE already assigned"
+          done
+
+      - name: Enable diagnostics on ALL Loom resources → Loom Log Analytics
+        # "All logs ON by default, routed to the Loom LAW." Deploy-time bicep
+        # wires the first-class resources; this sweep covers everything created
+        # at runtime (installed-app resources, ADX DBs, etc.) and any drift.
+        # First grant the Console UAMI Monitoring Contributor so the in-console
+        # Monitor → Diagnostics tab's "Enable" buttons work at runtime too.
+        run: |
+          for RG in "$ADMIN_RG" "$DLZ_RG"; do
+            az role assignment create \
+              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-principal-type ServicePrincipal \
+              --role "Monitoring Contributor" \
+              --scope "/subscriptions/$SUB/resourceGroups/$RG" \
+              -o table 2>&1 | grep -v "already exists" || echo "Monitoring Contributor already assigned on $RG"
+          done
+          # Idempotent sweep — skips resources already routing to the LAW and
+          # types that don't support diagnostic settings.
+          bash scripts/csa-loom/enable-all-diagnostics.sh --resource-groups "$ADMIN_RG $DLZ_RG" || \
+            echo "WARN: diagnostics sweep reported issues (non-fatal)"
+
+      - name: Grant Console UAMI constrained RBAC Admin (Governance access-policy enforcement)
+        # Lets the Governance → Policies "Access" wizard ENFORCE policies as real
+        # Storage RBAC grants (Blob Data Reader/Contributor/Owner) on the DLZ.
+        # Least-privilege: "Role Based Access Control Administrator" with a
+        # condition restricting it to ONLY assign/remove the 3 Storage Blob Data
+        # roles. Without this the access policy records with an honest error.
+        run: |
+          COND="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {2a2b9908-6ea1-4ae2-8e65-a410df84e7d1, ba92f5b4-2d11-453d-a403-e96b0029c9fe, b7e6dc6d-f1e8-4753-8033-0f276bb0955b})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {2a2b9908-6ea1-4ae2-8e65-a410df84e7d1, ba92f5b4-2d11-453d-a403-e96b0029c9fe, b7e6dc6d-f1e8-4753-8033-0f276bb0955b}))"
+          az role assignment create \
+            --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+            --assignee-principal-type ServicePrincipal \
+            --role "Role Based Access Control Administrator" \
+            --scope "/subscriptions/$SUB/resourceGroups/$DLZ_RG" \
+            --condition "$COND" --condition-version "2.0" \
+            -o table 2>&1 | grep -v "already exists" || echo "RBAC Admin (constrained) already assigned on $DLZ_RG"
 
       - name: Grant Console UAMI Microsoft Graph roles (Directory.Read.All + User.Read.All)
         # Unblocks /admin/users displayName + department + license
