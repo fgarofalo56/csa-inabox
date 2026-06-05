@@ -69,6 +69,7 @@ const QUERY_LANG: Record<DataAgentSourceType, string> = {
 function composeSystemPrompt(cfg: DataAgentConfig): string {
   const lines: string[] = [];
   lines.push('You are a CSA Loom data agent (CSA Loom is its own Azure-based data + AI platform, not Microsoft Fabric). Answer the user\'s question in natural language, grounded ONLY in the attached data sources below.');
+  lines.push('CRITICAL — ACT, DO NOT ASK: When a question can be answered from a source, ALWAYS write the exact query and include it in the tools JSON below. The platform RUNS your query automatically and feeds you the real rows to answer from. NEVER ask "would you like me to run it?", NEVER say "I will query…" without including the query, and NEVER describe hypothetical / "typical" results or tell the user to imagine them. If you do not yet know a schema, emit a real discovery query (list tables/columns) rather than guessing. Every numeric or factual claim MUST come from rows the platform actually returned.');
   lines.push('After your natural-language answer, append EXACTLY ONE fenced ```json code block describing the tools you used, in this shape:');
   lines.push('```json');
   lines.push('{"toolsUsed":[{"source":"<source name>","type":"<source type>","action":"query|search|traverse|retrieve","query":"<the exact query/KQL/DAX/search text you would run>"}]}');

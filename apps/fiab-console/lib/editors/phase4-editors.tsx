@@ -32,6 +32,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemBrowseGate, NewItemCreateGate } from './new-item-gate';
 import { safeModelJson } from './model-fetch';
+import { DataAgentResultViz } from './data-agent-result-viz';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -3105,23 +3106,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                             </Caption1>
                             {t.query && <pre className={s.chatSource}>{t.query}</pre>}
                             {t.executed && t.columns && t.columns.length > 0 && t.rows && t.rows.length > 0 && (
-                              <div style={{ overflowX: 'auto', marginTop: 2 }}>
-                                <table style={{ fontSize: 11, borderCollapse: 'collapse' }}>
-                                  <thead>
-                                    <tr>{t.columns.map((c, ci) => (
-                                      <th key={ci} style={{ textAlign: 'left', padding: '1px 8px 1px 0', color: tokens.colorNeutralForeground3, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>{c}</th>
-                                    ))}</tr>
-                                  </thead>
-                                  <tbody>
-                                    {t.rows.slice(0, 8).map((row, ri) => (
-                                      <tr key={ri}>{(Array.isArray(row) ? row : [row]).map((cell, ci) => (
-                                        <td key={ci} style={{ padding: '1px 8px 1px 0', whiteSpace: 'nowrap' }}>{cell == null ? '' : String(cell)}</td>
-                                      ))}</tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                                {(t.rowCount ?? 0) > 8 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>…showing 8 of {t.rowCount}</Caption1>}
-                              </div>
+                              <DataAgentResultViz tool={t} />
                             )}
                             {!t.executed && t.gate && (
                               <Caption1 style={{ color: tokens.colorPaletteYellowForeground1, display: 'block', marginTop: 2 }}>
