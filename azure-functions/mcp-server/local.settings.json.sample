@@ -1,0 +1,13 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "LOOM_MCP_API_KEY": "<set-me — clients send this in x-api-key>",
+    "LOOM_SUBSCRIPTION_ID": "<loom-subscription-guid>",
+    "LOOM_RESOURCE_GROUPS": "rg-csa-loom-admin-eastus2,rg-csa-loom-dlz-single-eastus2",
+    "LOOM_AI_SEARCH_SERVICE": "<search-service-name or https url>",
+    "LOOM_AI_SEARCH_INDEX": "loom-items",
+    "LOOM_ARM_ENDPOINT": "https://management.azure.com"
+  }
+}
