@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "current_session": 2,
+  "current_session": 3,
   "tasks": [
     {
       "id": "task-001",
@@ -60,7 +60,7 @@
       "id": "task-007",
       "title": "Phase 2 \u2014 Connect MCP tools agent panel",
       "feature": "MCP",
-      "status": "todo",
+      "status": "done",
       "task_order": 83,
       "assignee": "harness-coder",
       "description": "## Goal\nUI panel to register an MCP server (URL + KV secretRef), list its tools, enable/disable; the agent loop already supports external MCP tools \u2014 surface it.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-006"
