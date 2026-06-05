@@ -90,3 +90,16 @@ is template boilerplate that doesn't apply to a verification-only Phase-0 task).
 - Live console: task-002 merge (#708) triggered CSA Loom Console Build on main → console auto-rolls to the new image.
 
 **Next:** task-004 (Phase 1 — capacity-sizing clarity F-SKU ↔ DBU/ADX/Spark).
+
+### task-004 — capacity-sizing clarity (F-SKU ↔ DBU/ADX/Spark) ✅ (PR # pending)
+- New `lib/setup/capacity-equivalence.ts` — grounded in Microsoft Learn:
+  CU = F-number (plan-capacity); Synapse Spark vCores = CU×2 (optimize-capacity);
+  Power BI v-cores = CU÷8 (licenses); Warehouse SQL vCores/sec = official table
+  (usage-reporting). Databricks DBU + ADX SKUs have NO official Fabric equivalence
+  → banded Loom sizing guidelines, disclosed. Cost = relative tier + estimator
+  deep-link (NO fabricated dollars, per no-vaporware).
+- New `lib/components/setup/capacity-equivalence-panel.tsx` — Fluent v9 + Loom
+  tokens, itemVisual icons, "Microsoft-official" vs "Loom guideline" badges,
+  cost pips, honest MessageBar. Rendered in the wizard capacity step under the
+  F-SKU dropdown.
+- Parity doc row 3 enriched + backend table + (no new env var).
