@@ -31,6 +31,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
+import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -936,6 +937,9 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
   const [instances, setInstances] = useState<any[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Selected instance → drives the schema navigator (real reads over the PE).
+  const [selectedFqdn, setSelectedFqdn] = useState('');
+  const [navDb, setNavDb] = useState('master');
 
   const refresh = useCallback(() => {
     setLoading(true); setErr(null);
@@ -960,7 +964,11 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
     <ItemEditorChrome
       item={item} id={id}
       ribbon={ribbon}
-      leftPanel={<div className={s.treePad}><Caption1>SQL Managed Instances in this subscription. Select Refresh to reload.</Caption1></div>}
+      leftPanel={
+        selectedFqdn
+          ? <SqlDbTree workspaceId="" itemId="new" server={selectedFqdn} database={navDb} />
+          : <div className={s.treePad}><Caption1>Select a managed instance below to browse its schemas, tables, and views over the private endpoint.</Caption1></div>
+      }
       main={
         <div className={s.pad}>
           {id === 'new' && (
@@ -972,21 +980,30 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
               </MessageBarBody>
             </MessageBar>
           )}
-          {/* Honest infra-gate for in-MI-subnet query execution (no "deferred"
-              wording per ui-parity.md) — names the exact provisioning need. */}
-          <MessageBar intent="warning">
+          {/* Real schema reads are attempted over the PE via the navigator; this
+              note names the infra/role the reads need (honest fallback per
+              no-vaporware.md — the navigator surfaces the real TDS error if the
+              PE isn't reachable). */}
+          <MessageBar intent="info">
             <MessageBarBody>
-              <MessageBarTitle>In-instance T-SQL requires a private endpoint in the MI subnet</MessageBarTitle>
-              SQL MI has no public TDS gateway like Azure SQL DB; the Console must reach the
-              instance over a private endpoint joined to the MI delegated subnet. Provision
-              <code> Microsoft.Network/privateEndpoints</code> to the MI and grant the Console
-              UAMI <code>db_datareader</code> on the target database, then queries route through
-              the same TDS path the Azure SQL DB editor uses. Until then this surface lists
-              instances (state, location, SKU, FQDN) read-only via ARM.
+              <MessageBarTitle>Browsing an instance reads its schema over the private endpoint</MessageBarTitle>
+              Select an instance to load its schemas/tables/views in the navigator (real
+              <code> sys.*</code> over TDS — the same path the Azure SQL DB editor uses). The
+              Console must reach the instance over a private endpoint in the MI delegated subnet
+              and the UAMI must be an Entra admin (or have <code>db_datareader</code> + <code>VIEW DEFINITION</code>);
+              the navigator shows the real connection error otherwise.
             </MessageBarBody>
           </MessageBar>
           <div className={s.toolbar}>
             <Button size="small" appearance="outline" onClick={refresh} disabled={loading}>Refresh list</Button>
+            {selectedFqdn && (
+              <>
+                <Caption1>Browsing: <strong>{selectedFqdn}</strong></Caption1>
+                <Label htmlFor="mi-nav-db">DB</Label>
+                <Input id="mi-nav-db" size="small" value={navDb} onChange={(_, d) => setNavDb(d.value || 'master')} style={{ width: 140 }} />
+                <Button size="small" appearance="subtle" onClick={() => setSelectedFqdn('')}>Clear</Button>
+              </>
+            )}
             {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
           </div>
           {err && <BackendStateBar error={err} title="Azure SQL" />}
@@ -1002,7 +1019,9 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
               </TableRow></TableHeader>
               <TableBody>
                 {instances.map((i: any) => (
-                  <TableRow key={i.id}>
+                  <TableRow key={i.id}
+                    onClick={() => i.fqdn && setSelectedFqdn(i.fqdn)}
+                    style={{ cursor: i.fqdn ? 'pointer' : 'default', background: i.fqdn && i.fqdn === selectedFqdn ? tokens.colorNeutralBackground1Selected : undefined }}>
                     <TableCell><strong>{i.name}</strong></TableCell>
                     <TableCell>{i.state}</TableCell>
                     <TableCell>{i.location}</TableCell>

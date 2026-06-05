@@ -334,3 +334,26 @@ GRANT + kql ADX role) or continue Thread. Then task-012 (catalog detail).
 
 **Next:** task-013 (kill deferred-v3 TDS-via-PE reads) or task-018 web-3.0
 beautify, or Thread PR2. Continue down the ledger.
+
+### task-013 — TDS-via-PE reads (Azure SQL MI navigator) ✅ (PR # pending)
+- INVESTIGATION finding: the live `azure-sql-database` editor is the
+  **UnifiedSqlDatabaseEditor** (registry.ts:129), which ALREADY has the real
+  `SqlDbTree` navigator over TDS. The "deferred to v3.x" text in
+  `azure-sql-editors.tsx` `AzureSqlDatabaseEditor` is **dead code** (that export
+  isn't registered) — left untouched (not user-facing; flagged for later removal).
+- The one LIVE TDS-via-PE deferral was the **Managed Instance** editor
+  (`SqlManagedInstanceEditor`), which only listed instances + an honest gate.
+  Wired it to ATTEMPT real reads: select an instance row → `SqlDbTree` renders
+  in the left panel with `server=<MI fqdn>` + a DB input (default master),
+  reusing the existing `/api/sqldb/*` routes' `?server=&database=` override.
+  Real `sys.*` over TDS; the navigator surfaces the real connection error as the
+  honest fallback if the PE/AAD-admin isn't in place — squarely the task's
+  "editor runs real reads OR honest infra gate". MessageBar reframed info (no
+  "deferred"). tsc clean on touched code (only pre-existing px noise in useStyles).
+- LIVE-VERIFY (operator): needs a provisioned MI + PE in the MI subnet + UAMI
+  Entra admin; reads attempt regardless and show the real error otherwise.
+- Other "deferred to v3.x" markers (geo-pipeline ADF, vector-store similarity,
+  Fabric-mirror) are SEPARATE tasks (016/014), not TDS-via-PE.
+
+**Next:** task-014 (Azure SQL mirroring Azure-native) or task-016 (geo/graph +
+postgres + #655 auto-mount) or task-017/018 UI. Continue down the ledger.
