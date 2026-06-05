@@ -77,9 +77,9 @@ export async function listOwnedItems(itemType: string, tenantId: string): Promis
 export async function createOwnedItem(
   session: SessionPayload,
   itemType: string,
-  body: { workspaceId?: string; displayName?: string; description?: string; state?: Record<string, unknown> },
+  body: { workspaceId?: string; displayName?: string; description?: string; state?: Record<string, unknown>; folderId?: string | null },
 ): Promise<{ ok: true; item: WorkspaceItem } | { ok: false; status: number; error: string }> {
-  const { workspaceId, displayName, description, state } = body || {};
+  const { workspaceId, displayName, description, state, folderId } = body || {};
   if (!workspaceId || !displayName) {
     return { ok: false, status: 400, error: 'workspaceId and displayName are required' };
   }
@@ -102,6 +102,7 @@ export async function createOwnedItem(
     displayName: String(displayName).trim(),
     description: description?.trim() || undefined,
     state: state && typeof state === 'object' ? state : {},
+    ...(folderId ? { folderId } : {}),
     createdBy: session.claims.upn || session.claims.email || session.claims.oid,
     createdAt: now,
     updatedAt: now,

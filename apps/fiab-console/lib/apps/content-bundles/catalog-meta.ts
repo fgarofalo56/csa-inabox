@@ -1,0 +1,45 @@
+/**
+ * Catalog display metadata for every app whose content bundle is registered
+ * in ./index.ts. The apps-catalog BFF route seeds a tenant catalog doc for
+ * EVERY registered bundle using this map + the bundle's items, so an app is
+ * always discoverable (and therefore installable) the moment its bundle ships
+ * — with no dependency on re-running scripts/csa-loom/seed-catalogs.sh against
+ * the (network-locked) live Cosmos account.
+ *
+ * id MUST equal the bundle's appId (the 'app-<slug>' convention) so install →
+ * getBundle(appId) resolves.
+ */
+export interface CatalogMeta {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  category: string;
+  publisher: string;
+}
+
+export const CATALOG_META: Record<string, CatalogMeta> = {
+  // ---- existing curated apps ----
+  'app-fedramp-tracker': { id: 'app-fedramp-tracker', name: 'FedRAMP Compliance Tracker', description: 'Track FedRAMP control implementation across Loom-deployed services. Maps Synapse, Databricks, ADX, APIM, AI Foundry to NIST 800-53 controls.', icon: 'ShieldCheckmark20Regular', category: 'Compliance', publisher: 'CSA' },
+  'app-data-steward': { id: 'app-data-steward', name: 'Data Steward Console', description: 'Curate datasets, manage classifications, certify endorsements. Wires Purview + AI Search + Synapse Serverless for lineage + search.', icon: 'PersonStar20Regular', category: 'Governance', publisher: 'CSA' },
+  'app-rag-builder': { id: 'app-rag-builder', name: 'RAG Builder', description: 'Stand up a Retrieval-Augmented Generation pipeline. Builds an AI Search index, wires Foundry prompt-flow, deploys an evaluation suite.', icon: 'BookSearch20Regular', category: 'AI', publisher: 'CSA' },
+  'app-lakehouse-inspector': { id: 'app-lakehouse-inspector', name: 'Lakehouse Inspector', description: 'Browse bronze/silver/gold ADLS containers, preview Parquet/Delta files via Synapse Serverless, profile data quality.', icon: 'DocumentDatabase20Regular', category: 'Data', publisher: 'CSA' },
+  'app-pipeline-designer': { id: 'app-pipeline-designer', name: 'Pipeline Designer', description: 'Visual + JSON authoring for Synapse pipelines, ADF, Databricks Jobs. Common run history + alerting.', icon: 'FlowchartCircle20Regular', category: 'Data Engineering', publisher: 'CSA' },
+  'app-casino-analytics': { id: 'app-casino-analytics', name: 'Casino Analytics', description: 'Reference architecture: player-grain facts, table games, real-time win/loss, Activator alerts for high-roller events.', icon: 'GameChip20Regular', category: 'Industry', publisher: 'CSA' },
+  'app-healthcare-popmgt': { id: 'app-healthcare-popmgt', name: 'Healthcare Population Health', description: 'FHIR-on-Lakehouse + risk stratification model + Power BI patient dashboards. HIPAA-aligned.', icon: 'HeartPulse20Regular', category: 'Industry', publisher: 'CSA' },
+  'app-iot-realtime': { id: 'app-iot-realtime', name: 'IoT Real-Time Insights', description: 'IoT Hub → Event Hubs → ADX → KQL dashboards. Activator alerts on device anomalies. End-to-end in one workspace.', icon: 'DataLine20Regular', category: 'Real-Time', publisher: 'CSA' },
+  'app-finops-cost': { id: 'app-finops-cost', name: 'FinOps Cost Optimizer', description: 'Per-domain chargeback report, Synapse pool auto-pause schedule, idle workload finder. Cosmos-backed budgets.', icon: 'MoneyHand20Regular', category: 'Operations', publisher: 'CSA' },
+  'app-fabric-mirror-onboard': { id: 'app-fabric-mirror-onboard', name: 'Fabric Mirror Onboarding', description: 'One-click setup for Fabric Mirroring: Azure SQL Mirror, Snowflake Mirror, Cosmos Mirror with target workspace + RBAC.', icon: 'ArrowSwap20Regular', category: 'Data', publisher: 'CSA' },
+  // ---- documented use cases (1:1 with the docs) ----
+  'app-azure-realtime-analytics': { id: 'app-azure-realtime-analytics', name: 'Azure Real-Time Analytics', description: 'End-to-end streaming analytics: Event Hubs → ADX/Stream Analytics → KQL dashboards + Power BI, with Activator alerting. Reproduces docs/learn/08-solutions/azure-realtime-analytics.', icon: 'DataTrending20Regular', category: 'Real-Time', publisher: 'CSA' },
+  'app-change-feed-processor': { id: 'app-change-feed-processor', name: 'Change Feed Processor', description: 'Event-driven sync on the Cosmos DB change feed: a Functions-hosted processor fans each change out to Event Hubs, AI Search, Redis, and Delta Lake, with a change-feed-lag KQL DB + dashboard + Activator alert.', icon: 'DatabaseArrowRight20Regular', category: 'Real-Time', publisher: 'CSA' },
+  'app-data-governance': { id: 'app-data-governance', name: 'Data Governance', description: 'Purview-centered governance estate: catalog + glossary, lineage, classification, and DLP/MIP — wired to AI Search and a governance lakehouse. Reproduces docs/learn/08-solutions/data-governance.', icon: 'ShieldTask20Regular', category: 'Governance', publisher: 'CSA' },
+  'app-logic-apps-integration': { id: 'app-logic-apps-integration', name: 'Logic Apps Integration', description: 'Event-driven integration workflows: Logic Apps + Service Bus + Event Grid orchestrating data movement and notifications. Reproduces docs/learn/08-solutions/logic-apps-integration.', icon: 'Flow20Regular', category: 'Integration', publisher: 'CSA' },
+  'app-ml-pipeline': { id: 'app-ml-pipeline', name: 'ML Pipeline (MLOps)', description: 'A complete customer-churn MLOps loop on Databricks + Azure ML: feature store, MLflow/XGBoost training to Unity Catalog, validation gate, Model Serving, and Lakehouse-Monitoring drift detection.', icon: 'BrainCircuit20Regular', category: 'AI', publisher: 'CSA' },
+  'app-real-time-dashboards': { id: 'app-real-time-dashboards', name: 'Real-Time Dashboards', description: 'Live operational dashboards on ADX/KQL with Power BI DirectQuery, driven by an eventstream and refreshed in seconds. Reproduces docs/learn/08-solutions/real-time-dashboards.', icon: 'Gauge20Regular', category: 'Real-Time', publisher: 'CSA' },
+  'app-direct-lake-replacement': { id: 'app-direct-lake-replacement', name: 'Direct Lake-Replacement', description: 'Migrate off a legacy BI server to Power BI Premium + a Loom lakehouse with 5–30s freshness via the Direct-Lake-Shim warm-cache materializer.', icon: 'ArrowSync20Regular', category: 'Data', publisher: 'CSA' },
+  'app-federal-data-mesh': { id: 'app-federal-data-mesh', name: 'Federal Data Mesh', description: 'Autonomous agency data-product domains federated under a Department-CIO governance plane: cross-domain marketplace, Delta Sharing, federated access register, and a FederationAudit ADX DB.', icon: 'Organization20Regular', category: 'Government', publisher: 'CSA' },
+  'app-hybrid-topology': { id: 'app-hybrid-topology', name: 'Hybrid Topology', description: 'A hybrid on-prem/cloud data topology: mirrored on-prem sources, a cloud medallion lakehouse, and pipelines bridging the boundary. Reproduces docs/fiab/use-cases/hybrid-topology.', icon: 'CloudFlow20Regular', category: 'Architecture', publisher: 'CSA' },
+  'app-multi-agency-onboarding': { id: 'app-multi-agency-onboarding', name: 'Multi-Agency Onboarding', description: 'The operational + governance estate for onboarding agencies as Data Landing Zones under a central Admin Plane: onboarding registry, orchestrator notebook + provision/validate pipeline, telemetry, and a deployment-health Activator alert.', icon: 'PeopleTeam20Regular', category: 'Government', publisher: 'CSA' },
+  'app-sovereign-ai-agents': { id: 'app-sovereign-ai-agents', name: 'Sovereign AI Agents', description: 'Sovereign / air-gapped AI agents on AI Foundry with a grounded AI Search index, prompt-flow, evaluation suite, and audited inference. Reproduces docs/fiab/use-cases/sovereign-ai-agents.', icon: 'BotSparkle20Regular', category: 'AI', publisher: 'CSA' },
+};

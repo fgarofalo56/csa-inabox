@@ -12,6 +12,9 @@ tags:
 
 # Azure Cosmos DB Guide
 
+!!! note "Freshness"
+    **Validated against:** Azure Cosmos DB — NoSQL + Gremlin APIs, serverless and provisioned (RU/s) throughput, change feed to lakehouse, autoscale — on the Cosmos data-plane (`documents.azure.com`) — **as of 2026-06-02.** RU pricing, indexing-policy, and change-feed behavior track the current Cosmos service; verify against the Cosmos DB docs before deploying.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

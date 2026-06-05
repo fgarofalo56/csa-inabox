@@ -41,6 +41,29 @@ export class KustoError extends Error {
   }
 }
 
+/**
+ * The `Visualization` annotation produced by the KQL `render` operator and
+ * carried in the v1 response's `@ExtendedProperties` table. The ADX web UI uses
+ * exactly this to auto-pick the chart for a query result. Grounded in Microsoft
+ * Learn (Query/management HTTP response — `@ExtendedProperties`; render operator
+ * supported properties):
+ *   https://learn.microsoft.com/kusto/api/rest/response#the-meaning-of-tables-in-the-response
+ *   https://learn.microsoft.com/kusto/query/render-operator
+ */
+export interface KustoVisualization {
+  /** timechart | columnchart | barchart | piechart | linechart | scatterchart | card | … */
+  Visualization?: string;
+  Title?: string;
+  XColumn?: string;
+  YColumns?: string | string[];
+  Series?: string | string[];
+  Kind?: string;
+  Accumulate?: boolean;
+  XTitle?: string;
+  YTitle?: string;
+  [k: string]: unknown;
+}
+
 export interface KustoQueryResult {
   columns: string[];
   columnTypes: string[];
@@ -48,6 +71,11 @@ export interface KustoQueryResult {
   rowCount: number;
   executionMs: number;
   truncated: boolean;
+  /**
+   * The parsed `render` visualization hint, when the query ended with a
+   * `| render <viz>` operator. Absent for queries / mgmt commands with no render.
+   */
+  visualization?: KustoVisualization;
 }
 
 export function clusterUri(): string {
@@ -121,15 +149,44 @@ function shapeTable(table: any, executionMs: number): KustoQueryResult {
   };
 }
 
+/**
+ * Pull the `render`-produced Visualization annotation out of the v1
+ * `@ExtendedProperties` table. In the v1 protocol that table has a single
+ * string column whose value is a JSON-encoded string such as
+ * `{"Visualization":"piechart", …}` (or `{"Cursor":"…"}` for non-render rows).
+ * We scan every cell for the one whose parsed JSON carries a `Visualization`.
+ * Returns undefined when the query had no `| render`. Grounded in Learn
+ * (Query/management HTTP response — `@ExtendedProperties`).
+ */
+function parseVisualization(tables: any[]): KustoVisualization | undefined {
+  const ep = (tables || []).find((t: any) => t?.TableName === '@ExtendedProperties');
+  if (!ep) return undefined;
+  for (const row of ep.Rows || []) {
+    for (const cell of row || []) {
+      if (typeof cell !== 'string' || cell.indexOf('Visualization') < 0) continue;
+      try {
+        const parsed = JSON.parse(cell);
+        if (parsed && typeof parsed === 'object' && 'Visualization' in parsed && parsed.Visualization) {
+          return parsed as KustoVisualization;
+        }
+      } catch { /* not the JSON cell — keep scanning */ }
+    }
+  }
+  return undefined;
+}
+
 /** Execute a KQL query. Returns the primary results table (Table_0). */
 export async function executeQuery(database: string, kql: string): Promise<KustoQueryResult> {
   const started = Date.now();
   const json = await postRest('/v1/rest/query', database || DEFAULT_DB, kql);
-  const primary = (json?.Tables || []).find((t: any) => t?.TableName === 'Table_0') || json?.Tables?.[0];
+  const tables = json?.Tables || [];
+  const primary = tables.find((t: any) => t?.TableName === 'Table_0') || tables[0];
+  const visualization = parseVisualization(tables);
   if (!primary) {
-    return { columns: [], columnTypes: [], rows: [], rowCount: 0, executionMs: Date.now() - started, truncated: false };
+    return { columns: [], columnTypes: [], rows: [], rowCount: 0, executionMs: Date.now() - started, truncated: false, visualization };
   }
-  return shapeTable(primary, Date.now() - started);
+  const shaped = shapeTable(primary, Date.now() - started);
+  return visualization ? { ...shaped, visualization } : shaped;
 }
 
 /** Execute a Kusto control command (`.show`, `.create`, `.add`, `.ingest`, etc.). */
@@ -317,6 +374,46 @@ export async function listContinuousExports(db: string): Promise<KustoContinuous
     lastRunResult: resIdx >= 0 ? (row[resIdx] as string) : undefined,
     exportedTo: expIdx >= 0 ? (row[expIdx] as string | undefined)?.toString() : undefined,
   }));
+}
+
+export interface KustoDatabasePolicy {
+  /** Policy name: retention | caching | sharding | mergepolicy | streamingingestion. */
+  kind: string;
+  /** Parsed policy object (or the raw string if it didn't parse as JSON). */
+  policy: unknown;
+  /** The raw policy JSON string as returned by Kusto. */
+  raw: string;
+}
+
+/**
+ * `.show database <db> policy <kind>` for each read-only database policy.
+ *
+ * Issues one real management command per policy via {@link executeMgmtCommand},
+ * each wrapped in try/catch so a policy that is unset / unsupported on this
+ * cluster is simply skipped (NOT surfaced as an error). Each command returns a
+ * row with a "Policy" column holding the policy JSON string; we parse it for
+ * `policy` and keep the original string in `raw`. Only policies that actually
+ * returned a row are included. No mocks — every value comes from the live
+ * cluster. Read-only: the navigator never alters these.
+ */
+export async function showDatabasePolicies(db: string): Promise<KustoDatabasePolicy[]> {
+  const kinds = ['retention', 'caching', 'sharding', 'mergepolicy', 'streamingingestion'];
+  const out: KustoDatabasePolicy[] = [];
+  for (const kind of kinds) {
+    try {
+      const r = await executeMgmtCommand(db, `.show database ${qName(db)} policy ${kind}`);
+      if (!r.rows.length) continue;
+      const polIdx = r.columns.indexOf('Policy');
+      const idx = polIdx >= 0 ? polIdx : r.columns.length - 1;
+      const raw = String(r.rows[0][idx] ?? '');
+      let policy: unknown = raw;
+      try { policy = JSON.parse(raw); } catch { policy = raw; }
+      out.push({ kind, policy, raw });
+    } catch {
+      // Missing / unsupported policy on this database — skip, not an error.
+    }
+  }
+  return out;
 }
 
 /** `.show database <db> schema as json` — flat read-only schema object. */
@@ -538,5 +635,60 @@ export async function saveItemState(item: KustoItem, patch: Record<string, any>)
 export function resolveDatabase(item: KustoItem | null): string {
   const name = item?.state?.databaseName;
   if (typeof name === 'string' && name.trim()) return name.trim();
+  // App-install provisioning creates a DEDICATED ADX database for a
+  // bundle-installed kql-database (e.g. 'Change_Feed_Monitoring') and seeds its
+  // tables there, recording the real database name on
+  // `state.provisioning.secondaryIds.database` / `state.provisioning.resourceId`.
+  // Honor it so the query route + sibling Real-Time Dashboard target the
+  // database where the tables ACTUALLY live — instead of the shared default DB
+  // (which has none of those tables, surfacing as "Failed to resolve table").
+  const prov = (item?.state as any)?.provisioning;
+  if (prov && (prov.status === 'created' || prov.status === 'exists')) {
+    const provDb = prov.secondaryIds?.database || prov.resourceId;
+    if (typeof provDb === 'string' && provDb.trim()) return provDb.trim();
+  }
   return DEFAULT_DB;
+}
+
+/**
+ * Resolve the ADX database a kql-dashboard's tiles should query.
+ *
+ * A bundle-installed Real-Time Dashboard (e.g. "Change Feed Health") has no
+ * database of its own — its tiles query the DEDICATED database that the sibling
+ * `kql-database` item in the SAME app install provisions (e.g.
+ * 'Change_Feed_Monitoring'). When the dashboard item itself carries no resolved
+ * database, find that sibling and use its provisioned database, so the tiles
+ * run against the database where the seeded tables actually live instead of the
+ * shared default DB (where they don't exist → "Failed to resolve table").
+ *
+ * Falls back to the dashboard item's own resolveDatabase() when no provisioned
+ * sibling is found (a hand-authored dashboard, or one whose db is explicit).
+ */
+export async function resolveDashboardDatabase(item: KustoItem | null): Promise<string> {
+  if (!item) return DEFAULT_DB;
+  // Explicit/own provisioned DB on the dashboard item wins.
+  const own = resolveDatabase(item);
+  if (own !== DEFAULT_DB) return own;
+  try {
+    const items = await itemsContainer();
+    const { resources } = await items.items
+      .query<KustoItem>({
+        query: 'SELECT * FROM c WHERE c.workspaceId = @w AND c.itemType = @t',
+        parameters: [
+          { name: '@w', value: item.workspaceId },
+          { name: '@t', value: 'kql-database' },
+        ],
+      }, { partitionKey: item.workspaceId })
+      .fetchAll();
+    // Prefer a sibling sharing the dashboard's sourceApp, else any provisioned one.
+    const sourceApp = (item.state as any)?.sourceApp;
+    const candidates = sourceApp
+      ? resources.filter((r) => (r.state as any)?.sourceApp === sourceApp)
+      : resources;
+    for (const cand of (candidates.length ? candidates : resources)) {
+      const db = resolveDatabase(cand);
+      if (db !== DEFAULT_DB) return db;
+    }
+  } catch { /* best-effort — fall through to default */ }
+  return own;
 }

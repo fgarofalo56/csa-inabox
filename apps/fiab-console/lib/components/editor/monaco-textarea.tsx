@@ -95,6 +95,14 @@ export interface MonacoTextareaProps {
   minimap?: boolean;
   /** Word wrap. Default on. */
   wordWrap?: boolean;
+  /** Hide line numbers / gutter (compact single-expression editors). */
+  lineNumbers?: boolean;
+  /**
+   * Called once the editor + monaco are mounted — lets callers register
+   * language completion providers (IntelliSense) or capture the editor for
+   * cursor-aware insertion. Receives the Monaco editor + the monaco namespace.
+   */
+  onReady?: (editor: any, monaco: any) => void;
 }
 
 function mapLanguage(lang?: MonacoLanguage): string {
@@ -223,6 +231,8 @@ export function MonacoTextarea({
   ariaLabel,
   minimap = false,
   wordWrap = true,
+  lineNumbers = true,
+  onReady,
 }: MonacoTextareaProps) {
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
@@ -234,7 +244,8 @@ export function MonacoTextarea({
     defineLoomThemeOnce(monaco);
     if (monacoLang === 'kusto') registerKustoLanguageOnce(monaco);
     monaco.editor.setTheme(detectTheme());
-  }, [monacoLang]);
+    onReady?.(editor, monaco);
+  }, [monacoLang, onReady]);
 
   // Watch for dark/light class flips on <html> and resync the theme.
   useEffect(() => {
@@ -277,7 +288,7 @@ export function MonacoTextarea({
           wordWrap: wordWrap ? 'on' : 'off',
           fontFamily: 'Consolas, "Cascadia Code", monospace',
           fontSize: 13,
-          lineNumbers: 'on',
+          lineNumbers: lineNumbers ? 'on' : 'off',
           scrollBeyondLastLine: false,
           renderLineHighlight: 'line',
           renderWhitespace: 'selection',

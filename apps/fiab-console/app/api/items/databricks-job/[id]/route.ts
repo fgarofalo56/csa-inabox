@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getJob, updateJob, deleteJob } from '@/lib/azure/databricks-client';
+import { loadContentBackedItem, databricksJobFromContent } from '../../_lib/ai-content-fallback';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,12 +22,31 @@ function jobIdFrom(req: NextRequest): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function GET(req: NextRequest) {
+/**
+ * Build the editor's job shape from the installed bundle's DatabricksJobContent
+ * (tasks + shared cluster), so a bundle-installed job opens FULLY BUILT-OUT
+ * (every chained task + the job cluster) before a live Databricks job exists.
+ * Create/Run/Save still target the real workspace.
+ */
+async function jobContentFallback(id: string, tenantId: string) {
+  const item = await loadContentBackedItem(id, 'databricks-job', tenantId);
+  if (!item) return null;
+  const built = databricksJobFromContent(item);
+  return built ? { job: built.job, source: 'bundle' } : null;
+}
+
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  const { id } = await ctx.params;
   const jobId = jobIdFrom(req);
-  if (jobId === null)
+  // No live Databricks job id — surface the bundle definition for this item so
+  // the editor seeds its form from the stamped tasks + cluster.
+  if (jobId === null) {
+    const fb = await jobContentFallback(id, session.claims.oid);
+    if (fb) return NextResponse.json({ ok: true, ...fb });
     return NextResponse.json({ ok: false, error: 'jobId is required' }, { status: 400 });
+  }
   try {
     const job = await getJob(jobId);
     return NextResponse.json({ ok: true, job });

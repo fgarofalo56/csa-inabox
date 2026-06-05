@@ -17,6 +17,8 @@ import {
 } from '@fluentui/react-components';
 import { Search24Regular, Save24Regular, ArrowReset24Regular, Open16Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
+import { Section } from '@/lib/components/ui/section';
+import { CopilotAgentsConfig } from '@/lib/components/admin/copilot-agents-config';
 
 interface ToggleDef {
   id: string;
@@ -35,26 +37,29 @@ interface ToggleGroup {
 
 const useStyles = makeStyles({
   toolbar: {
-    display: 'flex', gap: 12, alignItems: 'center',
-    paddingBottom: 16, marginBottom: 12,
+    display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center',
+    paddingTop: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalM,
+    marginBottom: tokens.spacingVerticalL,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     position: 'sticky', top: 0, zIndex: 10,
     backgroundColor: tokens.colorNeutralBackground1,
+    flexWrap: 'wrap',
   },
   spacer: { flex: 1 },
   toggleRow: {
-    display: 'grid', gridTemplateColumns: '1fr auto', gap: 16,
-    padding: '12px 4px',
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'grid', gridTemplateColumns: '1fr auto', gap: tokens.spacingHorizontalXL,
+    paddingTop: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalM,
+    paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
     alignItems: 'center',
   },
-  toggleLabel: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 },
-  toggleName: { fontSize: 14, fontWeight: 500 },
-  toggleHelp: { fontSize: 12, color: tokens.colorNeutralForeground3, lineHeight: 1.4 },
-  groupDesc: { color: tokens.colorNeutralForeground3, fontSize: 13, marginBottom: 4 },
-  groupCount: { color: tokens.colorNeutralForeground3, fontSize: 12, marginLeft: 8 },
-  diff: { color: tokens.colorPaletteYellowForeground2, fontSize: 12 },
-  learn: { display: 'inline-flex', alignItems: 'center', gap: 4, marginLeft: 6 },
+  toggleLabel: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 },
+  toggleName: { fontSize: '14px', fontWeight: 500 },
+  toggleHelp: { fontSize: '12px', color: tokens.colorNeutralForeground3, lineHeight: 1.45 },
+  groupDesc: { color: tokens.colorNeutralForeground3, fontSize: '13px', marginBottom: tokens.spacingVerticalS, display: 'block' },
+  groupCount: { color: tokens.colorNeutralForeground3, fontSize: '12px', marginLeft: '8px' },
+  diff: { color: tokens.colorPaletteYellowForeground2, fontSize: '12px' },
+  learn: { display: 'inline-flex', alignItems: 'center', gap: '4px', marginLeft: '6px' },
 });
 
 export default function TenantSettingsPage() {
@@ -184,7 +189,7 @@ export default function TenantSettingsPage() {
           placeholder="Filter settings by name, key, or description…"
           value={q}
           onChange={(_, d) => setQ(d.value)}
-          style={{ flex: 1, maxWidth: 480 }}
+          style={{ width: '100%', maxWidth: 360, minWidth: 200 }}
         />
         <div className={s.spacer} />
         {dirty && (
@@ -240,6 +245,9 @@ export default function TenantSettingsPage() {
         </Caption1>
       )}
 
+      {/* Tenant-wide Copilot & Agents config (Foundry account + model deployments). */}
+      <CopilotAgentsConfig />
+
       {!groups && !loadError && <Spinner label="Loading settings…" />}
 
       {groups && visibleGroups.length === 0 && filter && (
@@ -249,6 +257,7 @@ export default function TenantSettingsPage() {
       )}
 
       {visibleGroups.length > 0 && (
+        <Section title="Settings">
         <Accordion multiple collapsible defaultOpenItems={visibleGroups.map((g) => g.id)}>
           {visibleGroups.map((g) => {
             const groupChangedCount = g.toggles.filter(
@@ -304,6 +313,7 @@ export default function TenantSettingsPage() {
             );
           })}
         </Accordion>
+        </Section>
       )}
     </AdminShell>
   );

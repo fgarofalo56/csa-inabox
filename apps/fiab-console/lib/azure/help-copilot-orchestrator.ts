@@ -35,6 +35,7 @@ import {
   isSearchConfigured,
   type DocHit,
 } from './loom-docs-index';
+import type { TenantCopilotConfig } from '../types/copilot-config';
 
 // ---------- Credential (for AOAI scope) ----------
 
@@ -85,6 +86,12 @@ export interface HelpOrchestrateOptions {
   userId: string;
   /** Optional override; default 6 (tighter than the cross-item orchestrator) */
   maxIterations?: number;
+  /** Tenant admin-selected Copilot config. The help agent prefers
+   *  helpAgentDeployment, then copilotChatDeployment, then env. */
+  tenantConfig?: TenantCopilotConfig | null;
+  /** Screen-awareness: where the user currently is in the console, so the
+   *  agent can answer "what's on this screen / help me with this" in context. */
+  pageContext?: { path?: string; label?: string; itemType?: string; itemId?: string };
 }
 
 interface ChatMessage {
@@ -101,7 +108,7 @@ interface ChatMessage {
 
 // ---------- System prompt ----------
 
-const SYSTEM_PROMPT = `You are the CSA Loom Help Copilot — a docs-grounded assistant inside the Loom Console (a Microsoft Fabric workspace experience for Azure tenants without Fabric).
+const SYSTEM_PROMPT = `You are the CSA Loom Help Copilot — a docs-grounded assistant inside the CSA Loom Console (a self-contained data + AI platform on Azure). CSA Loom is its OWN product, NOT Microsoft Fabric — always describe features as CSA Loom features (e.g. "the CSA Loom Real-Time hub"), never "in Microsoft Fabric". You may name the underlying Azure services (Synapse, ADX, Event Hubs, AI Foundry, ADLS) since those are the real backends.
 
 Your job: answer questions about CSA Loom (what it is, how to set it up, how to do anything). You ALWAYS:
 1. Ground answers in the docs + repo via the searchDocs / searchRepo tools. Never fabricate doc content.
@@ -408,19 +415,29 @@ export async function getHelpSession(sessionId: string, userId: string): Promise
 
 // ---------- AOAI plumbing ----------
 
+/** Newer reasoning models (o1/o3/gpt-5/MAI-*) reject any non-default
+ *  temperature/top_p; detect that 400 so we can retry without it. */
+function isUnsupportedSamplingParam(body: string): boolean {
+  return /unsupported_value|does not support|Only the default \(1\) value is supported/i.test(body)
+    && /temperature|top_p/i.test(body);
+}
+
 async function callAoai(target: AoaiTarget, messages: ChatMessage[], tools: unknown[]): Promise<any> {
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      messages,
-      tools,
-      tool_choice: 'auto',
-      temperature: 0.2,
-    }),
-  });
+  const base: Record<string, unknown> = { messages, tools, tool_choice: 'auto' };
+  const send = async (withTemperature: boolean) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(withTemperature ? { ...base, temperature: 0.2 } : base),
+    });
+  let res = await send(true);
+  if (res.status === 400) {
+    const t = await res.text();
+    if (isUnsupportedSamplingParam(t)) res = await send(false);
+    else throw new Error(`AOAI chat-completions failed 400: ${t.slice(0, 400)}`);
+  }
   if (!res.ok) {
     const t = await res.text();
     throw new Error(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
@@ -454,7 +471,16 @@ export async function* orchestrateHelp(opts: HelpOrchestrateOptions): AsyncItera
 
   let target: AoaiTarget;
   try {
-    target = await resolveAoaiTarget();
+    // The help agent prefers its own model deployment; map it onto the chat
+    // deployment field resolveAoaiTarget understands.
+    const cfg = opts.tenantConfig
+      ? {
+          ...opts.tenantConfig,
+          copilotChatDeployment:
+            opts.tenantConfig.helpAgentDeployment || opts.tenantConfig.copilotChatDeployment,
+        }
+      : null;
+    target = await resolveAoaiTarget(cfg);
   } catch (e: any) {
     yield {
       kind: 'error',
@@ -480,6 +506,16 @@ export async function* orchestrateHelp(opts: HelpOrchestrateOptions): AsyncItera
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: prompt },
   ];
+
+  // Screen-awareness: tell the agent where the user is so "what's on this
+  // screen / help me here" is answered in context (without the user retyping it).
+  const pc = opts.pageContext;
+  if (pc && (pc.label || pc.path)) {
+    const parts = [`The user is currently on the "${pc.label || pc.path}" screen of CSA Loom (route: ${pc.path || 'unknown'}).`];
+    if (pc.itemType) parts.push(`They are viewing a ${pc.itemType} item${pc.itemId ? ` (id: ${pc.itemId})` : ''}.`);
+    parts.push('When their question is about "this", "this screen", "here", or "what I\'m looking at", answer for THIS surface first. You can help with anything in Loom regardless of where they are.');
+    messages.splice(1, 0, { role: 'system', content: parts.join(' ') });
+  }
 
   await persistTurn(sessionId, userId, 'user', prompt);
 

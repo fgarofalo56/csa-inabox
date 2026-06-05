@@ -94,6 +94,10 @@ export function PipelineEditorCore({
   const [bound, setBound] = useState<string | null>(null);
   const [available, setAvailable] = useState<Array<{ name: string }>>([]);
   const [listError, setListError] = useState<string | null>(null);
+  // Preview graph for an UNBOUND bundle-installed item: the rich activity graph
+  // stamped into state.content, surfaced by the bind GET so the canvas renders
+  // FULLY BUILT-OUT (read-only) while the bind gate prompts to push it live.
+  const [preview, setPreview] = useState<any | null>(null);
   const [pickName, setPickName] = useState<string>('');     // bind-to-existing selection
   const [newName, setNewName] = useState<string>('');       // create-new input
   const [bindBusy, setBindBusy] = useState(false);
@@ -146,6 +150,7 @@ export function PipelineEditorCore({
       setBound(data.bound ?? null);
       setAvailable(Array.isArray(data.pipelines) ? data.pipelines : []);
       setListError(data.listError || null);
+      setPreview(data.preview ?? null);
       if (data.bound && !pickName) setPickName(data.bound);
     } catch (e: any) {
       setBindError(e?.message || String(e));
@@ -404,13 +409,15 @@ export function PipelineEditorCore({
         { label: busy ? 'Validating…' : 'Validate', icon: <Checkmark20Regular />, onClick: !busy && bound ? validate : undefined, disabled: busy || !bound, title: !bound ? 'Bind a pipeline first' : undefined },
       ],
     }] : [];
-    // Manage hub (factory-level: linked services / datasets / integration
-    // runtimes) — ADF only, available regardless of pipeline binding.
-    const manageGroup: RibbonTab['groups'] = isAdf ? [{
+    // Manage hub — linked services / datasets (+ integration runtimes for ADF).
+    // Available for BOTH ADF and Synapse pipelines, regardless of pipeline
+    // binding. Synapse pipelines reach their own /api/synapse/* resources; the
+    // backend is selected on the ManagePanel below.
+    const manageGroup: RibbonTab['groups'] = [{
       label: 'Manage', actions: [
-        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services, datasets and integration runtimes' },
+        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: isAdf ? 'Linked services, datasets and integration runtimes' : 'Linked services and datasets' },
       ],
-    }] : [];
+    }];
     return [
       { id: 'home', label: 'Home', groups: [
         { label: 'Save', actions: [
@@ -475,6 +482,29 @@ export function PipelineEditorCore({
           ) : !bound ? (
             <div className={s.gate}>
               {bindGate}
+              {preview && Array.isArray(preview?.properties?.activities) && preview.properties.activities.length > 0 && (
+                <div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                    <Subtitle2>Starter graph from this app</Subtitle2>
+                    <Badge appearance="outline">
+                      {preview.properties.activities.length} activit{preview.properties.activities.length === 1 ? 'y' : 'ies'}
+                    </Badge>
+                    <Badge appearance="filled" color="informative">Preview · read-only</Badge>
+                  </div>
+                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: 8 }}>
+                    This pipeline was installed from an app with a fully built-out activity graph
+                    (every activity, dependency, and parameter shown below). Bind it to a real
+                    {` ${config.containerLabel}`} pipeline above to push this graph live and enable
+                    Save / Run / Validate / Triggers.
+                  </Body1>
+                  <PipelineDesigner
+                    activities={extractActivities(JSON.stringify(preview)) as any}
+                    parameters={paramsFromSpec(preview as PipelineSpec)}
+                    variables={varsFromSpec(preview as PipelineSpec)}
+                    onActivitiesChange={() => { /* read-only until bound */ }}
+                  />
+                </div>
+              )}
               {isAdf && (
                 <div>
                   <Subtitle2>Select a Data Factory (any subscription)</Subtitle2>
@@ -650,17 +680,19 @@ export function PipelineEditorCore({
             </>
           )}
 
-          {isAdf && (
-            <ManagePanel
-              open={manageOpen}
-              onOpenChange={(open) => {
-                setManageOpen(open);
-                // On close, the navigator re-lists so linked-service / dataset /
-                // IR changes made in the Manage hub reflect in the counts.
-                if (!open) setFactoryRefreshKey((k) => k + 1);
-              }}
-            />
-          )}
+          <ManagePanel
+            open={manageOpen}
+            backend={isAdf ? 'adf' : 'synapse'}
+            onOpenChange={(open) => {
+              setManageOpen(open);
+              // On close, the navigator re-lists so linked-service / dataset /
+              // IR changes made in the Manage hub reflect in the counts.
+              if (!open) {
+                if (isAdf) setFactoryRefreshKey((k) => k + 1);
+                else setWorkspaceRefreshKey((k) => k + 1);
+              }
+            }}
+          />
 
           <Dialog open={triggersOpen} onOpenChange={(_, d) => setTriggersOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '760px', width: '90vw' }}>

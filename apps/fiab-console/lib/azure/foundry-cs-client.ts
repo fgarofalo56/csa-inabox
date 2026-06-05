@@ -527,6 +527,123 @@ export async function chatCompletion(
   };
 }
 
+// ---------------- Evaluations (AOAI Evals data-plane) ----------------
+//
+// Azure OpenAI in Azure AI Foundry "Evals" surface, reached on the SAME AOAI
+// data-plane host + Cognitive-Services token as chatCompletion above:
+//   list   = GET  {endpoint}/openai/v1/evals?api-version=<v>
+//   create = POST {endpoint}/openai/v1/evals
+//   get    = GET  {endpoint}/openai/v1/evals/{eval-id}
+//   runs   = GET  {endpoint}/openai/v1/evals/{eval-id}/runs
+//   run    = POST {endpoint}/openai/v1/evals/{eval-id}/runs   (kicks off grading)
+// Ref: https://learn.microsoft.com/azure/ai-foundry/openai/reference-preview-latest#list-evals
+//      https://learn.microsoft.com/azure/ai-foundry/openai/authoring-reference-preview#evaluation---getrunlist
+// Evals is a preview feature: the host requires the `aoai-evals: preview` header.
+
+const AOAI_EVALS_API = process.env.LOOM_AOAI_EVALS_API_VERSION || 'preview';
+
+export interface EvalSummary {
+  id: string;
+  name?: string;
+  createdAt?: number;
+  dataSourceConfig?: unknown;
+  testingCriteria?: unknown;
+  metadata?: Record<string, string>;
+}
+
+export interface EvalRunSummary {
+  id: string;
+  evalId?: string;
+  name?: string;
+  status?: string;
+  model?: string;
+  createdAt?: number;
+  resultCounts?: { passed?: number; failed?: number; errored?: number; total?: number };
+  reportUrl?: string;
+}
+
+async function evalsFetch(acct: CsAccount, path: string, init: RequestInit = {}): Promise<Response> {
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const sep = path.includes('?') ? '&' : '?';
+  const url = `${endpoint}/openai/v1${path}${sep}api-version=${AOAI_EVALS_API}`;
+  return fetch(url, {
+    ...init,
+    headers: {
+      ...(init.headers || {}),
+      authorization: `Bearer ${tok}`,
+      'content-type': 'application/json',
+      'aoai-evals': 'preview',
+    },
+  });
+}
+
+async function readEvalsJson<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  let parsed: any = undefined;
+  if (text) { try { parsed = JSON.parse(text); } catch { parsed = text; } }
+  if (!res.ok) {
+    const msg = parsed?.error?.message || (typeof parsed === 'string' ? parsed : `Evals call failed (${res.status})`);
+    throw new CsError(res.status, parsed, msg);
+  }
+  return parsed as T;
+}
+
+function mapEval(e: any): EvalSummary {
+  return {
+    id: e?.id,
+    name: e?.name,
+    createdAt: e?.created_at,
+    dataSourceConfig: e?.data_source_config,
+    testingCriteria: e?.testing_criteria,
+    metadata: e?.metadata,
+  };
+}
+
+function mapEvalRun(r: any): EvalRunSummary {
+  const rc = r?.result_counts || {};
+  return {
+    id: r?.id,
+    evalId: r?.eval_id,
+    name: r?.name,
+    status: r?.status,
+    model: r?.model,
+    createdAt: r?.created_at,
+    resultCounts: { passed: rc.passed, failed: rc.failed, errored: rc.errored, total: rc.total },
+    reportUrl: r?.report_url,
+  };
+}
+
+export async function listEvals(selector?: AccountSelector): Promise<{ account: CsAccount; evals: EvalSummary[] }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<{ data?: any[] }>(await evalsFetch(acct, '/evals?order=desc&limit=50'));
+  return { account: acct, evals: (j?.data || []).map(mapEval) };
+}
+
+export interface CreateEvalInput {
+  name: string;
+  /** testing_criteria array per AOAI Evals schema (e.g. string-check / label-model graders). */
+  testingCriteria: unknown[];
+  /** data_source_config (e.g. { type: 'custom', item_schema: {...}, include_sample_schema: true }). */
+  dataSourceConfig?: unknown;
+  metadata?: Record<string, string>;
+}
+
+export async function createEval(input: CreateEvalInput, selector?: AccountSelector): Promise<EvalSummary> {
+  const acct = await resolveAccount(false, selector);
+  const body: any = { name: input.name, testing_criteria: input.testingCriteria };
+  if (input.dataSourceConfig) body.data_source_config = input.dataSourceConfig;
+  if (input.metadata) body.metadata = input.metadata;
+  const j = await readEvalsJson<any>(await evalsFetch(acct, '/evals', { method: 'POST', body: JSON.stringify(body) }));
+  return mapEval(j);
+}
+
+export async function listEvalRuns(evalId: string, selector?: AccountSelector): Promise<{ account: CsAccount; runs: EvalRunSummary[] }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<{ data?: any[] }>(await evalsFetch(acct, `/evals/${encodeURIComponent(evalId)}/runs?order=desc&limit=50`));
+  return { account: acct, runs: (j?.data || []).map(mapEvalRun) };
+}
+
 // ---------------- Quota / usages (per region) ----------------
 
 export interface UsageRow {

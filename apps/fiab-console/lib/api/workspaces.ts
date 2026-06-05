@@ -99,6 +99,31 @@ export async function deleteWorkspace(id: string): Promise<void> {
   await fetchJson<{ ok: boolean }>(`/api/workspaces/${id}`, { method: 'DELETE' });
 }
 
+export interface BulkDeleteResult {
+  ok: boolean;
+  deleted: string[];
+  failed: Array<{ id: string; error: string }>;
+}
+
+/** Admin-only multi-delete. Server gates on isTenantAdmin; non-admins get 403. */
+export async function bulkDeleteWorkspaces(ids: string[]): Promise<BulkDeleteResult> {
+  return fetchJson<BulkDeleteResult>('/api/workspaces/bulk-delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
+}
+
+/** Probe whether the current session is a tenant admin (drives bulk-delete UI). */
+export async function getWorkspaceAdminStatus(): Promise<{ ok: boolean; isAdmin: boolean }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/workspaces/bulk-delete`, { credentials: 'include' });
+    if (!res.ok) return { ok: false, isAdmin: false };
+    return await res.json();
+  } catch {
+    return { ok: false, isAdmin: false };
+  }
+}
+
 export async function listItems(workspaceId: string): Promise<WorkspaceItem[]> {
   return fetchJson<WorkspaceItem[]>(`/api/workspaces/${workspaceId}/items`);
 }

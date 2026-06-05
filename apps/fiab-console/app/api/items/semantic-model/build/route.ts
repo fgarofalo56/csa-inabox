@@ -32,6 +32,36 @@ export const dynamic = 'force-dynamic';
 
 const VALID_TYPES: PushColumnType[] = ['Int64', 'Double', 'Boolean', 'DateTime', 'String', 'Decimal'];
 
+/**
+ * Normalize Tabular / semantic-model column dataTypes (which a Loom
+ * SemanticModelContent bundle uses — e.g. DimDate's `Date` column) onto the
+ * six types the Power BI Push Datasets REST API accepts. `Date` is a valid
+ * Tabular type but push datasets only expose `DateTime`; likewise `Decimal`/
+ * `Double` aliases. Mapping here (rather than 400-ing) lets a bundle-installed
+ * model actually push to Power BI without the user hand-editing every column.
+ */
+const PUSH_TYPE_ALIASES: Record<string, PushColumnType> = {
+  date: 'DateTime',
+  datetime: 'DateTime',
+  time: 'DateTime',
+  int64: 'Int64',
+  integer: 'Int64',
+  int: 'Int64',
+  double: 'Double',
+  decimal: 'Decimal',
+  currency: 'Decimal',
+  boolean: 'Boolean',
+  bool: 'Boolean',
+  string: 'String',
+  text: 'String',
+};
+
+function normalizePushType(dataType: string | undefined): PushColumnType | null {
+  if (!dataType) return null;
+  if (VALID_TYPES.includes(dataType as PushColumnType)) return dataType as PushColumnType;
+  return PUSH_TYPE_ALIASES[dataType.trim().toLowerCase()] || null;
+}
+
 interface BuildBody {
   name?: string;
   tables?: Array<{
@@ -68,13 +98,13 @@ export async function POST(req: NextRequest) {
     const cols = (t.columns || []).filter((c) => (c.name || '').trim());
     if (cols.length === 0) return NextResponse.json({ ok: false, error: `table "${tName}" needs at least one column` }, { status: 400 });
     for (const c of cols) {
-      if (!VALID_TYPES.includes(c.dataType as PushColumnType)) {
+      if (!normalizePushType(c.dataType)) {
         return NextResponse.json({ ok: false, error: `column "${c.name}" has invalid dataType "${c.dataType}". Allowed: ${VALID_TYPES.join(', ')}` }, { status: 400 });
       }
     }
     tables.push({
       name: tName,
-      columns: cols.map((c) => ({ name: (c.name || '').trim(), dataType: c.dataType as PushColumnType, formatString: c.formatString || undefined })),
+      columns: cols.map((c) => ({ name: (c.name || '').trim(), dataType: normalizePushType(c.dataType) as PushColumnType, formatString: c.formatString || undefined })),
       measures: (t.measures || [])
         .filter((m) => (m.name || '').trim() && (m.expression || '').trim())
         .map((m) => ({ name: (m.name || '').trim(), expression: (m.expression || '').trim(), formatString: m.formatString || undefined })),

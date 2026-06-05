@@ -17,7 +17,7 @@ import {
   Spinner, makeStyles, tokens, Button, Badge,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Dropdown, Option, Field, Switch, RadioGroup, Radio, Caption1,
+  Dropdown, Option, Field, Switch, RadioGroup, Radio, Caption1, Input,
 } from '@fluentui/react-components';
 import { ArrowLeft24Regular, Add24Regular, AppGeneric24Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
@@ -82,6 +82,10 @@ export default function AppDetailPage() {
   const [installOpen, setInstallOpen] = useState(false);
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[]>([]);
   const [pickedWs, setPickedWs] = useState<string>('');
+  // Install target folder inside the workspace ('' = workspace root).
+  const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([]);
+  const [pickedFolder, setPickedFolder] = useState<string>('');
+  const [newFolder, setNewFolder] = useState<string>('');
   const [installing, setInstalling] = useState(false);
   const [installResult, setInstallResult] = useState<InstallResult[] | null>(null);
   const [installErr, setInstallErr] = useState<string | null>(null);
@@ -109,14 +113,41 @@ export default function AppDetailPage() {
     }).catch(() => {});
   }, [installOpen, workspaces.length]);
 
+  // Load folders for the picked workspace so the user can target a folder.
+  useEffect(() => {
+    setPickedFolder(''); setNewFolder(''); setFolders([]);
+    if (!pickedWs) return;
+    fetch(`/api/workspaces/${pickedWs}/folders`).then(r => r.json()).then((d: any) => {
+      setFolders((d?.folders || []).map((f: any) => ({ id: f.id, name: f.name })));
+    }).catch(() => setFolders([]));
+  }, [pickedWs]);
+
+  // Resolve the target folder id: create a new folder first if one was typed,
+  // else use the picked existing folder (or root).
+  const resolveFolderId = async (): Promise<string | null> => {
+    const name = newFolder.trim();
+    if (name) {
+      try {
+        const r = await fetch(`/api/workspaces/${pickedWs}/folders`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        const j = await r.json();
+        if (r.ok && j?.folder?.id) return j.folder.id;
+      } catch { /* fall through to root */ }
+    }
+    return pickedFolder || null;
+  };
+
   const install = async () => {
     if (!pickedWs) return;
     setInstalling(true); setInstallErr(null); setInstallResult(null); setProvisionReport(null);
     try {
+      const folderId = await resolveFolderId();
       const r = await fetch(`/api/apps/${params.id}/install`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: pickedWs, deploy, mode }),
+        body: JSON.stringify({ workspaceId: pickedWs, deploy, mode, folderId }),
       });
       const j = await r.json();
       if (!r.ok || !j.ok) {
@@ -329,6 +360,33 @@ export default function AppDetailPage() {
                       You don't have any workspaces yet. Create one at <Link href="/workspaces">/workspaces</Link> first.
                     </MessageBarBody>
                   </MessageBar>
+                )}
+                {pickedWs && (
+                  <Field label="Install location" hint="Install all items into the workspace root, or into a folder inside it.">
+                    <Dropdown
+                      value={newFolder.trim()
+                        ? `New folder: ${newFolder.trim()}`
+                        : (pickedFolder ? (folders.find(f => f.id === pickedFolder)?.name || 'Folder') : 'Workspace root')}
+                      selectedOptions={[newFolder.trim() ? '__new__' : pickedFolder || '__root__']}
+                      onOptionSelect={(_, d) => {
+                        if (d.optionValue === '__new__') return; // handled by the input below
+                        setNewFolder('');
+                        setPickedFolder(d.optionValue === '__root__' ? '' : (d.optionValue || ''));
+                      }}
+                    >
+                      <Option value="__root__">Workspace root</Option>
+                      {folders.map(f => <Option key={f.id} value={f.id}>{f.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+                )}
+                {pickedWs && (
+                  <Field label="…or create a new folder" hint="Leave blank to use the selection above. If set, the folder is created and all items install into it.">
+                    <Input
+                      placeholder="e.g. Real-Time Analytics"
+                      value={newFolder}
+                      onChange={(_, d) => setNewFolder(d.value)}
+                    />
+                  </Field>
                 )}
                 <Field label="Deploy artifacts to live Azure services" hint="When ON, every Notebook / Lakehouse / KQL DB / Warehouse / AI Search Index / Activator rule / Pipeline / Eventstream / Semantic Model in the bundle is provisioned via real Fabric / ADX / Synapse / AI Search REST. Turn OFF to keep the install Cosmos-only (templates without backend resources).">
                   <Switch checked={deploy} onChange={(_e, d) => setDeploy(!!d.checked)} label={deploy ? 'On (recommended)' : 'Off (Cosmos-only)'} />

@@ -71,8 +71,8 @@ export default function PurviewPage() {
             <Badge appearance="tint" color="success" size="small">live</Badge>
           </div>
           <Caption1>
-            Account <code>{purview.account}</code> · data plane{' '}
-            <code>{purview.account}-api.purview.azure.com</code>
+            Account <code>{purview.account}</code> · Data Map data plane{' '}
+            <code>{purview.account}.purview.azure.com</code>
           </Caption1>
           <div>
             <Title3 as="h3" style={{ fontSize: 14, marginBottom: 4 }}>Native surfaces running on this account</Title3>

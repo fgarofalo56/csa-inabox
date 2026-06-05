@@ -36,9 +36,14 @@ interface SetupConfig {
   subscriptionId?: string;
   subscriptionName?: string;
   location?: string;
+  vanityDomain?: string;
 }
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function shouldDispatchWorkflow(): boolean {
+  return !!process.env.LOOM_GITHUB_ACTIONS_TOKEN;
+}
 
 export async function POST(req: NextRequest) {
   const session = getSession();
@@ -89,12 +94,69 @@ export async function POST(req: NextRequest) {
     'GCC-High': 'platform/fiab/bicep/params/gcc-high.bicepparam',
     IL5: 'platform/fiab/bicep/params/il5.bicepparam',
   };
+  if (shouldDispatchWorkflow()) {
+    const isGov = body.boundary === 'GCC-High' || body.boundary === 'IL5';
+    const region = body.location || (isGov ? 'usgovvirginia' : 'eastus2');
+    const workflowByBoundary: Record<string, string> = {
+      Commercial: 'deploy-fiab-commercial.yml',
+      GCC: 'deploy-fiab-gcc.yml',
+      'GCC-High': 'deploy-fiab-gcch.yml',
+      IL5: 'deploy-fiab-gcch.yml',
+    };
+    const workflowFile = workflowByBoundary[body.boundary!] || 'deploy-fiab-commercial.yml';
+    const dispatchInputs: Record<string, string> = {
+      run_mode: 'full',
+      subscription: body.subscriptionId!,
+      region: region,
+      dlz_domain_name: body.domainName!,
+      capacity_sku: body.capacitySku!,
+      keep_resources: 'false',
+    };
+    if (body.vanityDomain) dispatchInputs.vanity_domain = body.vanityDomain;
+    if ((body.boundary === 'GCC-High' || body.boundary === 'IL5') && body.mode === 'multi-sub') {
+      dispatchInputs.deployment_mode = 'multi-sub';
+    }
+    try {
+      const repoOwner = process.env.LOOM_GITHUB_REPO_OWNER || 'fgarofalo56';
+      const repoName = process.env.LOOM_GITHUB_REPO_NAME || 'csa-inabox';
+      const token = process.env.LOOM_GITHUB_ACTIONS_TOKEN!;
+      const dispatchUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/actions/workflows/${workflowFile}/dispatches`;
+      const dispatchRes = await fetch(dispatchUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+        body: JSON.stringify({ ref: 'main', inputs: dispatchInputs }),
+      });
+      if (dispatchRes.ok) {
+        return NextResponse.json(
+          {
+            ok: true,
+            deploymentMode: 'github-workflow-dispatch',
+            workflowFile,
+            inputs: dispatchInputs,
+            message: `Deployment queued on GitHub Actions (${workflowFile})`,
+            monitorUrl: `https://github.com/${repoOwner}/${repoName}/actions/workflows/${workflowFile}`,
+          },
+          { status: 202 },
+        );
+      }
+      console.error(`[setup/deploy] GitHub workflow dispatch failed (${dispatchRes.status})`);
+    } catch (e) {
+      console.error('[setup/deploy] GitHub workflow dispatch exception:', (e as Error).message);
+    }
+  }
+
   const paramFile = paramFileByBoundary[body.boundary!] || 'platform/fiab/bicep/params/commercial-full.bicepparam';
 
   return NextResponse.json(
     {
       ok: false,
-      error: 'Setup Orchestrator service is not deployed in this environment',
+      error: shouldDispatchWorkflow()
+        ? 'GitHub workflow dispatch failed (see remediation for manual fallback)'
+        : 'Setup Orchestrator service is not deployed in this environment',
       remediation: {
         message:
           'The Setup Wizard captured a complete, valid deployment config but the browser-driven Setup Orchestrator is not deployed here yet. Copy the command below — it is pre-filled with your selected subscription, region, and boundary — and run it locally:',

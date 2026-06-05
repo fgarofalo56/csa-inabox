@@ -27,13 +27,13 @@ id. Unbound → `412 {code:'unbound'}` → the editor renders its **bind picker*
 | List all indexes on the service | ✅ built — catalog list mode + bind-picker dropdown | `GET /indexes?$select=name,fields,vectorSearch` |
 | Bind item to an existing index | ✅ built — bind picker (Dropdown + Bind) | `POST /api/items/ai-search-index/[id]/bind` → `persistSearchBinding` (Cosmos) |
 | Create a new index | ✅ built — "Create + bind" + POST from schema editor | `POST /indexes` `{name, fields, ...}` |
-| View index definition / **Fields** (name, type, key, searchable, filterable, sortable, facetable, retrievable, analyzer, dims) | ✅ built — Schema tab field grid | `GET /indexes/{name}` |
-| Vector config (profiles, algorithms) | ✅ built — Schema tab vector summary line + JSON editor | `GET /indexes/{name}` `.vectorSearch` |
-| Semantic config | ✅ built — `semantic` badge + full JSON in editor | `GET /indexes/{name}` `.semantic` |
-| Edit index definition + save | ✅ built — Schema tab Monaco JSON editor → Save definition | `PUT /indexes/{name}` (createOrUpdate) |
+| View / **edit Fields** (name, type, key, searchable, filterable, sortable, facetable, retrievable, analyzer, dims, vector profile) | ✅ built — Schema tab **visual field designer**: editable grid, add/edit/delete rows, Edm type picker, attribute checkboxes, analyzer picker (string), dimensions + vector-profile picker (vector) → real `PUT /indexes/{name}` | `GET /indexes/{name}` / `PUT /indexes/{name}` |
+| Vector config (profiles, algorithms) | ✅ built — designer surfaces vector profiles per-field + summary line; full authoring in the advanced JSON editor | `GET /indexes/{name}` `.vectorSearch` |
+| Semantic config | ✅ built — `semantic` badge + config names surfaced; full authoring in advanced JSON | `GET /indexes/{name}` `.semantic` |
+| Edit index definition + save | ✅ built — visual field designer **and** advanced Monaco JSON editor (round-trip), both → Save | `PUT /indexes/{name}` (createOrUpdate) |
 | Delete index | ✅ built — `DELETE /api/items/ai-search-index/[id]` (bound) | `DELETE /indexes/{name}` |
-| **Search explorer** — query text, filter, top, select, count, facets | ✅ built — Search tab (search/filter/select/top, count + facet summary, results grid w/ score) | `POST /indexes/{name}/docs/search` |
-| Vector / hybrid query (k-NN) | ✅ built — `vectorQueries` passthrough on the search route | `POST /docs/search` `{vectorQueries}` |
+| **Search explorer** — query type (simple/full/semantic), search text, semantic config, search fields, filter, select, orderby, top, count, facets | ✅ built — Search tab full query-options panel + raw request-JSON view + results grid (score, reranker score, semantic answers, facets) | `POST /indexes/{name}/docs/search` |
+| Vector / hybrid query (k-NN + integrated vectorization) | ✅ built — **vector-query builder** (kind text/vector + vector field + text-to-vectorize OR raw vector + k), composable with full-text search for hybrid | `POST /docs/search` `{vectorQueries}` |
 | **Analyze** text (token preview) | ✅ built — Search tab Analyze box (text + analyzer → tokens) | `POST /indexes/{name}/analyze` |
 | **Index statistics** (document count, storage, vector index size) | ✅ built — Statistics tab | `GET /indexes/{name}/stats` |
 | **Indexers** list (target index, data source, skillset) | ✅ built — Indexers tab grid; rows targeting this index pinned + badged | `GET /indexers` |

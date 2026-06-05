@@ -1,5 +1,10 @@
 # apim-api — parity with Azure API Management → APIs
 
+> **rev.2 — corrected against current code (2026-05-31).** Operations row #3
+> upgraded from read-only list to full create/edit/delete authoring (PR #552,
+> real ARM `upsertOperation`/`deleteOperation`); OpenAPI import wired to the
+> dedicated `/api/apim/import` route (PR #545). Both verified real-backend.
+
 Source UI: Azure portal → API Management → APIs (https://learn.microsoft.com/azure/api-management/),
 REST: https://learn.microsoft.com/rest/api/apimanagement/
 
@@ -21,7 +26,7 @@ REST: https://learn.microsoft.com/rest/api/apimanagement/
 |---|--------|-------|
 | 1 | built ✅ | Import dialog: OpenAPI(JSON link/inline), WSDL link, GraphQL link → PUT with `format`/`value` |
 | 2 | built ✅ | Form fields, PUT `/api/items/apim-api/[id]` |
-| 3 | built ✅ | Left tree from `/operations` |
+| 3 | built ✅ | Operations tab: list + **create/edit/delete authoring** dialog (method, URL template, template/query/header params, declared responses) → real ARM `upsertOperation`/`deleteOperation` (rev.2 — PR #552). Tree branch also lists `/operations`. |
 | 4 | built ✅ | Test console tab → POST `/api/items/apim-api/[id]/test-call` (real gateway call, key resolved server-side from `master` all-access sub) |
 | 5 | built ✅ | Monaco OpenAPI editor dialog + read-only viewer |
 | 6 | built ✅ | Revisions tab → GET/POST `/api/items/apim-api/[id]/revisions` (create + optional release) |
@@ -29,8 +34,9 @@ REST: https://learn.microsoft.com/rest/api/apimanagement/
 
 ## Backend per control
 
-- Settings/import/spec → `upsertApi` (ARM PUT `/apis/{id}`)
-- Operations → `listOperations`
+- Settings/spec → `upsertApi` (ARM PUT `/apis/{id}`)
+- Import → `importApiFromOpenApi` (`POST /api/apim/import`, ARM PUT `format=openapi+json|openapi-link`)
+- Operations (list + authoring) → `listOperations` / `getOperation` / `upsertOperation` (PUT `/apis/{id}/operations/{opId}`) / `deleteOperation` via `/api/items/apim-api/[id]/operations`
 - Test → `testApiCall` (gateway fetch + `getSubscriptionKeys('master')`)
 - Revisions → `listApiRevisions` / `createApiRevision` / `createApiRelease`
 - Honest gate: APIM unreachable → `BackendStateBar` with the ARM error (RBAC/role hint).

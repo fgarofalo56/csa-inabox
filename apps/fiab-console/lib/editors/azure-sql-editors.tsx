@@ -21,18 +21,69 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Field,
+  Field, Dropdown, Option, Tooltip,
   TabList, Tab, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Database20Regular, Server20Regular, Play20Regular, Add20Regular,
   ShieldKeyhole20Regular, Globe20Regular, Sparkle20Regular,
+  ArrowDownload20Regular, Delete20Regular, Copy20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
+
+// ── Azure SQL real option sets (parity with the portal create/scale blades) ──
+const AZURE_REGIONS = [
+  'eastus', 'eastus2', 'centralus', 'southcentralus', 'westus', 'westus2', 'westus3',
+  'northcentralus', 'westcentralus', 'canadacentral', 'northeurope', 'westeurope',
+  'uksouth', 'ukwest', 'francecentral', 'germanywestcentral', 'switzerlandnorth',
+  'norwayeast', 'swedencentral', 'eastasia', 'southeastasia', 'japaneast', 'japanwest',
+  'australiaeast', 'australiasoutheast', 'centralindia', 'southindia', 'koreacentral',
+  'brazilsouth', 'southafricanorth', 'uaenorth',
+  // US Government regions
+  'usgovvirginia', 'usgovarizona', 'usgovtexas', 'usdodeast', 'usdodcentral',
+];
+
+// Service-objective (skuName) families — the real Azure SQL DB option set.
+const SQL_DB_SKUS = [
+  { group: 'Basic / DTU', skus: ['Basic', 'S0', 'S1', 'S2', 'S3', 'S4', 'S6', 'S7', 'S9', 'S12'] },
+  { group: 'Premium / DTU', skus: ['P1', 'P2', 'P4', 'P6', 'P11', 'P15'] },
+  { group: 'General Purpose (vCore)', skus: ['GP_Gen5_2', 'GP_Gen5_4', 'GP_Gen5_8', 'GP_Gen5_16', 'GP_Gen5_32', 'GP_Gen5_40'] },
+  { group: 'General Purpose serverless', skus: ['GP_S_Gen5_1', 'GP_S_Gen5_2', 'GP_S_Gen5_4', 'GP_S_Gen5_8', 'GP_S_Gen5_16'] },
+  { group: 'Business Critical (vCore)', skus: ['BC_Gen5_2', 'BC_Gen5_4', 'BC_Gen5_8', 'BC_Gen5_16', 'BC_Gen5_32'] },
+  { group: 'Hyperscale (vCore)', skus: ['HS_Gen5_2', 'HS_Gen5_4', 'HS_Gen5_8', 'HS_Gen5_16', 'HS_Gen5_32'] },
+];
+
+const SQL_DB_TIERS = ['Basic', 'Standard', 'Premium', 'GeneralPurpose', 'BusinessCritical', 'Hyperscale'];
+
+const VECTOR_METRICS = ['cosine', 'euclidean', 'dot'] as const;
+const VECTOR_DIMS = [256, 384, 512, 768, 1024, 1536, 2048, 3072];
+
+// ── Results export (CSV / JSON) — client-side download, no extra route ──
+function downloadBlob(filename: string, mime: string, data: string) {
+  const blob = new Blob([data], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+function csvEscape(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function resultsToCsv(columns: string[], rows: unknown[][]): string {
+  const head = columns.map(csvEscape).join(',');
+  const body = rows.map((r) => columns.map((_, j) => csvEscape(r[j])).join(',')).join('\r\n');
+  return `${head}\r\n${body}`;
+}
+function resultsToJson(columns: string[], rows: unknown[][]): string {
+  return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, j) => [c, r[j] ?? null]))), null, 2);
+}
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -45,11 +96,13 @@ const useStyles = makeStyles({
     resize: 'vertical',
   },
   resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 200 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8 },
+  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
   tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
   treePad: { padding: 8 },
   formRow: { display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 },
+  fullWidth: { width: '100%' },
 });
 
 interface QueryResponse {
@@ -88,12 +141,29 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
   }
   const rows = result.rows || [];
   const columns = result.columns || [];
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   return (
     <div className={s.resultBox}>
       <div className={s.resultMeta}>
         <Badge appearance="filled" color="success">{result.rowCount ?? rows.length} rows</Badge>
         <Caption1>· {result.executionMs} ms</Caption1>
         {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
+        {rows.length > 0 && (
+          <div className={s.resultActions}>
+            <Tooltip content="Download results as CSV" relationship="label">
+              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                onClick={() => downloadBlob(`query-results-${stamp}.csv`, 'text/csv', resultsToCsv(columns, rows))}>
+                CSV
+              </Button>
+            </Tooltip>
+            <Tooltip content="Download results as JSON" relationship="label">
+              <Button size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                onClick={() => downloadBlob(`query-results-${stamp}.json`, 'application/json', resultsToJson(columns, rows))}>
+                JSON
+              </Button>
+            </Tooltip>
+          </div>
+        )}
       </div>
       {rows.length === 0 ? (
         <Caption1>Query returned no rows.</Caption1>
@@ -146,6 +216,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
   const [newRuleName, setNewRuleName] = useState('');
   const [newRuleStart, setNewRuleStart] = useState('');
   const [newRuleEnd, setNewRuleEnd] = useState('');
+  const [confirmDeleteRule, setConfirmDeleteRule] = useState<string | null>(null);
 
   // AAD admin dialog
   const [aadOpen, setAadOpen] = useState(false);
@@ -327,7 +398,13 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                   Public access: {selected.publicNetworkAccess || 'Unknown'}
                 </Badge>
               </div>
-              <Body1>FQDN: <code>{selected.fqdn}</code></Body1>
+              <Body1>
+                FQDN: <code>{selected.fqdn}</code>
+                <Tooltip content="Copy FQDN" relationship="label">
+                  <Button size="small" appearance="subtle" icon={<Copy20Regular />} aria-label="Copy server FQDN"
+                    onClick={() => navigator.clipboard?.writeText(selected.fqdn)} style={{ marginLeft: 4 }} />
+                </Tooltip>
+              </Body1>
               <Body1>AAD admin login: <code>{selected.administratorLogin || '— set via Microsoft.Sql/servers/administrators —'}</code></Body1>
 
               <Subtitle2 style={{ marginTop: 12 }}>Databases ({databases.length})</Subtitle2>
@@ -383,7 +460,11 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                             <TableCell><strong>{r.name}</strong></TableCell>
                             <TableCell><code style={{ fontSize: 11 }}>{r.startIpAddress}</code></TableCell>
                             <TableCell><code style={{ fontSize: 11 }}>{r.endIpAddress}</code></TableCell>
-                            <TableCell><Button size="small" appearance="subtle" disabled={fwBusy} onClick={() => deleteRule(r.name)}>Delete</Button></TableCell>
+                            <TableCell>
+                              <Tooltip content={`Delete firewall rule ${r.name}`} relationship="label">
+                                <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete firewall rule ${r.name}`} disabled={fwBusy} onClick={() => setConfirmDeleteRule(r.name)}>Delete</Button>
+                              </Tooltip>
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -400,6 +481,27 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                   <Button appearance="secondary" onClick={() => setFwOpen(false)} disabled={fwBusy}>Close</Button>
                   <Button appearance="primary" onClick={addRule} disabled={fwBusy || !newRuleName.trim() || !newRuleStart.trim() || !newRuleEnd.trim()}>
                     {fwBusy ? 'Saving…' : 'Add rule'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Destructive-op confirmation for firewall rule deletion. */}
+          <Dialog open={!!confirmDeleteRule} onOpenChange={(_, d) => { if (!d.open) setConfirmDeleteRule(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Delete firewall rule?</DialogTitle>
+                <DialogContent>
+                  <Body1>
+                    This removes <code>{confirmDeleteRule}</code> from <strong>{selected?.name}</strong> via ARM.
+                    Clients in that IP range will lose access. This cannot be undone.
+                  </Body1>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setConfirmDeleteRule(null)} disabled={fwBusy}>Cancel</Button>
+                  <Button appearance="primary" disabled={fwBusy} onClick={async () => { const n = confirmDeleteRule; setConfirmDeleteRule(null); if (n) await deleteRule(n); }}>
+                    {fwBusy ? 'Deleting…' : 'Delete rule'}
                   </Button>
                 </DialogActions>
               </DialogBody>
@@ -784,10 +886,28 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                     <Input value={replicaDb} onChange={(_, d) => setReplicaDb(d.value)} placeholder={database} />
                   </Field>
                   <Field label="Replica region" required>
-                    <Input value={replicaLocation} onChange={(_, d) => setReplicaLocation(d.value)} placeholder="eastus2" />
+                    <Dropdown
+                      className={s.fullWidth}
+                      selectedOptions={replicaLocation ? [replicaLocation] : []}
+                      value={replicaLocation}
+                      onOptionSelect={(_, d) => setReplicaLocation(d.optionValue || '')}
+                      aria-label="Replica region"
+                    >
+                      {AZURE_REGIONS.map((r) => <Option key={r} value={r}>{r}</Option>)}
+                    </Dropdown>
                   </Field>
-                  <Field label="SKU (optional, e.g. GP_Gen5_4)">
-                    <Input value={replicaSku} onChange={(_, d) => setReplicaSku(d.value)} placeholder="leave blank to match primary" />
+                  <Field label="SKU (optional — blank matches primary)">
+                    <Dropdown
+                      className={s.fullWidth}
+                      selectedOptions={replicaSku ? [replicaSku] : []}
+                      value={replicaSku}
+                      placeholder="Match primary"
+                      onOptionSelect={(_, d) => setReplicaSku(d.optionValue || '')}
+                      aria-label="Replica SKU"
+                    >
+                      <Option value="">Match primary</Option>
+                      {SQL_DB_SKUS.flatMap((g) => g.skus).map((sku) => <Option key={sku} value={sku}>{sku}</Option>)}
+                    </Dropdown>
                   </Field>
                   {geoError && (
                     <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Geo-replica failed</MessageBarTitle>{geoError}</MessageBarBody></MessageBar>
@@ -1013,17 +1133,30 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
               </MessageBarBody>
             </MessageBar>
           )}
-          <div className={s.formRow}><Label>Table</Label><Input value={table} onChange={(_, d) => setTable(d.value)} /></div>
-          <div className={s.formRow}><Label>Vector column</Label><Input value={column} onChange={(_, d) => setColumn(d.value)} /></div>
-          <div className={s.formRow}><Label>Dimensions</Label><Input type="number" value={String(dim)} onChange={(_, d) => setDim(Number(d.value || '0'))} /></div>
-          <div className={s.formRow}>
-            <Label>Metric</Label>
-            <select value={metric} onChange={(e) => setMetric(e.target.value as any)} style={{ padding: 4 }}>
-              <option value="cosine">cosine</option>
-              <option value="euclidean">euclidean</option>
-              <option value="dot">dot</option>
-            </select>
-          </div>
+          <Field label="Table" className={s.formRow}><Input value={table} onChange={(_, d) => setTable(d.value)} placeholder="docs" /></Field>
+          <Field label="Vector column" className={s.formRow}><Input value={column} onChange={(_, d) => setColumn(d.value)} placeholder="embedding" /></Field>
+          <Field label="Dimensions" className={s.formRow}>
+            <Dropdown
+              className={s.fullWidth}
+              selectedOptions={[String(dim)]}
+              value={String(dim)}
+              onOptionSelect={(_, d) => setDim(Number(d.optionValue || '1536'))}
+              aria-label="Vector dimensions"
+            >
+              {VECTOR_DIMS.map((n) => <Option key={n} value={String(n)}>{String(n)}</Option>)}
+            </Dropdown>
+          </Field>
+          <Field label="Metric" className={s.formRow}>
+            <Dropdown
+              className={s.fullWidth}
+              selectedOptions={[metric]}
+              value={metric}
+              onOptionSelect={(_, d) => setMetric((d.optionValue as any) || 'cosine')}
+              aria-label="Distance metric"
+            >
+              {VECTOR_METRICS.map((m) => <Option key={m} value={m}>{m}</Option>)}
+            </Dropdown>
+          </Field>
         </div>
       }
       main={

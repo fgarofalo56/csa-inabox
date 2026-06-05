@@ -23,6 +23,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
+import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
+import type { WarehouseContent } from '@/lib/apps/content-bundles/types';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Spinner, Field,
   Tab, TabList,
@@ -39,7 +42,9 @@ import {
   MathFormula20Regular, Table20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
+import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
+import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -87,9 +92,16 @@ const useStyles = makeStyles({
 // ============================================================
 // Shared KQL results panel
 // ============================================================
+interface KqlVisualization {
+  Visualization?: string;
+  Title?: string;
+  [k: string]: unknown;
+}
+
 interface KqlResult {
   ok: boolean;
   columns?: string[];
+  columnTypes?: string[];
   rows?: unknown[][];
   rowCount?: number;
   executionMs?: number;
@@ -97,6 +109,28 @@ interface KqlResult {
   error?: string;
   database?: string;
   mode?: 'query' | 'mgmt';
+  /** Parsed `| render` hint from the cluster (drives auto-chart selection). */
+  visualization?: KqlVisualization;
+}
+
+/**
+ * Map a Kusto `render` visualization name to a Loom TileViz. Mirrors the chart
+ * family the ADX web UI auto-renders. Grounded in Learn (render operator
+ * visualizations). Unknown/empty → 'table'.
+ */
+function vizFromRender(name?: string): TileViz {
+  switch ((name || '').toLowerCase()) {
+    case 'timechart': return 'timechart';
+    case 'linechart': return 'line';
+    case 'areachart': // area renders as a line series here
+    case 'stackedareachart': return 'line';
+    case 'columnchart': return 'column';
+    case 'barchart': return 'bar';
+    case 'piechart': return 'pie';
+    case 'scatterchart': return 'map'; // geo scatter → point map; non-geo falls back below
+    case 'card': return 'stat';
+    default: return 'table';
+  }
 }
 
 function fmtCell(v: unknown): string {
@@ -104,8 +138,6 @@ function fmtCell(v: unknown): string {
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }
-
-type ResultViz = 'table' | 'bar' | 'line';
 
 // Dashboard tile visual types — superset that matches the ADX `render`
 // operator visualizations exposed by Fabric Real-Time Dashboards.
@@ -332,9 +364,39 @@ function TileVisual({ viz, result }: { viz: TileViz; result: KqlResult }) {
   }
 }
 
+// Full chart family the ADX web UI exposes, plus Table. The picker switches the
+// active visual; the cluster's `| render` hint chooses the default.
+const KQL_VIZ_CHOICES: { value: TileViz; label: string }[] = [
+  { value: 'table', label: 'Table' },
+  { value: 'timechart', label: 'Time chart' },
+  { value: 'line', label: 'Line' },
+  { value: 'column', label: 'Column' },
+  { value: 'bar', label: 'Bar' },
+  { value: 'pie', label: 'Pie' },
+  { value: 'stat', label: 'Card' },
+  { value: 'map', label: 'Map' },
+];
+
 function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loading: boolean }) {
   const s = useStyles();
-  const [viz, setViz] = useState<ResultViz>('table');
+  // Default visual follows the cluster's `| render` annotation; the user can
+  // override with the chart picker. Re-derive whenever a new result arrives.
+  const renderViz = vizFromRender(result?.visualization?.Visualization);
+  const [viz, setViz] = useState<TileViz>('table');
+  const [userPicked, setUserPicked] = useState(false);
+  const lastKeyRef = useRef<string>('');
+  useEffect(() => {
+    if (!result?.ok) return;
+    // A fresh result (new row count + first column + render hint) resets to the
+    // render default so a `| render piechart` query opens as a pie, like ADX.
+    const key = `${result.rowCount ?? 0}|${(result.columns || []).join(',')}|${result.visualization?.Visualization || ''}`;
+    if (key !== lastKeyRef.current) {
+      lastKeyRef.current = key;
+      setViz(renderViz);
+      setUserPicked(false);
+    }
+  }, [result, renderViz]);
+
   if (loading) {
     return <div className={s.resultBox}><Spinner size="small" label="Executing KQL…" labelPosition="after" /></div>;
   }
@@ -355,43 +417,45 @@ function KqlResultsPanel({ result, loading }: { result: KqlResult | null; loadin
   }
   const rows = result.rows || [];
   const columns = result.columns || [];
+  const renderName = result.visualization?.Visualization;
+  const vizTitle = result.visualization?.Title;
   return (
     <div className={s.resultBox}>
       <div className={s.resultMeta}>
         <Badge appearance="filled" color="success">{result.rowCount ?? rows.length} rows</Badge>
         <Caption1>· {result.executionMs} ms</Caption1>
         {result.mode === 'mgmt' && <Badge appearance="outline">mgmt</Badge>}
+        {renderName && <Badge appearance="outline" color="brand" title="from the query's | render operator">render: {renderName}</Badge>}
         {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
         {rows.length > 0 && (
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }} role="tablist" aria-label="Result view">
-            {(['table', 'bar', 'line'] as ResultViz[]).map((v) => (
-              <Button key={v} size="small" appearance={viz === v ? 'primary' : 'subtle'}
-                onClick={() => setViz(v)} aria-pressed={viz === v}>
-                {v === 'table' ? 'Table' : v === 'bar' ? 'Bar' : 'Line'}
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexWrap: 'wrap' }} role="tablist" aria-label="Result view">
+            {KQL_VIZ_CHOICES.map((v) => (
+              <Button key={v.value} size="small" appearance={viz === v.value ? 'primary' : 'subtle'}
+                onClick={() => { setViz(v.value); setUserPicked(true); }} aria-pressed={viz === v.value}>
+                {v.label}
               </Button>
             ))}
           </div>
         )}
       </div>
+      {vizTitle && viz !== 'table' && <Caption1 style={{ fontWeight: 600 }}>{vizTitle}</Caption1>}
+      {!userPicked && renderName && viz !== 'table' && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Auto-rendered from <code>| render {renderName}</code>. Switch views above.
+        </Caption1>
+      )}
       {rows.length === 0 ? (
         <Caption1>Query returned no rows.</Caption1>
       ) : viz !== 'table' ? (
-        <ResultChart columns={columns} rows={rows} kind={viz} />
+        <TileVisual viz={viz} result={result} />
       ) : (
-        <div className={s.tableWrap}>
-          <Table aria-label="KQL results" size="small">
-            <TableHeader>
-              <TableRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((row, i) => (
-                <TableRow key={i}>
-                  {columns.map((_, j) => <TableCell key={j} className={s.cell}>{fmtCell(row[j])}</TableCell>)}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <KustoResultsGrid
+          columns={columns}
+          columnTypes={result.columnTypes}
+          rows={rows}
+          totalRowCount={result.rowCount}
+          exportName={`kql-${result.database || 'results'}`}
+        />
       )}
     </div>
   );
@@ -707,7 +771,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                       {getDataMode === 'file' && (
                         <div>
                           <Label>File</Label>
-                          <input type="file" onChange={(e) => setGetDataFile(e.target.files?.[0] || null)} />
+                          <input type="file" aria-label="Data file to ingest (CSV, JSON, or Parquet)" onChange={(e) => setGetDataFile(e.target.files?.[0] || null)} />
                           {getDataFile && (
                             <Caption1>{getDataFile.name} ({(getDataFile.size / 1024).toFixed(1)} KB)</Caption1>
                           )}
@@ -820,12 +884,18 @@ interface KqlDbInfo {
   cluster?: string;
   database?: string;
   details?: Record<string, unknown> | null;
-  tables?: Array<{ name: string }>;
+  tables?: Array<{ name: string; fromContent?: boolean }>;
   tableCount?: number;
-  functions?: Array<{ name: string; parameters?: string }>;
+  functions?: Array<{ name: string; parameters?: string; fromContent?: boolean }>;
   functionCount?: number;
   materializedViews?: Array<{ name: string; sourceTable?: string }>;
   materializedViewCount?: number;
+  // Content-derived projections surfaced when the live ADX object is absent
+  // (bundle-installed KQL database not yet provisioned to the cluster). Lets
+  // the editor open FULLY BUILT-OUT — schema + starter queries.
+  schema?: Array<{ name: string; columns: Array<{ name: string; type: string }>; sample?: unknown[][]; live?: boolean }>;
+  starterQueries?: Array<{ name: string; kql: string }>;
+  contentFallback?: boolean;
   error?: string;
 }
 
@@ -887,6 +957,25 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       setLoading(false);
     }
   }, [id, kql]);
+
+  // Shift+Enter runs the query (the "Run (Shift+Enter)" button label promises
+  // this). Only fires when focus is inside the KQL editor surface so it never
+  // hijacks the shortcut elsewhere on the page. Mirrors the Ctrl+S pattern
+  // used by the Queryset / Dashboard / Eventstream editors.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && e.shiftKey) {
+        const active = document.activeElement as HTMLElement | null;
+        const inEditor = !!active?.closest?.('[aria-label="KQL query editor"]');
+        if (inEditor && !loading && id && id !== 'new') {
+          e.preventDefault();
+          run();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [loading, id, run]);
 
   const openWizard = useCallback((k: KqlWizardKind) => {
     setWizardKind(k); setWizError(null); setWizSuccess(null);
@@ -1046,6 +1135,99 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
           />
           <KqlResultsPanel result={result} loading={loading} />
 
+          {/* Starter schema + queries from the app-install template. Surfaced
+              when the live ADX object isn't provisioned yet so a bundle-
+              installed KQL database opens FULLY BUILT-OUT (tables + columns +
+              sample rows + starter analyst queries) instead of empty. Once the
+              tables/functions exist on the live cluster the navigator + Run
+              hit the real backend; these template rows are clearly labeled. */}
+          {info?.contentFallback && (
+            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>App template — schema & starter queries</MessageBarTitle>
+                  This KQL database ships a starter schema and analyst queries from its app
+                  bundle. Create the tables on the live cluster (New → Table, or run a
+                  starter query that references them) to ingest data; until then these are
+                  the template definitions.
+                </MessageBarBody>
+              </MessageBar>
+
+              {Array.isArray(info.schema) && info.schema.length > 0 && (
+                <div>
+                  <Subtitle2>Tables ({info.schema.length})</Subtitle2>
+                  <Tree aria-label="Starter table schema" style={{ marginTop: 6 }}>
+                    {info.schema.map((t) => (
+                      <TreeItem key={t.name} itemType="branch" value={`stbl-${t.name}`}>
+                        <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
+                          {t.name}{' '}
+                          <Caption1>({t.columns.length} cols)</Caption1>{' '}
+                          <Badge size="small" appearance="tint" color={t.live ? 'success' : 'warning'}>
+                            {t.live ? 'live' : 'template'}
+                          </Badge>
+                        </TreeItemLayout>
+                        <Tree>
+                          {t.columns.map((c) => (
+                            <TreeItem key={c.name} itemType="leaf" value={`stcol-${t.name}-${c.name}`}>
+                              <TreeItemLayout iconBefore={<Table20Regular />}>
+                                {c.name} <Caption1>: {c.type}</Caption1>
+                              </TreeItemLayout>
+                            </TreeItem>
+                          ))}
+                        </Tree>
+                        {Array.isArray(t.sample) && t.sample.length > 0 && (
+                          <div style={{ overflowX: 'auto', margin: '4px 0 8px 24px' }}>
+                            <Table size="extra-small" aria-label={`${t.name} sample rows`}>
+                              <TableHeader>
+                                <TableRow>
+                                  {t.columns.map((c) => (
+                                    <TableHeaderCell key={c.name}>{c.name}</TableHeaderCell>
+                                  ))}
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {t.sample.slice(0, 5).map((row, ri) => (
+                                  <TableRow key={ri}>
+                                    {(Array.isArray(row) ? row : []).map((cell, ci) => (
+                                      <TableCell key={ci}>{String(cell)}</TableCell>
+                                    ))}
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        )}
+                      </TreeItem>
+                    ))}
+                  </Tree>
+                </div>
+              )}
+
+              {Array.isArray(info.starterQueries) && info.starterQueries.length > 0 && (
+                <div>
+                  <Subtitle2>Starter queries ({info.starterQueries.length})</Subtitle2>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                    {info.starterQueries.map((q) => (
+                      <Button
+                        key={q.name}
+                        appearance="subtle"
+                        icon={<Play20Regular />}
+                        style={{ justifyContent: 'flex-start' }}
+                        onClick={() => {
+                          setKql(q.kql);
+                          const el = document.querySelector('textarea[aria-label="KQL query editor"]') as HTMLTextAreaElement | null;
+                          el?.focus();
+                        }}
+                      >
+                        {q.name}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <Dialog open={!!wizardKind} onOpenChange={(_: unknown, d: any) => { if (!d.open) setWizardKind(null); }}>
             <DialogSurface>
               <DialogBody>
@@ -1104,6 +1286,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                         <input
                           type="file"
                           accept=".csv,text/csv"
+                          aria-label="CSV file to ingest inline"
                           onChange={(e) => setWizIngestFile(e.target.files?.[0] || null)}
                         />
                         <Caption1>For larger files, use Eventhouse → Get data (configures Event Hub data-connection).</Caption1>
@@ -1596,6 +1779,10 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const [shareOpen, setShareOpen] = useState(false);
   // Query-based param value caches: variableName → string[]
   const [paramValueCache, setParamValueCache] = useState<Record<string, string[]>>({});
+  // Real KQL databases on the shared Loom ADX cluster — populates the data
+  // source database dropdown so binding a source defaults to a deployed DB
+  // instead of a blank free-text box (operator no-freeform mandate).
+  const [clusterDbs, setClusterDbs] = useState<string[]>([]);
 
   const defaultDb = state?.database || state?.defaultDatabase || 'loomdb-default';
 
@@ -1669,6 +1856,24 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   useEffect(() => { load(false); /* eslint-disable-next-line */ }, [id]);
   useEffect(() => { if (state?.ok && tiles.length > 0) runAll(); /* eslint-disable-next-line */ }, [state?.ok]);
 
+  // Fetch the real KQL databases on the shared cluster once, so data-source
+  // binding is a dropdown of deployed databases (not a blank text box). Best
+  // effort: if the cluster is unreachable the dialog falls back to free text.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/items/eventhouse/cluster');
+        const ct = r.headers.get('content-type') || '';
+        const j = ct.includes('application/json') ? await r.json() : { ok: false };
+        if (!cancelled && j.ok && Array.isArray(j.databases)) {
+          setClusterDbs(j.databases.map((d: { name: string }) => d.name).filter(Boolean));
+        }
+      } catch { /* dropdown falls back to free text */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const addTile = useCallback(() => {
     setTiles((prev) => {
       const next: DashTile[] = [...prev, {
@@ -1683,6 +1888,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   }, []);
 
   const deleteTile = useCallback((idx: number) => {
+    if (typeof window !== 'undefined' && !window.confirm('Delete this tile? This cannot be undone until you reload without saving.')) return;
     setTiles((prev) => prev.filter((_, i) => i !== idx));
     setDirty(true);
     setExpandedIdx((cur) => (cur === idx ? null : cur));
@@ -1759,9 +1965,12 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
 
   // --- Data sources ---
   const addDataSource = useCallback(() => {
-    setDataSources((prev) => [...prev, { id: genId(), name: `Source ${prev.length + 1}`, database: defaultDb }]);
+    // Default to a real deployed database (prefer the cluster default) rather
+    // than a blank box — operator no-freeform mandate.
+    const seedDb = clusterDbs.includes(defaultDb) ? defaultDb : (clusterDbs[0] || defaultDb);
+    setDataSources((prev) => [...prev, { id: genId(), name: `Source ${prev.length + 1}`, database: seedDb }]);
     setDirty(true);
-  }, [defaultDb]);
+  }, [defaultDb, clusterDbs]);
   const updateDataSource = useCallback((idx: number, patch: Partial<DashDataSource>) => {
     setDataSources((prev) => prev.map((d, i) => i === idx ? { ...d, ...patch } : d));
     setDirty(true);
@@ -2005,7 +2214,19 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     </div>
                     <div style={{ flex: 1 }}>
                       <Caption1>KQL database</Caption1>
-                      <Input value={ds.database} onChange={(_: unknown, d: any) => updateDataSource(idx, { database: d.value })} placeholder="loomdb-default" />
+                      {clusterDbs.length > 0 ? (
+                        <Select
+                          value={clusterDbs.includes(ds.database) ? ds.database : '__custom__'}
+                          onChange={(_: unknown, d: any) => { if (d.value !== '__custom__') updateDataSource(idx, { database: d.value }); }}
+                          aria-label="KQL database"
+                        >
+                          {clusterDbs.map((db) => <option key={db} value={db}>{db}</option>)}
+                          <option value="__custom__">Other (type below)…</option>
+                        </Select>
+                      ) : null}
+                      {(clusterDbs.length === 0 || !clusterDbs.includes(ds.database)) && (
+                        <Input value={ds.database} onChange={(_: unknown, d: any) => updateDataSource(idx, { database: d.value })} placeholder="loomdb-default" aria-label="KQL database (custom)" style={{ marginTop: clusterDbs.length > 0 ? 4 : 0 }} />
+                      )}
                     </div>
                     <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => removeDataSource(idx)} aria-label="Remove data source" />
                   </div>
@@ -2744,8 +2965,13 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   // new rule
   const [ruleOpen, setRuleOpen] = useState(false);
   const [ruleName, setRuleName] = useState('');
-  const [ruleCondition, setRuleCondition] = useState('{ "operator": "GreaterThan", "value": 20 }');
-  const [ruleAction, setRuleAction] = useState('{ "kind": "TeamsMessage", "config": {} }');
+  // Rule wizard (no JSON): condition (property/operator/value) + action (kind + target/message).
+  const [condProperty, setCondProperty] = useState('');
+  const [condOperator, setCondOperator] = useState('GreaterThan');
+  const [condValue, setCondValue] = useState('20');
+  const [actKind, setActKind] = useState<'TeamsMessage' | 'Email' | 'Webhook' | 'AdfPipelineRun' | 'NotebookRun' | 'PowerAutomateFlow'>('TeamsMessage');
+  const [actTarget, setActTarget] = useState('');
+  const [actMessage, setActMessage] = useState('Loom alert: {{eventValue}}');
   const [ruleBusy, setRuleBusy] = useState(false);
   const [ruleErr, setRuleErr] = useState<string | null>(null);
 
@@ -2811,9 +3037,21 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const addRule = useCallback(async () => {
     if (!ruleName.trim() || !workspaceId || !selectedId) return;
     setRuleBusy(true); setRuleErr(null);
-    let condition: any; let action: any;
-    try { condition = JSON.parse(ruleCondition); } catch (e: any) { setRuleErr(`condition JSON: ${e?.message}`); setRuleBusy(false); return; }
-    try { action = JSON.parse(ruleAction); } catch (e: any) { setRuleErr(`action JSON: ${e?.message}`); setRuleBusy(false); return; }
+    // Build the structured condition + action from the wizard fields (no JSON).
+    const condition = {
+      ...(condProperty.trim() ? { property: condProperty.trim() } : {}),
+      operator: condOperator,
+      value: condValue.trim() === '' ? null : (Number.isNaN(Number(condValue)) ? condValue.trim() : Number(condValue)),
+    };
+    const cfgByKind: Record<string, Record<string, string>> = {
+      TeamsMessage: { webhookUrl: actTarget, message: actMessage },
+      Email: { to: actTarget, subject: actMessage },
+      Webhook: { url: actTarget },
+      AdfPipelineRun: { pipeline: actTarget },
+      NotebookRun: { notebookId: actTarget },
+      PowerAutomateFlow: { triggerUrl: actTarget },
+    };
+    const action = { kind: actKind, config: cfgByKind[actKind] || {} };
     try {
       const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
@@ -2824,7 +3062,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       if (!j.ok) { setRuleErr(j.error || 'add rule failed'); }
       else { setRuleOpen(false); setRuleName(''); loadRules(workspaceId, selectedId); }
     } finally { setRuleBusy(false); }
-  }, [ruleName, ruleCondition, ruleAction, workspaceId, selectedId, loadRules]);
+  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, workspaceId, selectedId, loadRules]);
 
   const triggerNow = useCallback(async (ruleId: string) => {
     if (!workspaceId || !selectedId) return;
@@ -2856,19 +3094,21 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     }
   }, [workspaceId, selectedId, loadRules]);
 
-  // Action template — pre-fill the New Rule dialog with the common shape.
+  // Action template — pre-select the action kind + a sensible target/message in
+  // the wizard (no JSON). The user refines via the dropdowns/inputs.
   const openTemplate = useCallback((kind: 'Email' | 'Teams' | 'Pipeline' | 'Notebook' | 'PowerAutomate') => {
-    const templates: Record<typeof kind, string> = {
-      Email: JSON.stringify({ kind: 'Email', config: { to: 'alerts@example.com', subject: 'Loom alert', body: '{{eventValue}}' } }, null, 2),
-      Teams: JSON.stringify({ kind: 'TeamsMessage', config: { webhookUrl: 'https://outlook.office.com/webhook/...', message: 'Loom alert: {{eventValue}}' } }, null, 2),
-      Pipeline: JSON.stringify({ kind: 'AdfPipelineRun', config: { factory: 'adf-loom-default-eastus2', pipeline: 'pl_alert_handler', parameters: {} } }, null, 2),
-      Notebook: JSON.stringify({ kind: 'NotebookRun', config: { workspaceId: workspaceId, notebookId: '<notebook-guid>', parameters: {} } }, null, 2),
-      PowerAutomate: JSON.stringify({ kind: 'PowerAutomateFlow', config: { triggerUrl: 'https://prod-xx.westus.logic.azure.com/workflows/.../triggers/...' } }, null, 2),
-    } as const;
+    const map = {
+      Email: { k: 'Email' as const, t: 'alerts@example.com', m: 'Loom alert' },
+      Teams: { k: 'TeamsMessage' as const, t: 'https://outlook.office.com/webhook/...', m: 'Loom alert: {{eventValue}}' },
+      Pipeline: { k: 'AdfPipelineRun' as const, t: 'pl_alert_handler', m: '' },
+      Notebook: { k: 'NotebookRun' as const, t: '', m: '' },
+      PowerAutomate: { k: 'PowerAutomateFlow' as const, t: 'https://prod-xx.logic.azure.com/workflows/.../triggers/...', m: '' },
+    };
+    const sel = map[kind];
     setRuleName(`alert-${kind.toLowerCase()}-${Date.now().toString(36)}`);
-    setRuleAction(templates[kind]);
+    setActKind(sel.k); setActTarget(sel.t); setActMessage(sel.m);
     setRuleOpen(true);
-  }, [workspaceId]);
+  }, []);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -2956,12 +3196,58 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                     <DialogBody>
                       <DialogTitle>Add rule</DialogTitle>
                       <DialogContent>
-                        <Input placeholder="rule name" value={ruleName} onChange={(_: unknown, d: any) => setRuleName(d.value)} style={{ width: '100%' }} />
-                        <Caption1 style={{ marginTop: 8 }}>condition JSON</Caption1>
-                        <Textarea value={ruleCondition} onChange={(_: unknown, d: any) => setRuleCondition(d.value)} rows={3} style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }} />
-                        <Caption1 style={{ marginTop: 8 }}>action JSON</Caption1>
-                        <Textarea value={ruleAction} onChange={(_: unknown, d: any) => setRuleAction(d.value)} rows={3} style={{ width: '100%', fontFamily: 'Consolas, monospace', fontSize: 12 }} />
-                        {ruleErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{ruleErr}</MessageBarBody></MessageBar>}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                          <Field label="Rule name" required>
+                            <Input placeholder="e.g. Latency SLA breach" value={ruleName} onChange={(_: unknown, d: any) => setRuleName(d.value)} />
+                          </Field>
+
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>WHEN — condition</Caption1>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <Field label="Property" style={{ flex: 1 }}>
+                              <Input placeholder="e.g. latency_ms" value={condProperty} onChange={(_: unknown, d: any) => setCondProperty(d.value)} />
+                            </Field>
+                            <Field label="Operator" style={{ width: 180 }}>
+                              <Select value={condOperator} onChange={(_: unknown, d: any) => setCondOperator(d.value)}>
+                                {['GreaterThan', 'GreaterThanOrEqual', 'LessThan', 'LessThanOrEqual', 'Equals', 'NotEquals', 'BecomesTrue', 'ChangesTo'].map((o) => <option key={o} value={o}>{o}</option>)}
+                              </Select>
+                            </Field>
+                            <Field label="Value" style={{ width: 120 }}>
+                              <Input placeholder="20" value={condValue} onChange={(_: unknown, d: any) => setCondValue(d.value)} />
+                            </Field>
+                          </div>
+
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>THEN — action</Caption1>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <Field label="Do" style={{ width: 200 }}>
+                              <Select value={actKind} onChange={(_: unknown, d: any) => setActKind(d.value)}>
+                                <option value="TeamsMessage">Post to Teams</option>
+                                <option value="Email">Send email</option>
+                                <option value="Webhook">Call webhook</option>
+                                <option value="AdfPipelineRun">Run a pipeline</option>
+                                <option value="NotebookRun">Run a notebook</option>
+                                <option value="PowerAutomateFlow">Trigger Power Automate</option>
+                              </Select>
+                            </Field>
+                            <Field label={
+                              actKind === 'TeamsMessage' ? 'Teams webhook URL' :
+                              actKind === 'Email' ? 'To address' :
+                              actKind === 'Webhook' ? 'Webhook URL' :
+                              actKind === 'AdfPipelineRun' ? 'Pipeline name' :
+                              actKind === 'NotebookRun' ? 'Notebook id' : 'Flow trigger URL'
+                            } style={{ flex: 1 }}>
+                              <Input value={actTarget} onChange={(_: unknown, d: any) => setActTarget(d.value)} />
+                            </Field>
+                          </div>
+                          {(actKind === 'TeamsMessage' || actKind === 'Email') && (
+                            <Field label={actKind === 'Email' ? 'Subject' : 'Message'}>
+                              <Input value={actMessage} onChange={(_: unknown, d: any) => setActMessage(d.value)} />
+                            </Field>
+                          )}
+                          <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
+                            when {condProperty || '<property>'} {condOperator} {condValue || '<value>'} → {actKind}
+                          </Caption1>
+                          {ruleErr && <MessageBar intent="error"><MessageBarBody>{ruleErr}</MessageBarBody></MessageBar>}
+                        </div>
                       </DialogContent>
                       <DialogActions>
                         <Button appearance="secondary" onClick={() => setRuleOpen(false)}>Cancel</Button>
@@ -3049,10 +3335,40 @@ function formatCell(v: unknown): string {
 
 export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const isNew = id === 'new';
+  // Bundle-installed warehouses stamp their rich definition (DDL, dbt models,
+  // starter queries) into the Cosmos item's state.content (WarehouseContent).
+  // The live Synapse Dedicated pool may be Paused / not-yet-provisioned, in
+  // which case /schema 409s and the explorer renders empty. Read the persisted
+  // content from the React Query cache the host page primes at
+  // ['item','warehouse',id] so the editor opens FULLY built-out — showing the
+  // DDL, dbt medallion models, and starter queries — even before the live
+  // warehouse exists. Run / Save-as-table still hit the live backend.
+  const itemQ = useQuery<WorkspaceItem>({
+    queryKey: ['item', 'warehouse', id],
+    queryFn: () => getItem('warehouse', id),
+    enabled: !isNew,
+  });
+  const content = (itemQ.data?.state as any)?.content as WarehouseContent | undefined;
+  const bundleContent = content?.kind === 'warehouse' ? content : undefined;
+  const starterQueries = bundleContent?.starterQueries ?? [];
+  const dbtModels = bundleContent?.dbtModels ?? [];
+  const hasBundle = !!bundleContent && (!!bundleContent.ddl || starterQueries.length > 0 || dbtModels.length > 0);
+
   const [sqlText, setSqlText] = useState(SAMPLE_SQL);
   const [schema, setSchema] = useState<WHSchemaResp | null>(null);
   const [result, setResult] = useState<WHQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
+  // Seed the SQL editor with the bundle DDL once, when the live warehouse has
+  // no tables to show — so the surface lands populated instead of on a smoke
+  // test. The user can Run it (creates the schema) against the live compute.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current || !bundleContent?.ddl) return;
+    if (sqlText !== SAMPLE_SQL) return;
+    setSqlText(`-- Starter DDL from the installed app bundle.\n-- Run against the warehouse compute to provision these tables.\n\n${bundleContent.ddl}`);
+    seededRef.current = true;
+  }, [bundleContent, sqlText]);
   // Surface the underlying Synapse Dedicated SQL pool via ComputePicker so
   // users can Resume the pool when paused without leaving the Warehouse
   // editor. Selection is informational here — Warehouse query routes to the
@@ -3210,7 +3526,61 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div style={{ padding: 8 }}>
-          <Tree aria-label="Warehouse explorer" defaultOpenItems={['schemas']}>
+          <Tree aria-label="Warehouse explorer" defaultOpenItems={['schemas', 'starter', 'starter-queries', 'dbt-models']}>
+            {hasBundle && (
+              <TreeItem itemType="branch" value="starter">
+                <TreeItemLayout iconBefore={<Database20Regular />}>
+                  Starter content (app bundle)
+                </TreeItemLayout>
+                <Tree>
+                  {bundleContent?.ddl && (
+                    <TreeItem
+                      itemType="leaf"
+                      value="starter-ddl"
+                      onClick={() => { setSqlText(`-- Starter DDL from the installed app bundle.\n-- Run against the warehouse compute to provision these tables.\n\n${bundleContent.ddl}`); setResult(null); }}
+                    >
+                      <TreeItemLayout iconBefore={<DocumentTable20Regular />}>DDL — schema script</TreeItemLayout>
+                    </TreeItem>
+                  )}
+                  {dbtModels.length > 0 && (
+                    <TreeItem itemType="branch" value="dbt-models">
+                      <TreeItemLayout iconBefore={<Folder20Regular />}>dbt models ({dbtModels.length})</TreeItemLayout>
+                      <Tree>
+                        {dbtModels.map((m, i) => (
+                          <TreeItem
+                            key={`${m.layer}.${m.name}.${i}`}
+                            itemType="leaf"
+                            value={`dbt-${m.layer}-${m.name}-${i}`}
+                            onClick={() => { setSqlText(`-- dbt model [${m.layer}] ${m.name}\n\n${m.sql}`); setResult(null); }}
+                          >
+                            <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
+                              {m.name} <Caption1>· {m.layer}</Caption1>
+                            </TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  )}
+                  {starterQueries.length > 0 && (
+                    <TreeItem itemType="branch" value="starter-queries">
+                      <TreeItemLayout iconBefore={<Folder20Regular />}>Starter queries ({starterQueries.length})</TreeItemLayout>
+                      <Tree>
+                        {starterQueries.map((qy, i) => (
+                          <TreeItem
+                            key={`${qy.name}-${i}`}
+                            itemType="leaf"
+                            value={`sq-${qy.name}-${i}`}
+                            onClick={() => { setSqlText(qy.sql); setResult(null); }}
+                          >
+                            <TreeItemLayout iconBefore={<Play20Regular />}>{qy.name}</TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  )}
+                </Tree>
+              </TreeItem>
+            )}
             <TreeItem itemType="branch" value="schemas">
               <TreeItemLayout iconBefore={<Database20Regular />}>
                 Schemas ({schemaEntries.length})
@@ -3264,6 +3634,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               <MessageBarBody>
                 <MessageBarTitle>Warehouse compute is {schema.state}</MessageBarTitle>
                 {schema.message || 'Pick the Synapse Dedicated SQL pool below and click Resume.'}
+                {hasBundle && ' This warehouse was installed from an app bundle — its starter DDL, dbt models, and queries are listed in the explorer on the left. Resume the pool, then Run the DDL to provision them.'}
               </MessageBarBody>
             </MessageBar>
           )}
@@ -3393,7 +3764,11 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'measures' | 'build' | 'refresh' | 'config' | 'access' | 'governance' | 'embed'>('tables');
+  // Power BI is opt-in (no-fabric-dependency.md): the editor renders Loom-native
+  // tabular metadata by default and only exposes Power BI actions/embed when the
+  // Console identity actually has Power BI workspace access.
+  const powerBiConfigured = !!(ws.workspaces && ws.workspaces.length > 0 && !ws.error);
 
   // --- Model builder (real Power BI push-dataset authoring) ---------------
   // Builds a NEW semantic model with tables/typed-columns/measures/relationships
@@ -3641,15 +4016,19 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
           <div className={s.pad}>
             <div className={s.toolbar}>
               <Badge appearance="filled" color="brand">Semantic model</Badge>
-              <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
-              <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
-              <Button appearance="outline" icon={<Add20Regular />} onClick={focusBuild} disabled={!workspaceId} title={!workspaceId ? 'select a workspace first' : 'Build a new semantic model (push dataset) via Power BI REST'} style={{ marginLeft: 'auto' }}>Build model</Button>
+              {powerBiConfigured && (
+                <>
+                  <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+                  <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+                </>
+              )}
+              <Button appearance="outline" icon={<Add20Regular />} onClick={focusBuild} disabled={!powerBiConfigured || !workspaceId} title={!powerBiConfigured ? 'Power BI embed is opt-in; workspace not configured' : 'Build a new semantic model (push dataset) via Power BI REST'} style={{ marginLeft: 'auto' }}>Build model</Button>
               <Button
                 appearance="primary"
                 icon={<Play20Regular />}
-                disabled={!datasetId || refreshing || detail?.dataset?.isRefreshable === false}
+                disabled={!datasetId || refreshing || detail?.dataset?.isRefreshable === false || !powerBiConfigured}
                 onClick={refreshNow}
-                title={detail?.dataset?.isRefreshable === false ? 'Dataset is not refreshable (e.g. push dataset or DirectQuery without gateway).' : undefined}
+                title={!powerBiConfigured ? 'Power BI embed is opt-in; workspace not configured' : (detail?.dataset?.isRefreshable === false ? 'Dataset is not refreshable (e.g. push dataset or DirectQuery without gateway).' : undefined)}
               >
                 {refreshing ? 'Queuing…' : 'Refresh dataset'}
               </Button>
@@ -3657,6 +4036,14 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
             {listErr && <MessageBar intent="error"><MessageBarBody>{listErr}</MessageBarBody></MessageBar>}
             {refreshErr && <MessageBar intent="error"><MessageBarBody>{refreshErr}</MessageBarBody></MessageBar>}
             {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+            {!powerBiConfigured && (
+              <MessageBar intent="info" style={{ marginBottom: 12 }}>
+                <MessageBarBody>
+                  <MessageBarTitle>Power BI embed is opt-in</MessageBarTitle>
+                  The Console identity isn&rsquo;t registered in Power BI / not in any workspace. This editor shows Loom-native table, relationship, and measure (DAX) metadata. To enable Build model / Refresh / the Power BI Embed tab, register the Console UAMI in your Power BI tenant and add it to a workspace. <a href="https://learn.microsoft.com/power-bi/admin/service-principal-api-considerations" target="_blank" rel="noreferrer">Power BI service principal setup</a>.
+                </MessageBarBody>
+              </MessageBar>
+            )}
             {detail?.dataset && (
               <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Caption1>Owner: <strong>{detail.dataset.configuredBy || '—'}</strong></Caption1>
@@ -3675,6 +4062,9 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="build">Build model</Tab>
                   <Tab value="refresh">Refresh history ({refreshes.length})</Tab>
                   <Tab value="config">Configuration</Tab>
+                  <Tab value="governance">Gateway &amp; endorsement</Tab>
+                  <Tab value="access">Manage access</Tab>
+                  {powerBiConfigured && <Tab value="embed">Power BI Embed</Tab>}
                 </TabList>
               </div>
               <div className={s.pad}>
@@ -3948,6 +4338,23 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     </MessageBar>
                   </>
                 )}
+                {tab === 'governance' && datasetId && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                    <EndorsementControl workspaceId={workspaceId} itemId={datasetId} itemType="datasets" />
+                    <GatewayDatasourcesPanel workspaceId={workspaceId} datasetId={datasetId} />
+                  </div>
+                )}
+                {tab === 'access' && (
+                  <ManageAccessPanel workspaceId={workspaceId} />
+                )}
+                {tab === 'embed' && powerBiConfigured && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      <MessageBarTitle>Power BI embedding for semantic models</MessageBarTitle>
+                      Browse the model metadata and author DAX in the Tables, Relationships, and Measures tabs above. Power BI live-query / external-tool embedding is configured here when a workspace is bound.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
               </div>
             </>
           )}
@@ -3999,6 +4406,9 @@ function ReportLikeEditor({
   const [editMode, setEditMode] = useState(false);
   const [viewerErr, setViewerErr] = useState<string | null>(null);
   const embedRef = useRef<any>(null);
+  // Power BI is opt-in (no-fabric-dependency.md): render Loom-native report
+  // metadata by default; expose embed/refresh/export only when configured.
+  const powerBiConfigured = !!(ws.workspaces && ws.workspaces.length > 0 && !ws.error);
 
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
@@ -4257,11 +4667,15 @@ function ReportLikeEditor({
         <div className={s.pad}>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">{kind === 'paginated' ? 'Paginated report' : 'Power BI report'}</Badge>
-            <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
-            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Reload</Button>
+            {powerBiConfigured && (
+              <>
+                <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+                <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Reload</Button>
+              </>
+            )}
             {report?.webUrl && <Button appearance="outline" onClick={openInDesktop}>Open in Power BI</Button>}
-            <Button appearance="primary" icon={refreshBusy ? <Spinner size="tiny" /> : <ArrowSync20Regular />} onClick={refreshData} disabled={!reportId || refreshBusy}>{refreshBusy ? 'Refreshing…' : 'Refresh data'}</Button>
-            {kind !== 'paginated' && (
+            <Button appearance="primary" icon={refreshBusy ? <Spinner size="tiny" /> : <ArrowSync20Regular />} onClick={refreshData} disabled={!reportId || refreshBusy || !powerBiConfigured} title={!powerBiConfigured ? 'Power BI embed is opt-in; workspace not configured' : undefined}>{refreshBusy ? 'Refreshing…' : 'Refresh data'}</Button>
+            {kind !== 'paginated' && powerBiConfigured && (
               <>
                 <Button appearance="outline" onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
                 <Button appearance="outline" onClick={() => exportReport('PPTX')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX'}</Button>
@@ -4274,15 +4688,25 @@ function ReportLikeEditor({
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           {refreshMsg && <MessageBar intent={refreshMsg.ok ? 'success' : 'error'}><MessageBarBody>{refreshMsg.text}</MessageBarBody></MessageBar>}
           {exportErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Export failed</MessageBarTitle>{exportErr}</MessageBarBody></MessageBar>}
-          <MessageBar intent="info">
-            <MessageBarBody>
-              <MessageBarTitle>Visual authoring happens in Power BI Desktop</MessageBarTitle>
-              Visuals, pages, bookmarks and the filter pane are authored in <strong>Power BI Desktop</strong> (and the
-              Power BI Web editor) — that is by design, not a gap. This pane embeds the live {kind === 'paginated' ? 'paginated ' : ''}report,
-              {kind === 'paginated' ? ' links out to Power BI,' : ' triggers a dataset refresh, and exports to PDF/PPTX —'} all against the real
-              Power BI REST API. Use <strong>Open in Power BI</strong> to author.
-            </MessageBarBody>
-          </MessageBar>
+          {!powerBiConfigured && (
+            <MessageBar intent="info" style={{ marginBottom: 12 }}>
+              <MessageBarBody>
+                <MessageBarTitle>Power BI embed is opt-in</MessageBarTitle>
+                The Console identity isn&rsquo;t registered in Power BI / not in any workspace. This editor shows report metadata. To enable embedding, dataset refresh, export, and the visual viewer, register the Console UAMI in your Power BI tenant and add it to a workspace. <a href="https://learn.microsoft.com/power-bi/admin/service-principal-api-considerations" target="_blank" rel="noreferrer">Power BI service principal setup</a>.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {powerBiConfigured && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>Visual authoring happens in Power BI Desktop</MessageBarTitle>
+                Visuals, pages, bookmarks and the filter pane are authored in <strong>Power BI Desktop</strong> (and the
+                Power BI Web editor) — that is by design, not a gap. This pane embeds the live {kind === 'paginated' ? 'paginated ' : ''}report,
+                {kind === 'paginated' ? ' links out to Power BI,' : ' triggers a dataset refresh, and exports to PDF/PPTX —'} all against the real
+                Power BI REST API. Use <strong>Open in Power BI</strong> to author.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           {report && (
             <>
               <div className={s.card}>
@@ -4291,7 +4715,26 @@ function ReportLikeEditor({
                 <Caption1>modified: {report.modifiedDateTime || '—'} by {report.modifiedBy || '—'}</Caption1>
                 {report.webUrl && <Caption1><a href={report.webUrl} target="_blank" rel="noreferrer">Open in Power BI</a></Caption1>}
               </div>
-              {kind === 'paginated' ? (
+              {kind !== 'paginated' && reportId && (
+                <div className={s.card} style={{ marginTop: 8 }}>
+                  <EndorsementControl workspaceId={workspaceId} itemId={reportId} itemType="reports" />
+                </div>
+              )}
+              <div className={s.card} style={{ marginTop: 8 }}>
+                <ManageAccessPanel workspaceId={workspaceId} />
+              </div>
+              {!powerBiConfigured ? (
+                <div className={s.card}>
+                  <Subtitle2 style={{ marginBottom: 12 }}>Report metadata (Loom-native view)</Subtitle2>
+                  <Caption1 style={{ marginBottom: 8, display: 'block' }}>To embed the live report and enable refresh/export, configure Power BI workspace access above.</Caption1>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div><strong>Name:</strong> {report?.name || '—'}</div>
+                    <div><strong>Type:</strong> {report?.reportType || (kind === 'paginated' ? 'PaginatedReport' : 'PowerBIReport')}</div>
+                    <div><strong>Dataset ID:</strong> {report?.datasetId || '—'}</div>
+                    {report?.webUrl && <div><strong>Web URL:</strong> <a href={report.webUrl} target="_blank" rel="noreferrer">{report.webUrl}</a></div>}
+                  </div>
+                </div>
+              ) : kind === 'paginated' ? (
                 <MessageBar intent="warning">
                   <MessageBarBody>
                     <MessageBarTitle>Paginated report embed not yet wired</MessageBarTitle>

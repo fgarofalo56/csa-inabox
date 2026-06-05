@@ -3,15 +3,17 @@
 import { useState } from 'react';
 import {
   Title2,
-  Body1,
   makeStyles,
   tokens,
   Button,
   Textarea,
   Dropdown,
   Option,
+  MessageBar,
+  MessageBarBody,
+  MessageBarTitle,
 } from '@fluentui/react-components';
-import { Add24Regular, Play24Filled, Delete24Regular } from '@fluentui/react-icons';
+import { Add24Regular, Play24Filled, Delete24Regular, Open24Regular } from '@fluentui/react-icons';
 
 interface Cell {
   id: string;
@@ -91,8 +93,15 @@ export function NotebookPane() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ language: cell.language, source: cell.source }),
       });
-      const data = await res.json();
-      updateCell(cell.id, { output: data.output ?? data.error, running: false });
+      const data = await res.json().catch(() => ({}));
+      // The generic scratchpad route honest-gates (501) and names the real
+      // per-language compute route. Surface that clearly instead of a bare error.
+      const out = data.output
+        ?? (data.remediation
+          ? `${data.error}\n\n${data.remediation.message}\n→ ${data.remediation.route}`
+          : data.error)
+        ?? `HTTP ${res.status}`;
+      updateCell(cell.id, { output: out, running: false });
     } catch (e) {
       updateCell(cell.id, { output: String(e), running: false });
     }
@@ -107,6 +116,18 @@ export function NotebookPane() {
           Add cell
         </Button>
       </div>
+
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Quick scratchpad</MessageBarTitle>
+          This is a lightweight cell scratchpad. Cell execution routes to the compute that owns the
+          language (Spark → Databricks/Synapse, SQL → warehouse, KQL → KQL database) — Run reports the
+          exact route. For full kernel sessions, attached compute, and saved notebooks open a{' '}
+          <a href="/items" style={{ color: tokens.colorBrandForeground1 }}>
+            <Open24Regular style={{ verticalAlign: 'middle' }} /> Databricks/Synapse notebook
+          </a>{' '}from the catalog.
+        </MessageBarBody>
+      </MessageBar>
 
       {cells.map((cell) => (
         <div key={cell.id} className={styles.cell}>

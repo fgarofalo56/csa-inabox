@@ -35,6 +35,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 
 const useStyles = makeStyles({
   pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
@@ -1102,12 +1103,12 @@ function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agent
               </div>
               <Caption1>{ct.description}</Caption1>
               {existing?.embedUrl && <Caption1>Embed: <code>{existing.embedUrl}</code></Caption1>}
-              <Field label="Config (JSON)">
-                <Textarea
-                  rows={3}
+              <Field label="Channel settings">
+                <KeyValueGrid
                   value={configText[ct.type] ?? ''}
-                  onChange={(_, d) => setConfigText((m) => ({ ...m, [ct.type]: d.value }))}
-                  placeholder={'{"setting": "value"}'}
+                  onChange={(v) => setConfigText((m) => ({ ...m, [ct.type]: v }))}
+                  keyLabel="Setting" valueLabel="Value"
+                  keyPlaceholder="setting" valuePlaceholder="value" addLabel="Add setting"
                 />
               </Field>
               <Button

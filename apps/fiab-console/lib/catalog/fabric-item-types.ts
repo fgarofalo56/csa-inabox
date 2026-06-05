@@ -35,7 +35,8 @@ export type WorkloadCategory =
   | 'CSA Data Products'
   | 'Copilot Studio'
   | 'Power Platform'
-  | 'AI & Agents';
+  | 'AI & Agents'
+  | 'Fabric Apps';
 
 export interface LearnStep {
   title: string;
@@ -77,6 +78,31 @@ export interface FabricItemType {
 }
 
 export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
+  // Fabric Apps — Rayfin (Build 2026 preview)
+  { slug: 'rayfin-app', displayName: 'Rayfin app', restType: 'RayfinApp', category: 'Fabric Apps', preview: true,
+    description: 'Code-first app backend (database, auth, Data APIs, storage) deployed to Fabric with the Rayfin SDK + CLI.',
+    learnContent: {
+      "overview": "Rayfin is Microsoft's open-source Backend-as-a-Service for Fabric (Build 2026 preview). You define data models, auth, APIs, storage, and business logic in TypeScript with the @microsoft/rayfin-core decorators, then `npx rayfin up` deploys it to your Fabric workspace as a Rayfin item — data lands in OneLake (no ETL) and inherits your tenant's Entra identity, security, and governance. In Loom you author the backend spec here and Loom generates the SDK model + the exact CLI commands to deploy; the Rayfin CLI runs on your dev machine.",
+      "steps": [
+        {
+          "title": "Define entities + services",
+          "body": "Add entities (with text/boolean/date/number fields) and toggle the services you need — database, storage, Fabric (Entra) auth, static hosting."
+        },
+        {
+          "title": "Generate the model + commands",
+          "body": "Loom emits a model.ts using @microsoft/rayfin-core decorators (@entity/@text/@boolean/@date) and the exact CLI sequence — copy them into your project."
+        },
+        {
+          "title": "Scaffold + deploy",
+          "body": "Run `npm create @microsoft/rayfin@latest <app> --workspace <ws>`, then `npx rayfin init --services db,storage --auth-methods fabric`, then `npx rayfin up` to deploy to Fabric."
+        },
+        {
+          "title": "It runs in your tenant",
+          "body": "The deployed Rayfin item runs on Fabric under your identity/network/governance; app data lands in OneLake so it's catalogable and governed alongside your other items."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/fabric/apps/overview"
+    } },
   // Data Engineering
   { slug: 'lakehouse', displayName: 'Lakehouse', restType: 'Lakehouse', category: 'Data Engineering',
     description: 'A unified store for files, folders, and Delta tables in OneLake.',
@@ -922,6 +948,18 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     } },
 
   // APIs and functions
+  { slug: 'data-api-builder', displayName: 'Data API', restType: 'DataApi', category: 'APIs and functions',
+    description: 'Data API builder — expose Azure SQL / PostgreSQL / Cosmos tables as secured REST + GraphQL.',
+    learnContent: {
+      "overview": "Data API builder (DAB) generates secured REST and GraphQL endpoints over a relational or Cosmos source from a single dab-config.json. In Loom the editor introspects the database schema, maps tables/views/SPs to entities with per-role permissions, relationships, and policies, emits the canonical dab-config.json, and (when a DAB runtime Container App is deployed) tests the live REST + GraphQL endpoints and publishes through APIM.",
+      "steps": [
+        { "title": "Pick a data source", "body": "Choose Azure SQL / PostgreSQL / Cosmos and the connection — the connection string is referenced via @env(), never stored as a literal." },
+        { "title": "Add entities", "body": "Introspect the schema and map tables/views to entities with REST paths, GraphQL types, and field aliases." },
+        { "title": "Secure with permissions", "body": "Grant per-role create/read/update/delete with field-level include/exclude and database policies." },
+        { "title": "Preview and publish", "body": "Validate the config, test the live REST + GraphQL endpoints, then publish the API through API Management." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/data-api-builder/overview"
+    } },
   { slug: 'graphql-api', displayName: 'API for GraphQL', restType: 'GraphQLApi', category: 'APIs and functions',
     description: 'Single GraphQL endpoint over Warehouse / Lakehouse / SQL DB / mirrored DBs.',
     learnContent: {
@@ -1020,6 +1058,18 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
         }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-overview-what-is"
+    } },
+  { slug: 'synapse-notebook',            displayName: 'Synapse notebook',            restType: 'SynapseNotebook',          category: 'Synapse Analytics',
+    description: 'Spark notebook designer — multi-cell PySpark/Scala/SQL on a Synapse Big Data pool.',
+    learnContent: {
+      "overview": "A Synapse notebook is the Spark authoring surface in Synapse Studio — multi-language cells (PySpark, Spark Scala, Spark SQL, SparkR) run interactively on a Synapse Big Data pool via Livy. In Loom it reads/writes the workspace notebook artifact over the Synapse dev plane and runs cells against a live Livy session through the Console MI.",
+      "steps": [
+        { "title": "Attach a Spark pool", "body": "Pick a Big Data pool from the attach picker; the first run cold-starts the session (about 2-3 minutes)." },
+        { "title": "Author cells", "body": "Add code or markdown cells, set the per-cell language, and reorder them in the designer." },
+        { "title": "Run and inspect", "body": "Run a cell or Run all; output and error tracebacks render inline from the Livy statement result." },
+        { "title": "Publish", "body": "Save publishes the notebook back to the Synapse workspace as an artifact." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-development-using-notebooks"
     } },
   { slug: 'synapse-serverless-sql-pool', displayName: 'Synapse serverless SQL pool', restType: 'SynapseServerlessSqlPool', category: 'Synapse Analytics',
     description: 'Pay-per-query T-SQL over ADLS. OPENROWSET, external tables, ad-hoc analytics.',
@@ -2318,6 +2368,35 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/copilot-fabric-overview"
     } },
+
+  // --- v3 — Azure Logic Apps (Consumption, multitenant) ---
+  // Workflow Definition Language (WDL) workflows: Request/Recurrence triggers,
+  // HTTP / ApiConnection / Compose / ParseJson / Query / Select / If actions,
+  // deployed via PUT Microsoft.Logic/workflows and run via the manual trigger.
+  { slug: 'logic-app',                   displayName: 'Logic App',                   restType: 'Microsoft.Logic/workflows',  category: 'Data Factory',
+    description: 'Azure Logic Apps (Consumption) workflow: triggers + actions in the WDL designer, run via the manual trigger.',
+    learnContent: {
+      "overview": "A Logic App is an Azure Logic Apps (Consumption) workflow defined in the Workflow Definition Language (WDL): a trigger (Request, Recurrence) followed by actions (HTTP, ApiConnection, Compose, ParseJson, Query, Select, If/Switch, Response). In Loom it opens fully built-out from the installed definition or the live Microsoft.Logic/workflows resource, and Run trigger fires a real manual run.",
+      "steps": [
+        {
+          "title": "Read the designer",
+          "body": "The Designer tab shows the trigger followed by every action in execution order, including branch sub-actions and runAfter dependencies."
+        },
+        {
+          "title": "Inspect parameters",
+          "body": "The Parameters tab lists the WDL parameters (type, default, description) and the deploy-time parameter values."
+        },
+        {
+          "title": "Review the WDL",
+          "body": "The Code view tab shows the full Workflow Definition Language JSON in a Monaco editor."
+        },
+        {
+          "title": "Run the trigger",
+          "body": "Run trigger fires the manual trigger on the bound workflow and polls run history, or surfaces an honest gate naming LOOM_LOGIC_SUB / LOOM_LOGIC_RG / LOOM_LOGIC_LOCATION + the Logic App Contributor role."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/logic-apps/workflow-definition-language-schema"
+    } },
 ];
 
 export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
@@ -2343,6 +2422,7 @@ export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
   'Copilot Studio',
   'Power Platform',
   'AI & Agents',
+  'Fabric Apps',
 ];
 
 export function itemsByCategory(category: WorkloadCategory): FabricItemType[] {

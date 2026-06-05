@@ -21,6 +21,7 @@ import { getSession } from '@/lib/auth/session';
 import { listPipelines, upsertPipeline } from '@/lib/azure/synapse-dev-client';
 import {
   loadPipelineItem, persistBinding, bindingErrorResponse, ItemNotFoundError,
+  pipelineDefinitionFromContent,
 } from '@/lib/azure/pipeline-binding';
 
 export const runtime = 'nodejs';
@@ -44,7 +45,12 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     } catch (e: any) {
       listError = e?.message || String(e);
     }
-    return NextResponse.json({ ok: true, bound, pipelines, listError });
+    // Preview graph for bundle-installed (unbound) items: surface the rich
+    // activity graph stamped into state.content so the editor can render the
+    // FULLY BUILT-OUT canvas while the bind gate still prompts the user to push
+    // it to a real Synapse workspace pipeline. Null when no pipeline content.
+    const preview = bound ? null : pipelineDefinitionFromContent(item.state?.content);
+    return NextResponse.json({ ok: true, bound, pipelines, listError, preview });
   } catch (e) {
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });

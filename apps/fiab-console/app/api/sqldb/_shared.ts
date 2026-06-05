@@ -52,11 +52,15 @@ async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
 }
 
 /**
- * Validate session + resolve the TDS connection. The Fabric SQL database id
- * is read from `?id=` and its workspace from `?workspaceId=`. When the item
- * connection can't be resolved we fall back to the env defaults so the
- * navigator still works standalone; if neither yields a server the honest
- * gate fires.
+ * Validate session + resolve the TDS connection. Resolution order:
+ *   1. Explicit `?server=` / `?database=` overrides — used by the Unified
+ *      Azure SQL editor, where the connection is an **Azure SQL** server the
+ *      user picked from ARM inventory (not a Fabric SQL item). Same real
+ *      `sys.*`-over-TDS backend; the navigator just follows the selected
+ *      connection instead of a Fabric-resolved one.
+ *   2. The Fabric SQL database id (`?id=`) + its workspace (`?workspaceId=`).
+ *   3. The env defaults so the navigator still works standalone.
+ * If none yields a server the honest gate fires.
  */
 export async function guardSqlDbRequest(req: NextRequest): Promise<SqlDbGuardResult> {
   const session = getSession();
@@ -66,11 +70,17 @@ export async function guardSqlDbRequest(req: NextRequest): Promise<SqlDbGuardRes
 
   const itemId = req.nextUrl.searchParams.get('id')?.trim() || null;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId')?.trim() || null;
+  // Explicit Azure SQL connection override (Unified editor binds the
+  // user-selected ARM server/database here).
+  const serverOverride = req.nextUrl.searchParams.get('server')?.trim() || '';
+  const databaseOverride = req.nextUrl.searchParams.get('database')?.trim() || '';
 
-  let server = '';
-  let database = '';
+  let server = serverOverride;
+  let database = databaseOverride;
 
-  if (itemId && itemId !== 'new' && workspaceId) {
+  // An explicit server override short-circuits Fabric resolution — the
+  // Unified editor already knows which Azure SQL server/database to target.
+  if (!server && itemId && itemId !== 'new' && workspaceId) {
     try {
       const ws = await loadWs(workspaceId, session.claims.oid);
       if (!ws) {

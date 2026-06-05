@@ -1,5 +1,8 @@
 # Azure AI Foundry — Comprehensive Guide
 
+!!! note "Freshness"
+    **Validated against:** Azure AI Foundry (formerly Azure AI Studio) — hubs + projects, model deployments, agents, prompt flow, responsible-AI tooling — on Azure OpenAI + the AI Foundry control plane — **as of 2026-06-02.** Foundry is fast-moving (agents, fine-tuning, evals); verify model availability and API surface against the Azure AI Foundry docs before deploying.
+
 > Architecture, deployment, and operational guide for Azure AI Foundry within the
 > CSA-in-a-Box analytics platform.
 

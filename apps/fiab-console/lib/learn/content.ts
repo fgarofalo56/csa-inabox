@@ -20,7 +20,7 @@
  * (persisted to user-prefs).
  */
 
-import { findItemType } from '@/lib/catalog/fabric-item-types';
+import { findItemType, FABRIC_ITEM_TYPES, type WorkloadCategory } from '@/lib/catalog/fabric-item-types';
 
 export interface LearnEntry {
   title: string;
@@ -28,8 +28,83 @@ export interface LearnEntry {
   /** Plain step strings (legacy) OR titled steps (from catalog learnContent). */
   steps?: Array<string | { title: string; body: string }>;
   tip?: string;
+  /**
+   * PRIMARY link. Resolved CSA Loom docs URL for this topic when a Loom doc
+   * exists (`loomDocUrl(loomDocPath)`), else falls back to `msLearnUrl`.
+   * Computed by `getLearn()` — do not set directly in the registry.
+   */
   docsUrl?: string;
+  /**
+   * Relative path of the published CSA Loom doc for this topic, WITHOUT the
+   * `LOOM_DOCS_BASE` prefix and without a trailing slash, e.g.
+   * `fiab/tutorials/editor-lakehouse`. Undefined when no Loom doc exists yet
+   * (the entry then surfaces the MS-Learn link + a "Loom guide coming" tag).
+   */
+  loomDocPath?: string;
+  /** SECONDARY link — the Microsoft Learn / service docs URL (was `docsUrl`). */
+  msLearnUrl?: string;
+  /** True when a real CSA Loom doc page exists for this topic. */
+  hasLoomDoc?: boolean;
 }
+
+/**
+ * ── Dual-link strategy ──────────────────────────────────────────────────────
+ * Each Learn topic now carries TWO links:
+ *   • PRIMARY  → the project's own CSA Loom doc (MkDocs pages site), built
+ *                from LOOM_DOCS_BASE + the per-topic relative path.
+ *   • SECONDARY → the upstream Microsoft Learn / service docs page.
+ *
+ * LOOM_DOCS_BASE defaults to the published GitHub Pages site and can be
+ * overridden per-deployment via NEXT_PUBLIC_LOOM_DOCS_BASE (e.g. an internal
+ * mirror). Never trailing-slashed by callers — the builders normalise it.
+ */
+export const LOOM_DOCS_BASE: string = (
+  (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_LOOM_DOCS_BASE) ||
+  'https://fgarofalo56.github.io/csa-inabox'
+).replace(/\/+$/, '');
+
+/** Build an absolute CSA Loom doc URL from a relative path (MkDocs dir-urls). */
+export function loomDocUrl(relPath: string): string {
+  const clean = relPath.replace(/^\/+/, '').replace(/\/+$/, '');
+  // MkDocs uses directory URLs by default → page ends in a trailing slash.
+  return `${LOOM_DOCS_BASE}/${clean}/`;
+}
+
+/** Build the published tutorial thumbnail URL for an editor slug, or undefined. */
+export function loomThumbUrl(slug: string): string | undefined {
+  if (!EDITOR_DOC_SLUGS.has(slug)) return undefined;
+  return `${LOOM_DOCS_BASE}/fiab/tutorials/img/editor-${slug}-1.png`;
+}
+
+/**
+ * The 85 item-type slugs that have a real per-editor Loom doc at
+ * `docs/fiab/tutorials/editor-<slug>.md` (served at
+ * `<base>/fiab/tutorials/editor-<slug>/`). Kept in sync with the mkdocs.yml
+ * "Editor Tutorials (per-item)" nav block. A slug NOT in this set has no Loom
+ * doc yet → the Learn entry shows the MS-Learn link + a "Loom guide coming"
+ * tag and is reported in the build-out backlog.
+ */
+export const EDITOR_DOC_SLUGS: ReadonlySet<string> = new Set([
+  'activator', 'adf-dataset', 'adf-pipeline', 'adf-trigger', 'ai-builder-model',
+  'ai-foundry-hub', 'ai-foundry-project', 'ai-search-index', 'apim-api', 'apim-policy',
+  'apim-product', 'azure-sql-database', 'azure-sql-managed-instance', 'azure-sql-server',
+  'compute', 'content-safety', 'copilot-studio-action', 'copilot-studio-agent',
+  'copilot-studio-analytics', 'copilot-studio-channel', 'copilot-studio-knowledge',
+  'copilot-studio-topic', 'copilot-template-library', 'copy-job', 'cosmos-gremlin-graph',
+  'cross-item-copilot', 'cypher-graph', 'dashboard', 'data-agent', 'data-pipeline',
+  'data-product', 'data-product-instance', 'data-product-template', 'databricks-cluster',
+  'databricks-job', 'databricks-notebook', 'databricks-sql-warehouse', 'dataflow',
+  'dataset', 'dataverse-table', 'dbt-job', 'environment', 'evaluation', 'eventhouse',
+  'eventstream', 'geo-dataset', 'geo-map', 'geo-pipeline', 'geo-query', 'gql-graph',
+  'graph-model', 'graphql-api', 'kql-dashboard', 'kql-database', 'kql-queryset',
+  'lakehouse', 'map', 'mirrored-database', 'ml-experiment', 'ml-model', 'notebook',
+  'ontology', 'operations-agent', 'paginated-report', 'plan', 'power-app',
+  'power-automate-flow', 'power-page', 'powerplatform-environment', 'prompt-flow',
+  'report', 'scorecard', 'semantic-model', 'spark-job-definition',
+  'sql-server-2025-vector-index', 'synapse-dedicated-sql-pool', 'synapse-pipeline',
+  'synapse-serverless-sql-pool', 'synapse-spark-pool', 'tracing', 'user-data-function',
+  'usql-job', 'variable-library', 'vector-store', 'warehouse',
+]);
 
 const REGISTRY: Record<string, LearnEntry> = {
   'synapse-serverless-sql-pool': {
@@ -557,17 +632,234 @@ const REGISTRY: Record<string, LearnEntry> = {
 
 export function getLearn(itemType: string): LearnEntry | null {
   const legacy = REGISTRY[itemType] ?? null;
-  const catalog = findItemType(itemType)?.learnContent ?? null;
+  const item = findItemType(itemType);
+  const catalog = item?.learnContent ?? null;
 
-  // Prefer the authoritative catalog learnContent; fold in the legacy `tip`.
-  if (catalog) {
-    return {
-      title: findItemType(itemType)?.displayName ?? legacy?.title ?? itemType,
-      summary: catalog.overview,
-      steps: catalog.steps.map((s) => ({ title: s.title, body: s.body })),
-      tip: legacy?.tip,
-      docsUrl: catalog.docsUrl ?? legacy?.docsUrl,
-    };
+  if (!legacy && !catalog) return null;
+
+  // The registry/catalog `docsUrl` is always a Microsoft Learn / service docs
+  // link today → that becomes the SECONDARY link. The PRIMARY link is the
+  // per-editor CSA Loom doc when one exists for this slug.
+  const msLearnUrl = catalog?.docsUrl ?? legacy?.docsUrl;
+  const hasLoomDoc = EDITOR_DOC_SLUGS.has(itemType);
+  const loomDocPath = hasLoomDoc ? `fiab/tutorials/editor-${itemType}` : undefined;
+  // PRIMARY: Loom doc if it exists, else fall back to MS Learn (never a dead link).
+  const docsUrl = loomDocPath ? loomDocUrl(loomDocPath) : msLearnUrl;
+
+  const base: LearnEntry = catalog
+    ? {
+        title: item?.displayName ?? legacy?.title ?? itemType,
+        summary: catalog.overview,
+        steps: catalog.steps.map((s) => ({ title: s.title, body: s.body })),
+        tip: legacy?.tip,
+      }
+    : { ...legacy! };
+
+  return { ...base, docsUrl, loomDocPath, msLearnUrl, hasLoomDoc };
+}
+
+/* ── Learn-library catalog (powers the /learn portal) ──────────────────────── */
+
+/** A section the Learn portal groups topics under. */
+export type LearnSection =
+  | 'Tutorials'
+  | 'Use cases'
+  | 'Editor guides'
+  | 'Service guides'
+  | 'Reference';
+
+/**
+ * Real-world use cases from the CSA-in-a-Box docs — surfaced in the Learning Hub
+ * so users can browse/search every scenario and open the full walkthrough. Built
+ * on CSA Loom (Azure-native), never Fabric. `appId` (when set) is the matching
+ * one-click content-bundle app (installable real example with sample data) — the
+ * install/import wizard is wired in a follow-up; today the card opens the doc.
+ * primaryUrl points at the verified use-cases index (no fabricated deep links).
+ */
+const USE_CASES: ReadonlyArray<{
+  id: string; title: string; summary: string; category: string; visualType: string; appId?: string;
+}> = [
+  { id: 'doj-antitrust', title: 'DOJ Antitrust Analytics', summary: 'Antitrust compliance + investigation analytics — step-by-step domain build on Loom.', category: 'Government', visualType: 'warehouse' },
+  { id: 'gov-data-analytics', title: 'Government Data Analytics', summary: 'General government analytics platform on Azure-native Loom services.', category: 'Government', visualType: 'lakehouse' },
+  { id: 'dot-transportation', title: 'DOT Transportation Analytics', summary: 'Department of Transportation data analytics end to end.', category: 'Government', visualType: 'kql-database' },
+  { id: 'faa-aviation', title: 'FAA Aviation Analytics', summary: 'Federal Aviation Administration analytics on Loom.', category: 'Government', visualType: 'eventstream' },
+  { id: 'epa-environmental', title: 'EPA Environmental Analytics', summary: 'Environmental Protection Agency data analytics.', category: 'Government', visualType: 'lakehouse' },
+  { id: 'noaa-climate', title: 'NOAA Climate & Ocean Analytics', summary: 'Climate + oceanographic data analysis at scale.', category: 'Government', visualType: 'notebook' },
+  { id: 'nasa-earth', title: 'NASA Earth Science Analytics', summary: 'Earth-science data pipelines + analysis.', category: 'Government', visualType: 'notebook' },
+  { id: 'interior-resources', title: 'Interior Natural Resources', summary: 'Natural-resources management analytics.', category: 'Government', visualType: 'warehouse' },
+  { id: 'usda-agriculture', title: 'USDA Agricultural Analytics', summary: 'Department of Agriculture data solutions.', category: 'Government', visualType: 'lakehouse' },
+  { id: 'usps-postal', title: 'USPS Postal Operations', summary: 'Postal-service operational analytics.', category: 'Government', visualType: 'kql-dashboard' },
+  { id: 'commerce-economic', title: 'Commerce Economic Analytics', summary: 'Economic data + trade analytics.', category: 'Government', visualType: 'semantic-model' },
+  { id: 'ihs-tribal-health', title: 'IHS & Tribal Health Analytics', summary: 'Indian Health Service + tribal healthcare data.', category: 'Healthcare', visualType: 'lakehouse', appId: 'app-healthcare-popmgt' },
+  { id: 'rti-anomaly', title: 'Real-Time Anomaly Detection', summary: 'Fraud + anomaly detection on streaming data (Event Hubs → ADX → Activator).', category: 'Real-Time', visualType: 'activator', appId: 'app-iot-realtime' },
+  { id: 'casino-gaming', title: 'Casino & Gaming Analytics', summary: 'Player-grain facts, real-time win/loss, high-roller Activator alerts.', category: 'Industry', visualType: 'warehouse', appId: 'app-casino-analytics' },
+  { id: 'fed-cyber', title: 'Federal Cybersecurity & Threat Analytics', summary: 'Threat detection + security analytics on Loom.', category: 'Cybersecurity', visualType: 'kql-database' },
+  { id: 'unified-analytics', title: 'Unified Analytics', summary: 'Consolidated analytics — the Fabric experience on Azure-native Loom.', category: 'Platform', visualType: 'lakehouse' },
+  { id: 'data-virtualization', title: 'Data Virtualization', summary: 'Cross-cloud data access without copies.', category: 'Multi-Cloud', visualType: 'data-product' },
+  { id: 'api-first-ai', title: 'API-First Multi-Model AI Ecosystem', summary: 'AI + data through an API-gateway architecture (APIM).', category: 'API-First', visualType: 'apim-api' },
+  { id: 'dataverse-integration', title: 'Dataverse API Integration', summary: 'Microsoft Dataverse connectivity + analytics.', category: 'API-First', visualType: 'dataverse-table' },
+  { id: 'eam-apim', title: 'Enterprise Asset Management via APIM', summary: 'Asset management exposed + governed through API Management.', category: 'API-First', visualType: 'apim-product' },
+  { id: 'cross-platform', title: 'Cross-Platform Integration', summary: 'Integration across multiple platforms + clouds.', category: 'Multi-Cloud', visualType: 'data-pipeline' },
+];
+
+export interface LearnTopic {
+  /** Item-type slug (for editor guides) or a synthetic id (tutorials/services). */
+  id: string;
+  title: string;
+  summary?: string;
+  section: LearnSection;
+  /** WorkloadCategory for editor guides; a friendly group label otherwise. */
+  category: string;
+  /** Item-type slug used to resolve icon + color via itemVisual(). */
+  visualType: string;
+  /** PRIMARY link — CSA Loom doc when it exists, else the MS-Learn link. */
+  primaryUrl: string;
+  /** Label for the primary link ("Loom guide" or "MS Learn"). */
+  primaryLabel: string;
+  /** SECONDARY link — MS Learn / service docs (omitted when none / same as primary). */
+  msLearnUrl?: string;
+  /** True when a real CSA Loom doc backs the primary link. */
+  hasLoomDoc: boolean;
+  /** Published thumbnail URL (editor guides only); undefined → use icon art. */
+  thumbUrl?: string;
+  preview?: boolean;
+}
+
+/** The 8 numbered, end-to-end walkthroughs under docs/fiab/tutorials/. */
+const NUMBERED_TUTORIALS: ReadonlyArray<{
+  id: string; title: string; summary: string; visualType: string;
+}> = [
+  { id: '01-first-workspace', title: 'Your first workspace',
+    summary: 'Provision a workspace, set roles, and orient yourself in the Loom console.',
+    visualType: 'powerplatform-environment' },
+  { id: '02-first-lakehouse', title: 'First Lakehouse + Delta tables',
+    summary: 'Land raw files, load them to managed Delta tables, and query via the SQL endpoint.',
+    visualType: 'lakehouse' },
+  { id: '03-direct-lake-parity', title: 'Direct Lake parity',
+    summary: 'Wire a semantic model in Direct Lake mode with the warm-cache materializer.',
+    visualType: 'semantic-model' },
+  { id: '04-activator-rules', title: 'Activator rules over an IoT stream',
+    summary: 'Fire Teams / email actions when a streaming threshold is breached.',
+    visualType: 'activator' },
+  { id: '05-data-agent', title: 'Data Agent over a Lakehouse',
+    summary: 'Stand up a conversational Q&A agent grounded in your lakehouse + semantic models.',
+    visualType: 'data-agent' },
+  { id: '06-mirroring-cosmos', title: 'Mirror Cosmos DB to a Lakehouse',
+    summary: 'Near-real-time replicate a Cosmos container into OneLake and query the mirror.',
+    visualType: 'mirrored-database' },
+  { id: '07-marketplace-data-product', title: 'Publish a marketplace data product',
+    summary: 'Bundle items into a governed, endorsed data product and publish it to the catalog.',
+    visualType: 'data-product' },
+  { id: '08-forward-migrate-to-fabric', title: 'Forward-migrate a Lakehouse to Fabric',
+    summary: 'Lift a Loom lakehouse into Microsoft Fabric without re-engineering pipelines.',
+    visualType: 'lakehouse' },
+];
+
+/** Loom-engine service guides under docs/fiab/services/. */
+const SERVICE_GUIDES: ReadonlyArray<{
+  id: string; title: string; summary: string; visualType: string;
+}> = [
+  { id: 'activator-engine', title: 'Activator engine',
+    summary: 'How Loom evaluates Activator rules and dispatches actions without Fabric Reflex.',
+    visualType: 'activator' },
+  { id: 'mirroring-engine', title: 'Mirroring engine',
+    summary: 'The change-feed replicator that keeps OneLake mirrors in sync with their source.',
+    visualType: 'mirrored-database' },
+  { id: 'direct-lake-shim', title: 'Direct-Lake shim',
+    summary: 'The warm-cache materializer that gives Power BI sub-second Direct Lake reads.',
+    visualType: 'semantic-model' },
+];
+
+/** Reference topics — concept docs that aren't tied to one editor. */
+const REFERENCE_TOPICS: ReadonlyArray<{
+  id: string; title: string; summary: string; visualType: string; path: string;
+}> = [
+  { id: 'what-is-csa-loom', title: 'What is CSA Loom?',
+    summary: 'The one-page orientation: what Loom is, how it maps to Fabric + Azure, and why.',
+    visualType: 'data-product', path: 'fiab/what-is-csa-loom' },
+  { id: 'architecture', title: 'Reference architecture',
+    summary: 'End-to-end architecture of the Loom platform and its Azure backing services.',
+    visualType: 'plan', path: 'fiab/architecture' },
+  { id: 'portal-architecture', title: 'Portal architecture',
+    summary: 'Where admins and users go — the console surfaces and how they fit together.',
+    visualType: 'powerplatform-environment', path: 'fiab/portal-architecture' },
+  { id: 'parity-matrix', title: 'Parity matrix',
+    summary: 'Feature-by-feature parity scorecard against Microsoft Fabric and Azure.',
+    visualType: 'scorecard', path: 'fiab/parity-matrix' },
+];
+
+/**
+ * Build the full Learn-library catalog: every editor guide (one per catalog
+ * item type that has Learn content) plus the numbered tutorials, Loom service
+ * guides, and reference topics. Every entry resolves to a real, non-dead link.
+ */
+export function getLearnCatalog(): LearnTopic[] {
+  const topics: LearnTopic[] = [];
+
+  // Numbered tutorials (always have a Loom doc).
+  for (const t of NUMBERED_TUTORIALS) {
+    const path = `fiab/tutorials/${t.id}`;
+    topics.push({
+      id: `tutorial:${t.id}`, title: t.title, summary: t.summary,
+      section: 'Tutorials', category: 'End-to-end tutorials', visualType: t.visualType,
+      primaryUrl: loomDocUrl(path), primaryLabel: 'Loom guide', hasLoomDoc: true,
+    });
   }
-  return legacy;
+
+  // Real-world use cases (CSA-in-a-Box scenarios, built on Loom).
+  for (const u of USE_CASES) {
+    topics.push({
+      id: `usecase:${u.id}`, title: u.title, summary: u.summary,
+      section: 'Use cases', category: u.category, visualType: u.visualType,
+      primaryUrl: loomDocUrl('use-cases'), primaryLabel: 'Walkthrough', hasLoomDoc: true,
+    });
+  }
+
+  // Editor guides — one per catalog item type that has Learn content.
+  for (const it of FABRIC_ITEM_TYPES) {
+    const learn = getLearn(it.slug);
+    if (!learn) continue;
+    topics.push({
+      id: `editor:${it.slug}`,
+      title: learn.title,
+      summary: learn.summary,
+      section: 'Editor guides',
+      category: it.category,
+      visualType: it.slug,
+      primaryUrl: learn.docsUrl ?? loomDocUrl('fiab/index'),
+      primaryLabel: learn.hasLoomDoc ? 'Loom guide' : 'MS Learn',
+      msLearnUrl: learn.hasLoomDoc ? learn.msLearnUrl : undefined,
+      hasLoomDoc: !!learn.hasLoomDoc,
+      thumbUrl: loomThumbUrl(it.slug),
+      preview: it.preview,
+    });
+  }
+
+  // Loom service guides.
+  for (const s of SERVICE_GUIDES) {
+    const path = `fiab/services/${s.id}`;
+    topics.push({
+      id: `service:${s.id}`, title: s.title, summary: s.summary,
+      section: 'Service guides', category: 'Loom engines', visualType: s.visualType,
+      primaryUrl: loomDocUrl(path), primaryLabel: 'Loom guide', hasLoomDoc: true,
+    });
+  }
+
+  // Reference topics.
+  for (const r of REFERENCE_TOPICS) {
+    topics.push({
+      id: `ref:${r.id}`, title: r.title, summary: r.summary,
+      section: 'Reference', category: 'Concepts', visualType: r.visualType,
+      primaryUrl: loomDocUrl(r.path), primaryLabel: 'Loom guide', hasLoomDoc: true,
+    });
+  }
+
+  return topics;
+}
+
+/** Item-type slugs that have a Learn entry but NO Loom doc yet (build-out backlog). */
+export function loomDocBacklog(): string[] {
+  return FABRIC_ITEM_TYPES
+    .filter((it) => getLearn(it.slug) && !EDITOR_DOC_SLUGS.has(it.slug))
+    .map((it) => it.slug);
 }

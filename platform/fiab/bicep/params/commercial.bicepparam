@@ -72,6 +72,17 @@ param hubVnetCidr = '10.0.0.0/16'
 // Identity
 param adminEntraGroupId = '<replace-with-FiaB-Admins-group-guid>'
 
+// Feature-Permissions bootstrap admin — who can open /admin/* (Feature
+// Permissions, Domains, Security, …) BEFORE any grants exist. Without one of
+// these set, even the deployer gets "Access denied (403)" on /admin/permissions.
+// Set your admin SECURITY-GROUP OID (recommended) and/or a single user OID;
+// members bypass the feature gate with full Admin. The group defaults to the
+// FiaB Admins group above, so setting that one GUID covers both.
+//   az ad signed-in-user show --query id -o tsv          # your user OID
+//   az ad group show --group "<name>" --query id -o tsv  # admin group OID
+param loomTenantAdminGroupId = readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', adminEntraGroupId)
+param loomTenantAdminOid = readEnvironmentVariable('LOOM_TENANT_ADMIN_OID', '')
+
 // Multi-sub mode (empty for single-sub)
 param dlzSubscriptionIds = []
 param dlzDomainNames = []

@@ -67,8 +67,12 @@ const QUERY_LANG: Record<DataAgentSourceType, string> = {
 
 function composeSystemPrompt(cfg: DataAgentConfig): string {
   const lines: string[] = [];
-  lines.push('You are a Microsoft Fabric data agent. Answer the user\'s question in natural language, grounded ONLY in the attached data sources below.');
-  lines.push('For every answer, also emit the query you would run against the chosen source, fenced in a code block, and name the source you used.');
+  lines.push('You are a CSA Loom data agent (CSA Loom is its own Azure-based data + AI platform, not Microsoft Fabric). Answer the user\'s question in natural language, grounded ONLY in the attached data sources below.');
+  lines.push('After your natural-language answer, append EXACTLY ONE fenced ```json code block describing the tools you used, in this shape:');
+  lines.push('```json');
+  lines.push('{"toolsUsed":[{"source":"<source name>","type":"<source type>","action":"query|search|traverse|retrieve","query":"<the exact query/KQL/DAX/search text you would run>"}]}');
+  lines.push('```');
+  lines.push('List EVERY source you consulted (one entry each) — include multiple when the question spans sources. Put the tools JSON LAST; keep the prose answer above it with no code fences.');
   lines.push('');
   if (cfg.instructions?.trim()) {
     lines.push('## Agent instructions');
@@ -107,23 +111,84 @@ async function aoaiToken(): Promise<string> {
 
 export interface ChatTurn { role: 'user' | 'assistant'; content: string }
 
-export interface DataAgentAnswer {
-  answer: string;
-  query?: string;       // extracted fenced query block
-  sourceUsed?: string;  // best-effort source name parsed from the answer
-  raw: string;
+export interface DataAgentUsage { promptTokens: number; completionTokens: number; totalTokens: number; }
+
+/** One tool/source the agent consulted for an answer (sourcing metadata). */
+export interface DataAgentTool {
+  source: string;
+  type?: string;
+  action: string;   // query | search | traverse | retrieve
+  query?: string;
 }
 
-/** Extract the first fenced code block + a "source used" hint from the model output. */
+export interface DataAgentAnswer {
+  answer: string;
+  query?: string;       // first tool's query (back-compat)
+  sourceUsed?: string;  // first tool's source (back-compat)
+  raw: string;
+  /** Every source the agent consulted + its query (multi-source citations). */
+  tools?: DataAgentTool[];
+  /** Token/context usage for this turn (from the AOAI response). */
+  usage?: DataAgentUsage;
+  /** The model deployment that answered. */
+  model?: string;
+  /** Names of the sources attached to the agent (grounding context surfaced). */
+  sourcesAvailable?: string[];
+}
+
+/**
+ * Parse the model output into prose + structured tools-used. Prefers the
+ * trailing ```json {"toolsUsed":[…]} block (multi-source citations); falls back
+ * to the legacy single-fenced-block + name-match heuristic so older prompts and
+ * non-compliant responses still surface something.
+ */
 function parseAnswer(content: string, sources: DataAgentSource[]): DataAgentAnswer {
-  const fence = content.match(/```[a-zA-Z]*\n([\s\S]*?)```/);
-  const query = fence ? fence[1].trim() : undefined;
-  const answer = content.replace(/```[a-zA-Z]*\n[\s\S]*?```/g, '').trim();
-  let sourceUsed: string | undefined;
-  for (const s of sources) {
-    if (s.name && content.toLowerCase().includes(s.name.toLowerCase())) { sourceUsed = s.name; break; }
+  let tools: DataAgentTool[] | undefined;
+  let answer = content;
+
+  // 1) Structured toolsUsed JSON block (last fenced json wins).
+  const jsonBlocks = [...content.matchAll(/```json\s*\n([\s\S]*?)```/gi)];
+  const lastJson = jsonBlocks[jsonBlocks.length - 1];
+  if (lastJson) {
+    try {
+      const obj = JSON.parse(lastJson[1].trim());
+      const arr = Array.isArray(obj?.toolsUsed) ? obj.toolsUsed : Array.isArray(obj) ? obj : null;
+      if (arr) {
+        tools = arr
+          .map((t: any) => ({
+            source: String(t?.source ?? t?.name ?? '').trim(),
+            type: t?.type ? String(t.type) : undefined,
+            action: String(t?.action ?? 'query'),
+            query: t?.query ? String(t.query) : undefined,
+          }))
+          .filter((t: DataAgentTool) => t.source || t.query);
+        // Strip the tools JSON block from the prose answer.
+        answer = content.replace(lastJson[0], '').trim();
+      }
+    } catch { /* not valid JSON — fall through to heuristic */ }
   }
-  return { answer: answer || content, query, sourceUsed, raw: content };
+
+  // 2) Fallback: legacy single fenced query block + name match.
+  if (!tools || tools.length === 0) {
+    const fence = content.match(/```[a-zA-Z]*\n([\s\S]*?)```/);
+    const query = fence ? fence[1].trim() : undefined;
+    answer = content.replace(/```[a-zA-Z]*\n[\s\S]*?```/g, '').trim();
+    let sourceUsed: string | undefined;
+    let srcType: string | undefined;
+    for (const s of sources) {
+      if (s.name && content.toLowerCase().includes(s.name.toLowerCase())) { sourceUsed = s.name; srcType = s.type; break; }
+    }
+    if (query || sourceUsed) tools = [{ source: sourceUsed || 'source', type: srcType, action: 'query', query }];
+  }
+
+  const first = tools?.[0];
+  return {
+    answer: answer || content,
+    query: first?.query,
+    sourceUsed: first?.source,
+    tools,
+    raw: content,
+  };
 }
 
 /**
@@ -140,18 +205,38 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
     { role: 'user', content: question },
   ];
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const res = await fetch(url, {
+  const base: Record<string, unknown> = { messages, max_tokens: 1200 };
+  // Newer reasoning models reject a non-default temperature; retry without it.
+  const send = async (withTemp: boolean) => fetch(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ messages, temperature: 0.2, max_tokens: 1200 }),
+    body: JSON.stringify(withTemp ? { ...base, temperature: 0.2 } : base),
   });
+  let res = await send(true);
+  if (res.status === 400) {
+    const t = await res.text();
+    if (/unsupported_value|does not support|Only the default \(1\) value is supported/i.test(t) && /temperature|top_p/i.test(t)) {
+      res = await send(false);
+    } else {
+      throw new Error(`Data agent chat failed (400): ${t.slice(0, 400)}`);
+    }
+  }
   if (!res.ok) {
     const t = await res.text();
     throw new Error(`Data agent chat failed (${res.status}): ${t.slice(0, 400)}`);
   }
   const j: any = await res.json();
   const content = j?.choices?.[0]?.message?.content || '';
-  return parseAnswer(content, cfg.sources);
+  const parsed = parseAnswer(content, cfg.sources);
+  const u = j?.usage || {};
+  return {
+    ...parsed,
+    usage: (u.total_tokens != null)
+      ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0, totalTokens: u.total_tokens ?? 0 }
+      : undefined,
+    model: target.deployment,
+    sourcesAvailable: cfg.sources.map((s) => s.name).filter(Boolean),
+  };
 }
 
 /** Map typed sources to Foundry Agent Service tool entries (for publish). */

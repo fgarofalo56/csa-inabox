@@ -66,6 +66,14 @@ param hubVnetCidr = '10.0.0.0/16'
 // Identity — real Loom Admins group
 param adminEntraGroupId = '716f5ec5-20d0-4713-9e42-57ef931cd665'
 
+// Feature-Permissions bootstrap admin — members can open /admin/* before any
+// grants exist. Defaults to the Loom Admins group above (so members bypass the
+// gate with full Admin). Also set LOOM_TENANT_ADMIN_OID to a specific user OID
+// for a reliable single-user bootstrap (group-claim emission can be disabled in
+// the tenant, in which case the OID match is what unblocks /admin/permissions).
+param loomTenantAdminGroupId = readEnvironmentVariable('LOOM_TENANT_ADMIN_GROUP_ID', adminEntraGroupId)
+param loomTenantAdminOid = readEnvironmentVariable('LOOM_TENANT_ADMIN_OID', '')
+
 // Loom version + image tags — preserves currently deployed images
 param loomVersion = readEnvironmentVariable('LOOM_VERSION', 'v2.1')
 param appImageTags = {

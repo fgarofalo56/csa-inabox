@@ -59,6 +59,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   // Phase-2 flags
   const deploy = body?.deploy !== false; // default true
   const mode = body?.mode === 'dedicated' ? 'dedicated' : 'shared';
+  // Optional install target folder inside the workspace (null/'' = root).
+  const folderId = (body?.folderId || '').toString().trim() || null;
   const targetOverrides = body?.targetOverrides && typeof body.targetOverrides === 'object'
     ? body.targetOverrides
     : undefined;
@@ -127,7 +129,11 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   for (const ref of refs) {
     // Resolve rich starter content (notebook cells, KQL DDL, dbt models,
     // dashboard tiles, etc.) from the in-process bundle registry.
-    const bundle = resolveBundleItem(app.id, ref.type);
+    // Pass ref.displayName so bundles with multiple items of the same
+    // itemType (e.g. logic-apps-integration's three distinct logic-app
+    // workflows) resolve to the RIGHT item instead of collapsing onto the
+    // first one — keeping each workflow's own name + WDL content.
+    const bundle = resolveBundleItem(app.id, ref.type, ref.displayName);
     const displayName = bundle?.displayName || ref.displayName || `${app.name} · ${ref.type}`;
     const description = bundle?.description || `Installed from app '${app.name}'${ref.template ? ` · template: ${ref.template}` : ''}`;
     const state: Record<string, unknown> = {
@@ -136,6 +142,16 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       ...(bundle?.content ? { content: bundle.content } : {}),
       ...(bundle?.learnDoc ? { learnDoc: bundle.learnDoc } : {}),
     };
+    // Notebook items: project the bundle's NotebookContent.cells into the
+    // editor's read shape (state.cells / state.defaultLang) so the notebook
+    // opens FULLY POPULATED with every markdown + code cell — instead of an
+    // empty notebook whose content is stranded in the "bundle" pane. Covers
+    // notebook, synapse-notebook, and databricks-notebook item types.
+    const nbc = bundle?.content as { kind?: string; cells?: unknown[]; defaultLang?: string } | undefined;
+    if (nbc?.kind === 'notebook' && Array.isArray(nbc.cells) && nbc.cells.length > 0) {
+      state.cells = nbc.cells;
+      state.defaultLang = nbc.defaultLang || 'pyspark';
+    }
     const key = `${ref.type}::${displayName.toLowerCase()}`;
     if (existsKey.has(key)) {
       const match = (existing as any[]).find(e => e.itemType === ref.type && (e.displayName || '').toLowerCase() === displayName.toLowerCase());
@@ -147,6 +163,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       displayName,
       description,
       state,
+      folderId,
     });
     if (r.ok) {
       installed.push({ itemType: ref.type, id: r.item.id, displayName, status: 'created', content: bundle?.content });
@@ -154,6 +171,30 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       installed.push({ itemType: ref.type, displayName, status: 'failed', error: r.error });
     }
   }
+
+  // Auto-attach the app's installed lakehouse(s) to its notebooks, so each
+  // notebook opens with the data sources it needs already attached (no manual
+  // wiring). First lakehouse is the default source.
+  try {
+    const lakehouses = installed
+      .filter((i) => i.itemType === 'lakehouse' && i.id)
+      .map((i, idx) => ({ kind: 'lakehouse' as const, id: i.id!, displayName: i.displayName, isDefault: idx === 0 }));
+    if (lakehouses.length > 0) {
+      const itemsC = await itemsContainer();
+      const nbItems = installed.filter(
+        (i) => i.id && ['notebook', 'databricks-notebook', 'synapse-notebook'].includes(i.itemType),
+      );
+      for (const nb of nbItems) {
+        try {
+          const { resource } = await itemsC.item(nb.id!, workspaceId).read<any>();
+          if (resource) {
+            resource.state = { ...(resource.state || {}), attachedSources: lakehouses };
+            await itemsC.item(nb.id!, workspaceId).replace(resource);
+          }
+        } catch { /* best-effort attach */ }
+      }
+    }
+  } catch { /* best-effort */ }
 
   // Phase 2: run live-service provisioning.
   let provision: ProvisionReport | undefined;
@@ -174,7 +215,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       try {
         const { resource: cur } = await items.item(step.cosmosItemId, workspaceId).read<any>();
         if (!cur) continue;
-        const nextState = {
+        const nextState: Record<string, unknown> = {
           ...(cur.state || {}),
           provisioning: {
             status: step.result.status,
@@ -186,6 +227,37 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
             at: new Date().toISOString(),
           },
         };
+        // Pipeline items (adf-pipeline / synapse-pipeline) bind to a real Azure
+        // pipeline via `state.pipelineName` — the pipeline GET route's
+        // resolveBinding() 412s ("unbound") and never reaches its state.content
+        // fallback when this is missing, so the designer canvas opens EMPTY even
+        // though the bundle stamped a full activity graph. The provisioner
+        // already computed the Azure pipeline name (secondaryIds.pipelineName);
+        // stamp it as the binding here so the editor loads either the live
+        // pipeline OR the built-out content fallback, and Run/Validate target
+        // the real backend. Don't clobber a name the user already bound.
+        const sec = (step.result.secondaryIds || {}) as Record<string, string>;
+        if (
+          (step.itemType === 'adf-pipeline' || step.itemType === 'synapse-pipeline') &&
+          sec.pipelineName &&
+          !(cur.state as any)?.pipelineName
+        ) {
+          nextState.pipelineName = sec.pipelineName;
+          if (sec.backend === 'synapse' && process.env.LOOM_SYNAPSE_WORKSPACE) {
+            nextState.workspace = process.env.LOOM_SYNAPSE_WORKSPACE;
+          }
+          if (sec.backend === 'adf' && process.env.LOOM_ADF_NAME) {
+            nextState.factory = process.env.LOOM_ADF_NAME;
+          }
+        }
+        // Logic App items bind to a live Microsoft.Logic/workflows resource via
+        // state.logicAppName — the logic-app GET/run routes resolve this (plus
+        // secondaryIds.subscriptionId/resourceGroup) to fetch + run the real
+        // workflow; without it the editor still opens built-out from
+        // state.content.definition. Don't clobber a name already bound.
+        if (step.itemType === 'logic-app' && sec.workflowName && !(cur.state as any)?.logicAppName) {
+          nextState.logicAppName = sec.workflowName;
+        }
         await items.item(step.cosmosItemId, workspaceId).replace({ ...cur, state: nextState, updatedAt: new Date().toISOString() });
       } catch { /* swallow — provisioning record is best-effort */ }
     }

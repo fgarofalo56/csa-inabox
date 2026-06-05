@@ -372,7 +372,7 @@ summary.write \
 
 - [Spark SQL Tutorial](../tutorials/intermediate/spark-sql-tutorial.md)
 - Spark Performance Tuning
-- [Delta Lake Guide](../delta-lake-guide.md)
+- [Delta Lake Guide](../06-code-examples/delta-lake-guide.md)
 
 ---
 

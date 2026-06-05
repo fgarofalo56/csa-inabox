@@ -149,6 +149,62 @@ export async function persistBinding(
 }
 
 /**
+ * Build a backend-shaped pipeline definition (ADF / Synapse pipeline JSON:
+ * `{ name?, properties: { activities, parameters, ... } }`) from a bundle's
+ * stamped `state.content` (AdfPipelineContent / SynapsePipelineContent).
+ *
+ * Why this exists: when an app installs a pipeline item, the bundle's rich
+ * activity graph is stamped into `state.content.activities`, but the editor
+ * loads its canvas from the LIVE ADF/Synapse pipeline. When that live object
+ * isn't present yet (unprovisioned / RBAC-gated / not-yet-created) the canvas
+ * would open EMPTY. This maps the stamped content into the exact pipeline-JSON
+ * shape `extractActivities()` / the designer expect, so the canvas renders
+ * every activity + dependency + parameter even with no live backend object.
+ *
+ * The bundle's per-activity `config` is the activity body (it already carries
+ * `typeProperties` / `policy` / `linkedServiceName` / `description` for normal
+ * activities, or `expression` / `items` / child `activities` for control-flow
+ * activities), so it is spread directly onto the activity. `dependsOn` is the
+ * compact `string[]` form, expanded to ADF's `[{activity, dependencyConditions}]`.
+ *
+ * Returns null when `content` isn't a pipeline-shaped bundle content.
+ */
+export function pipelineDefinitionFromContent(
+  content: unknown,
+  pipelineName?: string,
+): { name?: string; properties: { activities: unknown[]; parameters?: Record<string, unknown> } } | null {
+  const c = content as
+    | { kind?: string; activities?: Array<{ name: string; type: string; config?: any; dependsOn?: string[] }>; parameters?: Record<string, unknown> }
+    | undefined;
+  if (!c || (c.kind !== 'adf-pipeline' && c.kind !== 'synapse-pipeline')) return null;
+  if (!Array.isArray(c.activities)) return null;
+
+  const activities = c.activities.map((a) => {
+    const { config, dependsOn } = a;
+    const activity: Record<string, unknown> = {
+      // `config` is the activity body (typeProperties/policy/linkedServiceName/
+      // description, or control-flow expression/items/activities). Spread first
+      // so the canonical name/type below always win.
+      ...(config && typeof config === 'object' ? config : {}),
+      name: a.name,
+      type: a.type,
+    };
+    if (Array.isArray(dependsOn) && dependsOn.length) {
+      activity.dependsOn = dependsOn.map((d) => ({ activity: d, dependencyConditions: ['Succeeded'] }));
+    }
+    return activity;
+  });
+
+  return {
+    ...(pipelineName ? { name: pipelineName } : {}),
+    properties: {
+      activities,
+      ...(c.parameters && typeof c.parameters === 'object' ? { parameters: c.parameters } : {}),
+    },
+  };
+}
+
+/**
  * Map a binding/lookup error to an HTTP status + structured body shape.
  * Routes use this so the editor always gets `{ ok:false, code, error }`.
  */

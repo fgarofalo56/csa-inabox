@@ -11,7 +11,7 @@
  * Backed by /api/loom/workspaces + /api/items/notebook/**.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
   Tree, TreeItem, TreeItemLayout, Select,
@@ -22,7 +22,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
-  History20Regular,
+  History20Regular, ArrowUpload20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -160,6 +160,9 @@ export function NotebookEditor({ item, id }: Props) {
   const [attachBusy, setAttachBusy] = useState(false);
   // Phase 3: History drawer
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Import-from-file (desktop .ipynb / .py / .sql / .scala / .r → Loom notebook)
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
 
   // Auto-pick first runnable compute (skip serverless SQL — not for notebooks)
   useEffect(() => {
@@ -168,6 +171,27 @@ export function NotebookEditor({ item, id }: Props) {
       if (first) setComputeId(first.id);
     }
   }, [cp.computes, computeId]);
+
+  // Pre-warm session on compute selection: if a Synapse Spark compute is picked,
+  // immediately POST to /run with no code to initialize the Livy session in the background.
+  // This amortizes the 60-90s cold-start across the idle time before the user's first cell run.
+  const prewarmSession = useCallback(async (cId: string) => {
+    if (!workspaceId || !notebookId || !cId.startsWith('spark:')) return;
+    try {
+      await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ compute: cId, cellId: '__prewarm__' }),
+      }).catch(() => { /* silent — warmup is best-effort */ });
+    } catch { /* ignore */ }
+  }, [workspaceId, notebookId]);
+
+  useEffect(() => {
+    if (computeId && workspaceId && notebookId) {
+      const debounce = setTimeout(() => prewarmSession(computeId), 500);
+      return () => clearTimeout(debounce);
+    }
+  }, [computeId, workspaceId, notebookId, prewarmSession]);
 
   // v3.28: honor URL deep-link — when /items/notebook/{id} loads, discover
   // the owning workspace from the Cosmos record and auto-select it so the
@@ -322,24 +346,52 @@ export function NotebookEditor({ item, id }: Props) {
     if (availableLakehouses === null) loadLakehouses();
   }, [availableLakehouses, loadLakehouses]);
 
+  /**
+   * Persist the attached-sources list IMMEDIATELY, with the explicit next
+   * array (not the closed-over state, which is one render stale). The operator
+   * reported attachments "aren't persistent" — that was because attach/detach
+   * only mutated local state and required a manual Save / Ctrl-S. Auto-saving
+   * here means a re-open / reload keeps the attachments. Cells are saved too
+   * (output stripped) so we don't clobber in-progress edits with a half doc.
+   */
+  const persistSources = useCallback(async (next: AttachedSource[]) => {
+    if (!workspaceId || !notebookId) return;
+    try {
+      const cellsForSave = cells.map(c => ({ ...c, output: undefined }));
+      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources: next } }),
+      });
+      const j = await r.json();
+      if (j.ok) { setDirty(false); setRunMsg(`Data sources saved at ${new Date().toLocaleTimeString()}`); }
+      else { setRunMsg(`Could not save data sources: ${j.error || 'unknown'} — use Save to retry`); }
+    } catch (e: any) {
+      setRunMsg(`Could not save data sources: ${e?.message || e} — use Save to retry`);
+    }
+  }, [workspaceId, notebookId, cells, defaultLang]);
+
   const attachLakehouse = useCallback((lh: LakehouseLite) => {
     if (attachedSources.some(s => s.kind === 'lakehouse' && s.id === lh.id)) return;
-    setAttachedSources(prev => [
-      ...prev,
-      { kind: 'lakehouse', id: lh.id, displayName: lh.displayName, isDefault: prev.length === 0 },
-    ]);
-    setDirty(true);
-  }, [attachedSources]);
+    const next: AttachedSource[] = [
+      ...attachedSources,
+      { kind: 'lakehouse', id: lh.id, displayName: lh.displayName, isDefault: attachedSources.length === 0 },
+    ];
+    setAttachedSources(next);
+    void persistSources(next);   // auto-persist so the attachment survives reload
+  }, [attachedSources, persistSources]);
 
   const detachSource = useCallback((srcId: string) => {
-    setAttachedSources(prev => prev.filter(s => s.id !== srcId));
-    setDirty(true);
-  }, []);
+    const next = attachedSources.filter(s => s.id !== srcId);
+    setAttachedSources(next);
+    void persistSources(next);
+  }, [attachedSources, persistSources]);
 
   const promoteDefault = useCallback((srcId: string) => {
-    setAttachedSources(prev => prev.map(s => ({ ...s, isDefault: s.id === srcId })));
-    setDirty(true);
-  }, []);
+    const next = attachedSources.map(s => ({ ...s, isDefault: s.id === srcId }));
+    setAttachedSources(next);
+    void persistSources(next);
+  }, [attachedSources, persistSources]);
 
   const run = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
@@ -367,15 +419,18 @@ export function NotebookEditor({ item, id }: Props) {
       let runId: string = j.runId;
       setRunMsg(`${j.compute?.kind || 'compute'} ${j.compute?.pool || j.compute?.clusterId} — ${j.status} (runId ${runId})`);
       const start = Date.now();
-      const MAX_MS = 8 * 60 * 1000;
+      const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
+      let pollInterval = 2000; // 2s during session-starting, 1s during statement
       while (Date.now() - start < MAX_MS) {
-        await new Promise(res => setTimeout(res, 4000));
+        await new Promise(res => setTimeout(res, pollInterval));
         const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const p = await pollRes.json();
         if (!p.ok) { setRunMsg(`Poll error: ${p.error || pollRes.status}`); break; }
         if (p.runId && p.runId !== runId) runId = p.runId; // promotion when statement is submitted
         const phase = p.phase ? ` · ${p.phase}` : '';
         setRunMsg(`Status: ${p.status}${phase}`);
+        // Adaptive polling: speed up after session is idle
+        if (p.phase === 'statement-running') pollInterval = 1000;
         if (p.output) {
           if (p.output.status === 'ok') {
             const txt = p.output.textPlain || JSON.stringify(p.output.data || {}, null, 2);
@@ -416,6 +471,55 @@ export function NotebookEditor({ item, id }: Props) {
       if (j.notebook?.id) setNotebookId(j.notebook.id);
     } finally { setCreateBusy(false); }
   }, [workspaceId, createName, loadList]);
+
+  // Import a desktop notebook file (.ipynb / .py / .sql / .scala / .r) into
+  // the current workspace as a Loom notebook with every cell populated.
+  // Reads the file → base64 → POST /api/items/notebook/import → on success
+  // refresh the list and select the new notebook so loadDetail renders its
+  // cells immediately.
+  const importFile = useCallback(async (file: File) => {
+    if (!workspaceId) { setRunMsg('Select a workspace before importing.'); return; }
+    setImporting(true);
+    setRunMsg(`Importing ${file.name}…`);
+    try {
+      const buf = await file.arrayBuffer();
+      // ArrayBuffer → base64 without blowing the call stack on large files.
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      const CHUNK = 0x8000;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+      }
+      const contentBase64 = btoa(binary);
+      const r = await fetch('/api/items/notebook/import', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId, filename: file.name, contentBase64 }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setDetailErr(j.error || 'import failed');
+        setRunMsg(`Import failed: ${j.error || 'unknown error'}`);
+        return;
+      }
+      setRunMsg(`Imported ${file.name} → ${j.cellCount} cell${j.cellCount === 1 ? '' : 's'} (${j.defaultLang}).`);
+      await loadList(workspaceId);
+      // Select the freshly-created notebook; loadDetail will populate cells.
+      if (j.id) setNotebookId(j.id);
+    } catch (e: any) {
+      setDetailErr(e?.message || String(e));
+      setRunMsg(`Import failed: ${e?.message || e}`);
+    } finally {
+      setImporting(false);
+    }
+  }, [workspaceId, loadList]);
+
+  const onImportFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset so picking the same file again re-fires change.
+    e.target.value = '';
+    if (file) importFile(file);
+  }, [importFile]);
 
   const del = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
@@ -520,9 +624,10 @@ export function NotebookEditor({ item, id }: Props) {
       }
       let runId: string = j.runId;
       const start = Date.now();
-      const MAX_MS = 8 * 60 * 1000;
+      const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
+      let pollInterval = 2000; // 2s during session-starting, 1s during statement
       while (Date.now() - start < MAX_MS) {
-        await new Promise(res => setTimeout(res, 4000));
+        await new Promise(res => setTimeout(res, pollInterval));
         const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const p = await pollRes.json();
         if (!p.ok) {
@@ -535,6 +640,8 @@ export function NotebookEditor({ item, id }: Props) {
           ? ` · cold-start: Spark pool warming up (~60-90s on first cell)`
           : p.phase ? ` · ${p.phase}` : '';
         setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${phaseHint} · ${elapsed}s`);
+        // Adaptive polling: speed up after session is idle
+        if (p.phase === 'statement-running') pollInterval = 1000;
         if (p.output) {
           patchCell(cell.id, {
             executionCount: prevExec + 1,
@@ -569,7 +676,7 @@ export function NotebookEditor({ item, id }: Props) {
   const ribbon: RibbonTab[] = useMemo(() => {
     const activeIdx = cells.findIndex(c => c.id === activeCellId);
     const insertAfter = activeIdx >= 0 ? activeIdx : cells.length - 1;
-    const canRun = !!notebookId && !running;
+    const canRun = !!notebookId && !!computeId && !running;
     const canSave = !!notebookId && dirty && !saving;
     const canDelete = !!notebookId;
     const canHistory = !!notebookId;
@@ -581,6 +688,7 @@ export function NotebookEditor({ item, id }: Props) {
         ]},
         { label: 'Item', actions: [
           { label: 'New notebook', onClick: workspaceId ? () => setCreateOpen(true) : undefined, disabled: !workspaceId },
+          { label: importing ? 'Importing…' : 'Import notebook', onClick: workspaceId && !importing ? () => fileInputRef.current?.click() : undefined, disabled: !workspaceId || importing },
           { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
           { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
         ]},
@@ -614,7 +722,7 @@ export function NotebookEditor({ item, id }: Props) {
       ]},
     ];
   }, [
-    cells, activeCellId, notebookId, running, dirty, saving, workspaceId,
+    cells, activeCellId, notebookId, running, dirty, saving, workspaceId, computeId, importing,
     run, save, del, loadList, insertCell, openAttach,
   ]);
 
@@ -677,7 +785,7 @@ export function NotebookEditor({ item, id }: Props) {
             <Badge appearance="filled" color="brand">Loom Notebook</Badge>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
               <Caption1>Workspace</Caption1>
-              <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
+              <Select aria-label="Workspace" value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
                 {(ws.workspaces || []).map((w) => (
                   <option key={w.id} value={w.id}>{w.name}{w.isOnDedicatedCapacity ? ' · dedicated' : ''}</option>
@@ -686,16 +794,44 @@ export function NotebookEditor({ item, id }: Props) {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
               <Caption1>Compute target</Caption1>
-              <Select value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
-                {!computeId && <option value="">{cp.loading ? 'Loading compute…' : 'Select compute'}</option>}
-                {cp.computes
-                  .filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster')
-                  .map(c => (
-                    <option key={c.id} value={c.id}>{c.name}{c.state ? ` · ${c.state}` : ''}</option>
-                  ))}
-              </Select>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <div style={{ flex: 1 }}>
+                  <Select aria-label="Compute target" value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
+                    {!computeId && <option value="">{cp.loading ? 'Loading compute…' : 'Select compute'}</option>}
+                    {cp.computes
+                      .filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster')
+                      .map(c => (
+                        <option key={c.id} value={c.id}>{c.name}{c.state ? ` · ${c.state}` : ''}</option>
+                      ))}
+                  </Select>
+                </div>
+                {computeId && (
+                  <Badge
+                    appearance="filled"
+                    color={['Available', 'Online', 'Running', 'RUNNING', 'idle'].includes(cp.computes.find(c => c.id === computeId)?.state || '') ? 'success' : 'warning'}
+                    size="small"
+                  >
+                    {cp.computes.find(c => c.id === computeId)?.state || 'unknown'}
+                  </Badge>
+                )}
+              </div>
             </div>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            {/* Import a desktop notebook file directly into this workspace. */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".ipynb,.py,.sql,.scala,.r"
+              style={{ display: 'none' }}
+              onChange={onImportFileChange}
+            />
+            <Button
+              appearance="outline"
+              icon={<ArrowUpload20Regular />}
+              disabled={!workspaceId || importing}
+              title={!workspaceId ? 'Select a workspace first' : 'Import .ipynb / .py / .sql / .scala / .r from your computer'}
+              onClick={() => fileInputRef.current?.click()}
+            >{importing ? 'Importing…' : 'Import'}</Button>
             <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
               <DialogTrigger disableButtonEnhancement>
                 <Button appearance="outline" icon={<Add20Regular />} disabled={!workspaceId}>New</Button>
@@ -720,7 +856,15 @@ export function NotebookEditor({ item, id }: Props) {
               aren't confused by two visually-identical Save buttons.
               Ctrl+S still works from anywhere.
             */}
-            <Button appearance="primary" icon={<Play20Regular />} disabled={running || !notebookId} onClick={run}>{running ? 'Queuing…' : 'Run'}</Button>
+            <Button
+              appearance="primary"
+              icon={<Play20Regular />}
+              disabled={running || !notebookId || !computeId}
+              title={!notebookId ? 'Open or create a notebook first'
+                : !computeId ? 'Select a compute target first'
+                : undefined}
+              onClick={run}
+            >{running ? 'Queuing…' : 'Run'}</Button>
             <Button appearance="outline" icon={<History20Regular />} disabled={!notebookId} onClick={() => setHistoryOpen(true)}>History</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
@@ -782,6 +926,28 @@ export function NotebookEditor({ item, id }: Props) {
             </MessageBar>
           )}
           {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+          {/* Honest compute gate — a notebook with no runnable Spark/Databricks
+              compute can't execute. Surface the discovery error, or name the env
+              vars to provision, instead of silently disabling Run. */}
+          {cp.error && (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                <MessageBarTitle>Compute discovery failed</MessageBarTitle>
+                {cp.error}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {!cp.loading && !cp.error && cp.computes.filter(c => c.kind === 'synapse-spark' || c.kind === 'databricks-cluster').length === 0 && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>No notebook compute is available</MessageBarTitle>
+                Notebooks run on a Synapse Spark pool or a Databricks cluster. Provision one and
+                set <code>LOOM_SYNAPSE_WORKSPACE</code> (Synapse Spark) or
+                {' '}<code>LOOM_DATABRICKS_HOSTNAME</code> (Databricks) so it appears in the compute
+                picker above. You can still edit and save cells without compute.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           {runMsg && <MessageBar intent="info"><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
 
           {notebookId && (

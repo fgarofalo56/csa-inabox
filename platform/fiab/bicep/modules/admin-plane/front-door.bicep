@@ -36,7 +36,22 @@ resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@20
     policySettings: {
       enabledState: 'Enabled'
       mode: 'Prevention'
-      requestBodyCheck: 'Enabled'
+      // Request-body inspection is DISABLED by design. The console's BFF (`/api/*`)
+      // is a session-gated (Entra) backend-for-frontend that legitimately carries
+      // SQL / KQL / OData / Gremlin / GraphQL query text in request bodies (Cosmos
+      // Data Explorer, AI Search, ADX, Azure SQL, Gremlin, GraphQL editors). The
+      // OWASP SQLI/RCE managed rules (Microsoft_DefaultRuleSet 2.1) inspect both the
+      // parsed JSON args AND the raw `InitialBodyContents` (which exclusions cannot
+      // cover), so they BLOCK every non-trivial query through Front Door in
+      // Prevention mode (verified live 2026-06-01: `SELECT … WHERE … ORDER BY` → 403).
+      // A custom Allow rule on `/api/*` did NOT bypass the managed body rules in
+      // practice, and per-arg exclusions miss InitialBodyContents — so the only
+      // reliable fix is to stop inspecting request bodies. URL / query-string /
+      // header / cookie inspection + the Bot Manager rule set all remain ACTIVE, so
+      // the public / login / static surface keeps WAF protection; only the request
+      // *body* (which the app parses safely and forwards as parameterized data-plane
+      // calls) is no longer scanned. Acceptable for an authenticated analytics BFF.
+      requestBodyCheck: 'Disabled'
     }
     managedRules: {
       managedRuleSets: [
@@ -114,6 +129,29 @@ resource fdOrigin 'Microsoft.Cdn/profiles/originGroups/origins@2024-02-01' = {
   }
 }
 
+// ── Optional vanity custom domain (e.g. csa-loom.contoso.ai) ──────────────────
+// When the admin supplies a vanity URL at deploy time, create a Front Door
+// managed-cert custom domain. The deploy then surfaces the CNAME + _dnsauth TXT
+// (outputs below) to add at the DNS provider; once those validate, the domain is
+// associated to the route (post-deploy bootstrap, or auto when the DNS zone is
+// Azure-managed). Empty vanityDomain → no-op (the *.azurefd.net host still works).
+@description('Optional vanity hostname for the console (e.g. csa-loom.contoso.ai). Empty = use the generated Front Door host.')
+param vanityDomain string = ''
+
+var vanityName = empty(vanityDomain) ? 'unused-vanity' : replace(replace(vanityDomain, '.', '-'), '*', 'wild')
+
+resource fdCustomDomain 'Microsoft.Cdn/profiles/customDomains@2024-02-01' = if (!empty(vanityDomain)) {
+  parent: fdProfile
+  name: vanityName
+  properties: {
+    hostName: vanityDomain
+    tlsSettings: {
+      certificateType: 'ManagedCertificate'
+      minimumTlsVersion: 'TLS12'
+    }
+  }
+}
+
 resource fdRoute 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-02-01' = {
   parent: fdEndpoint
   name: 'console-route'
@@ -149,6 +187,12 @@ resource fdSecurityPolicy 'Microsoft.Cdn/profiles/securityPolicies@2024-02-01' =
 output frontDoorProfileId string = fdProfile.id
 output frontDoorEndpointHostName string = fdEndpoint.properties.hostName
 output frontDoorPublicUrl string = 'https://${fdEndpoint.properties.hostName}'
+// Vanity-domain wiring — the deploy surfaces these so the admin can add DNS.
+output vanityDomain string = vanityDomain
+output vanityPublicUrl string = empty(vanityDomain) ? '' : 'https://${vanityDomain}'
+output vanityCnameTarget string = fdEndpoint.properties.hostName
+output vanityDnsTxtName string = empty(vanityDomain) ? '' : '_dnsauth.${vanityDomain}'
+output vanityValidationToken string = empty(vanityDomain) ? '' : fdCustomDomain.properties.validationProperties.validationToken
 output frontDoorOriginGroupId string = fdOriginGroup.id
 output wafPolicyId string = wafPolicy.id
 output caeDefaultDomainEcho string = caeDefaultDomain

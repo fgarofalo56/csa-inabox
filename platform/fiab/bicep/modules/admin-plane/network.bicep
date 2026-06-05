@@ -61,6 +61,11 @@ var subnets = [
         properties: { serviceName: 'Microsoft.App/environments' }
       }
     ] : []
+    // Microsoft.Storage service endpoint so Lakehouse SHORTCUTS can reach
+    // firewalled (defaultAction=Deny) storage accounts via a VNet rule that
+    // allows this subnet — the Console Container App has no stable egress IP,
+    // so IP allow-lists don't work. See scripts/csa-loom/grant-shortcut-storage-rbac.sh.
+    serviceEndpoints: [ { service: 'Microsoft.Storage' } ]
   }
   {
     name: 'snet-functions'
@@ -124,7 +129,8 @@ resource hubVnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
       properties: union(
         { addressPrefix: s.addressPrefix },
         contains(s, 'delegations') ? { delegations: s.delegations } : {},
-        contains(s, 'privateEndpointNetworkPolicies') ? { privateEndpointNetworkPolicies: s.privateEndpointNetworkPolicies } : {}
+        contains(s, 'privateEndpointNetworkPolicies') ? { privateEndpointNetworkPolicies: s.privateEndpointNetworkPolicies } : {},
+        contains(s, 'serviceEndpoints') ? { serviceEndpoints: s.serviceEndpoints } : {}
       )
     }]
   }

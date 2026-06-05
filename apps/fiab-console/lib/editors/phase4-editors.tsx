@@ -26,6 +26,7 @@ import {
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Dropdown, Option, Switch,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -37,6 +38,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph';
 import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
+import { GraphTypeEditor } from '@/lib/components/graph/graph-type-editor';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
 import {
@@ -199,6 +201,10 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const [pickModel, setPickModel] = useState<string>('');
   const [bindBusy, setBindBusy] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
+  // Bundle-installed definition (algorithm + hyperparameters + features +
+  // training code) stamped on the Cosmos item. Rendered as a read-only panel
+  // so the model item opens fully built-out before it's registered/bound.
+  const [bundleContent, setBundleContent] = useState<any | null>(null);
 
   // ---- Loaded model ----
   const [loading, setLoading] = useState(false);
@@ -237,6 +243,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
       setModels(j.data?.models || []);
       setWsError(j.data?.workspacesError || null);
       setModelsError(j.data?.modelsError || null);
+      setBundleContent(j.data?.content || null);
     } catch (e: any) { setBindError(e?.message || String(e)); }
     finally { setBindLoading(false); }
   }, [apiBase]);
@@ -428,6 +435,53 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
       main={
         <div className={s.pad}>
           {bindLoading && <Spinner size="small" label="Loading binding…" labelPosition="after" />}
+
+          {/* Bundle definition — algorithm + hyperparameters + features +
+              training code stamped at install. Renders fully built-out whether
+              or not the model is registered/bound yet; Register/Bind/Deploy
+              still target the real Azure ML registry. */}
+          {!bindLoading && bundleContent && (
+            <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Subtitle2>Model definition</Subtitle2>
+                <Badge appearance="filled" color="brand">{bundleContent.algorithm}</Badge>
+                {bundleContent.framework && <Badge appearance="outline">{bundleContent.framework}</Badge>}
+                {bundleContent.target && <Badge appearance="tint">target: {bundleContent.target}</Badge>}
+                <Badge appearance="outline" color="warning">bundle template</Badge>
+              </div>
+              {bundleContent.hyperparameters && Object.keys(bundleContent.hyperparameters).length > 0 && (
+                <div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Hyperparameters</Caption1>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                    {Object.entries(bundleContent.hyperparameters).map(([k, v]) => (
+                      <Badge key={k} appearance="outline">{k}={String(v)}</Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {Array.isArray(bundleContent.features) && bundleContent.features.length > 0 && (
+                <div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Features ({bundleContent.features.length})</Caption1>
+                  <Table aria-label="Model features" size="small">
+                    <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell></TableRow></TableHeader>
+                    <TableBody>
+                      {bundleContent.features.map((f: any) => (
+                        <TableRow key={f.name}><TableCell><strong>{f.name}</strong></TableCell><TableCell>{f.type}</TableCell></TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+              {bundleContent.trainingCode && (
+                <div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Training code</Caption1>
+                  <div className={s.monaco} style={{ whiteSpace: 'pre', overflow: 'auto', maxHeight: 320 }}>
+                    {bundleContent.trainingCode}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Unbound — render the bind picker. Full surface still present. */}
           {!bindLoading && !bound?.modelName && bindPanel}
@@ -631,6 +685,63 @@ interface FoundryJob {
   tags?: Record<string, string>; properties?: Record<string, string>;
 }
 
+// ----- MLflow tracking shapes (mirror lib/azure/mlflow-client.ts) -----
+interface MlflowMetric { key: string; value: number; timestamp?: number; step?: number }
+interface MlflowParam { key: string; value: string }
+interface MlflowRunTag { key: string; value: string }
+interface MlflowRun {
+  runId: string; runName?: string; experimentId?: string; status?: string;
+  startTime?: number; endTime?: number; artifactUri?: string; lifecycleStage?: string;
+  metrics: MlflowMetric[]; params: MlflowParam[]; tags: MlflowRunTag[];
+}
+
+function fmtEpochMs(ms?: number): string {
+  if (!ms || !Number.isFinite(ms)) return '—';
+  try { return new Date(ms).toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z'); } catch { return '—'; }
+}
+
+/**
+ * Minimal self-contained SVG line chart for a single MLflow metric series
+ * (step on x, value on y) — no extra deps, consistent with the Loom theme via
+ * Fluent tokens. Returns null with fewer than 2 points; the caller shows the
+ * values table alongside so a single-point metric is still readable.
+ */
+function MetricLineChart({ points }: { points: MlflowMetric[] }) {
+  const W = 640, H = 200, padL = 48, padR = 12, padT = 12, padB = 28;
+  const series = points
+    .map((p, i) => ({ x: p.step ?? i, y: p.value }))
+    .filter((p) => Number.isFinite(p.y));
+  if (series.length < 2) return null;
+  const xs = series.map((p) => p.x), ys = series.map((p) => p.y);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const xSpan = xMax - xMin || 1, ySpan = yMax - yMin || 1;
+  const sx = (x: number) => padL + ((x - xMin) / xSpan) * (W - padL - padR);
+  const sy = (y: number) => H - padB - ((y - yMin) / ySpan) * (H - padT - padB);
+  const d = series.map((p, i) => `${i === 0 ? 'M' : 'L'}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(' ');
+  const yTicks = [yMin, (yMin + yMax) / 2, yMax];
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Metric history chart"
+      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: tokens.colorNeutralBackground2, maxWidth: W }}>
+      {yTicks.map((t, i) => (
+        <g key={i}>
+          <line x1={padL} y1={sy(t)} x2={W - padR} y2={sy(t)} stroke={tokens.colorNeutralStroke3} strokeWidth={1} />
+          <text x={padL - 6} y={sy(t) + 4} textAnchor="end" fontSize={10} fill={tokens.colorNeutralForeground3}>
+            {t.toPrecision(4)}
+          </text>
+        </g>
+      ))}
+      <text x={padL} y={H - 8} textAnchor="start" fontSize={10} fill={tokens.colorNeutralForeground3}>{xMin}</text>
+      <text x={W - padR} y={H - 8} textAnchor="end" fontSize={10} fill={tokens.colorNeutralForeground3}>{xMax}</text>
+      <text x={(padL + W - padR) / 2} y={H - 8} textAnchor="middle" fontSize={10} fill={tokens.colorNeutralForeground3}>step</text>
+      <path d={d} fill="none" stroke={tokens.colorBrandStroke1} strokeWidth={2} />
+      {series.map((p, i) => (
+        <circle key={i} cx={sx(p.x)} cy={sy(p.y)} r={2.5} fill={tokens.colorBrandForeground1} />
+      ))}
+    </svg>
+  );
+}
+
 export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const isNew = id === 'new' || !id;
   // Read-only: experiments/runs are submitted via Azure ML / MLflow. On /new,
@@ -679,6 +790,21 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
   const [regName, setRegName] = useState('');
   const [registering, setRegistering] = useState(false);
   const [regMsg, setRegMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // ---- MLflow tracking (Runs tab) ----
+  const [tab, setTab] = useState<'overview' | 'mlflowRuns'>('overview');
+  const [mlflowLoading, setMlflowLoading] = useState(false);
+  const [mlflowConfigured, setMlflowConfigured] = useState(true);
+  const [mlflowHint, setMlflowHint] = useState<string | null>(null);
+  const [mlflowError, setMlflowError] = useState<string | null>(null);
+  const [mlflowRuns, setMlflowRuns] = useState<MlflowRun[]>([]);
+  const [selMlflowRun, setSelMlflowRun] = useState<string | null>(null);
+  // Metric-history view for the selected run.
+  const [metricKeys, setMetricKeys] = useState<string[]>([]);
+  const [selMetric, setSelMetric] = useState<string>('');
+  const [metricHistory, setMetricHistory] = useState<MlflowMetric[]>([]);
+  const [metricLoading, setMetricLoading] = useState(false);
+  const [metricError, setMetricError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (isNew) return;
@@ -740,17 +866,72 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
     finally { setRegistering(false); }
   }, [current, regName]);
 
+  // Load the experiment's MLflow runs (real run metrics + params + status that
+  // the AML job properties don't carry). `id` is the experiment name.
+  const loadMlflowRuns = useCallback(async () => {
+    setMlflowLoading(true); setMlflowError(null);
+    try {
+      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs`);
+      const j = await r.json();
+      if (!j.ok) { setMlflowError(j.error || `HTTP ${r.status}`); setMlflowRuns([]); return; }
+      setMlflowConfigured(j.configured !== false);
+      setMlflowHint(j.hint || null);
+      const rows: MlflowRun[] = Array.isArray(j.runs) ? j.runs : [];
+      setMlflowRuns(rows);
+      setSelMlflowRun((prev) => (prev && rows.some((x) => x.runId === prev)) ? prev : (rows[0]?.runId || null));
+    } catch (e: any) { setMlflowError(e?.message || String(e)); setMlflowRuns([]); }
+    finally { setMlflowLoading(false); }
+  }, [id]);
+
+  // Lazy-load runs when the user first opens the MLflow Runs tab.
+  useEffect(() => {
+    if (tab === 'mlflowRuns' && !mlflowLoading && mlflowRuns.length === 0 && mlflowConfigured && !mlflowError) {
+      loadMlflowRuns();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // When the selected run changes, fetch its available metric keys (from runs/get).
+  const selectedMlflowRun = mlflowRuns.find((r) => r.runId === selMlflowRun) || null;
+  useEffect(() => {
+    const keys = Array.from(new Set((selectedMlflowRun?.metrics || []).map((m) => m.key))).sort();
+    setMetricKeys(keys);
+    setSelMetric((prev) => (prev && keys.includes(prev)) ? prev : (keys[0] || ''));
+    setMetricHistory([]);
+    setMetricError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selMlflowRun]);
+
+  // Load the full step/value history for the chosen metric on the chosen run.
+  const loadMetricHistory = useCallback(async () => {
+    if (!selMlflowRun || !selMetric) { setMetricHistory([]); return; }
+    setMetricLoading(true); setMetricError(null);
+    try {
+      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs/${encodeURIComponent(selMlflowRun)}/metrics?metricKey=${encodeURIComponent(selMetric)}`);
+      const j = await r.json();
+      if (!j.ok) { setMetricError(j.error || `HTTP ${r.status}`); setMetricHistory([]); return; }
+      if (j.configured === false) { setMlflowConfigured(false); setMlflowHint(j.hint || null); setMetricHistory([]); return; }
+      setMetricHistory(Array.isArray(j.history) ? j.history : []);
+    } catch (e: any) { setMetricError(e?.message || String(e)); setMetricHistory([]); }
+    finally { setMetricLoading(false); }
+  }, [id, selMlflowRun, selMetric]);
+
+  useEffect(() => { if (selMlflowRun && selMetric) loadMetricHistory(); }, [selMlflowRun, selMetric, loadMetricHistory]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Runs', actions: [
         { label: loading ? 'Reloading…' : 'Reload', onClick: loading ? undefined : load, disabled: loading },
         { label: submitting ? 'Submitting…' : 'Submit run', onClick: submitRun, disabled: submitting },
       ]},
+      { label: 'Tracking', actions: [
+        { label: mlflowLoading ? 'Loading…' : 'MLflow runs', onClick: () => { setTab('mlflowRuns'); loadMlflowRuns(); }, disabled: mlflowLoading },
+      ]},
       { label: 'Model', actions: [
         { label: 'Register model', onClick: () => { setRegName(''); setRegMsg(null); setRegOpen(true); }, disabled: !current },
       ]},
     ]},
-  ], [loading, load, submitting, submitRun, current]);
+  ], [loading, load, submitting, submitRun, current, mlflowLoading, loadMlflowRuns]);
 
   return (
     <ItemEditorChrome
@@ -807,7 +988,15 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
               {job.experimentName && <Caption1>Experiment: {job.experimentName}</Caption1>}
             </>
           )}
+
           {!loading && !error && (kind === 'experiment' || kind === 'job') && (
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
+              <Tab value="overview">Overview</Tab>
+              <Tab value="mlflowRuns">Runs &amp; metrics</Tab>
+            </TabList>
+          )}
+
+          {tab === 'overview' && !loading && !error && (kind === 'experiment' || kind === 'job') && (
             <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <Subtitle2>Submit a run (Command job)</Subtitle2>
               <ComputePicker
@@ -846,7 +1035,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
               </DialogBody>
             </DialogSurface>
           </Dialog>
-          {!loading && !error && runs.length > 0 && (
+          {tab === 'overview' && !loading && !error && runs.length > 0 && (
             <>
               <Table aria-label="Runs" size="small">
                 <TableHeader><TableRow>
@@ -891,6 +1080,175 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                 </>
               )}
             </>
+          )}
+
+          {/* ---- MLflow Runs & metrics (real AML MLflow tracking REST) ---- */}
+          {tab === 'mlflowRuns' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {mlflowLoading && <Spinner size="small" label="Loading MLflow runs…" labelPosition="after" />}
+
+              {!mlflowConfigured && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Azure ML MLflow tracking not configured</MessageBarTitle>
+                    {mlflowHint || 'Set LOOM_AML_WORKSPACE / LOOM_AML_REGION to a deployed Azure Machine Learning workspace and grant the Console UAMI the AzureML Data Scientist role on it.'}
+                    <br />
+                    <Caption1>
+                      Env: <code>LOOM_AML_WORKSPACE</code> (falls back to <code>LOOM_FOUNDRY_NAME</code>),{' '}
+                      <code>LOOM_AML_REGION</code> (falls back to <code>LOOM_FOUNDRY_REGION</code>),{' '}
+                      <code>LOOM_SUBSCRIPTION_ID</code>.
+                    </Caption1>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {mlflowError && (
+                <MessageBar intent="error">
+                  <MessageBarBody><MessageBarTitle>MLflow load failed</MessageBarTitle>{mlflowError}</MessageBarBody>
+                </MessageBar>
+              )}
+
+              {!mlflowLoading && mlflowConfigured && !mlflowError && mlflowRuns.length === 0 && (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>No MLflow runs for this experiment</MessageBarTitle>
+                    Submit a run that logs with MLflow (e.g. <code>mlflow.start_run()</code> +{' '}
+                    <code>mlflow.log_metric()</code>) under experiment <strong>{expName || id}</strong>.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {!mlflowLoading && mlflowConfigured && mlflowRuns.length > 0 && (
+                <>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    {mlflowRuns.length} MLflow run(s) — click a row to view its params and per-step metric history.
+                  </Caption1>
+                  <Table aria-label="MLflow runs" size="small">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Run</TableHeaderCell>
+                      <TableHeaderCell>Status</TableHeaderCell>
+                      <TableHeaderCell>Started</TableHeaderCell>
+                      <TableHeaderCell>Params</TableHeaderCell>
+                      <TableHeaderCell>Metrics (latest)</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {mlflowRuns.map((r) => (
+                        <TableRow
+                          key={r.runId}
+                          onClick={() => setSelMlflowRun(r.runId)}
+                          style={{ cursor: 'pointer', background: r.runId === selMlflowRun ? tokens.colorNeutralBackground2 : undefined }}
+                        >
+                          <TableCell><strong>{r.runName || r.runId}</strong></TableCell>
+                          <TableCell>
+                            <Badge
+                              appearance="tint"
+                              color={r.status === 'FINISHED' ? 'success' : r.status === 'FAILED' || r.status === 'KILLED' ? 'danger' : 'informative'}
+                            >
+                              {r.status || '—'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>{fmtEpochMs(r.startTime)}</TableCell>
+                          <TableCell>{r.params.length}</TableCell>
+                          <TableCell>{r.metrics.length}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+
+                  {selectedMlflowRun && (
+                    <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <Subtitle2>Run: {selectedMlflowRun.runName || selectedMlflowRun.runId}</Subtitle2>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <Badge appearance="outline">{selectedMlflowRun.status || '—'}</Badge>
+                        <Badge appearance="outline">start: {fmtEpochMs(selectedMlflowRun.startTime)}</Badge>
+                        <Badge appearance="outline">end: {fmtEpochMs(selectedMlflowRun.endTime)}</Badge>
+                      </div>
+
+                      {selectedMlflowRun.params.length > 0 && (
+                        <div>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Parameters</Caption1>
+                          <Table aria-label="Run params" size="small">
+                            <TableHeader><TableRow><TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell></TableRow></TableHeader>
+                            <TableBody>
+                              {selectedMlflowRun.params.map((p) => (
+                                <TableRow key={p.key}>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{p.key}</TableCell>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{p.value}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+
+                      {selectedMlflowRun.metrics.length > 0 && (
+                        <div>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Metrics (latest logged value)</Caption1>
+                          <Table aria-label="Run metrics" size="small">
+                            <TableHeader><TableRow><TableHeaderCell>Metric</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell><TableHeaderCell>Step</TableHeaderCell></TableRow></TableHeader>
+                            <TableBody>
+                              {selectedMlflowRun.metrics.map((m) => (
+                                <TableRow key={m.key}>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.key}</TableCell>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.value}</TableCell>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.step ?? '—'}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      )}
+
+                      {/* Per-metric history (step/value over time) */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                          <Field label="Metric history">
+                            <Dropdown
+                              placeholder={metricKeys.length ? 'Select a metric' : 'No metrics logged on this run'}
+                              value={selMetric}
+                              selectedOptions={selMetric ? [selMetric] : []}
+                              onOptionSelect={(_, d) => setSelMetric(d.optionValue || '')}
+                              disabled={metricKeys.length === 0}
+                            >
+                              {metricKeys.map((k) => <Option key={k} value={k}>{k}</Option>)}
+                            </Dropdown>
+                          </Field>
+                          {metricLoading && <Spinner size="tiny" label="Loading history…" labelPosition="after" />}
+                        </div>
+
+                        {metricError && (
+                          <MessageBar intent="error"><MessageBarBody>{metricError}</MessageBarBody></MessageBar>
+                        )}
+
+                        {!metricLoading && !metricError && selMetric && metricHistory.length === 0 && (
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                            No history points for <code>{selMetric}</code>.
+                          </Caption1>
+                        )}
+
+                        {!metricLoading && metricHistory.length > 0 && (
+                          <>
+                            <MetricLineChart points={metricHistory} />
+                            <Table aria-label="Metric history" size="small">
+                              <TableHeader><TableRow><TableHeaderCell>Step</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell><TableHeaderCell>Timestamp</TableHeaderCell></TableRow></TableHeader>
+                              <TableBody>
+                                {metricHistory.map((m, i) => (
+                                  <TableRow key={`${m.step ?? i}-${m.timestamp ?? i}`}>
+                                    <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.step ?? i}</TableCell>
+                                    <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{m.value}</TableCell>
+                                    <TableCell style={{ fontFamily: 'monospace', fontSize: 12 }}>{fmtEpochMs(m.timestamp)}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           )}
         </div>
       }
@@ -1906,12 +2264,6 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
     finally { setMaterializing(false); }
   }, [id, save, setState]);
 
-  const editJson = (key: 'nodes' | 'edges', text: string) => {
-    try {
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) setState((p) => ({ ...p, [key]: parsed }));
-    } catch { /* leave previous */ }
-  };
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -1936,11 +2288,13 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <div>
             <Subtitle2>Node types</Subtitle2>
-            <MonacoTextarea value={JSON.stringify(state.nodes, null, 2)} onChange={(v) => editJson('nodes', v)} language="json" height={260} minHeight={200} ariaLabel="Node types JSON" />
+            <GraphTypeEditor kind="node" types={arr(state.nodes)}
+              onChange={(next) => setState((p) => ({ ...p, nodes: next }))} />
           </div>
           <div>
             <Subtitle2>Edge types</Subtitle2>
-            <MonacoTextarea value={JSON.stringify(state.edges, null, 2)} onChange={(v) => editJson('edges', v)} language="json" height={260} minHeight={200} ariaLabel="Edge types JSON" />
+            <GraphTypeEditor kind="edge" types={arr(state.edges)}
+              onChange={(next) => setState((p) => ({ ...p, edges: next }))} />
           </div>
         </div>
         <Subtitle2 style={{ marginTop: 8 }}>Schema graph</Subtitle2>
@@ -2377,7 +2731,8 @@ const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n
 // `_family-utils` (vitest coverage at lib/editors/__tests__/family-utils.test.ts)
 // so the legacy-string migration is unit-tested without the Fluent UI bundle.
 
-interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean }
+interface DaTool { source: string; type?: string; action: string; query?: string }
+interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[] }
 
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -2434,7 +2789,44 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const [chat, setChat] = useState<DaChatMsg[]>([]);
   const [question, setQuestion] = useState('');
   const [asking, setAsking] = useState(false);
+  // Conversation history (persisted to Cosmos via /conversations).
+  const [convId, setConvId] = useState<string | null>(null);
+  const [convos, setConvos] = useState<{ id: string; title: string; updatedAt: string; turns: number }[]>([]);
   const threadRef = useRef<HTMLDivElement | null>(null);
+
+  const loadConvos = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) setConvos(j.conversations || []);
+    } catch { /* non-fatal */ }
+  }, [id]);
+  useEffect(() => { if (id && id !== 'new') loadConvos(); }, [id, loadConvos]);
+
+  const saveConvo = useCallback(async (thread: DaChatMsg[]) => {
+    if (!thread.length || id === 'new') return;
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ conversationId: convId || undefined, messages: thread }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok && j.conversation?.id) { setConvId(j.conversation.id); loadConvos(); }
+    } catch { /* non-fatal */ }
+  }, [id, convId, loadConvos]);
+
+  const loadConvo = useCallback(async (cid: string) => {
+    try {
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations?conversationId=${encodeURIComponent(cid)}`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok && Array.isArray(j.conversation?.messages)) {
+        setChat(j.conversation.messages as DaChatMsg[]);
+        setConvId(cid);
+      }
+    } catch { /* non-fatal */ }
+  }, [id]);
+
+  const newChat = useCallback(() => { setChat([]); setConvId(null); }, []);
   // Keep the latest turn in view as the thread grows / a turn lands.
   useEffect(() => {
     const el = threadRef.current;
@@ -2447,8 +2839,10 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     if (dirty) await save();
     // Build history from the thread BEFORE we append the new user turn.
     const history = shapeDaHistory(chat);
-    setChat((c) => [...c, { role: 'user', content: q }]);
+    const userTurn: DaChatMsg = { role: 'user', content: q };
+    setChat((c) => [...c, userTurn]);
     setQuestion(''); setAsking(true);
+    let assistantTurn: DaChatMsg;
     try {
       const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/chat`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -2456,19 +2850,23 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       });
       // Content-type guard: a 404/500 returns an HTML page, not JSON — calling
       // r.json() on that throws "Unexpected token <" and the answer is lost.
-      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string }>(r);
+      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[] }>(r);
       const j = res.data;
       if (res.ok && j) {
-        setChat((c) => [...c, { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed }]);
+        assistantTurn = { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed, usage: j.usage, model: j.model, tools: j.tools };
       } else {
         const detail = res.error || j?.error || `HTTP ${res.status}`;
         const hint = j?.hint ? `\n\n${j.hint}` : '';
-        setChat((c) => [...c, { role: 'assistant', content: `${detail}${hint}`, error: true }]);
+        assistantTurn = { role: 'assistant', content: `${detail}${hint}`, error: true };
       }
     } catch (e: any) {
-      setChat((c) => [...c, { role: 'assistant', content: e?.message || String(e), error: true }]);
+      assistantTurn = { role: 'assistant', content: e?.message || String(e), error: true };
     } finally { setAsking(false); }
-  }, [question, asking, chat, dirty, save, id]);
+    setChat((c) => [...c, assistantTurn]);
+    // Persist the conversation (only when the turn succeeded) so it survives
+    // reload + can be resumed from History.
+    if (!assistantTurn.error) void saveConvo([...chat, userTurn, assistantTurn]);
+  }, [question, asking, chat, dirty, save, id, saveConvo]);
 
   // ---- publish ----
   const [publishing, setPublishing] = useState(false);
@@ -2501,19 +2899,23 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   }, [publishResult, inspectAgent]);
   const runInspect = useCallback(async () => {
     const agent = inspectAgent.trim(); const q = inspectQuestion.trim();
-    if (!agent || !q || inspecting) return;
+    // The agent name is OPTIONAL now — without a published Foundry agent the
+    // inspector runs the Azure-native grounded backend over this item's sources
+    // (no Microsoft Fabric / published asst_ required). Only the question + the
+    // item id are needed.
+    if (!q || inspecting) return;
     setInspecting(true); setInspectResult(null); setInspectGate(null);
     try {
       const r = await fetch('/api/data-agent/run-steps', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ agent, question: q }),
+        body: JSON.stringify({ agent: agent || undefined, question: q, id }),
       });
       const j = await r.json();
-      if (r.status === 501 || j?.code === 'not_configured') { setInspectGate(j?.hint || j?.error || 'Foundry Agent Service not configured.'); return; }
+      if (r.status === 501 || j?.code === 'not_configured') { setInspectGate(j?.hint || j?.error || 'No AOAI model deployed. Deploy one from the AI Foundry hub.'); return; }
       setInspectResult(j);
     } catch (e: any) { setInspectResult({ ok: false, error: e?.message || String(e) }); }
     finally { setInspecting(false); }
-  }, [inspectAgent, inspectQuestion, inspecting]);
+  }, [inspectAgent, inspectQuestion, inspecting, id]);
 
   // One-time migration: if a legacy record persisted `sources` as a string (or
   // any non-array shape), rewrite state to a clean DaSource[] so the agent both
@@ -2637,7 +3039,23 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                   <Subtitle2>Test chat</Subtitle2>
                   <Badge appearance="tint" color="brand">live · grounded</Badge>
                   <div style={{ flex: 1 }} />
-                  <Button size="small" appearance="subtle" onClick={() => { setChat([]); setQuestion(''); }} disabled={asking || (chat.length === 0 && !question)}>+ New thread</Button>
+                  {convos.length > 0 && (
+                    <Menu>
+                      <MenuTrigger disableButtonEnhancement>
+                        <Button size="small" appearance="subtle">History ({convos.length})</Button>
+                      </MenuTrigger>
+                      <MenuPopover>
+                        <MenuList>
+                          {convos.slice(0, 25).map((cv) => (
+                            <MenuItem key={cv.id} onClick={() => loadConvo(cv.id)}>
+                              {cv.title} · {cv.turns} msg · {new Date(cv.updatedAt).toLocaleDateString()}
+                            </MenuItem>
+                          ))}
+                        </MenuList>
+                      </MenuPopover>
+                    </Menu>
+                  )}
+                  <Button size="small" appearance="subtle" onClick={() => { newChat(); setQuestion(''); }} disabled={asking || (chat.length === 0 && !question)}>+ New thread</Button>
                 </div>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   Each turn runs against the live AOAI deployment on the Foundry hub, grounded on the {sources.length} source{sources.length === 1 ? '' : 's'} + instructions in Build.
@@ -2654,20 +3072,35 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     <Caption1>e.g. “What was total revenue by region last quarter?”</Caption1>
                   </div>
                 )}
-                {chat.map((m, i) => (
+                {chat.map((m, i) => {
+                  const tools = m.tools && m.tools.length ? m.tools : (m.query || m.sourceUsed ? [{ source: m.sourceUsed || 'source', action: 'query', query: m.query } as DaTool] : []);
+                  const srcLabel = !m.error
+                    ? (tools.length > 1 ? ` · ${tools.length} sources` : m.sourceUsed ? ` · source: ${m.sourceUsed}` : '')
+                    : '';
+                  return (
                   <div key={i} className={m.role === 'user' ? s.chatRowUser : s.chatRowBot}>
-                    <span className={s.chatMeta}>{m.role === 'user' ? 'You' : m.error ? 'Agent · error' : 'Agent'}{m.sourceUsed && !m.error ? ` · ${m.sourceUsed}` : ''}</span>
+                    <span className={s.chatMeta}>{m.role === 'user' ? 'You' : m.error ? 'Agent · error' : 'Agent'}{srcLabel}{m.model && !m.error ? ` · ${m.model}` : ''}{m.usage?.totalTokens && !m.error ? ` · ${m.usage.totalTokens} tokens` : ''}</span>
                     <div className={m.role === 'user' ? s.bubbleUser : m.error ? s.bubbleErr : s.bubbleBot}>
                       {m.content || (m.error ? 'Unknown error' : '')}
                     </div>
-                    {m.query && (
-                      <details style={{ marginTop: 2 }}>
-                        <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground2 }}>Generated query{m.sourceUsed ? ` · ${m.sourceUsed}` : ''}</summary>
-                        <pre className={s.chatSource}>{m.query}</pre>
+                    {m.role === 'assistant' && !m.error && tools.length > 0 && (
+                      <details style={{ marginTop: 2 }} open={tools.length > 1}>
+                        <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground2 }}>
+                          🛠 Tools used ({tools.length})
+                        </summary>
+                        {tools.map((t, ti) => (
+                          <div key={ti} style={{ marginTop: 4 }}>
+                            <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
+                              <strong>{t.source}</strong>{t.type ? ` · ${t.type}` : ''} · {t.action}
+                            </Caption1>
+                            {t.query && <pre className={s.chatSource}>{t.query}</pre>}
+                          </div>
+                        ))}
                       </details>
                     )}
                   </div>
-                ))}
+                  );
+                })}
                 {asking && (
                   <div className={s.chatRowBot}>
                     <span className={s.chatMeta}>Agent</span>

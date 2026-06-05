@@ -30,6 +30,15 @@ export interface KqlDatabaseContent {
 
 export interface KqlDashboardContent {
   kind: 'kql-dashboard';
+  /**
+   * ADX/Kusto database the tiles query. Set this to the DB name the sibling
+   * `kql-database` item provisions (kql-db.ts derives it from that item's
+   * displayName, e.g. 'Real-Time Ops KQL Database' → 'Real_Time_Ops_KQL_Database')
+   * so the dashboard resolves the seeded tables. When omitted the dashboard
+   * provisioner falls back to LOOM_KUSTO_DEFAULT_DB — which only works when the
+   * tiles' tables live in the default database.
+   */
+  database?: string;
   tiles: { title: string; kql: string; viz: 'card' | 'line' | 'bar' | 'table' | 'pie' }[];
 }
 
@@ -46,6 +55,17 @@ export interface WarehouseContent {
   dbtProject?: string;
   dbtModels?: { layer: 'bronze' | 'silver' | 'gold'; name: string; sql: string }[];
   starterQueries?: { name: string; sql: string }[];
+  /**
+   * Optional seed data inserted after the DDL runs so warehouse-backed apps
+   * (casino-analytics, pipeline-designer, ml-pipeline) land 'seeded' rather
+   * than empty. Each entry targets one table created by `ddl`. `rows` is a
+   * matrix of literal values; when `columns` is omitted the INSERT lists all
+   * columns positionally, otherwise it uses the named column list so the
+   * row tuples can be a subset / reordering of the table schema.
+   * The warehouse provisioner escapes every value (string/number/bool/null)
+   * into a parameterized-style literal INSERT and verifies with a COUNT.
+   */
+  sampleRows?: { table: string; columns?: string[]; rows: any[][] }[];
 }
 
 export interface LakehouseContent {
@@ -97,7 +117,21 @@ export interface DataProductContent {
 
 export interface AiSearchIndexContent {
   kind: 'ai-search-index';
-  schema: { fields: { name: string; type: string; searchable?: boolean; filterable?: boolean; key?: boolean }[] };
+  schema: {
+    fields: {
+      name: string;
+      type: string;
+      searchable?: boolean;
+      filterable?: boolean;
+      sortable?: boolean;
+      retrievable?: boolean;
+      key?: boolean;
+      /** Vector fields only — embedding length (e.g. 1536 for text-embedding-3-small). */
+      dimensions?: number;
+      /** Vector fields only — must reference a vectorSearch profile name the provisioner creates. */
+      vectorSearchProfile?: string;
+    }[];
+  };
   scoringProfiles?: { name: string; description: string }[];
   sampleDocs?: any[];
   vectorConfig?: { dimensions: number; algorithm: string };

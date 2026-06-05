@@ -159,6 +159,42 @@ describe('searchDocuments', () => {
     const body = JSON.parse(String(calls[0].init?.body));
     expect(body.vectorQueries[0]).toMatchObject({ kind: 'vector', fields: 'embedding', k: 5 });
   });
+
+  it('passes semantic options (queryType=semantic + semanticConfiguration + searchFields) to the wire', async () => {
+    const calls = captureFetch(() => ({ body: { value: [] } }));
+    const { searchDocuments } = await import('../search-index-client');
+    await searchDocuments('hotels', {
+      search: 'how do clouds form', queryType: 'semantic',
+      semanticConfiguration: 'my-semantic-config', searchFields: 'name,description',
+      answers: 'extractive', captions: 'extractive',
+    });
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.queryType).toBe('semantic');
+    expect(body.semanticConfiguration).toBe('my-semantic-config');
+    expect(body.searchFields).toBe('name,description');
+    expect(body.answers).toBe('extractive');
+    expect(body.captions).toBe('extractive');
+  });
+});
+
+describe('createIndex with the field-designer payload', () => {
+  it('POSTs a vector field shaped by fieldRowToApiField (dimensions + profile, no analyzer)', async () => {
+    const calls = captureFetch(() => ({ body: { name: 'idx' } }));
+    const { createIndex, fieldRowToApiField } = await import('../search-index-client');
+    const definition = {
+      name: 'idx',
+      fields: [
+        fieldRowToApiField({ name: 'id', type: 'Edm.String', key: true }),
+        fieldRowToApiField({ name: 'vec', type: 'Collection(Edm.Single)', searchable: true, dimensions: 1536, vectorSearchProfile: 'p' }),
+      ],
+    };
+    await createIndex(definition);
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(calls[0].init?.method).toBe('POST');
+    expect(body.fields[0]).toMatchObject({ name: 'id', key: true, retrievable: true });
+    expect(body.fields[1]).toMatchObject({ name: 'vec', dimensions: 1536, vectorSearchProfile: 'p' });
+    expect(body.fields[1].analyzer).toBeUndefined();
+  });
 });
 
 describe('analyzeText', () => {

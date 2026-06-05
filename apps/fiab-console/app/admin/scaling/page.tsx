@@ -48,9 +48,17 @@ async function jsonPost(url: string, body: unknown): Promise<any> {
 }
 
 async function jsonGet(url: string): Promise<any> {
-  const r = await fetch(url);
-  const j = await r.json().catch(() => ({}));
-  return j;
+  // 12s timeout so a hung backend route can't leave a panel spinning forever.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+    return await r.json().catch(() => ({}));
+  } catch (e: any) {
+    return { ok: false, error: e?.name === 'AbortError' ? `Timed out loading ${url}` : (e?.message || String(e)) };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export default function ScalingPage() {

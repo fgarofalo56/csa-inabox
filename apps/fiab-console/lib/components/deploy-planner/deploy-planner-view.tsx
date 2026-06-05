@@ -29,12 +29,15 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, Save20Regular, ArrowDownload20Regular, Delete20Regular, Search16Regular,
+  ChevronDown20Regular, ChevronRight20Regular,
 } from '@fluentui/react-icons';
-import { SubscriptionNode, DomainNode, ServiceNode } from './deploy-plan-nodes';
+import { SubscriptionNode, DomainNode, ServiceNode, ServiceIconChip } from './deploy-plan-nodes';
 import {
-  SERVICE_CATALOG, SERVICE_CATEGORY_ORDER, servicesByCategory, serviceByKey,
+  SERVICE_CATALOG, SERVICE_CATEGORY_ORDER, servicesByCategory, serviceByKey, serviceVisual,
+  SERVICE_COUNT, TOGGLEABLE_SERVICE_COUNT,
   type ServiceDef, type ServiceCategory,
 } from './service-catalog';
+import { iconUrl } from '../ui/item-type-visual';
 import { planToBicepparam } from './bicepparam';
 import type { PlanSubscription } from './types';
 
@@ -42,8 +45,8 @@ const nodeTypes: NodeTypes = { subscription: SubscriptionNode, domain: DomainNod
 
 // layout constants
 const SUB_PAD_X = 16, SUB_HEADER = 36, SUB_GAP = 28, SUB_BOTTOM = 16;
-const DOMAIN_W = 300, DOMAIN_HEADER = 30, DOMAIN_PAD = 10, DOMAIN_GAP = 16;
-const SVC_W = 128, SVC_H = 34, SVC_GAP_X = 12, SVC_GAP_Y = 8, SVC_COLS = 2;
+const DOMAIN_W = 312, DOMAIN_HEADER = 30, DOMAIN_PAD = 12, DOMAIN_GAP = 16;
+const SVC_W = 132, SVC_H = 40, SVC_GAP_X = 12, SVC_GAP_Y = 10, SVC_COLS = 2;
 const SUB_W = DOMAIN_W + SUB_PAD_X * 2;
 
 function domainHeight(serviceCount: number): number {
@@ -107,22 +110,72 @@ type Selection =
   | null;
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  body: { display: 'grid', gridTemplateColumns: '248px 1fr', gap: 12, minHeight: 540 },
+  root: {
+    display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalL, minHeight: 0,
+  },
+  toolbar: {
+    display: 'flex', gap: tokens.spacingHorizontalS,
+    alignItems: 'center', flexWrap: 'wrap',
+  },
+  body: {
+    // Height-bounded to the viewport so the PALETTE scrolls internally and the
+    // CANVAS stays fixed — collapsing/expanding categories never grows the page.
+    // minmax(0,1fr) lets the canvas column shrink instead of overflowing wide.
+    display: 'grid', gridTemplateColumns: '300px minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalL,
+    height: 'calc(100vh - 220px)', minHeight: '460px',
+  },
   palette: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
-    background: tokens.colorNeutralBackground1, overflowY: 'auto', padding: 8,
-    display: 'flex', flexDirection: 'column', gap: 8,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    background: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+    overflowY: 'auto',
+    padding: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
   },
-  pGroup: { display: 'flex', flexDirection: 'column', gap: 3 },
+  pFilters: {
+    display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS,
+  },
+  pGroup: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  pGroupHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    marginBottom: '2px', width: '100%', cursor: 'pointer',
+    background: 'none', border: 'none', padding: '4px 2px', textAlign: 'left',
+    borderRadius: tokens.borderRadiusMedium,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  pGroupChevron: { flexShrink: 0, color: tokens.colorNeutralForeground3, display: 'flex' },
+  pGroupCount: { marginLeft: 'auto', color: tokens.colorNeutralForeground3, fontSize: '11px' },
+  pGroupSwatch: { width: '8px', height: '8px', borderRadius: '2px', flexShrink: 0 },
   pTile: {
-    display: 'flex', alignItems: 'center', gap: 8, padding: '5px 7px', borderRadius: 4,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1,
-    cursor: 'grab', fontSize: 12,
-    ':hover': { border: `1px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorNeutralBackground1Hover },
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    padding: '7px 9px', borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    background: tokens.colorNeutralBackground1,
+    cursor: 'grab', fontSize: '12px',
+    transitionDuration: tokens.durationFaster,
+    transitionProperty: 'border-color, background-color, transform',
+    ':hover': {
+      border: `1px solid ${tokens.colorBrandStroke1}`,
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      transform: 'translateY(-1px)',
+    },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
-  canvas: { position: 'relative', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, overflow: 'hidden', background: tokens.colorNeutralBackground3 },
+  pTileLabel: {
+    flex: 1, minWidth: 0, whiteSpace: 'nowrap',
+    overflow: 'hidden', textOverflow: 'ellipsis',
+    color: tokens.colorNeutralForeground1,
+  },
+  canvas: {
+    position: 'relative',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    overflow: 'hidden', background: tokens.colorNeutralBackground3,
+    boxShadow: tokens.shadow2,
+  },
 });
 
 const MIME = 'application/x-loom-service';
@@ -138,6 +191,15 @@ function PlannerInner() {
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
+  const [catFilter, setCatFilter] = useState<ServiceCategory | 'all'>('all');
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
+  const toggleCat = useCallback((id: string) => {
+    setCollapsedCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
   const [exportSub, setExportSub] = useState<PlanSubscription | null>(null);
   const rectsRef = useRef<DomainRect[]>([]);
 
@@ -261,7 +323,11 @@ function PlannerInner() {
   }, [subs]);
 
   const q = query.trim().toLowerCase();
-  const matches = (def: ServiceDef) => !q || def.label.toLowerCase().includes(q) || def.key.toLowerCase().includes(q);
+  const matches = (def: ServiceDef) =>
+    (catFilter === 'all' || def.category === catFilter) &&
+    (!q || def.label.toLowerCase().includes(q) || def.key.toLowerCase().includes(q)
+      || def.description.toLowerCase().includes(q));
+  const matchCount = SERVICE_CATALOG.filter(matches).length;
 
   const selectedSub = sel?.kind === 'subscription' ? subs[sel.si] : null;
 
@@ -272,7 +338,10 @@ function PlannerInner() {
       <MessageBar intent="info">
         <MessageBarBody>
           <MessageBarTitle>Planning, not deploying</MessageBarTitle>
-          Save persists this plan to Cosmos. To deploy it, use <strong>Export bicepparam</strong> on a
+          Plan from a catalog of {SERVICE_COUNT} Azure service types ({TOGGLEABLE_SERVICE_COUNT} have a
+          one-button bicep toggle; <Badge size="tiny" appearance="outline" color="warning">plan</Badge> services
+          are real Azure but not auto-provisioned by main.bicep yet, so they are not written as bicep params).
+          Save persists this plan to Cosmos. To deploy, use <strong>Export bicepparam</strong> on a
           subscription, then run <code>az deployment sub create -f platform/fiab/bicep/main.bicep -p &lt;file&gt;.bicepparam</code>
           {' '}or trigger the deploy-fiab workflow. Domains come from{' '}
           <a href="/admin/domains">Admin → Domains</a>.
@@ -304,40 +373,84 @@ function PlannerInner() {
 
       <div className={s.body}>
         {/* palette */}
-        <div className={s.palette} role="navigation" aria-label="Azure service palette">
-          <Input size="small" contentBefore={<Search16Regular />} placeholder="Search services"
-            value={query} onChange={(_, d) => setQuery(d.value)} />
+        <div className={s.palette} role="navigation" aria-label="Azure service catalog">
+          <Input size="small" contentBefore={<Search16Regular />} placeholder="Search all Azure services"
+            value={query} onChange={(_, d) => setQuery(d.value)} aria-label="Search services" />
+
+          {/* category filter chips */}
+          <div className={s.pFilters} role="group" aria-label="Filter by category">
+            <Badge appearance={catFilter === 'all' ? 'filled' : 'outline'} color="brand"
+              style={{ cursor: 'pointer' }} onClick={() => setCatFilter('all')}>
+              All ({SERVICE_COUNT})
+            </Badge>
+            {SERVICE_CATEGORY_ORDER.map((cat) => {
+              const n = servicesByCategory(cat.id).length;
+              const on = catFilter === cat.id;
+              return (
+                <Badge key={cat.id} appearance={on ? 'filled' : 'outline'}
+                  style={{ cursor: 'pointer', backgroundColor: on ? cat.color : undefined, borderColor: cat.color, color: on ? '#fff' : cat.color }}
+                  onClick={() => setCatFilter(on ? 'all' : cat.id)} title={cat.label}>
+                  {cat.label.split(' ')[0]} ({n})
+                </Badge>
+              );
+            })}
+          </div>
+
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
             {sel?.kind === 'domain' || sel?.kind === 'service'
-              ? 'Click or drag a service to add it to the selected domain.'
-              : 'Select a domain, then click a service — or drag a service onto a domain.'}
+              ? `Click or drag a service onto the selected domain. ${matchCount} services shown.`
+              : `Select a domain, then click a service — or drag one onto a domain. ${matchCount} services shown.`}
           </Caption1>
+
+          {matchCount === 0 && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, padding: '8px 4px' }}>
+              No services match the current search/filter.
+            </Caption1>
+          )}
+
           {SERVICE_CATEGORY_ORDER.map((cat) => {
             const items = servicesByCategory(cat.id).filter(matches);
             if (!items.length) return null;
+            const collapsed = collapsedCats.has(cat.id);
             return (
               <div key={cat.id} className={s.pGroup}>
-                <Subtitle2>{cat.label}</Subtitle2>
-                {items.map((def) => (
-                  <Tooltip key={def.key} content={def.description} relationship="description" positioning="after">
-                    <div
-                      className={s.pTile}
-                      draggable
-                      data-service-key={def.key}
-                      onDragStart={(e) => { e.dataTransfer.setData(MIME, def.key); e.dataTransfer.effectAllowed = 'copy'; }}
-                      onClick={() => paletteAdd(def)}
-                      role="button" tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); paletteAdd(def); } }}
-                    >
-                      {def.icon
-                        // eslint-disable-next-line @next/next/no-img-element
-                        ? <img src={`/azure-icons/${def.icon}`} alt="" width={18} height={18} />
-                        : <span style={{ width: 18, height: 18, borderRadius: 3, background: def.color, color: '#fff', fontSize: 9, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{def.label.slice(0, 2).toUpperCase()}</span>}
-                      <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{def.label}</span>
-                      {!def.bicepFlag && <Badge size="tiny" appearance="outline" color="informative" title="Core — always deployed">core</Badge>}
-                    </div>
-                  </Tooltip>
-                ))}
+                <button
+                  type="button"
+                  className={s.pGroupHead}
+                  onClick={() => toggleCat(cat.id)}
+                  aria-expanded={!collapsed}
+                  aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${cat.label}`}
+                >
+                  <span className={s.pGroupChevron}>{collapsed ? <ChevronRight20Regular /> : <ChevronDown20Regular />}</span>
+                  <span className={s.pGroupSwatch} style={{ background: cat.color }} />
+                  <Subtitle2>{cat.label}</Subtitle2>
+                  <span className={s.pGroupCount}>{items.length}</span>
+                </button>
+                {!collapsed && items.map((def) => {
+                  const vis = serviceVisual(def.key);
+                  return (
+                    <Tooltip key={def.key} content={def.description} relationship="description" positioning="after">
+                      <div
+                        className={s.pTile}
+                        draggable
+                        data-service-key={def.key}
+                        onDragStart={(e) => { e.dataTransfer.setData(MIME, def.key); e.dataTransfer.effectAllowed = 'copy'; }}
+                        onClick={() => paletteAdd(def)}
+                        role="button" tabIndex={0}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); paletteAdd(def); } }}
+                      >
+                        <ServiceIconChip def={def} vis={vis} Glyph={vis.glyph} remote={iconUrl(def.key)} size={28} iconPx={17} radius={6} />
+                        <span className={s.pTileLabel}>{def.label}</span>
+                        {!def.bicepFlag && !def.planOnly && (
+                          <Badge size="tiny" appearance="outline" color="informative" title="Core — always deployed">core</Badge>
+                        )}
+                        {def.planOnly && (
+                          <Badge size="tiny" appearance="outline" color="warning" title="Plan-only — no one-button bicep toggle yet">plan</Badge>
+                        )}
+                      </div>
+                    </Tooltip>
+                  );
+                })}
               </div>
             );
           })}

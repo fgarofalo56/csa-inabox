@@ -1,0 +1,91 @@
+name: csa-loom-tutorial-capture
+
+# Drives the LIVE Loom console with a minted session (session secret read from
+# the Container App / Key Vault by the deploy SP — never written to disk), runs
+# the tutorial-capture functional UAT (apps/fiab-console/e2e/tutorial-capture.uat.ts)
+# which closes the "Learn about this item" drawer and screenshots every step of
+# every editor, and uploads the staged screenshots as an artifact for review.
+# Publishing into docs/ stays a manual step (scripts/csa-loom/publish-tutorials.mjs)
+# after the operator reviews the artifact (Azure-imagery privacy gate).
+
+on:
+  workflow_dispatch:
+    inputs:
+      loom_url:
+        description: 'Console URL to drive (default = Front Door)'
+        type: string
+        default: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
+      types:
+        description: 'LOOM_TUTORIAL_TYPES — comma list of item slugs (blank = all editors)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+  ADMIN_RG: rg-csa-loom-admin-eastus2
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install deps + Playwright (Chromium)
+        working-directory: apps/fiab-console
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Azure login (limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+      - name: Resolve session secret + run tutorial capture
+        env:
+          LOOM_URL: ${{ inputs.loom_url }}
+          LOOM_TUTORIAL_TYPES: ${{ inputs.types }}
+        run: |
+          set -uo pipefail
+          # Resolve the live session secret (container-app secret, else Key Vault).
+          SNAME=$(az containerapp secret list -g "$ADMIN_RG" -n loom-console \
+                  --query "[?contains(name,'session') || contains(name,'SESSION')].name | [0]" -o tsv 2>/dev/null || true)
+          SS=""
+          if [[ -n "$SNAME" ]]; then
+            SS=$(az containerapp secret show -g "$ADMIN_RG" -n loom-console --secret-name "$SNAME" --query value -o tsv 2>/dev/null || true)
+          fi
+          if [[ -z "$SS" ]]; then
+            KV=$(az keyvault list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>/dev/null || true)
+            if [[ -n "$KV" ]]; then
+              for KVS in loom-session-secret session-secret; do
+                SS=$(az keyvault secret show --vault-name "$KV" --name "$KVS" --query value -o tsv 2>/dev/null || true)
+                [[ -n "$SS" ]] && break
+              done
+            fi
+          fi
+          if [[ -z "$SS" ]]; then
+            echo "::error::Could not read the session secret. Cannot mint a session."; exit 1
+          fi
+          echo "::add-mask::$SS"
+          cd apps/fiab-console
+          # Don't fail the job on individual editor capture errors — we want the
+          # partial screenshots uploaded for review.
+          SESSION_SECRET="$SS" pnpm exec playwright test --project=uat e2e/tutorial-capture.uat.ts || true
+      - name: Upload staged tutorial captures (REVIEW before publishing)
+        uses: actions/upload-artifact@v4
+        with:
+          name: loom-tutorial-captures
+          path: temp/azure-screenshots/redacted/loom-tutorials/
+          if-no-files-found: warn
+          retention-days: 14

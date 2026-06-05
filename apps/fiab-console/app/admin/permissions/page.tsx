@@ -21,14 +21,37 @@ import { AdminShell } from '@/lib/components/admin-shell';
 import { CapabilityTree } from '@/lib/components/feature-rbac/capability-tree';
 import { GrantRow } from '@/lib/components/feature-rbac/grant-row';
 import { GrantDialog } from '@/lib/components/feature-rbac/grant-dialog';
+import { Section } from '@/lib/components/ui/section';
 import type { Capability } from '@/lib/auth/feature-catalog';
 import type { FeatureGrant } from '@/lib/auth/feature-gate';
 
 const useStyles = makeStyles({
-  layout: { display: 'grid', gridTemplateColumns: '320px 1fr', minHeight: '600px', gap: 0 },
-  detail: { padding: '24px', overflowY: 'auto' },
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', paddingBottom: '12px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  empty: { padding: '32px', color: tokens.colorNeutralForeground3, fontSize: '13px' },
+  intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
+  layout: {
+    display: 'grid',
+    gridTemplateColumns: '320px minmax(0, 1fr)',
+    minHeight: '600px',
+    gap: tokens.spacingHorizontalL,
+    alignItems: 'start',
+  },
+  treePane: {
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    overflow: 'hidden',
+    minWidth: 0,
+  },
+  detail: { padding: tokens.spacingVerticalL, overflowY: 'auto', minWidth: 0 },
+  header: {
+    display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM,
+    marginBottom: tokens.spacingVerticalL, paddingBottom: tokens.spacingVerticalM,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    flexWrap: 'wrap',
+  },
+  titleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  grants: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalM },
+  empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: '13px' },
 });
 
 export default function FeaturePermissionsPage() {
@@ -82,75 +105,81 @@ export default function FeaturePermissionsPage() {
 
   if (loading) {
     return (
-      <AdminShell>
-        <div style={{ padding: 32 }}><Spinner label="Loading capability catalog…" /></div>
+      <AdminShell sectionTitle="Feature permissions">
+        <Section><Spinner label="Loading capability catalog…" /></Section>
       </AdminShell>
     );
   }
   if (error) {
     return (
-      <AdminShell>
-        <div style={{ padding: 32 }}>
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              <MessageBarTitle>{error.message}</MessageBarTitle>
-              {error.remediation && <div style={{ marginTop: 4 }}>{error.remediation}</div>}
-              {!error.remediation && (
-                <div style={{ marginTop: 4 }}>
-                  Only members of the tenant-admin group (env <code>LOOM_TENANT_ADMIN_GROUP_ID</code>) or the user with <code>LOOM_TENANT_ADMIN_OID</code> can manage feature permissions before any grants exist.
-                </div>
-              )}
-            </MessageBarBody>
-          </MessageBar>
-        </div>
+      <AdminShell sectionTitle="Feature permissions">
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>{error.message}</MessageBarTitle>
+            {error.remediation && <div style={{ marginTop: 4 }}>{error.remediation}</div>}
+            {!error.remediation && (
+              <div style={{ marginTop: 4 }}>
+                Only members of the tenant-admin group (env <code>LOOM_TENANT_ADMIN_GROUP_ID</code>) or the user with <code>LOOM_TENANT_ADMIN_OID</code> can manage feature permissions before any grants exist.
+              </div>
+            )}
+          </MessageBarBody>
+        </MessageBar>
       </AdminShell>
     );
   }
 
   return (
-    <AdminShell>
-      <div className={styles.layout}>
-        <CapabilityTree
-          groups={groups}
-          grantCounts={grantCounts}
-          selected={selected?.id}
-          onSelect={(c) => setSelected(c)}
-        />
-        <div className={styles.detail}>
-          {selected ? (
-            <>
-              <div className={styles.header}>
-                <div>
-                  <Title2><ShieldKeyhole24Regular /> {selected.name}</Title2>
-                  <Caption1 style={{ display: 'block', marginTop: 4 }}>{selected.description}</Caption1>
-                  <Caption1 style={{ display: 'block', marginTop: 4, fontFamily: 'monospace', color: tokens.colorNeutralForeground3 }}>
-                    {selected.id}
-                  </Caption1>
-                </div>
-                <Button appearance="primary" icon={<AddRegular />} onClick={() => setDialogOpen(true)}>
-                  Add grant
-                </Button>
-              </div>
-              <Subtitle2>Current grants ({grantsForSelected.length})</Subtitle2>
-              <div style={{ marginTop: 12 }}>
-                {grantsForSelected.length === 0 && (
-                  <div className={styles.empty}>
-                    <Body1>No grants yet for this capability.</Body1>
-                    <div style={{ marginTop: 8 }}>
-                      Tenant admins always have full access; add explicit grants to delegate.
-                    </div>
+    <AdminShell sectionTitle="Feature permissions">
+      <Body1 className={styles.intro}>
+        Fabric-style RBAC. Pick a capability from the tree, then review and delegate its grants.
+        Tenant admins always have full access; explicit grants extend access to others.
+      </Body1>
+      <Section bare>
+        <div className={styles.layout}>
+          <div className={styles.treePane}>
+            <CapabilityTree
+              groups={groups}
+              grantCounts={grantCounts}
+              selected={selected?.id}
+              onSelect={(c) => setSelected(c)}
+            />
+          </div>
+          <div className={styles.detail}>
+            {selected ? (
+              <>
+                <div className={styles.header}>
+                  <div style={{ minWidth: 0 }}>
+                    <Title2 className={styles.titleRow}><ShieldKeyhole24Regular /> {selected.name}</Title2>
+                    <Caption1 style={{ display: 'block', marginTop: 4 }}>{selected.description}</Caption1>
+                    <Caption1 style={{ display: 'block', marginTop: 4, fontFamily: 'monospace', color: tokens.colorNeutralForeground3 }}>
+                      {selected.id}
+                    </Caption1>
                   </div>
-                )}
-                {grantsForSelected.map((g) => (
-                  <GrantRow key={g.id} grant={g} onRemoved={load} />
-                ))}
-              </div>
-            </>
-          ) : (
-            <div className={styles.empty}>Select a capability from the tree.</div>
-          )}
+                  <Button appearance="primary" icon={<AddRegular />} onClick={() => setDialogOpen(true)}>
+                    Add grant
+                  </Button>
+                </div>
+                <Subtitle2>Current grants ({grantsForSelected.length})</Subtitle2>
+                <div className={styles.grants}>
+                  {grantsForSelected.length === 0 && (
+                    <div className={styles.empty}>
+                      <Body1>No grants yet for this capability.</Body1>
+                      <div style={{ marginTop: 8 }}>
+                        Tenant admins always have full access; add explicit grants to delegate.
+                      </div>
+                    </div>
+                  )}
+                  {grantsForSelected.map((g) => (
+                    <GrantRow key={g.id} grant={g} onRemoved={load} />
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className={styles.empty}>Select a capability from the tree.</div>
+            )}
+          </div>
         </div>
-      </div>
+      </Section>
       <GrantDialog
         open={dialogOpen}
         capabilityId={selected?.id || ''}

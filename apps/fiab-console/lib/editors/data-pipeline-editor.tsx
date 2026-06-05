@@ -36,18 +36,20 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
   Toast, ToastTitle, useToastController, Toaster, useId,
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
-  Checkmark20Regular, Bug20Regular, Clock20Regular,
+  Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular, CloudArrowUp20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { ActivityPalette } from '@/lib/components/pipeline/palette';
 import { PipelineCanvas, type CanvasHandle } from '@/lib/components/pipeline/canvas';
 import { PropertiesPanel } from '@/lib/components/pipeline/properties-panel';
 import { TopTabs, type TopTabId } from '@/lib/components/pipeline/top-tabs';
+import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
 import { OutputPane } from '@/lib/components/pipeline/output-pane';
 import {
   ACTIVITY_CATALOG, findByKey, nextNameSuffix, type ActivityTypeDef,
@@ -78,6 +80,39 @@ const useStyles = makeStyles({
   centerCol: { flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 },
   treePad: { padding: '8px' },
   tabBody: { padding: '12px', overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' },
+
+  // ── ADF-Studio designer layout: palette | (canvas over a resizable config dock) ──
+  // The canvas FILLS the space above the dock; the dock has an explicit,
+  // user-dragged height with its own internal scroll, so expanding/collapsing
+  // sections inside the activity config NEVER resizes the canvas.
+  designerRow: { display: 'flex', flex: 1, minHeight: '560px', gap: '8px', minWidth: 0 },
+  designerMain: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 },
+  canvasWrap: { flex: 1, minHeight: '180px', display: 'flex', overflow: 'hidden' },
+  splitter: {
+    flexShrink: 0,
+    height: '10px',
+    cursor: 'row-resize',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    touchAction: 'none',
+    ':hover': { backgroundColor: tokens.colorNeutralBackground3 },
+  },
+  splitterActive: { backgroundColor: tokens.colorBrandBackground2 },
+  splitterGrip: {
+    width: '44px',
+    height: '4px',
+    borderRadius: '2px',
+    backgroundColor: tokens.colorNeutralStroke1,
+  },
+  configDock: {
+    flexShrink: 0,
+    overflow: 'auto',
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '4px',
+    minHeight: '120px',
+  },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -150,9 +185,34 @@ export function DataPipelineEditor({ item, id }: Props) {
   const [showGrid, setShowGrid] = useState(true);
   const [outputPinned, setOutputPinned] = useState(false);
 
+  // Activity-config dock height (ADF Studio docks config at the bottom of the
+  // canvas with a draggable divider). Explicit height + internal scroll means
+  // expanding/collapsing sections never resizes the canvas above it.
+  const [configHeight, setConfigHeight] = useState(300);
+  const [resizing, setResizing] = useState(false);
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = configHeight;
+    setResizing(true);
+    const onMove = (ev: MouseEvent) => {
+      // Dragging up (clientY decreases) grows the bottom dock.
+      const next = Math.max(120, Math.min(680, startH - (ev.clientY - startY)));
+      setConfigHeight(next);
+    };
+    const onUp = () => {
+      setResizing(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [configHeight]);
+
   // Lifecycle state
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [debugging, setDebugging] = useState(false);
   const [validating, setValidating] = useState(false);
   const [validation, setValidation] = useState<{ ok: boolean; message: string } | null>(null);
@@ -165,8 +225,10 @@ export function DataPipelineEditor({ item, id }: Props) {
 
   // Schedule dialog
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  // Manage hub (linked services / datasets) — Synapse-backed, the Azure-native
+  // default for the Fabric data pipeline item.
+  const [manageOpen, setManageOpen] = useState(false);
   const [triggerName, setTriggerName] = useState('');
-  const [triggerCron, setTriggerCron] = useState('0 0 * * *');
   const [triggerBusy, setTriggerBusy] = useState(false);
   const [triggerErr, setTriggerErr] = useState<string | null>(null);
   const [triggers, setTriggers] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
@@ -216,6 +278,23 @@ export function DataPipelineEditor({ item, id }: Props) {
       if (j.ok) setTriggers(j.triggers || []);
     } catch { /* keep last */ }
   }, []);
+
+  // Resolve THIS item's workspace + bind to its pipeline id from the route id,
+  // so a deep-linked / app-installed pipeline auto-loads its canvas instead of
+  // showing an empty "Select a workspace" state with the activities stranded in
+  // the bundle banner. Mirrors the notebook editor's wsId self-resolution.
+  useEffect(() => {
+    if (!id || id === 'new' || workspaceId) return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/data-pipeline/${encodeURIComponent(id)}`);
+        const j = await r.json().catch(() => ({}));
+        if (alive && j?.workspaceId) { setWorkspaceId(j.workspaceId); setPipelineId(id); }
+      } catch { /* fall back to manual workspace pick */ }
+    })();
+    return () => { alive = false; };
+  }, [id, workspaceId]);
 
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => {
@@ -388,37 +467,75 @@ export function DataPipelineEditor({ item, id }: Props) {
     } finally { setValidating(false); }
   }, [workspaceId, pipelineId, spec, activities.length, dispatchToast]);
 
+  // Publish the current canvas to a LIVE Azure Data Factory pipeline (creates
+  // the ADF backing + stamps adfPipelineName) so Run / Debug / Schedule work.
+  // This is the concrete resolution for the "no ADF backing yet" gate. Returns
+  // true on success so Run/Debug can publish-then-retry transparently.
+  const publishToAdf = useCallback(async (): Promise<boolean> => {
+    if (!workspaceId || !pipelineId) return false;
+    const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/publish?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ definition: { name: spec.name, properties: spec.properties } }),
+    });
+    const j = await r.json();
+    if (!j.ok) {
+      dispatchToast(<Toast><ToastTitle>Publish failed: {j.gate?.remediation || j.error}</ToastTitle></Toast>, { intent: 'error' });
+      return false;
+    }
+    setDirty(false);
+    dispatchToast(<Toast><ToastTitle>Published to ADF · {j.adfPipelineName}</ToastTitle></Toast>, { intent: 'success' });
+    return true;
+  }, [workspaceId, pipelineId, spec, dispatchToast]);
+
+  const publish = useCallback(async () => {
+    setPublishing(true);
+    try { await publishToAdf(); } finally { setPublishing(false); }
+  }, [publishToAdf]);
+
   const run = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     setRunning(true);
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
-      });
-      const j = await r.json();
-      if (!j.ok) dispatchToast(<Toast><ToastTitle>Run failed: {j.error}</ToastTitle></Toast>, { intent: 'error' });
+      const url = `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`;
+      let r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+      let j = await r.json();
+      // Not yet backed by ADF → publish, then retry once. No dead-end.
+      if (!j.ok && (j.gate || /no ADF backing/i.test(j.error || ''))) {
+        dispatchToast(<Toast><ToastTitle>Publishing to ADF first…</ToastTitle></Toast>, { intent: 'info' });
+        if (await publishToAdf()) {
+          r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+          j = await r.json();
+        }
+      }
+      if (!j.ok) dispatchToast(<Toast><ToastTitle>Run failed: {j.gate?.remediation || j.error}</ToastTitle></Toast>, { intent: 'error' });
       else {
         dispatchToast(<Toast><ToastTitle>Run queued · {j.runId?.slice(0, 8)}</ToastTitle></Toast>, { intent: 'success' });
         setTopTab('output');
       }
     } finally { setRunning(false); }
-  }, [workspaceId, pipelineId, dispatchToast]);
+  }, [workspaceId, pipelineId, dispatchToast, publishToAdf]);
 
   const debug = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     setDebugging(true);
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/debug?workspaceId=${encodeURIComponent(workspaceId)}`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
-      });
-      const j = await r.json();
-      if (!j.ok) dispatchToast(<Toast><ToastTitle>Debug failed: {j.error}</ToastTitle></Toast>, { intent: 'error' });
+      const url = `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/debug?workspaceId=${encodeURIComponent(workspaceId)}`;
+      let r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+      let j = await r.json();
+      if (!j.ok && (j.gate || /no ADF backing/i.test(j.error || ''))) {
+        dispatchToast(<Toast><ToastTitle>Publishing to ADF first…</ToastTitle></Toast>, { intent: 'info' });
+        if (await publishToAdf()) {
+          r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}) });
+          j = await r.json();
+        }
+      }
+      if (!j.ok) dispatchToast(<Toast><ToastTitle>Debug failed: {j.gate?.remediation || j.error}</ToastTitle></Toast>, { intent: 'error' });
       else {
         dispatchToast(<Toast><ToastTitle>Debug run started · {j.runId?.slice(0, 8)}</ToastTitle></Toast>, { intent: 'success' });
         setTopTab('output');
       }
     } finally { setDebugging(false); }
-  }, [workspaceId, pipelineId, dispatchToast]);
+  }, [workspaceId, pipelineId, dispatchToast, publishToAdf]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -457,28 +574,15 @@ export function DataPipelineEditor({ item, id }: Props) {
     loadDetail(workspaceId, pipelineId);
   }, [workspaceId, pipelineId, dirty, loadDetail]);
 
-  const createTrigger = useCallback(async () => {
-    if (!workspaceId || !pipelineId || !triggerName.trim()) return;
+  // Create any ADF trigger type from the guided wizard's payload (no JSON/cron).
+  const createTriggerWith = useCallback(async (name: string, properties: Record<string, unknown>) => {
+    if (!workspaceId || !pipelineId || !name.trim()) return;
     setTriggerBusy(true); setTriggerErr(null);
     try {
       const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/triggers?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: triggerName.trim(),
-          properties: {
-            type: 'ScheduleTrigger',
-            runtimeState: 'Stopped',
-            typeProperties: {
-              recurrence: {
-                frequency: 'Day',
-                interval: 1,
-                startTime: new Date().toISOString(),
-                timeZone: 'UTC',
-              },
-            },
-          },
-        }),
+        body: JSON.stringify({ name: name.trim(), properties }),
       });
       const j = await r.json();
       if (!j.ok) { setTriggerErr(j.error || 'create failed'); return; }
@@ -486,7 +590,7 @@ export function DataPipelineEditor({ item, id }: Props) {
       await loadTriggers(workspaceId, pipelineId);
       dispatchToast(<Toast><ToastTitle>Trigger created — start it from the list below.</ToastTitle></Toast>, { intent: 'success' });
     } finally { setTriggerBusy(false); }
-  }, [workspaceId, pipelineId, triggerName, triggerCron, loadTriggers, dispatchToast]);
+  }, [workspaceId, pipelineId, loadTriggers, dispatchToast]);
 
   const startStopTrigger = useCallback(async (name: string, action: 'start' | 'stop') => {
     if (!workspaceId || !pipelineId) return;
@@ -522,7 +626,11 @@ export function DataPipelineEditor({ item, id }: Props) {
         { label: 'Validate', actions: [
           { label: validating ? 'Validating…' : 'Validate', icon: <Checkmark20Regular />, onClick: canValidate ? validate : undefined, disabled: !canValidate },
         ]},
+        { label: 'Manage', actions: [
+          { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services and datasets' },
+        ]},
         { label: 'Run', actions: [
+          { label: publishing ? 'Publishing…' : 'Publish', icon: <CloudArrowUp20Regular />, onClick: pipelineId && !publishing ? publish : undefined, disabled: !pipelineId || publishing, title: 'Deploy this pipeline to Azure Data Factory so it can Run / Debug / schedule' },
           { label: running ? 'Queuing…' : 'Run', icon: <Play20Regular />, onClick: canRun ? run : undefined, disabled: !canRun },
           { label: debugging ? 'Debugging…' : 'Debug', icon: <Bug20Regular />, onClick: canDebug ? debug : undefined, disabled: !canDebug },
         ]},
@@ -558,6 +666,7 @@ export function DataPipelineEditor({ item, id }: Props) {
   ], [
     canCreate, saving, canSave, save, workspaceId, loadList, canDiscard, dirty, discard,
     validating, canValidate, validate, running, canRun, run, debugging, canDebug, debug,
+    publish, publishing,
     pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned,
   ]);
 
@@ -640,33 +749,52 @@ export function DataPipelineEditor({ item, id }: Props) {
                 pipeline: activities.length,
               }}>
               {topTab === 'pipeline' && (
-                <div className={s.threePane}>
+                <div className={s.designerRow}>
                   <div className={s.paletteCol}>
                     <ActivityPalette onInsert={(d) => insertActivity(d)} />
                   </div>
-                  <div className={s.centerCol}>
-                    <PipelineCanvas
-                      ref={canvasRef}
-                      activities={activities}
-                      selectedName={selectedActivity || undefined}
-                      onSelect={setSelectedActivity}
-                      snapToGrid={snapToGrid}
-                      showGrid={showGrid}
-                      onDropPaletteKey={(key) => {
-                        const def = findByKey(key);
-                        if (def) insertActivity(def);
-                      }}
-                      onConnect={connect}
-                    />
+                  <div className={s.designerMain}>
+                    {/* Canvas FILLS the space above the dock — fixed relative to
+                        the dock height, never resized by config expand/collapse. */}
+                    <div className={s.canvasWrap}>
+                      <PipelineCanvas
+                        ref={canvasRef}
+                        activities={activities}
+                        selectedName={selectedActivity || undefined}
+                        onSelect={setSelectedActivity}
+                        snapToGrid={snapToGrid}
+                        showGrid={showGrid}
+                        onDropPaletteKey={(key) => {
+                          const def = findByKey(key);
+                          if (def) insertActivity(def);
+                        }}
+                        onConnect={connect}
+                      />
+                    </div>
+                    {/* Draggable divider — drag up/down to resize the config dock. */}
+                    <div
+                      className={mergeClasses(s.splitter, resizing && s.splitterActive)}
+                      onMouseDown={startResize}
+                      role="separator"
+                      aria-orientation="horizontal"
+                      aria-label="Resize activity configuration panel"
+                      title="Drag to resize the configuration panel"
+                    >
+                      <div className={s.splitterGrip} />
+                    </div>
+                    {/* Bottom-docked activity configuration — explicit height + own scroll. */}
+                    <div className={s.configDock} style={{ height: configHeight }}>
+                      <PropertiesPanel
+                        activity={selected}
+                        allActivities={activities}
+                        parameters={parameters}
+                        variables={variables}
+                        layout="dock"
+                        onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
+                        onDelete={() => { if (selected) deleteActivity(selected.name); }}
+                      />
+                    </div>
                   </div>
-                  <PropertiesPanel
-                    activity={selected}
-                    allActivities={activities}
-                    parameters={parameters}
-                    variables={variables}
-                    onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
-                    onDelete={() => { if (selected) deleteActivity(selected.name); }}
-                  />
                 </div>
               )}
 
@@ -870,6 +998,9 @@ export function DataPipelineEditor({ item, id }: Props) {
             </TopTabs>
           )}
 
+          {/* Manage hub — linked services / datasets (Synapse-backed) */}
+          <ManagePanel open={manageOpen} backend="synapse" onOpenChange={setManageOpen} />
+
           {/* Create dialog */}
           <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
             <DialogSurface>
@@ -888,29 +1019,13 @@ export function DataPipelineEditor({ item, id }: Props) {
           </Dialog>
 
           {/* Schedule dialog */}
-          <Dialog open={scheduleOpen} onOpenChange={(_, d) => setScheduleOpen(d.open)}>
-            <DialogSurface>
-              <DialogBody>
-                <DialogTitle>Add schedule trigger</DialogTitle>
-                <DialogContent>
-                  <Field label="Trigger name" required>
-                    <Input value={triggerName} onChange={(_, d) => setTriggerName(d.value)} />
-                  </Field>
-                  <Field label="Recurrence cron (UTC)">
-                    <Input value={triggerCron} onChange={(_, d) => setTriggerCron(d.value)} />
-                  </Field>
-                  <Caption1>Creates a Daily ScheduleTrigger in Stopped state. Hit Start to activate it.</Caption1>
-                  {triggerErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{triggerErr}</MessageBarBody></MessageBar>}
-                </DialogContent>
-                <DialogActions>
-                  <Button appearance="secondary" onClick={() => setScheduleOpen(false)}>Cancel</Button>
-                  <Button appearance="primary" disabled={triggerBusy || !triggerName.trim()} onClick={createTrigger}>
-                    {triggerBusy ? 'Creating…' : 'Create trigger'}
-                  </Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
+          <TriggerWizard
+            open={scheduleOpen}
+            onClose={() => { setScheduleOpen(false); setTriggerErr(null); }}
+            onCreate={createTriggerWith}
+            busy={triggerBusy}
+            error={triggerErr}
+          />
         </div>
       }
     />

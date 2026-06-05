@@ -259,6 +259,69 @@ const bundle: AppBundle = {
             ],
           },
           {
+            name: 'dim_product',
+            ddl:
+              '-- Grounded in examples/fabric-e2e/contracts/dim_product.yaml (SCD Type 2)\n' +
+              'CREATE TABLE gold.dim_product (\n' +
+              '    product_key    BIGINT         NOT NULL,\n' +
+              '    product_id     VARCHAR(64)    NOT NULL,\n' +
+              '    product_name   VARCHAR(200)   NOT NULL,\n' +
+              '    category       VARCHAR(80)    NOT NULL,\n' +
+              '    subcategory    VARCHAR(80)    NOT NULL,\n' +
+              '    list_price     DECIMAL(18,2)  NOT NULL,\n' +
+              '    valid_from     TIMESTAMP      NOT NULL,\n' +
+              '    valid_to       TIMESTAMP,\n' +
+              '    is_current     BOOLEAN        NOT NULL,\n' +
+              '    CONSTRAINT pk_dim_product PRIMARY KEY (product_key),\n' +
+              '    CONSTRAINT dim_product_price_band CHECK (list_price BETWEEN 0 AND 100000)\n' +
+              ') USING DELTA\n' +
+              "TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true');",
+            // product_key 1..5 align to fact_sales.product_key (1=SKU-9001,
+            // 2=SKU-9101, 3=SKU-9214, 4=SKU-9555, 5=SKU-9999). is_current=TRUE
+            // for every row so cell-category-margin's `p.is_current = TRUE`
+            // join filter returns all five products.
+            sampleRows: [
+              [1, 'SKU-9001', 'Mechanical Keyboard MK-1', 'Peripherals', 'Keyboards', 49.99, '2026-01-01T00:00:00Z', null, true],
+              [2, 'SKU-9101', 'USB-C Hub Pro', 'Peripherals', 'Hubs & Docks', 19.95, '2026-01-01T00:00:00Z', null, true],
+              [3, 'SKU-9214', '27" 4K UHD Monitor', 'Displays', 'Monitors', 129.00, '2026-01-01T00:00:00Z', null, true],
+              [4, 'SKU-9555', 'Studio Microphone X', 'Audio', 'Microphones', 899.00, '2026-01-01T00:00:00Z', null, true],
+              [5, 'SKU-9999', 'Workstation Laptop Pro', 'Computers', 'Laptops', 2499.00, '2026-01-01T00:00:00Z', null, true],
+            ],
+          },
+          {
+            name: 'dim_date',
+            ddl:
+              '-- Grounded in examples/fabric-e2e/contracts/dim_date.yaml.\n' +
+              '-- Static date dimension; date_key is the YYYYMMDD integer surrogate key\n' +
+              '-- referenced by fact_sales.order_date_key / ship_date_key.\n' +
+              'CREATE TABLE gold.dim_date (\n' +
+              '    date_key       BIGINT       NOT NULL,\n' +
+              '    date           DATE         NOT NULL,\n' +
+              '    year           INT          NOT NULL,\n' +
+              '    quarter        INT          NOT NULL,\n' +
+              '    month          INT          NOT NULL,\n' +
+              '    month_name     VARCHAR(20)  NOT NULL,\n' +
+              '    day_of_week    INT          NOT NULL,\n' +
+              '    is_weekend     BOOLEAN      NOT NULL,\n' +
+              '    is_holiday     BOOLEAN      NOT NULL,\n' +
+              '    CONSTRAINT pk_dim_date PRIMARY KEY (date_key)\n' +
+              ') USING DELTA;',
+            // Covers every distinct order_date_key + ship_date_key in fact_sales
+            // (April 2026, all Q2 / month 4) so both role-playing FK joins resolve.
+            // day_of_week is 0=Sunday..6=Saturday; is_weekend = (dow in {0,6}).
+            sampleRows: [
+              [20260401, '2026-04-01', 2026, 2, 4, 'April', 3, false, false],
+              [20260402, '2026-04-02', 2026, 2, 4, 'April', 4, false, false],
+              [20260403, '2026-04-03', 2026, 2, 4, 'April', 5, false, false],
+              [20260404, '2026-04-04', 2026, 2, 4, 'April', 6, true, false],
+              [20260405, '2026-04-05', 2026, 2, 4, 'April', 0, true, false],
+              [20260406, '2026-04-06', 2026, 2, 4, 'April', 1, false, false],
+              [20260408, '2026-04-08', 2026, 2, 4, 'April', 3, false, false],
+              [20260409, '2026-04-09', 2026, 2, 4, 'April', 4, false, false],
+              [20260412, '2026-04-12', 2026, 2, 4, 'April', 0, true, false],
+            ],
+          },
+          {
             name: 'fact_sales',
             ddl:
               '-- Translated from dbt/models/gold/fact_sales.sql\n' +
@@ -448,13 +511,33 @@ const bundle: AppBundle = {
             source:
               '# 5. Read through the cross-workspace shortcut to fraud_scores (gold).\n' +
               '#    Confirms the workspace MI has Storage Blob Data Reader on the sister ADLS path.\n' +
-              'fraud = spark.read.format("delta").load(\n' +
-              '    "abfss://gold@<sister_adls>.dfs.core.windows.net/fraud_analytics/fraud_scores"\n' +
+              '#\n' +
+              '#    The sister storage account is deployment-specific, so we resolve it from the\n' +
+              '#    LOOM_SISTER_ADLS_ACCOUNT Spark conf / env var instead of hard-coding a placeholder.\n' +
+              '#    If it is not set, we print an honest remediation note rather than failing on an\n' +
+              "#    unresolved '<...>' path.\n" +
+              'import os\n' +
+              'sister = (\n' +
+              '    spark.conf.get("spark.loom.sisterAdlsAccount", None)\n' +
+              '    or os.environ.get("LOOM_SISTER_ADLS_ACCOUNT")\n' +
               ')\n' +
-              'print("fraud_scores schema:")\n' +
-              'fraud.printSchema()\n' +
-              'print(f"\\nrow count = {fraud.count():,}")\n' +
-              'fraud.select("transaction_id", "risk_tier", "fraud_probability").show(5, truncate=False)',
+              'if not sister:\n' +
+              '    print(\n' +
+              '        "[GATE] Cross-workspace shortcut not configured.\\n"\n' +
+              '        "       Set the sister ADLS account before running this cell, e.g.:\\n"\n' +
+              '        "         spark.conf.set(\\"spark.loom.sisterAdlsAccount\\", \\"<your_fraud_adls_account>\\")\\n"\n' +
+              '        "       or provision LOOM_SISTER_ADLS_ACCOUNT in the workspace and grant the\\n"\n' +
+              '        "       workspace MI \\"Storage Blob Data Reader\\" on that account. The shortcut\\n"\n' +
+              '        "       target is declared on this lakehouse as \\"sister-fraud-scores\\"."\n' +
+              '    )\n' +
+              'else:\n' +
+              '    fraud = spark.read.format("delta").load(\n' +
+              '        f"abfss://gold@{sister}.dfs.core.windows.net/fraud_analytics/fraud_scores"\n' +
+              '    )\n' +
+              '    print("fraud_scores schema:")\n' +
+              '    fraud.printSchema()\n' +
+              '    print(f"\\nrow count = {fraud.count():,}")\n' +
+              '    fraud.select("transaction_id", "risk_tier", "fraud_probability").show(5, truncate=False)',
           },
           {
             id: 'cell-md-next',

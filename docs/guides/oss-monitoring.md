@@ -2,6 +2,9 @@
 
 # OSS Stack Monitoring Guide
 
+!!! note "Freshness"
+    **Validated against:** `kube-prometheus-stack` (Prometheus + Grafana + Alertmanager) on **AKS**, with per-service exporters for the OSS data stack — **as of 2026-06-02.** Chart values and exporter configs track the Helm chart version pinned in the deploy scripts; confirm against the kube-prometheus-stack release before deploying.
+
 > [!NOTE]
 > **TL;DR:** Deploy Prometheus + Grafana via kube-prometheus-stack to monitor the OSS data platform on AKS. Includes per-service exporters, key metrics, alerting rules, and a sample Grafana dashboard.
 

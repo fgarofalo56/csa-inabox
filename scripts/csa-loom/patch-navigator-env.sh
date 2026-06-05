@@ -172,9 +172,18 @@ add LOOM_CONTENT_SAFETY_ENDPOINT "$CS_EP"
 # Purview — reuse the tenant Purview if one exists (only one Enterprise-tier
 # Purview is allowed per tenant, so this is almost always a reuse).
 # ---------------------------------------------------------------------------
-PURVIEW="${EXISTING_PURVIEW_ACCOUNT:-}"
+# Honor either override var name (discover-services.sh exports EXISTING_PURVIEW;
+# older callers used EXISTING_PURVIEW_ACCOUNT) — accept both.
+PURVIEW="${EXISTING_PURVIEW:-${EXISTING_PURVIEW_ACCOUNT:-}}"
 if [[ -z "$PURVIEW" ]]; then
-  PURVIEW="$(q purview account list --query "[0].name" -o tsv)"
+  # Only one Enterprise Purview is allowed per tenant, and it may live in a
+  # DIFFERENT subscription than the Loom DLZ (e.g. a shared governance sub). Scan
+  # every subscription the principal can see, not just the current one, so the
+  # console's Purview tab / catalog federation bind automatically.
+  for _psub in $(az account list --query "[].id" -o tsv 2>/dev/null); do
+    PURVIEW="$(az purview account list --subscription "$_psub" --query "[0].name" -o tsv 2>/dev/null)"
+    [[ -n "$PURVIEW" ]] && { echo "  Purview found in sub $_psub: $PURVIEW" >&2; break; }
+  done
 fi
 add LOOM_PURVIEW_ACCOUNT "$PURVIEW"
 
