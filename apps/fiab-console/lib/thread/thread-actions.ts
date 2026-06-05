@@ -12,7 +12,7 @@
  * BFF route. The menu groups actions by `group`.
  */
 
-export type ThreadGroup = 'Analyze with AI' | 'Publish' | 'Visualize' | 'Promote';
+export type ThreadGroup = 'Explore' | 'Analyze with AI' | 'Publish' | 'Visualize' | 'Promote';
 
 export interface ThreadField {
   name: string;
@@ -61,7 +61,28 @@ const DATA_AGENT_SOURCEABLE = [
   'synapse-dedicated-sql-pool', 'synapse-serverless-sql-pool', 'azure-sql-database',
 ];
 
+/** Item types that can be attached to a notebook session for exploration. */
+const NOTEBOOK_ATTACHABLE = [
+  'lakehouse', 'warehouse', 'kql-database',
+  'synapse-dedicated-sql-pool', 'synapse-serverless-sql-pool', 'azure-sql-database',
+];
+
 export const THREAD_ACTIONS: ThreadAction[] = [
+  {
+    id: 'analyze-in-notebook',
+    label: 'Analyze in a Notebook',
+    description:
+      'Create a Loom Notebook with this item attached as a data source and a starter cell, ' +
+      'so you can explore it in Spark/SQL right away — no paths to type.',
+    group: 'Explore',
+    fromTypes: NOTEBOOK_ATTACHABLE,
+    icon: 'notebook',
+    fields: [
+      { name: 'notebookName', label: 'Notebook name', kind: 'text', required: true, hint: 'A name for the new notebook.' },
+    ],
+    route: '/api/thread/analyze-in-notebook',
+    submitLabel: 'Weave',
+  },
   {
     id: 'add-data-agent-source',
     label: 'Add as a Data Agent source',
@@ -106,7 +127,7 @@ export function actionsFor(slug: string): ThreadAction[] {
 
 /** Group actions for the menu. */
 export function groupedActionsFor(slug: string): { group: ThreadGroup; actions: ThreadAction[] }[] {
-  const order: ThreadGroup[] = ['Promote', 'Analyze with AI', 'Visualize', 'Publish'];
+  const order: ThreadGroup[] = ['Promote', 'Explore', 'Analyze with AI', 'Visualize', 'Publish'];
   const byGroup = new Map<ThreadGroup, ThreadAction[]>();
   for (const a of actionsFor(slug)) {
     if (!byGroup.has(a.group)) byGroup.set(a.group, []);

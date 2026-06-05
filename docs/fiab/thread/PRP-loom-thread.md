@@ -122,8 +122,12 @@ promotable. (Phase 2 — the first slice can write edges without the viewer.)
   into `item-editor-chrome.tsx`; `thread-edges` write; and the **first real edges**:
   (a) *Add as Data Agent source*, (b) *Build a Power BI model* — both fully working
   on real backends, with honest gates.
-- **PR 2 — SQL/warehouse edges:** notebook/lakehouse → SQL warehouse (wire-or-create),
-  + the columns adapter.
+- **PR 2 — Explore + SQL/warehouse edges:**
+  - ✅ *Analyze in a Notebook* — from any lakehouse/warehouse/KQL/SQL item, create a
+    notebook with that item attached + a starter cell (`/api/thread/analyze-in-notebook`).
+  - ⏭ *lakehouse → SQL endpoint* (Synapse Serverless view over Delta) — deferred:
+    needs a serverless database + external-table/view DDL (CREATE DATABASE/VIEW),
+    an honest infra step; lands with the columns adapter next.
 - **PR 3 — API edges:** table/query → Data API Builder / APIM (+ Delta path), query → UDF REST.
 - **PR 4 — Medallion promotion + edge-graph mesh viewer:** promote bronze→silver→gold,
   lineage view over `thread-edges`.
