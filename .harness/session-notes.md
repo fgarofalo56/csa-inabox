@@ -411,3 +411,17 @@ picks a live-Azure item (CDC mirroring, app-installs 019-021).
   label). Open links stopPropagation. tsc clean.
 - task-018 still `todo`. Remaining raw-table pages: governance/scans,
   governance/policies, governance/insights, workspaces, + high-traffic Home/Browse/Monitor.
+
+### task-018 (slices 3-5) — more LoomDataTable conversions ✅ (PRs #742/#743 merged, +1 pending)
+- #742 governance/scans (Registered data sources, with Scans/Remove row actions).
+- #743 governance/policies (list, with enabled Switch + Delete + enforcement badge).
+- pending: catalog/data-quality (rules list, with Edit/Delete actions).
+- All: raw `<Table>` → shared LoomDataTable (sortable/filterable/resizable);
+  interactive cells preserved via render columns + stopPropagation. tsc clean;
+  console live-GREEN 34/34 across the batch.
+- governance/insights was already on LoomDataTable. Remaining raw tables:
+  catalog/{domains,metastores,[source]/[id]}, workspaces (selection checkboxes —
+  needs care), + high-traffic Home/Browse/Monitor (bespoke layouts).
+- GOTCHA reminder: after merging a PR I `git checkout main`; must create the NEXT
+  feature branch BEFORE editing or commits land on local main (happened once on
+  #742 — recovered via `git branch <new>` + `git reset --hard origin/main`).
