@@ -68,8 +68,13 @@ export default function PoliciesPage() {
   const [accKind, setAccKind] = useState<'user' | 'group'>('user');
   const [accResults, setAccResults] = useState<Array<{ id: string; type: string; displayName: string; upn?: string }>>([]);
   const [accSearching, setAccSearching] = useState(false);
-  const [accPicked, setAccPicked] = useState<{ id: string; name: string; type: 'User' | 'Group' } | null>(null);
+  const [accPicked, setAccPicked] = useState<{ id: string; name: string; type: 'User' | 'Group'; upn?: string } | null>(null);
   const [accContainer, setAccContainer] = useState('');
+  // Which data-plane the grant binds to: ADLS container · warehouse (Synapse SQL)
+  // · KQL database (ADX). Each is a real Azure-native grant (no Fabric dep).
+  const [accScope, setAccScope] = useState<'adls-container' | 'warehouse' | 'kql-database'>('adls-container');
+  const [accKqlDb, setAccKqlDb] = useState('');
+  const [kqlItems, setKqlItems] = useState<Array<{ id: string; name: string }>>([]);
 
   const searchPrincipals = useCallback(async () => {
     const q = accQuery.trim();
@@ -91,6 +96,9 @@ export default function PoliciesPage() {
     fetch('/api/admin/domains').then((r) => r.json()).then((d) => {
       setDomains((d?.domains || []).map((x: any) => ({ id: x.id, name: x.name || x.id })));
     }).catch(() => {});
+    fetch('/api/items/by-type?types=kql-database').then((r) => r.json()).then((d) => {
+      setKqlItems((d?.items || []).map((x: any) => ({ id: x.id, name: x.displayName || x.id })));
+    }).catch(() => {});
   }, []);
 
   const buildScope = (): string => scopeType === 'tenant' ? 'tenant' : `${scopeType}:${scopeTarget}`;
@@ -100,7 +108,12 @@ export default function PoliciesPage() {
       case 'Masking': return `mask column:${w.maskColumn || '<column>'} using:${w.maskFn}`;
       case 'RLS': return `filter ${w.rlsColumn || '<column>'} ${w.rlsOp} ${w.rlsValue || '<value>'}`;
       case 'Retention': return `retain ${w.retPeriod} ${w.retUnit} then:${w.retAction}`;
-      case 'Access': return `grant ${accPicked?.name || '<principal>'} ${w.accPermission} on ${accContainer || '<container>'}`;
+      case 'Access': {
+        const tgt = accScope === 'adls-container' ? (accContainer || '<container>')
+          : accScope === 'kql-database' ? (accKqlDb || '<kql db>')
+          : 'warehouse (Synapse SQL)';
+        return `grant ${accPicked?.name || '<principal>'} ${w.accPermission} on ${tgt}`;
+      }
       default: return '';
     }
   };
@@ -122,12 +135,20 @@ export default function PoliciesPage() {
     const body: Record<string, unknown> = { name: draftName.trim(), kind: draftKind, scope: buildScope(), rule: buildRule(), enabled: true };
     if (draftKind === 'Access') {
       if (!accPicked) { setActionErr('Search and pick a principal for the access policy.'); return; }
-      if (!accContainer.trim()) { setActionErr('Enter the ADLS container the grant applies to.'); return; }
       body.principalId = accPicked.id;
-      body.principalName = accPicked.name;
+      body.principalName = accPicked.upn || accPicked.name;
       body.principalType = accPicked.type;
-      body.scopeType = 'adls-container';
-      body.scopeRef = accContainer.trim();
+      body.scopeType = accScope;
+      if (accScope === 'adls-container') {
+        if (!accContainer.trim()) { setActionErr('Enter the ADLS container the grant applies to.'); return; }
+        body.scopeRef = accContainer.trim();
+      } else if (accScope === 'kql-database') {
+        if (!accKqlDb) { setActionErr('Pick the KQL database the grant applies to.'); return; }
+        body.scopeRef = accKqlDb;
+      } else {
+        // warehouse → the configured Synapse dedicated pool (resolved server-side).
+        body.scopeRef = 'warehouse';
+      }
       body.permission = (w.accPermission || 'Read').toLowerCase();
     }
     setBusy(true); setActionErr(null);
@@ -341,7 +362,7 @@ export default function PoliciesPage() {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 140, overflowY: 'auto' }}>
                         {accResults.map((r) => (
                           <Button key={r.id} appearance="subtle" style={{ justifyContent: 'flex-start' }}
-                            onClick={() => { setAccPicked({ id: r.id, name: r.displayName, type: r.type === 'group' ? 'Group' : 'User' }); setAccResults([]); }}>
+                            onClick={() => { setAccPicked({ id: r.id, name: r.displayName, type: r.type === 'group' ? 'Group' : 'User', upn: r.upn }); setAccResults([]); }}>
                             {r.displayName}{r.upn ? ` · ${r.upn}` : ''}
                           </Button>
                         ))}
@@ -354,9 +375,16 @@ export default function PoliciesPage() {
                       </Caption1>
                     )}
                     <div style={{ display: 'flex', gap: 12 }}>
-                      <Field label="ADLS container (scope)" style={{ flex: 1 }}
-                        hint="The data-lake container the grant applies to — Loom enforces it as real Storage RBAC.">
-                        <Input value={accContainer} placeholder="bronze" onChange={(_, d) => setAccContainer(d.value)} />
+                      <Field label="Scope (data plane)" style={{ flex: 1 }}
+                        hint="Where the grant is enforced — each is a real Azure-native grant.">
+                        <Dropdown
+                          value={accScope === 'adls-container' ? 'ADLS container' : accScope === 'warehouse' ? 'Warehouse (Synapse SQL)' : 'KQL database (ADX)'}
+                          selectedOptions={[accScope]}
+                          onOptionSelect={(_, d) => setAccScope((d.optionValue as typeof accScope) || 'adls-container')}>
+                          <Option value="adls-container">ADLS container</Option>
+                          <Option value="warehouse">Warehouse (Synapse SQL)</Option>
+                          <Option value="kql-database">KQL database (ADX)</Option>
+                        </Dropdown>
                       </Field>
                       <Field label="Permission" style={{ flex: 1 }}>
                         <Dropdown value={w.accPermission} selectedOptions={[w.accPermission]} onOptionSelect={(_, d) => setWf('accPermission', d.optionValue || 'Read')}>
@@ -364,6 +392,28 @@ export default function PoliciesPage() {
                         </Dropdown>
                       </Field>
                     </div>
+                    {accScope === 'adls-container' && (
+                      <Field label="ADLS container"
+                        hint="The data-lake container the grant applies to — Loom enforces it as real Storage RBAC.">
+                        <Input value={accContainer} placeholder="bronze" onChange={(_, d) => setAccContainer(d.value)} />
+                      </Field>
+                    )}
+                    {accScope === 'kql-database' && (
+                      <Field label="KQL database"
+                        hint="The ADX database — Loom enforces the grant as a real ADX database role.">
+                        <Dropdown placeholder={kqlItems.length ? 'Select…' : 'No KQL databases found'} disabled={!kqlItems.length}
+                          value={accKqlDb} selectedOptions={accKqlDb ? [accKqlDb] : []}
+                          onOptionSelect={(_, d) => setAccKqlDb(d.optionValue || '')}>
+                          {kqlItems.map((k) => <Option key={k.id} value={k.name}>{k.name}</Option>)}
+                        </Dropdown>
+                      </Field>
+                    )}
+                    {accScope === 'warehouse' && (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        The grant applies to the configured Synapse dedicated SQL pool. Loom creates the Entra
+                        database user (if needed) and adds it to db_datareader / db_datawriter / db_owner.
+                      </Caption1>
+                    )}
                   </div>
                 )}
                 <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>{buildScope()} · {buildRule()}</Caption1>

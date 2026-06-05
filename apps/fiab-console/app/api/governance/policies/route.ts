@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import {
-  enforceAccessGrant, revokeAccessGrant,
+  enforceAccessGrant, revokeAccessGrant, revokeStructuredGrant,
   type AccessPermission, type AccessScopeType, type PrincipalType,
 } from '@/lib/azure/access-policy-client';
 
@@ -102,12 +102,13 @@ export async function POST(req: NextRequest) {
       policy.principalId = String(body.principalId);
       policy.principalName = body?.principalName ? String(body.principalName) : String(body.principalId);
       policy.principalType = (['User', 'Group', 'ServicePrincipal'].includes(body?.principalType) ? body.principalType : 'User') as PrincipalType;
-      policy.scopeType = (['adls-container', 'workspace', 'item', 'collection'].includes(body?.scopeType) ? body.scopeType : 'adls-container') as AccessScopeType;
+      policy.scopeType = (['adls-container', 'warehouse', 'kql-database', 'workspace', 'item', 'collection'].includes(body?.scopeType) ? body.scopeType : 'adls-container') as AccessScopeType;
       policy.scopeRef = body?.scopeRef ? String(body.scopeRef) : '';
       policy.permission = (['read', 'write', 'admin'].includes(body?.permission) ? body.permission : 'read') as AccessPermission;
       if (policy.scopeRef) {
         policy.enforcement = await enforceAccessGrant({
           principalId: policy.principalId,
+          principalName: policy.principalName,
           principalType: policy.principalType,
           scopeType: policy.scopeType,
           scopeRef: policy.scopeRef,
@@ -164,9 +165,23 @@ export async function DELETE(req: NextRequest) {
     const doc = await loadOrSeed(tenantId);
     const target = doc.items.find((p) => p.id === id);
     if (!target) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-    // Revoke the real RBAC grant first (best-effort; never blocks the delete).
+    // Revoke the real grant first (best-effort; never blocks the delete).
     if (target.enforcement?.roleAssignmentId) {
+      // ADLS RBAC grant — revoke by role-assignment id.
       await revokeAccessGrant(target.enforcement.roleAssignmentId);
+    } else if (
+      target.kind === 'Access' && target.principalId && target.permission &&
+      (target.scopeType === 'warehouse' || target.scopeType === 'kql-database')
+    ) {
+      // Warehouse (Synapse SQL) / KQL (ADX) grant — replay the inverse command.
+      await revokeStructuredGrant({
+        principalId: target.principalId,
+        principalName: target.principalName,
+        principalType: target.principalType || 'User',
+        scopeType: target.scopeType,
+        scopeRef: target.scopeRef || '',
+        permission: target.permission,
+      });
     }
     doc.items = doc.items.filter((p) => p.id !== id);
     doc.updatedAt = new Date().toISOString();
