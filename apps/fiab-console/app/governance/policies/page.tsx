@@ -20,6 +20,7 @@ interface Policy {
   enabled: boolean;
   createdAt: string;
   createdBy: string;
+  enforcement?: { status: 'active' | 'pending' | 'error'; roleName?: string; roleAssignmentId?: string; detail?: string };
 }
 
 const KINDS = ['DLP', 'Masking', 'RLS', 'Retention', 'Access'] as const;
@@ -62,6 +63,25 @@ export default function PoliciesPage() {
     accPrincipal: '', accPermission: 'Read',
   });
   const setWf = (k: string, v: string) => setW((p) => ({ ...p, [k]: v }));
+  // Access policy: Entra principal search + ADLS container scope (real RBAC).
+  const [accQuery, setAccQuery] = useState('');
+  const [accKind, setAccKind] = useState<'user' | 'group'>('user');
+  const [accResults, setAccResults] = useState<Array<{ id: string; type: string; displayName: string; upn?: string }>>([]);
+  const [accSearching, setAccSearching] = useState(false);
+  const [accPicked, setAccPicked] = useState<{ id: string; name: string; type: 'User' | 'Group' } | null>(null);
+  const [accContainer, setAccContainer] = useState('');
+
+  const searchPrincipals = useCallback(async () => {
+    const q = accQuery.trim();
+    if (q.length < 2) { setAccResults([]); return; }
+    setAccSearching(true);
+    try {
+      const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&type=${accKind}`);
+      const j = await r.json();
+      setAccResults(j.ok ? (j.results || []) : []);
+    } catch { setAccResults([]); }
+    finally { setAccSearching(false); }
+  }, [accQuery, accKind]);
 
   useEffect(() => {
     fetch('/api/workspaces').then((r) => r.json()).then((d) => {
@@ -80,7 +100,7 @@ export default function PoliciesPage() {
       case 'Masking': return `mask column:${w.maskColumn || '<column>'} using:${w.maskFn}`;
       case 'RLS': return `filter ${w.rlsColumn || '<column>'} ${w.rlsOp} ${w.rlsValue || '<value>'}`;
       case 'Retention': return `retain ${w.retPeriod} ${w.retUnit} then:${w.retAction}`;
-      case 'Access': return `grant ${w.accPrincipal || '<principal>'} permission:${w.accPermission}`;
+      case 'Access': return `grant ${accPicked?.name || '<principal>'} ${w.accPermission} on ${accContainer || '<container>'}`;
       default: return '';
     }
   };
@@ -99,17 +119,29 @@ export default function PoliciesPage() {
 
   async function create() {
     if (!draftName.trim()) { setActionErr('name required'); return; }
+    const body: Record<string, unknown> = { name: draftName.trim(), kind: draftKind, scope: buildScope(), rule: buildRule(), enabled: true };
+    if (draftKind === 'Access') {
+      if (!accPicked) { setActionErr('Search and pick a principal for the access policy.'); return; }
+      if (!accContainer.trim()) { setActionErr('Enter the ADLS container the grant applies to.'); return; }
+      body.principalId = accPicked.id;
+      body.principalName = accPicked.name;
+      body.principalType = accPicked.type;
+      body.scopeType = 'adls-container';
+      body.scopeRef = accContainer.trim();
+      body.permission = (w.accPermission || 'Read').toLowerCase();
+    }
     setBusy(true); setActionErr(null);
     try {
       const r = await fetch('/api/governance/policies', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: draftName.trim(), kind: draftKind, scope: buildScope(), rule: buildRule(), enabled: true }),
+        body: JSON.stringify(body),
       });
       const j = await r.json();
-      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
+      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); if (j.policies) setPolicies(j.policies); return; }
       setPolicies(j.policies);
       setOpen(false);
       setDraftName(''); setScopeType('tenant'); setScopeTarget('');
+      setAccPicked(null); setAccContainer(''); setAccQuery(''); setAccResults([]);
     } catch (e: any) { setActionErr(e?.message || String(e)); }
     finally { setBusy(false); }
   }
@@ -181,7 +213,16 @@ export default function PoliciesPage() {
                 <TableCell><strong>{p.name}</strong></TableCell>
                 <TableCell><Badge appearance="filled" color={kindColor(p.kind)} size="small">{p.kind}</Badge></TableCell>
                 <TableCell>{p.scope}</TableCell>
-                <TableCell><code className={s.rule}>{p.rule || '—'}</code></TableCell>
+                <TableCell>
+                  <code className={s.rule}>{p.rule || '—'}</code>
+                  {p.enforcement && (
+                    <Badge appearance="tint" size="small" style={{ marginLeft: 6 }}
+                      color={p.enforcement.status === 'active' ? 'success' : p.enforcement.status === 'error' ? 'danger' : 'warning'}
+                      title={p.enforcement.detail || p.enforcement.roleName}>
+                      {p.enforcement.status === 'active' ? `enforced${p.enforcement.roleName ? ` · ${p.enforcement.roleName.replace('Storage Blob Data ', '')}` : ''}` : p.enforcement.status}
+                    </Badge>
+                  )}
+                </TableCell>
                 <TableCell>
                   <Switch checked={p.enabled} onChange={() => toggle(p)} />
                 </TableCell>
@@ -280,13 +321,49 @@ export default function PoliciesPage() {
                   </div>
                 )}
                 {draftKind === 'Access' && (
-                  <div style={{ display: 'flex', gap: 12 }}>
-                    <Field label="Principal (user / group)" style={{ flex: 1 }}><Input value={w.accPrincipal} placeholder="oid or group name" onChange={(_, d) => setWf('accPrincipal', d.value)} /></Field>
-                    <Field label="Permission" style={{ flex: 1 }}>
-                      <Dropdown value={w.accPermission} selectedOptions={[w.accPermission]} onOptionSelect={(_, d) => setWf('accPermission', d.optionValue || 'Read')}>
-                        {['Read', 'Write', 'Admin', 'None'].map((o) => <Option key={o} value={o}>{o}</Option>)}
-                      </Dropdown>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <Field label="Principal — search Entra users / groups">
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <Dropdown value={accKind === 'user' ? 'User' : 'Group'} selectedOptions={[accKind]} style={{ minWidth: 100 }}
+                          onOptionSelect={(_, d) => { setAccKind((d.optionValue as 'user' | 'group') || 'user'); setAccResults([]); }}>
+                          <Option value="user">User</Option>
+                          <Option value="group">Group</Option>
+                        </Dropdown>
+                        <Input value={accQuery} placeholder="name or UPN…" style={{ flex: 1 }}
+                          onChange={(_, d) => setAccQuery(d.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') searchPrincipals(); }} />
+                        <Button onClick={searchPrincipals} disabled={accSearching || accQuery.trim().length < 2}>
+                          {accSearching ? 'Searching…' : 'Search'}
+                        </Button>
+                      </div>
                     </Field>
+                    {accResults.length > 0 && !accPicked && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 140, overflowY: 'auto' }}>
+                        {accResults.map((r) => (
+                          <Button key={r.id} appearance="subtle" style={{ justifyContent: 'flex-start' }}
+                            onClick={() => { setAccPicked({ id: r.id, name: r.displayName, type: r.type === 'group' ? 'Group' : 'User' }); setAccResults([]); }}>
+                            {r.displayName}{r.upn ? ` · ${r.upn}` : ''}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                    {accPicked && (
+                      <Caption1>
+                        Principal: <strong>{accPicked.name}</strong> ({accPicked.type}){' '}
+                        <Button size="small" appearance="subtle" onClick={() => setAccPicked(null)}>change</Button>
+                      </Caption1>
+                    )}
+                    <div style={{ display: 'flex', gap: 12 }}>
+                      <Field label="ADLS container (scope)" style={{ flex: 1 }}
+                        hint="The data-lake container the grant applies to — Loom enforces it as real Storage RBAC.">
+                        <Input value={accContainer} placeholder="bronze" onChange={(_, d) => setAccContainer(d.value)} />
+                      </Field>
+                      <Field label="Permission" style={{ flex: 1 }}>
+                        <Dropdown value={w.accPermission} selectedOptions={[w.accPermission]} onOptionSelect={(_, d) => setWf('accPermission', d.optionValue || 'Read')}>
+                          {['Read', 'Write', 'Admin'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                        </Dropdown>
+                      </Field>
+                    </div>
                   </div>
                 )}
                 <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>{buildScope()} · {buildRule()}</Caption1>

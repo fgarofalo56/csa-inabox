@@ -6,9 +6,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import {
+  enforceAccessGrant, revokeAccessGrant,
+  type AccessPermission, type AccessScopeType, type PrincipalType,
+} from '@/lib/azure/access-policy-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+interface PolicyEnforcement {
+  status: 'active' | 'pending' | 'error';
+  roleName?: string;
+  roleAssignmentId?: string;
+  detail?: string;
+}
 
 interface Policy {
   id: string;
@@ -19,6 +30,15 @@ interface Policy {
   enabled: boolean;
   createdAt: string;
   createdBy: string;
+  // Access-kind structured fields (enable real RBAC enforcement).
+  principalId?: string;
+  principalName?: string;
+  principalType?: PrincipalType;
+  scopeType?: AccessScopeType;
+  scopeRef?: string;
+  permission?: AccessPermission;
+  /** Result of the real RBAC grant for Access policies. */
+  enforcement?: PolicyEnforcement;
 }
 
 interface PoliciesDoc {
@@ -74,6 +94,35 @@ export async function POST(req: NextRequest) {
       createdAt: new Date().toISOString(),
       createdBy: s.claims.upn || tenantId,
     };
+
+    // Access policies are ENFORCED as a real Azure RBAC grant (no-vaporware).
+    // When the structured access fields are present, attempt the grant and
+    // stamp the result; persist the structured fields so DELETE can revoke it.
+    if (kind === 'Access' && body?.principalId && body?.permission) {
+      policy.principalId = String(body.principalId);
+      policy.principalName = body?.principalName ? String(body.principalName) : String(body.principalId);
+      policy.principalType = (['User', 'Group', 'ServicePrincipal'].includes(body?.principalType) ? body.principalType : 'User') as PrincipalType;
+      policy.scopeType = (['adls-container', 'workspace', 'item', 'collection'].includes(body?.scopeType) ? body.scopeType : 'adls-container') as AccessScopeType;
+      policy.scopeRef = body?.scopeRef ? String(body.scopeRef) : '';
+      policy.permission = (['read', 'write', 'admin'].includes(body?.permission) ? body.permission : 'read') as AccessPermission;
+      if (policy.scopeRef) {
+        policy.enforcement = await enforceAccessGrant({
+          principalId: policy.principalId,
+          principalType: policy.principalType,
+          scopeType: policy.scopeType,
+          scopeRef: policy.scopeRef,
+          permission: policy.permission,
+        });
+        // Reflect enforcement failure to the caller but still record the policy.
+        if (policy.enforcement.status === 'error') {
+          doc.items.push(policy);
+          doc.updatedAt = new Date().toISOString();
+          await c.item(doc.id, tenantId).replace(doc);
+          return NextResponse.json({ ok: false, error: `Grant failed: ${policy.enforcement.detail}`, policy, policies: doc.items }, { status: 502 });
+        }
+      }
+    }
+
     doc.items.push(policy);
     doc.updatedAt = new Date().toISOString();
     await c.item(doc.id, tenantId).replace(doc);
@@ -113,9 +162,13 @@ export async function DELETE(req: NextRequest) {
     const tenantId = s.claims.oid;
     const c = await tenantSettingsContainer();
     const doc = await loadOrSeed(tenantId);
-    const before = doc.items.length;
+    const target = doc.items.find((p) => p.id === id);
+    if (!target) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+    // Revoke the real RBAC grant first (best-effort; never blocks the delete).
+    if (target.enforcement?.roleAssignmentId) {
+      await revokeAccessGrant(target.enforcement.roleAssignmentId);
+    }
     doc.items = doc.items.filter((p) => p.id !== id);
-    if (doc.items.length === before) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     doc.updatedAt = new Date().toISOString();
     await c.item(doc.id, tenantId).replace(doc);
     return NextResponse.json({ ok: true, policies: doc.items });
