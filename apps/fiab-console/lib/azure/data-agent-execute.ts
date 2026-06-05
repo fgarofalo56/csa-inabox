@@ -15,6 +15,7 @@
 
 import { executeQuery as synapseExecute, dedicatedTarget, serverlessTarget } from './synapse-sql-client';
 import { executeQuery as kustoExecute, clusterUri, defaultDatabase, kustoConfigGate } from './kusto-client';
+import { searchDocuments, searchConfigGate } from './search-index-client';
 import type { DataAgentSource } from './data-agent-client';
 
 export interface SourceExecution {
@@ -112,6 +113,27 @@ export async function executeSourceQuery(source: DataAgentSource, query: string)
             'Not wired in this deployment — the query is shown but not executed. Route metric questions to a ' +
             'warehouse/lakehouse source to ground on real rows.',
         };
+      case 'ai-search': {
+        const gate = searchConfigGate();
+        if (gate) return { executed: false, gate: `AI Search not configured: set ${gate.missing}.` };
+        const index = source.name || (source.tables ? source.tables.split(',')[0].trim() : '');
+        if (!index) return { executed: false, gate: 'No AI Search index name on this source.' };
+        // The model emits a search string; run it read-only and flatten the top docs.
+        const resp = await searchDocuments(index, { search: query, top: MAX_ROWS } as any);
+        const docs: any[] = Array.isArray(resp?.value) ? resp.value : [];
+        // Build a stable column set (skip @search.* internals except score).
+        const cols: string[] = [];
+        for (const d of docs) for (const k of Object.keys(d)) {
+          if (k.startsWith('@search.') && k !== '@search.score') continue;
+          if (!cols.includes(k)) cols.push(k);
+        }
+        const ordered = ['@search.score', ...cols.filter((c) => c !== '@search.score')].slice(0, 8);
+        const rows = docs.map((d) => ordered.map((c) => {
+          const v = d[c];
+          return typeof v === 'string' && v.length > 200 ? v.slice(0, 200) + '…' : v;
+        }));
+        return { executed: true, columns: ordered, rows, rowCount: docs.length, truncated: docs.length >= MAX_ROWS };
+      }
       default:
         return {
           executed: false,
