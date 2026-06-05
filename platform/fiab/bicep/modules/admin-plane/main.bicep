@@ -829,6 +829,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Service account. Consumed by the AOAI clients (chat + embeddings).
             { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : '' }
             { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            // The copilot/data-agent orchestrators read LOOM_AOAI_DEPLOYMENT (not
+            // the _CHAT_ variant) to resolve the model — keep both in sync so the
+            // Copilot/data-agent chat works out of the box (the "no AOAI model"
+            // gap was exactly this name mismatch on the live deploy).
+            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
             { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
