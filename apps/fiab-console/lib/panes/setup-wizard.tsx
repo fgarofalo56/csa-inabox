@@ -573,6 +573,16 @@ export function SetupWizardPane() {
         }));
         return;
       }
+      if (res.status === 403 || j.error === 'forbidden') {
+        // Feature-permission gate (admin.deploy-dlz). remediation is a string here.
+        const cap = j.capabilityName || j.capability || 'Deploy Landing Zone';
+        const rem = typeof j.remediation === 'string' ? `\n\n${j.remediation}` : '';
+        setState((s) => ({
+          ...s,
+          deployError: `You don't have permission to deploy a Data Landing Zone (requires ${j.requiredRole || 'Admin'} on "${cap}").${rem}`,
+        }));
+        return;
+      }
       if (!res.ok) {
         const msg = j.remediation?.message || j.error || `HTTP ${res.status}`;
         const commands = j.remediation?.commands ? '\n\n' + j.remediation.commands.join('\n') : '';

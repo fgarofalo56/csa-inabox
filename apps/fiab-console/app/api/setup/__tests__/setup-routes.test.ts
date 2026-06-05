@@ -36,15 +36,33 @@ vi.mock('@azure/identity', () => {
   return { DefaultAzureCredential: Cred, ManagedIdentityCredential: Cred, ChainedTokenCredential: Cred };
 });
 
+// The deploy route now enforces the `admin.deploy-dlz` feature-permission, which
+// queries the feature-permissions Cosmos container. Mock it to return whatever
+// grants the test sets; default = no grants (non-admin → 403). The existing
+// deploy tests bypass this by running as a tenant admin (LOOM_TENANT_ADMIN_OID).
+let featureGrants: any[] = [];
+vi.mock('@/lib/azure/cosmos-client', () => ({
+  featurePermissionsContainer: async () => ({
+    items: {
+      query: () => ({ fetchAll: async () => ({ resources: featureGrants }) }),
+    },
+  }),
+}));
+
 const GOOD_SUB = '11111111-2222-3333-4444-555555555555';
 
 beforeEach(() => {
   delete process.env.LOOM_ARM_ENDPOINT;
   delete process.env.LOOM_UAMI_CLIENT_ID;
+  featureGrants = [];
+  // Existing deploy tests run as the bootstrap tenant admin so they bypass the
+  // admin.deploy-dlz gate and exercise the validation / dispatch / 503 paths.
+  process.env.LOOM_TENANT_ADMIN_OID = 'oid-test';
   getSessionMock.mockReturnValue({ claims: { oid: 'oid-test', upn: 'u@t.com' }, exp: Date.now() / 1000 + 3600 } as any);
 });
 
 afterEach(() => {
+  delete process.env.LOOM_TENANT_ADMIN_OID;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.resetModules();
@@ -152,6 +170,36 @@ describe('POST /api/setup/deploy', () => {
     const { POST } = await import('@/app/api/setup/deploy/route');
     const r = await POST(bodyReq({}));
     expect(r.status).toBe(401);
+  });
+
+  it('403 when caller lacks the admin.deploy-dlz capability', async () => {
+    // Non-admin caller, no grants → feature-gate denies before validation.
+    delete process.env.LOOM_TENANT_ADMIN_OID;
+    featureGrants = [];
+    getSessionMock.mockReturnValue({ claims: { oid: 'not-admin', upn: 'x@t.com' }, exp: Date.now() / 1000 + 3600 } as any);
+    const { POST } = await import('@/app/api/setup/deploy/route');
+    const r = await POST(
+      bodyReq({ subscriptionId: GOOD_SUB, boundary: 'Commercial', mode: 'single-sub', domainName: 'finance', capacitySku: 'F8', location: 'eastus2' }),
+    );
+    const j = await r.json();
+    expect(r.status).toBe(403);
+    expect(j.error).toBe('forbidden');
+    expect(j.capability).toBe('admin.deploy-dlz');
+    expect(j.requiredRole).toBe('Admin');
+  });
+
+  it('allows a delegated (non-tenant-admin) caller with an Admin grant on admin.deploy-dlz', async () => {
+    delete process.env.LOOM_TENANT_ADMIN_OID;
+    getSessionMock.mockReturnValue({ claims: { oid: 'delegated-user', upn: 'd@t.com' }, exp: Date.now() / 1000 + 3600 } as any);
+    featureGrants = [
+      { id: 'g1', tenantId: 'delegated-user', capabilityId: 'admin.deploy-dlz', principalId: 'delegated-user', principalType: 'user', role: 'Admin', grantedBy: 'admin', grantedAt: 'now' },
+    ];
+    const { POST } = await import('@/app/api/setup/deploy/route');
+    const r = await POST(
+      bodyReq({ subscriptionId: GOOD_SUB, boundary: 'Commercial', mode: 'single-sub', domainName: 'finance', capacitySku: 'F8', location: 'eastus2' }),
+    );
+    // Passes the gate → reaches the honest 503 deploy gate (no GH token in test).
+    expect(r.status).toBe(503);
   });
 
   it('400 when subscriptionId is missing', async () => {

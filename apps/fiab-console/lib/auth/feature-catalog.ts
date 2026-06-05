@@ -187,6 +187,7 @@ export const CAPABILITY_CATALOG: Capability[] = [
   { id: 'admin.security',            domain: 'Admin',     workload: 'Tenant Admin',      name: 'Security & Governance',kind: 'admin',     description: '/admin/security', parentId: 'workload.admin' },
   { id: 'admin.updates',             domain: 'Admin',     workload: 'Tenant Admin',      name: 'Updates / Releases',   kind: 'admin',     description: '/admin/updates', parentId: 'workload.admin' },
   { id: 'admin.permissions',         domain: 'Admin',     workload: 'Tenant Admin',      name: 'Feature Permissions',  kind: 'admin',     description: '/admin/permissions — grant capabilities to users/groups.', parentId: 'workload.admin' },
+  { id: 'admin.deploy-dlz',          domain: 'Admin',     workload: 'Tenant Admin',      name: 'Deploy Landing Zone',  kind: 'admin',     description: 'Setup wizard — deploy an additional Data Landing Zone (server-side GitHub Actions dispatch / az deployment). Admin-only by default; an existing admin can delegate it by granting this capability at /admin/permissions.', parentId: 'workload.admin' },
 ];
 
 /** Lookup by id. */

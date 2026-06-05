@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceCapability } from '@/lib/auth/feature-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,6 +51,13 @@ export async function POST(req: NextRequest) {
   if (!session) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   }
+
+  // Deploying a Data Landing Zone is an admin-tier action: it dispatches a
+  // real subscription-scoped deployment. Gate on the `admin.deploy-dlz`
+  // feature-permission (Admin role required) — tenant admins bypass; any other
+  // principal must have been delegated this capability at /admin/permissions.
+  const gate = await enforceCapability(session, 'admin.deploy-dlz', 'Admin');
+  if (gate) return gate;
 
   const body = (await req.json().catch(() => ({}))) as SetupConfig;
 
