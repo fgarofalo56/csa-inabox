@@ -68,7 +68,11 @@ const QUERY_LANG: Record<DataAgentSourceType, string> = {
 function composeSystemPrompt(cfg: DataAgentConfig): string {
   const lines: string[] = [];
   lines.push('You are a CSA Loom data agent (CSA Loom is its own Azure-based data + AI platform, not Microsoft Fabric). Answer the user\'s question in natural language, grounded ONLY in the attached data sources below.');
-  lines.push('For every answer, also emit the query you would run against the chosen source, fenced in a code block, and name the source you used.');
+  lines.push('After your natural-language answer, append EXACTLY ONE fenced ```json code block describing the tools you used, in this shape:');
+  lines.push('```json');
+  lines.push('{"toolsUsed":[{"source":"<source name>","type":"<source type>","action":"query|search|traverse|retrieve","query":"<the exact query/KQL/DAX/search text you would run>"}]}');
+  lines.push('```');
+  lines.push('List EVERY source you consulted (one entry each) — include multiple when the question spans sources. Put the tools JSON LAST; keep the prose answer above it with no code fences.');
   lines.push('');
   if (cfg.instructions?.trim()) {
     lines.push('## Agent instructions');
@@ -109,11 +113,21 @@ export interface ChatTurn { role: 'user' | 'assistant'; content: string }
 
 export interface DataAgentUsage { promptTokens: number; completionTokens: number; totalTokens: number; }
 
+/** One tool/source the agent consulted for an answer (sourcing metadata). */
+export interface DataAgentTool {
+  source: string;
+  type?: string;
+  action: string;   // query | search | traverse | retrieve
+  query?: string;
+}
+
 export interface DataAgentAnswer {
   answer: string;
-  query?: string;       // extracted fenced query block
-  sourceUsed?: string;  // best-effort source name parsed from the answer
+  query?: string;       // first tool's query (back-compat)
+  sourceUsed?: string;  // first tool's source (back-compat)
   raw: string;
+  /** Every source the agent consulted + its query (multi-source citations). */
+  tools?: DataAgentTool[];
   /** Token/context usage for this turn (from the AOAI response). */
   usage?: DataAgentUsage;
   /** The model deployment that answered. */
@@ -122,16 +136,59 @@ export interface DataAgentAnswer {
   sourcesAvailable?: string[];
 }
 
-/** Extract the first fenced code block + a "source used" hint from the model output. */
+/**
+ * Parse the model output into prose + structured tools-used. Prefers the
+ * trailing ```json {"toolsUsed":[…]} block (multi-source citations); falls back
+ * to the legacy single-fenced-block + name-match heuristic so older prompts and
+ * non-compliant responses still surface something.
+ */
 function parseAnswer(content: string, sources: DataAgentSource[]): DataAgentAnswer {
-  const fence = content.match(/```[a-zA-Z]*\n([\s\S]*?)```/);
-  const query = fence ? fence[1].trim() : undefined;
-  const answer = content.replace(/```[a-zA-Z]*\n[\s\S]*?```/g, '').trim();
-  let sourceUsed: string | undefined;
-  for (const s of sources) {
-    if (s.name && content.toLowerCase().includes(s.name.toLowerCase())) { sourceUsed = s.name; break; }
+  let tools: DataAgentTool[] | undefined;
+  let answer = content;
+
+  // 1) Structured toolsUsed JSON block (last fenced json wins).
+  const jsonBlocks = [...content.matchAll(/```json\s*\n([\s\S]*?)```/gi)];
+  const lastJson = jsonBlocks[jsonBlocks.length - 1];
+  if (lastJson) {
+    try {
+      const obj = JSON.parse(lastJson[1].trim());
+      const arr = Array.isArray(obj?.toolsUsed) ? obj.toolsUsed : Array.isArray(obj) ? obj : null;
+      if (arr) {
+        tools = arr
+          .map((t: any) => ({
+            source: String(t?.source ?? t?.name ?? '').trim(),
+            type: t?.type ? String(t.type) : undefined,
+            action: String(t?.action ?? 'query'),
+            query: t?.query ? String(t.query) : undefined,
+          }))
+          .filter((t: DataAgentTool) => t.source || t.query);
+        // Strip the tools JSON block from the prose answer.
+        answer = content.replace(lastJson[0], '').trim();
+      }
+    } catch { /* not valid JSON — fall through to heuristic */ }
   }
-  return { answer: answer || content, query, sourceUsed, raw: content };
+
+  // 2) Fallback: legacy single fenced query block + name match.
+  if (!tools || tools.length === 0) {
+    const fence = content.match(/```[a-zA-Z]*\n([\s\S]*?)```/);
+    const query = fence ? fence[1].trim() : undefined;
+    answer = content.replace(/```[a-zA-Z]*\n[\s\S]*?```/g, '').trim();
+    let sourceUsed: string | undefined;
+    let srcType: string | undefined;
+    for (const s of sources) {
+      if (s.name && content.toLowerCase().includes(s.name.toLowerCase())) { sourceUsed = s.name; srcType = s.type; break; }
+    }
+    if (query || sourceUsed) tools = [{ source: sourceUsed || 'source', type: srcType, action: 'query', query }];
+  }
+
+  const first = tools?.[0];
+  return {
+    answer: answer || content,
+    query: first?.query,
+    sourceUsed: first?.source,
+    tools,
+    raw: content,
+  };
 }
 
 /**
