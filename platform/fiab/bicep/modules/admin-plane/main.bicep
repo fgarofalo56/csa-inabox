@@ -637,6 +637,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_AI_SEARCH_RG', value: byoAiSearchRg }
             { name: 'LOOM_ACA_RG', value: resourceGroup().name }
             { name: 'LOOM_DLZ_RG', value: loomDlzRg }
+            // Default ADLS Gen2 account for the Azure-native lakehouse + shortcut
+            // example targets ({{ADLS_ACCOUNT}} token). Without this the lakehouse
+            // shortcut examples resolve to a non-existent host (ENOTFOUND).
+            { name: 'LOOM_ADLS_ACCOUNT', value: loomStorageAccount }
             // /monitor observability surface — Log Analytics workspace GUID
             // (customerId) for the Logs (KQL) tab. The UAMI needs
             // "Log Analytics Reader" on this workspace + "Monitoring Reader"
