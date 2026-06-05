@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, createOwnedItem } from '../../items/_lib/item-crud';
+import { recordThreadEdge } from '@/lib/thread/thread-edges';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -82,6 +83,12 @@ export async function POST(req: NextRequest) {
     },
   });
   if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: res.status });
+
+  await recordThreadEdge(session, {
+    fromItemId: from.id, fromType: from.type, fromName: name,
+    toItemId: res.item.id, toType: 'notebook', toName: res.item.displayName,
+    action: 'analyze-in-notebook',
+  });
 
   return NextResponse.json({
     ok: true,

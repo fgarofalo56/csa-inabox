@@ -29,6 +29,7 @@ import {
   emptyDabConfig, emitDabConfigJson, validateDabConfig,
   type DabConfig, type DabEntity, type DabField,
 } from '../../dab/_lib/dab-config-model';
+import { recordThreadEdge } from '@/lib/thread/thread-edges';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -127,6 +128,12 @@ export async function POST(req: NextRequest) {
     state: { dabConfig: cfg, dabConfigJson: emitDabConfigJson(cfg) },
   });
   if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: res.status });
+
+  await recordThreadEdge(session, {
+    fromItemId: from.id, fromType: from.type, fromName: `${schema}.${name}`,
+    toItemId: res.item.id, toType: 'data-api-builder', toName: res.item.displayName,
+    action: 'publish-as-api',
+  });
 
   return NextResponse.json({
     ok: true,

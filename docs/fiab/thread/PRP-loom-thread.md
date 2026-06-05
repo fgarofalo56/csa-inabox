@@ -134,8 +134,12 @@ promotable. (Phase 2 — the first slice can write edges without the viewer.)
     Azure-native Synapse dedicated pool), `dab validate`-passing, deep-linked to
     the editor for deploy (`/api/thread/publish-as-api`).
   - ⏭ remainder: Delta/Databricks-SQL → API path; query → UDF REST.
-- **PR 4 — Medallion promotion + edge-graph mesh viewer:** promote bronze→silver→gold,
-  lineage view over `thread-edges`.
+- **PR 4 — Medallion promotion + edge-graph mesh viewer:**
+  - ✅ *edge graph + Lineage view* — every Weave records a `thread-edges` Cosmos
+    row (`recordThreadEdge`, best-effort upsert); `GET /api/thread/edges` + the
+    `/thread` Lineage page (KPIs + sortable table, deep-linked endpoints).
+  - ⏭ medallion promotion (bronze→silver→gold) as a flow; React Flow node-link
+    rendering of the graph.
 - **PR 5 — Power BI:**
   - ✅ *Build a Power BI model* — gold warehouse table → real Power BI **push
     dataset** (typed columns from the catalog + a sample of real rows pushed),

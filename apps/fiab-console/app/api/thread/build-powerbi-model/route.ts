@@ -28,6 +28,7 @@ import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { listColumns } from '@/lib/azure/sql-objects-client';
 import { createPushDataset, postPushRows, PowerBiError } from '@/lib/azure/powerbi-client';
 import { pushColumnsFromCatalog, coerceRow, bracket } from '@/lib/thread/sql-to-pushdataset';
+import { recordThreadEdge } from '@/lib/thread/thread-edges';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -119,6 +120,12 @@ export async function POST(req: NextRequest) {
   }
 
   const link = `https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/details`;
+  await recordThreadEdge(session, {
+    fromItemId: from.id, fromType: from.type, fromName: `${schema}.${name}`,
+    toItemId: datasetId, toType: 'powerbi-model', toName: modelName,
+    toExternal: true, toLink: link,
+    action: 'build-powerbi-model',
+  });
   return NextResponse.json({
     ok: true,
     message:

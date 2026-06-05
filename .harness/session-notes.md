@@ -253,5 +253,23 @@ report in Loom; data-agent semantic-model (DAX) execution via `executeQueries`.
   config are created regardless, deploy is the editor step. Honest gate when the
   pool env is unset.
 
+### Thread PR4 (spine) — edge graph + Lineage view ✅ (PR # pending)
+- New Cosmos container `thread-edges` (PK /tenantId) in cosmos-client + a
+  `threadEdgesContainer()` accessor (+ added to KNOWN_CONTAINER_IDS for
+  scale-by-SKU). `lib/thread/thread-edges.ts`: `recordThreadEdge` (best-effort
+  UPSERT — never blocks the edge action) + `listThreadEdges`.
+- Wired `recordThreadEdge` into ALL 4 edge routes (analyze-in-notebook,
+  add-data-agent-source [both new + append paths], build-powerbi-model [external
+  PBI target + deep link], publish-as-api). tenantId = claims.oid (single-tenant
+  convention, matches mcp-servers).
+- `GET /api/thread/edges` read API + new `/thread` **Lineage** page (left nav):
+  KPI cards (totals + per-action) + sortable/filterable LoomDataTable
+  (Source → Weave → Target, When, By); Loom targets deep-link to editors,
+  external (Power BI) opens in service; honest empty state. Fluent v9 + Loom
+  tokens. tsc clean on all touched files.
+- Deferred: medallion promotion flow + React Flow node-link rendering of the
+  same graph (data + list view ship first).
+
 **Next:** Thread PR2 finish (lakehouse → Synapse Serverless SQL view edge +
-columns adapter) or PR4 (medallion + mesh viewer), then numbered ledger task-010+.
+columns adapter), or extend the Weave registry further, then numbered ledger
+task-010+ (Purview web-3.0, access-policy enforcement, catalog detail…).
