@@ -105,7 +105,9 @@ export interface BulkDeleteResult {
   failed: Array<{ id: string; error: string }>;
 }
 
-/** Admin-only multi-delete. Server gates on isTenantAdmin; non-admins get 403. */
+/** Multi-delete. The server authorizes per workspace: tenant admins delete
+ * anything; every caller can delete the workspaces they OWN. Non-owned ids come
+ * back as per-id `forbidden`/`not_found` failures. */
 export async function bulkDeleteWorkspaces(ids: string[]): Promise<BulkDeleteResult> {
   return fetchJson<BulkDeleteResult>('/api/workspaces/bulk-delete', {
     method: 'POST',
@@ -113,14 +115,16 @@ export async function bulkDeleteWorkspaces(ids: string[]): Promise<BulkDeleteRes
   });
 }
 
-/** Probe whether the current session is a tenant admin (drives bulk-delete UI). */
-export async function getWorkspaceAdminStatus(): Promise<{ ok: boolean; isAdmin: boolean }> {
+/** Probe bulk-delete affordances. `canBulkDelete` is true for any authenticated
+ * user (they can delete their own workspaces); `isAdmin` marks tenant admins. */
+export async function getWorkspaceAdminStatus(): Promise<{ ok: boolean; isAdmin: boolean; canBulkDelete: boolean }> {
   try {
     const res = await fetch(`${API_BASE}/api/workspaces/bulk-delete`, { credentials: 'include' });
-    if (!res.ok) return { ok: false, isAdmin: false };
-    return await res.json();
+    if (!res.ok) return { ok: false, isAdmin: false, canBulkDelete: false };
+    const j = await res.json();
+    return { ok: !!j.ok, isAdmin: !!j.isAdmin, canBulkDelete: j.canBulkDelete !== false };
   } catch {
-    return { ok: false, isAdmin: false };
+    return { ok: false, isAdmin: false, canBulkDelete: false };
   }
 }
 
