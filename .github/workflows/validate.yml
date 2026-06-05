@@ -57,7 +57,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.bicep == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Lints AND compiles every .bicep in the monorepo (hundreds) serially, which
+    # exceeds 15 min and was canceling mid-build on any bicep-touching PR. 30 min
+    # gives the full sweep headroom. (Future: scope to changed files only.)
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
 

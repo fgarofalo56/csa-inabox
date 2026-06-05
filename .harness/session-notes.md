@@ -376,3 +376,29 @@ postgres + #655 auto-mount) or task-017/018 UI. Continue down the ledger.
 
 **Next:** more task-018 page slices (Home/Browse/Monitor), or operator picks a
 heavy item (pg driver / CDC mirroring / live app-install tasks 019-021).
+
+### task-016 (slice) — PostgreSQL in-database query LIVE ✅ (PR # pending)
+- Operator approved adding the `pg` driver. Added `pg`@^8.13.1 + `@types/pg` via
+  **pnpm** (repo uses pnpm-lock.yaml — `pnpm install --no-frozen-lockfile`; npm
+  install FAILS on this repo, "Cannot read properties of null (reading 'matches')").
+- `postgres-flex-client.ts`: replaced the `queryGateReason`/`isPostgresQueryLive`
+  honest-gate stubs with REAL `executePostgresQuery(fqdn, db, sql)` — `pg` Client,
+  Entra token as password (scope https://ossrdbms-aad.database.azure.com/.default,
+  Gov override via LOOM_POSTGRES_AAD_SCOPE), SSL, 30s statement timeout, lazy
+  `await import('pg')`. New `postgresQueryGate()` honest-gates when
+  LOOM_POSTGRES_AAD_USER unset (names the one-time pgaadauth_create_principal setup).
+- Query route `/api/items/postgres-flexible-server/[id]/query` now resolves the
+  server FQDN (getServer) + runs real SQL (was a 501 stub). The unified editor
+  ALREADY POSTed here (Query tab + schema browser) — no editor wiring needed;
+  updated the stale admin note (LOOM_POSTGRES_QUERY_LIVE → LOOM_POSTGRES_AAD_USER).
+- Bicep-sync: `loomPostgresAadUser` param + LOOM_POSTGRES_AAD_USER env in
+  admin-plane/main.bicep; documented in docs/fiab/v3-tenant-bootstrap.md. NOTE:
+  bicep-touching PR adds the slow "Bicep Lint" required check.
+- tsc clean on touched code (pre-existing px noise only). LIVE-VERIFY (operator):
+  set LOOM_POSTGRES_AAD_USER + register the principal in PG; query attempts real
+  exec and surfaces the real PG error otherwise.
+- task-016 stays `todo` (geo/graph deferred edges + #655 notebook abfss
+  auto-mount remain — both need live Spark/ADF to verify).
+
+**Next:** task-018 page slices, or geo/graph (task-016 remainder), or operator
+picks a live-Azure item (CDC mirroring, app-installs 019-021).

@@ -416,7 +416,7 @@ function SqlServerAdminPanel({
           <Subtitle2>Microsoft Entra admin</Subtitle2>
           <MessageBar intent="warning"><MessageBarBody>
             <MessageBarTitle>Entra auth on PostgreSQL is principal-based</MessageBarTitle>
-            PostgreSQL flexible servers don't expose a single server-level <code>administrators</code> ARM resource; Entra principals are created in-engine via <code>pgaadauth_create_principal</code>. Wire that to the PG query path (set <code>LOOM_POSTGRES_QUERY_LIVE=true</code>) to manage it from Loom. Honest gate — not a fake form.
+            PostgreSQL flexible servers don't expose a single server-level <code>administrators</code> ARM resource; Entra principals are created in-engine via <code>pgaadauth_create_principal</code>. The Query tab runs over the real <code>pg</code> wire protocol with an Entra token — register the console identity once (<code>SELECT * FROM pgaadauth_create_principal('&lt;console-uami-name&gt;', false, false)</code>) and set <code>LOOM_POSTGRES_AAD_USER</code> to that name. Honest gate — not a fake form.
           </MessageBarBody></MessageBar>
         </div>
       )}
