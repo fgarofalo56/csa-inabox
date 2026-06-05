@@ -38,6 +38,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph';
 import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
+import { GraphTypeEditor } from '@/lib/components/graph/graph-type-editor';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
 import {
@@ -2263,12 +2264,6 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
     finally { setMaterializing(false); }
   }, [id, save, setState]);
 
-  const editJson = (key: 'nodes' | 'edges', text: string) => {
-    try {
-      const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) setState((p) => ({ ...p, [key]: parsed }));
-    } catch { /* leave previous */ }
-  };
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -2293,11 +2288,13 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <div>
             <Subtitle2>Node types</Subtitle2>
-            <MonacoTextarea value={JSON.stringify(state.nodes, null, 2)} onChange={(v) => editJson('nodes', v)} language="json" height={260} minHeight={200} ariaLabel="Node types JSON" />
+            <GraphTypeEditor kind="node" types={arr(state.nodes)}
+              onChange={(next) => setState((p) => ({ ...p, nodes: next }))} />
           </div>
           <div>
             <Subtitle2>Edge types</Subtitle2>
-            <MonacoTextarea value={JSON.stringify(state.edges, null, 2)} onChange={(v) => editJson('edges', v)} language="json" height={260} minHeight={200} ariaLabel="Edge types JSON" />
+            <GraphTypeEditor kind="edge" types={arr(state.edges)}
+              onChange={(next) => setState((p) => ({ ...p, edges: next }))} />
           </div>
         </div>
         <Subtitle2 style={{ marginTop: 8 }}>Schema graph</Subtitle2>
