@@ -38,6 +38,7 @@ import {
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
+import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
@@ -527,12 +528,22 @@ function MetricsTab({ onUnauth }: { onUnauth: () => void }) {
 // Logs — Log Analytics KQL
 // ---------------------------------------------------------------------------
 
+interface KqlPreset {
+  id: string; label: string; query: string; description?: string;
+  category?: string; service?: string; chart?: KqlChartType | 'table';
+}
+
 function LogsTab({ onUnauth }: { onUnauth: () => void }) {
   const styles = useStyles();
-  const [presets, setPresets] = useState<{ id: string; label: string; query: string }[]>([]);
+  const [presets, setPresets] = useState<KqlPreset[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [category, setCategory] = useState<string>('');
+  const [presetId, setPresetId] = useState<string>('');
   const [query, setQuery] = useState('AzureActivity\n| summarize count() by Category\n| order by count_ desc');
   const [span, setSpan] = useState('P1D');
   const [result, setResult] = useState<LogResult | null>(null);
+  // chart hint for the *result* currently shown (captured at run time).
+  const [resultChart, setResultChart] = useState<KqlChartType | 'table'>('table');
   const [gate, setGate] = useState<Gate | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -543,12 +554,29 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); return; }
       const j = await r.json();
-      if (j.ok) setPresets(j.data.presets);
+      if (j.ok) {
+        setPresets(j.data.presets || []);
+        setCategories(j.data.categories || []);
+      }
     }).catch(() => {});
     return () => { alive = false; };
   }, [onUnauth]);
 
-  const run = useCallback(async () => {
+  // Queries visible in the picker, filtered by the chosen category.
+  const visiblePresets = useMemo(
+    () => (category ? presets.filter((p) => p.category === category) : presets),
+    [presets, category],
+  );
+  const selectedPreset = useMemo(() => presets.find((p) => p.id === presetId), [presets, presetId]);
+
+  const applyPreset = useCallback((id: string) => {
+    const p = presets.find((x) => x.id === id);
+    if (!p) return;
+    setPresetId(id);
+    setQuery(p.query);
+  }, [presets]);
+
+  const run = useCallback(async (overrideChart?: KqlChartType | 'table') => {
     setRunning(true); setErr(null); setGate(null); setResult(null);
     try {
       const r = await fetch('/api/monitor/logs', {
@@ -560,9 +588,11 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
       if (j.gate) { setGate(j.gate); return; }
       if (!j.ok) { setErr(j.error || 'Query failed'); return; }
       setResult(j.data);
+      const chart = overrideChart ?? (selectedPreset?.chart as KqlChartType | 'table' | undefined) ?? 'table';
+      setResultChart(query === selectedPreset?.query ? chart : 'table');
     } catch (e) { setErr(String(e)); }
     finally { setRunning(false); }
-  }, [query, span]);
+  }, [query, span, selectedPreset]);
 
   // LoomDataTable rows: map each result row to a keyed object by column name.
   const logColumns: LoomColumn<Record<string, unknown>>[] = useMemo(
@@ -585,35 +615,60 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
   return (
     <Section title="Logs (Log Analytics — KQL)">
       {gate && <GateBar gate={gate} subject="Logs (Log Analytics)" />}
+      <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+        Prebuilt query library — {presets.length} curated troubleshooting, performance, audit, cost &amp; per-service
+        queries against the Loom Log Analytics workspace. Pick a category, choose a query, then Run (or edit it freely).
+      </Text>
       <div className={styles.kqlBox}>
         <div className={styles.toolbar}>
           <Dropdown
-            aria-label="Preset query"
-            placeholder="Preset queries"
-            onOptionSelect={(_, d) => {
-              const p = presets.find((x) => x.id === d.optionValue);
-              if (p) setQuery(p.query);
-            }}
-            style={{ minWidth: 280 }}
+            aria-label="Query category"
+            placeholder="All categories"
+            value={category || 'All categories'}
+            selectedOptions={category ? [category] : []}
+            onOptionSelect={(_, d) => { setCategory(d.optionValue === '__all' ? '' : (d.optionValue || '')); }}
+            style={{ minWidth: 200 }}
           >
-            {presets.map((p) => <Option key={p.id} value={p.id}>{p.label}</Option>)}
+            <Option value="__all">All categories</Option>
+            {categories.map((c) => <Option key={c} value={c}>{c}</Option>)}
+          </Dropdown>
+          <Dropdown
+            aria-label="Prebuilt query"
+            placeholder="Prebuilt queries"
+            value={selectedPreset?.label || ''}
+            selectedOptions={presetId ? [presetId] : []}
+            onOptionSelect={(_, d) => d.optionValue && applyPreset(d.optionValue)}
+            style={{ minWidth: 320 }}
+          >
+            {visiblePresets.map((p) => (
+              <Option key={p.id} value={p.id} text={p.label}>
+                {p.label}{p.chart && p.chart !== 'table' ? ` · ${p.chart}` : ''}
+              </Option>
+            ))}
           </Dropdown>
           <Dropdown
             aria-label="Timespan"
-            value={span === 'PT1H' ? 'Last hour' : span === 'P1D' ? 'Last 24 hours' : span === 'P7D' ? 'Last 7 days' : span}
+            value={span === 'PT1H' ? 'Last hour' : span === 'P1D' ? 'Last 24 hours' : span === 'P7D' ? 'Last 7 days' : span === 'P30D' ? 'Last 30 days' : span}
             selectedOptions={[span]}
             onOptionSelect={(_, d) => d.optionValue && setSpan(d.optionValue)}
           >
             <Option value="PT1H">Last hour</Option>
             <Option value="P1D">Last 24 hours</Option>
             <Option value="P7D">Last 7 days</Option>
+            <Option value="P30D">Last 30 days</Option>
           </Dropdown>
-          <Button appearance="primary" icon={<Play20Regular />} onClick={run} disabled={running}>Run query</Button>
+          <Button appearance="primary" icon={<Play20Regular />} onClick={() => run()} disabled={running}>Run query</Button>
         </div>
+        {selectedPreset?.description && (
+          <Text size={200} style={{ color: tokens.colorNeutralForeground2 }}>
+            <strong>{selectedPreset.category}{selectedPreset.service ? ` · ${selectedPreset.service}` : ''}:</strong>{' '}
+            {selectedPreset.description}
+          </Text>
+        )}
         <Textarea
           aria-label="KQL query"
           value={query}
-          onChange={(_, d) => setQuery(d.value)}
+          onChange={(_, d) => { setQuery(d.value); }}
           rows={6}
           resize="vertical"
           style={{ fontFamily: 'var(--loom-font-mono, monospace)', fontSize: 13 }}
@@ -625,6 +680,9 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
       ) : result ? (
         <>
           <Text size={200}>{result.rowCount} rows{result.rowCount > 500 ? ' (showing first 500)' : ''}</Text>
+          {resultChart !== 'table' && result.rowCount > 0 && (
+            <KqlChart type={resultChart as KqlChartType} columns={result.columns} rows={result.rows} />
+          )}
           <LoomDataTable
             columns={logColumns}
             rows={logRows}
