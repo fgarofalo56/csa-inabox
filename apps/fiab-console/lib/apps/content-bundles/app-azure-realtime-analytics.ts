@@ -659,7 +659,7 @@ const bundle: AppBundle = {
         shortcuts: [
           {
             name: 'eventhub_capture',
-            target: 'abfss://landing@analyticsstorage.dfs.core.windows.net/eventhub-capture',
+            target: 'abfss://landing@{{ADLS_ACCOUNT}}.dfs.core.windows.net/eventhub-capture',
             description:
               'Shortcut to the Event Hubs Capture container so the raw Avro/JSON ' +
               'landing files are queryable without copying.',

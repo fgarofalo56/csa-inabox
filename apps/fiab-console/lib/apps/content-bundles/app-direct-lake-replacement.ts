@@ -670,7 +670,7 @@ const bundle: AppBundle = {
         shortcuts: [
           {
             name: 'legacy-bi-export-archive',
-            target: 'abfss://legacy-exports@loomlake.dfs.core.windows.net/pbirs-archive',
+            target: 'abfss://legacy-exports@{{ADLS_ACCOUNT}}.dfs.core.windows.net/pbirs-archive',
             description:
               'Read-only shortcut to the archived legacy BI server exports ' +
               '(Power BI Report Server / third-party workbooks) kept for the ' +

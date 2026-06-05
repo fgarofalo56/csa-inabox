@@ -72,7 +72,26 @@ export async function POST(req: NextRequest) {
   const name = (body?.name || '').toString().trim();
   const kind = (body?.kind || '').toString() as ShortcutKind;
   const targetType = (body?.targetType || '').toString() as ShortcutTargetType;
-  const targetUri = (body?.targetUri || '').toString().trim();
+  let targetUri = (body?.targetUri || '').toString().trim();
+
+  // Content-bundle example shortcuts ship with an `{{ADLS_ACCOUNT}}` token (and
+  // some legacy bundles used placeholder hosts) so they don't hard-code a
+  // deployment-specific storage account. Substitute the real default ADLS
+  // account here, server-side. Without it the shortcut would resolve to a
+  // non-existent host (ENOTFOUND) — a no-vaporware violation. If the token is
+  // present but LOOM_ADLS_ACCOUNT is unset, return an honest gate.
+  if (targetType === 'adls' && /\{\{\s*ADLS_ACCOUNT\s*\}\}/.test(targetUri)) {
+    const acct = (process.env.LOOM_ADLS_ACCOUNT || '').trim();
+    if (!acct) {
+      return NextResponse.json({
+        ok: false,
+        code: 'adls_account_unset',
+        error: 'This example shortcut targets the deployment default storage account, but LOOM_ADLS_ACCOUNT is not set on the Console. Set LOOM_ADLS_ACCOUNT (the Loom ADLS Gen2 account name) or edit the shortcut to a real abfss:// target.',
+        hint: 'Set LOOM_ADLS_ACCOUNT on the Console Container App (admin-plane bicep apps[].env), or type a concrete target storage account in the New shortcut form.',
+      }, { status: 503 });
+    }
+    targetUri = targetUri.replace(/\{\{\s*ADLS_ACCOUNT\s*\}\}/g, acct);
+  }
   const parentPath = (body?.parentPath || '').toString();
   const format = body?.format as ('delta' | 'parquet' | 'csv' | 'json' | undefined);
   const credentialRef = body?.credentialRef as ShortcutCredentialRef | undefined;
