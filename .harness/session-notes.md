@@ -402,3 +402,12 @@ heavy item (pg driver / CDC mirroring / live app-install tasks 019-021).
 
 **Next:** task-018 page slices, or geo/graph (task-016 remainder), or operator
 picks a live-Azure item (CDC mirroring, app-installs 019-021).
+
+### task-018 (slice 2) — Governance classifications + sensitivity → LoomDataTable ✅ (PR # pending)
+- Converted /governance/classifications "Applied classifications" table and
+  /governance/sensitivity "Labeled items" table from raw Fluent `<Table>` to the
+  shared **LoomDataTable** (sortable/filterable/resizable + standard empty state).
+  Sensitivity keeps its label-distribution card filter (rows reflect the picked
+  label). Open links stopPropagation. tsc clean.
+- task-018 still `todo`. Remaining raw-table pages: governance/scans,
+  governance/policies, governance/insights, workspaces, + high-traffic Home/Browse/Monitor.
