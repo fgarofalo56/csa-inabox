@@ -278,6 +278,26 @@ jobs:
               -o table 2>&1 | grep -v "already exists" || echo "$ROLE already assigned"
           done
 
+      - name: Enable diagnostics on ALL Loom resources → Loom Log Analytics
+        # "All logs ON by default, routed to the Loom LAW." Deploy-time bicep
+        # wires the first-class resources; this sweep covers everything created
+        # at runtime (installed-app resources, ADX DBs, etc.) and any drift.
+        # First grant the Console UAMI Monitoring Contributor so the in-console
+        # Monitor → Diagnostics tab's "Enable" buttons work at runtime too.
+        run: |
+          for RG in "$ADMIN_RG" "$DLZ_RG"; do
+            az role assignment create \
+              --assignee-object-id $CONSOLE_UAMI_PRINCIPAL \
+              --assignee-principal-type ServicePrincipal \
+              --role "Monitoring Contributor" \
+              --scope "/subscriptions/$SUB/resourceGroups/$RG" \
+              -o table 2>&1 | grep -v "already exists" || echo "Monitoring Contributor already assigned on $RG"
+          done
+          # Idempotent sweep — skips resources already routing to the LAW and
+          # types that don't support diagnostic settings.
+          bash scripts/csa-loom/enable-all-diagnostics.sh --resource-groups "$ADMIN_RG $DLZ_RG" || \
+            echo "WARN: diagnostics sweep reported issues (non-fatal)"
+
       - name: Grant Console UAMI Microsoft Graph roles (Directory.Read.All + User.Read.All)
         # Unblocks /admin/users displayName + department + license
         # enrichment so the page shows real Entra identity data instead of

@@ -131,7 +131,7 @@ function StatCardSkeleton() {
   );
 }
 
-type TabKey = 'overview' | 'metrics' | 'logs' | 'activity' | 'items' | 'alerts' | 'cost' | 'security';
+type TabKey = 'overview' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'alerts' | 'cost' | 'security';
 
 export function MonitorPane() {
   const styles = useStyles();
@@ -150,6 +150,7 @@ export function MonitorPane() {
         <Tab value="overview">Overview</Tab>
         <Tab value="metrics">Metrics</Tab>
         <Tab value="logs">Logs (KQL)</Tab>
+        <Tab value="diagnostics">Diagnostics</Tab>
         <Tab value="activity">Activity log</Tab>
         <Tab value="items">Deployed items</Tab>
         <Tab value="alerts">Alerts</Tab>
@@ -161,6 +162,7 @@ export function MonitorPane() {
       {tab === 'overview' && <OverviewTab onUnauth={onUnauth} />}
       {tab === 'metrics' && <MetricsTab onUnauth={onUnauth} />}
       {tab === 'logs' && <LogsTab onUnauth={onUnauth} />}
+      {tab === 'diagnostics' && <DiagnosticsTab onUnauth={onUnauth} />}
       {tab === 'activity' && <ActivityTab onUnauth={onUnauth} />}
       {tab === 'items' && <ActivityFeedPane />}
       {tab === 'alerts' && <AlertsTab onUnauth={onUnauth} />}
@@ -692,6 +694,130 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
           />
         </>
       ) : null}
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics — diagnostic-settings coverage ("are all logs ON → Loom LAW?")
+// ---------------------------------------------------------------------------
+
+interface DiagItem {
+  id: string; name: string; type: string; resourceGroup: string;
+  supported: boolean; routesToLoomLaw: boolean; settingNames: string[]; note?: string;
+}
+interface DiagSummary { total: number; supported: number; covered: number; missing: number; unsupported: number; }
+
+function shortType(t: string): string {
+  // 'microsoft.documentdb/databaseaccounts' → 'documentdb/databaseaccounts'
+  return t.replace(/^microsoft\./i, '');
+}
+
+function DiagnosticsTab({ onUnauth }: { onUnauth: () => void }) {
+  const styles = useStyles();
+  const [items, setItems] = useState<DiagItem[] | null>(null);
+  const [summary, setSummary] = useState<DiagSummary | null>(null);
+  const [gate, setGate] = useState<Gate | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null); // resourceId or '__all'
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null); setGate(null);
+    try {
+      const r = await fetch('/api/monitor/diagnostics');
+      if (r.status === 401 || r.status === 403) { onUnauth(); return; }
+      const j = await r.json();
+      if (j.gate) { setGate(j.gate); setItems([]); return; }
+      if (!j.ok) { setErr(j.error || 'Failed to load coverage'); setItems([]); return; }
+      setItems(j.data.items); setSummary(j.data.summary);
+    } catch (e) { setErr(String(e)); setItems([]); }
+  }, [onUnauth]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const enable = useCallback(async (body: object, key: string) => {
+    setBusy(key); setMsg(null); setErr(null);
+    try {
+      const r = await fetch('/api/monitor/diagnostics', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (j.gate) { setGate(j.gate); return; }
+      if (!j.ok) { setErr(j.error || 'Enable failed'); return; }
+      if (j.data.enabled) {
+        setMsg(`Enabled diagnostics on ${j.data.enabled.length} of ${j.data.attempted} resource(s)${j.data.failed?.length ? ` · ${j.data.failed.length} failed` : ''}.`);
+      } else {
+        setMsg(`Diagnostics enabled (${j.data.mode}).`);
+      }
+      await load();
+    } catch (e) { setErr(String(e)); }
+    finally { setBusy(null); }
+  }, [load]);
+
+  const columns: LoomColumn<DiagItem>[] = useMemo(() => [
+    { key: 'name', label: 'Resource', width: 220, render: (r) => r.name, getValue: (r) => r.name },
+    { key: 'type', label: 'Type', width: 240, render: (r) => <Text size={200}>{shortType(r.type)}</Text>, getValue: (r) => r.type },
+    { key: 'rg', label: 'Resource group', width: 200, render: (r) => <Text size={200}>{r.resourceGroup}</Text>, getValue: (r) => r.resourceGroup },
+    {
+      key: 'status', label: 'Logs → Loom LAW', width: 150,
+      render: (r) => !r.supported
+        ? <Badge color="subtle" appearance="outline">n/a</Badge>
+        : r.routesToLoomLaw
+          ? <Badge color="success" appearance="filled">On</Badge>
+          : <Badge color="warning" appearance="filled">Off</Badge>,
+      getValue: (r) => (!r.supported ? 'na' : r.routesToLoomLaw ? 'on' : 'off'),
+    },
+    {
+      key: 'action', label: '', width: 120,
+      render: (r) => (r.supported && !r.routesToLoomLaw)
+        ? <Button size="small" disabled={busy != null} onClick={() => enable({ resourceId: r.id }, r.id)}>
+            {busy === r.id ? 'Enabling…' : 'Enable'}
+          </Button>
+        : <Text size={200}>—</Text>,
+      getValue: () => '',
+    },
+  ], [busy, enable]);
+
+  const rows = items ?? [];
+
+  return (
+    <Section title="Diagnostics — log & metric coverage">
+      {gate && <GateBar gate={gate} subject="Diagnostics coverage" />}
+      <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+        Every Loom resource should route <strong>all logs + all metrics</strong> to the Loom Log Analytics workspace.
+        Deploy-time bicep wires the first-class resources; this audits the live estate and turns diagnostics on for
+        anything created at runtime or drifted off — the standardized <code>diag-loom-stdz</code> setting
+        (categoryGroup <code>allLogs</code> + <code>AllMetrics</code>).
+      </Text>
+
+      {summary && (
+        <div className={styles.toolbar}>
+          <Badge color="success" appearance="tint">{summary.covered} on</Badge>
+          <Badge color={summary.missing ? 'warning' : 'subtle'} appearance="tint">{summary.missing} off</Badge>
+          <Badge color="subtle" appearance="tint">{summary.unsupported} n/a</Badge>
+          <Button appearance="primary" icon={<ArrowSync20Regular />} disabled={busy != null || !summary.missing}
+            onClick={() => enable({ all: true }, '__all')}>
+            {busy === '__all' ? 'Enabling all…' : `Turn on all (${summary.missing})`}
+          </Button>
+          <Button appearance="subtle" icon={<ArrowSync20Regular />} disabled={busy != null} onClick={load}>Refresh</Button>
+        </div>
+      )}
+
+      {msg && <MessageBar intent="success"><MessageBarBody>{msg}</MessageBarBody></MessageBar>}
+      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+
+      {items == null ? (
+        <Spinner label="Auditing diagnostic-settings coverage…" />
+      ) : (
+        <LoomDataTable
+          columns={columns}
+          rows={rows}
+          getRowId={(r) => r.id}
+          empty="No resources found in the Loom resource groups."
+          ariaLabel="Diagnostic settings coverage"
+        />
+      )}
     </Section>
   );
 }
