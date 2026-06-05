@@ -75,6 +75,7 @@ import {
 } from '@fluentui/react-icons';
 import type { FluentIcon } from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { CapacityEquivalencePanel } from '@/lib/components/setup/capacity-equivalence-panel';
 
 type Boundary = 'Commercial' | 'GCC' | 'GCC-High' | 'IL5';
 type Mode = 'single-sub' | 'multi-sub';
@@ -923,6 +924,9 @@ export function SetupWizardPane() {
                 </Dropdown>
               </Field>
             </div>
+            {/* Guided F-SKU → Azure-native compute equivalence (CU / Spark vCores /
+                Databricks / ADX / Synapse SQL + relative cost), grounded in Learn. */}
+            <CapacityEquivalencePanel sku={state.capacitySku} />
             <Footer onBack={() => go('domain')} nextDisabled={!state.capacitySku} onNext={() => go('review')} />
           </>
         )}
