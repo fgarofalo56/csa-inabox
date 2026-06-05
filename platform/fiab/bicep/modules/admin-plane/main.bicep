@@ -139,6 +139,9 @@ param loomSynapseWorkspace string = 'syn-loom-default-${location}'
 @description('Loom Synapse Dedicated SQL pool name.')
 param loomSynapseDedicatedPool string = 'loompool'
 
+@description('Entra principal name the console identity is registered under in PostgreSQL (pgaadauth_create_principal). Empty = the PG Query tab shows an honest setup gate.')
+param loomPostgresAadUser string = ''
+
 @description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
 param loomAdfName string = 'adf-loom-default-${location}'
 
@@ -649,6 +652,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
+            { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }

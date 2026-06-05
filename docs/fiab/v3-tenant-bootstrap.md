@@ -216,3 +216,38 @@ and re-deploy admin-plane (the env wiring is already in `admin-plane/main.bicep`
 - The two Graph app-roles are **Graph-plane** grants and intentionally cannot be
   expressed in ARM/bicep — hence `scripts/csa-loom/grant-graph-approles.sh` +
   the admin-consent click above.
+
+## PostgreSQL in-database query (Entra auth)
+
+The unified SQL editor's **Query** tab and schema browser run real SQL against a
+PostgreSQL flexible server over the `pg` wire protocol, authenticating with a
+Microsoft Entra access token (no stored password). One-time setup:
+
+1. Connect to the server as its PostgreSQL **Entra admin** and register the
+   console identity as a PG principal:
+
+   ```sql
+   SELECT * FROM pgaadauth_create_principal('<console-uami-name>', false, false);
+   -- then grant it the privileges it needs, e.g.:
+   GRANT CONNECT ON DATABASE <db> TO "<console-uami-name>";
+   GRANT USAGE ON SCHEMA public TO "<console-uami-name>";
+   GRANT SELECT ON ALL TABLES IN SCHEMA public TO "<console-uami-name>";
+   ```
+
+2. Set `LOOM_POSTGRES_AAD_USER` to that principal name (`loomPostgresAadUser`
+   param in `admin-plane/main.bicep`, already wired to the console app env), e.g.:
+
+   ```bash
+   az containerapp update --name <loom-console-app> --resource-group <loom-admin-rg> \
+     --set-env-vars LOOM_POSTGRES_AAD_USER='<console-uami-name>'
+   ```
+
+Until it's set, the PG Query tab shows an honest setup gate (ARM inventory,
+provisioning, databases, and firewall are already live without it). Gov clouds:
+override the token audience with `LOOM_POSTGRES_AAD_SCOPE` if needed.
+
+### Bicep sync
+
+- `LOOM_POSTGRES_AAD_USER`: `platform/fiab/bicep/modules/admin-plane/main.bicep`
+  (`loomPostgresAadUser` param). The in-engine `pgaadauth_create_principal` call
+  is a data-plane grant and intentionally cannot be expressed in ARM/bicep.

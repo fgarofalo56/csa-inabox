@@ -2,15 +2,19 @@
  * POST /api/items/postgres-flexible-server/[id]/query
  *   body { server, database, sql }
  *
- * PostgreSQL speaks the PG wire protocol, not TDS. The `pg` driver is not
- * bundled with the console, so unless LOOM_POSTGRES_QUERY_LIVE=true this
- * route returns a structured 501 honest-gate (per no-vaporware.md) naming
- * the exact dependency + env var to wire. It never fabricates rows.
+ * Executes SQL against a PostgreSQL flexible server over the real `pg` wire
+ * protocol, authenticating with a Microsoft Entra access token (no stored
+ * password). Resolves the server FQDN from the ARM record. When the console
+ * identity hasn't been registered as a PG Entra principal
+ * (LOOM_POSTGRES_AAD_USER unset) it returns a structured honest gate naming the
+ * one-time setup — never fabricated rows (no-vaporware.md).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { isPostgresQueryLive, queryGateReason } from '@/lib/azure/postgres-flex-client';
+import {
+  getServer, executePostgresQuery, postgresQueryGate, PostgresError,
+} from '@/lib/azure/postgres-flex-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,19 +30,22 @@ export async function POST(req: NextRequest) {
   if (!database) return NextResponse.json({ ok: false, error: 'database is required' }, { status: 400 });
   if (!sqlText) return NextResponse.json({ ok: false, error: 'sql is required' }, { status: 400 });
 
-  if (!isPostgresQueryLive()) {
+  // Honest config gate: the UAMI must be a registered PG Entra principal.
+  const gate = postgresQueryGate();
+  if (gate) {
     return NextResponse.json(
-      { ok: false, error: queryGateReason(), code: 'PG_QUERY_GATED', gated: true },
-      { status: 501 },
+      { ok: false, error: gate.detail, missing: gate.missing, code: 'PG_QUERY_GATED', gated: true },
+      { status: 503 },
     );
   }
 
-  // Live path is intentionally not reachable until the `pg` driver is added —
-  // returning a clear 501 rather than importing a dependency that is not in
-  // package.json (which would break the build). When wiring live, import `pg`
-  // here and execute via an Entra access token for the PG scope.
-  return NextResponse.json(
-    { ok: false, error: 'PostgreSQL live query path not yet wired (add the `pg` driver). ' + queryGateReason(), code: 'PG_QUERY_NOT_WIRED', gated: true },
-    { status: 501 },
-  );
+  try {
+    // Resolve the real FQDN from ARM (server may be a bare name or resource id).
+    const srv = await getServer(server);
+    const result = await executePostgresQuery(srv.fqdn, database, sqlText);
+    return NextResponse.json({ ok: true, server: srv.fqdn, database, ...result });
+  } catch (e: any) {
+    const status = e instanceof PostgresError ? e.status : 502;
+    return NextResponse.json({ ok: false, error: e?.message || String(e), code: e?.body }, { status });
+  }
 }
