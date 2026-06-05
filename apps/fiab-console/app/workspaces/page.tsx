@@ -731,6 +731,9 @@ export default function WorkspacesPage() {
     staleTime: 5 * 60 * 1000,
   });
   const isAdmin = adminStatus?.isAdmin === true;
+  // Any authenticated user can bulk-delete the workspaces they OWN (the list is
+  // already scoped to their own workspaces); tenant admins can delete anything.
+  const canBulkDelete = adminStatus?.canBulkDelete === true || isAdmin;
 
   // ----- multi-select state -----
   const [selectMode, setSelectMode] = useState(false);
@@ -749,7 +752,7 @@ export default function WorkspacesPage() {
 
   // Non-admins can never accumulate a selection / open the confirm dialog.
   useEffect(() => {
-    if (!isAdmin) {
+    if (!canBulkDelete) {
       setSelectMode(false);
       setSelected(new Set());
       setConfirmOpen(false);
@@ -910,7 +913,7 @@ export default function WorkspacesPage() {
         }
       }}
     >
-      {selectMode && isAdmin && (
+      {selectMode && canBulkDelete && (
         <div className={styles.selectTileBox} onClick={e => e.stopPropagation()}>
           <Checkbox
             checked={selected.has(ws.id)}
@@ -986,7 +989,7 @@ export default function WorkspacesPage() {
       <Table size="small" aria-label="Workspaces">
         <TableHeader>
           <TableRow>
-            {selectMode && isAdmin && (
+            {selectMode && canBulkDelete && (
               <TableHeaderCell className={styles.selectCol}>
                 <Checkbox
                   checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false}
@@ -1007,7 +1010,7 @@ export default function WorkspacesPage() {
         <TableBody>
           {rows.map(ws => (
             <TableRow key={ws.id} appearance={selectMode && selected.has(ws.id) ? 'brand' : undefined}>
-              {selectMode && isAdmin && (
+              {selectMode && canBulkDelete && (
                 <TableCell className={styles.selectCol}>
                   <Checkbox
                     checked={selected.has(ws.id)}
@@ -1299,7 +1302,7 @@ export default function WorkspacesPage() {
         )}
 
         {/* Bulk action bar (admin + select mode) */}
-        {isAdmin && selectMode && (
+        {canBulkDelete && selectMode && (
           <div className={styles.bulkBar} role="region" aria-label="Bulk actions">
             <Checkbox
               checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false}

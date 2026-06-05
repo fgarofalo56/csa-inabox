@@ -82,19 +82,22 @@ async function deleteOne(ws: Workspace): Promise<void> {
 export async function GET() {
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
-  return NextResponse.json({ ok: true, isAdmin: isTenantAdmin(session) });
+  // Tenant admins can bulk-delete anything; every authenticated user can
+  // bulk-delete the workspaces they OWN (their own Cosmos partition). The page
+  // uses `canBulkDelete` to decide whether to show the multi-select affordances.
+  return NextResponse.json({ ok: true, isAdmin: isTenantAdmin(session), canBulkDelete: true });
 }
 
 export async function POST(req: NextRequest) {
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
-  if (!isTenantAdmin(session)) {
-    return err(
-      'Forbidden — bulk delete requires tenant admin (LOOM_TENANT_ADMIN_GROUP_ID member or LOOM_TENANT_ADMIN_OID).',
-      403,
-      'forbidden',
-    );
-  }
+
+  // Authorization is now PER-WORKSPACE (below), not a blanket tenant-admin gate:
+  // a workspace is deletable when the caller is a tenant admin OR owns it
+  // (ws.createdBy === oid). Because loadWorkspace() reads from the caller's own
+  // partition, a caller can only ever resolve — and thus delete — their own
+  // workspaces; a workspace they don't own reports an honest per-id failure.
+  const admin = isTenantAdmin(session);
 
   let body: any;
   try {
@@ -123,6 +126,11 @@ export async function POST(req: NextRequest) {
       const ws = await loadWorkspace(id, tenantId);
       if (!ws) {
         failed.push({ id, error: 'not_found' });
+        continue;
+      }
+      // Per-workspace authorization: tenant admin, or the workspace owner.
+      if (!admin && ws.createdBy && ws.createdBy !== session.claims.oid) {
+        failed.push({ id, error: 'forbidden' });
         continue;
       }
       await deleteOne(ws);
