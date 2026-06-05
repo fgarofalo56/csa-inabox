@@ -20,6 +20,8 @@ const reg = (loader: () => Promise<{ [k: string]: EditorComponent }>, name: stri
   dynamic(() => loader().then((m) => ({ default: m[name] })), { ssr: false });
 
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
+  // Fabric Apps (Build 2026 preview)
+  'rayfin-app':           reg(() => import('./rayfin-app-editor'),        'RayfinAppEditor'),
   // Phase 2
   'lakehouse':            reg(() => import('./lakehouse-editor'),         'LakehouseEditor'),
   'notebook':             reg(() => import('./notebook-editor'),          'NotebookEditor'),
@@ -69,6 +71,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'synapse-serverless-sql-pool': reg(() => import('./synapse-sql-editors'),    'SynapseServerlessSqlPoolEditor'),
   'synapse-spark-pool':          reg(() => import('./azure-services-editors'), 'SynapseSparkPoolEditor'),
   'synapse-pipeline':            reg(() => import('./azure-services-editors'), 'SynapsePipelineEditor'),
+  'synapse-notebook':            reg(() => import('./synapse-notebook-editor'), 'SynapseNotebookEditor'),
   'databricks-notebook':         reg(() => import('./databricks-editors'),     'DatabricksNotebookEditor'),
   'databricks-job':              reg(() => import('./databricks-editors'),     'DatabricksJobEditor'),
   'databricks-cluster':          reg(() => import('./databricks-editors'),     'DatabricksClusterEditor'),
@@ -152,6 +155,17 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // v3 — Push-button data-products library (CSA-curated templates + instances)
   'data-product-template':       reg(() => import('./data-product-editors'),   'DataProductTemplateEditor'),
   'data-product-instance':       reg(() => import('./data-product-editors'),   'DataProductInstanceEditor'),
+
+  // v3 — Azure Logic Apps (Consumption) — WDL workflow designer + code view.
+  // Opens fully built-out from the bundle's state.content.definition (or the
+  // live Microsoft.Logic/workflows resource when bound); Run trigger fires a
+  // real manual run via /api/items/logic-app/[id]/run or an honest infra gate.
+  'logic-app':                   reg(() => import('./logic-app-editor'),       'LogicAppEditor'),
+
+  // v3 — Microsoft Data API builder (DAB) — WYSIWYG dab-config.json builder
+  // (real REST/GraphQL entity authoring, per-role permissions, relationships,
+  // runtime/host; emits real dab-config.json + publishes via APIM).
+  'data-api-builder':            reg(() => import('./data-api-builder-editor'), 'DataApiBuilderEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {

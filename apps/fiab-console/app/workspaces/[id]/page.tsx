@@ -22,12 +22,13 @@ import {
   Menu, MenuTrigger, MenuList, MenuItem, MenuPopover,
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Input, Field,
+  Input, Field, Checkbox, Dropdown, Option,
   MessageBar, MessageBarBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   ArrowLeft24Regular, FolderAdd20Regular, Folder20Filled,
+  FolderArrowRight20Regular, Delete20Regular, Open20Regular,
 } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -268,6 +269,40 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
   const [confirmItemDelete, setConfirmItemDelete] = useState<WorkspaceItem | null>(null);
   const [moveItem, setMoveItem] = useState<WorkspaceItem | null>(null);
 
+  // ── Multi-select + bulk actions ───────────────────────────────────────────
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+  const [bulkMoveTarget, setBulkMoveTarget] = useState<string>(''); // '' = root
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const toggleSel = useCallback((id: string) => setSelected((prev) => {
+    const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next;
+  }), []);
+  const clearSel = useCallback(() => setSelected(new Set()), []);
+  const selectAll = useCallback(() => setSelected(new Set(items.map((i) => i.id))), [items]);
+  const bulkMove = useCallback(async () => {
+    setBulkBusy(true); setError(null);
+    try {
+      for (const id of selected) await patchWorkspaceItem(params.id, id, { folderId: bulkMoveTarget || null });
+      setBulkMoveOpen(false); clearSel(); refresh();
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBulkBusy(false); }
+  }, [selected, bulkMoveTarget, params.id, clearSel, refresh]);
+  const bulkDelete = useCallback(async () => {
+    setBulkBusy(true); setError(null);
+    try {
+      for (const id of selected) await deleteWorkspaceItem(params.id, id);
+      setBulkDeleteOpen(false); clearSel(); refresh();
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBulkBusy(false); }
+  }, [selected, params.id, clearSel, refresh]);
+  const openSelected = useCallback(() => {
+    for (const id of selected) {
+      const it = items.find((x) => x.id === id);
+      if (it) window.open(`/items/${it.itemType}/${it.id}`, '_blank', 'noopener');
+    }
+  }, [selected, items]);
+
   function openCreateFolder(parent: string | null) {
     setFolderDialog({ mode: 'create', parent });
     setFolderDialogName('');
@@ -350,6 +385,12 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
               } as any}
             >
               <span className={s.itemRow}>
+                <Checkbox
+                  checked={selected.has(it.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => toggleSel(it.id)}
+                  aria-label={`Select ${it.displayName}`}
+                />
                 <span>{it.displayName}</span>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   {meta?.displayName ?? it.itemType.replace(/-/g, ' ')}
@@ -390,7 +431,7 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
             }}
           >
             <TreeItemLayout
-              iconBefore={<Folder20Filled style={{ color: '#d8a200' }} />}
+              iconBefore={<Folder20Filled style={{ color: 'var(--loom-accent-gold)' }} />}
               className={isDropTarget ? s.treeItemDragOver : undefined}
               {...{
                 onDragOver: (e: React.DragEvent) => onFolderDragOver(e, f.id),
@@ -529,12 +570,66 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
                 </span>
               </div>
 
+              {selected.size > 0 && (
+                <div className={s.toolbar} style={{ backgroundColor: tokens.colorNeutralBackground2, borderRadius: 6, padding: '6px 10px' }}>
+                  <Badge appearance="filled" color="brand">{selected.size} selected</Badge>
+                  <Button size="small" appearance="secondary" icon={<FolderArrowRight20Regular />}
+                    onClick={() => { setBulkMoveTarget(''); setBulkMoveOpen(true); }} disabled={bulkBusy}>Move to folder…</Button>
+                  <Button size="small" appearance="secondary" icon={<Open20Regular />} onClick={openSelected}>Open all</Button>
+                  <Button size="small" appearance="secondary" icon={<Delete20Regular />}
+                    onClick={() => setBulkDeleteOpen(true)} disabled={bulkBusy}>Delete</Button>
+                  <div className={s.spacer} />
+                  <Button size="small" appearance="subtle" onClick={selectAll}>Select all ({items.length})</Button>
+                  <Button size="small" appearance="subtle" onClick={clearSel}>Clear</Button>
+                </div>
+              )}
+
               <div className={s.treeShell}>
                 <Tree aria-label="Workspace items">
                   {tree.childFolders.map(renderFolder)}
                   {tree.childItems.map(renderItem)}
                 </Tree>
               </div>
+
+              {/* Bulk move dialog */}
+              <Dialog open={bulkMoveOpen} onOpenChange={(_e, d) => { if (!d.open) setBulkMoveOpen(false); }}>
+                <DialogSurface>
+                  <DialogBody>
+                    <DialogTitle>Move {selected.size} item{selected.size === 1 ? '' : 's'}</DialogTitle>
+                    <DialogContent>
+                      <Field label="Destination folder">
+                        <Dropdown
+                          value={bulkMoveTarget ? (folders.find((f) => f.id === bulkMoveTarget)?.name || 'Folder') : 'Workspace root'}
+                          selectedOptions={[bulkMoveTarget || '__root__']}
+                          onOptionSelect={(_, d) => setBulkMoveTarget(d.optionValue === '__root__' ? '' : (d.optionValue || ''))}>
+                          <Option value="__root__">Workspace root</Option>
+                          {folders.map((f) => <Option key={f.id} value={f.id}>{f.name}</Option>)}
+                        </Dropdown>
+                      </Field>
+                    </DialogContent>
+                    <DialogActions>
+                      <Button appearance="secondary" onClick={() => setBulkMoveOpen(false)} disabled={bulkBusy}>Cancel</Button>
+                      <Button appearance="primary" onClick={bulkMove} disabled={bulkBusy}>{bulkBusy ? 'Moving…' : 'Move'}</Button>
+                    </DialogActions>
+                  </DialogBody>
+                </DialogSurface>
+              </Dialog>
+
+              {/* Bulk delete confirm */}
+              <Dialog open={bulkDeleteOpen} onOpenChange={(_e, d) => { if (!d.open) setBulkDeleteOpen(false); }}>
+                <DialogSurface>
+                  <DialogBody>
+                    <DialogTitle>Delete {selected.size} item{selected.size === 1 ? '' : 's'}?</DialogTitle>
+                    <DialogContent>
+                      <Body1>This permanently deletes the selected items and their backing artifacts. This cannot be undone.</Body1>
+                    </DialogContent>
+                    <DialogActions>
+                      <Button appearance="secondary" onClick={() => setBulkDeleteOpen(false)} disabled={bulkBusy}>Cancel</Button>
+                      <Button appearance="primary" onClick={bulkDelete} disabled={bulkBusy}>{bulkBusy ? 'Deleting…' : `Delete ${selected.size}`}</Button>
+                    </DialogActions>
+                  </DialogBody>
+                </DialogSurface>
+              </Dialog>
             </>
           )}
         </>
@@ -680,7 +775,7 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
                   <Button
                     key={f.id}
                     appearance="subtle"
-                    icon={<Folder20Filled style={{ color: '#d8a200' }} />}
+                    icon={<Folder20Filled style={{ color: 'var(--loom-accent-gold)' }} />}
                     onClick={async () => {
                       if (moveItem) await onMoveItem(moveItem.id, f.id);
                       setMoveItem(null);

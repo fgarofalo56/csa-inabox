@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Field, Dropdown, Option,
+  Checkbox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -31,6 +32,11 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { AiSearchServiceTree } from '@/lib/components/ai-search/ai-search-tree';
+import {
+  type FieldRow, type VectorQuery,
+  FIELD_TYPES, ANALYZERS, isVectorFieldType, apiFieldToRow, applyFieldRows,
+  semanticConfigNames, vectorProfileNames, scoringProfileNames, facetableFieldNames,
+} from '@/lib/azure/search-field-shapes';
 import { PromptFlowBuilder } from '@/lib/prompt-flow/flow-builder';
 import {
   type FlowDag, parseFlowDag, serializeFlowDag, starterFlow, emptyFlow,
@@ -51,6 +57,13 @@ const useStyles = makeStyles({
   empty: { padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
   card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 },
   formRow: { display: 'grid', gridTemplateColumns: '160px 1fr', gap: '6px 16px', alignItems: 'center' },
+  // Search Explorer query-options grid (label / control pairs, wraps responsively).
+  optGrid: { display: 'grid', gridTemplateColumns: 'max-content minmax(220px, 1fr)', gap: '8px 12px', alignItems: 'center' },
+  // One vector-query builder row.
+  vqRow: { display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap', marginTop: '8px' },
+  // Editable field-designer cell — compact controls inside the grid.
+  fdInput: { minWidth: '120px' },
+  fdNum: { width: '90px' },
 });
 
 /**
@@ -85,6 +98,52 @@ function ErrorBar({ msg, hint, notDeployed }: { msg: string; hint?: string; notD
         {msg}{hint ? ` — ${hint}` : ''}
       </MessageBarBody>
     </MessageBar>
+  );
+}
+
+/**
+ * Render an AI Search `@search.highlights` map into bolded snippets. The service
+ * wraps matched terms with the request's pre/post tags (default `<em>`/`</em>`);
+ * we split on those tags and bold the matched spans WITHOUT innerHTML — so a
+ * field value that happens to contain markup can never inject DOM. Grounded in
+ * Learn (Shape search results — hit highlighting: `@search.highlights`).
+ */
+function renderHighlights(
+  highlights: Record<string, string[]> | undefined,
+  preTag: string,
+  postTag: string,
+): ReactNode {
+  if (!highlights) return '—';
+  const pre = preTag || '<em>';
+  const post = postTag || '</em>';
+  const entries = Object.entries(highlights);
+  if (!entries.length) return '—';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {entries.map(([field, snippets], fi) => (
+        <div key={fi}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{field}: </Caption1>
+          {(snippets || []).map((snippet, si) => {
+            // Split on the pre tag, then each piece on the post tag; the segment
+            // BEFORE the first post tag (after a pre) is the matched span.
+            const parts: ReactNode[] = [];
+            let rest = snippet;
+            let k = 0;
+            while (rest.length) {
+              const pi = rest.indexOf(pre);
+              if (pi < 0) { parts.push(rest); break; }
+              if (pi > 0) parts.push(rest.slice(0, pi));
+              rest = rest.slice(pi + pre.length);
+              const ei = rest.indexOf(post);
+              if (ei < 0) { parts.push(<strong key={`m${k++}`}>{rest}</strong>); break; }
+              parts.push(<strong key={`m${k++}`} style={{ background: tokens.colorPaletteYellowBackground2 }}>{rest.slice(0, ei)}</strong>);
+              rest = rest.slice(ei + post.length);
+            }
+            return <span key={si} style={{ display: 'block' }}>{parts}</span>;
+          })}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -310,7 +369,12 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
 
   useEffect(() => { if (!isNew) setSelected(id); }, [id, isNew]);
 
-  const detailUrl = project && selected ? `/api/items/prompt-flow/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}` : null;
+  // Load the flow detail whenever a flow is selected. When a Foundry project is
+  // bound we pass it (live data-plane); when it isn't, we still request the
+  // route so a bundle-installed flow opens from its stamped content fallback.
+  const detailUrl = selected
+    ? `/api/items/prompt-flow/${encodeURIComponent(selected)}${project ? `?project=${encodeURIComponent(project)}` : ''}`
+    : null;
   const [detail] = useApi<{ flow: any }>(detailUrl, [project, selected]);
   useEffect(() => {
     if (detail.data?.flow && !dirty) {
@@ -503,7 +567,12 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
   const [list, reload] = useApi<{ evaluations: any[] }>(project ? `/api/items/evaluation?project=${encodeURIComponent(project)}` : null, [project]);
   const [selected, setSelected] = useState<string | null>(null);
   useEffect(() => { if (id !== 'new' && id !== 'create') setSelected(id); }, [id]);
-  const detailUrl = project && selected ? `/api/items/evaluation/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}&results=1` : null;
+  // Load the evaluation detail whenever one is selected. With a Foundry project
+  // bound we pass it (live results); without one we still request the route so a
+  // bundle-installed evaluation opens from its stamped metric definitions.
+  const detailUrl = selected
+    ? `/api/items/evaluation/${encodeURIComponent(selected)}${project ? `?project=${encodeURIComponent(project)}&results=1` : ''}`
+    : null;
   const [detail] = useApi<{ evaluation: any; results: any }>(detailUrl, [project, selected]);
 
   const [form, setForm] = useState({ displayName: '', datasetId: '', modelDeployment: '', evaluators: 'groundedness,relevance,fluency' });
@@ -854,6 +923,33 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const [hits, setHits] = useState<any>(null);
   const [searching, setSearching] = useState(false);
 
+  // Search Explorer — query options (parity with the portal's search-explorer pane).
+  const [queryType, setQueryType] = useState<'simple' | 'full' | 'semantic'>('simple');
+  const [semanticConfig, setSemanticConfig] = useState('');
+  const [searchFields, setSearchFields] = useState('');
+  const [orderby, setOrderby] = useState('');
+  const [countOn, setCountOn] = useState(true);
+  const [answersOn, setAnswersOn] = useState(false);
+  const [captionsOn, setCaptionsOn] = useState(false);
+  // Vector-query builder rows.
+  const [vectorQueries, setVectorQueries] = useState<VectorQuery[]>([]);
+  // Search Explorer — extra portal-parity options.
+  const [searchMode, setSearchMode] = useState<'any' | 'all'>('any');
+  const [scoringProfile, setScoringProfile] = useState('');
+  const [scoringParameters, setScoringParameters] = useState(''); // newline-separated "name-v1,v2"
+  const [selectedFacets, setSelectedFacets] = useState<string[]>([]);
+  const [highlightFields, setHighlightFields] = useState(''); // comma-separated searchable fields
+  const [highlightPreTag, setHighlightPreTag] = useState('<em>');
+  const [highlightPostTag, setHighlightPostTag] = useState('</em>');
+  // Last request body actually sent (raw-JSON view).
+  const [lastQueryBody, setLastQueryBody] = useState<any>(null);
+
+  // Field designer (visual per-field grid) state.
+  const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
+  const [fieldsDirty, setFieldsDirty] = useState(false);
+  const [savingFields, setSavingFields] = useState(false);
+  const [fieldsMsg, setFieldsMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
   // Analyze state.
   const [analyzeTxt, setAnalyzeTxt] = useState('');
   const [analyzer, setAnalyzer] = useState('standard.lucene');
@@ -871,10 +967,39 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
 
   const idx = detail.data?.index;
   const fields: any[] = idx?.fields || [];
+  const semanticConfigs = useMemo(() => semanticConfigNames(idx), [idx]);
+  const vectorProfiles = useMemo(() => vectorProfileNames(idx), [idx]);
+  const scoringProfiles = useMemo(() => scoringProfileNames(idx), [idx]);
+  const facetableFields = useMemo(() => facetableFieldNames(idx), [idx]);
+  // Searchable, non-vector string fields are the only valid highlight targets.
+  const highlightableFields = useMemo(
+    () => fields.filter((f) => f.searchable && /Edm\.String/.test(f.type || '') && !isVectorFieldType(f.type)).map((f) => f.name),
+    [fields],
+  );
+  // Vector field names — the only valid targets for a vector query's `fields`.
+  const vectorFieldNames = useMemo(
+    () => fields.filter((f) => isVectorFieldType(f.type)).map((f) => f.name),
+    [fields],
+  );
 
   useEffect(() => {
-    if (idx) { setSchemaText(JSON.stringify(idx, null, 2)); setSchemaDirty(false); }
+    if (idx) {
+      setSchemaText(JSON.stringify(idx, null, 2));
+      setSchemaDirty(false);
+      setFieldRows((idx.fields || []).map(apiFieldToRow));
+      setFieldsDirty(false);
+      setFieldsMsg(null);
+    }
   }, [idx]);
+
+  // Default the semantic-config picker to the first config once one is known.
+  useEffect(() => {
+    if (semanticConfigs.length && !semanticConfig) setSemanticConfig(semanticConfigs[0]);
+  }, [semanticConfigs, semanticConfig]);
+
+  // Toggle a facetable field in/out of the selected facets set.
+  const toggleFacet = (name: string, on: boolean) =>
+    setSelectedFacets((prev) => (on ? [...new Set([...prev, name])] : prev.filter((f) => f !== name)));
 
   const ribbon = useMemo(() => {
     const armId = idx?.id || idx?.armId;
@@ -886,10 +1011,104 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
 
   const runSearch = async () => {
     setSearching(true); setHits(null);
-    const j = await postJson(`${indexBase}/search`, {
-      search, filter: filter || undefined, select: select || undefined, top, count: true,
-    });
+    // Assemble the full query-options payload. Only meaningful fields are sent;
+    // semantic params ride along only on a semantic query (the BFF + the client's
+    // buildSearchBody enforce the same rule).
+    const payload: Record<string, unknown> = {
+      search,
+      filter: filter || undefined,
+      select: select || undefined,
+      searchFields: searchFields || undefined,
+      orderby: orderby || undefined,
+      top,
+      queryType,
+      searchMode,
+      count: countOn,
+    };
+    if (queryType === 'semantic') {
+      if (semanticConfig) payload.semanticConfiguration = semanticConfig;
+      if (answersOn) payload.answers = 'extractive';
+      if (captionsOn) payload.captions = 'extractive';
+    }
+    // Faceting — only facetable fields are valid targets (server still validates).
+    if (selectedFacets.length) payload.facets = selectedFacets;
+    // Scoring profile + its function inputs (one "name-v1,v2" per non-empty line).
+    if (scoringProfile) {
+      payload.scoringProfile = scoringProfile;
+      const params = scoringParameters.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      if (params.length) payload.scoringParameters = params;
+    }
+    // Hit highlighting (with optional custom tags — only sent when non-default).
+    if (highlightFields.trim()) {
+      payload.highlight = highlightFields.trim();
+      if (highlightPreTag && highlightPreTag !== '<em>') payload.highlightPreTag = highlightPreTag;
+      if (highlightPostTag && highlightPostTag !== '</em>') payload.highlightPostTag = highlightPostTag;
+    }
+    // Only emit vector queries that name a field (k-NN needs a parsed vector; text
+    // uses integrated vectorization). Empty/invalid rows are dropped at the wire.
+    const vq = vectorQueries
+      .filter((v) => v.fields && v.fields.trim())
+      .map((v) => {
+        const out: VectorQuery = { kind: v.kind, fields: v.fields.trim(), k: v.k };
+        if (v.kind === 'text') out.text = v.text || '';
+        else out.vector = v.vector || [];
+        return out;
+      })
+      .filter((v) => (v.kind === 'text' ? !!v.text : Array.isArray(v.vector) && v.vector.length > 0));
+    if (vq.length) payload.vectorQueries = vq;
+    setLastQueryBody(payload);
+    const j = await postJson(`${indexBase}/search`, payload);
     setHits(j); setSearching(false);
+  };
+
+  // ---- Vector-query builder row helpers ----
+  const addVectorQuery = () =>
+    setVectorQueries((rows) => [
+      ...rows,
+      { kind: 'text', fields: vectorFieldNames[0] || '', text: '', k: 5 },
+    ]);
+  const updateVectorQuery = (i: number, patch: Partial<VectorQuery>) =>
+    setVectorQueries((rows) => rows.map((r, n) => (n === i ? { ...r, ...patch } : r)));
+  const removeVectorQuery = (i: number) =>
+    setVectorQueries((rows) => rows.filter((_, n) => n !== i));
+
+  // ---- Field-designer grid helpers ----
+  const patchFieldRow = (i: number, patch: Partial<FieldRow>) => {
+    setFieldRows((rows) => rows.map((r, n) => (n === i ? { ...r, ...patch } : r)));
+    setFieldsDirty(true);
+  };
+  const addFieldRow = () => {
+    setFieldRows((rows) => [
+      ...rows,
+      { name: '', type: 'Edm.String', searchable: true, retrievable: true },
+    ]);
+    setFieldsDirty(true);
+  };
+  const removeFieldRow = (i: number) => {
+    setFieldRows((rows) => rows.filter((_, n) => n !== i));
+    setFieldsDirty(true);
+  };
+
+  // Save the visual field grid → real PUT /indexes/{name} via the same route the
+  // JSON editor uses. We merge the rows onto the live definition so vectorSearch /
+  // semantic / scoringProfiles survive the round-trip.
+  const saveFields = async () => {
+    if (!fieldRows.length) { setFieldsMsg({ intent: 'error', text: 'An index needs at least one field.' }); return; }
+    if (!fieldRows.some((f) => f.key)) { setFieldsMsg({ intent: 'error', text: 'Exactly one field must be the key (Edm.String).' }); return; }
+    if (fieldRows.some((f) => !f.name.trim())) { setFieldsMsg({ intent: 'error', text: 'Every field needs a name.' }); return; }
+    const definition = applyFieldRows(idx, fieldRows);
+    setSavingFields(true); setFieldsMsg(null);
+    const r = await fetch(indexBase, {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ definition }),
+    });
+    const ct = r.headers.get('content-type') || '';
+    const j = ct.includes('json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+    setSavingFields(false);
+    if (!j.ok) setFieldsMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` });
+    else {
+      setFieldsMsg({ intent: 'success', text: 'Index fields saved (PUT /indexes).' });
+      setFieldsDirty(false); reloadDetail(); setTreeRefresh((n) => n + 1);
+    }
   };
 
   const runAnalyze = async () => {
@@ -988,6 +1207,9 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const docs: any[] = hits?.ok ? (hits.result?.value || []) : [];
   const facets: Record<string, any[]> = hits?.ok ? (hits.result?.['@search.facets'] || {}) : {};
   const totalCount = hits?.ok ? hits.result?.['@odata.count'] : undefined;
+  const answers: any[] = hits?.ok ? (hits.result?.['@search.answers'] || []) : [];
+  const hasReranker = docs.some((d) => d?.['@search.rerankerScore'] !== undefined);
+  const hasHighlights = docs.some((d) => d?.['@search.highlights'] && Object.keys(d['@search.highlights']).length);
   const retrievable = fields.filter((f) => f.retrievable !== false).slice(0, 6);
 
   return chrome(
@@ -1003,7 +1225,25 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
             <Subtitle2>Index: {idx.name}</Subtitle2>
             {idx.vectorSearch && <Badge color="brand">vector</Badge>}
             {idx.semantic && <Badge color="success">semantic</Badge>}
+            {(detail.data as any)?.source === 'bundle' && <Badge color="warning">bundle template</Badge>}
           </div>
+
+          {/* Bundle-installed index: the full schema renders below from the
+              stamped definition. It isn't bound to a real index on the service
+              yet — surface the honest bind picker so the operator can create +
+              bind it (PUT /indexes) and make search/stats/indexers live. */}
+          {(detail.data as any)?.source === 'bundle' && !navIndex && (
+            <>
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>Template — not yet bound to a live index</MessageBarTitle>
+                  This index opens from its installed bundle definition (schema + scoring profiles + vector config below).
+                  Create &amp; bind it to a real Azure AI Search index to enable Search, Statistics, and Indexers against live data.
+                </MessageBarBody>
+              </MessageBar>
+              <AiSearchBindPicker id={id} onBound={reloadDetail} />
+            </>
+          )}
 
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
             <Tab value="schema">Schema ({fields.length})</Tab>
@@ -1012,44 +1252,116 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
             <Tab value="indexers">Indexers</Tab>
           </TabList>
 
-          {/* ---- Schema tab ---- */}
+          {/* ---- Schema tab: visual field designer (portal per-field grid) ---- */}
           {tab === 'schema' && (
             <>
-              <div className={s.tableWrap}>
-                <Table size="small" aria-label="Index fields">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
-                      <TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Searchable</TableHeaderCell>
-                      <TableHeaderCell>Filterable</TableHeaderCell><TableHeaderCell>Sortable</TableHeaderCell>
-                      <TableHeaderCell>Facetable</TableHeaderCell><TableHeaderCell>Retrievable</TableHeaderCell>
-                      <TableHeaderCell>Analyzer</TableHeaderCell><TableHeaderCell>Dims</TableHeaderCell>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {fields.map((f: any) => (
-                      <TableRow key={f.name}>
-                        <TableCell className={s.cell}><strong>{f.name}</strong></TableCell>
-                        <TableCell className={s.cell}><code>{f.type}</code></TableCell>
-                        <TableCell className={s.cell}>{f.key ? '✓' : ''}</TableCell>
-                        <TableCell className={s.cell}>{f.searchable ? '✓' : ''}</TableCell>
-                        <TableCell className={s.cell}>{f.filterable ? '✓' : ''}</TableCell>
-                        <TableCell className={s.cell}>{f.sortable ? '✓' : ''}</TableCell>
-                        <TableCell className={s.cell}>{f.facetable ? '✓' : ''}</TableCell>
-                        <TableCell className={s.cell}>{f.retrievable !== false ? '✓' : ''}</TableCell>
-                        <TableCell className={s.cell}>{f.analyzer || ''}</TableCell>
-                        <TableCell className={s.cell}>{f.dimensions || ''}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-              {idx.vectorSearch && (
-                <Caption1>Vector search · profiles: {(idx.vectorSearch?.profiles || []).map((p: any) => p.name).join(', ') || '—'} · algorithms: {(idx.vectorSearch?.algorithms || []).map((a: any) => `${a.name}(${a.kind})`).join(', ') || '—'}</Caption1>
-              )}
               <div className={s.card}>
-                <Subtitle2>Edit definition (JSON)</Subtitle2>
-                <Caption1>Full index definition. Save issues a real PUT /indexes/{idx.name}. Note: Azure rejects breaking field changes on a populated index.</Caption1>
+                <div className={s.toolbar}>
+                  <Subtitle2>Fields ({fieldRows.length})</Subtitle2>
+                  <Button size="small" onClick={addFieldRow}>＋ Add field</Button>
+                </div>
+                <Caption1>Edit fields visually — add/remove rows, set the type, key, the searchable/filterable/sortable/facetable/retrievable attributes, an analyzer (string fields), or dimensions + vector profile (vector fields). Save issues a real PUT /indexes/{idx.name}. Azure rejects breaking changes on a populated index (add new fields rather than retyping existing ones).</Caption1>
+                <div className={s.tableWrap}>
+                  <Table size="small" aria-label="Index field designer">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
+                        <TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Searchable</TableHeaderCell>
+                        <TableHeaderCell>Filterable</TableHeaderCell><TableHeaderCell>Sortable</TableHeaderCell>
+                        <TableHeaderCell>Facetable</TableHeaderCell><TableHeaderCell>Retrievable</TableHeaderCell>
+                        <TableHeaderCell>Analyzer / Vector</TableHeaderCell><TableHeaderCell></TableHeaderCell>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {fieldRows.map((f, i) => {
+                        const vector = isVectorFieldType(f.type);
+                        return (
+                          <TableRow key={i}>
+                            <TableCell className={s.cell}>
+                              <Input size="small" className={s.fdInput} value={f.name} aria-label={`field-${i}-name`}
+                                onChange={(_, d) => patchFieldRow(i, { name: d.value })} placeholder="field name" />
+                            </TableCell>
+                            <TableCell className={s.cell}>
+                              <Dropdown size="small" className={s.fdInput} value={f.type} selectedOptions={[f.type]} aria-label={`field-${i}-type`}
+                                onOptionSelect={(_, d) => d.optionValue && patchFieldRow(i, { type: d.optionValue })}>
+                                {FIELD_TYPES.map((t) => (<Option key={t} value={t}>{t}</Option>))}
+                              </Dropdown>
+                            </TableCell>
+                            <TableCell className={s.cell}>
+                              <Checkbox checked={!!f.key} aria-label={`field-${i}-key`}
+                                onChange={(_, d) => patchFieldRow(i, { key: !!d.checked, type: d.checked ? 'Edm.String' : f.type })} />
+                            </TableCell>
+                            <TableCell className={s.cell}>
+                              <Checkbox checked={!!f.searchable} aria-label={`field-${i}-searchable`}
+                                onChange={(_, d) => patchFieldRow(i, { searchable: !!d.checked })} />
+                            </TableCell>
+                            <TableCell className={s.cell}>
+                              <Checkbox checked={!vector && !!f.filterable} disabled={vector} aria-label={`field-${i}-filterable`}
+                                onChange={(_, d) => patchFieldRow(i, { filterable: !!d.checked })} />
+                            </TableCell>
+                            <TableCell className={s.cell}>
+                              <Checkbox checked={!vector && !!f.sortable} disabled={vector} aria-label={`field-${i}-sortable`}
+                                onChange={(_, d) => patchFieldRow(i, { sortable: !!d.checked })} />
+                            </TableCell>
+                            <TableCell className={s.cell}>
+                              <Checkbox checked={!vector && !!f.facetable} disabled={vector} aria-label={`field-${i}-facetable`}
+                                onChange={(_, d) => patchFieldRow(i, { facetable: !!d.checked })} />
+                            </TableCell>
+                            <TableCell className={s.cell}>
+                              <Checkbox checked={f.retrievable !== false} disabled={!!f.key} aria-label={`field-${i}-retrievable`}
+                                onChange={(_, d) => patchFieldRow(i, { retrievable: !!d.checked })} />
+                            </TableCell>
+                            <TableCell className={s.cell}>
+                              {vector ? (
+                                <div className={s.toolbar} style={{ gap: 6 }}>
+                                  <Input size="small" type="number" className={s.fdNum} aria-label={`field-${i}-dimensions`}
+                                    value={f.dimensions != null ? String(f.dimensions) : ''} placeholder="dims"
+                                    onChange={(_, d) => patchFieldRow(i, { dimensions: d.value ? Number(d.value) : undefined })} />
+                                  <Dropdown size="small" className={s.fdInput} aria-label={`field-${i}-profile`}
+                                    value={f.vectorSearchProfile || ''} selectedOptions={f.vectorSearchProfile ? [f.vectorSearchProfile] : []}
+                                    placeholder={vectorProfiles.length ? 'profile' : 'no profiles'}
+                                    onOptionSelect={(_, d) => d.optionValue && patchFieldRow(i, { vectorSearchProfile: d.optionValue })}>
+                                    {vectorProfiles.map((p) => (<Option key={p} value={p}>{p}</Option>))}
+                                  </Dropdown>
+                                </div>
+                              ) : (
+                                <Dropdown size="small" className={s.fdInput} aria-label={`field-${i}-analyzer`}
+                                  value={f.analyzer || ''} selectedOptions={f.analyzer ? [f.analyzer] : []}
+                                  disabled={!f.searchable} placeholder={f.searchable ? '(default)' : 'n/a'}
+                                  onOptionSelect={(_, d) => patchFieldRow(i, { analyzer: d.optionValue || undefined })}>
+                                  <Option value="">(default)</Option>
+                                  {ANALYZERS.map((a) => (<Option key={a} value={a}>{a}</Option>))}
+                                </Dropdown>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Button size="small" appearance="subtle" onClick={() => removeFieldRow(i)} aria-label={`field-${i}-delete`}>Delete</Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+                {idx.vectorSearch && (
+                  <Caption1>Vector search · profiles: {vectorProfiles.join(', ') || '—'} · algorithms: {(idx.vectorSearch?.algorithms || []).map((a: any) => `${a.name}(${a.kind})`).join(', ') || '—'}</Caption1>
+                )}
+                {idx.semantic && (
+                  <Caption1>Semantic configurations: {semanticConfigs.join(', ') || '—'}</Caption1>
+                )}
+                <div className={s.toolbar} style={{ marginTop: 8 }}>
+                  <Button appearance="primary" disabled={savingFields || !fieldsDirty} onClick={saveFields}>{savingFields ? 'Saving…' : 'Save fields'}</Button>
+                  <Button disabled={!fieldsDirty} onClick={() => { setFieldRows((idx.fields || []).map(apiFieldToRow)); setFieldsDirty(false); setFieldsMsg(null); }}>Revert</Button>
+                  {fieldsDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
+                </div>
+                {fieldsMsg && <MessageBar intent={fieldsMsg.intent}><MessageBarBody>{fieldsMsg.text}</MessageBarBody></MessageBar>}
+              </div>
+
+              {/* Advanced fallback: full definition JSON (vectorSearch / semantic /
+                  scoringProfiles / analyzers authored here, round-trips with the grid). */}
+              <div className={s.card}>
+                <Subtitle2>Advanced — full definition (JSON)</Subtitle2>
+                <Caption1>The complete index definition, including vectorSearch profiles/algorithms, semantic configurations, scoring profiles and custom analyzers. Save issues a real PUT /indexes/{idx.name}.</Caption1>
                 <MonacoTextarea value={schemaText} onChange={(v) => { setSchemaText(v); setSchemaDirty(true); }} language="json" minHeight={260} />
                 <div className={s.toolbar} style={{ marginTop: 8 }}>
                   <Button appearance="primary" disabled={savingSchema || !schemaDirty} onClick={saveSchema}>{savingSchema ? 'Saving…' : 'Save definition'}</Button>
@@ -1061,24 +1373,174 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
             </>
           )}
 
-          {/* ---- Search tab ---- */}
+          {/* ---- Search tab: full search explorer (query options + vector + raw JSON) ---- */}
           {tab === 'search' && (
             <>
               <div className={s.card}>
-                <div className={s.formRow}>
+                <Subtitle2>Query</Subtitle2>
+                <div className={s.optGrid}>
+                  <span>Query type</span>
+                  <Dropdown value={queryType} selectedOptions={[queryType]} aria-label="queryType"
+                    onOptionSelect={(_, d) => d.optionValue && setQueryType(d.optionValue as typeof queryType)}>
+                    <Option value="simple">simple</Option>
+                    <Option value="full">full (Lucene)</Option>
+                    <Option value="semantic">semantic</Option>
+                  </Dropdown>
+
                   <span>Search text</span><Input value={search} onChange={(_, d) => setSearch(d.value)} placeholder="* (match all)" />
+
+                  {queryType === 'semantic' && (
+                    <>
+                      <span>Semantic config</span>
+                      {semanticConfigs.length ? (
+                        <Dropdown value={semanticConfig} selectedOptions={semanticConfig ? [semanticConfig] : []} aria-label="semanticConfiguration"
+                          placeholder="select a semantic configuration"
+                          onOptionSelect={(_, d) => d.optionValue && setSemanticConfig(d.optionValue)}>
+                          {semanticConfigs.map((c) => (<Option key={c} value={c}>{c}</Option>))}
+                        </Dropdown>
+                      ) : (
+                        <Input value={semanticConfig} aria-label="semanticConfiguration"
+                          onChange={(_, d) => setSemanticConfig(d.value)} placeholder="no semantic config on this index — name one" />
+                      )}
+                      <span>Answers / Captions</span>
+                      <div className={s.toolbar} style={{ gap: 16 }}>
+                        <Checkbox label="answers (extractive)" checked={answersOn} onChange={(_, d) => setAnswersOn(!!d.checked)} />
+                        <Checkbox label="captions (extractive)" checked={captionsOn} onChange={(_, d) => setCaptionsOn(!!d.checked)} />
+                      </div>
+                    </>
+                  )}
+
+                  <span>Search mode</span>
+                  <Dropdown value={searchMode} selectedOptions={[searchMode]} aria-label="searchMode"
+                    onOptionSelect={(_, d) => d.optionValue && setSearchMode(d.optionValue as 'any' | 'all')}>
+                    <Option value="any">any (OR terms)</Option>
+                    <Option value="all">all (AND terms)</Option>
+                  </Dropdown>
+
+                  <span>Search fields</span><Input value={searchFields} onChange={(_, d) => setSearchFields(d.value)} placeholder="comma,separated (blank = all searchable)" />
                   <span>Filter (OData)</span><Input value={filter} onChange={(_, d) => setFilter(d.value)} placeholder="e.g. category eq 'docs'" />
                   <span>Select fields</span><Input value={select} onChange={(_, d) => setSelect(d.value)} placeholder="comma,separated (blank = all)" />
+                  <span>Order by</span><Input value={orderby} onChange={(_, d) => setOrderby(d.value)} placeholder="e.g. created desc" />
                   <span>Top</span><Input type="number" value={String(top)} onChange={(_, d) => setTop(Number(d.value) || 25)} />
+                  <span>Count</span><Checkbox label="return total match count" checked={countOn} onChange={(_, d) => setCountOn(!!d.checked)} />
+
+                  <span>Scoring profile</span>
+                  {scoringProfiles.length ? (
+                    <Dropdown value={scoringProfile || '(none)'} selectedOptions={scoringProfile ? [scoringProfile] : ['(none)']} aria-label="scoringProfile"
+                      onOptionSelect={(_, d) => setScoringProfile(d.optionValue === '(none)' ? '' : (d.optionValue || ''))}>
+                      <Option value="(none)">(default ranking)</Option>
+                      {scoringProfiles.map((p) => (<Option key={p} value={p}>{p}</Option>))}
+                    </Dropdown>
+                  ) : (
+                    <Caption1>No scoring profiles on this index (author one in the Schema → Advanced JSON).</Caption1>
+                  )}
+                  {scoringProfile && (
+                    <>
+                      <span>Scoring parameters</span>
+                      <Textarea value={scoringParameters} onChange={(_, d) => setScoringParameters(d.value)} rows={2}
+                        placeholder={'one per line, e.g.\nmylocation--122.2,44.8'} aria-label="scoringParameters" />
+                    </>
+                  )}
+
+                  <span>Highlight fields</span>
+                  <Input value={highlightFields} onChange={(_, d) => setHighlightFields(d.value)} aria-label="highlight"
+                    placeholder={highlightableFields.length ? `comma,separated (e.g. ${highlightableFields.slice(0, 2).join(',')}; suffix -N to cap)` : 'no searchable string fields'} />
+                  {highlightFields.trim() && (
+                    <>
+                      <span>Highlight tags</span>
+                      <div className={s.toolbar} style={{ gap: 8 }}>
+                        <Input value={highlightPreTag} onChange={(_, d) => setHighlightPreTag(d.value)} aria-label="highlightPreTag" placeholder="<em>" style={{ maxWidth: 120 }} />
+                        <Input value={highlightPostTag} onChange={(_, d) => setHighlightPostTag(d.value)} aria-label="highlightPostTag" placeholder="</em>" style={{ maxWidth: 120 }} />
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div className={s.toolbar} style={{ marginTop: 8 }}>
+
+                {/* Faceting — pick facetable fields to bucket results by. */}
+                {facetableFields.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <Caption1><strong>Facets</strong> — bucket results by a facetable field (returned under <code>@search.facets</code>).</Caption1>
+                    <div className={s.toolbar} style={{ gap: 12, flexWrap: 'wrap' }}>
+                      {facetableFields.map((f) => (
+                        <Checkbox key={f} label={f} checked={selectedFacets.includes(f)}
+                          aria-label={`facet-${f}`} onChange={(_, d) => toggleFacet(f, !!d.checked)} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Vector-query builder (k-NN / hybrid). */}
+                <Subtitle2 style={{ marginTop: 12 }}>Vector queries</Subtitle2>
+                <Caption1>
+                  Add a vector query for k-NN or hybrid search. <code>text</code> uses integrated
+                  vectorization (the service embeds the text via the field's vectorizer);
+                  <code> vector</code> takes a raw embedding (comma-separated numbers).
+                  {vectorFieldNames.length === 0 && ' This index has no Collection(Edm.Single) vector fields.'}
+                </Caption1>
+                {vectorQueries.map((v, i) => (
+                  <div key={i} className={s.vqRow}>
+                    <Field label="Kind">
+                      <Dropdown value={v.kind} selectedOptions={[v.kind]} aria-label={`vq-${i}-kind`}
+                        onOptionSelect={(_, d) => d.optionValue && updateVectorQuery(i, { kind: d.optionValue as 'text' | 'vector' })}>
+                        <Option value="text">text (vectorize)</Option>
+                        <Option value="vector">vector (raw)</Option>
+                      </Dropdown>
+                    </Field>
+                    <Field label="Vector field">
+                      {vectorFieldNames.length ? (
+                        <Dropdown value={v.fields} selectedOptions={v.fields ? [v.fields] : []} aria-label={`vq-${i}-fields`}
+                          onOptionSelect={(_, d) => d.optionValue && updateVectorQuery(i, { fields: d.optionValue })}>
+                          {vectorFieldNames.map((n) => (<Option key={n} value={n}>{n}</Option>))}
+                        </Dropdown>
+                      ) : (
+                        <Input value={v.fields} aria-label={`vq-${i}-fields`} onChange={(_, d) => updateVectorQuery(i, { fields: d.value })} placeholder="vector field" />
+                      )}
+                    </Field>
+                    {v.kind === 'text' ? (
+                      <Field label="Text to vectorize">
+                        <Input value={v.text || ''} aria-label={`vq-${i}-text`} onChange={(_, d) => updateVectorQuery(i, { text: d.value })} placeholder="mystery novel set in London" />
+                      </Field>
+                    ) : (
+                      <Field label="Vector (comma-separated)">
+                        <Input aria-label={`vq-${i}-vector`}
+                          value={(v.vector || []).join(',')}
+                          onChange={(_, d) => updateVectorQuery(i, { vector: d.value.split(',').map((x) => Number(x.trim())).filter((x) => !Number.isNaN(x)) })}
+                          placeholder="0.12, 0.04, …" />
+                      </Field>
+                    )}
+                    <Field label="k">
+                      <Input type="number" className={s.fdNum} aria-label={`vq-${i}-k`}
+                        value={v.k != null ? String(v.k) : ''} onChange={(_, d) => updateVectorQuery(i, { k: d.value ? Number(d.value) : undefined })} />
+                    </Field>
+                    <Button size="small" appearance="subtle" onClick={() => removeVectorQuery(i)} aria-label={`vq-${i}-remove`}>Remove</Button>
+                  </div>
+                ))}
+                <Button size="small" style={{ marginTop: 8 }} onClick={addVectorQuery}>＋ Add vector query</Button>
+
+                <div className={s.toolbar} style={{ marginTop: 12 }}>
                   <Button appearance="primary" onClick={runSearch} disabled={searching}>{searching ? 'Searching…' : 'Run query'}</Button>
                 </div>
+
+                {/* Raw request JSON actually posted to /docs/search. */}
+                {lastQueryBody && (
+                  <div style={{ marginTop: 8 }}>
+                    <Caption1>Request body (POST /indexes/{idx.name}/docs/search):</Caption1>
+                    <pre className={s.monaco} style={{ minHeight: 0, maxHeight: 200, overflow: 'auto' }}>{JSON.stringify(lastQueryBody, null, 2)}</pre>
+                  </div>
+                )}
               </div>
               {hits && !hits.ok && <ErrorBar msg={hits.error} hint={hits.hint} notDeployed={hits.notDeployed} />}
               {hits?.ok && (
                 <>
                   <Subtitle2>Results ({docs.length}{totalCount !== undefined ? ` of ${totalCount}` : ''})</Subtitle2>
+                  {answers.length > 0 && (
+                    <div className={s.card}>
+                      <Caption1><strong>Semantic answers</strong></Caption1>
+                      {answers.map((a, i) => (
+                        <Caption1 key={i}>· ({(a.score || 0).toFixed(3)}) {a.text || a.highlights || '—'}</Caption1>
+                      ))}
+                    </div>
+                  )}
                   {Object.keys(facets).length > 0 && (
                     <Caption1>Facets: {Object.entries(facets).map(([k, vs]) => `${k} [${(vs as any[]).map((v) => `${v.value}:${v.count}`).join(', ')}]`).join('  ·  ')}</Caption1>
                   )}
@@ -1088,13 +1550,16 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                         <TableHeader>
                           <TableRow>
                             <TableHeaderCell>Score</TableHeaderCell>
+                            {hasReranker && <TableHeaderCell>Reranker</TableHeaderCell>}
                             {retrievable.map((f) => (<TableHeaderCell key={f.name}>{f.name}</TableHeaderCell>))}
+                            {hasHighlights && <TableHeaderCell>Highlights</TableHeaderCell>}
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {docs.map((d, i) => (
                             <TableRow key={i}>
                               <TableCell className={s.cell}>{(d['@search.score'] || 0).toFixed(3)}</TableCell>
+                              {hasReranker && <TableCell className={s.cell}>{d['@search.rerankerScore'] !== undefined ? Number(d['@search.rerankerScore']).toFixed(3) : '—'}</TableCell>}
                               {retrievable.map((f) => (
                                 <TableCell key={f.name} className={s.cell}>
                                   {(() => {
@@ -1105,6 +1570,11 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                                   })()}
                                 </TableCell>
                               ))}
+                              {hasHighlights && (
+                                <TableCell className={s.cell} style={{ whiteSpace: 'normal', maxWidth: 360 }}>
+                                  {renderHighlights(d['@search.highlights'], highlightPreTag, highlightPostTag)}
+                                </TableCell>
+                              )}
                             </TableRow>
                           ))}
                         </TableBody>

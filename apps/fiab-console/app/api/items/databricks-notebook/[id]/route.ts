@@ -1,6 +1,12 @@
 /**
  * GET  /api/items/databricks-notebook/[id]?path=/Workspace/foo
- *      → { ok, path, language, content }
+ *      → { ok, path, language, content }            (live Databricks workspace/export)
+ * GET  /api/items/databricks-notebook/[id]?workspaceId=...   (no path)
+ *      → { ok, path, language, content, source:'cosmos' }
+ *        Cosmos fallback: serialize the bundle-stamped NotebookContent cells
+ *        (state.cells / state.content.cells) into a Databricks SOURCE notebook
+ *        so a bundle-installed notebook opens FULLY POPULATED with every
+ *        markdown + code cell — even before/without the live workspace import.
  * PUT  /api/items/databricks-notebook/[id]
  *      body { path, language, content } → upsert (workspace/import overwrite=true)
  * DELETE /api/items/databricks-notebook/[id]?path=/Workspace/foo[&recursive=true]
@@ -16,15 +22,44 @@ import {
   importNotebook,
   deleteWorkspaceObject,
 } from '@/lib/azure/databricks-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { buildDatabricksSource } from '@/lib/install/provisioners/_seed-databricks';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   const path = req.nextUrl.searchParams.get('path');
-  if (!path) return NextResponse.json({ ok: false, error: 'path is required' }, { status: 400 });
+
+  // No path → serve the installed item's bundle-stamped cells from Cosmos so
+  // the notebook opens populated (mirrors app/api/items/notebook/[id]/route.ts,
+  // adapted to the databricks-notebook editor's { content } SOURCE shape).
+  if (!path) {
+    const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+    if (!workspaceId) return NextResponse.json({ ok: false, error: 'path or workspaceId is required' }, { status: 400 });
+    try {
+      const items = await itemsContainer();
+      const { resource } = await items.item((await ctx.params).id, workspaceId).read<any>();
+      if (!resource || resource.itemType !== 'databricks-notebook') {
+        return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
+      }
+      const state = (resource.state as any) || {};
+      // Fallback: cells may be stamped directly (state.cells) or stranded in the
+      // NotebookContent shape (state.content.cells) — surface either.
+      const cells = (Array.isArray(state.cells) && state.cells.length > 0)
+        ? state.cells
+        : (state.content?.kind === 'notebook' && Array.isArray(state.content.cells) ? state.content.cells : []);
+      const defaultLang = state.defaultLang || state.content?.defaultLang || 'pyspark';
+      const content = buildDatabricksSource({ cells, defaultLang });
+      return NextResponse.json({ ok: true, path: null, language: 'PYTHON', content, source: 'cosmos' });
+    } catch (e: any) {
+      if (e?.code === 404) return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    }
+  }
+
   try {
     const nb = await getNotebook(path);
     return NextResponse.json({ ok: true, ...nb });

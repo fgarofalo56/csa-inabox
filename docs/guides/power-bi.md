@@ -1,5 +1,8 @@
 # Power BI Guide
 
+!!! note "Freshness"
+    **Validated against:** Power BI — Direct Lake / DirectQuery / Import semantic models over Delta on ADLS Gen2 (via Databricks SQL endpoints), reports, embedded analytics — on the Power BI / Fabric REST — **as of 2026-06-02.** Direct Lake fallback rules and semantic-model behavior track the current Power BI/Fabric service; verify against the Power BI docs before deploying.
+
 > Power BI is the visualization and reporting layer for CSA-in-a-Box — connecting
 > the Gold layer of the medallion architecture to interactive dashboards, embedded
 > analytics, and regulatory reports.

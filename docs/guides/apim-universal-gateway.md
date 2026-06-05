@@ -7,6 +7,9 @@ last_updated: 2026-05-15
 
 # Guide — Azure API Management as the Universal API Gateway
 
+!!! note "Freshness"
+    **Validated against:** Azure API Management (all SKUs incl. v2; policies, developer portal, self-hosted gateway, multi-region, AI/LLM policies) + Entra ID — **as of 2026-06-02.** APIM SKU tiers, policy XML, and AI-gateway (token-limit / semantic-caching) policies track the current APIM service; verify against the API Management docs before deploying.
+
 > **Comparative positioning note.** This document is written from the
 > perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any
 > description of third-party or competing products, services, pricing, or

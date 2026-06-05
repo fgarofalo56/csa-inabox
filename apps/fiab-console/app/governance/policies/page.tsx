@@ -20,6 +20,7 @@ interface Policy {
   enabled: boolean;
   createdAt: string;
   createdBy: string;
+  enforcement?: { status: 'active' | 'pending' | 'error'; roleName?: string; roleAssignmentId?: string; detail?: string };
 }
 
 const KINDS = ['DLP', 'Masking', 'RLS', 'Retention', 'Access'] as const;
@@ -48,8 +49,61 @@ export default function PoliciesPage() {
   const [busy, setBusy] = useState(false);
   const [draftName, setDraftName] = useState('');
   const [draftKind, setDraftKind] = useState<typeof KINDS[number]>('DLP');
-  const [draftScope, setDraftScope] = useState('tenant');
-  const [draftRule, setDraftRule] = useState('');
+  // Scope = selectable dropdowns (type + target) instead of a freeform string.
+  const [scopeType, setScopeType] = useState<'tenant' | 'domain' | 'workspace'>('tenant');
+  const [scopeTarget, setScopeTarget] = useState('');
+  const [workspaces, setWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
+  const [domains, setDomains] = useState<Array<{ id: string; name: string }>>([]);
+  // Per-kind rule wizard fields.
+  const [w, setW] = useState<Record<string, string>>({
+    dlpDetect: 'Email', dlpAction: 'Audit',
+    maskColumn: '', maskFn: 'Hash',
+    rlsColumn: '', rlsOp: '=', rlsValue: '',
+    retPeriod: '90', retUnit: 'Days', retAction: 'Delete',
+    accPrincipal: '', accPermission: 'Read',
+  });
+  const setWf = (k: string, v: string) => setW((p) => ({ ...p, [k]: v }));
+  // Access policy: Entra principal search + ADLS container scope (real RBAC).
+  const [accQuery, setAccQuery] = useState('');
+  const [accKind, setAccKind] = useState<'user' | 'group'>('user');
+  const [accResults, setAccResults] = useState<Array<{ id: string; type: string; displayName: string; upn?: string }>>([]);
+  const [accSearching, setAccSearching] = useState(false);
+  const [accPicked, setAccPicked] = useState<{ id: string; name: string; type: 'User' | 'Group' } | null>(null);
+  const [accContainer, setAccContainer] = useState('');
+
+  const searchPrincipals = useCallback(async () => {
+    const q = accQuery.trim();
+    if (q.length < 2) { setAccResults([]); return; }
+    setAccSearching(true);
+    try {
+      const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&type=${accKind}`);
+      const j = await r.json();
+      setAccResults(j.ok ? (j.results || []) : []);
+    } catch { setAccResults([]); }
+    finally { setAccSearching(false); }
+  }, [accQuery, accKind]);
+
+  useEffect(() => {
+    fetch('/api/workspaces').then((r) => r.json()).then((d) => {
+      const list = Array.isArray(d) ? d : (d?.workspaces || []);
+      setWorkspaces(list.map((x: any) => ({ id: x.id, name: x.name || x.displayName || x.id })));
+    }).catch(() => {});
+    fetch('/api/admin/domains').then((r) => r.json()).then((d) => {
+      setDomains((d?.domains || []).map((x: any) => ({ id: x.id, name: x.name || x.id })));
+    }).catch(() => {});
+  }, []);
+
+  const buildScope = (): string => scopeType === 'tenant' ? 'tenant' : `${scopeType}:${scopeTarget}`;
+  const buildRule = (): string => {
+    switch (draftKind) {
+      case 'DLP': return `detect:${w.dlpDetect} action:${w.dlpAction}`;
+      case 'Masking': return `mask column:${w.maskColumn || '<column>'} using:${w.maskFn}`;
+      case 'RLS': return `filter ${w.rlsColumn || '<column>'} ${w.rlsOp} ${w.rlsValue || '<value>'}`;
+      case 'Retention': return `retain ${w.retPeriod} ${w.retUnit} then:${w.retAction}`;
+      case 'Access': return `grant ${accPicked?.name || '<principal>'} ${w.accPermission} on ${accContainer || '<container>'}`;
+      default: return '';
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -65,17 +119,29 @@ export default function PoliciesPage() {
 
   async function create() {
     if (!draftName.trim()) { setActionErr('name required'); return; }
+    const body: Record<string, unknown> = { name: draftName.trim(), kind: draftKind, scope: buildScope(), rule: buildRule(), enabled: true };
+    if (draftKind === 'Access') {
+      if (!accPicked) { setActionErr('Search and pick a principal for the access policy.'); return; }
+      if (!accContainer.trim()) { setActionErr('Enter the ADLS container the grant applies to.'); return; }
+      body.principalId = accPicked.id;
+      body.principalName = accPicked.name;
+      body.principalType = accPicked.type;
+      body.scopeType = 'adls-container';
+      body.scopeRef = accContainer.trim();
+      body.permission = (w.accPermission || 'Read').toLowerCase();
+    }
     setBusy(true); setActionErr(null);
     try {
       const r = await fetch('/api/governance/policies', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: draftName.trim(), kind: draftKind, scope: draftScope, rule: draftRule, enabled: true }),
+        body: JSON.stringify(body),
       });
       const j = await r.json();
-      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
+      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); if (j.policies) setPolicies(j.policies); return; }
       setPolicies(j.policies);
       setOpen(false);
-      setDraftName(''); setDraftScope('tenant'); setDraftRule('');
+      setDraftName(''); setScopeType('tenant'); setScopeTarget('');
+      setAccPicked(null); setAccContainer(''); setAccQuery(''); setAccResults([]);
     } catch (e: any) { setActionErr(e?.message || String(e)); }
     finally { setBusy(false); }
   }
@@ -147,7 +213,16 @@ export default function PoliciesPage() {
                 <TableCell><strong>{p.name}</strong></TableCell>
                 <TableCell><Badge appearance="filled" color={kindColor(p.kind)} size="small">{p.kind}</Badge></TableCell>
                 <TableCell>{p.scope}</TableCell>
-                <TableCell><code className={s.rule}>{p.rule || '—'}</code></TableCell>
+                <TableCell>
+                  <code className={s.rule}>{p.rule || '—'}</code>
+                  {p.enforcement && (
+                    <Badge appearance="tint" size="small" style={{ marginLeft: 6 }}
+                      color={p.enforcement.status === 'active' ? 'success' : p.enforcement.status === 'error' ? 'danger' : 'warning'}
+                      title={p.enforcement.detail || p.enforcement.roleName}>
+                      {p.enforcement.status === 'active' ? `enforced${p.enforcement.roleName ? ` · ${p.enforcement.roleName.replace('Storage Blob Data ', '')}` : ''}` : p.enforcement.status}
+                    </Badge>
+                  )}
+                </TableCell>
                 <TableCell>
                   <Switch checked={p.enabled} onChange={() => toggle(p)} />
                 </TableCell>
@@ -173,10 +248,125 @@ export default function PoliciesPage() {
                     {KINDS.map((k) => <Option key={k} value={k}>{k}</Option>)}
                   </Dropdown>
                 </Field>
-                <Field label="Scope"><Input value={draftScope} onChange={(_, d) => setDraftScope(d.value)} placeholder="tenant / domain:finance / workspace:abc" /></Field>
-                <Field label="Rule">
-                  <Input value={draftRule} onChange={(_, d) => setDraftRule(d.value)} placeholder="e.g. column:email mask:hash" />
-                </Field>
+                {/* Scope — selectable dropdowns (type + target) */}
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Field label="Applies to" style={{ flex: 1 }}>
+                    <Dropdown value={scopeType} selectedOptions={[scopeType]}
+                      onOptionSelect={(_, d) => { setScopeType(d.optionValue as any); setScopeTarget(''); }}>
+                      <Option value="tenant">Whole tenant</Option>
+                      <Option value="domain">A domain</Option>
+                      <Option value="workspace">A workspace</Option>
+                    </Dropdown>
+                  </Field>
+                  {scopeType !== 'tenant' && (
+                    <Field label={scopeType === 'domain' ? 'Domain' : 'Workspace'} style={{ flex: 1 }}>
+                      <Dropdown value={scopeTarget} selectedOptions={[scopeTarget]} placeholder="Select…"
+                        onOptionSelect={(_, d) => setScopeTarget(d.optionValue || '')}>
+                        {(scopeType === 'domain' ? domains : workspaces).map((t) => <Option key={t.id} value={t.id}>{t.name}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  )}
+                </div>
+
+                {/* Rule wizard — fields depend on the policy kind */}
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Configure the {draftKind} rule</Caption1>
+                {draftKind === 'DLP' && (
+                  <div style={{ display: 'flex', gap: 12 }}>
+                    <Field label="Detect" style={{ flex: 1 }}>
+                      <Dropdown value={w.dlpDetect} selectedOptions={[w.dlpDetect]} onOptionSelect={(_, d) => setWf('dlpDetect', d.optionValue || '')}>
+                        {['Email', 'SSN', 'Credit card', 'Phone', 'IP address', 'Custom classification'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Action" style={{ flex: 1 }}>
+                      <Dropdown value={w.dlpAction} selectedOptions={[w.dlpAction]} onOptionSelect={(_, d) => setWf('dlpAction', d.optionValue || '')}>
+                        {['Audit', 'Block', 'Notify', 'Quarantine'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                )}
+                {draftKind === 'Masking' && (
+                  <div style={{ display: 'flex', gap: 12 }}>
+                    <Field label="Column" style={{ flex: 1 }}><Input value={w.maskColumn} placeholder="e.g. email" onChange={(_, d) => setWf('maskColumn', d.value)} /></Field>
+                    <Field label="Masking function" style={{ flex: 1 }}>
+                      <Dropdown value={w.maskFn} selectedOptions={[w.maskFn]} onOptionSelect={(_, d) => setWf('maskFn', d.optionValue || '')}>
+                        {['Full', 'Partial', 'Email', 'Hash', 'Random'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                )}
+                {draftKind === 'RLS' && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Field label="Column" style={{ flex: 1 }}><Input value={w.rlsColumn} placeholder="e.g. region" onChange={(_, d) => setWf('rlsColumn', d.value)} /></Field>
+                    <Field label="Operator" style={{ width: 100 }}>
+                      <Dropdown value={w.rlsOp} selectedOptions={[w.rlsOp]} onOptionSelect={(_, d) => setWf('rlsOp', d.optionValue || '=')}>
+                        {['=', '!=', 'IN', 'LIKE'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Value" style={{ flex: 1 }}><Input value={w.rlsValue} placeholder="@currentUser.region" onChange={(_, d) => setWf('rlsValue', d.value)} /></Field>
+                  </div>
+                )}
+                {draftKind === 'Retention' && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Field label="Keep for" style={{ width: 120 }}><Input type="number" value={w.retPeriod} onChange={(_, d) => setWf('retPeriod', d.value)} /></Field>
+                    <Field label="Unit" style={{ width: 120 }}>
+                      <Dropdown value={w.retUnit} selectedOptions={[w.retUnit]} onOptionSelect={(_, d) => setWf('retUnit', d.optionValue || 'Days')}>
+                        {['Days', 'Months', 'Years'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Then" style={{ flex: 1 }}>
+                      <Dropdown value={w.retAction} selectedOptions={[w.retAction]} onOptionSelect={(_, d) => setWf('retAction', d.optionValue || 'Delete')}>
+                        {['Delete', 'Archive', 'Review'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                )}
+                {draftKind === 'Access' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <Field label="Principal — search Entra users / groups">
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <Dropdown value={accKind === 'user' ? 'User' : 'Group'} selectedOptions={[accKind]} style={{ minWidth: 100 }}
+                          onOptionSelect={(_, d) => { setAccKind((d.optionValue as 'user' | 'group') || 'user'); setAccResults([]); }}>
+                          <Option value="user">User</Option>
+                          <Option value="group">Group</Option>
+                        </Dropdown>
+                        <Input value={accQuery} placeholder="name or UPN…" style={{ flex: 1 }}
+                          onChange={(_, d) => setAccQuery(d.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') searchPrincipals(); }} />
+                        <Button onClick={searchPrincipals} disabled={accSearching || accQuery.trim().length < 2}>
+                          {accSearching ? 'Searching…' : 'Search'}
+                        </Button>
+                      </div>
+                    </Field>
+                    {accResults.length > 0 && !accPicked && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 140, overflowY: 'auto' }}>
+                        {accResults.map((r) => (
+                          <Button key={r.id} appearance="subtle" style={{ justifyContent: 'flex-start' }}
+                            onClick={() => { setAccPicked({ id: r.id, name: r.displayName, type: r.type === 'group' ? 'Group' : 'User' }); setAccResults([]); }}>
+                            {r.displayName}{r.upn ? ` · ${r.upn}` : ''}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                    {accPicked && (
+                      <Caption1>
+                        Principal: <strong>{accPicked.name}</strong> ({accPicked.type}){' '}
+                        <Button size="small" appearance="subtle" onClick={() => setAccPicked(null)}>change</Button>
+                      </Caption1>
+                    )}
+                    <div style={{ display: 'flex', gap: 12 }}>
+                      <Field label="ADLS container (scope)" style={{ flex: 1 }}
+                        hint="The data-lake container the grant applies to — Loom enforces it as real Storage RBAC.">
+                        <Input value={accContainer} placeholder="bronze" onChange={(_, d) => setAccContainer(d.value)} />
+                      </Field>
+                      <Field label="Permission" style={{ flex: 1 }}>
+                        <Dropdown value={w.accPermission} selectedOptions={[w.accPermission]} onOptionSelect={(_, d) => setWf('accPermission', d.optionValue || 'Read')}>
+                          {['Read', 'Write', 'Admin'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                        </Dropdown>
+                      </Field>
+                    </div>
+                  </div>
+                )}
+                <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>{buildScope()} · {buildRule()}</Caption1>
               </div>
             </DialogContent>
             <DialogActions>

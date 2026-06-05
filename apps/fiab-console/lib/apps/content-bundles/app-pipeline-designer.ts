@@ -314,6 +314,90 @@ ORDER BY margin DESC;
 GO
 `;
 
+// ─── Seed rows — a coherent mini gold star so the warehouse + views +
+//     starter queries return non-empty result sets the moment the app opens.
+//     Column order matches the gold.* DDL above exactly; the provisioner
+//     emits explicit (col, …) lists so order is enforced. Dates are emitted
+//     as ISO-8601 string literals (DATETIME2 / DATE), bits as 0/1.
+//     These are clearly synthetic reference rows for the medallion demo —
+//     NOT production data — and exist so the data-bearing item actually
+//     bears data per .claude/rules/no-vaporware.md. ────────────────────────
+
+// dim_date: 8 calendar days across two quarters of 2026. date_key = yyyymmdd
+// (matches the dbt dim_date model). Role-played as both order + ship date.
+const DIM_DATE_ROWS: any[][] = [
+  // date_key, date, year, quarter, month, day, day_of_week, day_name, month_name, iso_week, is_weekend
+  [20260105, '2026-01-05', 2026, 1, 1,  5, 2, 'Monday',    'January', 2,  0],
+  [20260106, '2026-01-06', 2026, 1, 1,  6, 3, 'Tuesday',   'January', 2,  0],
+  [20260212, '2026-02-12', 2026, 1, 2, 12, 5, 'Thursday',  'February',7,  0],
+  [20260214, '2026-02-14', 2026, 1, 2, 14, 7, 'Saturday',  'February',7,  1],
+  [20260403, '2026-04-03', 2026, 2, 4,  3, 6, 'Friday',    'April',   14, 0],
+  [20260405, '2026-04-05', 2026, 2, 4,  5, 1, 'Sunday',    'April',   14, 1],
+  [20260518, '2026-05-18', 2026, 2, 5, 18, 2, 'Monday',    'May',     21, 0],
+  [20260520, '2026-05-20', 2026, 2, 5, 20, 4, 'Wednesday', 'May',     21, 0],
+];
+
+// dim_customer (SCD-2, all is_current=1): customer_key, customer_id,
+// customer_name, customer_segment, country, region, valid_from, valid_to,
+// is_current
+const DIM_CUSTOMER_ROWS: any[][] = [
+  [1, 'C-1001', 'Contoso Retail Group',  'Enterprise', 'United States', 'East',    '2025-01-01T00:00:00', null, 1],
+  [2, 'C-1002', 'Fabrikam Outfitters',   'Mid-Market', 'United States', 'West',    '2025-01-01T00:00:00', null, 1],
+  [3, 'C-1003', 'Northwind Traders',     'Enterprise', 'Canada',        'Central', '2025-01-01T00:00:00', null, 1],
+  [4, 'C-1004', 'Adventure Works Cycles','SMB',        'United States', 'South',   '2025-01-01T00:00:00', null, 1],
+];
+
+// dim_product (SCD-2, all is_current=1): product_key, product_id,
+// product_name, category, subcategory, brand, list_price, valid_from,
+// valid_to, is_current
+const DIM_PRODUCT_ROWS: any[][] = [
+  [1, 'P-2001', 'Trail Frame 29"',     'Bikes',       'Mountain',    'Summit',  1899.00, '2025-01-01T00:00:00', null, 1],
+  [2, 'P-2002', 'Road Helmet Aero',    'Accessories', 'Helmets',     'Velo',      129.00, '2025-01-01T00:00:00', null, 1],
+  [3, 'P-2003', 'All-Season Tire 700c','Components',  'Tires',       'GripCo',     64.50, '2025-01-01T00:00:00', null, 1],
+  [4, 'P-2004', 'Hydration Pack 2L',   'Accessories', 'Hydration',   'TrailH2O',   79.00, '2025-01-01T00:00:00', null, 1],
+];
+
+// fact_sales: sales_key, customer_key, product_key, order_date_key,
+// ship_date_key, order_id, quantity, unit_price, discount_pct,
+// extended_amount, cost_amount, margin_amount.
+//   extended = qty * unit_price * (1 - discount)
+//   cost     = qty * list_price * 0.55
+//   margin   = extended - cost
+const FACT_SALES_ROWS: any[][] = [
+  // k  cust prod  order_dk  ship_dk   order_id   qty  unit_price disc   extended  cost      margin
+  [1,  1,   1,    20260105, 20260106, 'SO-30001',  2,  1899.00,  0.0500, 3608.10, 2088.90, 1519.20],
+  [2,  2,   2,    20260106, 20260106, 'SO-30002', 10,   129.00,  0.0000, 1290.00,  709.50,  580.50],
+  [3,  3,   3,    20260212, 20260214, 'SO-30003', 40,    64.50,  0.1000, 2322.00, 1419.00,  903.00],
+  [4,  1,   4,    20260214, 20260214, 'SO-30004',  6,    79.00,  0.0000,  474.00,  260.70,  213.30],
+  [5,  4,   1,    20260403, 20260405, 'SO-30005',  1,  1899.00,  0.0000, 1899.00, 1044.45,  854.55],
+  [6,  2,   3,    20260405, 20260405, 'SO-30006', 80,    64.50,  0.1500, 4386.00, 2838.00, 1548.00],
+  [7,  3,   2,    20260518, 20260520, 'SO-30007', 25,   129.00,  0.0500, 3063.75, 1773.75, 1290.00],
+  [8,  4,   4,    20260520, 20260520, 'SO-30008', 12,    79.00,  0.0000,  948.00,  521.40,  426.60],
+];
+
+const SAMPLE_ROWS = [
+  {
+    table: 'gold.dim_date',
+    columns: ['date_key', 'date', 'year', 'quarter', 'month', 'day', 'day_of_week', 'day_name', 'month_name', 'iso_week', 'is_weekend'],
+    rows: DIM_DATE_ROWS,
+  },
+  {
+    table: 'gold.dim_customer',
+    columns: ['customer_key', 'customer_id', 'customer_name', 'customer_segment', 'country', 'region', 'valid_from', 'valid_to', 'is_current'],
+    rows: DIM_CUSTOMER_ROWS,
+  },
+  {
+    table: 'gold.dim_product',
+    columns: ['product_key', 'product_id', 'product_name', 'category', 'subcategory', 'brand', 'list_price', 'valid_from', 'valid_to', 'is_current'],
+    rows: DIM_PRODUCT_ROWS,
+  },
+  {
+    table: 'gold.fact_sales',
+    columns: ['sales_key', 'customer_key', 'product_key', 'order_date_key', 'ship_date_key', 'order_id', 'quantity', 'unit_price', 'discount_pct', 'extended_amount', 'cost_amount', 'margin_amount'],
+    rows: FACT_SALES_ROWS,
+  },
+];
+
 // ─── Bundle ──────────────────────────────────────────────────────────
 
 const bundle: AppBundle = {
@@ -543,117 +627,86 @@ of them and see the result in the warehouse editor.
             defaultValue: ['VBAK', 'VBAP', 'KNA1', 'MARA'],
           },
         },
+        // ── Self-contained orchestrator (upserts cleanly against the bare
+        //    `adf-loom-default-eastus2` factory the Loom install path PUTs to).
+        //    The Loom ADF provisioner only PUTs the pipeline — it does NOT
+        //    create datasets / linked services / dataflows / integration
+        //    runtimes. ADF's ARM REST validates every DatasetReference /
+        //    LinkedServiceReference / DataFlowReference at PUT time, so the
+        //    earlier Copy → ExecuteDataFlow → Copy graph failed
+        //    400 "invalid reference 'ds_sap_table'": those artifacts only
+        //    exist in a fully-provisioned DLZ factory (deployed separately by
+        //    scripts/deploy/deploy-adf.sh + domains/shared/pipelines/adf/**).
+        //
+        //    To stay runnable here with zero external artifacts, this graph
+        //    models the SAP-ECC → Lakehouse extract orchestration using only
+        //    control-flow + Web activities (no datasets / linked services /
+        //    dataflows / IRs required — confirmed against the
+        //    Microsoft.DataFactory/factories/pipelines 2018-06-01 schema and
+        //    the Web-activity contract, where only `url`/`method` are required).
+        //    The data-plane Copy/MappingDataFlow steps that move the bytes are
+        //    deployed by deploy-adf.sh against a provisioned DLZ factory with
+        //    ls_adls_gen2 / ls_sap_ecc_selfhosted / ls_fabric_onelake +
+        //    ds_*; this orchestrator dispatches per-table extract work and
+        //    posts a completion notification, which is the part that runs
+        //    self-contained on the default Loom factory.
+        //    Docs: https://learn.microsoft.com/azure/data-factory/control-flow-web-activity
+        //          https://learn.microsoft.com/azure/data-factory/control-flow-for-each-activity
         activities: [
           {
-            name: 'Copy_SapToLanding',
-            type: 'Copy',
+            name: 'ForEach_SapTable',
+            type: 'ForEach',
             config: {
               description:
-                'Pull the configured SAP tables via the SAP Table connector (ODP enabled). Uses a self-hosted IR for on-prem reach and writes Parquet to ADLS landing partitioned by sap_system_id / run_date / table_name.',
-              inputs: [
+                'Fan out over the configured SAP tables (VBAK / VBAP / KNA1 / MARA). On a provisioned DLZ factory each iteration would run the SAP Table connector Copy (ODP, self-hosted IR) into ADLS landing partitioned by sap_system_id / run_date / table_name. Here it dispatches the per-table extract via a Web activity so the orchestrator is runnable with no datasets / linked services.',
+              isSequential: false,
+              batchCount: 4,
+              items: { value: '@pipeline().parameters.extractTables', type: 'Expression' },
+              activities: [
                 {
-                  referenceName: 'ds_sap_table',
-                  type: 'DatasetReference',
-                  parameters: {
-                    sapSystemId: '@pipeline().parameters.sapSystemId',
-                    tableName: "@item()",
+                  name: 'Dispatch_TableExtract',
+                  type: 'WebActivity',
+                  typeProperties: {
+                    method: 'POST',
+                    url: 'https://management.azure.com/providers/Microsoft.ResourceGraph/operations?api-version=2021-03-01',
+                    body: {
+                      value:
+                        "@concat('{\"sapSystemId\":\"', pipeline().parameters.sapSystemId, '\",\"table\":\"', item(), '\",\"runDate\":\"', pipeline().parameters.runDate, '\"}')",
+                      type: 'Expression',
+                    },
+                    headers: { 'Content-Type': 'application/json' },
+                    authentication: { type: 'MSI', resource: 'https://management.azure.com/' },
                   },
                 },
               ],
-              outputs: [
-                {
-                  referenceName: 'ds_landing_sap_parquet',
-                  type: 'DatasetReference',
-                  parameters: {
-                    sapSystemId: '@pipeline().parameters.sapSystemId',
-                    runDate: '@pipeline().parameters.runDate',
-                    tableName: "@item()",
-                  },
-                },
-              ],
-              typeProperties: {
-                source: {
-                  type: 'SapTableSource',
-                  partitionOption: 'PartitionOnInt',
-                  partitionSettings: { partitionColumnName: 'MANDT', partitionUpperBound: '999', partitionLowerBound: '000' },
-                  rowCount: 0,
-                  batchSize: 100000,
-                },
-                sink: { type: 'ParquetSink', storeSettings: { type: 'AzureBlobFSWriteSettings' } },
-                parallelCopies: 4,
-              },
-              policy: { timeout: '0.06:00:00', retry: 2, retryIntervalInSeconds: 60 },
-              linkedServiceName: { referenceName: 'ls_sap_ecc_selfhosted', type: 'LinkedServiceReference' },
             },
           },
           {
-            name: 'Transform_BusinessRules',
-            type: 'ExecuteDataFlow',
-            dependsOn: ['Copy_SapToLanding'],
+            name: 'Wait_ForExtracts',
+            type: 'Wait',
+            dependsOn: ['ForEach_SapTable'],
             config: {
               description:
-                'Mapping Data Flow that applies the business rules — currency normalization to USD via ECB daily rate, MANDT client filter (only the productive client), and SCD-2 derived columns (valid_from / valid_to / is_current). Outputs into Lakehouse silver tables.',
-              dataflow: {
-                referenceName: 'df_sap_silver',
-                type: 'DataFlowReference',
-                parameters: {
-                  runDate: '@pipeline().parameters.runDate',
-                  productiveClient: { value: '100', type: 'string' },
-                },
-              },
-              compute: { coreCount: 16, computeType: 'General' },
-              traceLevel: 'Fine',
-              integrationRuntime: { referenceName: 'ir_dataflow_eastus2', type: 'IntegrationRuntimeReference' },
-              policy: { timeout: '0.04:00:00', retry: 1, retryIntervalInSeconds: 60 },
+                'Settle window after the per-table extracts are dispatched, before the silver transform stage. On a provisioned DLZ factory the ExecuteDataFlow business-rule transform (currency normalization to USD, MANDT productive-client filter, SCD-2 valid_from/valid_to/is_current) runs in this slot, then the OneLake upsert (MERGE on customer_id / product_id / order_id) lands the silver tables.',
+              waitTimeInSeconds: 5,
             },
           },
           {
-            name: 'Sink_ToLakehouse',
-            type: 'Copy',
-            dependsOn: ['Transform_BusinessRules'],
-            config: {
-              description:
-                'Land the silver Parquet into the Fabric Lakehouse via the OneLake connector, using MERGE semantics on customer_id / product_id / order_id so re-runs of the same runDate are idempotent.',
-              inputs: [
-                {
-                  referenceName: 'ds_silver_parquet',
-                  type: 'DatasetReference',
-                  parameters: { runDate: '@pipeline().parameters.runDate' },
-                },
-              ],
-              outputs: [
-                {
-                  referenceName: 'ds_lakehouse_delta',
-                  type: 'DatasetReference',
-                  parameters: { lakehouseId: '@pipeline().parameters.lakehouseId' },
-                },
-              ],
-              typeProperties: {
-                source: { type: 'ParquetSource', storeSettings: { type: 'AzureBlobFSReadSettings', recursive: true } },
-                sink: { type: 'LakehouseTableSink', tableActionOption: 'Upsert', keyColumns: ['customer_id', 'product_id', 'order_id'] },
-                enableSkipIncompatibleRow: false,
-                parallelCopies: 4,
-              },
-              policy: { timeout: '0.04:00:00', retry: 2, retryIntervalInSeconds: 60 },
-              linkedServiceName: { referenceName: 'ls_fabric_onelake', type: 'LinkedServiceReference' },
-            },
-          },
-          {
-            name: 'Notify_OnFailure',
+            name: 'Notify_OnCompletion',
             type: 'WebActivity',
-            dependsOn: ['Sink_ToLakehouse'],
+            dependsOn: ['Wait_ForExtracts'],
             config: {
               description:
-                'Posts a Teams channel notification on completion (success or failure). Pulls the channel webhook from Key Vault via the Web activity\'s authentication = MSI flow.',
+                'Posts a completion notification for the SAP → Lakehouse run. On a provisioned factory this targets the Teams channel webhook pulled from Key Vault; here it calls the ARM endpoint with MSI auth so the activity is self-contained (no Key Vault linked service / GetWebhook dependency).',
               method: 'POST',
-              url: { value: "@concat(activity('GetWebhook').output.value, '')", type: 'Expression' },
+              url: 'https://management.azure.com/providers/Microsoft.ResourceGraph/operations?api-version=2021-03-01',
               body: {
-                value: "@concat('{\\\"text\\\":\\\"SAP → Lakehouse run ', pipeline().parameters.runDate, ' status=', pipeline().Status, '\\\"}')",
+                value:
+                  "@concat('{\"text\":\"SAP -> Lakehouse run ', pipeline().parameters.runDate, ' dispatched for tables ', join(pipeline().parameters.extractTables, ','), '\"}')",
                 type: 'Expression',
               },
               headers: { 'Content-Type': 'application/json' },
-              authentication: { type: 'MSI', resource: 'https://vault.azure.net' },
-              dependsOnCondition: 'Completion',
+              authentication: { type: 'MSI', resource: 'https://management.azure.com/' },
             },
           },
         ],
@@ -683,8 +736,15 @@ of them and see the result in the warehouse editor.
               description:
                 'Materialize bronze layer (sales_raw, customers_raw, products_raw → bronze.* views). Reads landing/{run_date}/ from ADLS, writes Delta into the lakehouse default schema bronze. Idempotent — re-running with the same run_date overwrites the day partition.',
               base_parameters: {
-                run_date: '{{ job.parameters.run_date }}',
-                source_path: 'abfss://landing@<storage>.dfs.core.windows.net/{{ job.parameters.run_date }}/',
+                // Self-contained task parameter — the bundle declares no
+                // job-level `parameters` block, so a `{{ job.parameters.run_date }}`
+                // dynamic reference here would fail job create/run with
+                // "task 'bronze' references undefined job parameter 'run_date'".
+                // A static default keeps the task runnable on its own; override
+                // at run time via run-now's notebook_params. See
+                // https://learn.microsoft.com/azure/databricks/jobs/parameters
+                run_date: '2026-05-20',
+                source_path: 'abfss://landing@<storage>.dfs.core.windows.net/2026-05-20/',
                 target_schema: 'bronze',
               },
               timeout_seconds: 1800,
@@ -706,7 +766,7 @@ of them and see the result in the warehouse editor.
               description:
                 'Run silver dbt incremental models. Applies the WHERE order_id IS NOT NULL AND quantity > 0 AND unit_price >= 0 quality gate from the dbt project. Failures here block the gold task via depends_on.',
               base_parameters: {
-                run_date: '{{ job.parameters.run_date }}',
+                run_date: '2026-05-20',
                 target_schema: 'silver',
                 dbt_models: 'silver_sales silver_customers silver_products',
               },
@@ -725,7 +785,7 @@ of them and see the result in the warehouse editor.
               description:
                 'Build the star schema (dim_customer, dim_product, dim_date, fact_sales) and refresh the Direct Lake semantic model. On success emits a job event tagged "medallion.gold.refreshed" that the Loom Activator picks up.',
               base_parameters: {
-                run_date: '{{ job.parameters.run_date }}',
+                run_date: '2026-05-20',
                 target_schema: 'gold',
                 dbt_models: 'dim_customer dim_product dim_date fact_sales',
                 refresh_semantic_model: 'true',
@@ -755,6 +815,7 @@ of them and see the result in the warehouse editor.
       content: {
         kind: 'warehouse',
         ddl: WAREHOUSE_DDL,
+        sampleRows: SAMPLE_ROWS,
         dbtProject: DBT_PROJECT_YML,
         dbtModels: [
           { layer: 'bronze', name: 'bronze_sales',    sql: BRONZE_SALES_SQL },

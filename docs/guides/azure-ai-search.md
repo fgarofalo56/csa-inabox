@@ -13,6 +13,9 @@ tags:
 
 # Azure AI Search
 
+!!! note "Freshness"
+    **Validated against:** Azure AI Search — vector + hybrid indexes, semantic ranking, integrated vectorization, AI-enrichment skillsets, indexers — on the Search REST data-plane — **as of 2026-06-02.** Index schema, vector-profile, and semantic-config syntax track the current AI Search API version; verify against the Azure AI Search REST docs before deploying.
+
 ## Overview
 
 Azure AI Search (formerly Azure Cognitive Search) is the **vector and hybrid search

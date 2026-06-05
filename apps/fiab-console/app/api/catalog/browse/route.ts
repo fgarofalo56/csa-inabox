@@ -7,7 +7,10 @@
  *
  *   - For unity-catalog: empty path → metastores; one segment (host) → catalogs
  *     in that metastore; two (host,catalog) → schemas; three → tables+volumes.
- *   - For onelake: empty path → workspaces; one segment (workspaceId) → items.
+ *   - For onelake: empty path → the user's Fabric workspaces (real
+ *     api.fabric.microsoft.com/v1/workspaces); one segment (workspaceId) →
+ *     that workspace's items (lakehouses, warehouses, semantic models,
+ *     reports, KQL DBs, notebooks, pipelines, …) via /workspaces/{id}/items.
  *   - For purview: empty path → business domains; one segment (domainId) → data
  *     products in that domain.
  *
@@ -56,13 +59,64 @@ export async function GET(req: NextRequest) {
         const metastores = await listAllMetastores();
         return NextResponse.json({
           ok: true,
-          nodes: metastores.map((m) => ({
-            id: m.workspace_hostname || m.metastore_id,
-            label: `${m.name} (${m.workspace_hostname})`,
-            kind: 'metastore',
-            hasChildren: !m.metastore_id.startsWith('ERROR_'),
-            meta: { metastore_id: m.metastore_id, region: m.region },
-          })),
+          nodes: metastores.map((m) => {
+            // listAllMetastores returns a synthetic row (id prefixed `ERROR_`)
+            // for any workspace it could reach the host of but not list the
+            // metastore on — almost always a 403 "User is not an account admin
+            // for Account." That happens because GET /metastores requires
+            // Databricks account-admin privileges, OR the workspace simply
+            // isn't attached to a Unity Catalog metastore yet. Render a clean
+            // gate node instead of leaking the raw REST error string into the
+            // tree; the rest of the tree (other workspaces) still renders.
+            if (m.metastore_id.startsWith('ERROR_')) {
+              const reason = m.name.replace(/^\((.*)\)$/, '$1');
+              const is403 = /\b403\b/.test(reason) || /account admin/i.test(reason);
+              // Listing METASTORES needs Databricks account-admin (the 403 here).
+              // Listing this workspace's CATALOGS does NOT. So instead of a dead
+              // "gate" node, render the workspace as a NAVIGABLE node whose
+              // children come from listCatalogs(host) (path.length===1). The tree
+              // works by default with only workspace access — account-admin is an
+              // optional enrichment, never a hard requirement. Only a non-403
+              // unreachable error stays a true gate.
+              if (is403) {
+                return {
+                  id: m.workspace_hostname,
+                  label: m.workspace_hostname,
+                  kind: 'metastore',
+                  hasChildren: true,
+                  meta: {
+                    workspace_hostname: m.workspace_hostname,
+                    accountAdminEnrichment:
+                      'Metastore-level metadata (region, metastore id) needs Databricks account-admin; the catalogs below list without it.',
+                  },
+                };
+              }
+              return {
+                id: m.metastore_id,
+                label: m.workspace_hostname,
+                kind: 'gate',
+                hasChildren: false,
+                meta: {
+                  workspace_hostname: m.workspace_hostname,
+                  reason,
+                  title: 'Workspace unreachable',
+                  detail: `The workspace ${m.workspace_hostname} could not be reached: ${reason}`,
+                  remediation: [
+                    `Confirm LOOM_DATABRICKS_HOSTNAMES lists a reachable workspace and the Console UAMI can authenticate to it.`,
+                  ],
+                  learnMore:
+                    'https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/admin-privileges#account-admins',
+                },
+              };
+            }
+            return {
+              id: m.workspace_hostname || m.metastore_id,
+              label: `${m.name} (${m.workspace_hostname})`,
+              kind: 'metastore',
+              hasChildren: true,
+              meta: { metastore_id: m.metastore_id, region: m.region },
+            };
+          }),
         });
       }
       if (path.length === 1) {
@@ -115,13 +169,17 @@ export async function GET(req: NextRequest) {
     }
 
     if (source === 'onelake') {
+      // Real Fabric/OneLake catalog — the workspaces the Console UAMI can see
+      // (api.fabric.microsoft.com/v1/workspaces) and, on expand, every item in
+      // them (lakehouses, warehouses, semantic models, reports, KQL DBs,
+      // notebooks, pipelines, …). This is live tenant data, not a sample.
       if (path.length === 0) {
         const ws = await listOneLakeWorkspaces();
         return NextResponse.json({
           ok: true,
           nodes: ws.map((w) => ({
             id: w.id, label: w.displayName, kind: 'workspace', hasChildren: true,
-            meta: { description: w.description, capacityId: w.capacityId, type: w.type },
+            meta: { description: w.description, capacityId: w.capacityId, type: w.type, source: 'fabric-onelake' },
           })),
         });
       }
@@ -129,9 +187,15 @@ export async function GET(req: NextRequest) {
         const items = await listWorkspaceItems(path[0]);
         return NextResponse.json({
           ok: true,
+          // Normalize Fabric item types to a stable, lower-case node `kind` so
+          // the tree can pick a per-type icon; keep the original Fabric type in
+          // meta.type for the label suffix and the detail page.
           nodes: items.map((it) => ({
-            id: it.id, label: it.displayName, kind: it.type || 'item', hasChildren: false,
-            meta: { description: it.description, type: it.type, workspaceId: path[0] },
+            id: it.id,
+            label: it.displayName,
+            kind: (it.type || 'item').toLowerCase(),
+            hasChildren: false,
+            meta: { description: it.description, type: it.type || 'Item', workspaceId: path[0], source: 'fabric-onelake' },
           })),
         });
       }
@@ -149,7 +213,17 @@ export async function GET(req: NextRequest) {
         });
       }
       if (path.length === 1) {
-        const products = await listDataProducts(path[0]);
+        // Data products are a unified-catalog concept that the classic Data Map
+        // account doesn't expose. On classic, a domain mirrors to a collection
+        // (see purview-client listBusinessDomains) which has no "data products"
+        // sub-list — so an empty children list is the honest, non-erroring state
+        // rather than letting the unified-catalog gate 501 the whole tree.
+        let products: Awaited<ReturnType<typeof listDataProducts>> = [];
+        try { products = await listDataProducts(path[0]); }
+        catch (e: any) {
+          if (!(e instanceof PurviewNotConfiguredError)) throw e;
+          return NextResponse.json({ ok: true, nodes: [] });
+        }
         return NextResponse.json({
           ok: true,
           nodes: products.map((p) => ({

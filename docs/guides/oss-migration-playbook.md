@@ -17,6 +17,9 @@
     documentation before making decisions.
 
 
+!!! note "Freshness"
+    **Validated against:** Azure source services — Microsoft Purview, Azure Data Factory, Synapse Serverless SQL, Power BI, Azure AI Search — migrating to their OSS targets on **AKS** (Apache Atlas, Apache NiFi, Trino, Apache Superset, OpenSearch, Apache Airflow) via the Helm charts in `scripts/deploy-oss-stack.sh` — **as of 2026-06-02.** OSS target versions track the Helm charts pinned in the deploy script; confirm chart/app versions against each project's current release before migrating, as connector and SQL-dialect behavior changes across versions.
+
 > [!NOTE]
 > **TL;DR:** Step-by-step migration guide for moving from Azure PaaS services to open-source alternatives on AKS. Covers entity mapping, pipeline conversion, SQL dialect translation, dashboard recreation, and index schema migration.
 

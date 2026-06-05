@@ -1,5 +1,8 @@
 # Microsoft Fabric — The CSA-in-a-Box Platform Guide
 
+!!! note "Freshness"
+    **Validated against:** Microsoft Fabric — OneLake, Lakehouse, Warehouse, Data Factory, Data Engineering/Science, Real-Time Intelligence, Power BI, built-in Purview governance, F-SKU capacity model — **as of 2026-06-02.** Fabric ships features continuously; verify workload availability (especially Azure Government GA status) and the capacity/CU pricing model against the [Microsoft Fabric docs](https://learn.microsoft.com/fabric/fundamentals/microsoft-fabric-overview) before planning a migration.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

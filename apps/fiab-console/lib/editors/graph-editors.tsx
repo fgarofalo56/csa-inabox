@@ -313,12 +313,12 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
 // ============================================================
 // GQL
 // ============================================================
-type GqlBackend = 'fabric-graph' | 'cosmos-gremlin-translate' | 'persist-only';
+type GqlBackend = 'adx-graph' | 'fabric-graph' | 'cosmos-gremlin-translate' | 'persist-only';
 
 export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [query, setQuery] = useState<string>(SAMPLE_GQL);
-  const [backend, setBackend] = useState<GqlBackend>('persist-only');
+  const [backend, setBackend] = useState<GqlBackend>('adx-graph');
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
@@ -332,10 +332,17 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
   const run = useCallback(async () => {
     setLoading(true); setResult(null);
     try {
-      if (backend === 'fabric-graph') {
+      if (backend === 'adx-graph') {
+        // Azure-native default — runs make-graph + graph-match on ADX (no Fabric).
         const r = await fetch(`/api/items/gql-graph/${id}/query`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ query, backend: 'fabric-graph' }),
+          body: JSON.stringify({ query, backend: 'adx', mode: 'kql-graph' }),
+        });
+        setResult(await r.json());
+      } else if (backend === 'fabric-graph') {
+        const r = await fetch(`/api/items/gql-graph/${id}/query`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ query, backend: 'fabric' }),
         });
         setResult(await r.json());
       } else if (backend === 'cosmos-gremlin-translate') {
@@ -381,9 +388,10 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
           <div className={s.field} style={{ marginTop: 8 }}>
             <Label>Backend</Label>
             <select value={backend} onChange={(e) => setBackend(e.target.value as GqlBackend)} style={{ padding: 6 }}>
-              <option value="persist-only">Persist-only (no dispatch)</option>
-              <option value="fabric-graph">Fabric Graph REST (preview — gated on workspace)</option>
+              <option value="adx-graph">Azure Data Explorer (KQL graph — default, no Fabric)</option>
               <option value="cosmos-gremlin-translate">Cosmos Gremlin (best-effort translate)</option>
+              <option value="persist-only">Persist-only (no dispatch)</option>
+              <option value="fabric-graph">Fabric Graph REST (opt-in — gated on workspace)</option>
             </select>
           </div>
         </div>

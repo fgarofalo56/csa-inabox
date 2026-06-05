@@ -739,7 +739,7 @@ by bin(TimeGenerated, 1d), MetricName
 ## Related Resources
 
 - [Cost Optimization Overview](./cost-optimization/README.md)
-- [Delta Lake Optimization](../../02-services/05-best-practices/cross-cutting-concerns/performance/delta-lake-optimization.md)
+- [Delta Lake Optimization](../service-specific/databricks/delta-lake-optimization.md)
 - Storage Performance
 - [Azure Storage Pricing](https://azure.microsoft.com/pricing/details/storage/)
 

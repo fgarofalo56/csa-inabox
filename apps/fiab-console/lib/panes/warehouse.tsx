@@ -12,7 +12,7 @@ import {
   TabList,
   Spinner,
 } from '@fluentui/react-components';
-import { Play24Filled, Save24Regular } from '@fluentui/react-icons';
+import { Play24Filled } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '16px', height: '100%' },
@@ -44,8 +44,9 @@ interface QueryResult {
   columns: string[];
   rows: unknown[][];
   rowCount: number;
-  executionMs: number;
-  engine: 'databricks-sql' | 'synapse-serverless';
+  durationMs?: number;
+  executionMs?: number;
+  engine?: string;
 }
 
 export function WarehousePane() {
@@ -60,14 +61,20 @@ export function WarehousePane() {
   async function run() {
     setRunning(true);
     setError(null);
+    setResult(null);
     try {
       const res = await fetch('/api/warehouse/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sql }),
       });
-      if (!res.ok) throw new Error(await res.text());
-      setResult(await res.json());
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j?.ok === false) {
+        // Honest gate / SQL error message from the real Synapse backend.
+        setError(j?.error || `HTTP ${res.status}`);
+        return;
+      }
+      setResult(j as QueryResult);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -83,7 +90,6 @@ export function WarehousePane() {
         <Button appearance="primary" icon={<Play24Filled />} onClick={run} disabled={running}>
           {running ? 'Running...' : 'Run query'}
         </Button>
-        <Button icon={<Save24Regular />}>Save</Button>
       </div>
       <Textarea
         className={styles.editor}
@@ -103,7 +109,9 @@ export function WarehousePane() {
         {result && (
           <>
             <Body1>
-              {result.rowCount.toLocaleString()} rows · {result.executionMs} ms · engine: {result.engine}
+              {result.rowCount.toLocaleString()} rows
+              {typeof (result.durationMs ?? result.executionMs) === 'number' ? ` · ${result.durationMs ?? result.executionMs} ms` : ''}
+              {result.engine ? ` · engine: ${result.engine}` : ''}
             </Body1>
             <table className={styles.table}>
               <thead>

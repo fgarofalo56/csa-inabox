@@ -1,5 +1,8 @@
 # Microsoft Purview Guide
 
+!!! note "Freshness"
+    **Validated against:** Microsoft Purview — Data Map (scan/classify/lineage), Data Catalog, sensitivity labels, scanning ADLS Gen2 / Databricks / Synapse / Azure SQL / Cosmos — on the Purview REST data-plane — **as of 2026-06-02.** Scan-ruleset and classification behavior track the current Purview service; verify against the Microsoft Purview docs before deploying.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

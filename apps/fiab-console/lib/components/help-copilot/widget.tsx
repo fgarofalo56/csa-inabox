@@ -12,9 +12,10 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import {
   Button, Input, makeStyles, tokens,
-  Caption1, Subtitle2,
+  Caption1, Subtitle2, Badge,
 } from '@fluentui/react-components';
 import {
   Send24Regular, Sparkle24Regular, Dismiss20Regular,
@@ -89,8 +90,38 @@ function parseSse(buffer: string): { events: Array<{ event: string; data: string
   return { events: out, remaining };
 }
 
+/** Derive a friendly page label + (when on an item) its type/id from the route,
+ *  so the agent is aware of what the user is looking at. */
+function pageContextFromPath(pathname: string | null): { path: string; label: string; itemType?: string; itemId?: string } {
+  const path = pathname || '/';
+  const seg = path.split('/').filter(Boolean);
+  // /workspaces/:wsId/items/:itemType/:itemId  OR  /items/:itemType/:itemId
+  const itemsIdx = seg.indexOf('items');
+  let itemType: string | undefined;
+  let itemId: string | undefined;
+  if (itemsIdx >= 0 && seg[itemsIdx + 1]) { itemType = seg[itemsIdx + 1]; itemId = seg[itemsIdx + 2]; }
+
+  const LABELS: Record<string, string> = {
+    '': 'Home', browse: 'Browse', workspaces: 'Workspaces', copilot: 'Loom Copilot',
+    governance: 'Governance', monitor: 'Monitor', admin: 'Admin portal', marketplace: 'Apps marketplace',
+  };
+  let label: string;
+  if (itemType) {
+    label = `${itemType.replace(/-/g, ' ')} editor`;
+  } else if (seg[0] === 'admin' && seg[1]) {
+    label = `Admin · ${seg[1].replace(/-/g, ' ')}`;
+  } else if (seg[0] === 'governance' && seg[1]) {
+    label = `Governance · ${seg[1].replace(/-/g, ' ')}`;
+  } else {
+    label = LABELS[seg[0] || ''] || (seg[0] ? seg[0].replace(/-/g, ' ') : 'Home');
+  }
+  return { path, label, itemType, itemId };
+}
+
 export function HelpCopilotWidget() {
   const s = useStyles();
+  const pathname = usePathname();
+  const pageCtx = useMemo(() => pageContextFromPath(pathname), [pathname]);
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
@@ -157,7 +188,7 @@ export function HelpCopilotWidget() {
       const res = await fetch('/api/help-copilot/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt, sessionId: sessionRef.current ?? undefined }),
+        body: JSON.stringify({ prompt, sessionId: sessionRef.current ?? undefined, context: pageCtx }),
       });
 
       if (res.status === 503) {
@@ -244,8 +275,10 @@ export function HelpCopilotWidget() {
       <div className={s.header}>
         <div className={s.title}>
           <Sparkle24Regular style={{ color: tokens.colorBrandForeground1 }} />
-          <Subtitle2>Help Copilot</Subtitle2>
-          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>· docs-grounded</Caption1>
+          <Subtitle2>Loom Copilot</Subtitle2>
+          <Badge appearance="tint" size="small" color="brand" title={`Aware you're on: ${pageCtx.label} (${pageCtx.path})`}>
+            on: {pageCtx.label}
+          </Badge>
         </div>
         <Button appearance="subtle" size="small" icon={<ArrowReset20Regular />}
           onClick={reset} aria-label="New conversation" disabled={busy} title="New conversation" />
@@ -269,7 +302,7 @@ export function HelpCopilotWidget() {
           value={draft}
           onChange={(_, d) => setDraft(d.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !busy) send(draft); }}
-          placeholder={busy ? 'Thinking…' : 'Ask about CSA Loom…'}
+          placeholder={busy ? 'Thinking…' : `Ask about ${pageCtx.label} or anything in Loom…`}
           disabled={busy}
           aria-label="Ask the Help Copilot"
           data-testid="help-input"

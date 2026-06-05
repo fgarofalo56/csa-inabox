@@ -37,12 +37,15 @@ function fail(e: any) {
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const g = gate(); if (g) return g;
+  // `?service=` lets the admin Copilot-config picker list indexes on a search
+  // service other than the env default (used for RAG grounding selection).
+  const serviceOverride = req.nextUrl.searchParams.get('service')?.trim() || undefined;
+  if (!serviceOverride) { const g = gate(); if (g) return g; }
   try {
-    const indexes = await listIndexes();
+    const indexes = await listIndexes(serviceOverride);
     return NextResponse.json({ ok: true, indexes });
   } catch (e: any) { return fail(e); }
 }

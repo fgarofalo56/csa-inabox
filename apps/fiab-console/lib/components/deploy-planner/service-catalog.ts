@@ -1,16 +1,54 @@
 /**
- * Deploy-planner service catalog — the Azure services CSA Loom / Fabric-in-a-Box
- * can stand up, each tied to the REAL bicep knob that deploys it
- * (platform/fiab/bicep/main.bicep + params/*.bicepparam). The planner produces
- * a plan whose per-domain service set maps 1:1 onto these flags, and the
- * bicepparam export writes exactly these param names — so the visual plan and
- * `az deployment sub create` stay in sync (per .claude/rules/no-vaporware.md).
+ * Deploy-planner service catalog — the Azure service types CSA Loom /
+ * Fabric-in-a-Box can plan into a deployment, grouped by category. Each entry
+ * is tied to the REAL bicep knob that deploys it where one exists
+ * (platform/fiab/bicep/main.bicep + params/*.bicepparam), so the visual plan
+ * and `az deployment sub create` stay in sync (per .claude/rules/no-vaporware.md).
  *
- * `bicepFlag: null` = a core service that always deploys (no toggle); it shows
- * in the plan as always-on. `icon` is a file under /public/azure-icons (official
- * Microsoft Azure architecture icons); services without a bundled icon render a
- * branded initial badge until the icon pack is expanded.
+ * Three honest deployment states, NOT one:
+ *   - `bicepFlag: '<param>'` → a toggleable service; the bicepparam export
+ *     writes that param true/false based on the plan.
+ *   - `bicepFlag: null`      → a CORE service that always deploys (no toggle).
+ *     Shown as "core" and never written as a param.
+ *   - `planOnly: true`       → a service Loom can PLAN but does not yet have a
+ *     one-button bicep toggle for. It is real Azure, just not auto-provisioned
+ *     by main.bicep today. Shown with a "plan-only" badge so nobody mistakes
+ *     the tile for an auto-deploy. It never emits a fake bicep param.
+ *
+ * Icons: every service renders a high-quality Fluent glyph + brand color via
+ * `serviceVisual()` (mirrors lib/components/ui/item-type-visual). A bundled
+ * official Azure raster icon (`icon`) is used when present; otherwise the
+ * Fluent glyph. The OPTIONAL Atlas Diag icon API (`NEXT_PUBLIC_LOOM_ICON_BASE`,
+ * via `iconUrl()` from item-type-visual) is a progressive enhancement only —
+ * the catalog renders fully standalone with Fluent icons.
  */
+
+import type { FluentIcon } from '@fluentui/react-icons';
+import {
+  // compute
+  Box24Regular, Server24Regular, ServerLink24Regular, AppsList24Regular,
+  Apps24Regular, Code24Regular,
+  Cube24Regular, Grid24Regular,
+  // data & analytics
+  Database24Regular, DatabaseLink24Regular, CloudFlow24Regular,
+  Flow24Regular, DataLine24Regular, DataHistogram24Regular, DataPie24Regular,
+  Layer24Regular, Archive24Regular, DocumentTable24Regular,
+  // ai
+  BrainCircuit24Regular, Bot24Regular, BotSparkle24Regular, Sparkle24Regular,
+  Search24Regular, Eye24Regular, Mic24Regular, Translate24Regular,
+  // integration
+  PlugConnected24Regular, Pulse24Regular, MailInbox24Regular, BoardSplit24Regular,
+  Globe24Regular, ArrowRouting24Regular, Group24Regular,
+  // governance & security
+  ShieldCheckmark24Regular, ShieldKeyhole24Regular, Key24Regular,
+  ClipboardTaskListLtr24Regular, ChartMultiple24Regular, BookGlobe24Regular,
+  Shield24Regular, LockClosed24Regular,
+  // networking
+  VirtualNetwork24Regular, Router24Regular, GlobeShield24Regular,
+  Connector24Regular, Earth24Regular, ArrowBidirectionalUpDown24Regular,
+  // fallback
+  Document24Regular,
+} from '@fluentui/react-icons';
 
 export type ServiceCategory =
   | 'compute' | 'data' | 'ai' | 'integration' | 'governance' | 'networking';
@@ -19,91 +57,233 @@ export interface ServiceDef {
   key: string;
   label: string;
   category: ServiceCategory;
-  /** bicep param that enables it, or null if it is always deployed. */
+  /** bicep param that enables it, or null if it is always deployed (core). */
   bicepFlag: string | null;
-  /** /public/azure-icons file, or undefined → initial-badge fallback. */
+  /**
+   * True when Loom can PLAN this service but has no one-button bicep toggle
+   * for it yet. Such services never emit a bicep param (no fake knobs); they
+   * surface a "plan-only" badge so the plan is honest about what auto-deploys.
+   */
+  planOnly?: boolean;
+  /** Fluent glyph used as the standalone (no-external-dep) icon. */
+  glyph: FluentIcon;
+  /** /public/azure-icons file (official Microsoft icon), if one is bundled. */
   icon?: string;
-  /** Accent colour (Azure service brand-ish) for swatch + fallback badge. */
+  /** Accent colour (category brand) for the icon chip + fallback badge. */
   color: string;
-  /** Short description shown in the palette tooltip. */
+  /** Short description shown in the tile tooltip. */
   description: string;
 }
 
-export const SERVICE_CATEGORY_ORDER: Array<{ id: ServiceCategory; label: string }> = [
-  { id: 'compute', label: 'Compute & apps' },
-  { id: 'data', label: 'Data & analytics' },
-  { id: 'ai', label: 'AI' },
-  { id: 'integration', label: 'Integration' },
-  { id: 'governance', label: 'Governance & security' },
-  { id: 'networking', label: 'Networking' },
+export const SERVICE_CATEGORY_ORDER: Array<{ id: ServiceCategory; label: string; color: string }> = [
+  { id: 'compute',     label: 'Compute & apps',        color: '#0078d4' },
+  { id: 'data',        label: 'Data & analytics',      color: '#117865' },
+  { id: 'ai',          label: 'AI & machine learning', color: '#7c3aed' },
+  { id: 'integration', label: 'Integration & messaging', color: '#e3008c' },
+  { id: 'governance',  label: 'Governance & security', color: '#0b6a0b' },
+  { id: 'networking',  label: 'Networking & edge',     color: '#004578' },
 ];
 
+/** Per-category brand colour (icon chip tint + fallback badge). */
+export const CATEGORY_COLOR: Record<ServiceCategory, string> = Object.fromEntries(
+  SERVICE_CATEGORY_ORDER.map((c) => [c.id, c.color]),
+) as Record<ServiceCategory, string>;
+
 export const SERVICE_CATALOG: ServiceDef[] = [
-  // ---- compute ----
+  // ───────────────────────── compute & apps ─────────────────────────
   { key: 'containerApps', label: 'Container Apps', category: 'compute', bicepFlag: 'deployAppsEnabled',
-    icon: 'Container-Apps-Environments.png', color: '#0078d4',
+    glyph: Box24Regular, icon: 'Container-Apps-Environments.png', color: '#0078d4',
     description: 'Hosts the Loom console + BFF + agent apps (Azure Container Apps).' },
   { key: 'acr', label: 'Container Registry', category: 'compute', bicepFlag: null,
-    icon: 'Container-Registries.png', color: '#0078d4',
+    glyph: Archive24Regular, icon: 'Container-Registries.png', color: '#0078d4',
     description: 'Stores the Loom app images (core — always deployed).' },
+  { key: 'aks', label: 'Kubernetes Service (AKS)', category: 'compute', bicepFlag: 'atlasOnAksEnabled',
+    glyph: Grid24Regular, icon: 'Kubernetes-Services.png', color: '#0078d4',
+    description: 'Managed Kubernetes — enables the optional Atlas-on-AKS workload.' },
+  { key: 'appService', label: 'App Service', category: 'compute', bicepFlag: 'appServiceEnabled',
+    glyph: Globe24Regular, icon: 'App-Services.png', color: '#0078d4',
+    description: 'PaaS web app / API hosting (Linux B1 plan + web app, HTTPS-only).' },
+  { key: 'functions', label: 'Azure Functions', category: 'compute', bicepFlag: 'functionsEnabled',
+    glyph: Code24Regular, icon: 'Function-Apps.png', color: '#0078d4',
+    description: 'Serverless event-driven compute (Consumption Linux plan + backing storage).' },
+  { key: 'containerInstances', label: 'Container Instances', category: 'compute', bicepFlag: 'containerInstancesEnabled',
+    glyph: Box24Regular, icon: 'Container-Instances.png', color: '#0078d4',
+    description: 'Single-shot serverless containers (sample image group, start/stop-able).' },
+  { key: 'vm', label: 'Virtual Machines', category: 'compute', bicepFlag: 'vmEnabled',
+    glyph: Server24Regular, icon: 'Virtual-Machine.png', color: '#0078d4',
+    description: 'Linux IaaS VM (isolated VNet/subnet + NIC, no public IP, SSH-key auth, managed OS disk).' },
+  { key: 'batch', label: 'Azure Batch', category: 'compute', bicepFlag: 'batchEnabled',
+    glyph: AppsList24Regular, color: '#0078d4',
+    description: 'Large-scale parallel + HPC batch compute (BatchService mode + managed-identity auto-storage).' },
+  { key: 'logicApps', label: 'Logic Apps', category: 'compute', bicepFlag: 'logicAppsEnabled',
+    glyph: Flow24Regular, icon: 'Logic-Apps.png', color: '#0078d4',
+    description: 'Low-code workflow automation (Consumption Logic App, empty editable workflow).' },
+  { key: 'staticWebApps', label: 'Static Web Apps', category: 'compute', bicepFlag: 'staticWebAppsEnabled',
+    glyph: Apps24Regular, color: '#0078d4',
+    description: 'Globally-distributed static front-ends + managed APIs (standalone, no repo link).' },
 
-  // ---- data ----
+  // ─────────────────────── data & analytics ─────────────────────────
   { key: 'storage', label: 'ADLS Gen2 (OneLake)', category: 'data', bicepFlag: null,
-    icon: 'Storage-Accounts.png', color: '#107c10',
+    glyph: Archive24Regular, icon: 'Storage-Accounts.png', color: '#117865',
     description: 'Medallion lake storage (bronze/silver/gold). Core — always deployed.' },
   { key: 'synapse', label: 'Synapse Serverless', category: 'data', bicepFlag: null,
-    color: '#1f8a70',
+    glyph: Server24Regular, color: '#117865',
     description: 'Serverless SQL over the lake (OPENROWSET + Delta). Core data plane.' },
   { key: 'databricks', label: 'Azure Databricks', category: 'data', bicepFlag: null,
-    color: '#ff3621',
+    glyph: ServerLink24Regular, color: '#b91c4b',
     description: 'Spark engineering + ML. Unity Catalog / SQL Warehouse gated by boundary.' },
+  { key: 'databricksUnity', label: 'Databricks Unity Catalog', category: 'data', bicepFlag: 'databricksUnityCatalogEnabled',
+    glyph: BookGlobe24Regular, color: '#b91c4b',
+    description: 'Unity Catalog governance metastore for Databricks.' },
+  { key: 'databricksSqlWarehouse', label: 'Databricks SQL Warehouse', category: 'data', bicepFlag: 'databricksSqlWarehouseEnabled',
+    glyph: Server24Regular, color: '#b91c4b',
+    description: 'Serverless SQL warehouse on Databricks.' },
   { key: 'adx', label: 'Data Explorer (Eventhouse)', category: 'data', bicepFlag: 'adxEnabled',
-    color: '#00a4ef',
+    glyph: DataLine24Regular, color: '#117865',
     description: 'Real-time analytics (KQL) for Eventstream + realtime hub.' },
   { key: 'cosmos', label: 'Cosmos DB', category: 'data', bicepFlag: null,
-    icon: 'Azure-Cosmos-DB.png', color: '#0078d4',
+    glyph: Cube24Regular, icon: 'Azure-Cosmos-DB.png', color: '#117865',
     description: 'Loom item/state store. Core — always deployed.' },
-  { key: 'sql', label: 'Azure SQL', category: 'data', bicepFlag: null,
-    icon: 'Azure-SQL.png', color: '#0078d4',
+  { key: 'sql', label: 'Azure SQL Database', category: 'data', bicepFlag: null,
+    glyph: DatabaseLink24Regular, icon: 'Azure-SQL.png', color: '#117865',
     description: 'Relational store for SQL-database items.' },
+  { key: 'sqlMi', label: 'SQL Managed Instance', category: 'data', bicepFlag: null, planOnly: true,
+    glyph: ServerLink24Regular, color: '#117865',
+    description: 'Near-100% SQL Server compatibility, fully managed. Plan-only — needs a delegated subnet + ~hours-long provision, so it is not a single self-contained toggle.' },
+  { key: 'postgres', label: 'PostgreSQL Flexible', category: 'data', bicepFlag: 'postgresEnabled',
+    glyph: Database24Regular, color: '#117865',
+    description: 'Managed PostgreSQL (flexible server, Entra-only auth) + starter DB.' },
+  { key: 'mysql', label: 'MySQL Flexible', category: 'data', bicepFlag: 'mysqlEnabled',
+    glyph: Database24Regular, color: '#117865',
+    description: 'Managed MySQL (flexible server) + starter DB.' },
+  { key: 'redis', label: 'Cache for Redis', category: 'data', bicepFlag: 'redisEnabled',
+    glyph: DataHistogram24Regular, color: '#117865',
+    description: 'In-memory cache / session store (Basic C0, Entra auth enabled).' },
+  { key: 'fabricCapacity', label: 'Fabric Capacity (F-SKU)', category: 'data', bicepFlag: null, planOnly: true,
+    glyph: Layer24Regular, color: '#117865',
+    description: 'Microsoft Fabric capacity backing the Loom workspace. Plan-only — F-SKU + Fabric tenant admin gating, not a self-contained sub-deployment toggle.' },
+  { key: 'streamAnalytics', label: 'Stream Analytics', category: 'data', bicepFlag: 'streamAnalyticsEnabled',
+    glyph: DataPie24Regular, color: '#117865',
+    description: 'Real-time stream processing (SQL-like). Job created Stopped, ready to edit.' },
+  { key: 'dataFactory', label: 'Data Factory', category: 'data', bicepFlag: 'dataFactoryEnabled',
+    glyph: CloudFlow24Regular, color: '#117865',
+    description: 'Cloud ETL/ELT orchestration (factory for the ADF Pipeline/Dataset/Trigger editors).' },
+  { key: 'purviewData', label: 'Microsoft Fabric / OneLake catalog', category: 'data', bicepFlag: null,
+    glyph: DocumentTable24Regular, color: '#117865',
+    description: 'OneLake catalog surfaced in Loom. Core where the lake is deployed.' },
 
-  // ---- ai ----
+  // ───────────────────────── ai & ML ────────────────────────────────
   { key: 'aiFoundry', label: 'AI Foundry (Azure OpenAI)', category: 'ai', bicepFlag: 'aiFoundryEnabled',
-    icon: 'Azure-OpenAI.png', color: '#7719aa',
+    glyph: BrainCircuit24Regular, icon: 'Azure-OpenAI.png', color: '#7c3aed',
     description: 'AI Foundry project + Azure OpenAI deployments for Copilot/agents.' },
+  { key: 'foundryPortal', label: 'AI Foundry Portal', category: 'ai', bicepFlag: 'foundryPortalEnabled',
+    glyph: BotSparkle24Regular, color: '#7c3aed',
+    description: 'AI Foundry portal experience (hub + projects UI).' },
   { key: 'aiSearch', label: 'AI Search', category: 'ai', bicepFlag: 'aiSearchEnabled',
-    color: '#7719aa',
+    glyph: Search24Regular, color: '#7c3aed',
     description: 'Vector + keyword index for RAG over Loom items.' },
+  { key: 'defenderForAI', label: 'Defender for AI', category: 'ai', bicepFlag: 'defenderForAIEnabled',
+    glyph: ShieldCheckmark24Regular, color: '#7c3aed',
+    description: 'Threat protection + prompt-shield for AI workloads.' },
+  { key: 'mlWorkspace', label: 'Azure Machine Learning', category: 'ai', bicepFlag: 'mlWorkspaceEnabled',
+    glyph: Bot24Regular, icon: 'Machine-Learning-Studio-(Classic)-Web-Services.png', color: '#7c3aed',
+    description: 'AML workspace for training + MLOps (provisions its KV/Storage/AppInsights dependencies).' },
+  { key: 'aiServices', label: 'Azure AI Services (multi)', category: 'ai', bicepFlag: 'aiServicesEnabled',
+    glyph: Sparkle24Regular, icon: 'Azure-Applied-AI-Services.png', color: '#7c3aed',
+    description: 'Multi-service Cognitive Services account (Entra-only, custom subdomain).' },
+  { key: 'documentIntelligence', label: 'Document Intelligence', category: 'ai', bicepFlag: 'documentIntelligenceEnabled',
+    glyph: DocumentTable24Regular, color: '#7c3aed',
+    description: 'OCR + document extraction (FormRecognizer account, Entra-only).' },
+  { key: 'visionServices', label: 'Computer Vision', category: 'ai', bicepFlag: 'visionServicesEnabled',
+    glyph: Eye24Regular, color: '#7c3aed',
+    description: 'Image analysis + OCR (single-kind ComputerVision Cognitive Services account, Entra-only).' },
+  { key: 'speechServices', label: 'Speech Services', category: 'ai', bicepFlag: 'speechServicesEnabled',
+    glyph: Mic24Regular, color: '#7c3aed',
+    description: 'Speech-to-text, TTS, translation (single-kind SpeechServices account, Entra-only).' },
+  { key: 'languageServices', label: 'Language Services', category: 'ai', bicepFlag: 'languageServicesEnabled',
+    glyph: Translate24Regular, color: '#7c3aed',
+    description: 'Text analytics, entity + sentiment (single-kind TextAnalytics account, Entra-only).' },
+  { key: 'contentSafety', label: 'Content Safety', category: 'ai', bicepFlag: 'contentSafetyEnabled',
+    glyph: ShieldCheckmark24Regular, color: '#7c3aed',
+    description: 'Moderates text + image for harmful content (ContentSafety account, Entra-only).' },
 
-  // ---- integration ----
+  // ─────────────────────── integration ──────────────────────────────
   { key: 'apim', label: 'API Management', category: 'integration', bicepFlag: 'apimEnabled',
-    icon: 'API-Management-Services.png', color: '#e3008c',
+    glyph: PlugConnected24Regular, icon: 'API-Management-Services.png', color: '#e3008c',
     description: 'API gateway fronting data + AI APIs.' },
   { key: 'eventhubs', label: 'Event Hubs', category: 'integration', bicepFlag: null,
-    icon: 'Event-Hubs.png', color: '#0078d4',
+    glyph: Pulse24Regular, icon: 'Event-Hubs.png', color: '#e3008c',
     description: 'Streaming ingestion for Eventstream sources.' },
+  { key: 'eventGrid', label: 'Event Grid', category: 'integration', bicepFlag: 'eventGridEnabled',
+    glyph: BoardSplit24Regular, icon: 'Event-Grid-Topics.png', color: '#e3008c',
+    description: 'Pub/sub event routing across Azure (custom topic, local-auth disabled).' },
+  { key: 'serviceBus', label: 'Service Bus', category: 'integration', bicepFlag: 'serviceBusEnabled',
+    glyph: MailInbox24Regular, color: '#e3008c',
+    description: 'Enterprise messaging (Standard namespace, SAS disabled) + starter queue/topic.' },
+  { key: 'storageQueues', label: 'Storage Queues', category: 'integration', bicepFlag: 'storageQueuesEnabled',
+    glyph: ArrowRouting24Regular, color: '#e3008c',
+    description: 'Simple durable message queue on Storage (shared-key disabled) + starter queue.' },
+  { key: 'signalr', label: 'SignalR / Web PubSub', category: 'integration', bicepFlag: 'signalrEnabled',
+    glyph: Group24Regular, color: '#e3008c',
+    description: 'Real-time websocket fan-out (SignalR Standard_S1, AAD-only).' },
+  { key: 'businessProcess', label: 'Business Process Tracking', category: 'integration', bicepFlag: null, planOnly: true,
+    glyph: ArrowRouting24Regular, icon: 'Business-Process-Tracking.png', color: '#e3008c',
+    description: 'Track long-running business transactions. Plan-only — a preview capability layered on a Standard Logic App + tracking store, not a single self-contained resource.' },
 
-  // ---- governance ----
+  // ─────────────────── governance & security ────────────────────────
   { key: 'purview', label: 'Microsoft Purview', category: 'governance', bicepFlag: 'purviewEnabled',
-    color: '#0b6a0b',
+    glyph: BookGlobe24Regular, color: '#0b6a0b',
     description: 'Unified catalog + business domains. Reuse tenant Purview where present.' },
   { key: 'keyvault', label: 'Key Vault', category: 'governance', bicepFlag: null,
-    icon: 'Key-Vaults.png', color: '#0078d4',
+    glyph: Key24Regular, icon: 'Key-Vaults.png', color: '#0b6a0b',
     description: 'Secret + key store. Core — always deployed.' },
   { key: 'logAnalytics', label: 'Log Analytics + Sentinel', category: 'governance', bicepFlag: null,
-    color: '#0078d4',
+    glyph: ChartMultiple24Regular, color: '#0b6a0b',
     description: 'Monitoring workspace + Sentinel onboarding. Core — always deployed.' },
+  { key: 'loomMip', label: 'MIP Sensitivity Labels', category: 'governance', bicepFlag: 'loomMipEnabled',
+    glyph: ShieldKeyhole24Regular, color: '#0b6a0b',
+    description: 'Microsoft Purview Information Protection labels on Loom items.' },
+  { key: 'loomDlp', label: 'Data Loss Prevention (DLP)', category: 'governance', bicepFlag: 'loomDlpEnabled',
+    glyph: LockClosed24Regular, color: '#0b6a0b',
+    description: 'Purview DLP policies enforced across Loom.' },
+  { key: 'defenderCloud', label: 'Defender for Cloud', category: 'governance', bicepFlag: 'defenderCloudEnabled',
+    glyph: Shield24Regular, color: '#0b6a0b',
+    description: 'CSPM + workload protection plans (sets subscription Microsoft.Security pricing tiers to Standard).' },
+  { key: 'policy', label: 'Azure Policy / Blueprints', category: 'governance', bicepFlag: 'policyEnabled',
+    glyph: ClipboardTaskListLtr24Regular, color: '#0b6a0b',
+    description: 'Compliance guardrails (sample built-in audit policy assigned at the subscription scope).' },
+  { key: 'managedIdentity', label: 'Managed Identity', category: 'governance', bicepFlag: null,
+    glyph: ShieldCheckmark24Regular, color: '#0b6a0b',
+    description: 'User-assigned identity for service-to-service auth. Core.' },
 
-  // ---- networking ----
+  // ───────────────────── networking & edge ──────────────────────────
+  { key: 'vnet', label: 'Virtual Network', category: 'networking', bicepFlag: null,
+    glyph: VirtualNetwork24Regular, color: '#004578',
+    description: 'Landing-zone VNet + subnets. Core where private networking is on.' },
+  { key: 'privateEndpoints', label: 'Private Endpoints', category: 'networking', bicepFlag: null, planOnly: true,
+    glyph: Connector24Regular, color: '#004578',
+    description: 'Private Link endpoints for PaaS data planes. Plan-only — each endpoint needs a target resource id + the specific groupId/subresource, so it is provisioned per-target, not as a standalone toggle.' },
+  { key: 'privateDns', label: 'Private DNS Zones', category: 'networking', bicepFlag: null, planOnly: true,
+    glyph: Earth24Regular, color: '#004578',
+    description: 'Private DNS for Private Link resolution. Plan-only — zone name + VNet links are derived from the specific Private Endpoints being created, so it is provisioned alongside them rather than standalone.' },
   { key: 'appGateway', label: 'Application Gateway', category: 'networking', bicepFlag: 'appGatewayEnabled',
-    icon: 'Application-Gateways.png', color: '#004578',
+    glyph: Router24Regular, icon: 'Application-Gateways.png', color: '#004578',
     description: 'WAF + L7 ingress for the console.' },
   { key: 'frontDoor', label: 'Front Door', category: 'networking', bicepFlag: 'frontDoorEnabled',
-    icon: 'Front-Door-and-CDN-Profiles.png', color: '#004578',
+    glyph: GlobeShield24Regular, icon: 'Front-Door-and-CDN-Profiles.png', color: '#004578',
     description: 'Global edge + WAF (Commercial).' },
+  { key: 'cdn', label: 'CDN Profile', category: 'networking', bicepFlag: 'cdnEnabled',
+    glyph: Globe24Regular, icon: 'CDN-Profiles.png', color: '#004578',
+    description: 'Content delivery / edge cache (Standard Microsoft CDN profile; endpoints added from the navigator).' },
   { key: 'vpnGateway', label: 'VPN Gateway', category: 'networking', bicepFlag: 'vpnGatewayEnabled',
-    color: '#004578',
+    glyph: ArrowBidirectionalUpDown24Regular, color: '#004578',
     description: 'Hybrid connectivity into the landing zone.' },
+  { key: 'loadBalancer', label: 'Load Balancer', category: 'networking', bicepFlag: 'loadBalancerEnabled',
+    glyph: ArrowRouting24Regular, icon: 'Load-Balancers.png', color: '#004578',
+    description: 'Internal Standard L4 load balancer (isolated VNet/subnet + frontend/pool/probe/rule).' },
+  { key: 'firewall', label: 'Azure Firewall', category: 'networking', bicepFlag: 'firewallEnabled',
+    glyph: Shield24Regular, color: '#004578',
+    description: 'Managed stateful firewall (Standard AZFW_VNet in its own VNet with AzureFirewallSubnet + static public IP).' },
 ];
 
 const BY_KEY = new Map(SERVICE_CATALOG.map((s) => [s.key, s]));
@@ -111,6 +291,14 @@ export function serviceByKey(key: string): ServiceDef | undefined { return BY_KE
 export function servicesByCategory(cat: ServiceCategory): ServiceDef[] {
   return SERVICE_CATALOG.filter((s) => s.category === cat);
 }
+
+/** Resolve the icon glyph + color for a service key (always usable). */
+export function serviceVisual(key: string): { glyph: FluentIcon; color: string; label: string } {
+  const def = BY_KEY.get(key);
+  if (def) return { glyph: def.glyph, color: def.color, label: def.label };
+  return { glyph: Document24Regular, color: '#6b7280', label: key };
+}
+
 /** The bicep feature flags that the given service-key set turns on. */
 export function flagsForServices(keys: string[]): Record<string, boolean> {
   const out: Record<string, boolean> = {};
@@ -120,3 +308,8 @@ export function flagsForServices(keys: string[]): Record<string, boolean> {
   }
   return out;
 }
+
+/** QA/debug — how many distinct service types the catalog covers. */
+export const SERVICE_COUNT = SERVICE_CATALOG.length;
+/** How many of those have a real one-button bicep toggle. */
+export const TOGGLEABLE_SERVICE_COUNT = SERVICE_CATALOG.filter((s) => s.bicepFlag).length;

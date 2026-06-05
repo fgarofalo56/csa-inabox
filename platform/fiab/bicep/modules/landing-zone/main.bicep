@@ -292,6 +292,42 @@ module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(
 }
 
 // =====================================================================
+// 9b. Scaled Self-Hosted Integration Runtime (VMSS, scale-to-0)
+//
+// A shared 4-node self-hosted IR for the DLZ that costs nothing while idle:
+// the VMSS sits at 0 instances and Loom scales it up only when a pipeline runs.
+// Registers the IR on the DLZ Data Factory. Enabled by default but only deploys
+// once an admin password is supplied (a VMSS needs a local credential) — supply
+// `shirAdminPassword` from Key Vault at deploy. Honest gate per no-vaporware.
+// =====================================================================
+
+@description('Provision the scaled self-hosted IR (VMSS, scale-to-0) on the DLZ Data Factory.')
+param selfHostedIrEnabled bool = true
+
+@description('Local admin password for the SHIR VMSS nodes. Supply from Key Vault. Empty = SHIR not deployed (honest gate).')
+@secure()
+param shirAdminPassword string = ''
+
+@description('Target SHIR node count (the cluster scales 0↔this on demand).')
+param shirMaxNodes int = 4
+
+module shir 'shir.bicep' = if (selfHostedIrEnabled && adfEnabled && !empty(consolePrincipalId) && !empty(adfPrivateDnsZoneId) && !empty(shirAdminPassword)) {
+  name: 'dlz-shir'
+  params: {
+    location: location
+    domainName: domainName
+    dataFactoryName: adf.outputs.factoryName
+    subnetId: network.outputs.workloadsSubnetId
+    adminPassword: shirAdminPassword
+    maxNodes: shirMaxNodes
+    consolePrincipalId: consolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    workspaceId: adminPlaneLawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // 10. Cosmos Gremlin + NoSQL vector containers
 //
 // Backs the `cosmos-gremlin-graph` and `vector-store` editors. Opt-in via

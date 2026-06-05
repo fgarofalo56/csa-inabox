@@ -31,6 +31,19 @@ import { semanticModelProvisioner } from './provisioners/semantic-model';
 import { activatorProvisioner } from './provisioners/activator';
 import { dataPipelineProvisioner } from './provisioners/data-pipeline';
 import { eventstreamProvisioner } from './provisioners/eventstream';
+import { kqlDashboardProvisioner } from './provisioners/kql-dashboard';
+import { mirroredDatabaseProvisioner } from './provisioners/mirrored-database';
+import { databricksNotebookProvisioner } from './provisioners/databricks-notebook';
+import { reportProvisioner } from './provisioners/report';
+import { dataProductProvisioner } from './provisioners/data-product';
+import { mlModelProvisioner } from './provisioners/ml-model';
+import { promptFlowProvisioner } from './provisioners/prompt-flow';
+import { evaluationProvisioner } from './provisioners/evaluation';
+import { logicAppProvisioner } from './provisioners/logic-app';
+import { synapsePipelineProvisioner } from './provisioners/synapse-pipeline';
+import { adfPipelineProvisioner } from './provisioners/adf-pipeline';
+import { databricksJobProvisioner } from './provisioners/databricks-job';
+import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
 
 /** Mapping from editor item type → provisioner.  Item types not listed
  * here are Cosmos-only (no Phase-2 backend side-effect). */
@@ -41,11 +54,23 @@ const PROVISIONERS: Record<string, Provisioner> = {
   'kql-database': kqlDatabaseProvisioner,
   'kql-queryset': kqlDatabaseProvisioner, // queryset rides on top of the parent DB
   'eventhouse': kqlDatabaseProvisioner,   // eventhouse = kql cluster, same surface for install
+  'kql-dashboard': kqlDashboardProvisioner, // Real-Time Dashboard item (Fabric kqlDashboards)
   'ai-search-index': aiSearchProvisioner,
   'semantic-model': semanticModelProvisioner,
   'activator': activatorProvisioner,
   'data-pipeline': dataPipelineProvisioner,
   'eventstream': eventstreamProvisioner,
+  'mirrored-database': mirroredDatabaseProvisioner, // replicate legacy SQL → Bronze (Fabric Mirroring)
+  'databricks-notebook': databricksNotebookProvisioner, // import + run the Silver/Gold medallion notebooks
+  'report': reportProvisioner, // create the PBIR report bound byConnection to the semantic model
+  'data-product': dataProductProvisioner, // create Purview Unified Catalog data products + glossary terms
+  'ml-model': mlModelProvisioner, // import + run the bundle's training script → trains & registers the model in MLflow/UC
+  'prompt-flow': promptFlowProvisioner, // create the grounded RAG flow in the AI Foundry project (AML data-plane)
+  'evaluation': evaluationProvisioner, // submit a real AI Foundry evaluation run (no hard-coded scores)
+  'logic-app': logicAppProvisioner, // PUT Microsoft.Logic/workflows + fire manual trigger run + poll run history (real ARM)
+  'synapse-pipeline': synapsePipelineProvisioner, // PUT Synapse Studio pipeline + createRun + poll status (real Synapse dev REST)
+  'adf-pipeline': adfPipelineProvisioner, // PUT ADF pipeline (ARM) + createRun + poll status (real ARM)
+  'databricks-job': databricksJobProvisioner, // create/reset multi-task job w/ shared cluster + run-now + poll (real Jobs 2.1)
 };
 
 /** Item types that have a Phase-2 provisioner — exposed for the wizard
@@ -92,6 +117,16 @@ export function resolveTarget(mode: DeploymentMode, overrides?: Partial<Provisio
     aiSearchService: process.env.LOOM_AI_SEARCH_SERVICE,
     adlsAccount: process.env.LOOM_ADLS_ACCOUNT,
     adlsContainer: process.env.LOOM_ADLS_CONTAINER,
+    // Per-item backends DEFAULT to Azure-native (no-fabric-dependency.md).
+    // Fabric is opt-in only via LOOM_<ITEM>_BACKEND=fabric.
+    pipelineBackend: (process.env.LOOM_PIPELINE_BACKEND as ProvisionTarget['pipelineBackend']) || 'synapse',
+    eventBackend: (process.env.LOOM_EVENT_BACKEND as ProvisionTarget['eventBackend']) || 'eventhubs',
+    activatorBackend: (process.env.LOOM_ACTIVATOR_BACKEND as ProvisionTarget['activatorBackend']) || 'azure-monitor',
+    dashboardBackend: (process.env.LOOM_DASHBOARD_BACKEND as ProvisionTarget['dashboardBackend']) || 'adx',
+    mirrorBackend: (process.env.LOOM_MIRROR_BACKEND as ProvisionTarget['mirrorBackend']) || 'adf-cdc',
+    lakehouseBackend: (process.env.LOOM_LAKEHOUSE_BACKEND as ProvisionTarget['lakehouseBackend']) || 'adls',
+    semanticBackend: (process.env.LOOM_SEMANTIC_BACKEND as ProvisionTarget['semanticBackend']) || 'loom-native',
+    eventhubsNamespace: process.env.LOOM_EVENTHUB_NAMESPACE,
   };
   return { ...base, ...(overrides || {}) };
 }
@@ -126,6 +161,93 @@ export interface RunProvisioningOpts {
   targetOverrides?: Partial<ProvisionTarget>;
 }
 
+/** Max number of items provisioned concurrently. Bounds the fan-out so a
+ * large app (10-12 items) finishes well under the gateway timeout without
+ * hammering the Fabric/ARM/AI-Search control planes (which throttle at 429).
+ * Each item still runs its own one-shot transient retry. */
+const PROVISION_CONCURRENCY = 6;
+
+/** Provision a single installed item. Pure per-item logic extracted from the
+ * old serial loop so it can run inside a bounded-concurrency pool. Never
+ * throws (runWithRetry → safeRun guarantee), so a rejected slot can never
+ * sink the whole batch. The per-item provisioner contract and the returned
+ * ProvisionStep shape are unchanged. */
+async function provisionOne(
+  it: { itemType: string; id?: string; displayName: string; content?: unknown },
+  session: ProvisionerInput['session'],
+  appId: string,
+  workspaceId: string,
+  target: ProvisionTarget,
+): Promise<ProvisionStep> {
+  const p = PROVISIONERS[it.itemType];
+  if (!p) {
+    return {
+      itemType: it.itemType,
+      displayName: it.displayName,
+      cosmosItemId: it.id || '',
+      result: { status: 'skipped', steps: [`No Phase-2 provisioner for itemType '${it.itemType}' (Cosmos-only).`] },
+    };
+  }
+  if (!it.id) {
+    return {
+      itemType: it.itemType,
+      displayName: it.displayName,
+      cosmosItemId: '',
+      result: { status: 'failed', error: 'Cosmos item not created; cannot provision.', steps: [] },
+    };
+  }
+  const input: ProvisionerInput = {
+    session,
+    target,
+    cosmosItemId: it.id,
+    workspaceId,
+    displayName: it.displayName,
+    content: it.content || {},
+    appId,
+  };
+  const result = await runWithRetry(p, input);
+  return { itemType: it.itemType, displayName: it.displayName, cosmosItemId: it.id, result };
+}
+
+/**
+ * Pre-warm the Synapse dedicated SQL pool at the very START of an install that
+ * includes a warehouse on the dedicated backend.
+ *
+ * A dedicated pool auto-pauses on idle and refuses TDS while offline, so the
+ * warehouse provisioner otherwise has to fire the resume only when ITS step
+ * runs — and a cold resume takes 1-3 min (far past the gateway window), forcing
+ * a "Retry" round-trip on essentially every install. Firing the resume here,
+ * before the batched fan-out, starts the resume clock as early as possible so
+ * the pool is warming through the lakehouse / KQL / notebook / semantic-model
+ * steps. In the common case it's Online (or nearly) by the time the warehouse
+ * step runs, so the DDL + seed lands inline with no Retry. Best-effort and
+ * fully non-blocking: any failure (no ARM role, missing env) is swallowed — the
+ * warehouse provisioner still handles the resume + honest gate on its own.
+ */
+async function prewarmDedicatedPool(
+  installed: Array<{ itemType: string }>,
+  steps: string[],
+): Promise<void> {
+  const backend = process.env.LOOM_WAREHOUSE_BACKEND || 'synapse-dedicated';
+  if (backend !== 'synapse-dedicated') return;
+  if (!installed.some((it) => it.itemType === 'warehouse')) return;
+  try {
+    const { state } = await getPoolState();
+    if (state === 'Online') {
+      steps.push('Pre-warm: dedicated SQL pool already Online.');
+      return;
+    }
+    if (state === 'Paused' || state === 'Pausing' || state === 'Unknown') {
+      await resumePool();
+      steps.push(`Pre-warm: dedicated SQL pool was ${state}; fired ARM resume at install start (non-blocking).`);
+    } else {
+      steps.push(`Pre-warm: dedicated SQL pool already ${state}; resume in progress.`);
+    }
+  } catch (e: any) {
+    steps.push(`Pre-warm skipped (${e?.message || String(e)}); warehouse step will handle resume.`);
+  }
+}
+
 /** Run provisioning across an installed app's Cosmos items.  Each
  * `installed[i]` is an item just created by createOwnedItem(). */
 export async function runProvisioning(
@@ -151,38 +273,33 @@ export async function runProvisioning(
     };
   }
 
-  const out: ProvisionStep[] = [];
-  for (const it of installed) {
-    const p = PROVISIONERS[it.itemType];
-    if (!p) {
-      out.push({
-        itemType: it.itemType,
-        displayName: it.displayName,
-        cosmosItemId: it.id || '',
-        result: { status: 'skipped', steps: [`No Phase-2 provisioner for itemType '${it.itemType}' (Cosmos-only).`] },
-      });
-      continue;
-    }
-    if (!it.id) {
-      out.push({
-        itemType: it.itemType,
-        displayName: it.displayName,
-        cosmosItemId: '',
-        result: { status: 'failed', error: 'Cosmos item not created; cannot provision.', steps: [] },
-      });
-      continue;
-    }
-    const input: ProvisionerInput = {
-      session,
-      target,
-      cosmosItemId: it.id,
-      workspaceId,
-      displayName: it.displayName,
-      content: it.content || {},
-      appId,
-    };
-    const result = await runWithRetry(p, input);
-    out.push({ itemType: it.itemType, displayName: it.displayName, cosmosItemId: it.id, result });
+  // Pre-warm the dedicated SQL pool BEFORE the fan-out so a warehouse install
+  // doesn't pay a cold 1-3 min resume + Retry round-trip on its own step.
+  const prewarmSteps: string[] = [];
+  await prewarmDedicatedPool(installed, prewarmSteps);
+
+  // Provision items CONCURRENTLY in bounded batches. Serial provisioning of a
+  // 10-12 item app blew the ~30s gateway timeout (504); fanning out
+  // PROVISION_CONCURRENCY at a time cuts wall-clock to roughly the slowest
+  // item per batch. Results are written back by their original index so the
+  // returned `steps` order is deterministic and identical to the input order
+  // regardless of which item finishes first.
+  const out: ProvisionStep[] = new Array(installed.length);
+  for (let start = 0; start < installed.length; start += PROVISION_CONCURRENCY) {
+    const batch = installed.slice(start, start + PROVISION_CONCURRENCY);
+    const settled = await Promise.all(
+      batch.map((it) => provisionOne(it, session, appId, workspaceId, target)),
+    );
+    settled.forEach((step, j) => {
+      out[start + j] = step;
+    });
+  }
+
+  // Surface the pre-warm log on the warehouse step so the report explains the
+  // early resume that ran before this item's own provisioner.
+  if (prewarmSteps.length > 0) {
+    const wh = out.find((s) => s.itemType === 'warehouse');
+    if (wh) wh.result.steps = [...prewarmSteps, ...(wh.result.steps || [])];
   }
 
   // Aggregate outcome.

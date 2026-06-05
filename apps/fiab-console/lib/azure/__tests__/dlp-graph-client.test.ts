@@ -44,12 +44,29 @@ describe('dlp-graph-client', () => {
     }
   });
 
-  it('returns [] when Graph 404s on the DLP policies list (preview not enabled)', async () => {
+  it('honest-gates when Graph has no DLP policies segment for the tenant (404)', async () => {
     process.env.LOOM_DLP_ENABLED = 'true';
     fetchMock.mockResolvedValue(new Response('', { status: 404 }));
     const mod = await import('../dlp-graph-client');
-    const policies = await mod.listDlpPolicies();
-    expect(policies).toEqual([]);
+    // The dataLossPrevention segment isn't readable via Graph for most tenants
+    // (404 or 400 "Resource not found for the segment"). We surface an honest
+    // configured-but-unavailable gate naming the Purview-portal action, rather
+    // than masquerade it as an empty policy list.
+    await expect(mod.listDlpPolicies()).rejects.toBeInstanceOf(mod.DlpNotConfiguredError);
+    try {
+      await mod.listDlpPolicies();
+    } catch (e: any) {
+      expect(e.hint.followUp).toMatch(/Purview portal/i);
+    }
+  });
+
+  it('honest-gates when Graph 400s with "Resource not found for the segment"', async () => {
+    process.env.LOOM_DLP_ENABLED = 'true';
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: 'BadRequest', message: "Resource not found for the segment 'dataLossPreventionPolicies'." } }), { status: 400 }),
+    );
+    const mod = await import('../dlp-graph-client');
+    await expect(mod.listDlpPolicies()).rejects.toBeInstanceOf(mod.DlpNotConfiguredError);
   });
 
   it('shapes DLP policy responses', async () => {

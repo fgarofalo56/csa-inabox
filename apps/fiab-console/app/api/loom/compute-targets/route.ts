@@ -19,10 +19,10 @@
  * Used by: notebook, data-pipeline, dataflow, spark-job-definition, and any
  * other editor that needs to pick a compute backend.
  */
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listSparkPools } from '@/lib/azure/synapse-dev-client';
-import { listClusters } from '@/lib/azure/databricks-client';
+import { listClusters, createCluster } from '@/lib/azure/databricks-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -111,4 +111,66 @@ export async function GET() {
   } catch { /* helper not exported in this build — skip silently */ }
 
   return NextResponse.json({ ok: true, computes, errors });
+}
+
+/**
+ * POST /api/loom/compute-targets — create a new compute target.
+ *
+ * Currently scoped to Databricks interactive clusters (the gap the operator
+ * hit: "I have no way to … create a new cluster"). Synapse Spark pool creation
+ * is an ARM workspace-capacity operation handled in the Synapse pool editor;
+ * Serverless/Dedicated SQL are provisioned by Bicep — so create here = a real
+ * Databricks /api/2.0/clusters/create.
+ *
+ * Body (all collected via guided dropdowns in <ComputePicker>, no raw JSON):
+ *   { kind: 'databricks-cluster', cluster_name, spark_version, node_type_id,
+ *     num_workers?, autotermination_minutes? }
+ *
+ * Returns the new cluster id so the caller can select + start it. Failures
+ * (insufficient permission, bad node type, quota) surface verbatim — no mocks.
+ */
+export async function POST(req: NextRequest) {
+  const s = getSession();
+  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  const body = (await req.json().catch(() => ({}))) as {
+    kind?: string;
+    cluster_name?: string;
+    spark_version?: string;
+    node_type_id?: string;
+    num_workers?: number;
+    autotermination_minutes?: number;
+  };
+
+  if (body.kind && body.kind !== 'databricks-cluster') {
+    return NextResponse.json(
+      { ok: false, error: `Create is only supported for Databricks clusters here. Synapse Spark pools are created in the Synapse pool editor; SQL pools are deployed by Bicep.` },
+      { status: 400 },
+    );
+  }
+
+  const missing: string[] = [];
+  if (!body.cluster_name) missing.push('cluster_name');
+  if (!body.spark_version) missing.push('spark_version');
+  if (!body.node_type_id) missing.push('node_type_id');
+  if (missing.length) {
+    return NextResponse.json({ ok: false, error: `Missing: ${missing.join(', ')}` }, { status: 400 });
+  }
+
+  try {
+    const { cluster_id } = await createCluster({
+      cluster_name: body.cluster_name!,
+      spark_version: body.spark_version!,
+      node_type_id: body.node_type_id!,
+      num_workers: typeof body.num_workers === 'number' ? body.num_workers : 2,
+      autotermination_minutes:
+        typeof body.autotermination_minutes === 'number' ? body.autotermination_minutes : 30,
+    });
+    return NextResponse.json({
+      ok: true,
+      created: { id: `databricks:${cluster_id}`, cluster_id, kind: 'databricks-cluster' },
+    });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+  }
 }

@@ -52,6 +52,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, service });
   } catch (e: any) {
     if (e instanceof ApimError) {
+      const txt = JSON.stringify(e.body || '') + (e.message || '');
+      // 409 ServiceLocked = APIM is mid-operation (a prior SKU/scale change is
+      // still applying — these take 15-45 min). Transient + retryable, not a
+      // real failure. Surface a clear "transitioning, retry shortly" message.
+      if (e.status === 409 || /ServiceLocked|transitioning/i.test(txt)) {
+        return NextResponse.json({
+          ok: false,
+          error: 'API Management is currently transitioning — a prior scale/SKU operation is still applying (these can take 15-45 min). Wait a few minutes and retry; no change was lost.',
+          retryable: true,
+          gate: { reason: 'APIM is locked while an in-flight operation completes.', remediation: 'Retry once the service shows "Succeeded" again (Service & SKU tab refresh).' },
+        }, { status: 409 });
+      }
       return NextResponse.json({ ok: false, error: e.message, body: e.body }, { status: e.status || 502 });
     }
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });

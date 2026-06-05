@@ -118,7 +118,7 @@ export function PinnedSection() {
   return (
     <div className={styles.root}>
       <div className={styles.header}>
-        <Star16Filled style={{ color: '#F59E0B' }} />
+        <Star16Filled style={{ color: 'var(--loom-accent-gold)' }} />
         Pinned
       </div>
       {items.length === 0 ? (

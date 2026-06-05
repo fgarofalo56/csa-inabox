@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { mirroredDatabaseFromContent } from '../../_lib/ai-content-fallback';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,10 +21,27 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'mirrored-database') return err('mirrored database not found', 404);
+    const liveDefinition = (resource.state as any)?.definition || null;
+    // Bundle-installed mirror with no live definition yet: project the
+    // bundle's MirroredDatabaseContent (source + tables) into the editor's
+    // definition + per-table replication shape so it opens FULLY BUILT-OUT.
+    if (!liveDefinition) {
+      const fallback = mirroredDatabaseFromContent(resource);
+      if (fallback) {
+        return NextResponse.json({
+          ok: true,
+          mirroredDatabase: { id: resource.id, displayName: resource.displayName, description: resource.description },
+          definition: fallback.definition,
+          status: fallback.status,
+          tables: fallback.tables,
+          source: 'bundle',
+        });
+      }
+    }
     return NextResponse.json({
       ok: true,
       mirroredDatabase: { id: resource.id, displayName: resource.displayName, description: resource.description },
-      definition: (resource.state as any)?.definition || null,
+      definition: liveDefinition,
       status: { mirroringStatus: (resource.state as any)?.mirroringStatus || 'NotStarted' },
       tables: null,
     });

@@ -27,7 +27,7 @@ import {
 import {
   Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
-  ArrowImport20Regular, Add20Regular, Delete20Regular,
+  ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ApimTree } from '@/lib/components/apim/apim-tree';
@@ -98,12 +98,91 @@ interface ApimApi {
   subscriptionRequired?: boolean;
 }
 
+interface ApimParameter {
+  name: string;
+  type?: string;
+  required?: boolean;
+  description?: string;
+}
+
+interface ApimRepresentation {
+  contentType: string;
+  example?: string;
+}
+
+interface ApimOperationResponse {
+  statusCode: number;
+  description?: string;
+}
+
 interface ApimOperation {
   id: string;
   name: string;
   displayName: string;
   method: string;
   urlTemplate: string;
+  description?: string;
+  templateParameters?: ApimParameter[];
+  request?: {
+    description?: string;
+    queryParameters?: ApimParameter[];
+    headers?: ApimParameter[];
+    representations?: ApimRepresentation[];
+  };
+  responses?: ApimOperationResponse[];
+}
+
+// Editable draft for the operation authoring dialog. Params/representations are
+// edited as newline/text blocks then parsed on save, keeping the form compact
+// while still round-tripping the real ParameterContract / ResponseContract shape.
+interface OperationDraft {
+  operationId: string;        // empty on a new op → server slugs from displayName
+  isNew: boolean;
+  displayName: string;
+  method: string;
+  urlTemplate: string;
+  description: string;
+  // "name:type:required" per line (type/required optional) for template + query + header params
+  templateParams: string;
+  queryParams: string;
+  headerParams: string;
+  // "contentType" per line for request representations
+  requestReps: string;
+  // "statusCode:description" per line
+  responses: string;
+}
+
+const EMPTY_OP_DRAFT: OperationDraft = {
+  operationId: '', isNew: true, displayName: '', method: 'GET', urlTemplate: '/',
+  description: '', templateParams: '', queryParams: '', headerParams: '', requestReps: '', responses: '200:OK',
+};
+
+// Parse "name:type:required" lines into ApimParameter[]. type defaults to
+// 'string'; a trailing ':required' / ':true' marks the param required.
+function parseParams(text: string): ApimParameter[] {
+  return text.split('\n').map((l) => l.trim()).filter(Boolean).map((line) => {
+    const [name, type, req] = line.split(':').map((x) => x.trim());
+    return { name, type: type || 'string', required: req === 'required' || req === 'true' };
+  }).filter((p) => p.name);
+}
+
+// Parse "statusCode:description" lines into responses.
+function parseResponses(text: string): ApimOperationResponse[] {
+  return text.split('\n').map((l) => l.trim()).filter(Boolean).map((line) => {
+    const ix = line.indexOf(':');
+    const code = parseInt(ix < 0 ? line : line.slice(0, ix), 10);
+    return { statusCode: code, description: ix < 0 ? undefined : line.slice(ix + 1).trim() || undefined };
+  }).filter((r) => Number.isFinite(r.statusCode));
+}
+
+function paramsToText(params?: ApimParameter[]): string {
+  return (params || []).map((p) => `${p.name}:${p.type || 'string'}${p.required ? ':required' : ''}`).join('\n');
+}
+function responsesToText(rs?: ApimOperationResponse[]): string {
+  return (rs || []).map((r) => `${r.statusCode}${r.description ? ':' + r.description : ''}`).join('\n');
+}
+function repsToText(reps?: ApimRepresentation[]): string {
+  return (reps || []).map((r) => r.contentType).join('\n');
 }
 
 const PROTOCOLS = ['https', 'http', 'ws', 'wss'] as const;
@@ -133,8 +212,16 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const [specSaving, setSpecSaving] = useState(false);
   const [specError, setSpecError] = useState<string | null>(null);
 
-  // Tab: Design | Test | Revisions
-  const [tab, setTab] = useState<'design' | 'test' | 'revisions'>('design');
+  // Tab: Design | Operations | Test | Revisions
+  const [tab, setTab] = useState<'design' | 'operations' | 'test' | 'revisions'>('design');
+
+  // Operations authoring — editor dialog over a single operation's contract.
+  const [opDialogOpen, setOpDialogOpen] = useState(false);
+  const [opDraft, setOpDraft] = useState<OperationDraft>(EMPTY_OP_DRAFT);
+  const [opBusy, setOpBusy] = useState(false);
+  const [opErr, setOpErr] = useState<string | null>(null);
+  const [opMsg, setOpMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const [opLoadingDetail, setOpLoadingDetail] = useState(false);
 
   // Import API dialog (OpenAPI / WSDL / GraphQL).
   const [importOpen, setImportOpen] = useState(false);
@@ -142,6 +229,21 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const [importValue, setImportValue] = useState('');
   const [importBusy, setImportBusy] = useState(false);
   const [importErr, setImportErr] = useState<string | null>(null);
+
+  // Import-from-OpenAPI dialog — self-contained "Create from definition →
+  // OpenAPI" parity. Collects API id + display name + path + format + spec and
+  // POSTs to /api/apim/import (real ARM PUT). Unlike the Import-API dialog
+  // above (which patches the *current* API), this can mint a brand-new API
+  // from a spec in one shot, then navigates to it.
+  const [oasOpen, setOasOpen] = useState(false);
+  const [oasApiId, setOasApiId] = useState('');
+  const [oasDisplayName, setOasDisplayName] = useState('');
+  const [oasPath, setOasPath] = useState('');
+  const [oasFormat, setOasFormat] = useState<'openapi+json' | 'openapi-link'>('openapi+json');
+  const [oasValue, setOasValue] = useState('');
+  const [oasBusy, setOasBusy] = useState(false);
+  const [oasErr, setOasErr] = useState<string | null>(null);
+  const [oasGate, setOasGate] = useState<string | null>(null);
 
   // Test console — pick an operation, edit method/template/headers/body, send.
   const [testOpName, setTestOpName] = useState<string>('');
@@ -211,6 +313,11 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const save = useCallback(async () => {
     if (!displayName.trim() || !path.trim()) {
       setStatus({ kind: 'err', msg: 'displayName and path are required' });
+      return;
+    }
+    if (protocols.length === 0) {
+      // APIM rejects an API with no protocols — guard client-side with a clear message.
+      setStatus({ kind: 'err', msg: 'Select at least one protocol (https / http / ws / wss).' });
       return;
     }
     setStatus({ kind: 'saving' });
@@ -332,6 +439,55 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     finally { setImportBusy(false); }
   }, [id, importKind, importValue, displayName, path, protocols, subscriptionRequired, serviceUrl, loadOps, loadSpec]);
 
+  // ---- Import from OpenAPI (dedicated /api/apim/import) ----
+  const openOas = useCallback(() => {
+    // Seed from the current editor so importing onto an existing API is a
+    // one-click default; on the new-API form everything starts blank.
+    setOasApiId(isNew ? '' : id);
+    setOasDisplayName(displayName || '');
+    setOasPath(path || '');
+    setOasFormat('openapi+json');
+    setOasValue('');
+    setOasErr(null);
+    setOasGate(null);
+    setOasOpen(true);
+  }, [isNew, id, displayName, path]);
+
+  const runOasImport = useCallback(async () => {
+    const apiIdTrim = oasApiId.trim();
+    const pathTrim = oasPath.trim();
+    if (!apiIdTrim) { setOasErr('API id is required.'); return; }
+    if (!pathTrim) { setOasErr('URL path is required.'); return; }
+    if (!oasValue.trim()) { setOasErr(oasFormat === 'openapi-link' ? 'Spec URL is required.' : 'OpenAPI document is required.'); return; }
+    if (oasFormat === 'openapi+json') {
+      try { JSON.parse(oasValue); }
+      catch (e: any) { setOasErr(`Inline OpenAPI is not valid JSON: ${e?.message || String(e)}`); return; }
+    }
+    setOasBusy(true); setOasErr(null); setOasGate(null);
+    try {
+      const r = await fetch('/api/apim/import', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          apiId: apiIdTrim,
+          displayName: oasDisplayName.trim() || undefined,
+          path: pathTrim,
+          format: oasFormat,
+          value: oasValue,
+        }),
+      });
+      const j = await r.json();
+      if (r.status === 503 && j?.code === 'not_configured') { setOasGate(j.missing || j.error || 'APIM not configured'); return; }
+      if (!j.ok) { setOasErr(j.error || `HTTP ${r.status}`); return; }
+      setOasOpen(false);
+      setStatus({ kind: 'ok', msg: `Imported ${j.api.displayName || j.api.name} (${j.api.name}) at path /${j.api.path}` });
+      // Navigate to the created/updated API so its operations + spec render.
+      if (j.api?.name && j.api.name !== id) router.push(`/items/apim-api/${encodeURIComponent(j.api.name)}`);
+      else { load(); loadOps(); loadSpec(); }
+    } catch (e: any) { setOasErr(e?.message || String(e)); }
+    finally { setOasBusy(false); }
+  }, [oasApiId, oasPath, oasValue, oasFormat, oasDisplayName, id, router, load, loadOps, loadSpec]);
+
   // ---- Test console ----
   const sendTest = useCallback(async () => {
     setTestBusy(true); setTestErr(null); setTestResp(null);
@@ -361,6 +517,93 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     const op = (ops.data || []).find((o) => o.name === opName);
     if (op) { setTestMethod(op.method || 'GET'); setTestTemplate(op.urlTemplate || '/'); }
   }, [ops.data]);
+
+  // ---- Operations authoring ----
+  const openNewOp = useCallback(() => {
+    setOpDraft(EMPTY_OP_DRAFT);
+    setOpErr(null);
+    setOpDialogOpen(true);
+  }, []);
+
+  // Open the edit dialog for an existing operation — fetch full detail (the
+  // list only carries method/template/displayName) so template/query/header
+  // params and responses are populated for editing.
+  const openEditOp = useCallback(async (operationName: string) => {
+    setOpErr(null); setOpLoadingDetail(true);
+    setOpDraft({ ...EMPTY_OP_DRAFT, isNew: false, operationId: operationName });
+    setOpDialogOpen(true);
+    try {
+      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations?operationId=${encodeURIComponent(operationName)}`);
+      const j = await r.json();
+      if (!j.ok) { setOpErr(j.error || `HTTP ${r.status}`); return; }
+      const o: ApimOperation = j.operation;
+      setOpDraft({
+        operationId: o.name, isNew: false,
+        displayName: o.displayName || '', method: o.method || 'GET', urlTemplate: o.urlTemplate || '/',
+        description: o.description || '',
+        templateParams: paramsToText(o.templateParameters),
+        queryParams: paramsToText(o.request?.queryParameters),
+        headerParams: paramsToText(o.request?.headers),
+        requestReps: repsToText(o.request?.representations),
+        responses: responsesToText(o.responses) || '200:OK',
+      });
+    } catch (e: any) { setOpErr(e?.message || String(e)); }
+    finally { setOpLoadingDetail(false); }
+  }, [id]);
+
+  const saveOp = useCallback(async () => {
+    if (!opDraft.displayName.trim()) { setOpErr('Display name is required.'); return; }
+    if (!opDraft.urlTemplate.trim()) { setOpErr('URL template is required.'); return; }
+    setOpBusy(true); setOpErr(null); setOpMsg(null);
+    const repsList = opDraft.requestReps.split('\n').map((l) => l.trim()).filter(Boolean).map((contentType) => ({ contentType }));
+    const payload = {
+      operationId: opDraft.isNew ? undefined : opDraft.operationId,
+      displayName: opDraft.displayName.trim(),
+      method: opDraft.method,
+      urlTemplate: opDraft.urlTemplate.trim(),
+      description: opDraft.description.trim() || undefined,
+      templateParameters: parseParams(opDraft.templateParams),
+      request: {
+        queryParameters: parseParams(opDraft.queryParams),
+        headers: parseParams(opDraft.headerParams),
+        representations: repsList,
+      },
+      responses: parseResponses(opDraft.responses),
+    };
+    try {
+      // POST creates (server slugs the id); PUT replaces an existing op.
+      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations`, {
+        method: opDraft.isNew ? 'POST' : 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!j.ok) { setOpErr(j.error || `HTTP ${r.status}`); return; }
+      setOpDialogOpen(false);
+      setOpMsg({ intent: 'success', text: `${opDraft.isNew ? 'Created' : 'Updated'} operation ${j.operation.displayName} (${j.operation.method} ${j.operation.urlTemplate}).` });
+      loadOps();
+    } catch (e: any) { setOpErr(e?.message || String(e)); }
+    finally { setOpBusy(false); }
+  }, [id, opDraft, loadOps]);
+
+  const deleteOp = useCallback(async (operationName: string, label: string) => {
+    if (typeof window !== 'undefined' && !window.confirm(`Delete operation "${label}"? This cannot be undone.`)) return;
+    setOpBusy(true); setOpMsg(null);
+    try {
+      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations?operationId=${encodeURIComponent(operationName)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) { setOpMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      setOpMsg({ intent: 'success', text: `Deleted operation ${label}.` });
+      loadOps();
+    } catch (e: any) { setOpMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setOpBusy(false); }
+  }, [id, loadOps]);
+
+  // Per-operation policy entry point — deep-links to the policy editor at
+  // operation scope (apis/{id}/operations/{opId}/policies/policy).
+  const openOpPolicy = useCallback((operationName: string) => {
+    router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=operation&apiId=${encodeURIComponent(id)}&operationId=${encodeURIComponent(operationName)}`);
+  }, [router, id]);
 
   // ---- Revisions ----
   const loadRevs = useCallback(async () => {
@@ -398,23 +641,28 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'API', actions: [
-        { label: status.kind === 'saving' ? 'Saving…' : 'Save', onClick: status.kind !== 'saving' && (isNew || dirty) && displayName.trim() && path.trim() ? save : undefined, disabled: status.kind === 'saving' || (!isNew && !dirty) || !displayName.trim() || !path.trim(), title: !displayName.trim() || !path.trim() ? 'displayName and path are required' : (!dirty && !isNew ? 'No unsaved changes' : undefined) },
+        { label: status.kind === 'saving' ? 'Saving…' : 'Save', onClick: status.kind !== 'saving' && (isNew || dirty) && displayName.trim() && path.trim() && protocols.length > 0 ? save : undefined, disabled: status.kind === 'saving' || (!isNew && !dirty) || !displayName.trim() || !path.trim() || protocols.length === 0, title: !displayName.trim() || !path.trim() ? 'displayName and path are required' : protocols.length === 0 ? 'Select at least one protocol' : (!dirty && !isNew ? 'No unsaved changes' : undefined) },
         { label: 'Reload', onClick: !isNew ? () => { load(); loadOps(); loadSpec(); } : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
       { label: 'Definition', actions: [
-        { label: 'Import API', onClick: () => { setImportErr(null); setImportOpen(true); }, title: 'Import OpenAPI / WSDL / GraphQL' },
+        { label: 'Import from OpenAPI', onClick: openOas, title: 'Create or replace an API from an OpenAPI definition (inline or URL)' },
+        { label: 'Import API', onClick: () => { setImportErr(null); setImportOpen(true); }, title: 'Import OpenAPI / WSDL / GraphQL into the current API' },
         { label: 'Edit OpenAPI', onClick: !isNew ? openSpecEditor : undefined, disabled: isNew, title: isNew ? 'Save the API first, then edit the spec' : undefined },
         { label: 'Copy spec', onClick: spec.data?.value ? copySpec : undefined, disabled: !spec.data?.value, title: !spec.data?.value ? 'No spec attached to this API' : undefined },
+      ]},
+      { label: 'Design', actions: [
+        { label: 'Operations', onClick: !isNew ? () => setTab('operations') : undefined, disabled: isNew, title: isNew ? 'Save the API first' : 'Create / edit / delete operations' },
+        { label: 'Add operation', onClick: !isNew ? () => { setTab('operations'); openNewOp(); } : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
       { label: 'Run', actions: [
         { label: 'Test', onClick: !isNew ? () => setTab('test') : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
         { label: 'Revisions', onClick: !isNew ? () => setTab('revisions') : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
       ]},
       { label: 'Policy', actions: [
-        { label: 'Open policy editor', onClick: !isNew ? () => router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=api&apiId=${encodeURIComponent(id)}`) : undefined, disabled: isNew, title: isNew ? 'Save the API first' : undefined },
+        { label: 'API policy', onClick: !isNew ? () => router.push(`/items/apim-policy/${encodeURIComponent(id)}?scope=api&apiId=${encodeURIComponent(id)}`) : undefined, disabled: isNew, title: isNew ? 'Save the API first' : 'Edit the API-scope policy XML' },
       ]},
     ]},
-  ], [status.kind, isNew, dirty, displayName, path, save, load, loadOps, loadSpec, spec.data, openSpecEditor, router, id]);
+  ], [status.kind, isNew, dirty, displayName, path, protocols, save, load, loadOps, loadSpec, spec.data, openSpecEditor, openOas, openNewOp, router, id]);
 
   const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
@@ -445,9 +693,16 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
             <Badge appearance="outline">{api.data?.name || id}</Badge>
             {subscriptionRequired && <Badge appearance="outline">Subscription required</Badge>}
             {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
-            <Button appearance="primary" icon={<Save20Regular />} onClick={save} disabled={status.kind === 'saving' || (!isNew && !dirty)}>
+            <Button
+              appearance="primary"
+              icon={<Save20Regular />}
+              onClick={save}
+              disabled={status.kind === 'saving' || (!isNew && !dirty) || !displayName.trim() || !path.trim() || protocols.length === 0}
+              title={!displayName.trim() || !path.trim() ? 'Display name and path are required' : protocols.length === 0 ? 'Select at least one protocol' : (!dirty && !isNew ? 'No unsaved changes' : undefined)}
+            >
               {status.kind === 'saving' ? 'Saving…' : isNew ? 'Create' : 'Save'}
             </Button>
+            <Button appearance="outline" icon={<CloudArrowUp20Regular />} onClick={openOas}>Import from OpenAPI</Button>
             <Button appearance="outline" icon={<ArrowImport20Regular />} onClick={() => { setImportErr(null); setImportOpen(true); }}>Import</Button>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => { load(); loadOps(); loadSpec(); }}>
               Reload
@@ -461,6 +716,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
 
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
             <Tab value="design" icon={<Document20Regular />}>Design</Tab>
+            <Tab value="operations" icon={<Code20Regular />} disabled={isNew}>Operations</Tab>
             <Tab value="test" icon={<Play20Regular />} disabled={isNew}>Test console</Tab>
             <Tab value="revisions" icon={<BranchFork20Regular />} disabled={isNew}>Revisions</Tab>
           </TabList>
@@ -506,6 +762,48 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
             </>
           )}
 
+          {tab === 'operations' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Body1>Create, edit, and delete the API's operations — method, URL template, parameters, and declared responses. Writes go straight to APIM via real ARM REST.</Body1>
+                <Button appearance="primary" icon={<Add20Regular />} onClick={openNewOp} style={{ marginLeft: 'auto' }}>Add operation</Button>
+                <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadOps}>Reload</Button>
+              </div>
+              {opMsg && <MessageBar intent={opMsg.intent}><MessageBarBody>{opMsg.text}</MessageBarBody></MessageBar>}
+              {ops.loading && <Spinner size="tiny" label="Loading operations…" labelPosition="after" />}
+              {ops.error && !ops.loading && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Could not load operations</MessageBarTitle>{ops.error}</MessageBarBody></MessageBar>}
+              {!ops.loading && !ops.error && (
+                <Table size="small" aria-label="Operations">
+                  <TableHeader><TableRow>
+                    <TableHeaderCell>Method</TableHeaderCell>
+                    <TableHeaderCell>Display name</TableHeaderCell>
+                    <TableHeaderCell>URL template</TableHeaderCell>
+                    <TableHeaderCell>Actions</TableHeaderCell>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {(ops.data || []).length === 0 && (
+                      <TableRow><TableCell colSpan={4}><Caption1>No operations yet. Click <strong>Add operation</strong> or import an OpenAPI spec.</Caption1></TableCell></TableRow>
+                    )}
+                    {(ops.data || []).map((op) => (
+                      <TableRow key={op.name}>
+                        <TableCell><Badge appearance="tint" color={op.method === 'GET' ? 'success' : op.method === 'DELETE' ? 'danger' : 'brand'}>{op.method}</Badge></TableCell>
+                        <TableCell>{op.displayName || op.name}</TableCell>
+                        <TableCell><code>{op.urlTemplate}</code></TableCell>
+                        <TableCell>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <Button size="small" onClick={() => openEditOp(op.name)}>Edit</Button>
+                            <Button size="small" appearance="outline" icon={<Code20Regular />} onClick={() => openOpPolicy(op.name)}>Policy</Button>
+                            <Button size="small" appearance="outline" icon={<Delete20Regular />} onClick={() => deleteOp(op.name, op.displayName || op.name)} disabled={opBusy}>Delete</Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          )}
+
           {tab === 'test' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <Body1>Sends a real request through the APIM gateway. The all-access subscription key is attached server-side; it never reaches the browser.</Body1>
@@ -517,7 +815,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                     selectedOptions={testOpName ? [testOpName] : []}
                     onOptionSelect={(_, d) => d.optionValue && pickTestOp(d.optionValue)}
                   >
-                    {(ops.data || []).map((op) => <Option key={op.name} value={op.name}>{op.method} {op.urlTemplate}</Option>)}
+                    {(ops.data || []).map((op) => <Option key={op.name} value={op.name}>{`${op.method} ${op.urlTemplate}`}</Option>)}
                   </Dropdown>
                 </Field>
                 <Field label="Method">
@@ -562,6 +860,17 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
 
           {tab === 'revisions' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Honest gate per ui-parity.md: APIM also offers API *versions* /
+                  version sets (segment/header/query scheme) alongside revisions.
+                  That is a distinct, heavier ARM surface (apiVersionSets +
+                  per-version apis) with no BFF route yet, so it is flagged rather
+                  than stubbed. Revisions below are fully live. */}
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Revisions are live. Versions / version sets are a tracked gap.</MessageBarTitle>
+                  API <em>versions</em> (segment / header / query-string scheme via <code>apiVersionSets</code>) are not built yet — they need a dedicated <code>/api/apim/version-sets</code> route. Revision list, create, and release (make-current) below all call real ARM.
+                </MessageBarBody>
+              </MessageBar>
               <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <Subtitle2>Create revision</Subtitle2>
                 <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -655,6 +964,68 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
             </DialogSurface>
           </Dialog>
 
+          {/* Import from OpenAPI dialog — dedicated /api/apim/import (real ARM PUT) */}
+          <Dialog open={oasOpen} onOpenChange={(_, d) => { if (!d.open) setOasOpen(false); }}>
+            <DialogSurface style={{ maxWidth: '90vw', width: 760 }}>
+              <DialogBody>
+                <DialogTitle>Import from OpenAPI</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Body1>
+                      Creates or replaces an API from an OpenAPI definition. APIM parses the spec
+                      into operations and schemas — the same as the portal's <em>Create from definition → OpenAPI</em>.
+                    </Body1>
+                    <div className={s.form}>
+                      <Field label="API id" required hint="Resource name (lowercase, e.g. 'petstore')">
+                        <Input value={oasApiId} onChange={(_, d) => setOasApiId(d.value)} placeholder="petstore" />
+                      </Field>
+                      <Field label="Display name" hint="Defaults to the spec's info.title">
+                        <Input value={oasDisplayName} onChange={(_, d) => setOasDisplayName(d.value)} placeholder="Pet Store" />
+                      </Field>
+                      <Field label="URL path" required hint="Suffix after the gateway hostname, e.g. 'petstore'">
+                        <Input value={oasPath} onChange={(_, d) => setOasPath(d.value)} placeholder="petstore" />
+                      </Field>
+                      <Field label="Source">
+                        <Dropdown
+                          value={oasFormat === 'openapi-link' ? 'OpenAPI (link to spec URL)' : 'OpenAPI (inline JSON)'}
+                          selectedOptions={[oasFormat]}
+                          onOptionSelect={(_, d) => d.optionValue && setOasFormat(d.optionValue as typeof oasFormat)}
+                        >
+                          <Option value="openapi+json">OpenAPI (inline JSON)</Option>
+                          <Option value="openapi-link">OpenAPI (link to spec URL)</Option>
+                        </Dropdown>
+                      </Field>
+                    </div>
+                    {oasFormat === 'openapi-link' ? (
+                      <Field label="Spec URL" required>
+                        <Input value={oasValue} onChange={(_, d) => setOasValue(d.value)} placeholder="https://petstore3.swagger.io/api/v3/openapi.json" />
+                      </Field>
+                    ) : (
+                      <Field label="OpenAPI document (JSON)" required>
+                        <MonacoTextarea value={oasValue} onChange={setOasValue} language="json" height={300} minHeight={220} ariaLabel="OpenAPI document to import" />
+                      </Field>
+                    )}
+                    {oasGate && (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>APIM not configured</MessageBarTitle>
+                          This deployment has no target APIM service. Set <code>{oasGate}</code> on the Console app, then retry.
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {oasErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Import failed</MessageBarTitle>{oasErr}</MessageBarBody></MessageBar>}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setOasOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={runOasImport} disabled={oasBusy || !oasApiId.trim() || !oasPath.trim() || !oasValue.trim()}>
+                    {oasBusy ? 'Importing…' : 'Import'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
           {/* Edit OpenAPI dialog */}
           <Dialog open={specEditorOpen} onOpenChange={(_, d) => { if (!d.open) setSpecEditorOpen(false); }}>
             <DialogSurface style={{ maxWidth: '90vw', width: 900 }}>
@@ -667,6 +1038,61 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                 <DialogActions>
                   <Button onClick={() => setSpecEditorOpen(false)}>Cancel</Button>
                   <Button appearance="primary" onClick={saveSpec} disabled={specSaving}>{specSaving ? 'Saving…' : 'Save spec'}</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Operation authoring dialog — create / edit a single operation */}
+          <Dialog open={opDialogOpen} onOpenChange={(_, d) => { if (!d.open) setOpDialogOpen(false); }}>
+            <DialogSurface style={{ maxWidth: '90vw', width: 760 }}>
+              <DialogBody>
+                <DialogTitle>{opDraft.isNew ? 'Add operation' : `Edit operation${opDraft.operationId ? ` — ${opDraft.operationId}` : ''}`}</DialogTitle>
+                <DialogContent>
+                  {opLoadingDetail ? (
+                    <Spinner size="tiny" label="Loading operation…" labelPosition="after" />
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div className={s.form}>
+                        <Field label="Display name" required>
+                          <Input value={opDraft.displayName} onChange={(_, d) => setOpDraft((o) => ({ ...o, displayName: d.value }))} placeholder="Get order by id" />
+                        </Field>
+                        <Field label="Method" required>
+                          <Dropdown value={opDraft.method} selectedOptions={[opDraft.method]} onOptionSelect={(_, d) => d.optionValue && setOpDraft((o) => ({ ...o, method: d.optionValue! }))}>
+                            {['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'TRACE'].map((m) => <Option key={m} value={m}>{m}</Option>)}
+                          </Dropdown>
+                        </Field>
+                        <Field label="URL template" required hint="Relative to the API path, e.g. /orders/{id}" style={{ gridColumn: '1 / -1' }}>
+                          <Input value={opDraft.urlTemplate} onChange={(_, d) => setOpDraft((o) => ({ ...o, urlTemplate: d.value }))} placeholder="/orders/{id}" />
+                        </Field>
+                        <Field label="Description" style={{ gridColumn: '1 / -1' }}>
+                          <Input value={opDraft.description} onChange={(_, d) => setOpDraft((o) => ({ ...o, description: d.value }))} placeholder="Returns a single order" />
+                        </Field>
+                        <Field label="Template parameters" hint="One per line: name:type:required (one for each {token} in the URL)">
+                          <Textarea value={opDraft.templateParams} onChange={(_, d) => setOpDraft((o) => ({ ...o, templateParams: d.value }))} rows={3} placeholder={'id:string:required'} />
+                        </Field>
+                        <Field label="Query parameters" hint="One per line: name:type:required">
+                          <Textarea value={opDraft.queryParams} onChange={(_, d) => setOpDraft((o) => ({ ...o, queryParams: d.value }))} rows={3} placeholder={'expand:boolean'} />
+                        </Field>
+                        <Field label="Request headers" hint="One per line: name:type:required">
+                          <Textarea value={opDraft.headerParams} onChange={(_, d) => setOpDraft((o) => ({ ...o, headerParams: d.value }))} rows={3} placeholder={'X-Trace-Id:string'} />
+                        </Field>
+                        <Field label="Request representations" hint="One content-type per line">
+                          <Textarea value={opDraft.requestReps} onChange={(_, d) => setOpDraft((o) => ({ ...o, requestReps: d.value }))} rows={3} placeholder={'application/json'} />
+                        </Field>
+                        <Field label="Responses" hint="One per line: statusCode:description" style={{ gridColumn: '1 / -1' }}>
+                          <Textarea value={opDraft.responses} onChange={(_, d) => setOpDraft((o) => ({ ...o, responses: d.value }))} rows={3} placeholder={'200:OK\n404:Not found'} />
+                        </Field>
+                      </div>
+                      {opErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{opErr}</MessageBarBody></MessageBar>}
+                    </div>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setOpDialogOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" icon={<Save20Regular />} onClick={saveOp} disabled={opBusy || opLoadingDetail || !opDraft.displayName.trim() || !opDraft.urlTemplate.trim()}>
+                    {opBusy ? 'Saving…' : opDraft.isNew ? 'Create operation' : 'Save operation'}
+                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
@@ -717,6 +1143,25 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   // Subscriptions.
   const [subs, setSubs] = useState<LoadState<any[]>>({ loading: false, data: null });
+  // Per-subscription key reveal. APIM never returns keys on GET; the real
+  // POST /api/marketplace/subscriptions/[sid]/keys route resolves them via
+  // listSecrets server-side. Keyed by subscription name; cleared on tab leave.
+  const [subKeys, setSubKeys] = useState<Record<string, { primaryKey?: string; secondaryKey?: string }>>({});
+  const [subKeyBusy, setSubKeyBusy] = useState<string | null>(null);
+  const [subKeyErr, setSubKeyErr] = useState<{ sid: string; msg: string } | null>(null);
+
+  const revealSubKeys = useCallback(async (sid: string) => {
+    // Toggle off if already revealed.
+    if (subKeys[sid]) { setSubKeys((cur) => { const n = { ...cur }; delete n[sid]; return n; }); return; }
+    setSubKeyBusy(sid); setSubKeyErr(null);
+    try {
+      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}/keys`, { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) { setSubKeyErr({ sid, msg: j.error || `HTTP ${r.status}` }); return; }
+      setSubKeys((cur) => ({ ...cur, [sid]: { primaryKey: j.primaryKey, secondaryKey: j.secondaryKey } }));
+    } catch (e: any) { setSubKeyErr({ sid, msg: e?.message || String(e) }); }
+    finally { setSubKeyBusy(null); }
+  }, [subKeys]);
 
   const loadApis = useCallback(async () => {
     if (isNew) return;
@@ -732,6 +1177,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
   const loadSubs = useCallback(async () => {
     if (isNew) return;
     setSubs({ loading: true, data: null });
+    setSubKeys({}); setSubKeyErr(null); // re-conceal keys on every reload
     try {
       const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}/subscriptions`);
       const j = await r.json();
@@ -895,7 +1341,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
           <Tab value="settings" icon={<Document20Regular />}>Settings</Tab>
           <Tab value="apis" icon={<Code20Regular />} disabled={isNew}>APIs</Tab>
-          <Tab value="subs" icon={<Library20Regular />} disabled={isNew}>Subscriptions</Tab>
+          <Tab value="subs" icon={<Key20Regular />} disabled={isNew}>Subscriptions</Tab>
         </TabList>
 
         {tab === 'settings' && (
@@ -937,7 +1383,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                   selectedOptions={addApiId ? [addApiId] : []}
                   onOptionSelect={(_, d) => setAddApiId(d.optionValue || '')}
                 >
-                  {(apis.data?.allApis || []).map((a: any) => <Option key={a.name} value={a.name}>{a.displayName} ({a.name})</Option>)}
+                  {(apis.data?.allApis || []).map((a: any) => <Option key={a.name} value={a.name}>{`${a.displayName} (${a.name})`}</Option>)}
                 </Dropdown>
               </Field>
               <Button appearance="primary" icon={<Add20Regular />} onClick={addApi} disabled={apiBusy || !addApiId}>Add</Button>
@@ -972,7 +1418,23 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
 
         {tab === 'subs' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadSubs} style={{ alignSelf: 'flex-start' }}>Reload</Button>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadSubs}>Reload</Button>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Subscriptions scoped to this product. Use <strong>Show keys</strong> to reveal the primary/secondary key (resolved server-side via listSecrets — keys never persist in the browser).
+              </Caption1>
+            </div>
+            {/* Honest gate: APIM exposes Suspend / Activate / Cancel state transitions and
+                key regeneration on subscriptions. Those write-paths have no BFF route in
+                this deployment yet, so they are surfaced as a tracked gap rather than a
+                dead button. */}
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>Read + reveal only</MessageBarTitle>
+                State transitions (Suspend / Activate / Cancel) and key <em>regeneration</em> are not yet wired — they need a
+                {' '}<code>PATCH/POST /api/apim/subscriptions/&#123;sid&#125;</code> route (<code>updateSubscriptionState</code> / <code>regenerateSubscriptionKey</code> on the ARM client). Reveal + copy below are live.
+              </MessageBarBody>
+            </MessageBar>
             {subs.loading && <Spinner size="tiny" label="Loading subscriptions…" labelPosition="after" />}
             {subs.error && <MessageBar intent="warning"><MessageBarBody>{subs.error}</MessageBarBody></MessageBar>}
             {subs.data && (
@@ -982,19 +1444,50 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                   <TableHeaderCell>Display name</TableHeaderCell>
                   <TableHeaderCell>State</TableHeaderCell>
                   <TableHeaderCell>Created</TableHeaderCell>
+                  <TableHeaderCell>Keys</TableHeaderCell>
                 </TableRow></TableHeader>
                 <TableBody>
                   {subs.data.length === 0 && (
-                    <TableRow><TableCell>No subscriptions to this product.</TableCell><TableCell /><TableCell /><TableCell /></TableRow>
+                    <TableRow><TableCell>No subscriptions to this product.</TableCell><TableCell /><TableCell /><TableCell /><TableCell /></TableRow>
                   )}
-                  {subs.data.map((sub: any) => (
-                    <TableRow key={sub.name}>
-                      <TableCell><code>{sub.name}</code></TableCell>
-                      <TableCell>{sub.displayName || '—'}</TableCell>
-                      <TableCell><Badge appearance="outline" color={sub.state === 'active' ? 'success' : 'informative'}>{sub.state || '—'}</Badge></TableCell>
-                      <TableCell>{sub.createdDate || '—'}</TableCell>
-                    </TableRow>
-                  ))}
+                  {subs.data.map((sub: any) => {
+                    const revealed = subKeys[sub.name];
+                    return (
+                      <TableRow key={sub.name}>
+                        <TableCell><code>{sub.name}</code></TableCell>
+                        <TableCell>{sub.displayName || '—'}</TableCell>
+                        <TableCell><Badge appearance="outline" color={sub.state === 'active' ? 'success' : 'informative'}>{sub.state || '—'}</Badge></TableCell>
+                        <TableCell>{sub.createdDate || '—'}</TableCell>
+                        <TableCell>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <Button
+                              size="small"
+                              icon={revealed ? <EyeOff20Regular /> : <Eye20Regular />}
+                              onClick={() => revealSubKeys(sub.name)}
+                              disabled={subKeyBusy === sub.name}
+                              aria-label={revealed ? `Hide keys for ${sub.name}` : `Show keys for ${sub.name}`}
+                            >
+                              {subKeyBusy === sub.name ? 'Revealing…' : revealed ? 'Hide keys' : 'Show keys'}
+                            </Button>
+                            {subKeyErr && subKeyErr.sid === sub.name && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{subKeyErr.msg}</Caption1>}
+                            {revealed && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                {(['primaryKey', 'secondaryKey'] as const).map((k) => (
+                                  <div key={k} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                    <Caption1 style={{ color: tokens.colorNeutralForeground3, minWidth: 64 }}>{k === 'primaryKey' ? 'Primary' : 'Secondary'}</Caption1>
+                                    <code style={{ fontSize: 11, wordBreak: 'break-all', maxWidth: 240 }}>{revealed[k] || '—'}</code>
+                                    {revealed[k] && (
+                                      <Button size="small" appearance="transparent" icon={<Copy20Regular />} aria-label={`Copy ${k === 'primaryKey' ? 'primary' : 'secondary'} key`} onClick={() => navigator.clipboard?.writeText(revealed[k]!).catch(() => {})} />
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
@@ -1029,6 +1522,12 @@ const POLICY_SNIPPETS: { key: string; label: string; section: 'inbound' | 'outbo
   { key: 'mock', label: 'Mock response', section: 'inbound', xml: `<mock-response status-code="200" content-type="application/json" />` },
   { key: 'set-header-out', label: 'Set response header', section: 'outbound', xml: `<set-header name="X-Powered-By" exists-action="override">\n      <value>CSA Loom APIM</value>\n    </set-header>` },
   { key: 'cache-lookup', label: 'Cache responses', section: 'inbound', xml: `<cache-lookup vary-by-developer="false" vary-by-developer-groups="false" downstream-caching-type="none" />` },
+  // ── AI gateway (LLM) policies — for Azure OpenAI / Foundry-backed APIs ──
+  { key: 'llm-token-limit', label: 'AI: token-per-minute limit', section: 'inbound', xml: `<llm-token-limit counter-key="@(context.Subscription.Id)" tokens-per-minute="5000" estimate-prompt-tokens="true" remaining-tokens-header-name="x-remaining-tokens" tokens-consumed-header-name="x-consumed-tokens" />` },
+  { key: 'llm-content-safety', label: 'AI: content safety check', section: 'inbound', xml: `<llm-content-safety backend-id="content-safety-backend" shield-prompt="true">\n      <categories output-type="EightSeverityLevels">\n        <category name="Hate" threshold="4" />\n        <category name="Violence" threshold="4" />\n        <category name="Sexual" threshold="4" />\n        <category name="SelfHarm" threshold="4" />\n      </categories>\n    </llm-content-safety>` },
+  { key: 'llm-semantic-cache-lookup', label: 'AI: semantic cache lookup', section: 'inbound', xml: `<llm-semantic-cache-lookup score-threshold="0.05" embeddings-backend-id="embeddings-backend" embeddings-backend-auth="system-assigned">\n      <vary-by>@(context.Subscription.Id)</vary-by>\n    </llm-semantic-cache-lookup>` },
+  { key: 'llm-semantic-cache-store', label: 'AI: semantic cache store', section: 'outbound', xml: `<llm-semantic-cache-store duration="60" />` },
+  { key: 'llm-emit-token-metric', label: 'AI: emit token metrics', section: 'inbound', xml: `<llm-emit-token-metric namespace="openai">\n      <dimension name="API ID" value="@(context.Api.Id)" />\n      <dimension name="Subscription ID" value="@(context.Subscription.Id)" />\n    </llm-emit-token-metric>` },
 ];
 
 function isWellFormedXml(xml: string): { ok: true } | { ok: false; error: string } {
@@ -1224,6 +1723,7 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add policy snippet:</Caption1>
           <Dropdown
+            aria-label="Add a policy snippet to the editor"
             placeholder="Choose a snippet…"
             selectedOptions={[]}
             value=""
@@ -1236,6 +1736,17 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
           </Dropdown>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Inserts into the matching inbound/outbound section.</Caption1>
         </div>
+        {/* Honest gate per ui-parity.md: the Azure portal also ships a form-based
+            "+ Add policy" guided editor, an effective-policy (inherited base
+            resolution) view, and reusable policy fragments. The code editor below
+            is full-fidelity, but those three surfaces are genuinely heavy and
+            backend-gated, so they are flagged as tracked gaps rather than faked. */}
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <MessageBarTitle>Code editor (full XML). Three portal surfaces are tracked gaps.</MessageBarTitle>
+            The form-based guided editor, <em>Calculate effective policy</em> (inherited <code>&lt;base/&gt;</code> resolution), and reusable <em>policy fragments</em> are not built yet — each needs a dedicated ARM read (<code>policies?format=rawxml</code> effective resolution / <code>policyFragments</code> CRUD). The XML editor, snippet gallery, scope selector, validation, and save are all live.
+          </MessageBarBody>
+        </MessageBar>
         <MonacoTextarea
           value={value}
           onChange={(v) => { setValue(v); setDirty(true); }}
@@ -1284,6 +1795,47 @@ const DP_EMPTY: DataProductState = {
   sla: '',
   bundle: [],
 };
+
+/**
+ * Project a bundle-installed data product's `state.content` (DataProductContent
+ * — datasets/glossaryTerms/owner/endorsement per content-bundles/types.ts) into
+ * the editor's DataProductState so an app-installed data product opens FULLY
+ * BUILT-OUT (its datasets, glossary terms, owner, endorsement) instead of an
+ * empty form. The editor's existing direct state fields win when present
+ * (e.g. after the user has edited + saved); content only fills gaps. This
+ * keeps Register-with-Purview / dataset registration hitting the real backend.
+ */
+function projectDataProductContent(state: Record<string, unknown>): Partial<DataProductState> {
+  const out: Partial<DataProductState> = { ...(state as Partial<DataProductState>) };
+  const content = (state?.content as any);
+  if (!content || content.kind !== 'data-product') return out;
+
+  // Datasets: content { id, name, description, classification } → editor
+  // DataProductDataset { name, typeName, qualifiedName, classifications[] }.
+  if ((!out.datasets || out.datasets.length === 0) && Array.isArray(content.datasets)) {
+    out.datasets = content.datasets.map((d: any) => ({
+      name: d.name,
+      typeName: 'fabric_data_product',
+      qualifiedName: d.id || d.name,
+      classifications: d.classification ? [String(d.classification)] : [],
+    }));
+  }
+  // Glossary terms: content { term, definition } → editor { name }.
+  if ((!out.glossaryLinks || out.glossaryLinks.length === 0) && Array.isArray(content.glossaryTerms)) {
+    out.glossaryLinks = content.glossaryTerms.map((t: any) => ({ name: t.term }));
+  }
+  // Owner: content { name, email? } → editor owner string.
+  if (!out.owner && content.owner) {
+    out.owner = content.owner.email
+      ? `${content.owner.name} <${content.owner.email}>`
+      : (content.owner.name || '');
+  }
+  // Endorsement → certified flag (editor's only endorsement surface).
+  if (out.certified === undefined && content.endorsement) {
+    out.certified = content.endorsement === 'certified';
+  }
+  return out;
+}
 
 // Hint payload returned with HTTP 501 from /register-purview when the
 // LOOM_PURVIEW_ACCOUNT env var is not set. Mirrors PurviewNotConfiguredHint
@@ -1361,6 +1913,16 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [dsType, setDsType] = useState('fabric_lakehouse');
   const [dsQName, setDsQName] = useState('');
   const [dsClass, setDsClass] = useState('');
+  // Governance label taxonomy (/api/governance/classification-types) so dataset
+  // classifications are PICKED from the tenant's standard set, not free-typed.
+  const [classTypes, setClassTypes] = useState<string[]>([]);
+  useEffect(() => {
+    fetch('/api/governance/classification-types')
+      .then((r) => r.json())
+      .then((j) => { if (j?.ok) setClassTypes((j.types || []).map((t: any) => t.name).filter(Boolean)); })
+      .catch(() => {});
+  }, []);
+  const dsClassSelected = dsClass.split(',').map((c) => c.trim()).filter(Boolean);
   const [dsBusy, setDsBusy] = useState(false);
   const [dsMsg, setDsMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
@@ -1402,11 +1964,18 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         const r = await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`);
         const j = await r.json();
         if (cancelled) return;
-        if (!j.ok) {
+        // /api/cosmos-items/[type]/[id] returns the bare WorkspaceItem record
+        // (state lives at the top level), not an { ok, item } envelope. On
+        // error it returns { ok:false, error }. Read state from the top level
+        // (with a legacy j.item.state fallback) so a bundle-installed data
+        // product opens FULLY BUILT-OUT — its datasets, glossary terms, owner,
+        // and endorsement from state.content — instead of an empty form.
+        const itemState = (j?.state ?? j?.item?.state) as Record<string, unknown> | undefined;
+        if (j?.ok === false) {
           // 404 on fresh items is expected; show empty form rather than error.
           if (r.status !== 404) setLoadErr(j.error || `HTTP ${r.status}`);
-        } else if (j.item?.state) {
-          setState({ ...DP_EMPTY, ...(j.item.state as Partial<DataProductState>) });
+        } else if (itemState) {
+          setState({ ...DP_EMPTY, ...projectDataProductContent(itemState) });
           setDirty(false);
         }
       } catch (e: any) {
@@ -1822,8 +2391,16 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               <Field label="Qualified name (unique asset id)" style={{ gridColumn: '1 / -1' }}>
                 <Input value={dsQName} onChange={(_, d) => setDsQName(d.value)} placeholder="https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>.Lakehouse/Tables/silver_revenue" />
               </Field>
-              <Field label="Classifications (comma-separated)" style={{ gridColumn: '1 / -1' }}>
-                <Input value={dsClass} onChange={(_, d) => setDsClass(d.value)} placeholder="MICROSOFT.PERSONAL.EMAIL, MICROSOFT.FINANCIAL" />
+              <Field label="Classifications" hint="Pick from the tenant label taxonomy (manage in Governance → Classifications)." style={{ gridColumn: '1 / -1' }}>
+                {classTypes.length > 0 ? (
+                  <Dropdown multiselect placeholder="Select labels…"
+                    value={dsClassSelected.join(', ')} selectedOptions={dsClassSelected}
+                    onOptionSelect={(_, d) => setDsClass((d.selectedOptions || []).join(', '))}>
+                    {classTypes.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                  </Dropdown>
+                ) : (
+                  <Input value={dsClass} onChange={(_, d) => setDsClass(d.value)} placeholder="PII, Confidential (comma-separated)" />
+                )}
               </Field>
             </div>
             <Button appearance="primary" icon={<Add20Regular />} onClick={registerDataset} disabled={dsBusy} style={{ alignSelf: 'flex-start' }}>

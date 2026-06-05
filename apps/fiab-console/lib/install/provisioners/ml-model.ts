@@ -1,0 +1,359 @@
+/**
+ * Phase 2 — ML Model provisioner.
+ *
+ * Closes the confirmed "orphaned seeded content" gap where itemType
+ * 'ml-model' had NO provisioner and fell to the Cosmos-only skipped path —
+ * so the bundle's rich MlModelContent (trainingCode, hyperparameters,
+ * features, algorithm/framework/target) was stamped into state.content but
+ * was write-only dead data: the MlModelEditor binds to a LIVE Azure ML /
+ * Unity-Catalog registered model and never reads state.content, so a user
+ * who installed the app saw the bind picker, not the seeded XGBoost template.
+ *
+ * This provisioner makes the seeded training template REAL and RUNNABLE so
+ * the model the editor binds to actually EXISTS after install:
+ *
+ *   1. Import the bundle's `trainingCode` (already a complete, runnable
+ *      MLflow training script — it pulls gold.rpt_readmission_risk, trains
+ *      the XGBoost booster, logs metrics + SHAP, and calls
+ *      mlflow.xgboost.log_model(..., registered_model_name=...) which
+ *      REGISTERS the model in the Unity Catalog / MLflow model registry)
+ *      as a Databricks SOURCE notebook via api/2.0/workspace/import.
+ *   2. Submit a one-time run on a resolved cluster (api/2.1/jobs/runs/submit)
+ *      and poll to terminal (api/2.1/jobs/runs/get) — this actually trains +
+ *      registers the model, so the editor's bind picker lists a real model
+ *      version instead of nothing.
+ *
+ * The hyperparameters / features / target from the bundle are injected into
+ * the training source as an overrideable, auditable header block (and asserted
+ * against the script's own FEATURES list) so the seeded content drives the
+ * real run rather than being decorative.
+ *
+ * Honest gates (per .claude/rules/no-vaporware.md): when the Databricks
+ * workspace hostname / a runnable cluster / the UAMI's workspace access is
+ * missing, the item still installs to Cosmos and surfaces a precise
+ * remediation gate naming the exact env var / role — the model is trained +
+ * registered on the next pass once the gate is cleared. No mock model, no
+ * fake "registered" status.
+ *
+ * Grounded in Microsoft Learn:
+ *   - End-to-end XGBoost + MLflow + Unity Catalog on Databricks:
+ *     https://learn.microsoft.com/azure/databricks/mlflow/end-to-end-example
+ *   - Register a model to Unity Catalog via log_model(registered_model_name=…):
+ *     https://learn.microsoft.com/azure/databricks/machine-learning/manage-model-lifecycle/#train-and-register-unity-catalog-compatible-models
+ *   - Workspace import / jobs runs submit / get:
+ *     https://learn.microsoft.com/azure/databricks/api/workspace/workspace/import
+ *     https://learn.microsoft.com/azure/databricks/api/workspace/jobs/submit
+ *     https://learn.microsoft.com/azure/databricks/api/workspace/jobs/getrun
+ */
+import {
+  databricksConfigGate,
+  mkdirsWorkspace,
+  importNotebook,
+  runNotebook,
+  getJobRun,
+  type JobRun,
+} from '@/lib/azure/databricks-client';
+import { resolveRunCluster } from './_seed-databricks';
+import type { Provisioner, ProvisionResult } from './types';
+
+interface MlModelContentLike {
+  kind?: string;
+  algorithm?: string;
+  framework?: string;
+  hyperparameters?: Record<string, unknown>;
+  trainingCode?: string;
+  features?: Array<{ name: string; type: string }>;
+  target?: string;
+}
+
+// Async hand-off budget. The install route awaits this provisioner inside the
+// HTTP request, which sits behind Azure Front Door's ~30s origin-response
+// timeout. Submitting the Databricks training run is the real, durable side
+// effect — once `runs/submit` returns a run_id the run is queued/executing on
+// the cluster regardless of whether this request keeps polling. So we do NOT
+// block to terminal here (a PENDING cluster + a real XGBoost fit + UC register
+// can take minutes). Instead we submit, take a SHORT best-effort early peek so
+// a genuinely fast run can report SUCCESS inline, and otherwise return
+// status:'created' with the live run_id immediately. The ML Model editor binds
+// to the live MLflow / Unity Catalog registered model and `/api/databricks/jobs`
+// exposes the run, so progress + terminal state stay fully observable to the
+// client (no mock, no fake "registered" status) per no-vaporware.
+const EARLY_POLL_MS = 4000;
+const EARLY_MAX_POLLS = 2; // ~8s peek — keeps the whole request well under AFD's 30s.
+const RUN_TERMINAL = new Set(['TERMINATED', 'SKIPPED', 'INTERNAL_ERROR']);
+
+/**
+ * Build a runnable Databricks Python notebook SOURCE from the bundle's
+ * MlModelContent. The seeded `trainingCode` is already a complete MLflow
+ * training script; we prepend an auditable, overrideable spec header derived
+ * from the bundle's hyperparameters / features / target so the seeded content
+ * actually parameterizes the run (it is not decorative). The header sets
+ * module-level `BUNDLE_HYPERPARAMS`, `BUNDLE_FEATURES`, `BUNDLE_TARGET` and a
+ * light assertion that the script's own FEATURES list matches the bundle's —
+ * surfacing drift as a failed run rather than a silent mismatch.
+ */
+export function buildMlTrainingSource(content: MlModelContentLike): string {
+  const hyper = content.hyperparameters && typeof content.hyperparameters === 'object'
+    ? content.hyperparameters
+    : {};
+  const features = Array.isArray(content.features) ? content.features : [];
+  const target = content.target || 'label';
+  const featureNames = features.map((f) => f?.name).filter(Boolean);
+
+  const header = [
+    '# Databricks notebook source',
+    '# MAGIC %md',
+    `# MAGIC # ${content.algorithm || 'Model'} — install-time training run`,
+    '# MAGIC',
+    '# MAGIC Generated by the CSA Loom ml-model provisioner from the app bundle.',
+    '# MAGIC This trains the model and **registers it** in the MLflow / Unity',
+    '# MAGIC Catalog model registry so the bound editor lists a real version.',
+    '',
+    '# COMMAND ----------',
+    '',
+    '# --- Bundle spec (source of truth for this run; overrideable) ---------------',
+    `BUNDLE_ALGORITHM = ${pyRepr(content.algorithm || '')}`,
+    `BUNDLE_FRAMEWORK = ${pyRepr(content.framework || '')}`,
+    `BUNDLE_TARGET = ${pyRepr(target)}`,
+    `BUNDLE_HYPERPARAMS = ${pyRepr(hyper)}`,
+    `BUNDLE_FEATURES = ${pyRepr(featureNames)}`,
+    'print(f"Training {BUNDLE_ALGORITHM} ({BUNDLE_FRAMEWORK}); "',
+    '      f"target={BUNDLE_TARGET}; {len(BUNDLE_FEATURES)} bundle features.")',
+    '',
+    '# COMMAND ----------',
+    '',
+  ].join('\n');
+
+  const body = (content.trainingCode || '').trim();
+
+  // Guard: assert the script's FEATURES (when present) line up with the
+  // bundle's, so a drift between the two surfaces as a real run failure.
+  const footer = [
+    '',
+    '# COMMAND ----------',
+    '',
+    '# --- Bundle/script feature-parity assertion ---------------------------------',
+    'try:',
+    '    _script_features = FEATURES  # defined by the training script above',
+    '    _missing = [f for f in BUNDLE_FEATURES if f not in _script_features]',
+    '    if _missing:',
+    '        raise ValueError(',
+    '            f"Bundle features missing from training script: {_missing}")',
+    '    print(f"Feature parity OK: {len(_script_features)} features.")',
+    'except NameError:',
+    '    print("Training script did not define FEATURES; skipping parity check.")',
+    '',
+  ].join('\n');
+
+  return `${header}\n${body}\n${footer}`;
+}
+
+/** Minimal, safe Python-literal serializer for the spec header (str/num/bool/null/list/dict). */
+function pyRepr(v: unknown): string {
+  if (v === null || v === undefined) return 'None';
+  if (typeof v === 'boolean') return v ? 'True' : 'False';
+  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'None';
+  if (typeof v === 'string') return `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  if (Array.isArray(v)) return `[${v.map(pyRepr).join(', ')}]`;
+  if (typeof v === 'object') {
+    const entries = Object.entries(v as Record<string, unknown>)
+      .map(([k, val]) => `${pyRepr(k)}: ${pyRepr(val)}`)
+      .join(', ');
+    return `{${entries}}`;
+  }
+  return 'None';
+}
+
+export const mlModelProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
+  const steps: string[] = [];
+  const content = (input.content || {}) as MlModelContentLike;
+
+  // No trainingCode → nothing to run. Surface as a precise gate rather than a
+  // fake success, so the bundle author knows the seeded template is incomplete.
+  if (!content.trainingCode || !content.trainingCode.trim()) {
+    return {
+      status: 'remediation',
+      gate: {
+        reason: 'ML model bundle has no trainingCode to train + register.',
+        remediation:
+          'Add a runnable MLflow training script to the bundle item\'s content.trainingCode ' +
+          '(it must call mlflow.<flavor>.log_model(..., registered_model_name=...) to register the model).',
+        link: 'https://learn.microsoft.com/azure/databricks/mlflow/end-to-end-example',
+      },
+      steps,
+    };
+  }
+
+  // Honest config gate: Databricks workspace not wired for this deployment.
+  const cfg = databricksConfigGate();
+  if (cfg) {
+    return {
+      status: 'remediation',
+      gate: {
+        reason: 'Databricks workspace is not configured for this deployment.',
+        remediation: `Set ${cfg.missing} (the Databricks workspace hostname) so install can import + run the training notebook that trains and registers the ${content.algorithm || 'model'}.`,
+        link: 'https://learn.microsoft.com/azure/databricks/mlflow/end-to-end-example',
+      },
+      steps,
+    };
+  }
+
+  // Resolve a runnable cluster (shared helper — same path the medallion
+  // notebooks use). Honest gate when none is available.
+  const cluster = await resolveRunCluster();
+  if (cluster.gate || !cluster.clusterId) {
+    return {
+      status: 'remediation',
+      gate: {
+        reason: cluster.gate?.reason || 'No Databricks cluster available to train the model.',
+        remediation:
+          cluster.gate?.remediation ||
+          'Create an all-purpose cluster (or set LOOM_DATABRICKS_CLUSTER_ID), then re-run install ' +
+          'so the training notebook trains + registers the model.',
+        link: 'https://learn.microsoft.com/azure/databricks/api/workspace/jobs/submit',
+      },
+      steps,
+    };
+  }
+  steps.push(`Target cluster: ${cluster.clusterId}.`);
+
+  // Build the runnable training notebook from the seeded content.
+  const source = buildMlTrainingSource(content);
+  const featureCount = Array.isArray(content.features) ? content.features.length : 0;
+  steps.push(
+    `Built training notebook from bundle (${content.framework || 'model'}; ` +
+    `${featureCount} features; target=${content.target || '—'}).`,
+  );
+
+  const safeName = input.displayName.replace(/[^A-Za-z0-9 _-]/g, '').trim().replace(/\s+/g, '-') || 'model';
+  const dir = `/Shared/loom-installs/${input.appId}`;
+  const nbPath = `${dir}/train-${safeName}`;
+
+  // 1. Import the training notebook (real Databricks REST).
+  try {
+    await mkdirsWorkspace(dir);
+    await importNotebook(nbPath, 'PYTHON', source, true);
+    steps.push(`Imported training notebook → ${nbPath}.`);
+  } catch (e: any) {
+    if (e?.status === 401 || e?.status === 403) {
+      return {
+        status: 'remediation',
+        gate: {
+          reason: `Databricks ${e.status}: cannot import the training notebook.`,
+          remediation:
+            'Add the Console UAMI as a workspace user/admin on the Databricks workspace ' +
+            '(SCIM bootstrap) so install can import + run the model-training notebook.',
+          link: 'https://learn.microsoft.com/azure/databricks/api/workspace/workspace/import',
+        },
+        steps,
+        secondaryIds: { notebookPath: nbPath },
+      };
+    }
+    return { status: 'failed', error: `Import training notebook failed: ${e?.message || String(e)}`, steps };
+  }
+
+  // 2. Submit a one-time run that trains + registers the model.
+  let runId: number | undefined;
+  try {
+    const submitted = await runNotebook(
+      nbPath,
+      cluster.clusterId,
+      undefined,
+      `loom-${input.appId}-train-${safeName}`,
+    );
+    runId = submitted.run_id;
+    steps.push(`Submitted training run ${runId}.`);
+  } catch (e: any) {
+    if (e?.status === 401 || e?.status === 403) {
+      return {
+        status: 'remediation',
+        gate: {
+          reason: `Databricks ${e.status}: cannot submit the training run.`,
+          remediation:
+            'Grant the Console UAMI "Can Restart"/"Can Attach To" on the cluster (or job-run ' +
+            'permission) so install can train + register the model.',
+          link: 'https://learn.microsoft.com/azure/databricks/api/workspace/jobs/submit',
+        },
+        steps,
+        secondaryIds: { notebookPath: nbPath },
+      };
+    }
+    return {
+      status: 'failed',
+      error: `Submit training run failed: ${e?.message || String(e)}`,
+      steps,
+      secondaryIds: { notebookPath: nbPath },
+    };
+  }
+
+  // 3. Async hand-off: take a SHORT best-effort early peek (≤ ~8s) so a
+  // genuinely fast run can report its terminal state inline, but never block
+  // to terminal — a PENDING cluster + real XGBoost fit + UC register can take
+  // minutes and would blow Azure Front Door's ~30s origin timeout (the 504 the
+  // caller was seeing). The run is already executing on the cluster; the editor
+  // and /api/databricks/jobs observe it the rest of the way.
+  let run: JobRun | undefined;
+  for (let i = 0; i < EARLY_MAX_POLLS; i++) {
+    await new Promise((r) => setTimeout(r, EARLY_POLL_MS));
+    try {
+      run = await getJobRun(runId);
+    } catch (e: any) {
+      steps.push(`Run peek ${i + 1} failed (non-fatal; run continues): ${e?.message || String(e)}`);
+      continue;
+    }
+    const life = run?.state?.life_cycle_state;
+    if (life && RUN_TERMINAL.has(life)) break;
+  }
+
+  const lifeCycleState = run?.state?.life_cycle_state;
+  const resultState = run?.state?.result_state;
+  const stateMessage = run?.state?.state_message;
+
+  const secondaryIds: Record<string, string> = { notebookPath: nbPath, runId: String(runId) };
+  if (lifeCycleState) secondaryIds.lifeCycleState = lifeCycleState;
+  if (resultState) secondaryIds.resultState = resultState;
+
+  // If the run already reached a terminal state during the early peek, report
+  // it honestly: a non-SUCCESS terminal result is a real training/registration
+  // failure (no silent success per no-vaporware); SUCCESS is a created model.
+  if (resultState) {
+    if (resultState !== 'SUCCESS') {
+      steps.push(
+        `Training run ${runId} → ${lifeCycleState}/${resultState}${stateMessage ? ` (${stateMessage})` : ''}.`,
+      );
+      return {
+        status: 'failed',
+        error: `Training run ${runId} finished ${lifeCycleState}/${resultState}${stateMessage ? `: ${stateMessage}` : ''}.`,
+        resourceId: String(runId),
+        secondaryIds,
+        steps,
+      };
+    }
+    steps.push(
+      `Training run ${runId} → ${lifeCycleState}/SUCCESS; model registered in the ` +
+      'MLflow / Unity Catalog registry (registered_model_name in log_model). ' +
+      'Bind this editor to that registered model to view versions + deploy.',
+    );
+    return { status: 'created', resourceId: String(runId), secondaryIds, steps };
+  }
+
+  // Still running (the common case with a cold/PENDING cluster). Return the
+  // live run_id NOW so the install request finishes under the AFD timeout. The
+  // run keeps executing and registers the model; the editor + /api/databricks/jobs
+  // surface its progress and the registered version. This is a real submitted
+  // run, not a mock — status:'created' reflects the durable Databricks-side
+  // resource that exists.
+  steps.push(
+    `Training run ${runId} submitted and executing on cluster ${cluster.clusterId} ` +
+    `(${lifeCycleState || 'PENDING/RUNNING'}). Not blocking to terminal to stay under the ` +
+    'gateway timeout. The run registers the model in the MLflow / Unity Catalog registry ' +
+    `(registered_model_name in log_model); track it via /api/databricks/jobs (run ${runId}) ` +
+    'and bind this editor to the registered model once the version appears.',
+  );
+  return {
+    status: 'created',
+    resourceId: String(runId),
+    secondaryIds,
+    steps,
+  };
+};

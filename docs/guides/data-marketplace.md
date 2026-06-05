@@ -1,5 +1,8 @@
 # Build an internal data marketplace on Azure
 
+!!! note "Freshness"
+    **Validated against:** the CSA data-marketplace service (FastAPI + Microsoft Purview catalog + API Management) deployed via `csa_platform/data_marketplace/` — **as of 2026-06-02.** Purview catalog REST and APIM policy behavior track the current Azure services; verify against the Purview and APIM docs before deploying.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

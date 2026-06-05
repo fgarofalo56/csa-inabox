@@ -50,8 +50,8 @@ in the portal.
 | Indexes — ＋ New | ✅ | starter index (key `id` + searchable `content`) via `POST /indexes`; full field/analyzer/vector/semantic authoring in the Schema (JSON) tab |
 | Indexes — open | ✅ | selecting opens schema + search-explorer + stats + indexers for that index |
 | Indexes — delete | ✅ | `DELETE /api/ai-search/indexes?name=` → `deleteIndex` |
-| Index — edit schema (fields, analyzers, vector, semantic) | ✅ | Schema (JSON) tab → `PUT /api/ai-search/indexes/[name]` → `updateIndex` (`PUT /indexes/{name}`) |
-| Index — search explorer (filter/select/top/facets/count) | ✅ | Search tab → `POST /api/ai-search/indexes/[name]/search` → `searchDocuments` |
+| Index — edit schema (fields, analyzers, vector, semantic) | ✅ | Schema tab **visual field designer** (editable grid: type picker, key/searchable/filterable/sortable/facetable/retrievable, analyzer, vector dims + profile) **+** advanced JSON tab → `PUT /api/ai-search/indexes/[name]` → `updateIndex` (`PUT /indexes/{name}`) |
+| Index — search explorer (queryType simple/full/semantic, semantic config, search fields, filter/select/orderby/top/facets/count, **vector-query builder**, raw-JSON view) | ✅ | Search tab → `POST /api/ai-search/indexes/[name]/search` → `searchDocuments` (semantic + vectorQueries) |
 | Index — analyze text | ✅ | `POST /api/ai-search/indexes/[name]/analyze` → `analyzeText` |
 | Index — statistics (doc count, storage, vector size) | ✅ | `GET /api/ai-search/indexes/[name]` → `getIndexStats` |
 | Indexers — list + count | ✅ | `GET /api/ai-search/indexers` → `listIndexers` |
@@ -75,8 +75,8 @@ in the portal.
 | Filter by name | ✅ | client-side filter box over all six groups |
 | ＋ Add menu (top) + refresh | ✅ | menu opens the per-type create dialog; refresh re-lists everything |
 | Service not provisioned | ⚠️ honest-gate | every route 503s `{code:'not_configured', missing:'LOOM_AI_SEARCH_SERVICE'}`; the whole tree shows one MessageBar naming the env var + roles + bicep module |
-| Semantic configuration **visual designer** | ⚠️ coming | authored today via the index Schema JSON (`semantic.configurations[]`); a dedicated designer is a "Not yet wired" row |
-| Vector profile **authoring wizard** | ⚠️ coming | authored today via Schema JSON (`vectorSearch.profiles/algorithms`); guided wizard is a "Not yet wired" row |
+| Semantic configuration authoring + query | ✅ | per-field designer surfaces semantic config names; Search tab selects a semantic config + emits `queryType:'semantic'` + `semanticConfiguration` (+ optional answers/captions); a dedicated config-builder wizard (which fields feed the config) remains advanced-JSON for now |
+| Vector profile authoring + query | ✅ | designer assigns dims + an existing `vectorSearchProfile` per vector field, and the Search tab's vector-query builder runs k-NN/hybrid against them; profile/algorithm *creation* remains advanced-JSON for now |
 | Debug sessions | ⚠️ coming | `/debugSessions` visual enrichment debugger; "Not yet wired" row |
 | Import data / Import-and-vectorize wizard | ⚠️ coming | build datasource → skillset → index → indexer individually; one-shot wizard is a "Not yet wired" row |
 

@@ -5,6 +5,9 @@ description: "Comprehensive guide for integrating on-premises SQL Server 2022 wi
 
 # On-Premises SQL Server Integration
 
+!!! note "Freshness"
+    **Validated against:** On-premises SQL Server **2022** (PolyBase data virtualization, CDC, incremental replication) integrating with Azure via the Self-Hosted Integration Runtime (ADF) + Synapse Serverless — **as of 2026-06-02.** PolyBase and CDC behavior track SQL Server 2022; verify against the SQL Server docs before deploying.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

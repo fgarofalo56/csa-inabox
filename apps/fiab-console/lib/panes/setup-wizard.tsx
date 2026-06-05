@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Loom Setup Wizard — PRP-04
+ * Loom Setup Wizard — PRP-04 (redesigned multi-step wizard)
  *
  * Conversational deployment of additional Data Landing Zones after
  * the Admin Plane is installed.
@@ -9,38 +9,86 @@
  * State machine:
  *   intro → boundary → mode → subscription → domain → capacity → review → deploying → done
  *
- * The `subscription` step lists the operator's real Azure subscriptions via
- * GET /api/setup/subscriptions (ARM `GET /subscriptions`) and threads the
- * chosen subscriptionId into the deploy POST + the generated bicep preview.
- * Without it the deploy had nowhere to land and failed opaquely.
+ * UI shape (Web 3.0 / Fluent v9 + Loom tokens):
+ *   - A left STEP RAIL shows numbered steps, current/complete/upcoming state,
+ *     and lets the operator jump back to any already-completed step.
+ *   - The right CONTENT PANEL is a spaced card per step: a clear heading, a
+ *     readable description, Field-wrapped controls (never smushed), and a
+ *     Back / Next footer. Boundary + mode are selectable option cards; the
+ *     capacity step previews the real Azure-native services the F-SKU
+ *     equivalence provisions, each rendered with itemVisual() icon + color.
+ *
+ * Real data wiring (unchanged):
+ *   - The `subscription` step lists the operator's real Azure subscriptions
+ *     via GET /api/setup/subscriptions (ARM `GET /subscriptions`) and threads
+ *     the chosen subscriptionId into the deploy POST + the bicep preview.
+ *   - Deploy POSTs to /api/setup/deploy, which validates the config and
+ *     returns an honest 503 + copy-paste `az deployment sub create` when the
+ *     Setup Orchestrator isn't deployed. No fake progress, no mocks.
  *
  * Tier dispatch:
  *   Commercial/GCC → Foundry Agent Service backend
  *   GCC-High/IL5  → MAF + AOAI direct backend
- *
- * Both tiers share THIS UI; only the /api/setup endpoint that routes
- * the conversational turns differs.
+ *   Both tiers share THIS UI; only the /api/setup endpoint differs.
  */
 
+import * as React from 'react';
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Title2,
+  Subtitle2,
   Body1,
+  Body1Strong,
+  Caption1,
   makeStyles,
   tokens,
   Button,
   Input,
   Dropdown,
   Option,
+  Field,
+  Badge,
+  Divider,
   ProgressBar,
   MessageBar,
   MessageBarBody,
+  MessageBarTitle,
   Spinner,
+  Link,
+  mergeClasses,
 } from '@fluentui/react-components';
-import { Send24Regular, ArrowClockwise24Regular } from '@fluentui/react-icons';
+import {
+  Send24Regular,
+  ArrowClockwise20Regular,
+  ArrowLeft20Regular,
+  ArrowRight20Regular,
+  Checkmark16Filled,
+  Globe24Regular,
+  Building24Regular,
+  ShieldCheckmark24Regular,
+  Shield24Regular,
+  Branch24Regular,
+  SquareMultiple24Regular,
+  CheckmarkCircle48Filled,
+  Rocket24Regular,
+} from '@fluentui/react-icons';
+import type { FluentIcon } from '@fluentui/react-icons';
+import { itemVisual } from '@/lib/components/ui/item-type-visual';
 
 type Boundary = 'Commercial' | 'GCC' | 'GCC-High' | 'IL5';
 type Mode = 'single-sub' | 'multi-sub';
+
+type Step =
+  | 'intro'
+  | 'boundary'
+  | 'mode'
+  | 'multi-sub-choice'  // New: only shown when mode='multi-sub' — branch to wire-new vs wire-existing
+  | 'subscription'
+  | 'domain'
+  | 'capacity'
+  | 'review'
+  | 'deploying'
+  | 'done';
 
 interface AzureSubscription {
   subscriptionId: string;
@@ -50,16 +98,7 @@ interface AzureSubscription {
 }
 
 interface WizardState {
-  step:
-    | 'intro'
-    | 'boundary'
-    | 'mode'
-    | 'subscription'
-    | 'domain'
-    | 'capacity'
-    | 'review'
-    | 'deploying'
-    | 'done';
+  step: Step;
   boundary?: Boundary;
   mode?: Mode;
   subscriptionId?: string;
@@ -67,6 +106,17 @@ interface WizardState {
   location?: string;
   domainName?: string;
   capacitySku?: string;
+  /** Optional vanity console URL (e.g. csa-loom.contoso.ai). Empty = generated Front Door host. */
+  vanityDomain?: string;
+  /** Multi-sub mode only: the deployment sub in which the DLZ lands (distinct from admin-plane sub) */
+  dlzSubscriptionId?: string;
+  dlzSubscriptionName?: string;
+  /** Multi-sub Route A (wire new) vs Route B (wire existing) */
+  multiSubMode?: 'wire-new' | 'wire-existing';
+  /** Multi-sub Route B: list of existing DLZs discovered in the tenant (loaded async) */
+  existingDlzs?: Array<{ subscriptionId: string; subscriptionName: string; domainName: string; rg: string }>;
+  /** Multi-sub Route B: which existing DLZ(s) to wire into admin plane (checked state) */
+  selectedExistingDlzs?: Array<{ subscriptionId: string; domainName: string }>;
   deployProgress?: number;
   deployStage?: string;
   deployError?: string;
@@ -76,37 +126,90 @@ interface WizardState {
 const REGIONS_COMMERCIAL = ['eastus2', 'eastus', 'westus2', 'westus3', 'centralus', 'westeurope', 'northeurope'];
 const REGIONS_GOV = ['usgovvirginia', 'usgovtexas', 'usgovarizona'];
 
-const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '900px' },
-  card: {
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
-    padding: '24px',
+/** The ordered, user-facing steps shown in the rail (intro/deploying/done are transient). */
+/** Note: 'multi-sub-choice' is inserted dynamically after 'mode' when mode='multi-sub'. */
+const RAIL_STEPS: { key: Step; label: string; hint: string }[] = [
+  { key: 'boundary', label: 'Cloud boundary', hint: 'Where Loom runs' },
+  { key: 'mode', label: 'Deployment mode', hint: 'Single or multi-sub' },
+  { key: 'subscription', label: 'Subscription & region', hint: 'Deploy target' },
+  { key: 'domain', label: 'Domain name', hint: 'Landing-zone name' },
+  { key: 'capacity', label: 'Capacity sizing', hint: 'Compute equivalence' },
+  { key: 'review', label: 'Review & deploy', hint: 'Confirm and launch' },
+];
+
+const STEP_ORDER: Step[] = RAIL_STEPS.map((s) => s.key);
+
+/** Boundary option cards. */
+const BOUNDARY_OPTIONS: { value: Boundary; title: string; desc: string; icon: FluentIcon; gov: boolean }[] = [
+  { value: 'Commercial', title: 'Commercial', desc: 'Azure Public cloud', icon: Globe24Regular, gov: false },
+  { value: 'GCC', title: 'GCC', desc: 'M365 GCC identity over Azure Public', icon: Building24Regular, gov: false },
+  { value: 'GCC-High', title: 'GCC-High / IL4', desc: 'Azure Government', icon: ShieldCheckmark24Regular, gov: true },
+  { value: 'IL5', title: 'DoD IL5', desc: 'Azure Government', icon: Shield24Regular, gov: true },
+];
+
+/** Mode option cards. */
+const MODE_OPTIONS: { value: Mode; title: string; desc: string; icon: FluentIcon; tag?: string }[] = [
+  {
+    value: 'single-sub',
+    title: 'Single subscription',
+    desc: 'The new DLZ lands in the same subscription as the Admin Plane. Simplest to operate.',
+    icon: SquareMultiple24Regular,
   },
-  preview: {
-    backgroundColor: tokens.colorNeutralBackground3,
-    borderLeft: `3px solid ${tokens.colorBrandStroke1}`,
-    fontFamily: 'Cascadia Code, Consolas, monospace',
-    fontSize: '12px',
-    padding: '12px',
-    margin: '12px 0',
-    whiteSpace: 'pre-wrap',
+  {
+    value: 'multi-sub',
+    title: 'Multi-subscription',
+    desc: 'Each DLZ gets its own subscription. Recommended for federal multi-tenant isolation.',
+    icon: Branch24Regular,
+    tag: 'Recommended',
   },
-  buttons: { display: 'flex', gap: '8px', marginTop: '16px' },
-});
+];
+
+/** Capacity F-SKU equivalence rows — the Azure-native services each one provisions. */
+const CAPACITY_OPTIONS: { sku: string; note: string; tag?: string }[] = [
+  { sku: 'F2', note: 'Smallest — dev / sandbox' },
+  { sku: 'F4', note: 'Light shared workloads' },
+  { sku: 'F8', note: 'Recommended for a prod start', tag: 'Recommended' },
+  { sku: 'F32', note: 'Department-scale analytics' },
+  { sku: 'F64', note: 'Heavy concurrent BI + ML' },
+  { sku: 'F128', note: 'Enterprise multi-team' },
+  { sku: 'F512', note: 'Largest — mission-scale' },
+];
+
+/** The Azure-native services the F-SKU equivalence maps onto (visualised on the capacity step). */
+const CAPACITY_SERVICES: { type: string; label: string }[] = [
+  { type: 'databricks-cluster', label: 'Databricks' },
+  { type: 'kql-database', label: 'ADX (Kusto)' },
+  { type: 'synapse-spark-pool', label: 'Synapse Spark' },
+];
 
 function renderBicepParam(s: WizardState): string {
   const isGov = s.boundary === 'GCC-High' || s.boundary === 'IL5';
+  const isSingleSub = s.mode === 'single-sub';
+  const defaultLocation = isGov ? 'usgovvirginia' : 'eastus2';
+  
+  const deploymentModeComment = isSingleSub
+    ? `// Single-sub: Admin Plane + DLZ + all 21 deploy-planner services in ONE subscription`
+    : `// Multi-sub: Admin Plane in hub (${s.subscriptionName}), DLZ in spoke (${s.dlzSubscriptionName ?? '?'})`;
+  
+  const dlzLines = isSingleSub
+    ? [`param dlzDomainNames    = ['${s.domainName ?? ''}']`]
+    : [
+        `// Multi-sub mode: DLZ lands in ${s.dlzSubscriptionId}`,
+        `param dlzDomainNames    = ['${s.domainName ?? ''}']`,
+        `param dlzSubscriptionIds = ['${s.dlzSubscriptionId ?? ''}']`,
+      ];
+  
   return [
     `// Generated by Loom Setup Wizard`,
-    `// Subscription: ${s.subscriptionName ?? '?'} (${s.subscriptionId ?? '?'})`,
-    `// Region:       ${s.location ?? (isGov ? 'usgovvirginia' : 'eastus2')}`,
-    `// Boundary:     ${s.boundary ?? '?'}`,
-    `// Mode:         ${s.mode ?? '?'}`,
-    `// Domain:       ${s.domainName ?? '?'}`,
-    `// Capacity:     ${s.capacitySku ?? '?'}`,
+    `// Admin Plane Subscription: ${s.subscriptionName ?? '?'} (${s.subscriptionId ?? '?'})`,
+    ...(isSingleSub ? [] : [`// DLZ Subscription:       ${s.dlzSubscriptionName ?? '?'} (${s.dlzSubscriptionId ?? '?'})`]),
+    `// Region:                ${s.location ?? defaultLocation}`,
+    `// Boundary:              ${s.boundary ?? '?'}`,
+    `// Mode:                  ${s.mode ?? '?'}`,
+    `// Domain:                ${s.domainName ?? '?'}`,
+    `// Capacity:              ${s.capacitySku ?? '?'}`,
     ``,
+    deploymentModeComment,
     `using '../main.bicep'`,
     ``,
     `param environment       = '${isGov ? 'AzureUSGovernment' : 'AzureCloud'}'`,
@@ -114,14 +217,202 @@ function renderBicepParam(s: WizardState): string {
     `param deploymentMode    = '${s.mode ?? ''}'`,
     `param containerPlatform = '${isGov ? 'aks' : 'containerApps'}'`,
     `param capacitySku       = '${s.capacitySku ?? ''}'`,
-    `param dlzDomainNames    = ['${s.domainName ?? ''}']`,
+    ...dlzLines,
     `// ... boundary-defaulted parameters omitted for brevity`,
     ``,
     `// Deploy target (passed to: az deployment sub create):`,
-    `//   --subscription ${s.subscriptionId ?? '<select a subscription>'}`,
-    `//   -l ${s.location ?? (isGov ? 'usgovvirginia' : 'eastus2')}`,
+    `//   --subscription ${s.subscriptionId ?? '<select a subscription>'} ${isSingleSub ? '' : '(admin/hub)'}`,
+    `//   -l ${s.location ?? defaultLocation}`,
   ].join('\n');
 }
+
+const useStyles = makeStyles({
+  root: {
+    display: 'grid',
+    gridTemplateColumns: '260px minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalXXL,
+    alignItems: 'start',
+    maxWidth: '1100px',
+  },
+  // ── step rail ────────────────────────────────────────────────────────────
+  rail: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    position: 'sticky',
+    top: tokens.spacingVerticalL,
+  },
+  railHead: {
+    marginBottom: tokens.spacingVerticalM,
+  },
+  railProgress: {
+    marginTop: tokens.spacingVerticalS,
+  },
+  railItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid transparent`,
+    textAlign: 'left',
+    background: 'none',
+    cursor: 'default',
+    width: '100%',
+  },
+  railItemClickable: {
+    cursor: 'pointer',
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  railItemActive: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    boxShadow: tokens.shadow2,
+  },
+  railBullet: {
+    flexShrink: 0,
+    width: '28px',
+    height: '28px',
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    color: tokens.colorNeutralForeground3,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  railBulletActive: {
+    backgroundColor: tokens.colorBrandBackground,
+    color: tokens.colorNeutralForegroundOnBrand,
+    border: `1px solid ${tokens.colorBrandBackground}`,
+  },
+  railBulletDone: {
+    backgroundColor: tokens.colorPaletteGreenBackground3,
+    color: tokens.colorNeutralForegroundOnBrand,
+    border: `1px solid ${tokens.colorPaletteGreenBackground3}`,
+  },
+  railText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
+  railLabel: { color: tokens.colorNeutralForeground1, fontWeight: tokens.fontWeightSemibold },
+  railLabelActive: { color: tokens.colorBrandForeground1 },
+  railHint: { color: tokens.colorNeutralForeground3 },
+  // ── content panel ──────────────────────────────────────────────────────
+  panel: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+    boxShadow: tokens.shadow4,
+    padding: tokens.spacingVerticalXXL,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalL,
+    minWidth: 0,
+  },
+  stepHeader: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  fields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '520px' },
+  // option-card grid (boundary / mode)
+  optionGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: tokens.spacingHorizontalM,
+  },
+  optionCard: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    cursor: 'pointer',
+    textAlign: 'left',
+    transitionDuration: tokens.durationFaster,
+    transitionProperty: 'border-color, box-shadow, background-color',
+    ':hover': { border: `1px solid ${tokens.colorNeutralStroke1}`, boxShadow: tokens.shadow4 },
+  },
+  optionCardSelected: {
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+    backgroundColor: tokens.colorBrandBackground2,
+    boxShadow: tokens.shadow4,
+  },
+  optionIconChip: {
+    flexShrink: 0,
+    width: '40px',
+    height: '40px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: tokens.colorBrandForeground1,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  optionBody: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 },
+  optionTitleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  // service equivalence chips (capacity step)
+  serviceRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
+  serviceChip: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  serviceIconChip: {
+    width: '24px',
+    height: '24px',
+    borderRadius: tokens.borderRadiusSmall,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  // review summary grid
+  summaryGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: tokens.spacingHorizontalL,
+    rowGap: tokens.spacingVerticalM,
+  },
+  summaryCell: { display: 'flex', flexDirection: 'column', gap: '2px' },
+  summaryLabel: { color: tokens.colorNeutralForeground3 },
+  preview: {
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderLeft: `3px solid ${tokens.colorBrandStroke1}`,
+    borderRadius: tokens.borderRadiusMedium,
+    fontFamily: 'Cascadia Code, Consolas, monospace',
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase300,
+    padding: tokens.spacingVerticalM,
+    whiteSpace: 'pre-wrap',
+    overflowX: 'auto',
+  },
+  // footer / buttons
+  footer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalM,
+  },
+  footerRight: { display: 'flex', gap: tokens.spacingHorizontalS, marginLeft: 'auto' },
+  inlineLoad: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  // intro hero
+  hero: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, alignItems: 'flex-start' },
+  heroIconChip: {
+    width: '56px',
+    height: '56px',
+    borderRadius: tokens.borderRadiusXLarge,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: tokens.colorBrandForeground1,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  doneCenter: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalM, textAlign: 'center', padding: tokens.spacingVerticalL },
+});
 
 export function SetupWizardPane() {
   const styles = useStyles();
@@ -134,6 +425,8 @@ export function SetupWizardPane() {
 
   const isGov = state.boundary === 'GCC-High' || state.boundary === 'IL5';
   const regions = isGov ? REGIONS_GOV : REGIONS_COMMERCIAL;
+
+  const go = useCallback((step: Step) => setState((s) => ({ ...s, step })), []);
 
   const loadSubscriptions = useCallback(async () => {
     setSubsLoading(true);
@@ -173,12 +466,11 @@ export function SetupWizardPane() {
   }, [state.step, subs.length, subsLoading, subsError, loadSubscriptions]);
 
   async function deploy() {
-    // The backend validates the captured config (subscription, boundary,
-    // mode, domain, capacity) and returns 400 if anything is missing, or
-    // 503 with a copy-paste `az deployment sub create` (pre-filled with the
-    // selected subscription + region) when the Setup Orchestrator isn't
-    // deployed. We surface either honestly — no fake progress animation.
-    setState((s) => ({ ...s, step: 'deploying', deployProgress: 0, deployStage: 'Submitting', deployError: undefined }));
+    // The backend validates the captured config and returns 400 if anything is
+    // missing, or 503 with a copy-paste `az deployment sub create` (pre-filled
+    // with the selected subscription + region) when the Setup Orchestrator
+    // isn't deployed. We surface either honestly — no fake progress animation.
+    setState((s) => ({ ...s, step: 'deploying', deployProgress: 0, deployStage: 'Submitting deployment request…', deployError: undefined }));
     try {
       const res = await fetch('/api/setup/deploy', {
         method: 'POST',
@@ -192,6 +484,16 @@ export function SetupWizardPane() {
         return;
       }
       const j = await res.json().catch(() => ({}));
+      if (res.status === 202 && j.ok && j.deploymentMode === 'github-workflow-dispatch') {
+        setState((s) => ({
+          ...s,
+          deploymentId: j.workflowFile,
+          deployStage: `Queued on GitHub Actions (${j.workflowFile})`,
+          deployProgress: 0.3,
+          step: 'done',
+        }));
+        return;
+      }
       if (!res.ok) {
         const msg = j.remediation?.message || j.error || `HTTP ${res.status}`;
         const commands = j.remediation?.commands ? '\n\n' + j.remediation.commands.join('\n') : '';
@@ -204,290 +506,491 @@ export function SetupWizardPane() {
     }
   }
 
+  // Which rail step is "current" for highlighting (transient steps map to review).
+  const activeRailKey: Step =
+    state.step === 'deploying' || state.step === 'done' ? 'review' : state.step;
+  const activeIndex = STEP_ORDER.indexOf(activeRailKey);
+
+  function isStepComplete(step: Step): boolean {
+    switch (step) {
+      case 'boundary': return !!state.boundary;
+      case 'mode': return !!state.mode;
+      case 'subscription': return !!state.subscriptionId && !!state.location;
+      case 'domain': return !!state.domainName;
+      case 'capacity': return !!state.capacitySku;
+      case 'review': return state.step === 'done';
+      default: return false;
+    }
+  }
+
+  const completedCount = STEP_ORDER.filter(isStepComplete).length;
+
   return (
     <div className={styles.root}>
-      <Title2>Setup Wizard</Title2>
+      {/* ── Step rail ─────────────────────────────────────────────────── */}
+      <nav className={styles.rail} aria-label="Setup steps">
+        <div className={styles.railHead}>
+          <Subtitle2>Deploy a Data Landing Zone</Subtitle2>
+          <ProgressBar
+            className={styles.railProgress}
+            value={completedCount / STEP_ORDER.length}
+            thickness="medium"
+          />
+          <Caption1 className={styles.railHint}>{completedCount} of {STEP_ORDER.length} steps complete</Caption1>
+        </div>
 
-      <div className={styles.card}>
+        {RAIL_STEPS.map((rs, i) => {
+          const done = isStepComplete(rs.key);
+          const isActive = rs.key === activeRailKey;
+          // A step is reachable if it's already complete, the current one, or
+          // the immediate next once the previous is satisfied.
+          const reachable = state.step !== 'intro' && (done || i <= activeIndex);
+          return (
+            <button
+              key={rs.key}
+              type="button"
+              className={mergeClasses(
+                styles.railItem,
+                reachable && styles.railItemClickable,
+                isActive && styles.railItemActive,
+              )}
+              aria-current={isActive ? 'step' : undefined}
+              disabled={!reachable}
+              onClick={() => reachable && go(rs.key)}
+            >
+              <span
+                className={mergeClasses(
+                  styles.railBullet,
+                  isActive && styles.railBulletActive,
+                  done && !isActive && styles.railBulletDone,
+                )}
+                aria-hidden
+              >
+                {done && !isActive ? <Checkmark16Filled /> : i + 1}
+              </span>
+              <span className={styles.railText}>
+                <Caption1 className={mergeClasses(styles.railLabel, isActive && styles.railLabelActive)}>
+                  {rs.label}
+                </Caption1>
+                <Caption1 className={styles.railHint}>{rs.hint}</Caption1>
+              </span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* ── Content panel ─────────────────────────────────────────────── */}
+      <div className={styles.panel}>
         {state.step === 'intro' && (
-          <>
+          <div className={styles.hero}>
+            <span className={styles.heroIconChip} aria-hidden><Rocket24Regular /></span>
+            <Title2>Set up a new Data Landing Zone</Title2>
             <Body1>
-              I'll help you deploy a new Data Landing Zone. We'll choose the boundary, mode, domain
-              name, and capacity together — then I'll execute the Bicep deployment under JIT
-              Contributor elevation via the Azure MCP server.
+              This wizard provisions an additional Data Landing Zone on top of your installed Admin
+              Plane. You'll choose the cloud boundary, deployment mode, target subscription and
+              region, a domain name, and capacity sizing — then review the generated Bicep before
+              launching the deployment under JIT Contributor elevation via the Azure MCP server.
             </Body1>
-            <div className={styles.buttons}>
-              <Button appearance="primary" onClick={() => setState({ ...state, step: 'boundary' })}>
+            <MessageBar intent="info">
+              <MessageBarBody>
+                Nothing is provisioned until you confirm on the final review step.
+              </MessageBarBody>
+            </MessageBar>
+            <div className={styles.footer}>
+              <Button appearance="primary" size="large" icon={<ArrowRight20Regular />} iconPosition="after" onClick={() => go('boundary')}>
                 Get started
               </Button>
             </div>
-          </>
+          </div>
         )}
 
         {state.step === 'boundary' && (
           <>
-            <Body1 weight="semibold">Which Azure boundary?</Body1>
-            <Dropdown
-              placeholder="Select boundary"
-              value={state.boundary}
-              selectedOptions={state.boundary ? [state.boundary] : []}
-              onOptionSelect={(_, d) => setState({ ...state, boundary: d.optionValue as Boundary })}
-            >
-              <Option value="Commercial">Commercial (Azure Public)</Option>
-              <Option value="GCC">GCC (M365 GCC identity over Azure Public)</Option>
-              <Option value="GCC-High">GCC-High / IL4 (Azure Government)</Option>
-              <Option value="IL5">DoD IL5 (Azure Government)</Option>
-            </Dropdown>
-            <div className={styles.buttons}>
-              <Button
-                appearance="primary"
-                disabled={!state.boundary}
-                onClick={() => setState({ ...state, step: 'mode' })}
-              >
-                Next
-              </Button>
+            <div className={styles.stepHeader}>
+              <Subtitle2>Which Azure boundary?</Subtitle2>
+              <Body1>This determines the cloud, identity model, and container platform Loom deploys into.</Body1>
             </div>
+            <div className={styles.optionGrid}>
+              {BOUNDARY_OPTIONS.map((opt) => {
+                const Icon = opt.icon;
+                const selected = state.boundary === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    aria-pressed={selected}
+                    className={mergeClasses(styles.optionCard, selected && styles.optionCardSelected)}
+                    onClick={() => setState((s) => ({ ...s, boundary: opt.value, location: undefined }))}
+                  >
+                    <span className={styles.optionIconChip} aria-hidden><Icon /></span>
+                    <span className={styles.optionBody}>
+                      <span className={styles.optionTitleRow}>
+                        <Body1Strong>{opt.title}</Body1Strong>
+                        {opt.gov && <Badge appearance="tint" color="informative" size="small">Gov</Badge>}
+                      </span>
+                      <Caption1 className={styles.railHint}>{opt.desc}</Caption1>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <Footer
+              onBack={() => go('intro')}
+              backLabel="Cancel"
+              nextDisabled={!state.boundary}
+              onNext={() => go('mode')}
+            />
           </>
         )}
 
         {state.step === 'mode' && (
           <>
-            <Body1 weight="semibold">Single-sub or multi-sub?</Body1>
-            <Body1>
-              Single-sub puts the DLZ in the same subscription as the Admin Plane. Multi-sub puts
-              each DLZ in its own subscription (recommended for federal multi-tenant scenarios).
-            </Body1>
-            <Dropdown
-              placeholder="Select mode"
-              value={state.mode}
-              selectedOptions={state.mode ? [state.mode] : []}
-              onOptionSelect={(_, d) => setState({ ...state, mode: d.optionValue as Mode })}
-            >
-              <Option value="single-sub">Single-sub</Option>
-              <Option value="multi-sub">Multi-sub</Option>
-            </Dropdown>
-            <div className={styles.buttons}>
-              <Button onClick={() => setState({ ...state, step: 'boundary' })}>Back</Button>
-              <Button
-                appearance="primary"
-                disabled={!state.mode}
-                onClick={() => setState({ ...state, step: 'subscription' })}
-              >
-                Next
-              </Button>
+            <div className={styles.stepHeader}>
+              <Subtitle2>Single-sub or multi-sub?</Subtitle2>
+              <Body1>Choose how the new Data Landing Zone is isolated from the Admin Plane.</Body1>
             </div>
+            <div className={styles.optionGrid}>
+              {MODE_OPTIONS.map((opt) => {
+                const Icon = opt.icon;
+                const selected = state.mode === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    aria-pressed={selected}
+                    className={mergeClasses(styles.optionCard, selected && styles.optionCardSelected)}
+                    onClick={() => setState((s) => ({ ...s, mode: opt.value }))}
+                  >
+                    <span className={styles.optionIconChip} aria-hidden><Icon /></span>
+                    <span className={styles.optionBody}>
+                      <span className={styles.optionTitleRow}>
+                        <Body1Strong>{opt.title}</Body1Strong>
+                        {opt.tag && <Badge appearance="tint" color="success" size="small">{opt.tag}</Badge>}
+                      </span>
+                      <Caption1 className={styles.railHint}>{opt.desc}</Caption1>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <Footer onBack={() => go('boundary')} nextDisabled={!state.mode} onNext={() => go('subscription')} />
           </>
         )}
 
         {state.step === 'subscription' && (
           <>
-            <Body1 weight="semibold">Target subscription</Body1>
-            <Body1>
-              Choose the Azure subscription the new Data Landing Zone will be deployed into. This is
-              the subscription threaded into <code>az deployment sub create --subscription …</code>.
-              Only subscriptions your identity can see are listed.
-            </Body1>
-
-            {subsLoading && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '12px 0' }}>
-                <Spinner size="tiny" /> <Body1>Listing subscriptions from Azure Resource Manager…</Body1>
-              </div>
-            )}
-
-            {subsError && !subsLoading && (
-              <MessageBar intent="warning">
-                <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{subsError}</MessageBarBody>
-              </MessageBar>
-            )}
-
-            {!subsLoading && subs.length > 0 && (
-              <Dropdown
-                placeholder="Select subscription"
-                value={state.subscriptionName}
-                selectedOptions={state.subscriptionId ? [state.subscriptionId] : []}
-                onOptionSelect={(_, d) => {
-                  const chosen = subs.find((x) => x.subscriptionId === d.optionValue);
-                  setState({
-                    ...state,
-                    subscriptionId: d.optionValue,
-                    subscriptionName: chosen?.displayName,
-                  });
-                }}
-              >
-                {subs.map((sub) => (
-                  <Option key={sub.subscriptionId} value={sub.subscriptionId} text={sub.displayName}>
-                    {sub.displayName} — {sub.subscriptionId} ({sub.state})
-                  </Option>
-                ))}
-              </Dropdown>
-            )}
-
-            <div style={{ marginTop: '12px' }}>
-              <Body1 weight="semibold">Region</Body1>
-              <Dropdown
-                placeholder="Select region"
-                value={state.location}
-                selectedOptions={state.location ? [state.location] : []}
-                onOptionSelect={(_, d) => setState({ ...state, location: d.optionValue as string })}
-              >
-                {regions.map((r) => (
-                  <Option key={r} value={r}>
-                    {r}
-                  </Option>
-                ))}
-              </Dropdown>
+            <div className={styles.stepHeader}>
+              <Subtitle2>Target subscription &amp; region</Subtitle2>
+              <Body1>
+                Pick the Azure subscription the new Data Landing Zone deploys into — it's threaded into{' '}
+                <code>az deployment sub create --subscription …</code>. Only subscriptions your identity
+                can see are listed.
+              </Body1>
             </div>
 
-            <div className={styles.buttons}>
-              <Button onClick={() => setState({ ...state, step: 'mode' })}>Back</Button>
-              <Button
-                icon={<ArrowClockwise24Regular />}
-                onClick={() => {
-                  setSubs([]);
-                  setSubsError(undefined);
-                  void loadSubscriptions();
-                }}
-                disabled={subsLoading}
+            <div className={styles.fields}>
+              <Field label="Subscription" required>
+                {subsLoading ? (
+                  <div className={styles.inlineLoad}>
+                    <Spinner size="tiny" /> <Caption1>Listing subscriptions from Azure Resource Manager…</Caption1>
+                  </div>
+                ) : (
+                  <Dropdown
+                    placeholder={subs.length ? 'Select subscription' : 'No subscriptions available'}
+                    disabled={subs.length === 0}
+                    value={state.subscriptionName}
+                    selectedOptions={state.subscriptionId ? [state.subscriptionId] : []}
+                    onOptionSelect={(_, d) => {
+                      const chosen = subs.find((x) => x.subscriptionId === d.optionValue);
+                      setState((s) => ({ ...s, subscriptionId: d.optionValue, subscriptionName: chosen?.displayName }));
+                    }}
+                  >
+                    {subs.map((sub) => (
+                      <Option key={sub.subscriptionId} value={sub.subscriptionId} text={sub.displayName}>
+                        {sub.displayName} — {sub.subscriptionId} ({sub.state})
+                      </Option>
+                    ))}
+                  </Dropdown>
+                )}
+              </Field>
+
+              {subsError && !subsLoading && (
+                <MessageBar intent="warning">
+                  <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{subsError}</MessageBarBody>
+                </MessageBar>
+              )}
+
+              <Field
+                label="Region"
+                required
+                hint={isGov ? 'Azure Government regions only for this boundary.' : 'Azure Public regions for this boundary.'}
               >
-                Refresh
-              </Button>
-              <Button
-                appearance="primary"
-                disabled={!state.subscriptionId || !state.location}
-                onClick={() => setState({ ...state, step: 'domain' })}
-              >
-                Next
-              </Button>
+                <Dropdown
+                  placeholder="Select region"
+                  value={state.location}
+                  selectedOptions={state.location ? [state.location] : []}
+                  onOptionSelect={(_, d) => setState((s) => ({ ...s, location: d.optionValue as string }))}
+                >
+                  {regions.map((r) => (
+                    <Option key={r} value={r}>{r}</Option>
+                  ))}
+                </Dropdown>
+              </Field>
             </div>
+
+            <Footer
+              onBack={() => go('mode')}
+              nextDisabled={!state.subscriptionId || !state.location}
+              onNext={() => go('domain')}
+              extra={
+                <Button
+                  appearance="subtle"
+                  icon={<ArrowClockwise20Regular />}
+                  onClick={() => { setSubs([]); setSubsError(undefined); void loadSubscriptions(); }}
+                  disabled={subsLoading}
+                >
+                  Refresh
+                </Button>
+              }
+            />
           </>
         )}
 
         {state.step === 'domain' && (
           <>
-            <Body1 weight="semibold">DLZ domain name</Body1>
-            <Body1>Used in resource names (e.g., "finance" → rg-csa-loom-dlz-finance-eastus2).</Body1>
-            <Input
-              value={state.domainName ?? ''}
-              onChange={(_, d) => setState({ ...state, domainName: d.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
-              placeholder="finance, procurement, mission-ops..."
-            />
-            <div className={styles.buttons}>
-              <Button onClick={() => setState({ ...state, step: 'subscription' })}>Back</Button>
-              <Button
-                appearance="primary"
-                disabled={!state.domainName}
-                onClick={() => setState({ ...state, step: 'capacity' })}
-              >
-                Next
-              </Button>
+            <div className={styles.stepHeader}>
+              <Subtitle2>Domain name</Subtitle2>
+              <Body1>Used in the Data Landing Zone resource names. Lowercase letters, digits, and hyphens only.</Body1>
             </div>
+            <div className={styles.fields}>
+              <Field
+                label="DLZ domain name"
+                required
+                hint={
+                  state.domainName
+                    ? `Resource group: rg-csa-loom-dlz-${state.domainName}-${state.location ?? (isGov ? 'usgovvirginia' : 'eastus2')}`
+                    : 'e.g. finance → rg-csa-loom-dlz-finance-eastus2'
+                }
+              >
+                <Input
+                  value={state.domainName ?? ''}
+                  onChange={(_, d) => setState((s) => ({ ...s, domainName: d.value.toLowerCase().replace(/[^a-z0-9-]/g, '') }))}
+                  placeholder="finance, procurement, mission-ops…"
+                />
+              </Field>
+              <Field
+                label="Vanity URL (optional)"
+                hint={state.vanityDomain
+                  ? `Console will be reachable at https://${state.vanityDomain} — the deploy outputs the 2 DNS records (CNAME + _dnsauth TXT) to add at your DNS provider.`
+                  : 'e.g. csa-loom.contoso.ai — a friendly URL instead of the long generated Front Door host. Leave blank to skip.'}
+              >
+                <Input
+                  value={state.vanityDomain ?? ''}
+                  onChange={(_, d) => setState((s) => ({ ...s, vanityDomain: d.value.toLowerCase().replace(/[^a-z0-9.-]/g, '') }))}
+                  placeholder="csa-loom.contoso.ai"
+                />
+              </Field>
+            </div>
+            <Footer onBack={() => go('subscription')} nextDisabled={!state.domainName} onNext={() => go('capacity')} />
           </>
         )}
 
         {state.step === 'capacity' && (
           <>
-            <Body1 weight="semibold">Capacity sizing</Body1>
-            <Body1>
-              Loom uses Fabric F-SKU labels as a familiar <i>sizing equivalence</i> so existing Fabric
-              sizing guides apply, but the underlying compute is provisioned on Azure-native services
-              you already pay for: Databricks cluster nodes + ADX SKU + Synapse Spark pool size.
-              Pick the equivalence that matches your expected workload.
-            </Body1>
-            <Dropdown
-              value={state.capacitySku}
-              selectedOptions={state.capacitySku ? [state.capacitySku] : []}
-              onOptionSelect={(_, d) => setState({ ...state, capacitySku: d.optionValue as string })}
-            >
-              <Option value="F2">F2 (smallest — dev)</Option>
-              <Option value="F4">F4</Option>
-              <Option value="F8">F8 (recommended for prod start)</Option>
-              <Option value="F32">F32</Option>
-              <Option value="F64">F64</Option>
-              <Option value="F128">F128</Option>
-              <Option value="F512">F512 (largest)</Option>
-            </Dropdown>
-            <div className={styles.buttons}>
-              <Button onClick={() => setState({ ...state, step: 'domain' })}>Back</Button>
-              <Button
-                appearance="primary"
-                disabled={!state.capacitySku}
-                onClick={() => setState({ ...state, step: 'review' })}
-              >
-                Next
-              </Button>
+            <div className={styles.stepHeader}>
+              <Subtitle2>Capacity sizing</Subtitle2>
+              <Body1>
+                Loom uses Fabric F-SKU labels as a familiar <i>sizing equivalence</i> so existing Fabric
+                guides apply, but compute is provisioned on Azure-native services you already pay for:
+              </Body1>
+              <div className={styles.serviceRow}>
+                {CAPACITY_SERVICES.map((svc) => {
+                  const v = itemVisual(svc.type);
+                  const Icon = v.icon;
+                  return (
+                    <span key={svc.type} className={styles.serviceChip}>
+                      <span className={styles.serviceIconChip} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
+                        <Icon />
+                      </span>
+                      <Caption1>{svc.label}</Caption1>
+                    </span>
+                  );
+                })}
+              </div>
             </div>
+            <div className={styles.fields}>
+              <Field label="Capacity equivalence" required>
+                <Dropdown
+                  placeholder="Select capacity"
+                  value={state.capacitySku}
+                  selectedOptions={state.capacitySku ? [state.capacitySku] : []}
+                  onOptionSelect={(_, d) => setState((s) => ({ ...s, capacitySku: d.optionValue as string }))}
+                >
+                  {CAPACITY_OPTIONS.map((c) => (
+                    <Option key={c.sku} value={c.sku} text={c.sku}>
+                      {c.sku} — {c.note}{c.tag ? ` (${c.tag})` : ''}
+                    </Option>
+                  ))}
+                </Dropdown>
+              </Field>
+            </div>
+            <Footer onBack={() => go('domain')} nextDisabled={!state.capacitySku} onNext={() => go('review')} />
           </>
         )}
 
         {state.step === 'review' && (
           <>
-            <Body1 weight="semibold">Review</Body1>
-            <Body1>Here's the generated Bicep parameter file:</Body1>
-            <div className={styles.preview}>{bicepPreview}</div>
-            <Body1>
-              Deploy will request JIT Contributor elevation on the target subscription via PIM-for-
-              Groups and execute via the self-hosted Azure MCP server.
-            </Body1>
-            <div className={styles.buttons}>
-              <Button onClick={() => setState({ ...state, step: 'capacity' })}>Back</Button>
-              <Button appearance="primary" icon={<Send24Regular />} onClick={deploy}>
-                Deploy
-              </Button>
+            <div className={styles.stepHeader}>
+              <Subtitle2>Review &amp; deploy</Subtitle2>
+              <Body1>Confirm the configuration below. Deploy requests JIT Contributor elevation on the target subscription via PIM-for-Groups and executes via the self-hosted Azure MCP server.</Body1>
             </div>
+
+            <div className={styles.summaryGrid}>
+              <SummaryCell label="Boundary" value={state.boundary} />
+              <SummaryCell label="Mode" value={state.mode === 'single-sub' ? 'Single-sub' : state.mode === 'multi-sub' ? 'Multi-sub' : undefined} />
+              <SummaryCell label="Subscription" value={state.subscriptionName} sub={state.subscriptionId} />
+              <SummaryCell label="Region" value={state.location} />
+              <SummaryCell label="Domain" value={state.domainName} />
+              <SummaryCell label="Capacity" value={state.capacitySku} />
+            </div>
+
+            <Divider />
+
+            <div>
+              <Body1Strong>Generated Bicep parameters</Body1Strong>
+              <div className={styles.preview}>{bicepPreview}</div>
+            </div>
+
+            <Footer
+              onBack={() => go('capacity')}
+              onNext={deploy}
+              nextLabel="Deploy"
+              nextIcon={<Send24Regular />}
+              nextAppearance="primary"
+            />
           </>
         )}
 
         {state.step === 'deploying' && (
           <>
-            <Body1 weight="semibold">{state.deployError ? 'Deployment failed' : 'Deploying…'}</Body1>
-            {!state.deployError && <ProgressBar value={state.deployProgress ?? 0} />}
-            <Body1>{state.deployStage}</Body1>
+            <div className={styles.stepHeader}>
+              <Subtitle2>{state.deployError ? 'Deployment could not start' : 'Deploying…'}</Subtitle2>
+            </div>
+            {!state.deployError && (
+              <>
+                <ProgressBar value={state.deployProgress ?? 0} thickness="large" />
+                <div className={styles.inlineLoad}><Spinner size="tiny" /><Body1>{state.deployStage}</Body1></div>
+              </>
+            )}
             {state.deployError && (
               <>
                 <MessageBar intent={/az deployment sub create/.test(state.deployError) ? 'warning' : 'error'}>
-                  <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{state.deployError}</MessageBarBody>
+                  <MessageBarBody>
+                    <MessageBarTitle>
+                      {/az deployment sub create/.test(state.deployError) ? 'Run the deployment manually' : 'Deployment error'}
+                    </MessageBarTitle>
+                    <div style={{ whiteSpace: 'pre-wrap', marginTop: tokens.spacingVerticalXS }}>{state.deployError}</div>
+                  </MessageBarBody>
                 </MessageBar>
-                <div className={styles.buttons}>
-                  <Button onClick={() => setState((s) => ({ ...s, step: 'review', deployError: undefined }))}>
-                    Back to review
-                  </Button>
-                  <Button appearance="primary" onClick={deploy}>
-                    Retry deploy
-                  </Button>
-                </div>
+                <Footer
+                  onBack={() => setState((s) => ({ ...s, step: 'review', deployError: undefined }))}
+                  backLabel="Back to review"
+                  onNext={deploy}
+                  nextLabel="Retry deploy"
+                  nextAppearance="primary"
+                />
               </>
             )}
           </>
         )}
 
         {state.step === 'done' && (
-          <>
-            <MessageBar intent="success">
+          <div className={styles.doneCenter}>
+            {state.deployStage?.includes('GitHub Actions') ? (
+              <>
+                <Spinner size="large" />
+                <Title2>Deployment queued on GitHub Actions</Title2>
+                <Body1>
+                  The workflow <code>{state.deploymentId}</code> is running. Monitor it on GitHub.
+                </Body1>
+                <Button
+                  appearance="primary"
+                  as="a"
+                  href={`https://github.com/fgarofalo56/csa-inabox/actions/workflows/${state.deploymentId}`}
+                  target="_blank"
+                >
+                  Watch workflow run
+                </Button>
+              </>
+            ) : (
+              <>
+                <CheckmarkCircle48Filled style={{ color: tokens.colorPaletteGreenForeground1 }} aria-hidden />
+                <Title2>Data Landing Zone deployed</Title2>
+                <Body1>
+                  "{state.domainName}" was deployed successfully.
+                  {state.deploymentId && <> Deployment ID: <code>{state.deploymentId}</code></>}
+                </Body1>
+              </>
+            )}
+            <MessageBar intent="info">
               <MessageBarBody>
-                Data Landing Zone "{state.domainName}" deployed successfully. Deployment ID:{' '}
-                <code>{state.deploymentId}</code>
+                <MessageBarTitle>Next steps</MessageBarTitle>
+                Configure mirroring from your source systems, define Activator rules over the ADX
+                database, build a semantic model on the gold layer, and create a Data Agent grounded
+                on this lakehouse. <Link href="/learn?topic=setup-wizard">Learn more</Link>
               </MessageBarBody>
             </MessageBar>
-            <Body1>
-              Next steps:
-              <ul>
-                <li>Configure mirroring from your source systems (Mirroring pane)</li>
-                <li>Define Activator rules over the ADX database (Activator pane)</li>
-                <li>Build a semantic model on the gold layer (Semantic Model pane)</li>
-                <li>Create a Data Agent grounded on this lakehouse (Data Agent pane)</li>
-              </ul>
-            </Body1>
-            <div className={styles.buttons}>
-              <Button
-                appearance="primary"
-                onClick={() => setState({ step: 'intro' })}
-              >
-                Deploy another
-              </Button>
-            </div>
-          </>
+            <Button appearance="primary" icon={<Rocket24Regular />} onClick={() => { setState({ step: 'intro' }); setSubs([]); setSubsError(undefined); }}>
+              Deploy another
+            </Button>
+          </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Step footer: Back on the left, optional extra control, primary Next on the right. */
+function Footer(props: {
+  onBack: () => void;
+  backLabel?: string;
+  onNext: () => void;
+  nextLabel?: string;
+  nextDisabled?: boolean;
+  nextIcon?: React.ReactElement;
+  nextAppearance?: 'primary' | 'secondary';
+  extra?: React.ReactNode;
+}) {
+  const styles = useStyles();
+  return (
+    <div className={styles.footer}>
+      <Button appearance="subtle" icon={<ArrowLeft20Regular />} onClick={props.onBack}>
+        {props.backLabel ?? 'Back'}
+      </Button>
+      <div className={styles.footerRight}>
+        {props.extra}
+        <Button
+          appearance={props.nextAppearance ?? 'primary'}
+          icon={props.nextIcon ?? <ArrowRight20Regular />}
+          iconPosition={props.nextIcon ? 'before' : 'after'}
+          disabled={props.nextDisabled}
+          onClick={props.onNext}
+        >
+          {props.nextLabel ?? 'Next'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** A label/value cell in the review summary grid. */
+function SummaryCell({ label, value, sub }: { label: string; value?: string; sub?: string }) {
+  const styles = useStyles();
+  return (
+    <div className={styles.summaryCell}>
+      <Caption1 className={styles.summaryLabel}>{label}</Caption1>
+      <Body1Strong>{value ?? '—'}</Body1Strong>
+      {sub && <Caption1 className={styles.summaryLabel}>{sub}</Caption1>}
     </div>
   );
 }

@@ -7,6 +7,9 @@ last_updated: 2026-05-15
 
 # Guide — APIM + MCP Layered Orchestration
 
+!!! note "Freshness"
+    **Validated against:** Azure API Management (AI-gateway policies: token-limit, token-metric, semantic caching) fronting Model Context Protocol (MCP) servers + Azure OpenAI / multi-model routing — **as of 2026-06-02.** MCP is an evolving spec and APIM's AI-gateway + MCP support is moving quickly; verify the protocol version and APIM policy surface against the current docs before deploying.
+
 ## The pattern
 
 Model Context Protocol (MCP) servers expose **tools** (callable functions) and **resources** (readable data) to LLM clients over a uniform protocol. Agent clients call MCP servers; MCP servers call backends.

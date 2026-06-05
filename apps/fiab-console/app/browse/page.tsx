@@ -1,70 +1,161 @@
 'use client';
 
+/**
+ * /browse — the cross-tenant landing surface.
+ *
+ * Three stacked, breathing-room sections (Web 3.0 standard, see
+ * docs/fiab/design/ui-web3-guide.md):
+ *   1. Pinned     — pinned items, grouped by type, as ItemTiles.
+ *   2. Recent     — the shared RecentItems row.
+ *   3. Workspaces — every workspace in the tenant, with a Tile | List
+ *                   ViewToggle (tile = ItemTile/TileGrid, list =
+ *                   LoomDataTable with sort + filter on name / type /
+ *                   modified). Rows/tiles route to /workspaces/{id}.
+ *
+ * All data is real:
+ *   • pinned     -> /api/user-prefs?key=pinnedItems
+ *   • workspaces -> /api/workspaces
+ *   • recent     -> RecentItems (/api/items/recent)
+ *
+ * The top Toolbar's SearchBox (capped at 360px by the Toolbar primitive)
+ * scans pinned + workspaces; the workspace List view also has its own
+ * per-column filters from LoomDataTable.
+ */
+
 import { PageShell } from '@/lib/components/page-shell';
 import { RecentItems } from '@/lib/components/recent-items';
 import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
-import { makeStyles, tokens, Spinner, Input, Badge } from '@fluentui/react-components';
-import { Search20Regular, Open16Regular } from '@fluentui/react-icons';
+import { useRouter } from 'next/navigation';
+import {
+  makeStyles,
+  tokens,
+  Spinner,
+  Badge,
+  MessageBar,
+  MessageBarBody,
+  Text,
+} from '@fluentui/react-components';
+import { Section, Toolbar } from '@/lib/components/ui/section';
+import { AllItemsExplorer } from '@/lib/components/browse/all-items-explorer';
+import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
+import { ItemTile } from '@/lib/components/ui/item-tile';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { itemVisual } from '@/lib/components/ui/item-type-visual';
 
-interface Pin { id: string; label: string; href: string; type?: string; }
-interface WorkspaceLite { id: string; name: string; tenantId?: string; }
+interface Pin {
+  id: string;
+  label: string;
+  href: string;
+  type?: string;
+}
+interface WorkspaceLite {
+  id: string;
+  name: string;
+  tenantId?: string;
+  description?: string;
+  createdAt?: string;
+  lastAccessedAt?: string;
+}
+
+const LS_BROWSE_VIEW = 'loom.browse.workspaces.viewMode.v1';
 
 const useStyles = makeStyles({
-  toolbar: {
-    display: 'flex', alignItems: 'center', gap: 12,
-    marginTop: 16, marginBottom: 8, flexWrap: 'wrap',
+  countBadges: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    flexWrap: 'wrap',
   },
-  search: { flex: 1, maxWidth: 380 },
-  sectionTitle: { fontSize: 18, fontWeight: 600, marginTop: 28, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 },
-  pinGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-    gap: 14,
+  groupLabel: {
+    display: 'block',
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    color: tokens.colorNeutralForeground3,
+    fontWeight: tokens.fontWeightBold,
+    marginBottom: tokens.spacingVerticalS,
   },
-  pin: {
-    padding: 14, borderRadius: 10,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    textDecoration: 'none', color: tokens.colorNeutralForeground1,
-    display: 'flex', flexDirection: 'column', gap: 6,
-    transition: 'border-color 0.15s, transform 0.15s',
-    ':hover': { borderColor: tokens.colorBrandStroke1, transform: 'translateY(-2px)' },
+  group: {
+    marginBottom: tokens.spacingVerticalL,
   },
-  pinLabel: { fontSize: 14, fontWeight: 600 },
-  pinType: { fontSize: 11, color: tokens.colorNeutralForeground3, textTransform: 'uppercase', letterSpacing: '0.06em' },
-  pinFooter: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: tokens.colorBrandForeground1, marginTop: 'auto' },
   empty: {
-    padding: 20, borderRadius: 10,
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusLarge,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     color: tokens.colorNeutralForeground3,
-    fontSize: 13, textAlign: 'center', lineHeight: 1.6,
+    fontSize: '13px',
+    textAlign: 'center',
+    lineHeight: 1.6,
+  },
+  spinnerWrap: {
+    padding: tokens.spacingVerticalM,
   },
 });
 
 export default function BrowsePage() {
   const styles = useStyles();
+  const router = useRouter();
+
   const [pins, setPins] = useState<Pin[] | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
   const [q, setQ] = useState('');
+  const [view, setView] = useState<LoomView>('tile');
+
+  // Hydrate the persisted workspace view mode (SSR-safe).
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(LS_BROWSE_VIEW);
+      if (raw === 'tile' || raw === 'list') setView(raw);
+    } catch {
+      /* ignore (quota / private mode) */
+    }
+  }, []);
 
   useEffect(() => {
-    fetch('/api/user-prefs?key=pinnedItems').then(r => r.json()).then(d => {
-      setPins(Array.isArray(d?.value) ? d.value : []);
-    }).catch(() => setPins([]));
-    fetch('/api/workspaces').then(r => r.json()).then(d => {
-      const list = Array.isArray(d) ? d : (d?.workspaces || []);
-      setWorkspaces(list);
-    }).catch(() => setWorkspaces([]));
+    try {
+      window.localStorage.setItem(LS_BROWSE_VIEW, view);
+    } catch {
+      /* ignore */
+    }
+  }, [view]);
+
+  useEffect(() => {
+    fetch('/api/user-prefs?key=pinnedItems')
+      .then((r) => r.json())
+      .then((d) => {
+        setPins(Array.isArray(d?.value) ? d.value : []);
+      })
+      .catch(() => setPins([]));
+    fetch('/api/workspaces')
+      .then((r) => r.json())
+      .then((d) => {
+        const list = Array.isArray(d) ? d : d?.workspaces || [];
+        setWorkspaces(list);
+      })
+      .catch(() => setWorkspaces([]));
   }, []);
 
   const filter = q.trim().toLowerCase();
+
   const visiblePins = useMemo(
-    () => (pins ?? []).filter(p => !filter || p.label.toLowerCase().includes(filter) || (p.type ?? '').toLowerCase().includes(filter)),
+    () =>
+      (pins ?? []).filter(
+        (p) =>
+          !filter ||
+          p.label.toLowerCase().includes(filter) ||
+          (p.type ?? '').toLowerCase().includes(filter),
+      ),
     [pins, filter],
   );
+
   const visibleWorkspaces = useMemo(
-    () => (workspaces ?? []).filter(w => !filter || w.name.toLowerCase().includes(filter)),
+    () =>
+      (workspaces ?? []).filter(
+        (w) =>
+          !filter ||
+          w.name.toLowerCase().includes(filter) ||
+          (w.description ?? '').toLowerCase().includes(filter),
+      ),
     [workspaces, filter],
   );
 
@@ -79,81 +170,188 @@ export default function BrowsePage() {
     return Array.from(groups.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [visiblePins]);
 
+  // Workspace list-view columns (sortable + filterable per the design guide).
+  const workspaceColumns = useMemo<LoomColumn<WorkspaceLite>[]>(
+    () => [
+      {
+        key: 'name',
+        label: 'Name',
+        sortable: true,
+        filterable: true,
+        width: 320,
+        getValue: (w) => w.name,
+        render: (w) => {
+          const visual = itemVisual('workspace');
+          return (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 24,
+                  height: 24,
+                  borderRadius: tokens.borderRadiusMedium,
+                  backgroundColor: `${visual.color}1f`,
+                  flexShrink: 0,
+                }}
+                aria-hidden
+              >
+                <visual.icon style={{ width: 16, height: 16, color: visual.color }} />
+              </span>
+              <Text weight="semibold">{w.name}</Text>
+            </span>
+          );
+        },
+      },
+      {
+        key: 'type',
+        label: 'Type',
+        sortable: true,
+        filterable: true,
+        width: 160,
+        getValue: () => 'Workspace',
+      },
+      {
+        key: 'modified',
+        label: 'Modified',
+        sortable: true,
+        filterable: false,
+        width: 180,
+        getValue: (w) => w.lastAccessedAt ?? w.createdAt ?? '',
+        render: (w) => {
+          const d = w.lastAccessedAt ?? w.createdAt;
+          return d ? new Date(d).toLocaleDateString() : '—';
+        },
+      },
+    ],
+    [],
+  );
+
+  const pinsLoading = pins === null;
+  const wsLoading = workspaces === null;
+
   return (
     <PageShell
       title="Browse"
-      subtitle="Pinned, recent, and every workspace your tenant owns — one filter scans across all of them."
+      subtitle="Everything in your Loom tenant — every item across every workspace, plus pinned and recent. (Workspaces lists the workspaces themselves.)"
     >
-      <div className={styles.toolbar}>
-        <Input
-          className={styles.search}
-          contentBefore={<Search20Regular />}
-          placeholder="Filter pinned, recent, and workspaces…"
-          value={q}
-          onChange={(_, d) => setQ(d.value)}
-        />
-        {pins !== null && workspaces !== null && (
-          <Badge appearance="outline">
-            {(pins?.length ?? 0)} pinned · {(workspaces?.length ?? 0)} workspaces
-          </Badge>
+      <Toolbar
+        search={q}
+        onSearch={setQ}
+        searchPlaceholder="Filter pinned and workspaces…"
+        actions={
+          !pinsLoading && !wsLoading ? (
+            <div className={styles.countBadges}>
+              <Badge appearance="outline">{pins?.length ?? 0} pinned</Badge>
+              <Badge appearance="outline">{workspaces?.length ?? 0} workspaces</Badge>
+            </div>
+          ) : undefined
+        }
+      />
+
+      {/* ── All items (everything in the tenant) ───────────────────────── */}
+      <Section title="All items">
+        <AllItemsExplorer />
+      </Section>
+
+      {/* ── Pinned ──────────────────────────────────────────────────── */}
+      <Section title="Pinned">
+        {pinsLoading && (
+          <div className={styles.spinnerWrap}>
+            <Spinner size="tiny" label="Loading pins…" />
+          </div>
         )}
-      </div>
-
-      <div className={styles.sectionTitle}>Pinned</div>
-      {pins === null && <Spinner size="tiny" label="Loading pins…" />}
-      {pins !== null && pins.length === 0 && (
-        <div className={styles.empty}>
-          Nothing pinned yet. Open a workspace or item and click the pin icon to make it stick here
-          and in the left sidebar.
-        </div>
-      )}
-      {pins !== null && pins.length > 0 && visiblePins.length === 0 && (
-        <div className={styles.empty}>No pinned items match &quot;{q}&quot;.</div>
-      )}
-      {groupedPins.length > 0 && groupedPins.map(([type, list]) => (
-        <div key={type} style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: tokens.colorNeutralForeground3, marginBottom: 6 }}>
-            {type}
+        {!pinsLoading && (pins?.length ?? 0) === 0 && (
+          <div className={styles.empty}>
+            Nothing pinned yet. Open a workspace or item and click the pin icon to make it stick
+            here and in the left sidebar.
           </div>
-          <div className={styles.pinGrid}>
-            {list.map(p => (
-              <Link key={p.id} href={p.href} className={styles.pin}>
-                <div className={styles.pinLabel}>{p.label}</div>
-                <div className={styles.pinFooter}>
-                  <Open16Regular /> Open
-                </div>
-              </Link>
-            ))}
+        )}
+        {!pinsLoading && (pins?.length ?? 0) > 0 && visiblePins.length === 0 && (
+          <div className={styles.empty}>No pinned items match &quot;{q}&quot;.</div>
+        )}
+        {groupedPins.map(([type, list]) => (
+          <div key={type} className={styles.group}>
+            <Text size={200} className={styles.groupLabel}>
+              {itemVisual(type).label}
+            </Text>
+            <TileGrid>
+              {list.map((p) => (
+                <ItemTile
+                  key={p.id}
+                  type={p.type ?? 'workspace'}
+                  title={p.label}
+                  subtitle={itemVisual(p.type ?? 'workspace').label}
+                  onClick={() => router.push(p.href)}
+                />
+              ))}
+            </TileGrid>
           </div>
-        </div>
-      ))}
+        ))}
+      </Section>
 
-      <div className={styles.sectionTitle}>Recent</div>
-      <RecentItems />
+      {/* ── Recent ──────────────────────────────────────────────────── */}
+      <Section title="Recent">
+        <RecentItems />
+      </Section>
 
-      <div className={styles.sectionTitle}>All workspaces</div>
-      {workspaces === null && <Spinner size="tiny" label="Loading workspaces…" />}
-      {workspaces !== null && workspaces.length === 0 && (
-        <div className={styles.empty}>
-          No workspaces in this tenant yet. Visit <Link href="/workspaces">/workspaces</Link> to create one.
-        </div>
-      )}
-      {workspaces !== null && workspaces.length > 0 && visibleWorkspaces.length === 0 && filter && (
-        <div className={styles.empty}>No workspaces match &quot;{q}&quot;.</div>
-      )}
-      {visibleWorkspaces.length > 0 && (
-        <div className={styles.pinGrid}>
-          {visibleWorkspaces.map(w => (
-            <Link key={w.id} href={`/workspaces/${w.id}`} className={styles.pin}>
-              <div className={styles.pinType}>workspace</div>
-              <div className={styles.pinLabel}>{w.name}</div>
-              <div className={styles.pinFooter}>
-                <Open16Regular /> Open
-              </div>
-            </Link>
-          ))}
-        </div>
-      )}
+      {/* ── All workspaces ──────────────────────────────────────────── */}
+      <Section
+        title="All workspaces"
+        actions={
+          !wsLoading && (workspaces?.length ?? 0) > 0 ? (
+            <ViewToggle value={view} onChange={setView} ariaLabel="Workspace view" />
+          ) : undefined
+        }
+      >
+        {wsLoading && (
+          <div className={styles.spinnerWrap}>
+            <Spinner size="tiny" label="Loading workspaces…" />
+          </div>
+        )}
+        {!wsLoading && (workspaces?.length ?? 0) === 0 && (
+          <MessageBar intent="info">
+            <MessageBarBody>
+              No workspaces in this tenant yet. Visit /workspaces to create one.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {!wsLoading && (workspaces?.length ?? 0) > 0 && visibleWorkspaces.length === 0 && filter && (
+          <div className={styles.empty}>No workspaces match &quot;{q}&quot;.</div>
+        )}
+        {!wsLoading && visibleWorkspaces.length > 0 && (
+          view === 'tile' ? (
+            <TileGrid>
+              {visibleWorkspaces.map((w) => (
+                <ItemTile
+                  key={w.id}
+                  type="workspace"
+                  title={w.name}
+                  subtitle={w.description || 'Workspace'}
+                  meta={
+                    w.lastAccessedAt
+                      ? `Opened ${new Date(w.lastAccessedAt).toLocaleDateString()}`
+                      : w.createdAt
+                        ? `Created ${new Date(w.createdAt).toLocaleDateString()}`
+                        : undefined
+                  }
+                  onClick={() => router.push(`/workspaces/${w.id}`)}
+                />
+              ))}
+            </TileGrid>
+          ) : (
+            <LoomDataTable
+              columns={workspaceColumns}
+              rows={visibleWorkspaces}
+              getRowId={(w) => w.id}
+              onRowClick={(w) => router.push(`/workspaces/${w.id}`)}
+              ariaLabel="All workspaces"
+              empty="No workspaces match this filter."
+            />
+          )
+        )}
+      </Section>
     </PageShell>
   );
 }

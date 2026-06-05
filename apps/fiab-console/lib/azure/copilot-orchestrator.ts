@@ -23,6 +23,7 @@ import {
 } from '@azure/identity';
 
 import { listConnections } from './foundry-client';
+import type { TenantCopilotConfig } from '../types/copilot-config';
 import {
   executeQuery as synapseExecute,
   dedicatedTarget,
@@ -39,6 +40,7 @@ import * as powerbi from './powerbi-client';
 import * as fabric from './fabric-client';
 import * as activator from './activator-client';
 import { copilotSessionsContainer } from './cosmos-client';
+import { runSelfAudit, applyFix } from '@/lib/admin/self-audit';
 
 // ---------- Credential ----------
 
@@ -67,20 +69,58 @@ export interface AoaiTarget {
 
 let _aoaiTarget: AoaiTarget | null = null;
 
-export async function resolveAoaiTarget(force = false): Promise<AoaiTarget> {
-  if (_aoaiTarget && !force) return _aoaiTarget;
+/**
+ * Resolve the AOAI chat target.
+ *
+ * Resolution order:
+ *   1. `cfg` — the tenant's admin-selected Copilot config (aoaiEndpoint +
+ *      copilotChatDeployment, or just copilotChatDeployment paired with the
+ *      foundry account's endpoint). The admin picker is the source of truth.
+ *   2. LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT env vars (existing behaviour).
+ *   3. Discovery via Foundry hub connections.
+ *
+ * When `cfg` is supplied the result is NOT cached (config is per-tenant); the
+ * module cache only memoizes the env/discovery default.
+ */
+export async function resolveAoaiTarget(
+  forceOrCfg: boolean | TenantCopilotConfig | null = false,
+  maybeCfg?: TenantCopilotConfig | null,
+): Promise<AoaiTarget> {
+  const force = typeof forceOrCfg === 'boolean' ? forceOrCfg : false;
+  const cfg: TenantCopilotConfig | null =
+    typeof forceOrCfg === 'object' && forceOrCfg ? forceOrCfg : (maybeCfg ?? null);
 
-  // Env overrides (works even when no Foundry connection is registered)
-  const envEndpoint = process.env.LOOM_AOAI_ENDPOINT;
-  const envDeployment = process.env.LOOM_AOAI_DEPLOYMENT;
   const apiVersion = process.env.LOOM_AOAI_API_VERSION || '2024-10-21';
 
-  if (envEndpoint && envDeployment) {
-    _aoaiTarget = { endpoint: envEndpoint.replace(/\/$/, ''), deployment: envDeployment, apiVersion };
-    return _aoaiTarget;
+  // 1. Tenant admin-selected config (highest priority).
+  if (cfg && (cfg.copilotChatDeployment || cfg.aoaiEndpoint)) {
+    const endpoint = (cfg.aoaiEndpoint || process.env.LOOM_AOAI_ENDPOINT || '').replace(/\/$/, '');
+    const deployment = cfg.copilotChatDeployment || process.env.LOOM_AOAI_DEPLOYMENT || '';
+    if (endpoint && deployment) {
+      return { endpoint, deployment, apiVersion };
+    }
+    // Endpoint known but no deployment chosen yet → honest gate.
+    if (!deployment) {
+      throw new NoAoaiDeploymentError(
+        'A Foundry account is selected in admin tenant-settings but no Copilot chat-model deployment is chosen. ' +
+          'Pick one under Admin → Tenant settings → Copilot & Agents (deploy a gpt-4o / gpt-4.1 class model first).',
+      );
+    }
   }
 
-  // Discover via Foundry hub connections
+  if (_aoaiTarget && !force && !cfg) return _aoaiTarget;
+
+  // 2. Env overrides (works even when no Foundry connection is registered)
+  const envEndpoint = process.env.LOOM_AOAI_ENDPOINT;
+  const envDeployment = process.env.LOOM_AOAI_DEPLOYMENT;
+
+  if (envEndpoint && envDeployment) {
+    const t = { endpoint: envEndpoint.replace(/\/$/, ''), deployment: envDeployment, apiVersion };
+    if (!cfg) _aoaiTarget = t;
+    return t;
+  }
+
+  // 3. Discover via Foundry hub connections
   let conns: Awaited<ReturnType<typeof listConnections>> = [];
   try {
     conns = await listConnections();
@@ -100,13 +140,15 @@ export async function resolveAoaiTarget(force = false): Promise<AoaiTarget> {
     );
   }
 
-  const deployment = envDeployment || (aoai.metadata?.['DeploymentApiVersion'] as string) || 'gpt-4o';
-  _aoaiTarget = {
+  const deployment =
+    cfg?.copilotChatDeployment || envDeployment || (aoai.metadata?.['DeploymentApiVersion'] as string) || 'gpt-4o';
+  const discovered: AoaiTarget = {
     endpoint: aoai.target.replace(/\/$/, ''),
     deployment,
     apiVersion,
   };
-  return _aoaiTarget;
+  if (!cfg) _aoaiTarget = discovered;
+  return discovered;
 }
 
 async function aoaiToken(): Promise<string> {
@@ -117,12 +159,20 @@ async function aoaiToken(): Promise<string> {
 
 // ---------- Tool registry ----------
 
+/** Per-turn context passed to every tool handler (caller identity). Lets the
+ *  build-assist tools create/configure items OWNED by the signed-in user. */
+export interface ToolContext {
+  userOid: string;
+  /** Minimal session shape the item-crud helpers consume (claims.oid = tenant). */
+  session: { claims: { oid: string; upn?: string; email?: string } };
+}
+
 export interface ToolDef {
   name: string;
   description: string;
   service: string;
   parameters: Record<string, unknown>; // JSON Schema object
-  handler: (args: any) => Promise<unknown>;
+  handler: (args: any, ctx: ToolContext) => Promise<unknown>;
 }
 
 export class LoomToolRegistry {
@@ -435,30 +485,102 @@ export function buildDefaultRegistry(): LoomToolRegistry {
   r.register({
     name: 'workspace_create',
     service: 'Loom',
-    description: 'Create a new Loom workspace (Cosmos-backed metadata only).',
+    description: 'Create a new Loom workspace OWNED by the current user. Call this before item_create when the user has no workspace yet. Returns the new workspace id.',
     parameters: obj({ name: S_STRING, description: S_STRING }, ['name']),
-    handler: async ({ name, description }) => {
+    handler: async ({ name, description }, ctx) => {
       const { workspacesContainer } = await import('./cosmos-client');
       const c = await workspacesContainer();
-      const id = `ws-${Date.now()}`;
-      const doc = { id, name, description: description || '', tenantId: 'default', createdAt: new Date().toISOString() };
-      await c.items.create(doc);
-      return doc;
+      const now = new Date().toISOString();
+      const ws = {
+        id: crypto.randomUUID(),
+        tenantId: ctx.userOid,
+        name: String(name).trim(),
+        description: description ? String(description).trim() : undefined,
+        createdBy: ctx.userOid,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const { resource } = await c.items.create(ws);
+      return { id: resource?.id ?? ws.id, name: ws.name };
     },
   });
   r.register({
     name: 'item_create',
     service: 'Loom',
-    description: 'Create a new Loom item (Cosmos metadata) of a given type inside a workspace.',
-    parameters: obj({ workspaceId: S_STRING, type: S_STRING, displayName: S_STRING }, ['workspaceId', 'type', 'displayName']),
-    handler: async ({ workspaceId, type, displayName }) => {
-      const { itemsContainer } = await import('./cosmos-client');
-      const c = await itemsContainer();
-      const id = `item-${Date.now()}`;
-      const doc = { id, workspaceId, type, displayName, createdAt: new Date().toISOString() };
-      await c.items.create(doc);
-      return doc;
+    description:
+      'Create a new Loom item of a given type inside a workspace, OWNED by the current user. ' +
+      'Optionally pass an initial `state` object to create a PRE-CONFIGURED item — e.g. a data-agent ' +
+      'with {sources:[…], instructions}, a data-pipeline with {activities:[…]}, a lakehouse, warehouse, ' +
+      'notebook, kql-database, eventstream, activator, semantic-model, report, graph-model, etc. ' +
+      'Returns the created item id (open it in the editor to continue). This is the primary build-assist tool.',
+    parameters: obj({
+      workspaceId: S_STRING, type: S_STRING, displayName: S_STRING, description: S_STRING,
+      state: { type: 'object', description: 'Initial item state/config (item-type specific). Omit for an empty item.' },
+    }, ['workspaceId', 'type', 'displayName']),
+    handler: async ({ workspaceId, type, displayName, description, state }, ctx) => {
+      const { createOwnedItem } = await import('@/app/api/items/_lib/item-crud');
+      const res = await createOwnedItem(ctx.session as any, String(type), {
+        workspaceId: String(workspaceId),
+        displayName: String(displayName),
+        description: description ? String(description) : undefined,
+        state: state && typeof state === 'object' ? (state as Record<string, unknown>) : undefined,
+      });
+      if (!res.ok) throw new Error(res.error);
+      return { id: res.item.id, itemType: res.item.itemType, displayName: res.item.displayName, workspaceId: res.item.workspaceId };
     },
+  });
+  r.register({
+    name: 'item_configure',
+    service: 'Loom',
+    description:
+      'Update an existing Loom item the current user owns — patch its displayName/description and/or merge a ' +
+      'new `state` config. Use this to BUILD an item incrementally (e.g. add sources to a data-agent, add ' +
+      'activities to a pipeline, set a dataset schema). Pass the item id + itemType.',
+    parameters: obj({
+      id: S_STRING, itemType: S_STRING, displayName: S_STRING, description: S_STRING,
+      state: { type: 'object', description: 'New item state to store (replaces the existing state object).' },
+    }, ['id', 'itemType']),
+    handler: async ({ id, itemType, displayName, description, state }, ctx) => {
+      const { updateOwnedItem } = await import('@/app/api/items/_lib/item-crud');
+      const updated = await updateOwnedItem(String(id), String(itemType), ctx.userOid, {
+        displayName: displayName ? String(displayName) : undefined,
+        description: description !== undefined ? String(description) : undefined,
+        state: state && typeof state === 'object' ? (state as Record<string, unknown>) : undefined,
+      });
+      if (!updated) throw new Error(`item ${id} (${itemType}) not found or not owned by you`);
+      return { id: updated.id, itemType: updated.itemType, displayName: updated.displayName, updatedAt: updated.updatedAt };
+    },
+  });
+  r.register({
+    name: 'item_list',
+    service: 'Loom',
+    description: 'List the Loom items of a given type the current user owns (id + displayName + workspace). Use to find an item to configure, or to check what already exists before creating a duplicate.',
+    parameters: obj({ itemType: S_STRING }, ['itemType']),
+    handler: async ({ itemType }, ctx) => {
+      const { listOwnedItems } = await import('@/app/api/items/_lib/item-crud');
+      const items = await listOwnedItems(String(itemType), ctx.userOid);
+      return items.map((it: any) => ({ id: it.id, displayName: it.displayName, workspaceId: it.workspaceId }));
+    },
+  });
+
+  // -------- agent-loom: self-audit + healer --------
+  // These let the built-in Copilot (agent-loom) review the whole deployment and
+  // apply runtime-safe fixes conversationally — the same engine the Admin →
+  // Health page uses. agent-loom understands every Loom requirement (identity,
+  // data plane, Azure services, permissions, security) via the audit registry.
+  r.register({
+    name: 'loom_self_audit',
+    service: 'Loom',
+    description: 'Run a full CSA Loom self-audit: identity, data plane (Cosmos), the Azure services each workload needs (Synapse, ADX, Event Hubs, ADLS, AI Search, AOAI/Foundry, Monitor, ADF, Purview), permissions (bootstrap admin), and security posture. Returns a scored report with the exact remediation for every warning/failure. Use this first when asked to check, validate, or fix the deployment.',
+    parameters: obj({}),
+    handler: async () => runSelfAudit(new Date().toISOString()),
+  });
+  r.register({
+    name: 'loom_heal',
+    service: 'Loom',
+    description: "Apply a runtime-safe healer fix by its fixId (from loom_self_audit results, e.g. 'ensure-cosmos'). Only fixes the Console identity can safely apply at runtime are executed; deploy-time issues (env vars / RBAC grants) return guidance to apply + redeploy instead of pretending to fix. Requires tenant-admin approval at the UI layer.",
+    parameters: obj({ fixId: S_STRING }, ['fixId']),
+    handler: async ({ fixId }) => applyFix(String(fixId)),
   });
 
   return r;
@@ -466,11 +588,13 @@ export function buildDefaultRegistry(): LoomToolRegistry {
 
 // ---------- Orchestrator ----------
 
+export interface OrchestratorUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
+
 export type OrchestratorStep =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; args: unknown; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
-  | { kind: 'final'; content: string }
+  | { kind: 'final'; content: string; usage?: OrchestratorUsage; model?: string }
   | { kind: 'error'; error: string };
 
 export interface OrchestrateOptions {
@@ -478,6 +602,9 @@ export interface OrchestrateOptions {
   sessionId: string;
   userOid: string;
   maxIterations?: number;
+  /** Tenant admin-selected Copilot config (account + chat deployment). When
+   *  supplied it takes priority over env / discovery. */
+  tenantConfig?: TenantCopilotConfig | null;
 }
 
 interface ChatMessage {
@@ -488,11 +615,22 @@ interface ChatMessage {
   name?: string;
 }
 
-const SYSTEM_PROMPT = `You are CSA Loom Copilot, a cross-item orchestrator for Microsoft Fabric, Synapse, Databricks, ADF, APIM, ADX, Power BI, AI Foundry, and ADLS.
+const SYSTEM_PROMPT = `You are CSA Loom Copilot — the assistant for CSA Loom, a self-contained data + AI platform that runs on Azure (Synapse, Databricks, ADF, APIM, Azure Data Explorer, AI Foundry, ADLS, Event Hubs, Azure Monitor). CSA Loom is its OWN product, NOT Microsoft Fabric. When you describe a feature, describe it as a CSA Loom feature (e.g. "the CSA Loom Real-Time hub", "a CSA Loom Eventstream", "the CSA Loom lakehouse") — never say "in Microsoft Fabric". You may name the underlying Azure services since those are the real backends.
 
-You decompose user requests into concrete tool calls against the registered Loom tools. Always prefer real tool calls over describing what you would do. Chain results: feed output of one call into the next. Be concise in your final summary; the user already sees the step trace.
+You decompose user requests into concrete tool calls against the registered CSA Loom tools. Always prefer real tool calls over describing what you would do. Chain results: feed output of one call into the next. Be concise in your final summary; the user already sees the step trace.
 
 If a tool errors, surface the error clearly and either retry with corrected inputs or abandon that branch and explain why.`;
+
+/**
+ * True when an AOAI 400 body is the "this model only supports the default
+ * temperature" rejection that newer reasoning models (o1/o3/gpt-5/MAI-*) emit.
+ * Those deployments reject any non-default temperature (and top_p); the right
+ * move is to retry without the sampling params, not to fail the chat.
+ */
+function isUnsupportedSamplingParam(body: string): boolean {
+  return /unsupported_value|does not support|Only the default \(1\) value is supported/i.test(body)
+    && /temperature|top_p/i.test(body);
+}
 
 async function callAoai(
   target: AoaiTarget,
@@ -501,19 +639,27 @@ async function callAoai(
 ): Promise<any> {
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      messages,
-      tools,
-      tool_choice: 'auto',
-      temperature: 0.2,
-    }),
-  });
+  const base: Record<string, unknown> = { messages, tools, tool_choice: 'auto' };
+
+  // First attempt sends temperature for determinism; if the model rejects it,
+  // retry once with the default sampling (no temperature). Works by default
+  // across both classic chat models and the newer reasoning models.
+  const send = async (withTemperature: boolean) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(withTemperature ? { ...base, temperature: 0.2 } : base),
+    });
+
+  let res = await send(true);
+  if (res.status === 400) {
+    const t = await res.text();
+    if (isUnsupportedSamplingParam(t)) {
+      res = await send(false);
+    } else {
+      throw new Error(`AOAI chat-completions failed 400: ${t.slice(0, 400)}`);
+    }
+  }
   if (!res.ok) {
     const t = await res.text();
     throw new Error(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
@@ -559,10 +705,13 @@ async function persistStep(sessionId: string, userOid: string, step: Orchestrato
 export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<OrchestratorStep> {
   const { prompt, sessionId, userOid } = opts;
   const maxIter = opts.maxIterations ?? 10;
+  // Identity passed to every tool handler so build-assist tools create/configure
+  // items OWNED by this user (not the broken tenantId:'default' shells).
+  const toolCtx: ToolContext = { userOid, session: { claims: { oid: userOid, upn: userOid } } };
 
   let target: AoaiTarget;
   try {
-    target = await resolveAoaiTarget();
+    target = await resolveAoaiTarget(opts.tenantConfig ?? null);
   } catch (e: any) {
     const step: OrchestratorStep = {
       kind: 'error',
@@ -575,6 +724,13 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   }
 
   const reg = getRegistry();
+  // Register any connected external MCP tool servers (Build 2026 "Connect MCP
+  // tools") so agent-loom can call them alongside the built-in Loom tools.
+  // Best-effort: a missing/unreachable MCP server never breaks the chat.
+  try {
+    const { buildMcpShim } = await import('./mcp-shim');
+    await buildMcpShim(reg, userOid);
+  } catch { /* MCP shim optional — continue with built-in tools */ }
   const tools = reg.toAoaiTools();
 
   const messages: ChatMessage[] = [
@@ -583,6 +739,10 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   ];
 
   await persistStep(sessionId, userOid, { kind: 'thought', content: `User prompt: ${prompt}` }, prompt);
+
+  // Accumulate token/context usage across every AOAI round-trip in the loop so
+  // the final step can report total cost (parity with the data-agent chat).
+  const usage: OrchestratorUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, aoaiCalls: 0, toolCalls: 0 };
 
   for (let i = 0; i < maxIter; i++) {
     let resp: any;
@@ -594,6 +754,11 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       yield step;
       return;
     }
+    const u = resp?.usage || {};
+    usage.aoaiCalls += 1;
+    usage.promptTokens += u.prompt_tokens ?? 0;
+    usage.completionTokens += u.completion_tokens ?? 0;
+    usage.totalTokens += u.total_tokens ?? 0;
 
     const choice = resp?.choices?.[0];
     const msg = choice?.message;
@@ -613,11 +778,12 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
 
     const toolCalls = msg.tool_calls as ChatMessage['tool_calls'];
     if (!toolCalls || toolCalls.length === 0) {
-      const finalStep: OrchestratorStep = { kind: 'final', content: msg.content || '' };
+      const finalStep: OrchestratorStep = { kind: 'final', content: msg.content || '', usage, model: target.deployment };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
       return;
     }
+    usage.toolCalls += toolCalls.length;
 
     for (const tc of toolCalls) {
       let parsedArgs: unknown = {};
@@ -652,7 +818,7 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         });
       } else {
         try {
-          const result = await tool.handler(parsedArgs as any);
+          const result = await tool.handler(parsedArgs as any, toolCtx);
           // Cap result size fed back to the model so we don't blow context
           const serialized = JSON.stringify(result);
           const truncated = serialized.length > 16_000

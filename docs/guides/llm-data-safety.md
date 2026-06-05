@@ -1,5 +1,8 @@
 # Data safety for LLM and chatbot workloads on Azure
 
+!!! note "Freshness"
+    **Validated against:** Azure OpenAI + Azure AI Content Safety + Microsoft Purview (sensitivity labels / DLP) + Azure AI Search (grounding) — **as of 2026-06-02.** Content Safety categories and Azure OpenAI safety-system behavior track the current services; verify against the Azure AI Content Safety and Azure OpenAI docs before deploying.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

@@ -89,6 +89,68 @@ async function jsonOrThrow<T>(r: Response, label: string): Promise<T> {
   catch { return {} as T; }
 }
 
+/**
+ * Synapse dev artifact PUTs (pipelines / datasets / linked services / triggers)
+ * are LONG-RUNNING operations: a 202 means "accepted", NOT "committed". The
+ * artifact only exists once the async operation reaches Succeeded — and it can
+ * reach Failed when the artifact references something that doesn't resolve (a
+ * missing dataset / linked service / pool), in which case the entity is NEVER
+ * created. Treating the 202 as success (the old behaviour) reported "created"
+ * for artifacts that silently failed to commit — the root cause of later
+ * "Entity <name> not found" errors on debug/run.
+ *
+ * This polls the operation to a terminal state and throws the REAL error on
+ * failure. On 200 (synchronous commit) it returns immediately.
+ *
+ * Docs: https://learn.microsoft.com/rest/api/synapse/data-plane/pipeline/create-or-update-pipeline
+ *       (202 + Location header → GET operationResults until terminal)
+ */
+async function commitArtifact<T>(r: Response, label: string): Promise<T> {
+  if (!r.ok && r.status !== 202) {
+    throw new Error(`${label} failed ${r.status}: ${await r.text()}`);
+  }
+  if (r.status !== 202) {
+    const text = await r.text();
+    if (!text) return {} as T;
+    try { return JSON.parse(text) as T; } catch { return {} as T; }
+  }
+  // 202 — poll the operation. Synapse returns a Location (operationResults) URL.
+  const loc = r.headers.get('location') || r.headers.get('Location');
+  // Capture the 202 body (often the artifact echo) so we can still return it.
+  let accepted: T = {} as T;
+  try { const t = await r.text(); if (t) accepted = JSON.parse(t) as T; } catch { /* ignore */ }
+  if (!loc) return accepted; // no operation URL — best effort.
+
+  const tok = await credential.getToken(DEV_SCOPE);
+  if (!tok?.token) throw new Error('Failed to acquire Synapse dev token');
+  const deadline = Date.now() + 90_000; // commit settles in seconds; cap at 90s.
+  let delay = 1000;
+  // The Location is an absolute URL on the dev host.
+  while (Date.now() < deadline) {
+    await new Promise((res) => setTimeout(res, delay));
+    delay = Math.min(delay * 1.5, 5000);
+    const pr = await fetch(loc, { headers: { authorization: `Bearer ${tok.token}` } });
+    if (pr.status === 202) continue; // still running
+    const body = await pr.text();
+    let parsed: any = {};
+    try { parsed = body ? JSON.parse(body) : {}; } catch { /* non-JSON */ }
+    const status = (parsed?.status || '').toString();
+    if (!pr.ok) {
+      throw new Error(`${label} commit failed ${pr.status}: ${body || '(no body)'}`);
+    }
+    if (status === 'Failed' || status === 'Cancelled') {
+      const detail = parsed?.error?.message || parsed?.error?.code || body || 'unknown';
+      throw new Error(`${label} did not commit (${status}): ${detail}`);
+    }
+    if (status === '' || status === 'Succeeded') {
+      // Succeeded (or a terminal 200 with the artifact body).
+      return (parsed && Object.keys(parsed).length ? parsed : accepted) as T;
+    }
+    // InProgress / Accepted → keep polling.
+  }
+  throw new Error(`${label} did not commit within 90s (operation still in progress)`);
+}
+
 // ============================================================
 // Spark Big Data Pools (ARM)
 // ============================================================
@@ -324,7 +386,7 @@ export async function upsertPipeline(name: string, spec: SynapsePipeline): Promi
     `/pipelines/${encodeURIComponent(name)}?api-version=${DEV_API}`,
     { method: 'PUT', body: JSON.stringify(body) },
   );
-  return jsonOrThrow<SynapsePipeline>(r, `upsertPipeline(${name})`);
+  return commitArtifact<SynapsePipeline>(r, `upsertPipeline(${name})`);
 }
 
 export async function deletePipeline(name: string): Promise<void> {
@@ -445,24 +507,6 @@ export async function debugPipeline(
 // Triggers (dev endpoint — Synapse Integrate)
 // ============================================================
 
-export interface SynapseTrigger {
-  id?: string;
-  name: string;
-  type?: string;
-  etag?: string;
-  properties: {
-    description?: string;
-    runtimeState?: 'Started' | 'Stopped' | 'Disabled' | string;
-    pipelines?: Array<{
-      pipelineReference: { referenceName: string; type: 'PipelineReference' };
-      parameters?: Record<string, unknown>;
-    }>;
-    type?: string; // discriminator: ScheduleTrigger / TumblingWindowTrigger / BlobEventsTrigger
-    typeProperties?: Record<string, unknown>;
-    annotations?: unknown[];
-  };
-}
-
 export async function listTriggers(): Promise<SynapseTrigger[]> {
   const r = await callDev(`/triggers?api-version=${DEV_API}`);
   const body = await jsonOrThrow<{ value: SynapseTrigger[] }>(r, 'listTriggers');
@@ -480,7 +524,7 @@ export async function upsertTrigger(name: string, spec: SynapseTrigger): Promise
     `/triggers/${encodeURIComponent(name)}?api-version=${DEV_API}`,
     { method: 'PUT', body: JSON.stringify(body) },
   );
-  return jsonOrThrow<SynapseTrigger>(r, `upsertTrigger(${name})`);
+  return commitArtifact<SynapseTrigger>(r, `upsertTrigger(${name})`);
 }
 
 export async function deleteTrigger(name: string): Promise<void> {

@@ -83,6 +83,18 @@ param deployAppsEnabled bool = false
 @description('Deploy AI Foundry Hub. Requires explicit storage-account strategy; default off so initial provision succeeds before operator picks Hub strategy.')
 param aiFoundryEnabled bool = false
 
+@description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. Independent of aiFoundryEnabled.')
+param agentFoundryEnabled bool = false
+
+@description('Deploy the shared Data API builder preview runtime that the DAB editor\'s live REST/GraphQL testers point at via LOOM_DAB_PREVIEW_URL.')
+param dabRuntimeEnabled bool = false
+
+@description('SQL server FQDN the DAB preview runtime targets (e.g. <srv>.database.windows.net). Required when dabRuntimeEnabled.')
+param dabSqlServerFqdn string = ''
+
+@description('SQL database the DAB preview runtime targets. Required when dabRuntimeEnabled.')
+param dabSqlDatabase string = ''
+
 @description('Deploy APIM. Premium V2 takes 30+ min; default off so initial provision iterates quickly.')
 param apimEnabled bool = false
 
@@ -130,6 +142,12 @@ param loomSynapseDedicatedPool string = 'loompool'
 @description('Loom Azure Data Factory name (for env-var wiring on loom-console — backs the ADF Pipeline/Dataset/Trigger editors).')
 param loomAdfName string = 'adf-loom-default-${location}'
 
+@description('Scaled self-hosted IR VMSS name (backs the SHIR metrics tile + scale controls). Defaults to the single-sub DLZ name; empty disables the SHIR surface (honest gate).')
+param loomShirVmssName string = 'vmss-loom-shir-default'
+
+@description('Loom Azure Data Factory resource group. Empty defaults to LOOM_DLZ_RG.')
+param loomAdfRg string = ''
+
 @description('Loom DLZ resource group (for ARM REST pause/resume from the Console BFF).')
 param loomDlzRg string = 'rg-csa-loom-dlz-single-${location}'
 
@@ -147,6 +165,9 @@ param loomEventHubRg string = ''
 
 @description('Loom Event Hubs subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
 param loomEventHubSub string = ''
+
+@description('Loom Alert Rules resource group (for monitoring alerts/rules). Empty defaults to LOOM_DLZ_RG.')
+param loomAlertRg string = ''
 
 @description('Loom Storage account name (for ADLS Gen2 lake URLs). When empty, env vars omitted and the Lakehouse editor surfaces a config message.')
 param loomStorageAccount string = ''
@@ -255,6 +276,41 @@ param loomDefaultFabricWorkspace string = ''
 @description('Phase-2 warehouse provisioner backend. synapse-dedicated (default) runs DDL against the dedicated Synapse pool via TDS+AAD; fabric-warehouse is on the v3.5 roadmap.')
 @allowed(['synapse-dedicated', 'fabric-warehouse'])
 param loomWarehouseBackend string = 'synapse-dedicated'
+
+// =====================================================================
+// Azure-native backend selectors (no-fabric-dependency)
+// =====================================================================
+
+@description('Azure Data Lake Storage Gen2 bronze container name. Default: bronze.')
+param loomBronzeContainer string = 'bronze'
+
+@description('Pipeline orchestrator backend selector. Default: synapse. Alternatives: adf, fabric.')
+@allowed(['synapse', 'adf', 'fabric'])
+param loomPipelineBackend string = 'synapse'
+
+@description('Event ingestion backend selector. Default: eventhubs (Azure Event Hubs). Alternatives: fabric.')
+@allowed(['eventhubs', 'fabric'])
+param loomEventBackend string = 'eventhubs'
+
+@description('Activator rule backend selector. Default: azure-monitor (Azure Monitor). Alternatives: fabric.')
+@allowed(['azure-monitor', 'fabric'])
+param loomActivatorBackend string = 'azure-monitor'
+
+@description('Dashboard backend selector. Default: adx (Azure Data Explorer/Kusto). Alternatives: fabric.')
+@allowed(['adx', 'fabric'])
+param loomDashboardBackend string = 'adx'
+
+@description('Data mirroring backend selector. Default: adf-cdc (Azure Data Factory Change Data Capture). Alternatives: synapse-link, fabric.')
+@allowed(['adf-cdc', 'synapse-link', 'fabric'])
+param loomMirrorBackend string = 'adf-cdc'
+
+@description('Lakehouse storage backend selector. Default: adls (Azure Data Lake Storage Gen2). Alternatives: fabric.')
+@allowed(['adls', 'fabric'])
+param loomLakehouseBackend string = 'adls'
+
+@description('Semantic model backend selector. Default: loom-native. Alternatives: analysis-services, powerbi.')
+@allowed(['loom-native', 'analysis-services', 'powerbi'])
+param loomSemanticBackend string = 'loom-native'
 
 // =====================================================================
 // 1. Monitoring (LAW + AppInsights + Sentinel + AI rules) — FIRST
@@ -417,6 +473,39 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoun
 }
 
 // =====================================================================
+// 8b. AI Foundry Agent Service account (aifndry-loom-<location>)
+// Dedicated AIServices account + loom-agents project + chat/embedding
+// model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* for
+// the Agent Service. Mirrors the live Commercial deployment one-for-one.
+// =====================================================================
+
+module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
+  name: 'agent-foundry'
+  params: {
+    location: location
+    // Sovereign / private-only boundaries keep the account off the public net.
+    publicNetworkAccess: boundary == 'Commercial'
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+// Shared Data API builder preview runtime (off by default — needs a SQL target).
+module dabRuntime 'dab-runtime.bicep' = if (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) {
+  name: 'dab-runtime'
+  params: {
+    location: location
+    managedEnvironmentId: containerPlatformModule.outputs.caeId
+    uamiResourceId: identity.outputs.uamiConsoleId
+    uamiClientId: identity.outputs.uamiConsoleClientId
+    sqlServerFqdn: dabSqlServerFqdn
+    sqlDatabase: dabSqlDatabase
+  }
+}
+
+// =====================================================================
 // 9. APIM (Premium V2 or classic Premium per boundary)
 // =====================================================================
 
@@ -548,14 +637,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_AI_SEARCH_RG', value: byoAiSearchRg }
             { name: 'LOOM_ACA_RG', value: resourceGroup().name }
             { name: 'LOOM_DLZ_RG', value: loomDlzRg }
+            // Default ADLS Gen2 account for the Azure-native lakehouse + shortcut
+            // example targets ({{ADLS_ACCOUNT}} token). Without this the lakehouse
+            // shortcut examples resolve to a non-existent host (ENOTFOUND).
+            { name: 'LOOM_ADLS_ACCOUNT', value: loomStorageAccount }
             // /monitor observability surface — Log Analytics workspace GUID
             // (customerId) for the Logs (KQL) tab. The UAMI needs
             // "Log Analytics Reader" on this workspace + "Monitoring Reader"
             // on the sub for metrics/activity/health/alerts.
             { name: 'LOOM_LOG_ANALYTICS_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
+            { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
+            { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
+            { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
+            { name: 'LOOM_ALERT_RG', value: !empty(loomAlertRg) ? loomAlertRg : loomDlzRg }
             // Stream Analytics — defaults to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID
             // when blank (see lib/azure/stream-analytics-client.ts). Override
             // when ASA lives in a different RG / sub than the DLZ.
@@ -625,6 +722,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_TENANT_ADMIN_OID', value: loomTenantAdminOid }
             { name: 'LOOM_DEFAULT_FABRIC_WORKSPACE', value: loomDefaultFabricWorkspace }
             { name: 'LOOM_WAREHOUSE_BACKEND', value: loomWarehouseBackend }
+            // ----------------------------------------------------------------
+            // Azure-native backend selectors (no-fabric-dependency)
+            // ----------------------------------------------------------------
+            { name: 'LOOM_BRONZE_CONTAINER', value: loomBronzeContainer }
+            { name: 'LOOM_PIPELINE_BACKEND', value: loomPipelineBackend }
+            { name: 'LOOM_EVENT_BACKEND', value: loomEventBackend }
+            { name: 'LOOM_ACTIVATOR_BACKEND', value: loomActivatorBackend }
+            { name: 'LOOM_DASHBOARD_BACKEND', value: loomDashboardBackend }
+            { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
+            { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomLakehouseBackend }
+            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
           ],
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
@@ -714,10 +822,24 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // quota/model calls; falls back to a hard-coded 'eastus2' otherwise.
             { name: 'LOOM_FOUNDRY_REGION', value: location }
             // Foundry Agent Service (data-plane) — backs the data-agent Publish flow +
-            // the Foundry agent editor. Project endpoint + workspace GUID come from the
-            // Foundry project created in ai-foundry.bicep. Empty when AI Foundry is off.
-            { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectEndpoint : '' }
-            { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectId : '' }
+            // the Foundry agent editor. The dedicated Agent Service account
+            // (foundry-project.bicep, aifndry-loom-<location>) takes precedence;
+            // otherwise fall back to the shared Hub's project (ai-foundry.bicep).
+            // Empty when neither is deployed.
+            { name: 'LOOM_FOUNDRY_PROJECT_ENDPOINT', value: agentFoundryEnabled ? agentFoundry!.outputs.projectEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectEndpoint : '') }
+            { name: 'LOOM_FOUNDRY_PROJECT_ID',       value: agentFoundryEnabled ? agentFoundry!.outputs.projectId : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.projectId : '') }
+            { name: 'LOOM_FOUNDRY_PROJECT_NAME',     value: agentFoundryEnabled ? agentFoundry!.outputs.projectNameOut : '' }
+            // AOAI inference endpoint + model deployment names for the Agent
+            // Service account. Consumed by the AOAI clients (chat + embeddings).
+            { name: 'LOOM_AOAI_ENDPOINT',          value: agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : '' }
+            { name: 'LOOM_AOAI_CHAT_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            // The copilot/data-agent orchestrators read LOOM_AOAI_DEPLOYMENT (not
+            // the _CHAT_ variant) to resolve the model — keep both in sync so the
+            // Copilot/data-agent chat works out of the box (the "no AOAI model"
+            // gap was exactly this name mismatch on the live deploy).
+            { name: 'LOOM_AOAI_DEPLOYMENT',        value: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : '' }
+            { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : '' }
+            { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
@@ -853,13 +975,34 @@ module frontDoor 'front-door.bicep' = if (frontDoorEnabled && containerPlatform 
     caeId: containerPlatformModule.outputs.caeId
     caeDefaultDomain: containerPlatformModule.outputs.caeDefaultDomain
     consoleFqdn: 'loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
+    vanityDomain: loomVanityDomain
     complianceTags: complianceTags
   }
 }
 
+@description('Optional vanity hostname for the console (e.g. csa-loom.contoso.ai). Empty = generated Front Door host only. The deploy emits the CNAME + _dnsauth TXT to add at your DNS provider.')
+param loomVanityDomain string = ''
+
 // =====================================================================
 // Outputs
 // =====================================================================
+
+// =====================================================================
+// Scale-by-SKU console (/admin/scaling) — the Console UAMI scales compute
+// SKUs that all live in THIS admin RG: ADX/Kusto cluster, Synapse dedicated
+// SQL pool (DWU), APIM, Container Apps, Fabric/foundry compute, AI Search.
+// Those are ARM control-plane PATCH calls, so the UAMI needs write here.
+// Without this grant the UAMI has only narrow per-resource + Reader roles in
+// this RG and EVERY scale operation returns 403. Delegated to a sub-module so
+// the principalId (a module output) is start-time-known inside it (BCP177).
+// =====================================================================
+module scalingRbac 'scaling-rbac.bicep' = {
+  name: 'console-scaling-rbac'
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
 
 output hubVnetId string = network.outputs.hubVnetId
 
@@ -900,3 +1043,10 @@ output appInsightsId string = monitoring.outputs.appInsightsId
 output vpnGatewayPublicIp string = vpnGatewayEnabled ? vpnGateway.outputs.vpnPublicIp : ''
 output appGatewayPublicFqdn string = (appGatewayEnabled && containerPlatform == 'containerApps' && deployAppsEnabled) ? appGateway.outputs.publicFqdn : ''
 output frontDoorPublicUrl string = (frontDoorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled) ? frontDoor.outputs.frontDoorPublicUrl : ''
+var fdOn = frontDoorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+@description('Vanity console URL (empty if no vanity domain set).')
+output vanityPublicUrl string = fdOn ? frontDoor.outputs.vanityPublicUrl : ''
+@description('DNS the admin must add at their provider to activate the vanity domain: CNAME <vanityDomain> → vanityCnameTarget, and TXT vanityDnsTxtName → vanityValidationToken.')
+output vanityCnameTarget string = fdOn ? frontDoor.outputs.vanityCnameTarget : ''
+output vanityDnsTxtName string = fdOn ? frontDoor.outputs.vanityDnsTxtName : ''
+output vanityValidationToken string = fdOn ? frontDoor.outputs.vanityValidationToken : ''

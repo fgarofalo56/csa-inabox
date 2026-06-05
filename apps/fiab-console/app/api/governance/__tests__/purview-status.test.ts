@@ -52,16 +52,16 @@ describe('GET /api/governance/purview/status', () => {
     expect(j.account).toBe('purview-test');
   });
 
-  it('200 + cross_cloud body carries the message + hint', async () => {
+  it('200 + role_missing body carries the message + hint (UAMI lacks a Data Map role)', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     (probePurview as any).mockResolvedValue({
-      configured: true, account: 'purview-gov', reason: 'cross_cloud',
-      message: 'ENOTFOUND', hint: { followUp: 'different cloud' },
+      configured: true, account: 'purview-test', reason: 'role_missing',
+      message: 'Purview answered 403 (UAMI lacks a Data Map role).', hint: { followUp: 'grant Data Curator' },
     });
     const res = await GET();
     expect(res.status).toBe(200);
     const j = await res.json();
-    expect(j.reason).toBe('cross_cloud');
-    expect(j.message).toBe('ENOTFOUND');
+    expect(j.reason).toBe('role_missing');
+    expect(j.message).toContain('403');
   });
 });

@@ -288,10 +288,28 @@ function LearnPane({ type, onClose }: { type: string; onClose: () => void }) {
       {learn.tip && (
         <MessageBar intent="success"><MessageBarBody>{learn.tip}</MessageBarBody></MessageBar>
       )}
-      {learn.docsUrl && (
-        <a href={learn.docsUrl} target="_blank" rel="noreferrer">
-          Open detailed docs ↗
-        </a>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+        {learn.docsUrl && (
+          <a href={learn.docsUrl} target="_blank" rel="noreferrer"
+             style={{ fontWeight: 600 }}>
+            {learn.hasLoomDoc ? 'Open the CSA Loom guide ↗' : 'Open detailed docs ↗'}
+          </a>
+        )}
+        {/* Secondary MS Learn link only when distinct from the primary Loom link. */}
+        {learn.hasLoomDoc && learn.msLearnUrl && (
+          <a href={learn.msLearnUrl} target="_blank" rel="noreferrer"
+             style={{ fontSize: 12, color: tokens.colorNeutralForeground3 }}>
+            MS Learn ↗
+          </a>
+        )}
+      </div>
+      {!learn.hasLoomDoc && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            A dedicated CSA Loom guide for this item is on the way. The link
+            above points to Microsoft Learn in the meantime.
+          </MessageBarBody>
+        </MessageBar>
       )}
       <Checkbox checked={dismiss} onChange={(_, d) => setDismiss(!!d.checked)}
         label="Don't show this again" />

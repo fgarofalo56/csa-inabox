@@ -17,9 +17,10 @@
 import { useState } from 'react';
 import {
   Button, Input, MessageBar, MessageBarBody, MessageBarTitle, Spinner,
-  Subtitle2, Body1, makeStyles, tokens, Field, Textarea,
+  Body1, makeStyles, tokens, Field, Textarea,
 } from '@fluentui/react-components';
 import { Open16Regular } from '@fluentui/react-icons';
+import { Section } from '@/lib/components/ui/section';
 
 interface Props {
   source: 'purview' | 'unity-catalog' | 'onelake';
@@ -30,11 +31,39 @@ interface Props {
 }
 
 const useStyles = makeStyles({
-  row: { display: 'flex', flexDirection: 'column', gap: 12 },
-  group: { padding: 12, borderRadius: 6, border: `1px solid ${tokens.colorNeutralStroke2}`, display: 'flex', flexDirection: 'column', gap: 8 },
-  groupTitle: { fontWeight: 600 },
-  buttonRow: { display: 'flex', gap: 8, flexWrap: 'wrap' },
-  hint: { color: tokens.colorNeutralForeground3, fontSize: 12 },
+  // each action group stacks its fields with consistent vertical rhythm
+  group: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  // capped-width controls so nothing stretches full-bleed
+  control: {
+    maxWidth: '480px',
+    width: '100%',
+  },
+  buttonRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+    marginTop: tokens.spacingVerticalS,
+  },
+  hint: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase200,
+    maxWidth: '640px',
+  },
+  resultLink: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    marginTop: tokens.spacingVerticalS,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorBrandForeground1,
+    textDecorationLine: 'none',
+    ':hover': { textDecorationLine: 'underline' },
+  },
 });
 
 interface ActionResult {
@@ -149,64 +178,67 @@ export function CrossSourceActions({ source, id, host, workspaceId, detail }: Pr
   }
 
   return (
-    <div className={s.row}>
+    <>
       {(source === 'unity-catalog' || source === 'onelake') && (
-        <div className={s.group}>
-          <Subtitle2 className={s.groupTitle}>Register in Purview</Subtitle2>
-          <Body1 className={s.hint}>
-            Creates / merges an Atlas entity in Purview Unified Catalog using a deterministic qualifiedName.
-            Subsequent registrations are idempotent (Atlas dedupes by qualifiedName).
-          </Body1>
-          <Field label="Business domain GUID (optional)">
-            <Input value={domain} onChange={(_, d) => setDomain(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
-          </Field>
-          <div className={s.buttonRow}>
-            <Button appearance="primary" onClick={registerInPurview} disabled={busy} data-testid="action-register">
-              {busy ? <Spinner size="tiny" /> : 'Register in Purview'}
-            </Button>
+        <Section title="Register in Purview">
+          <div className={s.group}>
+            <Body1 className={s.hint}>
+              Creates / merges an Atlas entity in Purview Unified Catalog using a deterministic qualifiedName.
+              Subsequent registrations are idempotent (Atlas dedupes by qualifiedName).
+            </Body1>
+            <Field label="Business domain GUID (optional)">
+              <Input className={s.control} value={domain} onChange={(_, d) => setDomain(d.value)} placeholder="11111111-2222-3333-4444-555555555555" />
+            </Field>
+            <div className={s.buttonRow}>
+              <Button appearance="primary" onClick={registerInPurview} disabled={busy} data-testid="action-register">
+                {busy ? <Spinner size="tiny" /> : 'Register in Purview'}
+              </Button>
+            </div>
           </div>
-        </div>
+        </Section>
       )}
 
-      <div className={s.group}>
-        <Subtitle2 className={s.groupTitle}>Glossary term</Subtitle2>
-        <Body1 className={s.hint}>
-          Creates a glossary term in Purview. {source !== 'purview' ? 'Register the asset first to enable auto-apply.' : 'Applies it to this asset.'}
-        </Body1>
-        <Field label="Term name" required>
-          <Input value={termName} onChange={(_, d) => setTermName(d.value)} placeholder="PII" />
-        </Field>
-        <Field label="Long description">
-          <Textarea value={termDesc} onChange={(_, d) => setTermDesc(d.value)} placeholder="Personally identifiable information" rows={2} />
-        </Field>
-        <div className={s.buttonRow}>
-          <Button appearance="secondary" onClick={applyTerm} disabled={busy} data-testid="action-glossary">
-            {busy ? <Spinner size="tiny" /> : (source === 'purview' ? 'Create + apply' : 'Create term')}
-          </Button>
-        </div>
-      </div>
-
-      {source === 'onelake' && (
+      <Section title="Glossary term">
         <div className={s.group}>
-          <Subtitle2 className={s.groupTitle}>Promote ADLS path to OneLake shortcut</Subtitle2>
           <Body1 className={s.hint}>
-            Creates a zero-copy shortcut from ADLS Gen2 into this Lakehouse. The shortcut is auto-registered in Purview.
+            Creates a glossary term in Purview. {source !== 'purview' ? 'Register the asset first to enable auto-apply.' : 'Applies it to this asset.'}
           </Body1>
-          <Field label="Shortcut name" required>
-            <Input value={shortcutName} onChange={(_, d) => setShortcutName(d.value)} placeholder="bronze-customers" />
+          <Field label="Term name" required>
+            <Input className={s.control} value={termName} onChange={(_, d) => setTermName(d.value)} placeholder="PII" />
           </Field>
-          <Field label="ADLS Gen2 location">
-            <Input value={shortcutLocation} onChange={(_, d) => setShortcutLocation(d.value)} />
-          </Field>
-          <Field label="ADLS subpath">
-            <Input value={shortcutSubpath} onChange={(_, d) => setShortcutSubpath(d.value)} />
+          <Field label="Long description">
+            <Textarea className={s.control} value={termDesc} onChange={(_, d) => setTermDesc(d.value)} placeholder="Personally identifiable information" rows={2} />
           </Field>
           <div className={s.buttonRow}>
-            <Button appearance="primary" onClick={promoteShortcut} disabled={busy} data-testid="action-shortcut">
-              {busy ? <Spinner size="tiny" /> : 'Create shortcut'}
+            <Button appearance="secondary" onClick={applyTerm} disabled={busy} data-testid="action-glossary">
+              {busy ? <Spinner size="tiny" /> : (source === 'purview' ? 'Create + apply' : 'Create term')}
             </Button>
           </div>
         </div>
+      </Section>
+
+      {source === 'onelake' && (
+        <Section title="Promote ADLS path to OneLake shortcut">
+          <div className={s.group}>
+            <Body1 className={s.hint}>
+              Creates a zero-copy shortcut from ADLS Gen2 into this Lakehouse. The shortcut is auto-registered in Purview.
+            </Body1>
+            <Field label="Shortcut name" required>
+              <Input className={s.control} value={shortcutName} onChange={(_, d) => setShortcutName(d.value)} placeholder="bronze-customers" />
+            </Field>
+            <Field label="ADLS Gen2 location">
+              <Input className={s.control} value={shortcutLocation} onChange={(_, d) => setShortcutLocation(d.value)} />
+            </Field>
+            <Field label="ADLS subpath">
+              <Input className={s.control} value={shortcutSubpath} onChange={(_, d) => setShortcutSubpath(d.value)} />
+            </Field>
+            <div className={s.buttonRow}>
+              <Button appearance="primary" onClick={promoteShortcut} disabled={busy} data-testid="action-shortcut">
+                {busy ? <Spinner size="tiny" /> : 'Create shortcut'}
+              </Button>
+            </div>
+          </div>
+        </Section>
       )}
 
       {result && (
@@ -215,15 +247,13 @@ export function CrossSourceActions({ source, id, host, workspaceId, detail }: Pr
             <MessageBarTitle>{result.ok ? 'Done' : 'Action failed'}</MessageBarTitle>
             <Body1>{result.message}</Body1>
             {result.link && (
-              <a href={result.link} target="_blank" rel="noreferrer" style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 6, fontSize: 13,
-              }}>
+              <a className={s.resultLink} href={result.link} target="_blank" rel="noreferrer">
                 Open in Purview <Open16Regular />
               </a>
             )}
           </MessageBarBody>
         </MessageBar>
       )}
-    </div>
+    </>
   );
 }

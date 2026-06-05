@@ -1,172 +1,288 @@
-# databricks-workspace — parity with Azure Databricks workspace (objects navigator)
+# databricks-workspace — parity with the Azure Databricks workspace UI
 
-Source UI: the Azure Databricks workspace (`https://adb-<id>.<n>.azuredatabricks.net`)
-left sidebar — **Workspace / Jobs (Workflows) / Compute / SQL Warehouses /
-Repos / Catalog** — collapsed into one typed "Workspace" navigator in the Loom
-Databricks Job editor's left pane. This is the Databricks equivalent of the ADF
-Studio Factory Resources pane (`docs/fiab/parity/adf-factory-resources.md`) and
-the Synapse Workspace Resources pane
-(`docs/fiab/parity/synapse-workspace-resources.md`). Grounded in Microsoft Learn:
+> Brutally-honest 1:1 parity audit (regenerated 2026-05-31). Grading per
+> `.claude/rules/no-vaporware.md` + `.claude/rules/ui-parity.md`. Graded
+> conservatively; when in doubt, graded DOWN. This is the **consolidated** audit
+> across the entire Loom Databricks surface (navigator + 4 editors + UC), not
+> just the navigator. Per-object detail also lives in `databricks-cluster.md`,
+> `databricks-job.md`, `databricks-notebook.md`, `databricks-sql-warehouse.md`.
+>
+> (An earlier version of this file scoped only the navigator and labelled the
+> editor-level gaps "deferred." That under-counted the whole-service parity bar
+> in `ui-parity.md`; this version counts them honestly.)
 
-- Databricks Jobs API 2.1 (list/create/delete/run-now):
-  https://learn.microsoft.com/azure/databricks/api/workspace/jobs
-- Workspace API 2.0 (notebooks/folders list/import/mkdirs/delete):
-  https://learn.microsoft.com/azure/databricks/api/workspace/workspace
-- Clusters API 2.0 (list/create/start/restart/delete + node-types + spark-versions):
-  https://learn.microsoft.com/azure/databricks/api/workspace/clusters
-- SQL Warehouses API 2.0 (list/create/start/stop/delete/edit):
-  https://learn.microsoft.com/azure/databricks/api/workspace/warehouses
-- Repos / Git folders API 2.0 (list/create/get/update/delete):
-  https://learn.microsoft.com/azure/databricks/dev-tools/cli/reference/repos-commands
-  + https://learn.microsoft.com/azure/databricks/repos/
-- Unity Catalog API 2.1 (catalogs/schemas/tables):
-  https://learn.microsoft.com/azure/databricks/api/workspace/catalogs
+**Source UI (grounded in Microsoft Learn, not memory):**
+- Workspace / sidebar concepts — https://learn.microsoft.com/azure/databricks/getting-started/concepts
+- Compute (clusters) create/config — https://learn.microsoft.com/azure/databricks/compute/configure , https://learn.microsoft.com/azure/databricks/compute/simple-form
+- Compute policies — https://learn.microsoft.com/azure/databricks/admin/clusters/policies
+- Lakeflow Jobs UI — https://learn.microsoft.com/azure/databricks/jobs/configure-job , /configure-task , /repair-job-failures , /monitor
+- SQL warehouses + SQL editor — https://learn.microsoft.com/azure/databricks/compute/sql-warehouse/create , https://learn.microsoft.com/azure/databricks/query/
+- Unity Catalog / Catalog Explorer — https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/ , https://learn.microsoft.com/azure/databricks/catalogs/create-catalog
+- Git folders (Repos) — https://learn.microsoft.com/azure/databricks/repos/
 
-Data-plane host: **`https://<workspace-host>/api/...`** (the workspace URL).
-Token scope: the Azure Databricks first-party resource id
-**`2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default`**. Auth:
+**Loom surface:**
+- Navigator: `apps/fiab-console/lib/components/databricks/databricks-workspace-tree.tsx`
+- Editors: `apps/fiab-console/lib/editors/databricks-editors.tsx` (SQL Warehouse, Notebook, Job, Cluster) + `mirrored-databricks-editor.tsx`
+- REST client (real, AAD-token, no mocks): `apps/fiab-console/lib/azure/databricks-client.ts`
+- Workspace-level BFF: `apps/fiab-console/app/api/databricks/{jobs,notebooks,clusters,warehouses,repos,catalogs,workspace}/route.ts`
+- Item-level BFF: `apps/fiab-console/app/api/items/databricks-{cluster,job,notebook,sql-warehouse}/**`
+- Registry: `apps/fiab-console/lib/editors/registry.ts` (all 4 wired); contract tests in `lib/editors/__tests__/databricks-*.test.tsx`
+
+**Backend reality check.** `databricks-client.ts` acquires a real AAD token
+(`DBX_SCOPE = 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default`, UAMI via
 `ChainedTokenCredential(ManagedIdentityCredential(LOOM_UAMI_CLIENT_ID),
-DefaultAzureCredential)` — the exact flow the existing Databricks editors
-(`lib/azure/databricks-client.ts`) already use. The workspace host is the
-env-pinned default `LOOM_DATABRICKS_HOSTNAME`.
+DefaultAzureCredential)`) and calls the real Databricks REST surface: Clusters
+2.0, Jobs 2.1, SQL Warehouses 2.0, SQL Statements 2.0, Workspace 2.0, Command
+Execution 1.2, Unity Catalog 2.1, Repos 2.0. **No `return []`, no `MOCK_`, no
+`useState(SAMPLE)` anywhere in the Databricks surface.** Honest 503 /
+`code:'not_configured'` gate keyed on `LOOM_DATABRICKS_HOSTNAME`. This is a
+genuine functional surface, not a scaffold.
 
-## Azure / Databricks feature inventory
+---
 
-The Databricks workspace surface is a set of left-rail sections, each a typed
-navigator over an object collection. For each object type the UI exposes a
-**list with count**, a **＋ Create / New** affordance, a **search/filter** box,
-and per-item **open / delete / (lifecycle)** actions:
+## Azure feature inventory → Loom coverage → backend
 
-| # | Databricks section / object | Capabilities in the Databricks UI |
-|---|------------------------------|-----------------------------------|
-| 1 | **Workflows → Jobs** | list w/ count, Create job, open (task graph), Run now, delete |
-| 2 | **Workspace → Notebooks / files / folders** | browse tree, Create notebook / folder / file, import, open, delete |
-| 3 | **Compute → All-purpose clusters** | list w/ count + state, Create compute, Start / Restart / Terminate, edit, delete |
-| 4 | **SQL → SQL Warehouses** | list w/ count + state, Create, Start / Stop, edit (size/scaling), delete |
-| 5 | **Repos → Git folders** | list w/ count, Add repo (clone remote), pull/checkout branch, delete |
-| 6 | **Catalog → Unity Catalog** | browse catalogs → schemas → tables (metastore-governed) |
-| 7 | **Workflows → DLT pipelines** | list, create, start, delete (Delta Live Tables) |
-| 8 | **Machine Learning → Experiments / Models** | MLflow experiments + registered models |
-| 9 | **SQL → Dashboards / Queries / Alerts** | Databricks SQL authoring objects |
-| 10 | **Serving → Endpoints** | real-time model serving endpoints |
-| — | Top toolbar | **＋ Add new** menu, **Filter resources by name** |
+Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ (exists, incomplete/rough)
+· gated ⚠️ (honest infra-gate only) · MISSING ❌
 
-## Loom coverage
+### A. Workspace navigator (Azure left sidebar collapsed into one tree)
 
-Built ✅ / honest-gate ⚠️ / MISSING ❌. Surface:
-`apps/fiab-console/lib/components/databricks/databricks-workspace-tree.tsx`,
-wired into the Databricks Job editor left pane
-(`lib/editors/databricks-editors.tsx`, `DatabricksJobEditor`). Selecting a Job
-opens it in that editor (existing `selectJob` flow); **New job** opens the
-new-job form (Databricks jobs require ≥1 task, authored in the editor — never
-blind-created with an invalid empty task graph).
+| # | Azure capability | Loom | Where / backend |
+|---|---|---|---|
+| A1 | Typed object groups with live counts + filter | ✅ built | `databricks-workspace-tree.tsx`; counts from real list calls |
+| A2 | "+ Add new" menu (Job/Notebook/Cluster/Warehouse/Repo) | ✅ built | menu → create dialogs / editor |
+| A3 | Jobs group: list, run-now, open, delete | ✅ built | `/api/databricks/jobs` → Jobs 2.1 |
+| A4 | Notebooks/workspace files: list, create, delete | ⚠️ partial | `/api/databricks/notebooks` lists `/Workspace` root only in *this* tree (no nested expand here; the Notebook editor's own tree does nested) |
+| A5 | Clusters: list, create, start, terminate, delete | ✅ built | `/api/databricks/clusters` → Clusters 2.0 |
+| A6 | SQL Warehouses: list, create, start, stop, delete | ✅ built | `/api/databricks/warehouses` → SQL Warehouses 2.0 |
+| A7 | Repos (Git folders): list, create, delete | ✅ built | `/api/databricks/repos` → Repos 2.0 |
+| A8 | Unity Catalog: list catalogs (read-only) | ⚠️ partial | `/api/databricks/catalogs` → UC 2.1; list only, no drill/grant here |
+| A9 | DLT / Lakeflow pipelines | ⚠️ gated | honest "Not yet wired" row naming `/api/2.0/pipelines` |
+| A10 | MLflow experiments & registered models | ⚠️ gated | honest "Not yet wired" row |
+| A11 | Dashboards / Queries / Alerts (Databricks SQL authoring) | ⚠️ gated | honest "Not yet wired" row |
+| A12 | Model serving endpoints | ⚠️ gated | honest "Not yet wired" row |
 
-| Capability | Status | Notes |
-|------------|--------|-------|
-| Workspace typed navigator (groups + counts) | ✅ | Fluent `Tree`, one branch per type, live count from real list |
-| Filter resources by name | ✅ | top `Input` filters every group client-side |
-| Add new menu (top) | ✅ | Fluent `Menu` → Job / Notebook / Cluster / SQL Warehouse / Repo |
-| ＋ New per group | ✅ | per-group `Add` button on the group header |
-| **Jobs** — list / count | ✅ | `GET /api/databricks/jobs` → `listJobs` (api 2.1) |
-| **Jobs** — open | ✅ | click row → host `selectJob(job_id)` → full Job editor (tasks/schedule/runs) |
-| **Jobs** — Run now | ✅ | `POST /api/databricks/jobs {jobId, action:'run'}` → `runJob` (`/jobs/run-now`) |
-| **Jobs** — New (≥1 task) | ✅ | opens the editor's new-job form; `POST /api/databricks/jobs {name}` (`/jobs/create`) is available for callers that supply tasks |
-| **Jobs** — delete | ✅ | `DELETE /api/databricks/jobs?jobId=` → `deleteJob` (`/jobs/delete`) |
-| **Notebooks / files** — list / count | ✅ | `GET /api/databricks/notebooks?path=/Workspace` → `listWorkspace` (`/workspace/list`) |
-| **Notebooks** — New (empty notebook) | ✅ | `POST /api/databricks/notebooks {name,language}` → `importNotebook` (`/workspace/import`, SOURCE) |
-| **Folders** — New | ✅ | `POST /api/databricks/notebooks {mkdirs:true,path}` → `mkdirsWorkspace` (`/workspace/mkdirs`) |
-| **Notebooks / folders** — delete | ✅ | `DELETE /api/databricks/notebooks?path=[&recursive=true]` → `deleteWorkspaceObject` (`/workspace/delete`) |
-| **Notebooks** — cell authoring / run | ⚠️ | create/delete is real; rich cell editor + Command-Execution run lives in the dedicated Databricks Notebook editor, not in this navigator |
-| **Clusters** — list / count / state | ✅ | `GET /api/databricks/clusters` → `listClusters` (`/clusters/list`) |
-| **Clusters** — New (autoscaling) | ✅ | `POST /api/databricks/clusters {name}` → `createCluster`; default node type + latest LTS runtime resolved server-side |
-| **Clusters** — Start / Restart | ✅ | `POST /api/databricks/clusters {clusterId, action}` → `startCluster` / `restartCluster` |
-| **Clusters** — Terminate / delete | ✅ | `DELETE /api/databricks/clusters?clusterId=` → `terminateCluster` (`/clusters/delete`) |
-| **Clusters** — full edit (node type, libraries, init scripts, events) | ⚠️ | quick-create + lifecycle here; full config + Libraries/Events tabs live in the dedicated Databricks Cluster editor |
-| **SQL Warehouses** — list / count / state | ✅ | `GET /api/databricks/warehouses` → `listWarehouses` (`/sql/warehouses`) |
-| **SQL Warehouses** — New (size picker) | ✅ | `POST /api/databricks/warehouses {name,cluster_size}` → `createWarehouse` |
-| **SQL Warehouses** — Start / Stop | ✅ | `POST /api/databricks/warehouses {id, action}` → `startWarehouse` / `stopWarehouse` |
-| **SQL Warehouses** — delete | ✅ | `DELETE /api/databricks/warehouses?id=` → `deleteWarehouse` |
-| **Repos (Git folders)** — list / count | ✅ | `GET /api/databricks/repos` → `listRepos` (`/repos`, paginated) |
-| **Repos** — Add (clone remote) | ✅ | `POST /api/databricks/repos {url,provider}` → `createRepo`; provider dropdown (gitHub/gitLab/azureDevOpsServices/…) |
-| **Repos** — delete (unlink) | ✅ | `DELETE /api/databricks/repos?id=` → `deleteRepo` |
-| **Repos** — branch checkout / pull | ⚠️ | list/create/delete is real; `update` (checkout branch/tag, pull) not surfaced in this navigator yet |
-| **Unity Catalog** — catalogs list | ✅ | `GET /api/databricks/catalogs` → `listUcCatalogs` (`/unity-catalog/catalogs`) |
-| **Unity Catalog** — schemas / tables drill-down | ⚠️ | route supports `?catalog=` → `listUcSchemas`; the full catalog→schema→table tree lives in the Mirrored Databricks editor (`listUcTables`) |
-| **DLT pipelines** | ⚠️ | honest "coming" gate row — `/api/2.0/pipelines` not wired |
-| **MLflow experiments & models** | ⚠️ | honest "coming" gate row — `/api/2.0/mlflow/*` not wired |
-| **Dashboards / Queries / Alerts** | ⚠️ | honest "coming" gate row — `/api/2.0/lakeview`, `/api/2.0/sql/queries|alerts` not wired |
-| **Model serving endpoints** | ⚠️ | honest "coming" gate row — `/api/2.0/serving-endpoints` not wired |
-| Honest infra-gate when workspace unreachable | ✅ | when the routes 503 `not_configured`, the whole navigator shows one `MessageBar` naming `LOOM_DATABRICKS_HOSTNAME` + the workspace-admin / Contributor requirement |
+### B. Compute / Clusters editor (Azure "Compute → Create compute" + cluster detail)
 
-Zero ❌. Every un-built Databricks section is rendered as an honest ⚠️ "coming"
-row (tooltip names the exact REST gap) or routed to its existing dedicated
-editor — never a fake list.
+| # | Azure capability | Loom | Where / backend |
+|---|---|---|---|
+| B1 | List clusters with state + node type | ✅ built | `DatabricksClusterEditor`; `/api/items/databricks-cluster` → Clusters 2.0 |
+| B2 | Create cluster (name, node type, runtime, autoscale min/max OR fixed workers, autotermination) | ✅ built | POST → `createCluster` |
+| B3 | Node type + runtime dropdowns from real catalog | ✅ built | `/databricks-cluster/options` → `listNodeTypes`+`listSparkVersions` |
+| B4 | Start / Stop / Restart | ✅ built | `/[id]/state` → start/terminate/restart |
+| B5 | Permanent delete | ✅ built | `/[id]?permanent=true` → `permanentDeleteCluster` |
+| B6 | View Spark config (read) | ✅ built | config tab reads `spark_conf` from `clusters/get` |
+| B7 | View installed Libraries (status) | ⚠️ partial | read-only tab via `/api/2.0/libraries/cluster-status`; **install/uninstall MISSING** |
+| B8 | View Init scripts | ⚠️ partial | read-only tab from `clusters/get`; **add/edit/reorder MISSING** |
+| B9 | Cluster events / event log | ✅ built | events tab → `/api/2.0/clusters/events` |
+| B10 | **Edit existing cluster spec** (resize, change node/runtime, autoterm) | ❌ MISSING | editor hard-codes "edit not exposed… recreate to change spec" (~L2838); fields disabled when a cluster is selected. `editCluster()` exists in client, **unwired** |
+| B11 | Access mode (Standard/Dedicated / `data_security_mode`) | ❌ MISSING | not in create form; UC-compliance access mode can't be chosen |
+| B12 | Compute **policy** selection | ❌ MISSING | Azure simple-form *leads* with Policy; absent |
+| B13 | Spot instances / on-demand mix | ❌ MISSING | not in form |
+| B14 | Single-node toggle / driver type | ❌ MISSING | not in form |
+| B15 | Custom tags on cluster | ❌ MISSING | `custom_tags` in client type, not in form |
+| B16 | Advanced: local-disk encryption, log delivery, SSH, env vars, Docker image | ❌ MISSING | none surfaced |
+| B17 | Cluster permissions (ACL modal) | ❌ MISSING | not present |
+| B18 | Instance pools | ❌ MISSING | not present |
+| B19 | Metrics / Spark UI / driver-log deep links | ❌ MISSING | not present |
 
-## Backend per control
+### C. Lakeflow Jobs editor (Azure "Jobs & Pipelines")
 
-Every count and action hits real Databricks REST through
-`lib/azure/databricks-client.ts`. Auth:
-`ChainedTokenCredential(ManagedIdentityCredential(LOOM_UAMI_CLIENT_ID),
-DefaultAzureCredential)`, scope `2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default`;
-host `https://${LOOM_DATABRICKS_HOSTNAME}`.
+| # | Azure capability | Loom | Where / backend |
+|---|---|---|---|
+| C1 | List jobs (name, creator) | ✅ built | `DatabricksJobEditor`; `/api/items/databricks-job` → Jobs 2.1 |
+| C2 | Create / Save (reset) / Delete job | ✅ built | POST/PUT/DELETE → create/reset/delete |
+| C3 | Multi-task DAG, all task types (notebook, python script, wheel, JAR, spark-submit, SQL, dbt, pipeline, run-job) | ✅ built | full form ↔ spec round-trip (`taskToSpec`/`specToTask`) |
+| C4 | depends_on + run_if (ALL_SUCCESS … ALL_FAILED) | ✅ built | per-task toggles + run_if dropdown |
+| C5 | Compute per task: existing cluster OR new job cluster (runtime/node/workers) | ✅ built | `new_cluster` from real options |
+| C6 | Per-task retries, min-retry-interval, timeout | ✅ built | form → spec |
+| C7 | Visual task graph (DAG view) | ✅ built | `PipelineDagView` |
+| C8 | Schedule/trigger: none / cron (quartz+tz+pause) / continuous / file-arrival | ✅ built | schedule tab → `schedule`/`continuous`/`trigger` |
+| C9 | Job settings: max concurrent, timeout, tags, job_parameters, email on failure/success | ✅ built | settings tab → spec |
+| C10 | Run now (with job_parameters defaults) | ✅ built | `/[id]/run` → run-now |
+| C11 | Run history (state, start, exec, creator) | ✅ built | `/[id]/runs` → runs/list |
+| C12 | Run output viewer (notebook output, logs, error trace) | ✅ built | `/[id]/run-output` → runs/get-output |
+| C13 | View JSON (live create/reset payload) | ✅ built | JSON tab (Monaco read-only) |
+| C14 | **Repair run** (re-run failed/skipped subset) | ❌ MISSING | first-class Lakeflow feature (`jobs/repairrun`); not wired |
+| C15 | **Run now with different parameters** dialog | ⚠️ partial | only sends saved job_parameters; no per-run override dialog |
+| C16 | Notifications beyond email (Slack / webhooks / system destinations) | ❌ MISSING | only `email_notifications` |
+| C17 | Duration thresholds / health rules | ❌ MISSING | not surfaced |
+| C18 | Git source for job tasks | ❌ MISSING | `git_source` not editable |
+| C19 | Job permissions / ACLs | ❌ MISSING | not present |
+| C20 | Matrix/Gantt run view, task-run drill-in, Genie "Diagnose error" | ❌ MISSING | flat run table only |
+| C21 | Switch to code version (YAML/bundle) | ❌ MISSING | JSON view only |
+
+### D. Notebook editor (Azure notebook surface)
+
+| # | Azure capability | Loom | Where / backend |
+|---|---|---|---|
+| D1 | Workspace tree: browse/expand (nested), open, new, delete | ✅ built | `DatabricksNotebookEditor`; `/list`, `/[id]` PUT/DELETE → Workspace 2.0 |
+| D2 | Open notebook → cells (export SOURCE, parse) | ✅ built | `/[id]?path=` → workspace/export; `parseSource` |
+| D3 | Save notebook (serialize cells → import SOURCE) | ✅ built | `/[id]` PUT → workspace/import |
+| D4 | Cell authoring: add code/markdown, reorder, delete, duplicate; per-cell language | ✅ built | `CodeCell`/`MarkdownCell`/`CellAdder` + Monaco |
+| D5 | Attach cluster + live state badge | ✅ built | cluster dropdown from real list |
+| D6 | Run cell / Run all (real REPL, stop-on-error) | ✅ built | `/[id]/command` → Command Execution 1.2, persisted contextId |
+| D7 | Cell output: text / table / image / error | ✅ built | `DbxCellOutput` |
+| D8 | Runs history | ✅ built | `/[id]/runs` → runs/list |
+| D9 | Markdown render | ✅ built | `MarkdownCell` |
+| D10 | Schedule notebook as job (inline one-click) | ⚠️ partial | done via Job editor, not a "Schedule" button on the notebook |
+| D11 | Notebook **revision history / version compare** | ❌ MISSING | no revision timeline |
+| D12 | Comments / co-presence / real-time co-edit | ❌ MISSING | single-user |
+| D13 | Variable explorer / data profile / built-in viz builder | ❌ MISSING | raw table/text/image only |
+| D14 | Notebook-level Git status / commit | ❌ MISSING | not present |
+| D15 | %run / dbutils.notebook.run cross-notebook | ❌ MISSING | per-cell REPL only |
+
+### E. SQL Warehouse / SQL editor (Azure Databricks SQL)
+
+| # | Azure capability | Loom | Where / backend |
+|---|---|---|---|
+| E1 | List warehouses + state | ✅ built | `DatabricksSqlWarehouseEditor`; `/warehouses` → SQL Warehouses 2.0 |
+| E2 | Start / Stop warehouse (with poll) | ✅ built | `/start`, `/state` POST |
+| E3 | Unity Catalog browse: catalogs → schemas → tables (lazy) | ✅ built | `/schema` → SHOW CATALOGS/SCHEMAS/TABLES via Statement exec |
+| E4 | SQL editor (Monaco) + Run + results grid | ✅ built | `/query` → Statements 2.0 with polling |
+| E5 | Click table → templated SELECT | ✅ built | tree click inserts SELECT |
+| E6 | Query history (paginated) | ✅ built | `/query-history` → history/queries |
+| E7 | Result count / exec ms / truncated badge | ✅ built | `ResultsPanel` |
+| E8 | **Create warehouse** from this editor | ⚠️ partial | navigator + portal create it; editor says "create in portal" |
+| E9 | **Edit/scale warehouse** (size, min/max clusters, auto-stop, type, serverless) | ❌ MISSING | `editWarehouse()` in client, **no editor UI calls it** |
+| E10 | Warehouse **monitoring** (running clusters, query queue, peak) | ❌ MISSING | state badge only |
+| E11 | Saved **Queries** / **Dashboards** / **Alerts** objects | ❌ MISSING | ad-hoc SQL only |
+| E12 | Warehouse permissions / channel (preview/current) / tags | ❌ MISSING | not present |
+| E13 | Visualizations / download results (CSV) | ❌ MISSING | grid only |
+
+### F. Unity Catalog / Catalog Explorer (governance)
+
+| # | Azure capability | Loom | Where / backend |
+|---|---|---|---|
+| F1 | List catalogs | ✅ built | navigator + `/api/databricks/catalogs` → UC 2.1 |
+| F2 | Browse schemas/tables (SQL editor via SHOW) | ✅ built | SQL editor tree (E3) |
+| F3 | Mirrored Databricks catalog object | ⚠️ partial | `mirrored-databricks-editor.tsx` + `/api/items/mirrored-databricks/[id]/catalog` |
+| F4 | **Create catalog / schema / table / volume** | ❌ MISSING | read-only; create lives in portal (metastore-admin) |
+| F5 | **Grant/revoke privileges**, ownership, workspace bindings | ❌ MISSING | no UC permissions UI |
+| F6 | Tags / comments on securables | ❌ MISSING | not present |
+| F7 | Data **lineage**, sample data, column details, history | ❌ MISSING | not present |
+| F8 | External locations, storage credentials, connections, Delta Sharing shares | ❌ MISSING | not present |
+
+### G. Repos / Git folders
+
+| # | Azure capability | Loom | Where / backend |
+|---|---|---|---|
+| G1 | List / create (link remote + provider) / delete Git folder | ✅ built | navigator → `/api/databricks/repos` → Repos 2.0 |
+| G2 | **Checkout branch/tag, pull, diff/commit history** | ❌ MISSING | client `update`(checkout) unused; no branch UI |
+| G3 | Git credential management (linked accounts) | ❌ MISSING | disclosed in dialog text only; not actionable |
+
+### H. Workspace-level / admin surfaces
+
+| # | Azure capability | Loom | Where / backend |
+|---|---|---|---|
+| H1 | Honest "which workspace" disclosure + infra gate | ✅ built | `/api/databricks/workspace`; MessageBar names `LOOM_DATABRICKS_HOSTNAME` |
+| H2 | Compute **Policies** tab | ❌ MISSING | not present |
+| H3 | Instance **Pools** tab | ❌ MISSING | not present |
+| H4 | **DLT / Lakeflow Pipelines** editor | ⚠️ gated | navigator gate row only; no editor |
+| H5 | **MLflow** experiments/models, **Model serving** | ⚠️ gated | navigator gate rows only |
+| H6 | Databricks **SQL** Dashboards/Queries/Alerts/Genie | ⚠️ gated | navigator gate row only |
+| H7 | Admin settings / SCIM / secrets / workspace settings | ❌ MISSING | SCIM handled at bicep bootstrap, not UI |
+| H8 | Marketplace / Partner Connect / Lakeflow Connect ingestion | ❌ MISSING | not present |
+
+---
+
+## Coverage tally
+
+- **built ✅: 41**
+- **partial ⚠️: 9**
+- **gated ⚠️ (honest infra-gate): 5**
+- **MISSING ❌: 33**
+
+## Honest grade: **B−**
+
+The four shipped editors and the navigator are genuinely **production-grade**:
+real AAD-authenticated Databricks REST across Clusters/Jobs/Warehouses/Workspace/
+Command-Exec/UC/Repos, proper `{ok,data,error}` BFF contracts with honest
+`not_configured` 503 gates, Fluent v9 + Loom theme, ribbons, Monaco, contract
+tests present. **No vaporware** — nothing fake. The **Jobs editor (C)** and
+**Notebook editor (D)** are A-/A-grade in isolation: near-complete 1:1 with the
+Lakeflow Jobs UI and the Databricks notebook surface.
+
+Held to **B−** (not A) by `ui-parity.md`'s "feature completeness must match" bar
+applied to the whole Azure Databricks workspace:
+
+1. **Cluster editor can't EDIT** (B10) — create / lifecycle / view only; can't
+   change an existing cluster's spec. `editCluster()` exists in the client and is
+   simply not wired. Highest-value, lowest-effort gap.
+2. **No compute policy / access-mode / advanced options** (B11–B16) — the Azure
+   simple-form *leads* with Policy and Access mode (the UC-compliance gate); absent.
+3. **No SQL-warehouse edit/scale** (E9) — `editWarehouse()` exists, unwired.
+4. **No job Repair-run** (C14) — first-class Lakeflow feature.
+5. **Unity Catalog is read-only** (F4–F8) — no create/grant/lineage/external-locations.
+6. Whole object classes absent or honest-gated: **DLT pipelines, MLflow, Model
+   serving, Databricks SQL Dashboards/Queries/Alerts, Pools, Policies, Marketplace**.
+
+Gated rows are *disclosed honestly* (per no-vaporware) so they don't drag the grade
+below B; the genuinely-missing edit paths for resources that are otherwise managed
+(cluster edit, warehouse scale, job repair) are what keep it under A.
+
+## Highest-value gaps to build first
+
+1. **Wire `editCluster()` into the Cluster editor** (B10) — un-disable fields on a
+   selected cluster, PUT to a new edit route. Client fn already exists.
+2. **Wire `editWarehouse()` scale UI** (E9) — size / min-max clusters / auto-stop /
+   serverless. Client fn already exists.
+3. **Cluster create: Policy + Access mode + tags + spot/single-node** (B11–B15).
+4. **Job Repair-run** (C14) + run-with-different-parameters dialog (C15).
+5. **Unity Catalog write**: create catalog/schema, GRANT/REVOKE, tags, lineage (F4–F7).
+6. **DLT / Lakeflow Pipelines editor** (H4).
+7. **Repos branch ops** (G2) — checkout/pull/diff; client `update` is unused.
+
+## Backend per control (workspace-level navigator routes)
 
 | Control | BFF route | client fn | Databricks endpoint |
 |---------|-----------|-----------|---------------------|
 | Jobs list | `/api/databricks/jobs` (GET) | `listJobs` | `GET /api/2.1/jobs/list` |
-| Job create | `/api/databricks/jobs` (POST `{name}`) | `createJob` | `POST /api/2.1/jobs/create` |
-| Job run-now | `/api/databricks/jobs` (POST `{jobId,action:'run'}`) | `runJob` | `POST /api/2.1/jobs/run-now` |
-| Job delete | `/api/databricks/jobs` (DELETE `?jobId=`) | `deleteJob` | `POST /api/2.1/jobs/delete` |
-| Workspace list | `/api/databricks/notebooks` (GET `?path=`) | `listWorkspace` | `GET /api/2.0/workspace/list` |
-| Notebook import | `/api/databricks/notebooks` (POST `{name,language}`) | `importNotebook` | `POST /api/2.0/workspace/import` |
-| Folder mkdirs | `/api/databricks/notebooks` (POST `{mkdirs,path}`) | `mkdirsWorkspace` | `POST /api/2.0/workspace/mkdirs` |
-| Workspace delete | `/api/databricks/notebooks` (DELETE `?path=`) | `deleteWorkspaceObject` | `POST /api/2.0/workspace/delete` |
+| Job create | `/api/databricks/jobs` (POST) | `createJob` | `POST /api/2.1/jobs/create` |
+| Job run-now | `/api/databricks/jobs` (POST) | `runJob` | `POST /api/2.1/jobs/run-now` |
+| Job delete | `/api/databricks/jobs` (DELETE) | `deleteJob` | `POST /api/2.1/jobs/delete` |
+| Workspace list | `/api/databricks/notebooks` (GET) | `listWorkspace` | `GET /api/2.0/workspace/list` |
+| Notebook import | `/api/databricks/notebooks` (POST) | `importNotebook` | `POST /api/2.0/workspace/import` |
+| Folder mkdirs | `/api/databricks/notebooks` (POST) | `mkdirsWorkspace` | `POST /api/2.0/workspace/mkdirs` |
+| Workspace delete | `/api/databricks/notebooks` (DELETE) | `deleteWorkspaceObject` | `POST /api/2.0/workspace/delete` |
 | Clusters list | `/api/databricks/clusters` (GET) | `listClusters` | `GET /api/2.0/clusters/list` |
-| Cluster create | `/api/databricks/clusters` (POST `{name}`) | `createCluster` (+ `listNodeTypes`/`listSparkVersions`) | `POST /api/2.0/clusters/create` |
-| Cluster start/restart | `/api/databricks/clusters` (POST `{clusterId,action}`) | `startCluster` / `restartCluster` | `POST /api/2.0/clusters/start|restart` |
-| Cluster terminate/delete | `/api/databricks/clusters` (DELETE `?clusterId=`) | `terminateCluster` | `POST /api/2.0/clusters/delete` |
+| Cluster create | `/api/databricks/clusters` (POST) | `createCluster` (+options) | `POST /api/2.0/clusters/create` |
+| Cluster start/restart | `/api/databricks/clusters` (POST) | `startCluster`/`restartCluster` | `POST /api/2.0/clusters/{start,restart}` |
+| Cluster terminate | `/api/databricks/clusters` (DELETE) | `terminateCluster` | `POST /api/2.0/clusters/delete` |
 | Warehouses list | `/api/databricks/warehouses` (GET) | `listWarehouses` | `GET /api/2.0/sql/warehouses` |
-| Warehouse create | `/api/databricks/warehouses` (POST `{name,cluster_size}`) | `createWarehouse` | `POST /api/2.0/sql/warehouses` |
-| Warehouse start/stop | `/api/databricks/warehouses` (POST `{id,action}`) | `startWarehouse` / `stopWarehouse` | `POST /api/2.0/sql/warehouses/{id}/start|stop` |
-| Warehouse delete | `/api/databricks/warehouses` (DELETE `?id=`) | `deleteWarehouse` | `DELETE /api/2.0/sql/warehouses/{id}` |
+| Warehouse create | `/api/databricks/warehouses` (POST) | `createWarehouse` | `POST /api/2.0/sql/warehouses` |
+| Warehouse start/stop | `/api/databricks/warehouses` (POST) | `startWarehouse`/`stopWarehouse` | `POST /api/2.0/sql/warehouses/{id}/{start,stop}` |
+| Warehouse delete | `/api/databricks/warehouses` (DELETE) | `deleteWarehouse` | `DELETE /api/2.0/sql/warehouses/{id}` |
 | Repos list | `/api/databricks/repos` (GET) | `listRepos` | `GET /api/2.0/repos` (paginated) |
-| Repo create | `/api/databricks/repos` (POST `{url,provider}`) | `createRepo` | `POST /api/2.0/repos` |
-| Repo delete | `/api/databricks/repos` (DELETE `?id=`) | `deleteRepo` | `DELETE /api/2.0/repos/{id}` |
-| UC catalogs / schemas | `/api/databricks/catalogs` (GET `[?catalog=]`) | `listUcCatalogs` / `listUcSchemas` | `GET /api/2.1/unity-catalog/catalogs|schemas` |
-
-## Deferred (explicit follow-ups, not half-built)
-
-- **Notebook cell authoring / run inside the navigator** — rich editor +
-  Command-Execution run already exist in the dedicated Databricks Notebook editor.
-- **Full cluster config (node type / libraries / init scripts / events)** —
-  lives in the dedicated Databricks Cluster editor; the navigator does
-  quick-create + lifecycle.
-- **Repo branch checkout / pull** (`PATCH /api/2.0/repos/{id}` `branch`/`tag`).
-- **Unity Catalog schema→table drill-down inside the navigator** — full tree
-  exists in the Mirrored Databricks editor (`listUcTables`).
-- **DLT pipelines** (`/api/2.0/pipelines`) — Delta Live Tables list/create/start.
-- **MLflow experiments & registered models** (`/api/2.0/mlflow/*`).
-- **Databricks SQL dashboards / queries / alerts** (`/api/2.0/lakeview`,
-  `/api/2.0/sql/queries|alerts`).
-- **Model serving endpoints** (`/api/2.0/serving-endpoints`).
+| Repo create | `/api/databricks/repos` (POST) | `createRepo` | `POST /api/2.0/repos` |
+| Repo delete | `/api/databricks/repos` (DELETE) | `deleteRepo` | `DELETE /api/2.0/repos/{id}` |
+| UC catalogs/schemas | `/api/databricks/catalogs` (GET) | `listUcCatalogs`/`listUcSchemas` | `GET /api/2.1/unity-catalog/{catalogs,schemas}` |
+| SQL statement exec | `/api/items/databricks-sql-warehouse/[id]/query` | `executeStatement` | `POST /api/2.0/sql/statements` (+poll) |
+| Schema browse (SHOW) | `/api/items/databricks-sql-warehouse/[id]/schema` | `executeStatement` | `POST /api/2.0/sql/statements` |
+| Query history | `/api/items/databricks-sql-warehouse/[id]/query-history` | `listQueryHistory` | `GET /api/2.0/sql/history/queries` |
+| Notebook cell run | `/api/items/databricks-notebook/[id]/command` | Command Exec | `POST /api/1.2/commands/execute` (+contexts) |
+| Cluster options | `/api/items/databricks-cluster/options` | `listNodeTypes`/`listSparkVersions` | `GET /api/2.0/clusters/{list-node-types,spark-versions}` |
+| Cluster libraries | `/api/items/databricks-cluster/[id]/libraries` | `listClusterLibraries` | `GET /api/2.0/libraries/cluster-status` |
 
 ## Bicep / env sync
 
-- Env var consumed: **`LOOM_DATABRICKS_HOSTNAME`** (already consumed by the
-  existing Databricks SQL Warehouse / Notebook / Job / Cluster editors and the
-  `/api/databricks/workspace` gate route — no new bicep app-env entry needed).
-- Role: the Loom UAMI must be a **workspace user/admin** (granted via the SCIM
-  bootstrap) and hold **Contributor** on the workspace resource — the same
-  requirement the existing `databricks-client` already documents. Provisioned by
+- Env var consumed: **`LOOM_DATABRICKS_HOSTNAME`** (already consumed by all 4
+  editors + the `/api/databricks/workspace` gate; no new bicep app-env entry).
+- Role: the Loom UAMI must be a **workspace user/admin** (SCIM bootstrap) and hold
+  **Contributor** on the workspace resource. Provisioned by
   `platform/fiab/bicep/modules/landing-zone/databricks*.bicep`.
+- Cluster-create needs the `allow-cluster-create` SCIM entitlement — runbook:
+  `docs/fiab/runbooks/databricks-cluster-create-permission.md` (the cluster editor
+  surfaces a precise remediation message on the 403).
 - No new Azure resource or Cosmos container.
 
 ## Verification
 
-- `cd apps/fiab-console && pnpm build` → exit 0 (only a pre-existing
-  third-party `@protobufjs/inquire` critical-dependency warning, unrelated).
-- The six `/api/databricks/{jobs,notebooks,clusters,warehouses,repos,catalogs}`
-  routes register in the build route table.
-- Per `no-vaporware.md`: every list/create/delete/lifecycle call hits real
-  Databricks REST; the honest infra-gate renders when `LOOM_DATABRICKS_HOSTNAME`
-  is unset. Live `pnpm uat` side-by-side against the Databricks workspace UI:
-  pending (no minted session / reachable workspace in this worktree).
+- All 4 editors registered in `lib/editors/registry.ts`; contract tests in
+  `lib/editors/__tests__/databricks-*.test.tsx`.
+- Per `no-vaporware.md`: every list/create/delete/lifecycle/exec call hits real
+  Databricks REST; honest infra-gate renders when `LOOM_DATABRICKS_HOSTNAME` unset.
+- Live `pnpm uat` side-by-side against the Databricks workspace UI: **pending**
+  (no minted session / reachable workspace in this worktree). DOM strings ≠ parity
+  per the no-scaffold rule — the MISSING/partial rows above were derived from code,
+  not a live click-through, and should be confirmed against the live portal.

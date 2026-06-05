@@ -15,11 +15,13 @@ import {
 } from '@fluentui/react-components';
 import { Send24Regular, Sparkle24Regular, Dismiss20Regular } from '@fluentui/react-icons';
 
+interface CopilotUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
+
 type Step =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; error?: string }
-  | { kind: 'final'; content: string }
+  | { kind: 'final'; content: string; usage?: CopilotUsage; model?: string }
   | { kind: 'error'; error: string };
 
 interface Msg {
@@ -27,6 +29,8 @@ interface Msg {
   text: string;
   steps?: Step[];
   streaming?: boolean;
+  usage?: CopilotUsage;
+  model?: string;
 }
 
 const SEED: Msg[] = [
@@ -165,7 +169,7 @@ export function CopilotPane() {
               const step = JSON.parse(ev.data) as Step;
               setMsgs((m) => m.map((x) => {
                 if (!x.streaming) return x;
-                if (step.kind === 'final') return { ...x, text: step.content, streaming: false };
+                if (step.kind === 'final') return { ...x, text: step.content, streaming: false, usage: step.usage, model: step.model };
                 if (step.kind === 'error') return { ...x, text: `Error: ${step.error}`, streaming: false };
                 return { ...x, steps: [...(x.steps ?? []), step] };
               }));
@@ -224,6 +228,14 @@ export function CopilotPane() {
             })}
             {m.streaming && !m.text && (
               <div className={s.stepRow}><Spinner size="extra-tiny" /> Thinking…</div>
+            )}
+            {m.who === 'copilot' && !m.streaming && m.usage && (
+              <Caption1 className={s.stepRow} style={{ color: tokens.colorNeutralForeground3 }}>
+                {m.usage.toolCalls > 0 ? `${m.usage.toolCalls} tool${m.usage.toolCalls === 1 ? '' : 's'} · ` : ''}
+                {m.usage.totalTokens.toLocaleString()} tokens
+                {m.usage.aoaiCalls > 1 ? ` · ${m.usage.aoaiCalls} turns` : ''}
+                {m.model ? ` · ${m.model}` : ''}
+              </Caption1>
             )}
           </div>
         ))}

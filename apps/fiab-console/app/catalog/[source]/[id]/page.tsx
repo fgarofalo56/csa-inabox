@@ -4,11 +4,12 @@ import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import { LineageGraph } from '@/lib/components/catalog/lineage-graph';
+import { LineagePanel } from '@/lib/components/catalog/lineage-panel';
 import { CrossSourceActions } from '@/lib/components/catalog/cross-source-actions';
 import {
   Spinner, Badge, MessageBar, MessageBarBody, Button, Subtitle2, Caption1,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  tokens, Card, CardHeader,
+  tokens, Card, CardHeader, TabList, Tab, TabValue,
 } from '@fluentui/react-components';
 import { Open16Regular } from '@fluentui/react-icons';
 
@@ -23,6 +24,7 @@ export default function AssetDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedTab, setSelectedTab] = useState<TabValue>('overview');
 
   useEffect(() => {
     let alive = true;
@@ -54,6 +56,12 @@ export default function AssetDetailPage() {
         </MessageBar>
       )}
       {detail && (
+        <TabList selectedValue={selectedTab} onTabSelect={(_, data) => setSelectedTab(data.value)}>
+          <Tab value="overview">Overview</Tab>
+          <Tab value="lineage">Lineage</Tab>
+        </TabList>
+      )}
+      {detail && selectedTab === 'overview' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
           <Card>
             <CardHeader header={<Subtitle2>Overview</Subtitle2>} />
@@ -171,13 +179,10 @@ export default function AssetDetailPage() {
             </div>
           </Card>
 
-          <Card style={{ gridColumn: '1 / -1' }}>
-            <CardHeader header={<Subtitle2>Lineage</Subtitle2>} />
-            <div style={{ padding: 12 }}>
-              <LineageGraph source={source as any} id={id} host={host} workspaceId={workspaceId} />
-            </div>
-          </Card>
         </div>
+      )}
+      {detail && selectedTab === 'lineage' && (
+        <LineagePanel source={source as any} id={id} host={host} workspaceId={workspaceId} />
       )}
     </CatalogShell>
   );

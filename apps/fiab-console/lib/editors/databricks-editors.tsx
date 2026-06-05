@@ -26,7 +26,7 @@ import {
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Stop20Regular,
   ArrowSync20Regular, Folder20Regular, Document20Regular,
-  Save20Regular, Delete20Regular, Add20Regular,
+  Save20Regular, Delete20Regular, Add20Regular, Key20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
@@ -104,6 +104,9 @@ interface WarehouseState {
   cluster_size?: string;
   warehouse_type?: string;
   serverless?: boolean;
+  min_num_clusters?: number;
+  max_num_clusters?: number;
+  auto_stop_mins?: number;
   error?: string;
 }
 
@@ -193,8 +196,424 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
   );
 }
 
+// ============================================================
+// Unity Catalog WRITE dialogs — create catalog / schema / table +
+// manage grants. All on the real UC REST surface under
+// /api/databricks/unity-catalog/*. Drives the same UC tree the editor browses.
+// ============================================================
+
+// Privileges the UC grant editor offers per securable type. Grounded in the
+// Unity Catalog privileges reference (Learn). Catalog/Schema are container
+// objects (CREATE…/USE…); Table/Volume/Function are leaf securables.
+const UC_PRIVILEGES: Record<string, string[]> = {
+  CATALOG: [
+    'ALL PRIVILEGES', 'USE CATALOG', 'USE SCHEMA', 'CREATE SCHEMA', 'CREATE TABLE',
+    'CREATE FUNCTION', 'CREATE VOLUME', 'CREATE MATERIALIZED VIEW', 'CREATE MODEL',
+    'SELECT', 'MODIFY', 'EXECUTE', 'READ VOLUME', 'WRITE VOLUME', 'REFRESH',
+    'BROWSE', 'APPLY TAG', 'MANAGE',
+  ],
+  SCHEMA: [
+    'ALL PRIVILEGES', 'USE SCHEMA', 'CREATE TABLE', 'CREATE FUNCTION', 'CREATE VOLUME',
+    'CREATE MATERIALIZED VIEW', 'CREATE MODEL', 'SELECT', 'MODIFY', 'EXECUTE',
+    'READ VOLUME', 'WRITE VOLUME', 'REFRESH', 'APPLY TAG', 'MANAGE',
+  ],
+  TABLE: ['ALL PRIVILEGES', 'SELECT', 'MODIFY', 'APPLY TAG', 'MANAGE'],
+  VOLUME: ['ALL PRIVILEGES', 'READ VOLUME', 'WRITE VOLUME', 'APPLY TAG', 'MANAGE'],
+  FUNCTION: ['ALL PRIVILEGES', 'EXECUTE', 'APPLY TAG', 'MANAGE'],
+};
+
+const UC_COLUMN_TYPES = [
+  'STRING', 'INT', 'BIGINT', 'SMALLINT', 'TINYINT', 'DOUBLE', 'FLOAT',
+  'DECIMAL', 'BOOLEAN', 'DATE', 'TIMESTAMP', 'TIMESTAMP_NTZ', 'BINARY',
+];
+
+interface UcGrant { principal: string; privileges: string[] }
+type UcSecurable = 'CATALOG' | 'SCHEMA' | 'TABLE' | 'VOLUME' | 'FUNCTION';
+
+interface UcWriteDialogsProps {
+  catalogs: string[];
+  activeCatalog: string | null;
+  schemas: string[];
+  activeSchema: string | null;
+  tables: string[];
+  onChanged: () => void;            // re-list the tree after a mutation
+  // controlled open state per dialog
+  createCatalogOpen: boolean; setCreateCatalogOpen: (v: boolean) => void;
+  createSchemaOpen: boolean; setCreateSchemaOpen: (v: boolean) => void;
+  createTableOpen: boolean; setCreateTableOpen: (v: boolean) => void;
+  grantsOpen: boolean; setGrantsOpen: (v: boolean) => void;
+}
+
+interface NewColumn { name: string; type_name: string; nullable: boolean; comment: string }
+
+function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
+  const s = useStyles();
+  const {
+    catalogs, activeCatalog, schemas, activeSchema, tables, onChanged,
+    createCatalogOpen, setCreateCatalogOpen,
+    createSchemaOpen, setCreateSchemaOpen,
+    createTableOpen, setCreateTableOpen,
+    grantsOpen, setGrantsOpen,
+  } = props;
+
+  // ---- Create catalog ----
+  const [catName, setCatName] = useState('');
+  const [catComment, setCatComment] = useState('');
+  const [catStorage, setCatStorage] = useState('');
+  const [catBusy, setCatBusy] = useState(false);
+  const [catErr, setCatErr] = useState<string | null>(null);
+
+  const createCatalog = useCallback(async () => {
+    if (!catName.trim()) return;
+    setCatBusy(true); setCatErr(null);
+    try {
+      const r = await fetch('/api/databricks/unity-catalog/catalogs', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: catName.trim(), comment: catComment.trim() || undefined, storage_root: catStorage.trim() || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setCatErr(j.error || `HTTP ${r.status}`); return; }
+      setCreateCatalogOpen(false); setCatName(''); setCatComment(''); setCatStorage('');
+      onChanged();
+    } catch (e: any) { setCatErr(e?.message || String(e)); }
+    finally { setCatBusy(false); }
+  }, [catName, catComment, catStorage, onChanged, setCreateCatalogOpen]);
+
+  // ---- Create schema ----
+  const [schCatalog, setSchCatalog] = useState(activeCatalog || '');
+  const [schName, setSchName] = useState('');
+  const [schComment, setSchComment] = useState('');
+  const [schBusy, setSchBusy] = useState(false);
+  const [schErr, setSchErr] = useState<string | null>(null);
+  useEffect(() => { if (createSchemaOpen) setSchCatalog(activeCatalog || catalogs[0] || ''); }, [createSchemaOpen, activeCatalog, catalogs]);
+
+  const createSchema = useCallback(async () => {
+    if (!schCatalog || !schName.trim()) return;
+    setSchBusy(true); setSchErr(null);
+    try {
+      const r = await fetch('/api/databricks/unity-catalog/schemas', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: schName.trim(), catalog_name: schCatalog, comment: schComment.trim() || undefined }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setSchErr(j.error || `HTTP ${r.status}`); return; }
+      setCreateSchemaOpen(false); setSchName(''); setSchComment('');
+      onChanged();
+    } catch (e: any) { setSchErr(e?.message || String(e)); }
+    finally { setSchBusy(false); }
+  }, [schCatalog, schName, schComment, onChanged, setCreateSchemaOpen]);
+
+  // ---- Create table ----
+  const [tblCatalog, setTblCatalog] = useState(activeCatalog || '');
+  const [tblSchema, setTblSchema] = useState(activeSchema || '');
+  const [tblName, setTblName] = useState('');
+  const [tblComment, setTblComment] = useState('');
+  const [tblType, setTblType] = useState<'MANAGED' | 'EXTERNAL'>('MANAGED');
+  const [tblFormat, setTblFormat] = useState('DELTA');
+  const [tblStorage, setTblStorage] = useState('');
+  const [tblCols, setTblCols] = useState<NewColumn[]>([{ name: 'id', type_name: 'BIGINT', nullable: false, comment: '' }]);
+  const [tblBusy, setTblBusy] = useState(false);
+  const [tblErr, setTblErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (createTableOpen) { setTblCatalog(activeCatalog || catalogs[0] || ''); setTblSchema(activeSchema || ''); }
+  }, [createTableOpen, activeCatalog, activeSchema, catalogs]);
+
+  const addCol = useCallback(() => setTblCols((c) => [...c, { name: '', type_name: 'STRING', nullable: true, comment: '' }]), []);
+  const patchCol = useCallback((i: number, p: Partial<NewColumn>) => setTblCols((c) => c.map((col, j) => (j === i ? { ...col, ...p } : col))), []);
+  const delCol = useCallback((i: number) => setTblCols((c) => (c.length <= 1 ? c : c.filter((_, j) => j !== i))), []);
+
+  const createTable = useCallback(async () => {
+    if (!tblCatalog || !tblSchema || !tblName.trim()) return;
+    if (tblCols.some((c) => !c.name.trim())) { setTblErr('Every column needs a name.'); return; }
+    if (tblType === 'EXTERNAL' && !tblStorage.trim()) { setTblErr('EXTERNAL tables require a storage location (abfss://…).'); return; }
+    setTblBusy(true); setTblErr(null);
+    try {
+      const r = await fetch('/api/databricks/unity-catalog/tables', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: tblName.trim(), catalog_name: tblCatalog, schema_name: tblSchema,
+          table_type: tblType, data_source_format: tblFormat,
+          storage_location: tblStorage.trim() || undefined,
+          comment: tblComment.trim() || undefined,
+          columns: tblCols.map((c, i) => ({ name: c.name.trim(), type_name: c.type_name, nullable: c.nullable, position: i, comment: c.comment.trim() || undefined })),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setTblErr(j.error || `HTTP ${r.status}`); return; }
+      setCreateTableOpen(false); setTblName(''); setTblComment(''); setTblStorage('');
+      setTblCols([{ name: 'id', type_name: 'BIGINT', nullable: false, comment: '' }]);
+      onChanged();
+    } catch (e: any) { setTblErr(e?.message || String(e)); }
+    finally { setTblBusy(false); }
+  }, [tblCatalog, tblSchema, tblName, tblComment, tblType, tblFormat, tblStorage, tblCols, onChanged, setCreateTableOpen]);
+
+  // ---- Grants ----
+  const [grSecurable, setGrSecurable] = useState<UcSecurable>('SCHEMA');
+  const [grFullName, setGrFullName] = useState('');
+  const [grGrants, setGrGrants] = useState<UcGrant[] | null>(null);
+  const [grEffective, setGrEffective] = useState(false);
+  const [grBusy, setGrBusy] = useState(false);
+  const [grErr, setGrErr] = useState<string | null>(null);
+  const [grPrincipal, setGrPrincipal] = useState('');
+  const [grPrivs, setGrPrivs] = useState<Set<string>>(new Set());
+
+  // Seed full_name from the current tree context when the dialog opens.
+  useEffect(() => {
+    if (!grantsOpen) return;
+    if (activeSchema && activeCatalog) { setGrSecurable('SCHEMA'); setGrFullName(`${activeCatalog}.${activeSchema}`); }
+    else if (activeCatalog) { setGrSecurable('CATALOG'); setGrFullName(activeCatalog); }
+  }, [grantsOpen, activeCatalog, activeSchema]);
+
+  const loadGrants = useCallback(async () => {
+    if (!grFullName.trim() && grSecurable !== 'METASTORE' as any) { setGrErr('Enter the securable full name.'); return; }
+    setGrBusy(true); setGrErr(null); setGrGrants(null);
+    try {
+      const params = new URLSearchParams({ securable_type: grSecurable, full_name: grFullName.trim() });
+      if (grEffective) params.set('effective', 'true');
+      const r = await fetch(`/api/databricks/unity-catalog/grants?${params.toString()}`);
+      const j = await r.json();
+      if (!j.ok) { setGrErr(j.error || `HTTP ${r.status}`); return; }
+      // effective shape differs (privileges is array of objects) — normalize for display.
+      const grants: UcGrant[] = (j.grants || []).map((g: any) => ({
+        principal: g.principal,
+        privileges: Array.isArray(g.privileges)
+          ? g.privileges.map((p: any) => (typeof p === 'string' ? p : `${p.privilege}${p.inherited_from_type ? ` (inherited)` : ''}`))
+          : [],
+      }));
+      setGrGrants(grants);
+    } catch (e: any) { setGrErr(e?.message || String(e)); }
+    finally { setGrBusy(false); }
+  }, [grSecurable, grFullName, grEffective]);
+
+  const applyGrant = useCallback(async (mode: 'add' | 'remove') => {
+    if (!grPrincipal.trim() || grPrivs.size === 0) { setGrErr('Pick a principal and at least one privilege.'); return; }
+    setGrBusy(true); setGrErr(null);
+    try {
+      const change = mode === 'add'
+        ? { principal: grPrincipal.trim(), add: [...grPrivs] }
+        : { principal: grPrincipal.trim(), remove: [...grPrivs] };
+      const r = await fetch('/api/databricks/unity-catalog/grants', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ securable_type: grSecurable, full_name: grFullName.trim(), changes: [change] }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setGrErr(j.error || `HTTP ${r.status}`); return; }
+      setGrGrants((j.grants || []).map((g: any) => ({ principal: g.principal, privileges: g.privileges || [] })));
+      setGrPrivs(new Set());
+    } catch (e: any) { setGrErr(e?.message || String(e)); }
+    finally { setGrBusy(false); }
+  }, [grSecurable, grFullName, grPrincipal, grPrivs]);
+
+  const togglePriv = useCallback((p: string) => setGrPrivs((s) => {
+    const n = new Set(s); if (n.has(p)) n.delete(p); else n.add(p); return n;
+  }), []);
+
+  return (
+    <>
+      {/* Create catalog */}
+      <Dialog open={createCatalogOpen} onOpenChange={(_, d) => setCreateCatalogOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 520 }}>
+          <DialogBody>
+            <DialogTitle>Create catalog</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {catErr && <MessageBar intent="error"><MessageBarBody>{catErr}</MessageBarBody></MessageBar>}
+                <Field label="Catalog name" required><Input value={catName} onChange={(_, d) => setCatName(d.value)} placeholder="sales" /></Field>
+                <Field label="Comment"><Input value={catComment} onChange={(_, d) => setCatComment(d.value)} /></Field>
+                <Field label="Managed storage root (optional)" hint="abfss://container@account.dfs.core.windows.net/path — omit to use the metastore default">
+                  <Input value={catStorage} onChange={(_, d) => setCatStorage(d.value)} placeholder="abfss://…" />
+                </Field>
+                <Caption1>POST <code>/api/2.1/unity-catalog/catalogs</code> — requires CREATE CATALOG on the metastore.</Caption1>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCreateCatalogOpen(false)} disabled={catBusy}>Cancel</Button>
+              <Button appearance="primary" onClick={createCatalog} disabled={catBusy || !catName.trim()}>{catBusy ? 'Creating…' : 'Create catalog'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Create schema */}
+      <Dialog open={createSchemaOpen} onOpenChange={(_, d) => setCreateSchemaOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 520 }}>
+          <DialogBody>
+            <DialogTitle>Create schema</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {schErr && <MessageBar intent="error"><MessageBarBody>{schErr}</MessageBarBody></MessageBar>}
+                <Field label="Catalog" required>
+                  <Dropdown value={schCatalog} selectedOptions={schCatalog ? [schCatalog] : []} onOptionSelect={(_, d) => d.optionValue && setSchCatalog(d.optionValue)} placeholder="Select catalog">
+                    {catalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Schema name" required><Input value={schName} onChange={(_, d) => setSchName(d.value)} placeholder="bronze" /></Field>
+                <Field label="Comment"><Input value={schComment} onChange={(_, d) => setSchComment(d.value)} /></Field>
+                <Caption1>POST <code>/api/2.1/unity-catalog/schemas</code> — requires CREATE SCHEMA + USE CATALOG on the parent.</Caption1>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCreateSchemaOpen(false)} disabled={schBusy}>Cancel</Button>
+              <Button appearance="primary" onClick={createSchema} disabled={schBusy || !schCatalog || !schName.trim()}>{schBusy ? 'Creating…' : 'Create schema'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Create table */}
+      <Dialog open={createTableOpen} onOpenChange={(_, d) => setCreateTableOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 720, width: '95vw' }}>
+          <DialogBody>
+            <DialogTitle>Create table</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {tblErr && <MessageBar intent="error"><MessageBarBody>{tblErr}</MessageBarBody></MessageBar>}
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Field label="Catalog" required style={{ flex: 1 }}>
+                    <Dropdown value={tblCatalog} selectedOptions={tblCatalog ? [tblCatalog] : []} onOptionSelect={(_, d) => d.optionValue && setTblCatalog(d.optionValue)} placeholder="catalog">
+                      {catalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Schema" required style={{ flex: 1 }}>
+                    {schemas.length > 0 && tblCatalog === activeCatalog ? (
+                      <Dropdown value={tblSchema} selectedOptions={tblSchema ? [tblSchema] : []} onOptionSelect={(_, d) => d.optionValue && setTblSchema(d.optionValue)} placeholder="schema">
+                        {schemas.map((sc) => <Option key={sc} value={sc} text={sc}>{sc}</Option>)}
+                      </Dropdown>
+                    ) : (
+                      <Input value={tblSchema} onChange={(_, d) => setTblSchema(d.value)} placeholder="schema" />
+                    )}
+                  </Field>
+                  <Field label="Table name" required style={{ flex: 1 }}><Input value={tblName} onChange={(_, d) => setTblName(d.value)} placeholder="orders" /></Field>
+                </div>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Field label="Type" style={{ flex: 1 }}>
+                    <Dropdown value={tblType} selectedOptions={[tblType]} onOptionSelect={(_, d) => d.optionValue && setTblType(d.optionValue as 'MANAGED' | 'EXTERNAL')}>
+                      <Option value="MANAGED" text="MANAGED">MANAGED</Option>
+                      <Option value="EXTERNAL" text="EXTERNAL">EXTERNAL</Option>
+                    </Dropdown>
+                  </Field>
+                  <Field label="Format" style={{ flex: 1 }}>
+                    <Dropdown value={tblFormat} selectedOptions={[tblFormat]} onOptionSelect={(_, d) => d.optionValue && setTblFormat(d.optionValue)}>
+                      {['DELTA', 'PARQUET', 'CSV', 'JSON', 'ORC', 'AVRO', 'TEXT'].map((f) => <Option key={f} value={f} text={f}>{f}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Comment" style={{ flex: 2 }}><Input value={tblComment} onChange={(_, d) => setTblComment(d.value)} /></Field>
+                </div>
+                {tblType === 'EXTERNAL' && (
+                  <Field label="Storage location" required hint="abfss://… — required for EXTERNAL tables">
+                    <Input value={tblStorage} onChange={(_, d) => setTblStorage(d.value)} placeholder="abfss://container@account.dfs.core.windows.net/path" />
+                  </Field>
+                )}
+                <Divider>Columns</Divider>
+                {tblCols.map((c, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <Input style={{ flex: 2 }} value={c.name} onChange={(_, d) => patchCol(i, { name: d.value })} placeholder="column name" aria-label={`Column ${i + 1} name`} />
+                    <Dropdown style={{ flex: 1, minWidth: 120 }} value={c.type_name} selectedOptions={[c.type_name]} onOptionSelect={(_, d) => d.optionValue && patchCol(i, { type_name: d.optionValue })} aria-label={`Column ${i + 1} type`}>
+                      {UC_COLUMN_TYPES.map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
+                    </Dropdown>
+                    <Switch checked={c.nullable} label="nullable" onChange={(_, d) => patchCol(i, { nullable: !!d.checked })} />
+                    <Input style={{ flex: 2 }} value={c.comment} onChange={(_, d) => patchCol(i, { comment: d.value })} placeholder="comment" aria-label={`Column ${i + 1} comment`} />
+                    <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Remove column ${i + 1}`} disabled={tblCols.length <= 1} onClick={() => delCol(i)} />
+                  </div>
+                ))}
+                <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addCol}>Add column</Button>
+                <Caption1>POST <code>/api/2.1/unity-catalog/tables</code> — requires CREATE TABLE + USE SCHEMA + USE CATALOG.</Caption1>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCreateTableOpen(false)} disabled={tblBusy}>Cancel</Button>
+              <Button appearance="primary" onClick={createTable} disabled={tblBusy || !tblCatalog || !tblSchema || !tblName.trim()}>{tblBusy ? 'Creating…' : 'Create table'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Manage grants */}
+      <Dialog open={grantsOpen} onOpenChange={(_, d) => setGrantsOpen(d.open)}>
+        <DialogSurface style={{ maxWidth: 760, width: '95vw' }}>
+          <DialogBody>
+            <DialogTitle>Manage grants (Unity Catalog permissions)</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {grErr && <MessageBar intent="error"><MessageBarBody>{grErr}</MessageBarBody></MessageBar>}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+                  <Field label="Securable type" style={{ minWidth: 140 }}>
+                    <Dropdown value={grSecurable} selectedOptions={[grSecurable]} onOptionSelect={(_, d) => { if (d.optionValue) { setGrSecurable(d.optionValue as UcSecurable); setGrPrivs(new Set()); } }}>
+                      {(['CATALOG', 'SCHEMA', 'TABLE', 'VOLUME', 'FUNCTION'] as UcSecurable[]).map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Full name" style={{ flex: 1 }} hint="catalog · catalog.schema · catalog.schema.object">
+                    <Input value={grFullName} onChange={(_, d) => setGrFullName(d.value)} placeholder="main.sales" />
+                  </Field>
+                  <Switch checked={grEffective} label="effective (incl. inherited)" onChange={(_, d) => setGrEffective(!!d.checked)} />
+                  <Button appearance="primary" onClick={loadGrants} disabled={grBusy}>{grBusy ? 'Loading…' : 'Load grants'}</Button>
+                </div>
+
+                {grGrants && (
+                  <div className={s.tableWrap}>
+                    <Table aria-label="Grants" size="small">
+                      <TableHeader><TableRow>
+                        <TableHeaderCell>Principal</TableHeaderCell>
+                        <TableHeaderCell>Privileges</TableHeaderCell>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {grGrants.length === 0 && <TableRow><TableCell colSpan={2}><Caption1>No direct grants.</Caption1></TableCell></TableRow>}
+                        {grGrants.map((g) => (
+                          <TableRow key={g.principal}>
+                            <TableCell>{g.principal}</TableCell>
+                            <TableCell><div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>{g.privileges.map((p) => <Badge key={p} appearance="outline">{p}</Badge>)}</div></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+
+                {!grEffective && (
+                  <>
+                    <Divider>Grant / revoke</Divider>
+                    <Field label="Principal" hint="user email, group name, or service-principal applicationId">
+                      <Input value={grPrincipal} onChange={(_, d) => setGrPrincipal(d.value)} placeholder="data-engineers" />
+                    </Field>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {(UC_PRIVILEGES[grSecurable] || []).map((p) => (
+                        <Badge
+                          key={p}
+                          appearance={grPrivs.has(p) ? 'filled' : 'outline'}
+                          color={grPrivs.has(p) ? 'brand' : 'informative'}
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => togglePriv(p)}
+                        >
+                          {p}
+                        </Badge>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Button appearance="primary" onClick={() => applyGrant('add')} disabled={grBusy || !grPrincipal.trim() || grPrivs.size === 0}>Grant selected</Button>
+                      <Button appearance="outline" onClick={() => applyGrant('remove')} disabled={grBusy || !grPrincipal.trim() || grPrivs.size === 0}>Revoke selected</Button>
+                    </div>
+                    <Caption1>PATCH <code>/api/2.1/unity-catalog/permissions/&#123;type&#125;/&#123;full_name&#125;</code> — requires object ownership / MANAGE / metastore admin.</Caption1>
+                  </>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setGrantsOpen(false)} disabled={grBusy}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </>
+  );
+}
+
 export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  // Unity Catalog WRITE dialog open-state (create catalog/schema/table + grants).
+  const [ucCreateCatalogOpen, setUcCreateCatalogOpen] = useState(false);
+  const [ucCreateSchemaOpen, setUcCreateSchemaOpen] = useState(false);
+  const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
+  const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
 
   const [sqlText, setSqlText] = useState<string>(
     `-- Databricks SQL Warehouse — Unity Catalog.\n-- Click a table on the left to insert a SELECT.\nSELECT current_catalog() AS catalog, current_database() AS schema, current_user() AS upn;`,
@@ -212,6 +631,17 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [starting, setStarting] = useState(false);
   const [warehousesError, setWarehousesError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
+
+  // ---- Edit / scale dialog (POST /api/2.0/sql/warehouses/{id}/edit) ----
+  const [editOpen, setEditOpen] = useState(false);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editSize, setEditSize] = useState('X-Small');
+  const [editMinClusters, setEditMinClusters] = useState(1);
+  const [editMaxClusters, setEditMaxClusters] = useState(1);
+  const [editAutoStop, setEditAutoStop] = useState(10);
+  const [editType, setEditType] = useState<'PRO' | 'CLASSIC'>('PRO');
+  const [editServerless, setEditServerless] = useState(false);
 
   // ---- Initial: load warehouses, pick first, fetch state ----
   useEffect(() => {
@@ -321,6 +751,55 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     refreshState();
   }, [id, warehouseId, refreshState]);
 
+  // ---- Edit / scale: pre-fill from the live warehouse, then POST /edit ----
+  const openEdit = useCallback(async () => {
+    if (!warehouseId) return;
+    setEditError(null);
+    // Pull current size/scaling/type/serverless so the dialog starts from
+    // the real warehouse config (state route surfaces these).
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/state?warehouseId=${encodeURIComponent(warehouseId)}`);
+      const j = (await r.json()) as WarehouseState;
+      if (j.ok) {
+        if (j.cluster_size) setEditSize(j.cluster_size);
+        if (typeof j.min_num_clusters === 'number') setEditMinClusters(j.min_num_clusters);
+        if (typeof j.max_num_clusters === 'number') setEditMaxClusters(j.max_num_clusters);
+        if (typeof j.auto_stop_mins === 'number') setEditAutoStop(j.auto_stop_mins);
+        setEditType(j.warehouse_type === 'CLASSIC' ? 'CLASSIC' : 'PRO');
+        setEditServerless(!!j.serverless);
+      }
+    } catch { /* dialog still opens with defaults */ }
+    setEditOpen(true);
+  }, [id, warehouseId]);
+
+  const saveEdit = useCallback(async () => {
+    if (!warehouseId) return;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/edit?warehouseId=${encodeURIComponent(warehouseId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          cluster_size: editSize,
+          min_num_clusters: editMinClusters,
+          max_num_clusters: editMaxClusters,
+          auto_stop_mins: editAutoStop,
+          warehouse_type: editType,
+          enable_serverless_compute: editServerless,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setEditError(j.error || `HTTP ${r.status}`); return; }
+      setEditOpen(false);
+      await refreshState();
+    } catch (e: any) {
+      setEditError(e?.message || String(e));
+    } finally {
+      setEditBusy(false);
+    }
+  }, [id, warehouseId, editSize, editMinClusters, editMaxClusters, editAutoStop, editType, editServerless, refreshState]);
+
   // ---- Run query ----
   const run = useCallback(async () => {
     if (!warehouseId) {
@@ -409,6 +888,14 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const canStart = !!warehouseId && !starting && (state === 'STOPPED' || state === 'STOPPING' || state === 'UNKNOWN');
   const canStop = !!warehouseId && isRunning;
   const canRun = !!warehouseId && isRunning && !loading;
+  // Re-list the tree level a UC write touched, so created catalogs/schemas/
+  // tables appear immediately. Re-runs the deepest active query.
+  const ucChanged = useCallback(() => {
+    if (activeCatalog && activeSchema) { void openSchema(activeCatalog, activeSchema); }
+    else if (activeCatalog) { void openCatalog(activeCatalog); }
+    void refreshCatalogs();
+  }, [activeCatalog, activeSchema, openCatalog, openSchema, refreshCatalogs]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
@@ -419,10 +906,17 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       { label: 'Warehouse', actions: [
         { label: starting ? 'Starting…' : 'Start', onClick: canStart ? start : undefined, disabled: !canStart },
         { label: 'Stop', onClick: canStop ? stop : undefined, disabled: !canStop },
+        { label: 'Edit', onClick: warehouseId ? openEdit : undefined, disabled: !warehouseId, title: !warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless' },
         { label: 'Refresh', onClick: warehouseId ? refreshAll : undefined, disabled: !warehouseId },
       ]},
+      { label: 'Unity Catalog', actions: [
+        { label: 'Create catalog', onClick: () => setUcCreateCatalogOpen(true), title: 'Create a UC catalog (api 2.1 — requires CREATE CATALOG on the metastore)' },
+        { label: 'Create schema', onClick: () => setUcCreateSchemaOpen(true), title: 'Create a UC schema under a catalog' },
+        { label: 'Create table', onClick: () => setUcCreateTableOpen(true), title: 'Create a managed/external UC table' },
+        { label: 'Manage grants', onClick: () => setUcGrantsOpen(true), title: 'View / grant / revoke UC privileges' },
+      ]},
     ]},
-  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory]);
+  ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit]);
 
   return (
     <ItemEditorChrome
@@ -431,6 +925,20 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
+          <div style={{ display: 'flex', gap: 4, marginBottom: 6, flexWrap: 'wrap' }}>
+            <Tooltip content="Create catalog (UC REST)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setUcCreateCatalogOpen(true)}>Catalog</Button>
+            </Tooltip>
+            <Tooltip content="Create schema (UC REST)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setUcCreateSchemaOpen(true)}>Schema</Button>
+            </Tooltip>
+            <Tooltip content="Create table (UC REST)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setUcCreateTableOpen(true)}>Table</Button>
+            </Tooltip>
+            <Tooltip content="Manage grants (UC permissions)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Key20Regular />} onClick={() => setUcGrantsOpen(true)} aria-label="Manage grants" />
+            </Tooltip>
+          </div>
           <Tree aria-label="Unity Catalog" defaultOpenItems={['catalogs']}>
             <TreeItem itemType="branch" value="catalogs">
               <TreeItemLayout iconBefore={<Database20Regular />}>
@@ -546,18 +1054,33 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             {isRunning && (
               <Button appearance="outline" icon={<Stop20Regular />} onClick={stop}>Stop</Button>
             )}
-            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => {
+            <Button appearance="outline" icon={<ArrowSync20Regular />} aria-label="Refresh warehouse state" onClick={() => {
               refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
             }}>Refresh</Button>
-            <Button
-              appearance="primary"
-              icon={<Play20Regular />}
-              disabled={loading || !isRunning || !warehouseId}
-              onClick={run}
-              style={{ marginLeft: 'auto' }}
+            <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'Change size, scaling, auto-stop, type, serverless'} relationship="label">
+              <Button appearance="outline" icon={<Save20Regular />} disabled={!warehouseId} onClick={openEdit}>
+                Edit
+              </Button>
+            </Tooltip>
+            <Tooltip
+              content={
+                !warehouseId ? 'Pick a warehouse first'
+                  : loading ? 'A query is running…'
+                  : !isRunning ? 'Start the warehouse before running SQL'
+                  : 'Run the SQL on the selected warehouse'
+              }
+              relationship="label"
             >
-              Run
-            </Button>
+              <Button
+                appearance="primary"
+                icon={<Play20Regular />}
+                disabled={loading || !isRunning || !warehouseId}
+                onClick={run}
+                style={{ marginLeft: 'auto' }}
+              >
+                Run
+              </Button>
+            </Tooltip>
           </div>
           {state === 'STARTING' && (
             <MessageBar intent="info">
@@ -598,6 +1121,75 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               </Body1>
             </div>
           )}
+
+          {/* Edit / scale dialog — POST /api/2.0/sql/warehouses/{id}/edit */}
+          <Dialog open={editOpen} onOpenChange={(_, d) => setEditOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '560px' }}>
+              <DialogBody>
+                <DialogTitle>Edit warehouse — {selectedWarehouse?.name || warehouseId}</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {editError && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Edit failed</MessageBarTitle>{editError}</MessageBarBody></MessageBar>
+                    )}
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        Changes apply via <code>POST /api/2.0/sql/warehouses/&#123;id&#125;/edit</code>. A running
+                        warehouse may briefly restart to take a new size; scaling (min/max clusters) and auto-stop
+                        apply live.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <Field label="Cluster size">
+                      <Dropdown
+                        value={editSize}
+                        selectedOptions={[editSize]}
+                        onOptionSelect={(_, d) => d.optionValue && setEditSize(d.optionValue)}
+                      >
+                        {['2X-Small', 'X-Small', 'Small', 'Medium', 'Large', 'X-Large', '2X-Large', '3X-Large', '4X-Large'].map((sz) => (
+                          <Option key={sz} value={sz} text={sz}>{sz}</Option>
+                        ))}
+                      </Dropdown>
+                    </Field>
+                    <div style={{ display: 'flex', gap: 12 }}>
+                      <Field label="Min clusters" style={{ flex: 1 }} hint="Scaling floor (1–30)">
+                        <Input type="number" value={String(editMinClusters)}
+                          onChange={(_, d) => setEditMinClusters(Math.max(1, Number(d.value) || 1))} />
+                      </Field>
+                      <Field label="Max clusters" style={{ flex: 1 }} hint="Scaling ceiling (1–30)">
+                        <Input type="number" value={String(editMaxClusters)}
+                          onChange={(_, d) => setEditMaxClusters(Math.max(1, Number(d.value) || 1))} />
+                      </Field>
+                    </div>
+                    <Field label="Auto-stop (minutes)" hint="0 disables auto-stop">
+                      <Input type="number" value={String(editAutoStop)}
+                        onChange={(_, d) => setEditAutoStop(Math.max(0, Number(d.value) || 0))} />
+                    </Field>
+                    <Field label="Warehouse type">
+                      <Dropdown
+                        value={editType}
+                        selectedOptions={[editType]}
+                        onOptionSelect={(_, d) => d.optionValue && setEditType(d.optionValue as 'PRO' | 'CLASSIC')}
+                      >
+                        <Option value="PRO" text="PRO">PRO</Option>
+                        <Option value="CLASSIC" text="CLASSIC">CLASSIC</Option>
+                      </Dropdown>
+                    </Field>
+                    <Switch
+                      checked={editServerless}
+                      label="Serverless compute"
+                      onChange={(_, d) => setEditServerless(!!d.checked)}
+                    />
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setEditOpen(false)} disabled={editBusy}>Cancel</Button>
+                  <Button appearance="primary" onClick={saveEdit} disabled={editBusy}>
+                    {editBusy ? 'Saving…' : 'Save changes'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           <Dialog open={qhOpen} onOpenChange={(_, d) => setQhOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '1080px', width: '95vw' }}>
@@ -652,6 +1244,19 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          <UnityCatalogWriteDialogs
+            catalogs={catalogs}
+            activeCatalog={activeCatalog}
+            schemas={schemas}
+            activeSchema={activeSchema}
+            tables={tables}
+            onChanged={ucChanged}
+            createCatalogOpen={ucCreateCatalogOpen} setCreateCatalogOpen={setUcCreateCatalogOpen}
+            createSchemaOpen={ucCreateSchemaOpen} setCreateSchemaOpen={setUcCreateSchemaOpen}
+            createTableOpen={ucCreateTableOpen} setCreateTableOpen={setUcCreateTableOpen}
+            grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
+          />
         </div>
       }
     />
@@ -863,6 +1468,45 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootPath]);
   useEffect(() => { void loadClusters(); }, [loadClusters]);
+
+  // ---- Hydrate from the installed item's bundle cells ----
+  // A bundle-installed databricks-notebook has its NotebookContent cells
+  // stamped into Cosmos (state.cells, or state.content.cells when only the
+  // NotebookContent shape was written). The live-workspace tree on the left
+  // doesn't surface those, so on mount we open the item populated with every
+  // markdown + code cell instead of a single empty cell — the bundle content
+  // is no longer stranded. Once the user clicks a real workspace path the
+  // openNotebook flow takes over (export from the live Databricks workspace).
+  useEffect(() => {
+    if (!id || id === 'new') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/cosmos-items/databricks-notebook/${encodeURIComponent(id)}`);
+        if (!r.ok) return;
+        const item = await r.json();
+        if (cancelled) return;
+        const st = (item?.state as any) || {};
+        const raw: any[] = (Array.isArray(st.cells) && st.cells.length > 0)
+          ? st.cells
+          : (st.content?.kind === 'notebook' && Array.isArray(st.content.cells) ? st.content.cells : []);
+        if (raw.length === 0) return;
+        const hydrated: NotebookCell[] = raw.map((c, i) => ({
+          id: typeof c?.id === 'string' && c.id ? c.id : `bundle-${i}`,
+          type: c?.type === 'markdown' ? 'markdown' : 'code',
+          lang: (c?.lang || c?.language || st.defaultLang || st.content?.defaultLang || 'python') as NotebookCell['lang'],
+          source: typeof c?.source === 'string' ? c.source : Array.isArray(c?.source) ? c.source.join('') : '',
+        }));
+        setCells(hydrated);
+        setBaseLanguage('PYTHON');
+        setOrigSerialized(serializeCells(hydrated, 'PYTHON'));
+        setActiveCellId(hydrated[0]?.id || null);
+        setFileMessage('Loaded notebook cells from the installed app bundle. Click a workspace notebook on the left to open the deployed copy.');
+      } catch { /* fall back to the empty starter cell */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   const toggle = useCallback((path: string) => {
     setExpanded((prev) => {
@@ -1097,7 +1741,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
   const openRuns = useCallback(() => { setRunsOpen(true); void loadRuns(); }, [loadRuns]);
 
   // ---- Tree render ----
-  const renderTree = (path: string, depth = 0): JSX.Element[] => {
+  const renderTree = (path: string, depth = 0) => {
     const items = tree[path] || [];
     return items.map((o) => {
       const isDir = o.object_type === 'DIRECTORY' || o.object_type === 'REPO';
@@ -1110,8 +1754,17 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
             style={{ background: selectedPath === o.path ? tokens.colorNeutralBackground2Selected : undefined }}
           >
             <div
+              role="button"
+              tabIndex={0}
+              aria-label={`${isDir ? 'Toggle' : 'Open'} ${o.path}`}
               style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, cursor: 'pointer', minWidth: 0 }}
               onClick={() => isDir ? toggle(o.path) : isNb ? openNotebook(o.path, o.language) : undefined}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  if (isDir) toggle(o.path); else if (isNb) openNotebook(o.path, o.language);
+                }
+              }}
             >
               {isDir ? <Folder20Regular /> : isNb ? <Document20Regular /> : <DocumentTable20Regular />}
               <Caption1 style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1226,23 +1879,43 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
                 {selectedCluster.state}
               </Badge>
             )}
-            <Button
-              appearance="primary"
-              icon={<Play20Regular />}
-              disabled={!canRunAll}
-              onClick={runAll}
-              style={{ marginLeft: 'auto' }}
+            <Tooltip
+              content={
+                runningAll ? 'Running all cells…'
+                  : !clusterId ? 'Attach a cluster first'
+                  : !cells.some((c) => c.type === 'code' && c.source.trim()) ? 'Add a non-empty code cell'
+                  : 'Run every code cell top-to-bottom (stops on first error)'
+              }
+              relationship="label"
             >
-              {runningAll ? 'Running all…' : 'Run all'}
-            </Button>
-            <Button
-              appearance="primary"
-              icon={<Save20Regular />}
-              disabled={!selectedPath || !dirty || savingFile}
-              onClick={save}
+              <Button
+                appearance="primary"
+                icon={<Play20Regular />}
+                disabled={!canRunAll}
+                onClick={runAll}
+                style={{ marginLeft: 'auto' }}
+              >
+                {runningAll ? 'Running all…' : 'Run all'}
+              </Button>
+            </Tooltip>
+            <Tooltip
+              content={
+                !selectedPath ? 'Open or create a notebook first'
+                  : savingFile ? 'Saving…'
+                  : !dirty ? 'No unsaved changes'
+                  : 'Save to the workspace (workspace/import)'
+              }
+              relationship="label"
             >
-              {savingFile ? 'Saving…' : dirty ? 'Save *' : 'Save'}
-            </Button>
+              <Button
+                appearance="primary"
+                icon={<Save20Regular />}
+                disabled={!selectedPath || !dirty || savingFile}
+                onClick={save}
+              >
+                {savingFile ? 'Saving…' : dirty ? 'Save *' : 'Save'}
+              </Button>
+            </Tooltip>
           </div>
 
           {clustersError && (
@@ -1728,6 +2401,16 @@ interface JobRow {
 
 type TriggerType = 'none' | 'cron' | 'continuous' | 'file_arrival';
 
+// Timezone ids the Databricks schedule UI offers (IANA / Joda zone ids).
+// Mirrors the portal's timezone dropdown for cron schedules.
+const SCHEDULE_TIMEZONES = [
+  'UTC',
+  'America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York',
+  'America/Sao_Paulo', 'Europe/London', 'Europe/Paris', 'Europe/Berlin',
+  'Europe/Moscow', 'Asia/Dubai', 'Asia/Kolkata', 'Asia/Singapore',
+  'Asia/Shanghai', 'Asia/Tokyo', 'Australia/Sydney', 'Pacific/Auckland',
+];
+
 export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
 
@@ -1765,6 +2448,8 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [nodeTypes, setNodeTypes] = useState<{ node_type_id: string; description?: string }[]>([]);
   const [sparkVersions, setSparkVersions] = useState<{ key: string; name: string }[]>([]);
+  // SQL Warehouses (for sql_task / dbt_task warehouse picker — real REST list).
+  const [warehouses, setWarehouses] = useState<{ id: string; name: string }[]>([]);
   // Notebook workspace browse (for notebook_task path picker)
   const [notebooks, setNotebooks] = useState<string[]>([]);
 
@@ -1826,6 +2511,17 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       const j = await r.json();
       if (j.ok) { setNodeTypes(j.nodeTypes || []); setSparkVersions(j.sparkVersions || []); }
     })();
+    // SQL warehouses (for sql_task / dbt_task warehouse picker). Optional —
+    // a free-text fallback remains if the workspace has none / list fails.
+    void (async () => {
+      try {
+        const r = await fetch('/api/databricks/warehouses');
+        const j = await r.json();
+        if (j.ok) {
+          setWarehouses((j.warehouses || []).map((w: any) => ({ id: w.id, name: w.name || w.id })));
+        }
+      } catch { /* picker optional; free-text warehouse id still works */ }
+    })();
     // notebooks under /Workspace for the notebook-task path picker
     void (async () => {
       try {
@@ -1848,6 +2544,34 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     setTriggerType('none'); setCron('0 0 2 * * ?'); setTz('UTC'); setPaused(false); setFileArrivalUrl('');
     setActiveTab('tasks'); setDirty(false);
   }, []);
+
+  // Bundle-installed job: seed the form from the item's stamped
+  // DatabricksJobContent (tasks + shared cluster) so it opens FULLY BUILT-OUT
+  // before any live Databricks job exists. The item GET route returns the
+  // editor-shaped { job, source:'bundle' } when no jobId is passed. The user
+  // then clicks Create to push it to the real workspace (jobs/create). Only
+  // runs once per item id, and never overrides a live-job selection or unsaved
+  // edits.
+  const [bundleSeeded, setBundleSeeded] = useState(false);
+  useEffect(() => {
+    if (id === 'new' || !id || bundleSeeded || jobId !== null || dirty) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch(`/api/items/databricks-job/${encodeURIComponent(id)}`);
+        const j = await r.json();
+        if (cancelled || !j.ok || j.source !== 'bundle' || !j.job?.settings) return;
+        const settings = j.job.settings;
+        setName(settings.name || '');
+        const ts = (settings.tasks || []).map(specToTask);
+        if (ts.length) { setTasks(ts); setActiveTaskKey(ts[0].task_key || 'main'); }
+        setMaxConcurrent(settings.max_concurrent_runs ?? 1);
+        setActiveTab('tasks');
+        setBundleSeeded(true);
+      } catch { /* best-effort seed; the live job list still works */ }
+    })();
+    return () => { cancelled = true; };
+  }, [id, bundleSeeded, jobId, dirty]);
 
   const selectJob = useCallback(async (jid: number) => {
     setJobId(jid);
@@ -2137,22 +2861,34 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
             {dirty && jobId !== null && <Badge appearance="outline" color="warning">unsaved</Badge>}
             {jobId !== null && <Badge appearance="outline">job_id {jobId}</Badge>}
             {workspaceHost && <Caption1>workspace: <code>{workspaceHost}</code></Caption1>}
-            <Button
-              appearance="primary"
-              icon={<Save20Regular />}
-              disabled={!canSaveJob}
-              onClick={save}
-              style={{ marginLeft: 'auto' }}
+            <Tooltip
+              content={
+                saving ? 'Save in progress…'
+                  : !tasks.some((t) => t.task_key) ? 'Add at least one task with a task key'
+                  : !canSaveJob ? 'No unsaved changes'
+                  : jobId === null ? 'Create this job (jobs/create)' : 'Save changes (jobs/reset)'
+              }
+              relationship="label"
             >
-              {saving ? 'Saving…' : jobId === null ? 'Create' : dirty ? 'Save *' : 'Save'}
-            </Button>
-            {jobId !== null && (
-              <Button appearance="outline" icon={<Play20Regular />} disabled={running} onClick={runNow}>
-                {running ? 'Submitting…' : 'Run now'}
+              <Button
+                appearance="primary"
+                icon={<Save20Regular />}
+                disabled={!canSaveJob}
+                onClick={save}
+                style={{ marginLeft: 'auto' }}
+              >
+                {saving ? 'Saving…' : jobId === null ? 'Create' : dirty ? 'Save *' : 'Save'}
               </Button>
+            </Tooltip>
+            {jobId !== null && (
+              <Tooltip content={running ? 'A run is being submitted…' : 'Trigger this job now (jobs/run-now)'} relationship="label">
+                <Button appearance="outline" icon={<Play20Regular />} disabled={running} onClick={runNow}>
+                  {running ? 'Submitting…' : 'Run now'}
+                </Button>
+              </Tooltip>
             )}
             {jobId !== null && (
-              <Button appearance="outline" icon={<Delete20Regular />} onClick={del}>Delete</Button>
+              <Button appearance="outline" icon={<Delete20Regular />} aria-label="Delete job" onClick={del}>Delete</Button>
             )}
           </div>
           {saveError && (
@@ -2197,7 +2933,11 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                   {tasks.map((t) => (
                     <div
                       key={t.task_key}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Edit task ${t.task_key}`}
                       onClick={() => setActiveTaskKey(t.task_key)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTaskKey(t.task_key); } }}
                       style={{
                         padding: 6, cursor: 'pointer', borderRadius: 3, marginBottom: 2,
                         display: 'flex', alignItems: 'center', gap: 6,
@@ -2317,9 +3057,21 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                     )}
                     {activeTask.task_type === 'sql_task' && (
                       <>
-                        <Field label="SQL Warehouse id" hint="Pro/serverless warehouse the SQL runs on">
-                          <Input value={activeTask.sql_warehouse_id}
-                            onChange={(_, d) => patchTask(activeTask.task_key, { sql_warehouse_id: d.value })} />
+                        <Field label="SQL Warehouse" hint="Pro/serverless warehouse the SQL runs on">
+                          {warehouses.length > 0 ? (
+                            <Dropdown
+                              aria-label="SQL Warehouse"
+                              placeholder="Select warehouse"
+                              value={warehouses.find((w) => w.id === activeTask.sql_warehouse_id)?.name || activeTask.sql_warehouse_id}
+                              selectedOptions={activeTask.sql_warehouse_id ? [activeTask.sql_warehouse_id] : []}
+                              onOptionSelect={(_, d) => d.optionValue && patchTask(activeTask.task_key, { sql_warehouse_id: d.optionValue })}
+                            >
+                              {warehouses.map((w) => <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>)}
+                            </Dropdown>
+                          ) : (
+                            <Input aria-label="SQL Warehouse id" value={activeTask.sql_warehouse_id} placeholder="warehouse id"
+                              onChange={(_, d) => patchTask(activeTask.task_key, { sql_warehouse_id: d.value })} />
+                          )}
                         </Field>
                         <div style={{ display: 'flex', gap: 12 }}>
                           <Field label="Query id (saved query)" style={{ flex: 1 }}>
@@ -2344,23 +3096,51 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                             <Input value={activeTask.dbt_project_directory}
                               onChange={(_, d) => patchTask(activeTask.task_key, { dbt_project_directory: d.value })} />
                           </Field>
-                          <Field label="SQL Warehouse id" style={{ flex: 1 }}>
-                            <Input value={activeTask.sql_warehouse_id}
-                              onChange={(_, d) => patchTask(activeTask.task_key, { sql_warehouse_id: d.value })} />
+                          <Field label="SQL Warehouse" style={{ flex: 1 }}>
+                            {warehouses.length > 0 ? (
+                              <Dropdown
+                                aria-label="dbt SQL Warehouse"
+                                placeholder="Select warehouse"
+                                value={warehouses.find((w) => w.id === activeTask.sql_warehouse_id)?.name || activeTask.sql_warehouse_id}
+                                selectedOptions={activeTask.sql_warehouse_id ? [activeTask.sql_warehouse_id] : []}
+                                onOptionSelect={(_, d) => d.optionValue && patchTask(activeTask.task_key, { sql_warehouse_id: d.optionValue })}
+                              >
+                                {warehouses.map((w) => <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>)}
+                              </Dropdown>
+                            ) : (
+                              <Input aria-label="dbt SQL Warehouse id" value={activeTask.sql_warehouse_id} placeholder="warehouse id"
+                                onChange={(_, d) => patchTask(activeTask.task_key, { sql_warehouse_id: d.value })} />
+                            )}
                           </Field>
                         </div>
                       </>
                     )}
                     {activeTask.task_type === 'pipeline_task' && (
-                      <Field label="DLT pipeline id">
-                        <Input value={activeTask.pipeline_id}
+                      <Field label="DLT / Lakeflow pipeline id" hint="Paste the pipeline id from the Databricks Delta Live Tables UI — no Loom DLT editor yet (tracked gap)">
+                        <Input aria-label="DLT pipeline id" value={activeTask.pipeline_id} placeholder="e.g. 0123abcd-…"
                           onChange={(_, d) => patchTask(activeTask.task_key, { pipeline_id: d.value })} />
                       </Field>
                     )}
                     {activeTask.task_type === 'run_job_task' && (
-                      <Field label="Job id to run">
-                        <Input value={activeTask.run_job_id}
-                          onChange={(_, d) => patchTask(activeTask.task_key, { run_job_id: d.value })} />
+                      <Field label="Job to run" hint="Another Databricks job this task triggers">
+                        {jobs.filter((jb) => jb.job_id !== jobId).length > 0 ? (
+                          <Dropdown
+                            aria-label="Job to run"
+                            placeholder="Select a job"
+                            value={jobs.find((jb) => String(jb.job_id) === activeTask.run_job_id)?.settings?.name || activeTask.run_job_id}
+                            selectedOptions={activeTask.run_job_id ? [activeTask.run_job_id] : []}
+                            onOptionSelect={(_, d) => d.optionValue && patchTask(activeTask.task_key, { run_job_id: d.optionValue })}
+                          >
+                            {jobs.filter((jb) => jb.job_id !== jobId).map((jb) => (
+                              <Option key={jb.job_id} value={String(jb.job_id)} text={jb.settings?.name || String(jb.job_id)}>
+                                {jb.settings?.name || `job ${jb.job_id}`} · {jb.job_id}
+                              </Option>
+                            ))}
+                          </Dropdown>
+                        ) : (
+                          <Input aria-label="Job id to run" type="number" value={activeTask.run_job_id} placeholder="job_id"
+                            onChange={(_, d) => patchTask(activeTask.task_key, { run_job_id: d.value })} />
+                        )}
                       </Field>
                     )}
 
@@ -2509,8 +3289,15 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
                   <Field label="Quartz cron expression" hint="e.g. 0 0 2 * * ?  (daily 02:00)">
                     <Input value={cron} onChange={(_, d) => { setCron(d.value); markDirty(); }} />
                   </Field>
-                  <Field label="Timezone id" hint="e.g. UTC, America/Los_Angeles">
-                    <Input value={tz} onChange={(_, d) => { setTz(d.value); markDirty(); }} />
+                  <Field label="Timezone" hint="Cron is evaluated in this zone">
+                    <Dropdown
+                      aria-label="Schedule timezone"
+                      value={tz}
+                      selectedOptions={[tz]}
+                      onOptionSelect={(_, d) => { if (d.optionValue) { setTz(d.optionValue); markDirty(); } }}
+                    >
+                      {SCHEDULE_TIMEZONES.map((z) => <Option key={z} value={z} text={z}>{z}</Option>)}
+                    </Dropdown>
                   </Field>
                 </div>
               )}
@@ -2835,15 +3622,38 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
         setClusterId(j.cluster_id);
         await selectCluster(j.cluster_id);
       } else {
-        // edit not exposed at top-level path; surface info
-        setSaveMessage('Cluster edit via REST is not yet wired in this editor — recreate to change spec.');
+        // Edit an existing cluster via POST /api/2.0/clusters/edit. Databricks
+        // only allows edit while the cluster is RUNNING or TERMINATED; any
+        // other state returns 400 INVALID_STATE, which we surface verbatim.
+        const r = await fetch(`/api/items/databricks-cluster/${id}?clusterId=${encodeURIComponent(clusterId)}`, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ spec }),
+        });
+        const ct = r.headers.get('content-type') || '';
+        const j = ct.includes('application/json') ? await r.json().catch(() => null) : null;
+        if (!j || !j.ok) {
+          const rawErr = j?.error || (await r.text().catch(() => ''))?.slice(0, 240) || `HTTP ${r.status}`;
+          if (/INVALID_STATE/i.test(rawErr) || /Clusters in state/i.test(rawErr)) {
+            setSaveError(
+              `Databricks rejected the edit: ${rawErr}. A cluster can only be edited while it is ` +
+              `RUNNING or TERMINATED. Stop (terminate) the cluster, edit it, then Start — or edit ` +
+              `while it is fully RUNNING.`,
+            );
+          } else {
+            setSaveError(rawErr);
+          }
+          return;
+        }
+        setSaveMessage(`Saved cluster ${clusterId} at ${new Date().toLocaleTimeString()}`);
+        await loadClusters();
+        await selectCluster(clusterId);
       }
     } catch (e: any) {
       setSaveError(e?.message || String(e));
     } finally {
       setSaving(false);
     }
-  }, [clusterId, buildSpec, loadClusters, selectCluster]);
+  }, [id, clusterId, buildSpec, loadClusters, selectCluster]);
 
   const doState = useCallback(async (action: 'start' | 'stop' | 'restart') => {
     if (!clusterId) return;
@@ -2874,19 +3684,19 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     await loadClusters();
   }, [id, clusterId, loadClusters]);
 
-  // Ctrl/Cmd+S to save when not already busy. Only meaningful for the
-  // create flow (clusterId === null); edit-after-create is gated by the
-  // Databricks REST surface, but matching the family-wide muscle memory.
+  // Ctrl/Cmd+S to save when not already busy — works for both create
+  // (clusterId === null → /clusters/create) and edit (existing cluster →
+  // /clusters/edit), matching the family-wide muscle memory.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        if (!saving && !clusterId) save();
+        if (!saving) save();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [saving, clusterId, save]);
+  }, [saving, save]);
 
   const state = cluster?.state || (clusterId ? 'UNKNOWN' : 'NEW');
 
@@ -2916,11 +3726,11 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
         <div className={s.treePad}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
             <Subtitle2 style={{ flex: 1 }}>Clusters ({clusters.length})</Subtitle2>
-            <Button size="small" icon={<Add20Regular />} onClick={() => {
+            <Button size="small" icon={<Add20Regular />} aria-label="New cluster" onClick={() => {
               setClusterId(null); setCluster(null); setName(''); setEvents([]);
               setSaveMessage(null); setSaveError(null);
             }} />
-            <Button size="small" icon={<ArrowSync20Regular />} onClick={loadClusters} />
+            <Button size="small" icon={<ArrowSync20Regular />} aria-label="Refresh cluster list" onClick={loadClusters} />
           </div>
           {listError && (
             <MessageBar intent="error"><MessageBarBody>{listError}</MessageBarBody></MessageBar>
@@ -2928,7 +3738,11 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
           {clusters.map((c) => (
             <div
               key={c.cluster_id}
+              role="button"
+              tabIndex={0}
+              aria-label={`Open cluster ${c.cluster_name || c.cluster_id}`}
               onClick={() => selectCluster(c.cluster_id)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectCluster(c.cluster_id); } }}
               style={{
                 padding: 6, cursor: 'pointer', borderRadius: 3,
                 background: clusterId === c.cluster_id ? tokens.colorNeutralBackground2Selected : undefined,
@@ -2949,20 +3763,26 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
             <Badge appearance="filled" color={clusterStateColor(state)}>{state}</Badge>
             {cluster?.state_message && <Caption1>{cluster.state_message}</Caption1>}
             <Button appearance="primary" icon={<Save20Regular />} disabled={saving} onClick={save}>
-              {saving ? 'Saving…' : clusterId ? 'Save (recreate to change spec)' : 'Create'}
+              {saving ? 'Saving…' : clusterId ? 'Save changes' : 'Create'}
             </Button>
             {clusterId && (
               <>
-                <Button appearance="outline" icon={<Play20Regular />}
-                  disabled={stateBusy || state === 'RUNNING' || state === 'PENDING'}
-                  onClick={() => doState('start')}>Start</Button>
-                <Button appearance="outline" icon={<Stop20Regular />}
-                  disabled={stateBusy || state === 'TERMINATED' || state === 'TERMINATING'}
-                  onClick={() => doState('stop')}>Stop</Button>
-                <Button appearance="outline" icon={<ArrowSync20Regular />}
-                  disabled={stateBusy || state !== 'RUNNING'}
-                  onClick={() => doState('restart')}>Restart</Button>
-                <Button appearance="outline" icon={<Delete20Regular />} onClick={del}>Delete</Button>
+                <Tooltip content={state === 'RUNNING' || state === 'PENDING' ? `Cluster is already ${state.toLowerCase()}` : 'Start the cluster (clusters/start)'} relationship="label">
+                  <Button appearance="outline" icon={<Play20Regular />}
+                    disabled={stateBusy || state === 'RUNNING' || state === 'PENDING'}
+                    onClick={() => doState('start')}>Start</Button>
+                </Tooltip>
+                <Tooltip content={state === 'TERMINATED' || state === 'TERMINATING' ? `Cluster is already ${state.toLowerCase()}` : 'Terminate the cluster (clusters/delete)'} relationship="label">
+                  <Button appearance="outline" icon={<Stop20Regular />}
+                    disabled={stateBusy || state === 'TERMINATED' || state === 'TERMINATING'}
+                    onClick={() => doState('stop')}>Stop</Button>
+                </Tooltip>
+                <Tooltip content={state !== 'RUNNING' ? 'Restart is only available while RUNNING' : 'Restart the cluster (clusters/restart)'} relationship="label">
+                  <Button appearance="outline" icon={<ArrowSync20Regular />}
+                    disabled={stateBusy || state !== 'RUNNING'}
+                    onClick={() => doState('restart')}>Restart</Button>
+                </Tooltip>
+                <Button appearance="outline" icon={<Delete20Regular />} aria-label="Permanently delete cluster" onClick={del}>Delete</Button>
               </>
             )}
           </div>
@@ -2975,8 +3795,19 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
           </MessageBarBody></MessageBar>}
           {saveMessage && <MessageBar intent="success"><MessageBarBody>{saveMessage}</MessageBarBody></MessageBar>}
 
+          {clusterId && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>Editing an existing cluster</MessageBarTitle>
+                Change the name, node type, runtime, autoscale / workers, or autotermination, then click
+                <strong> Save</strong> to call <code>POST /api/2.0/clusters/edit</code>. Databricks only allows
+                edits while the cluster is <strong>RUNNING</strong> or <strong>TERMINATED</strong>; in any other
+                state it returns INVALID_STATE.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <Field label="Cluster name">
-            <Input value={name} onChange={(_, d) => setName(d.value)} disabled={!!clusterId} />
+            <Input value={name} onChange={(_, d) => setName(d.value)} />
           </Field>
           <div style={{ display: 'flex', gap: 12 }}>
             <Field label="Node type" style={{ flex: 1 }}>
@@ -2984,7 +3815,6 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
                 value={nodeType}
                 selectedOptions={nodeType ? [nodeType] : []}
                 onOptionSelect={(_, d) => d.optionValue && setNodeType(d.optionValue)}
-                disabled={!!clusterId}
               >
                 {nodeTypes.slice(0, 80).map((n) => (
                   <Option key={n.node_type_id} value={n.node_type_id} text={n.node_type_id}>
@@ -2998,7 +3828,6 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
                 value={sparkVersions.find((v) => v.key === sparkVersion)?.name || sparkVersion}
                 selectedOptions={sparkVersion ? [sparkVersion] : []}
                 onOptionSelect={(_, d) => d.optionValue && setSparkVersion(d.optionValue)}
-                disabled={!!clusterId}
               >
                 {sparkVersions.slice(0, 80).map((v) => (
                   <Option key={v.key} value={v.key} text={v.name}>{v.name}</Option>
@@ -3007,26 +3836,26 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
             </Field>
           </div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
-            <Switch checked={autoscale} onChange={(_, d) => setAutoscale(!!d.checked)} label="Autoscale" disabled={!!clusterId} />
+            <Switch checked={autoscale} onChange={(_, d) => setAutoscale(!!d.checked)} label="Autoscale" />
             {autoscale ? (
               <>
                 <Field label="Min workers">
-                  <Input type="number" value={String(minWorkers)} disabled={!!clusterId}
+                  <Input type="number" value={String(minWorkers)}
                     onChange={(_, d) => setMinWorkers(Number(d.value) || 1)} />
                 </Field>
                 <Field label="Max workers">
-                  <Input type="number" value={String(maxWorkers)} disabled={!!clusterId}
+                  <Input type="number" value={String(maxWorkers)}
                     onChange={(_, d) => setMaxWorkers(Number(d.value) || 1)} />
                 </Field>
               </>
             ) : (
               <Field label="Workers">
-                <Input type="number" value={String(numWorkers)} disabled={!!clusterId}
+                <Input type="number" value={String(numWorkers)}
                   onChange={(_, d) => setNumWorkers(Number(d.value) || 1)} />
               </Field>
             )}
             <Field label="Autotermination (min)">
-              <Input type="number" value={String(autoterm)} disabled={!!clusterId}
+              <Input type="number" value={String(autoterm)}
                 onChange={(_, d) => setAutoterm(Number(d.value) || 0)} />
             </Field>
           </div>

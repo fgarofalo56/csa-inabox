@@ -30,6 +30,9 @@ export async function GET(req: NextRequest) {
       cluster_size: w.cluster_size,
       warehouse_type: w.warehouse_type,
       serverless: w.enable_serverless_compute,
+      min_num_clusters: w.min_num_clusters,
+      max_num_clusters: w.max_num_clusters,
+      auto_stop_mins: w.auto_stop_mins,
     });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });

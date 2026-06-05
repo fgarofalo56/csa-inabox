@@ -31,9 +31,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tree, TreeItem, TreeItemLayout,
   Button, Input, Field, Caption1, Badge, Spinner, Dropdown, Option,
-  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, SpinButton,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, SpinButton, Switch, Textarea,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
+  Tab, TabList,
+  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Tooltip, MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -41,6 +43,7 @@ import {
   Stream20Regular, PeopleTeam20Regular, DocumentBulletList20Regular,
   Key20Regular, Globe20Regular, ShieldKeyhole20Regular,
   Search20Regular, Warning20Regular,
+  DataUsage20Regular, Send20Regular, Eye20Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -53,12 +56,25 @@ const useStyles = makeStyles({
   leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
 });
 
+// Data Explorer styles. New makeStyles use STRING CSS values (px units) so the
+// Griffel types accept them (the older block above predates that and trips tsc).
+const useDataExplorerStyles = makeStyles({
+  panel: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '0' },
+  row: { display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' },
+  grow: { flexGrow: '1', minWidth: '160px' },
+  gridWrap: { maxHeight: '320px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
+  bodyCell: { maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
+  hint: { color: tokens.colorNeutralForeground3, display: 'block' },
+});
+
 const HUBS_ROUTE = '/api/eventhubs/hubs';
 const CG_ROUTE = '/api/eventhubs/consumergroups';
 const SG_ROUTE = '/api/eventhubs/schemagroups';
 const AUTH_ROUTE = '/api/eventhubs/authrules';
 const NET_ROUTE = '/api/eventhubs/network';
 const GEODR_ROUTE = '/api/eventhubs/geodr';
+const DATA_ROUTE = '/api/eventhubs/data-explorer';
 
 async function readJson(res: Response): Promise<any> {
   const text = await res.text();
@@ -78,6 +94,257 @@ function hubStatusColor(s?: string) {
   if (s === 'Active') return 'success' as const;
   if (s === 'Disabled' || s === 'SendDisabled' || s === 'ReceiveDisabled') return 'warning' as const;
   return 'informative' as const;
+}
+
+// ===================================================================
+// Data Explorer dialog — Send events + View (peek) events for one hub.
+// Mirrors the Azure portal per-event-hub "Data Explorer" tool. Send hits the
+// real HTTPS data-plane REST (/api/eventhubs/data-explorer op=send). View calls op=peek,
+// which is an honest dependency-gate today (Event Hubs has no REST receive;
+// receiving needs the @azure/event-hubs AMQP SDK) — the full View UI still
+// renders and shows the precise MessageBar naming what to provision.
+// ===================================================================
+interface PeekEvent {
+  offset?: string;
+  sequenceNumber?: number;
+  enqueuedTime?: string;
+  partitionId?: string;
+  partitionKey?: string;
+  body: unknown;
+  properties?: Record<string, unknown>;
+}
+
+export interface EventHubsDataExplorerDialogProps {
+  open: boolean;
+  hub: string;
+  onClose: () => void;
+}
+
+export function EventHubsDataExplorerDialog({ open, hub, onClose }: EventHubsDataExplorerDialogProps) {
+  const d = useDataExplorerStyles();
+  const [tab, setTab] = useState<'send' | 'view'>('send');
+
+  // ---- Send panel ----
+  const [bodyText, setBodyText] = useState('{\n  "message": "hello from Loom"\n}');
+  const [propsText, setPropsText] = useState('');
+  const [partitionKey, setPartitionKey] = useState('');
+  const [repeat, setRepeat] = useState(1);
+  const [sending, setSending] = useState(false);
+  const [sendErr, setSendErr] = useState<string | null>(null);
+  const [sendMsg, setSendMsg] = useState<string | null>(null);
+
+  // ---- View panel ----
+  const [viewPartition, setViewPartition] = useState('0');
+  const [maxEvents, setMaxEvents] = useState(20);
+  const [fromLatest, setFromLatest] = useState(true);
+  const [peeking, setPeeking] = useState(false);
+  const [peekErr, setPeekErr] = useState<string | null>(null);
+  const [peekGate, setPeekGate] = useState<{ message: string; missing?: string; dependency?: string; hint?: string } | null>(null);
+  const [events, setEvents] = useState<PeekEvent[]>([]);
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+
+  // Reset transient state whenever the dialog (re)opens for a hub.
+  useEffect(() => {
+    if (open) {
+      setTab('send');
+      setSendErr(null); setSendMsg(null);
+      setPeekErr(null); setPeekGate(null); setEvents([]); setExpanded({});
+    }
+  }, [open, hub]);
+
+  function parseProps(): Record<string, string | number | boolean> | null {
+    const t = propsText.trim();
+    if (!t) return {};
+    try {
+      const parsed = JSON.parse(t);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, string | number | boolean>;
+      }
+      setSendErr('Properties must be a JSON object, e.g. {"source":"loom"}.');
+      return null;
+    } catch {
+      setSendErr('Properties is not valid JSON.');
+      return null;
+    }
+  }
+
+  const doSend = useCallback(async () => {
+    setSendErr(null); setSendMsg(null);
+    if (!bodyText.trim()) { setSendErr('Event body is required.'); return; }
+    const properties = parseProps();
+    if (properties === null) return;
+    const count = Math.max(1, Math.min(100, repeat));
+    // Body is sent as-is; if it parses as JSON we forward the parsed object so
+    // it is serialized once on the wire, otherwise we send the raw string.
+    let body: unknown = bodyText;
+    try { body = JSON.parse(bodyText); } catch { body = bodyText; }
+    const events = Array.from({ length: count }, () => ({
+      body,
+      ...(Object.keys(properties).length > 0 ? { properties } : {}),
+    }));
+    setSending(true);
+    try {
+      const res = await fetch(DATA_ROUTE, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'send', hub, events, partitionKey: partitionKey.trim() || undefined }),
+      });
+      const j = await readJson(res);
+      if (!j.ok) {
+        setSendErr(j.code === 'not_configured' ? `Namespace not configured: set ${j.missing}.` : (j.error || `send failed (HTTP ${res.status})`));
+        return;
+      }
+      setSendMsg(`Sent ${j.sent} event${j.sent === 1 ? '' : 's'} to ${hub}${partitionKey.trim() ? ` (partition key "${partitionKey.trim()}")` : ''} — HTTP ${j.status}.`);
+    } catch (e: any) {
+      setSendErr(e?.message || String(e));
+    } finally {
+      setSending(false);
+    }
+  }, [bodyText, propsText, partitionKey, repeat, hub]);
+
+  const doPeek = useCallback(async () => {
+    setPeekErr(null); setPeekGate(null); setEvents([]); setExpanded({});
+    setPeeking(true);
+    try {
+      const qs = new URLSearchParams({
+        op: 'peek', hub, partition: viewPartition.trim() || '0',
+        maxEvents: String(Math.max(1, Math.min(100, maxEvents))),
+        fromLatest: String(fromLatest),
+      });
+      const res = await fetch(`${DATA_ROUTE}?${qs.toString()}`);
+      const j = await readJson(res);
+      if (!j.ok) {
+        if (j.code === 'receive_unavailable') {
+          setPeekGate({ message: j.error, missing: j.missing, dependency: j.dependency, hint: j.hint });
+        } else if (j.code === 'not_configured') {
+          setPeekGate({ message: `Event Hubs namespace not configured: set ${j.missing}.`, missing: j.missing });
+        } else {
+          setPeekErr(j.error || `peek failed (HTTP ${res.status})`);
+        }
+        return;
+      }
+      setEvents(Array.isArray(j.events) ? j.events : []);
+    } catch (e: any) {
+      setPeekErr(e?.message || String(e));
+    } finally {
+      setPeeking(false);
+    }
+  }, [hub, viewPartition, maxEvents, fromLatest]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, data) => { if (!data.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: '760px' }}>
+        <DialogBody>
+          <DialogTitle>Data Explorer — {hub}</DialogTitle>
+          <DialogContent>
+            <TabList selectedValue={tab} onTabSelect={(_, dt) => setTab(dt.value as 'send' | 'view')}>
+              <Tab value="send" icon={<Send20Regular />}>Send events</Tab>
+              <Tab value="view" icon={<Eye20Regular />}>View events</Tab>
+            </TabList>
+
+            {tab === 'send' && (
+              <div className={d.panel} style={{ marginTop: '12px' }}>
+                <Field label="Event body" hint="Plain text or a JSON document. Published to the event hub via the real REST data plane.">
+                  <Textarea value={bodyText} onChange={(_, v) => setBodyText(v.value)} rows={6} resize="vertical" textarea={{ style: { fontFamily: tokens.fontFamilyMonospace } }} />
+                </Field>
+                <Field label="Custom properties (JSON object, optional)" hint='Sent as UserProperties, e.g. {"source":"loom","priority":1}.'>
+                  <Textarea value={propsText} onChange={(_, v) => setPropsText(v.value)} rows={2} resize="vertical" placeholder='{"source":"loom"}' textarea={{ style: { fontFamily: tokens.fontFamilyMonospace } }} />
+                </Field>
+                <div className={d.row}>
+                  <Field label="Partition key (optional)" className={d.grow}>
+                    <Input value={partitionKey} onChange={(_, v) => setPartitionKey(v.value)} placeholder="e.g. device-42" />
+                  </Field>
+                  <Field label="Repeat (send N copies)">
+                    <SpinButton min={1} max={100} value={repeat} onChange={(_, sd) => { const v = sd.value ?? Number(sd.displayValue); if (Number.isFinite(v)) setRepeat(Math.max(1, Math.min(100, Number(v)))); }} />
+                  </Field>
+                </div>
+                {sendErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Send failed</MessageBarTitle>{sendErr}</MessageBarBody></MessageBar>}
+                {sendMsg && <MessageBar intent="success"><MessageBarBody>{sendMsg}</MessageBarBody></MessageBar>}
+                <Caption1 className={d.hint}>
+                  Authenticated with Microsoft Entra (the namespace sets <code>disableLocalAuth:true</code>, so SAS is
+                  disabled). The Console UAMI must hold <strong>Azure Event Hubs Data Sender</strong> (or Data Owner) —
+                  otherwise the real 401/403 from the service is shown here.
+                </Caption1>
+              </div>
+            )}
+
+            {tab === 'view' && (
+              <div className={d.panel} style={{ marginTop: '12px' }}>
+                <div className={d.row}>
+                  <Field label="Partition">
+                    <Input value={viewPartition} onChange={(_, v) => setViewPartition(v.value)} placeholder="0" style={{ width: '80px' }} />
+                  </Field>
+                  <Field label="Max events">
+                    <SpinButton min={1} max={100} value={maxEvents} onChange={(_, sd) => { const v = sd.value ?? Number(sd.displayValue); if (Number.isFinite(v)) setMaxEvents(Math.max(1, Math.min(100, Number(v)))); }} />
+                  </Field>
+                  <Field label="Position">
+                    <Switch checked={fromLatest} onChange={(_, sd) => setFromLatest(sd.checked)} label={fromLatest ? 'Latest (newest)' : 'Earliest (retained)'} />
+                  </Field>
+                  <Button appearance="primary" icon={<Eye20Regular />} onClick={doPeek} disabled={peeking}>{peeking ? 'Reading…' : 'Peek'}</Button>
+                </div>
+
+                {peekErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>View failed</MessageBarTitle>{peekErr}</MessageBarBody></MessageBar>}
+                {peekGate && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>View events not available in this deployment</MessageBarTitle>
+                      {peekGate.message}
+                      {peekGate.hint && <><br /><Caption1>{peekGate.hint}</Caption1></>}
+                    </MessageBarBody>
+                    {(peekGate.dependency || peekGate.missing) && (
+                      <MessageBarActions>
+                        {peekGate.dependency && <Badge appearance="tint" color="warning">add {peekGate.dependency}</Badge>}
+                        {peekGate.missing && <Badge appearance="tint" color="warning">set {peekGate.missing}</Badge>}
+                      </MessageBarActions>
+                    )}
+                  </MessageBar>
+                )}
+
+                {events.length > 0 && (
+                  <div className={d.gridWrap}>
+                    <Table size="extra-small" aria-label="Peeked events">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHeaderCell>Seq #</TableHeaderCell>
+                          <TableHeaderCell>Offset</TableHeaderCell>
+                          <TableHeaderCell>Enqueued (UTC)</TableHeaderCell>
+                          <TableHeaderCell>Body</TableHeaderCell>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {events.map((ev, i) => {
+                          const bodyStr = typeof ev.body === 'string' ? ev.body : JSON.stringify(ev.body);
+                          const isOpen = !!expanded[i];
+                          return (
+                            <TableRow key={`${ev.sequenceNumber ?? i}`} onClick={() => setExpanded((m) => ({ ...m, [i]: !m[i] }))} style={{ cursor: 'pointer' }}>
+                              <TableCell><span className={d.mono}>{ev.sequenceNumber ?? '—'}</span></TableCell>
+                              <TableCell><span className={d.mono}>{ev.offset ?? '—'}</span></TableCell>
+                              <TableCell><Caption1>{ev.enqueuedTime ?? '—'}</Caption1></TableCell>
+                              <TableCell className={d.bodyCell}>
+                                <span className={d.mono} style={isOpen ? undefined : { whiteSpace: 'nowrap' }}>{isOpen ? bodyStr : bodyStr.slice(0, 80)}</span>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+                {!peeking && !peekErr && !peekGate && events.length === 0 && (
+                  <Caption1 className={d.hint}>Choose a partition and position, then Peek to read a bounded batch of recent events.</Caption1>
+                )}
+              </div>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Close</Button>
+            {tab === 'send' && (
+              <Button appearance="primary" icon={<Send20Regular />} onClick={doSend} disabled={sending || !bodyText.trim()}>{sending ? 'Sending…' : 'Send'}</Button>
+            )}
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
 }
 
 export interface EventHubsNamespaceTreeProps {
@@ -105,6 +372,9 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
   // Consumer groups are per-hub and lazily loaded when a hub is expanded.
   const [cgByHub, setCgByHub] = useState<Record<string, CgRow[]>>({});
   const [cgLoading, setCgLoading] = useState<Record<string, boolean>>({});
+
+  // Data Explorer (Send + View events) — open for the chosen event hub.
+  const [dataExplorerHub, setDataExplorerHub] = useState<string | null>(null);
 
   // ---- create dialog ----
   const [createGroup, setCreateGroup] = useState<CreateGroup | null>(null);
@@ -345,6 +615,9 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
                         {typeof h.messageRetentionInDays === 'number' && <Caption1>{h.messageRetentionInDays}d</Caption1>}
                         {h.captureEnabled && <Badge size="small" appearance="outline">capture</Badge>}
                         {h.status && <Badge size="small" appearance="filled" color={hubStatusColor(h.status)}>{h.status}</Badge>}
+                        <Tooltip content="Data Explorer (send / view events)" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<DataUsage20Regular />} onClick={() => setDataExplorerHub(h.name)} aria-label={`Data Explorer for ${h.name}`} />
+                        </Tooltip>
                         <Tooltip content="New consumer group" relationship="label">
                           <Button size="small" appearance="subtle" icon={<Add20Regular />} disabled={busy} onClick={() => openCreate('cg', h.name)} aria-label={`New consumer group on ${h.name}`} />
                         </Tooltip>
@@ -572,6 +845,15 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      {/* Data Explorer (Send + View events) for the selected event hub. */}
+      {dataExplorerHub && (
+        <EventHubsDataExplorerDialog
+          open={dataExplorerHub !== null}
+          hub={dataExplorerHub}
+          onClose={() => setDataExplorerHub(null)}
+        />
+      )}
     </div>
   );
 }

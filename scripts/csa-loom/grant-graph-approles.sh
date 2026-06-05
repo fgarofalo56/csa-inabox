@@ -26,10 +26,16 @@ echo "Target Console UAMI principal: $CONSOLE_UAMI_PRINCIPAL"
 GRAPH_SP_ID=$(az ad sp list --filter "appId eq '00000003-0000-0000-c000-000000000000'" --query "[0].id" -o tsv)
 echo "Microsoft Graph SP object id: $GRAPH_SP_ID"
 
+# App-role (application permission) ids — NOT the delegated ids. Verified against
+# Microsoft Graph permissions reference. The /admin/security MIP + DLP tabs call
+# Graph app-only with the Console UAMI, so these MUST be the Application app-role
+# ids under the Graph SP's appRoles[] (type=Role), not oauth2PermissionScopes.
+#   InformationProtectionPolicy.Read.All -> MIP sensitivity-label policy reads
+#   Policy.Read.All                      -> DLP / tenant policy reads
 declare -a ROLES=(
   "InformationProtectionPolicy.Read.All:19da66cb-0fb0-4390-b071-ebc76a349482"
+  "Policy.Read.All:246dd0d5-5bd0-4def-940b-0421030a5b68"
   "SensitivityLabel.Evaluate:57f0b71b-a759-45a0-9a0f-cc099fbd9a44"
-  "Policy.Read.All:572fea84-0151-49b2-9301-11cb16974376"
   "SecurityAlert.Read.All:bf394140-e372-4bf9-a898-299cfc7564e5"
 )
 

@@ -42,6 +42,7 @@ import {
   Field,
   Input,
   Caption1,
+  Checkbox,
   MessageBar,
   MessageBarBody,
   Select,
@@ -82,12 +83,16 @@ import {
   Pin16Filled,
   PinOff16Regular,
   Search20Regular,
+  Delete20Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import {
+  bulkDeleteWorkspaces,
   createWorkspace,
+  getWorkspaceAdminStatus,
   listWorkspacesWithCounts,
+  type BulkDeleteResult,
   type Workspace,
 } from '@/lib/api/workspaces';
 import { useMutation } from '@tanstack/react-query';
@@ -341,6 +346,27 @@ const useStyles = makeStyles({
     ':hover': { color: tokens.colorBrandForeground1, textDecoration: 'underline' },
   },
   rowDesc: { color: tokens.colorNeutralForeground2, fontSize: '12px' },
+  selectCol: { width: '36px', paddingLeft: '10px', paddingRight: '0px' },
+  selectTileBox: {
+    position: 'absolute',
+    top: '8px',
+    left: '8px',
+    zIndex: 1,
+  },
+  tileSelected: {
+    boxShadow: `0 0 0 2px ${tokens.colorBrandStroke1}`,
+  },
+  bulkBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    flexWrap: 'wrap',
+    padding: '8px 12px',
+    borderRadius: '8px',
+    backgroundColor: tokens.colorNeutralBackground3,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  bulkBarSpacer: { flex: 1 },
   pinCol: { width: '36px', paddingLeft: '10px', paddingRight: '0px' },
   countCol: { width: '90px' },
   dateCol: { width: '150px' },
@@ -696,6 +722,40 @@ export default function WorkspacesPage() {
     });
   }, []);
 
+  // ----- admin probe (drives the bulk-delete affordances) -----
+  // Same server truth as every admin route: GET /api/workspaces/bulk-delete
+  // returns isTenantAdmin(session). Non-admins never see multi-select.
+  const { data: adminStatus } = useQuery({
+    queryKey: ['workspaces', 'admin-status'],
+    queryFn: getWorkspaceAdminStatus,
+    staleTime: 5 * 60 * 1000,
+  });
+  const isAdmin = adminStatus?.isAdmin === true;
+
+  // ----- multi-select state -----
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [bulkResult, setBulkResult] = useState<BulkDeleteResult | null>(null);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Non-admins can never accumulate a selection / open the confirm dialog.
+  useEffect(() => {
+    if (!isAdmin) {
+      setSelectMode(false);
+      setSelected(new Set());
+      setConfirmOpen(false);
+    }
+  }, [isAdmin]);
+
   // ----- filter + sort pipeline -----
   const visible = useMemo(() => {
     let rows = data ?? [];
@@ -751,6 +811,63 @@ export default function WorkspacesPage() {
   const pinnedRows = useMemo(() => sorted.filter(w => pinned.has(w.id)), [sorted, pinned]);
   const unpinnedRows = useMemo(() => sorted.filter(w => !pinned.has(w.id)), [sorted, pinned]);
 
+  // ----- bulk-select helpers (operate over currently-visible rows) -----
+  // "Test" = the workspaces UAT/E2E runs leave behind. Matched by common
+  // throwaway prefixes so an admin can clear them in one click.
+  const TEST_RE = /^(uat-|e2e-|test-|tmp-|temp-|scratch-|playwright-|ci-)/i;
+  const visibleIds = useMemo(() => sorted.map(w => w.id), [sorted]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selected.has(id));
+  const someVisibleSelected = visibleIds.some(id => selected.has(id));
+  const testRows = useMemo(() => sorted.filter(w => TEST_RE.test(w.name)), [sorted]);
+
+  const selectAllVisible = useCallback(() => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (visibleIds.every(id => next.has(id))) {
+        // toggle off
+        for (const id of visibleIds) next.delete(id);
+      } else {
+        for (const id of visibleIds) next.add(id);
+      }
+      return next;
+    });
+  }, [visibleIds]);
+
+  const selectTest = useCallback(() => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      for (const w of testRows) next.add(w.id);
+      return next;
+    });
+    setSelectMode(true);
+  }, [testRows]);
+
+  const clearSelection = useCallback(() => setSelected(new Set()), []);
+
+  // ----- bulk delete -----
+  const nameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const w of data ?? []) m.set(w.id, w.name);
+    return m;
+  }, [data]);
+
+  const bulkMut = useMutation({
+    mutationFn: (ids: string[]) => bulkDeleteWorkspaces(ids),
+    onSuccess: result => {
+      setBulkResult(result);
+      setConfirmOpen(false);
+      // Drop successfully-deleted ids from the selection; keep failures so the
+      // admin can see + retry them.
+      setSelected(prev => {
+        const next = new Set(prev);
+        for (const id of result.deleted) next.delete(id);
+        return next;
+      });
+      if (result.deleted.length === 0) setSelectMode(true);
+      qc.invalidateQueries({ queryKey: ['workspaces', 'withCounts'] });
+    },
+  });
+
   // ----- filter chip helpers -----
   const totalFilterCount =
     capacityFilters.size + domainFilters.size + (ownerFilter === 'me' ? 1 : 0);
@@ -776,14 +893,32 @@ export default function WorkspacesPage() {
 
   // ----- render helpers -----
   const renderTile = (ws: Workspace) => (
-    <div key={ws.id} className={styles.tile} onClick={() => router.push(`/workspaces/${ws.id}`)} role="link" tabIndex={0}
+    <div
+      key={ws.id}
+      className={mergeClasses(styles.tile, selectMode && selected.has(ws.id) && styles.tileSelected)}
+      onClick={() => {
+        if (selectMode) toggleSelect(ws.id);
+        else router.push(`/workspaces/${ws.id}`);
+      }}
+      role="link"
+      tabIndex={0}
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          router.push(`/workspaces/${ws.id}`);
+          if (selectMode) toggleSelect(ws.id);
+          else router.push(`/workspaces/${ws.id}`);
         }
       }}
     >
+      {selectMode && isAdmin && (
+        <div className={styles.selectTileBox} onClick={e => e.stopPropagation()}>
+          <Checkbox
+            checked={selected.has(ws.id)}
+            onChange={() => toggleSelect(ws.id)}
+            aria-label={`Select ${ws.name}`}
+          />
+        </div>
+      )}
       <button
         type="button"
         className={mergeClasses(styles.pinBtn, pinned.has(ws.id) && styles.pinBtnActive)}
@@ -851,6 +986,15 @@ export default function WorkspacesPage() {
       <Table size="small" aria-label="Workspaces">
         <TableHeader>
           <TableRow>
+            {selectMode && isAdmin && (
+              <TableHeaderCell className={styles.selectCol}>
+                <Checkbox
+                  checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false}
+                  onChange={selectAllVisible}
+                  aria-label="Select all visible workspaces"
+                />
+              </TableHeaderCell>
+            )}
             <TableHeaderCell className={styles.pinCol} aria-label="Pin" />
             <TableHeaderCell>Name</TableHeaderCell>
             <TableHeaderCell>Description</TableHeaderCell>
@@ -862,7 +1006,16 @@ export default function WorkspacesPage() {
         </TableHeader>
         <TableBody>
           {rows.map(ws => (
-            <TableRow key={ws.id}>
+            <TableRow key={ws.id} appearance={selectMode && selected.has(ws.id) ? 'brand' : undefined}>
+              {selectMode && isAdmin && (
+                <TableCell className={styles.selectCol}>
+                  <Checkbox
+                    checked={selected.has(ws.id)}
+                    onChange={() => toggleSelect(ws.id)}
+                    aria-label={`Select ${ws.name}`}
+                  />
+                </TableCell>
+              )}
               <TableCell className={styles.pinCol}>
                 <button
                   type="button"
@@ -1022,6 +1175,35 @@ export default function WorkspacesPage() {
             </MenuPopover>
           </Menu>
 
+          {/* Admin: multi-select toggle + one-click test selection */}
+          {isAdmin && (
+            <>
+              <Button
+                appearance={selectMode ? 'primary' : 'subtle'}
+                aria-pressed={selectMode}
+                onClick={() => {
+                  setSelectMode(s => {
+                    const next = !s;
+                    if (!next) setSelected(new Set());
+                    return next;
+                  });
+                }}
+              >
+                {selectMode ? 'Done selecting' : 'Select'}
+              </Button>
+              {testRows.length > 0 && (
+                <Tooltip
+                  content={`Select ${testRows.length} test workspace${testRows.length === 1 ? '' : 's'} (uat-/e2e-/test-/tmp-…)`}
+                  relationship="label"
+                >
+                  <Button appearance="subtle" onClick={selectTest}>
+                    {`Select test (${testRows.length})`}
+                  </Button>
+                </Tooltip>
+              )}
+            </>
+          )}
+
           <div className={styles.toolbarSpacer} />
 
           {/* View mode toggle */}
@@ -1115,6 +1297,97 @@ export default function WorkspacesPage() {
             </button>
           </div>
         )}
+
+        {/* Bulk action bar (admin + select mode) */}
+        {isAdmin && selectMode && (
+          <div className={styles.bulkBar} role="region" aria-label="Bulk actions">
+            <Checkbox
+              checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false}
+              onChange={selectAllVisible}
+              label={allVisibleSelected ? 'Deselect all' : 'Select all visible'}
+            />
+            <span>{`${selected.size} selected`}</span>
+            {selected.size > 0 && (
+              <Button appearance="subtle" size="small" onClick={clearSelection}>
+                Clear
+              </Button>
+            )}
+            <div className={styles.bulkBarSpacer} />
+            <Button
+              appearance="primary"
+              icon={<Delete20Regular />}
+              disabled={selected.size === 0 || bulkMut.isPending}
+              onClick={() => setConfirmOpen(true)}
+            >
+              {`Delete selected (${selected.size})`}
+            </Button>
+          </div>
+        )}
+
+        {/* Bulk-delete result */}
+        {bulkResult && (
+          <MessageBar intent={bulkResult.failed.length > 0 ? 'warning' : 'success'}>
+            <MessageBarBody>
+              Deleted {bulkResult.deleted.length} workspace
+              {bulkResult.deleted.length === 1 ? '' : 's'}.
+              {bulkResult.failed.length > 0 && (
+                <> {bulkResult.failed.length} failed: {bulkResult.failed
+                  .map(f => `${nameById.get(f.id) ?? f.id} (${f.error})`)
+                  .join(', ')}.</>
+              )}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {/* Confirm dialog */}
+        <Dialog open={confirmOpen} onOpenChange={(_, d) => setConfirmOpen(d.open)}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>{`Delete ${selected.size} workspace${selected.size === 1 ? '' : 's'}?`}</DialogTitle>
+              <DialogContent>
+                <div className={styles.formCol}>
+                  <Body1>
+                    This permanently deletes the selected workspaces and every item inside them
+                    (lakehouses, notebooks, reports, etc.) from Cosmos. This cannot be undone.
+                  </Body1>
+                  <div style={{ maxHeight: 180, overflowY: 'auto' }}>
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {Array.from(selected).slice(0, 50).map(id => (
+                        <li key={id}>{nameById.get(id) ?? id}</li>
+                      ))}
+                    </ul>
+                    {selected.size > 50 && (
+                      <Caption1>…and {selected.size - 50} more.</Caption1>
+                    )}
+                  </div>
+                  {bulkMut.error && (
+                    <MessageBar intent="error">
+                      <MessageBarBody>{(bulkMut.error as Error).message}</MessageBarBody>
+                    </MessageBar>
+                  )}
+                </div>
+              </DialogContent>
+              <DialogActions>
+                <DialogTrigger disableButtonEnhancement>
+                  <Button appearance="secondary" disabled={bulkMut.isPending}>
+                    Cancel
+                  </Button>
+                </DialogTrigger>
+                <Button
+                  appearance="primary"
+                  icon={<Delete20Regular />}
+                  disabled={selected.size === 0 || bulkMut.isPending}
+                  onClick={() => {
+                    setBulkResult(null);
+                    bulkMut.mutate(Array.from(selected));
+                  }}
+                >
+                  {bulkMut.isPending ? 'Deleting…' : `Delete ${selected.size}`}
+                </Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
 
         {/* Unauth / error / loading */}
         {unauth && <SignInRequired subject="workspaces" />}

@@ -79,6 +79,9 @@ export interface Warehouse {
   cluster_size?: string;
   warehouse_type?: string;
   enable_serverless_compute?: boolean;
+  min_num_clusters?: number;
+  max_num_clusters?: number;
+  auto_stop_mins?: number;
 }
 
 export async function listWarehouses(): Promise<Warehouse[]> {
@@ -1072,6 +1075,256 @@ export async function listUcTables(catalogName: string, schemaName: string): Pro
   const res = await dbxFetch(`/api/2.1/unity-catalog/tables?${params.toString()}`);
   const body = await asJsonOrThrow<{ tables?: UcTable[] }>(res, `listUcTables(${catalogName}.${schemaName})`);
   return body.tables || [];
+}
+
+export async function getUcTable(fullName: string): Promise<UcTable> {
+  // GET /api/2.1/unity-catalog/tables/{full_name}  (catalog.schema.table)
+  const res = await dbxFetch(`/api/2.1/unity-catalog/tables/${fullName.split('.').map(encodeURIComponent).join('.')}`);
+  return asJsonOrThrow<UcTable>(res, `getUcTable(${fullName})`);
+}
+
+// ---- Volumes (managed/external storage volumes under a schema) ----
+export interface UcVolume {
+  name: string;
+  catalog_name?: string;
+  schema_name?: string;
+  full_name?: string;
+  volume_type?: 'MANAGED' | 'EXTERNAL' | string;
+  storage_location?: string;
+  comment?: string;
+  owner?: string;
+}
+
+export async function listUcVolumes(catalogName: string, schemaName: string): Promise<UcVolume[]> {
+  const params = new URLSearchParams({ catalog_name: catalogName, schema_name: schemaName });
+  const res = await dbxFetch(`/api/2.1/unity-catalog/volumes?${params.toString()}`);
+  const body = await asJsonOrThrow<{ volumes?: UcVolume[] }>(res, `listUcVolumes(${catalogName}.${schemaName})`);
+  return body.volumes || [];
+}
+
+// ---- Functions (registered UDFs under a schema) ----
+export interface UcFunction {
+  name: string;
+  catalog_name?: string;
+  schema_name?: string;
+  full_name?: string;
+  data_type?: string;
+  comment?: string;
+  owner?: string;
+}
+
+export async function listUcFunctions(catalogName: string, schemaName: string): Promise<UcFunction[]> {
+  const params = new URLSearchParams({ catalog_name: catalogName, schema_name: schemaName });
+  const res = await dbxFetch(`/api/2.1/unity-catalog/functions?${params.toString()}`);
+  const body = await asJsonOrThrow<{ functions?: UcFunction[] }>(res, `listUcFunctions(${catalogName}.${schemaName})`);
+  return body.functions || [];
+}
+
+// ============================================================
+// Unity Catalog — WRITE (create catalog / schema / table, grants)
+// All on the real UC REST surface (api 2.1). The console UAMI must be a
+// metastore-privileged principal (CREATE CATALOG on the metastore, or
+// CREATE SCHEMA / CREATE TABLE on the parent) — Databricks 403s otherwise,
+// surfaced verbatim through asJsonOrThrow.
+// ============================================================
+
+export interface UcCatalogCreateSpec {
+  name: string;
+  comment?: string;
+  storage_root?: string;             // optional managed-storage root (abfss://…)
+  properties?: Record<string, string>;
+}
+
+/** POST /api/2.1/unity-catalog/catalogs */
+export async function createUcCatalog(spec: UcCatalogCreateSpec): Promise<UcCatalog> {
+  const body: Record<string, unknown> = { name: spec.name };
+  if (spec.comment) body.comment = spec.comment;
+  if (spec.storage_root) body.storage_root = spec.storage_root;
+  if (spec.properties && Object.keys(spec.properties).length) body.properties = spec.properties;
+  const res = await dbxFetch('/api/2.1/unity-catalog/catalogs', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  return asJsonOrThrow<UcCatalog>(res, 'createUcCatalog');
+}
+
+/** DELETE /api/2.1/unity-catalog/catalogs/{name}?force= */
+export async function deleteUcCatalog(name: string, force = false): Promise<void> {
+  const qs = force ? '?force=true' : '';
+  const res = await dbxFetch(`/api/2.1/unity-catalog/catalogs/${encodeURIComponent(name)}${qs}`, {
+    method: 'DELETE',
+  });
+  await asJsonOrThrow<unknown>(res, 'deleteUcCatalog');
+}
+
+export interface UcSchemaCreateSpec {
+  name: string;
+  catalog_name: string;
+  comment?: string;
+  storage_root?: string;
+  properties?: Record<string, string>;
+}
+
+/** POST /api/2.1/unity-catalog/schemas */
+export async function createUcSchema(spec: UcSchemaCreateSpec): Promise<UcSchema> {
+  const body: Record<string, unknown> = { name: spec.name, catalog_name: spec.catalog_name };
+  if (spec.comment) body.comment = spec.comment;
+  if (spec.storage_root) body.storage_root = spec.storage_root;
+  if (spec.properties && Object.keys(spec.properties).length) body.properties = spec.properties;
+  const res = await dbxFetch('/api/2.1/unity-catalog/schemas', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  return asJsonOrThrow<UcSchema>(res, 'createUcSchema');
+}
+
+/** DELETE /api/2.1/unity-catalog/schemas/{full_name}  (catalog.schema) */
+export async function deleteUcSchema(fullName: string, force = false): Promise<void> {
+  const qs = force ? '?force=true' : '';
+  const path = fullName.split('.').map(encodeURIComponent).join('.');
+  const res = await dbxFetch(`/api/2.1/unity-catalog/schemas/${path}${qs}`, { method: 'DELETE' });
+  await asJsonOrThrow<unknown>(res, 'deleteUcSchema');
+}
+
+export interface UcColumnSpec {
+  name: string;
+  type_name: string;                 // 'STRING' | 'INT' | 'BIGINT' | 'DOUBLE' | 'BOOLEAN' | 'TIMESTAMP' | 'DATE' | …
+  type_text?: string;                // defaults to lowercased type_name
+  position: number;
+  nullable?: boolean;
+  comment?: string;
+}
+
+export interface UcTableCreateSpec {
+  name: string;
+  catalog_name: string;
+  schema_name: string;
+  columns: UcColumnSpec[];
+  table_type?: 'MANAGED' | 'EXTERNAL';
+  data_source_format?: 'DELTA' | 'PARQUET' | 'CSV' | 'JSON' | 'ORC' | 'AVRO' | 'TEXT' | string;
+  storage_location?: string;         // required for EXTERNAL
+  comment?: string;
+}
+
+/**
+ * POST /api/2.1/unity-catalog/tables — create a UC table directly via REST.
+ * For MANAGED Delta tables the storage_location is omitted (UC manages it).
+ * EXTERNAL tables require storage_location. column_info type_json/type_name
+ * follow the UC ColumnInfo schema.
+ */
+export async function createUcTable(spec: UcTableCreateSpec): Promise<UcTable> {
+  const tableType = spec.table_type ?? 'MANAGED';
+  const fmt = spec.data_source_format ?? 'DELTA';
+  const columns = spec.columns.map((c) => ({
+    name: c.name,
+    type_name: c.type_name.toUpperCase(),
+    type_text: c.type_text ?? c.type_name.toLowerCase(),
+    type_json: JSON.stringify({
+      name: c.name,
+      type: c.type_name.toLowerCase(),
+      nullable: c.nullable !== false,
+      metadata: {},
+    }),
+    position: c.position,
+    nullable: c.nullable !== false,
+    ...(c.comment ? { comment: c.comment } : {}),
+  }));
+  const body: Record<string, unknown> = {
+    name: spec.name,
+    catalog_name: spec.catalog_name,
+    schema_name: spec.schema_name,
+    table_type: tableType,
+    data_source_format: fmt,
+    columns,
+  };
+  if (spec.comment) body.comment = spec.comment;
+  if (tableType === 'EXTERNAL') {
+    if (!spec.storage_location) {
+      throw new Error('createUcTable: EXTERNAL tables require storage_location');
+    }
+    body.storage_location = spec.storage_location;
+  } else if (spec.storage_location) {
+    body.storage_location = spec.storage_location;
+  }
+  const res = await dbxFetch('/api/2.1/unity-catalog/tables', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  return asJsonOrThrow<UcTable>(res, 'createUcTable');
+}
+
+/** DELETE /api/2.1/unity-catalog/tables/{full_name}  (catalog.schema.table) */
+export async function deleteUcTable(fullName: string): Promise<void> {
+  const path = fullName.split('.').map(encodeURIComponent).join('.');
+  const res = await dbxFetch(`/api/2.1/unity-catalog/tables/${path}`, { method: 'DELETE' });
+  await asJsonOrThrow<unknown>(res, 'deleteUcTable');
+}
+
+// ---- Grants / permissions ----
+// securable_type is one of CATALOG | SCHEMA | TABLE | VOLUME | FUNCTION | …
+// full_name is the dot-qualified name of the securable.
+export type UcSecurableType =
+  | 'CATALOG' | 'SCHEMA' | 'TABLE' | 'VOLUME' | 'FUNCTION'
+  | 'EXTERNAL_LOCATION' | 'STORAGE_CREDENTIAL' | 'METASTORE' | string;
+
+export interface UcPrivilegeAssignment {
+  principal: string;
+  privileges: string[];
+}
+
+/**
+ * GET /api/2.1/unity-catalog/permissions/{securable_type}/{full_name}
+ * Returns direct grants on the securable.
+ */
+export async function getUcPermissions(
+  securableType: UcSecurableType,
+  fullName: string,
+): Promise<UcPrivilegeAssignment[]> {
+  const path = fullName.split('.').map(encodeURIComponent).join('.');
+  const res = await dbxFetch(`/api/2.1/unity-catalog/permissions/${encodeURIComponent(securableType)}/${path}`);
+  const body = await asJsonOrThrow<{ privilege_assignments?: UcPrivilegeAssignment[] }>(res, 'getUcPermissions');
+  return body.privilege_assignments || [];
+}
+
+/**
+ * GET /api/2.1/unity-catalog/effective-permissions/{securable_type}/{full_name}
+ * Returns inherited + direct grants.
+ */
+export async function getUcEffectivePermissions(
+  securableType: UcSecurableType,
+  fullName: string,
+): Promise<Array<{ principal: string; privileges: Array<{ privilege: string; inherited_from_type?: string; inherited_from_name?: string }> }>> {
+  const path = fullName.split('.').map(encodeURIComponent).join('.');
+  const res = await dbxFetch(`/api/2.1/unity-catalog/effective-permissions/${encodeURIComponent(securableType)}/${path}`);
+  const body = await asJsonOrThrow<{
+    privilege_assignments?: Array<{ principal: string; privileges: Array<{ privilege: string; inherited_from_type?: string; inherited_from_name?: string }> }>;
+  }>(res, 'getUcEffectivePermissions');
+  return body.privilege_assignments || [];
+}
+
+export interface UcPermissionsChange {
+  principal: string;
+  add?: string[];
+  remove?: string[];
+}
+
+/**
+ * PATCH /api/2.1/unity-catalog/permissions/{securable_type}/{full_name}
+ * Body: { changes: [{ principal, add?: [...], remove?: [...] }] }
+ * Returns the resulting direct grants.
+ */
+export async function updateUcPermissions(
+  securableType: UcSecurableType,
+  fullName: string,
+  changes: UcPermissionsChange[],
+): Promise<UcPrivilegeAssignment[]> {
+  const path = fullName.split('.').map(encodeURIComponent).join('.');
+  const res = await dbxFetch(`/api/2.1/unity-catalog/permissions/${encodeURIComponent(securableType)}/${path}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ changes }),
+  });
+  const body = await asJsonOrThrow<{ privilege_assignments?: UcPrivilegeAssignment[] }>(res, 'updateUcPermissions');
+  return body.privilege_assignments || [];
 }
 
 // ============================================================

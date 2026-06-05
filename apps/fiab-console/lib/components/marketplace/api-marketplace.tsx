@@ -2,7 +2,8 @@
 
 /**
  * ApiMarketplace — the consumer/catalog view over the tenant's Azure API
- * Management instance. The Loom equivalent of the APIM developer portal.
+ * Management instance. The Loom equivalent of the APIM developer portal /
+ * Azure API Center hub.
  *
  * No mock data. Every panel is wired to a real BFF route that calls Azure
  * REST against Microsoft.ApiManagement/service:
@@ -17,22 +18,30 @@
  * When APIM isn't provisioned the catalog route returns a 503 { gated:true,
  * hint } which we render as a Fluent MessageBar (intent="warning"); the full
  * UI shell still renders behind it.
+ *
+ * UI follows the Web-3.0 design contract (docs/fiab/design/ui-web3-guide.md):
+ * Section/Toolbar layout, ItemTile + TileGrid catalog with a ViewToggle to a
+ * LoomDataTable list, capped search, and a LoomDataTable for subscriptions.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  LargeTitle, Subtitle2, Subtitle1, Body1, Caption1, Badge, Button, Spinner,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner,
   Input, Textarea, Dropdown, Option, Field, Tab, TabList,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Tree, TreeItem, TreeItemLayout,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Search20Regular, ArrowSync20Regular, Play20Regular, Copy20Regular,
-  Key20Regular, Add20Regular, Document20Regular, Apps20Regular, Open20Regular,
+  ArrowSync20Regular, Play20Regular, Copy20Regular,
+  Key20Regular, Add20Regular, Apps20Regular,
+  ArrowLeft20Regular,
 } from '@fluentui/react-icons';
+import { Section, Toolbar } from '@/lib/components/ui/section';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { ItemTile } from '@/lib/components/ui/item-tile';
+import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
 // ---------------- types mirrored from the BFF ----------------
 
@@ -52,47 +61,40 @@ interface Operation { id: string; name: string; displayName?: string; method?: s
 interface ServiceInfo { name?: string; gatewayUrl?: string; state?: string }
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  split: { display: 'grid', gridTemplateColumns: 'minmax(280px, 340px) 1fr', gap: 16, minHeight: 0, flex: 1, alignItems: 'start' },
-  rail: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8, padding: 8,
-    maxHeight: '72vh', overflow: 'auto', backgroundColor: tokens.colorNeutralBackground1,
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0, flex: 1 },
+  topBar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  spacer: { flex: 1 },
+  detailHead: {
+    display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
   },
-  detail: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8, padding: 16,
-    display: 'flex', flexDirection: 'column', gap: 12, minHeight: '60vh',
-    backgroundColor: tokens.colorNeutralBackground1,
+  metaRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  overviewGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+    gap: tokens.spacingVerticalL, marginTop: tokens.spacingVerticalM,
   },
-  productHead: { display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px' },
-  apiRow: {
-    display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 12px', borderRadius: 6,
-    cursor: 'pointer', border: '1px solid transparent',
-    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  fieldBlock: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 },
+  tryGrid: {
+    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM,
   },
-  apiRowActive: { backgroundColor: tokens.colorBrandBackground2, border: `1px solid ${tokens.colorBrandStroke2}` },
-  metaRow: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  tabBody: { paddingTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   code: {
-    width: '100%', minHeight: 220, maxHeight: 480, padding: 12,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    width: '100%', minHeight: '220px', maxHeight: '480px', padding: tokens.spacingVerticalM,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     overflow: 'auto', whiteSpace: 'pre',
   },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 },
-  card: {
-    padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
-    display: 'flex', flexDirection: 'column', gap: 6,
-  },
+  keysCell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, alignItems: 'flex-start' },
+  keyLine: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
 });
 
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
 function stateBadge(state?: string) {
-  const s = (state || '').toLowerCase();
-  if (s === 'active' || s === 'published') return <Badge color="success" appearance="filled">{state}</Badge>;
-  if (s === 'submitted') return <Badge color="warning" appearance="filled">{state}</Badge>;
-  if (s === 'rejected' || s === 'cancelled' || s === 'expired' || s === 'suspended') return <Badge color="danger">{state}</Badge>;
+  const st = (state || '').toLowerCase();
+  if (st === 'active' || st === 'published') return <Badge color="success" appearance="filled">{state}</Badge>;
+  if (st === 'submitted') return <Badge color="warning" appearance="filled">{state}</Badge>;
+  if (st === 'rejected' || st === 'cancelled' || st === 'expired' || st === 'suspended') return <Badge color="danger">{state}</Badge>;
   return <Badge appearance="outline">{state || 'unknown'}</Badge>;
 }
 
@@ -101,6 +103,8 @@ export function ApiMarketplace() {
 
   // top-level view
   const [view, setView] = useState<'catalog' | 'subscriptions'>('catalog');
+  // catalog tile/list switch
+  const [catView, setCatView] = useState<LoomView>('tile');
 
   // catalog
   const [loading, setLoading] = useState(true);
@@ -266,27 +270,95 @@ export function ApiMarketplace() {
   // ---------------- filtering ----------------
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const match = (a: ApiSummary) =>
+    const matchA = (a: ApiSummary) =>
       !q || (a.displayName || a.name || '').toLowerCase().includes(q) || (a.path || '').toLowerCase().includes(q);
     const matchP = (p: ProductSummary) =>
-      !q || (p.displayName || p.name || '').toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q) || p.apis.some(match);
-    const productsF = products.filter(matchP).map((p) => ({ ...p, apis: q ? (matchP(p) && !p.apis.some(match) ? p.apis : p.apis.filter(match)) : p.apis }));
-    const inProduct = new Set(products.flatMap((p) => p.apis.map((a) => a.name || a.id)));
-    const ungrouped = apis.filter((a) => !inProduct.has(a.name || a.id)).filter(match);
-    return { productsF, ungrouped };
+      !q || (p.displayName || p.name || '').toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q) || p.apis.some(matchA);
+    const productsF = products.filter(matchP);
+    // flat de-duped API list across products + ungrouped, for the API collection
+    const seen = new Set<string>();
+    const allApis: ApiSummary[] = [];
+    for (const a of [...products.flatMap((p) => p.apis), ...apis]) {
+      const k = a.name || a.id;
+      if (seen.has(k)) continue;
+      seen.add(k); allApis.push(a);
+    }
+    const apisF = allApis.filter(matchA);
+    return { productsF, apisF };
   }, [products, apis, query]);
 
   const copy = (text: string) => { navigator.clipboard?.writeText(text).catch(() => {}); };
 
+  // product → which product (if any) an API belongs to, for the API subtitle
+  const apiProductLabel = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const p of products) for (const a of p.apis) map[a.name || a.id] = p.displayName || p.name;
+    return map;
+  }, [products]);
+
+  // ---------------- subscription columns ----------------
+  const subColumns: LoomColumn<SubscriptionSummary>[] = useMemo(() => [
+    {
+      key: 'name', label: 'Name', width: 220,
+      getValue: (r) => r.displayName || r.name,
+      render: (r) => <strong>{r.displayName || r.name}</strong>,
+    },
+    {
+      key: 'scope', label: 'Scope', width: 220,
+      getValue: (r) => (r.scope || '').replace(/^.*\/service\/[^/]+/, ''),
+      render: (r) => <Caption1><code>{(r.scope || '').replace(/^.*\/service\/[^/]+/, '') || '—'}</code></Caption1>,
+    },
+    {
+      key: 'state', label: 'State', width: 120,
+      getValue: (r) => r.state || '',
+      render: (r) => stateBadge(r.state),
+    },
+    {
+      key: 'created', label: 'Created', width: 130, filterable: false,
+      getValue: (r) => r.createdDate || '',
+      render: (r) => <Caption1>{r.createdDate ? new Date(r.createdDate).toLocaleDateString() : '—'}</Caption1>,
+    },
+    {
+      key: 'keys', label: 'Keys', width: 260, sortable: false, filterable: false,
+      render: (r) => {
+        const keys = keyCache[r.name];
+        if (!keys) {
+          return (
+            <Button size="small" icon={<Key20Regular />} onClick={(e) => { e.stopPropagation(); revealKeys(r.name); }}>
+              Show keys
+            </Button>
+          );
+        }
+        return (
+          <div className={s.keysCell}>
+            <div className={s.keyLine}>
+              <Caption1><code>{keys.primaryKey ? `${keys.primaryKey.slice(0, 8)}…` : '(none)'}</code></Caption1>
+              {keys.primaryKey && (
+                <Button size="small" icon={<Copy20Regular />} onClick={(e) => { e.stopPropagation(); copy(keys.primaryKey!); }}>
+                  Copy primary
+                </Button>
+              )}
+            </div>
+            {keys.secondaryKey && (
+              <Button size="small" icon={<Copy20Regular />} onClick={(e) => { e.stopPropagation(); copy(keys.secondaryKey!); }}>
+                Copy secondary
+              </Button>
+            )}
+          </div>
+        );
+      },
+    },
+  ], [keyCache, revealKeys, s.keysCell, s.keyLine]);
+
   // ---------------- render ----------------
   return (
     <div className={s.root}>
-      <div className={s.toolbar}>
-        <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as any)}>
+      <div className={s.topBar}>
+        <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as 'catalog' | 'subscriptions')}>
           <Tab value="catalog" icon={<Apps20Regular />}>Catalog</Tab>
           <Tab value="subscriptions" icon={<Key20Regular />}>My subscriptions</Tab>
         </TabList>
-        <div style={{ flex: 1 }} />
+        <div className={s.spacer} />
         {service?.gatewayUrl && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
             Gateway: <code>{service.gatewayUrl}</code>
@@ -313,288 +385,299 @@ export function ApiMarketplace() {
         </MessageBar>
       )}
 
-      {view === 'catalog' && (
+      {view === 'catalog' && !selApi && (
         <>
-          <Field>
-            <Input
-              contentBefore={<Search20Regular />}
-              placeholder="Search APIs and products by name, path, or description"
-              value={query}
-              onChange={(_, d) => setQuery(d.value)}
-            />
-          </Field>
-
-          {loading && <Spinner label="Loading catalog from API Management…" labelPosition="after" />}
+          {loading && (
+            <Section title="API catalog">
+              <Spinner label="Loading catalog from API Management…" labelPosition="after" />
+            </Section>
+          )}
 
           {!loading && !gate && (
-            <div className={s.split}>
-              {/* LEFT: product/API rail */}
-              <div className={s.rail} role="navigation" aria-label="API catalog">
-                {filtered.productsF.length === 0 && filtered.ungrouped.length === 0 && (
-                  <Body1 style={{ padding: 12, color: tokens.colorNeutralForeground3 }}>
-                    No APIs or products match. {products.length === 0 && apis.length === 0 ? 'This APIM instance has nothing published yet.' : ''}
+            <>
+              {/* Products */}
+              <Section
+                title={`Products${filtered.productsF.length ? ` (${filtered.productsF.length})` : ''}`}
+                actions={<ViewToggle value={catView} onChange={setCatView} ariaLabel="Switch catalog view" />}
+              >
+                <Toolbar
+                  search={query}
+                  onSearch={setQuery}
+                  searchPlaceholder="Search APIs and products by name, path, or description"
+                />
+                {filtered.productsF.length === 0 ? (
+                  <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    {products.length === 0 ? 'This APIM instance has no products published yet.' : 'No products match your search.'}
                   </Body1>
-                )}
-                <Tree aria-label="Products and APIs">
-                  {filtered.productsF.map((p) => (
-                    <TreeItem key={p.id} itemType="branch" value={p.id}>
-                      <TreeItemLayout
-                        aside={stateBadge(p.state)}
-                      >
-                        {p.displayName || p.name}
-                      </TreeItemLayout>
-                      <Tree>
-                        <TreeItem itemType="leaf" value={`${p.id}__subscribe`}>
-                          <TreeItemLayout>
-                            <Button
-                              size="small" appearance="primary" icon={<Add20Regular />}
-                              onClick={() => openSubscribe({ kind: 'product', id: p.name || p.id, name: p.displayName || p.name })}
-                            >
-                              {p.approvalRequired ? 'Request access' : 'Subscribe'}
-                            </Button>
-                          </TreeItemLayout>
-                        </TreeItem>
-                        {p.apis.length === 0 && (
-                          <TreeItem itemType="leaf" value={`${p.id}__empty`}>
-                            <TreeItemLayout><Caption1>(no APIs in this product)</Caption1></TreeItemLayout>
-                          </TreeItem>
-                        )}
-                        {p.apis.map((a) => (
-                          <TreeItem key={`${p.id}-${a.id}`} itemType="leaf" value={`${p.id}-${a.id}`}>
-                            <TreeItemLayout
-                              onClick={() => selectApi(a)}
-                              className={selApi?.id === a.id ? s.apiRowActive : undefined}
-                            >
-                              {a.displayName || a.name}
-                            </TreeItemLayout>
-                          </TreeItem>
-                        ))}
-                      </Tree>
-                    </TreeItem>
-                  ))}
-                </Tree>
-
-                {filtered.ungrouped.length > 0 && (
-                  <>
-                    <Caption1 style={{ padding: '8px 12px 4px', color: tokens.colorNeutralForeground3 }}>
-                      APIs not in a product
-                    </Caption1>
-                    {filtered.ungrouped.map((a) => (
-                      <div
-                        key={a.id}
-                        className={`${s.apiRow} ${selApi?.id === a.id ? s.apiRowActive : ''}`}
-                        onClick={() => selectApi(a)}
-                        role="button" tabIndex={0}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') selectApi(a); }}
-                      >
-                        <Body1>{a.displayName || a.name}</Body1>
-                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>/{a.path}</Caption1>
-                      </div>
+                ) : catView === 'tile' ? (
+                  <TileGrid>
+                    {filtered.productsF.map((p) => (
+                      <ItemTile
+                        key={p.id}
+                        type="apim-product"
+                        title={p.displayName || p.name}
+                        subtitle={p.description || `${p.apis.length} API${p.apis.length === 1 ? '' : 's'}`}
+                        meta={
+                          <div className={s.metaRow}>
+                            {stateBadge(p.state)}
+                            {p.approvalRequired && <Badge appearance="tint" color="warning">approval required</Badge>}
+                          </div>
+                        }
+                        badge={
+                          <Button
+                            size="small" appearance="primary" icon={<Add20Regular />}
+                            onClick={(e) => { e.stopPropagation(); openSubscribe({ kind: 'product', id: p.name || p.id, name: p.displayName || p.name }); }}
+                          >
+                            {p.approvalRequired ? 'Request' : 'Subscribe'}
+                          </Button>
+                        }
+                      />
                     ))}
-                  </>
+                  </TileGrid>
+                ) : (
+                  <LoomDataTable<ProductSummary>
+                    ariaLabel="Products"
+                    columns={[
+                      { key: 'name', label: 'Product', width: 240, getValue: (r) => r.displayName || r.name, render: (r) => <strong>{r.displayName || r.name}</strong> },
+                      { key: 'description', label: 'Description', width: 300, getValue: (r) => r.description || '' },
+                      { key: 'apis', label: 'APIs', width: 80, filterable: false, getValue: (r) => r.apis.length, render: (r) => String(r.apis.length) },
+                      { key: 'state', label: 'State', width: 120, getValue: (r) => r.state || '', render: (r) => stateBadge(r.state) },
+                      {
+                        key: 'subscribe', label: 'Access', width: 140, sortable: false, filterable: false,
+                        render: (r) => (
+                          <Button
+                            size="small" appearance="primary" icon={<Add20Regular />}
+                            onClick={(e) => { e.stopPropagation(); openSubscribe({ kind: 'product', id: r.name || r.id, name: r.displayName || r.name }); }}
+                          >
+                            {r.approvalRequired ? 'Request' : 'Subscribe'}
+                          </Button>
+                        ),
+                      },
+                    ]}
+                    rows={filtered.productsF}
+                    getRowId={(r) => r.id}
+                    empty="No products match your search."
+                  />
                 )}
-              </div>
+              </Section>
 
-              {/* RIGHT: detail */}
-              <div className={s.detail}>
-                {!selApi && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, color: tokens.colorNeutralForeground3, padding: 24, textAlign: 'center', alignItems: 'center' }}>
-                    <Document20Regular fontSize={40} />
-                    <Subtitle1>Select an API to explore it</Subtitle1>
-                    <Body1>Pick an API from a product on the left to view its description, operations, OpenAPI spec, and to try a live call through the gateway.</Body1>
-                  </div>
+              {/* APIs */}
+              <Section title={`APIs${filtered.apisF.length ? ` (${filtered.apisF.length})` : ''}`}>
+                {filtered.apisF.length === 0 ? (
+                  <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    {apis.length === 0 && products.every((p) => p.apis.length === 0)
+                      ? 'This APIM instance has no APIs published yet.'
+                      : 'No APIs match your search.'}
+                  </Body1>
+                ) : catView === 'tile' ? (
+                  <TileGrid>
+                    {filtered.apisF.map((a) => (
+                      <ItemTile
+                        key={a.id}
+                        type="apim-api"
+                        title={a.displayName || a.name}
+                        subtitle={a.path ? `/${a.path}` : apiProductLabel[a.name || a.id] || 'API'}
+                        meta={
+                          <div className={s.metaRow}>
+                            <Badge appearance="outline">{a.type || 'http'}</Badge>
+                            {a.subscriptionRequired
+                              ? <Badge color="warning" appearance="tint">subscription</Badge>
+                              : <Badge color="success" appearance="tint">open</Badge>}
+                          </div>
+                        }
+                        onClick={() => selectApi(a)}
+                      />
+                    ))}
+                  </TileGrid>
+                ) : (
+                  <LoomDataTable<ApiSummary>
+                    ariaLabel="APIs"
+                    columns={[
+                      { key: 'name', label: 'API', width: 240, getValue: (r) => r.displayName || r.name, render: (r) => <strong>{r.displayName || r.name}</strong> },
+                      { key: 'path', label: 'Path', width: 200, getValue: (r) => r.path || '', render: (r) => <code>/{r.path}</code> },
+                      { key: 'type', label: 'Type', width: 100, getValue: (r) => r.type || 'http' },
+                      {
+                        key: 'sub', label: 'Access', width: 140, sortable: false, filterable: false,
+                        getValue: (r) => (r.subscriptionRequired ? 'subscription' : 'open'),
+                        render: (r) => r.subscriptionRequired
+                          ? <Badge color="warning" appearance="tint">subscription</Badge>
+                          : <Badge color="success" appearance="tint">open</Badge>,
+                      },
+                    ]}
+                    rows={filtered.apisF}
+                    getRowId={(r) => r.id}
+                    onRowClick={selectApi}
+                    empty="No APIs match your search."
+                  />
                 )}
-                {selApi && (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <Subtitle1>{selApi.displayName || selApi.name}</Subtitle1>
-                        <div className={s.metaRow}>
-                          <Badge appearance="outline">{selApi.type || 'http'}</Badge>
-                          {(selApi.protocols || []).map((pr) => <Badge key={pr} appearance="tint">{pr}</Badge>)}
-                          {selApi.subscriptionRequired
-                            ? <Badge color="warning" appearance="tint">subscription required</Badge>
-                            : <Badge color="success" appearance="tint">open</Badge>}
-                        </div>
-                      </div>
-                      <Button
-                        appearance="primary" icon={<Add20Regular />}
-                        onClick={() => openSubscribe({ kind: 'api', id: selApi.name || selApi.id, name: selApi.displayName || selApi.name })}
-                      >
-                        Subscribe to this API
-                      </Button>
-                    </div>
-
-                    <TabList selectedValue={detailTab} onTabSelect={(_, d) => setDetailTab(d.value as any)}>
-                      <Tab value="overview">Overview</Tab>
-                      <Tab value="operations">Operations</Tab>
-                      <Tab value="spec">OpenAPI</Tab>
-                      <Tab value="tryit" icon={<Play20Regular />}>Try it</Tab>
-                    </TabList>
-
-                    {detailTab === 'overview' && (
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                        <div>
-                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Path</Caption1>
-                          <Body1><code>/{selApi.path}</code></Body1>
-                        </div>
-                        <div>
-                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Gateway base URL</Caption1>
-                          <Body1><code>{service?.gatewayUrl ? `${service.gatewayUrl}/${selApi.path}` : '(gateway unavailable)'}</code></Body1>
-                        </div>
-                        {selApi.serviceUrl && (
-                          <div>
-                            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Backend service URL</Caption1>
-                            <Body1><code>{selApi.serviceUrl}</code></Body1>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {detailTab === 'operations' && (
-                      <>
-                        {ops.loading && <Spinner size="tiny" label="Loading operations…" labelPosition="after" />}
-                        {ops.error && <MessageBar intent="warning"><MessageBarBody>{ops.error}</MessageBarBody></MessageBar>}
-                        {!ops.loading && !ops.error && (
-                          <Table size="small" aria-label="Operations">
-                            <TableHeader><TableRow>
-                              <TableHeaderCell>Method</TableHeaderCell>
-                              <TableHeaderCell>Name</TableHeaderCell>
-                              <TableHeaderCell>URL template</TableHeaderCell>
-                              <TableHeaderCell>Try</TableHeaderCell>
-                            </TableRow></TableHeader>
-                            <TableBody>
-                              {ops.data.length === 0 && <TableRow><TableCell colSpan={4}><Caption1>No operations defined.</Caption1></TableCell></TableRow>}
-                              {ops.data.map((op) => (
-                                <TableRow key={op.id || op.name}>
-                                  <TableCell><Badge appearance="tint">{op.method}</Badge></TableCell>
-                                  <TableCell>{op.displayName || op.name}</TableCell>
-                                  <TableCell><code>{op.urlTemplate}</code></TableCell>
-                                  <TableCell>
-                                    <Button size="small" icon={<Play20Regular />} onClick={() => { setTMethod(op.method || 'GET'); setTTemplate(op.urlTemplate || ''); setDetailTab('tryit'); }}>Use</Button>
-                                  </TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        )}
-                      </>
-                    )}
-
-                    {detailTab === 'spec' && (
-                      <>
-                        <div className={s.metaRow}>
-                          <Subtitle2>OpenAPI spec</Subtitle2>
-                          <Badge appearance="outline">{spec.format || 'openapi+json'}</Badge>
-                          <Button size="small" icon={<Copy20Regular />} disabled={!spec.value} onClick={() => spec.value && copy(spec.value)}>Copy</Button>
-                          <Button size="small" icon={<ArrowSync20Regular />} onClick={() => loadSpec(selApi.name || selApi.id)}>Refresh</Button>
-                        </div>
-                        {spec.loading && <Spinner size="tiny" label="Exporting spec from APIM…" labelPosition="after" />}
-                        {spec.error && <Caption1>Spec unavailable: {spec.error}</Caption1>}
-                        {!spec.loading && !spec.error && (
-                          <div className={s.code} role="region" aria-label="OpenAPI spec">
-                            {spec.value || '(no spec attached to this API)'}
-                          </div>
-                        )}
-                      </>
-                    )}
-
-                    {detailTab === 'tryit' && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        <Body1>Sends a real request through the APIM gateway. The all-access subscription key is attached server-side; it never reaches the browser.</Body1>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                          <Field label="Method">
-                            <Dropdown value={tMethod} selectedOptions={[tMethod]} onOptionSelect={(_, d) => d.optionValue && setTMethod(d.optionValue)}>
-                              {HTTP_METHODS.map((m) => <Option key={m} value={m}>{m}</Option>)}
-                            </Dropdown>
-                          </Field>
-                          <Field label="URL template (appended to the API path)">
-                            <Input value={tTemplate} onChange={(_, d) => setTTemplate(d.value)} placeholder="/orders/{id}" />
-                          </Field>
-                          <Field label="Request headers (one per line, Name: value)" style={{ gridColumn: '1 / -1' }}>
-                            <Textarea value={tHeaders} onChange={(_, d) => setTHeaders(d.value)} rows={2} placeholder={'Accept: application/json'} />
-                          </Field>
-                          {!['GET', 'HEAD'].includes(tMethod) && (
-                            <Field label="Request body" style={{ gridColumn: '1 / -1' }}>
-                              <Textarea value={tBody} onChange={(_, d) => setTBody(d.value)} rows={4} placeholder={'{ "name": "value" }'} />
-                            </Field>
-                          )}
-                        </div>
-                        <Button appearance="primary" icon={<Play20Regular />} onClick={sendTest} disabled={tBusy} style={{ alignSelf: 'flex-start' }}>
-                          {tBusy ? 'Sending…' : 'Send'}
-                        </Button>
-                        {tErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Request failed</MessageBarTitle>{tErr}</MessageBarBody></MessageBar>}
-                        {tResp && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            <div className={s.metaRow}>
-                              <Badge appearance="filled" color={tResp.status < 400 ? 'success' : tResp.status < 500 ? 'warning' : 'danger'}>
-                                {tResp.status} {tResp.statusText}
-                              </Badge>
-                              <Caption1>{tResp.headers['content-type'] || ''}</Caption1>
-                            </div>
-                            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response body</Caption1>
-                            <div className={s.code}>{tResp.body || '(empty)'}</div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            </div>
+              </Section>
+            </>
           )}
         </>
       )}
 
-      {view === 'subscriptions' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div className={s.toolbar}>
-            <Subtitle1>My subscriptions</Subtitle1>
-            <div style={{ flex: 1 }} />
-            <Button icon={<ArrowSync20Regular />} onClick={loadSubscriptions}>Refresh</Button>
+      {/* API detail — replaces the catalog grid when an API is selected */}
+      {view === 'catalog' && selApi && (
+        <Section
+          title={selApi.displayName || selApi.name}
+          actions={
+            <Button appearance="subtle" icon={<ArrowLeft20Regular />} onClick={() => setSelApi(null)}>
+              Back to catalog
+            </Button>
+          }
+        >
+          <div className={s.detailHead}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className={s.metaRow}>
+                <Badge appearance="outline">{selApi.type || 'http'}</Badge>
+                {(selApi.protocols || []).map((pr) => <Badge key={pr} appearance="tint">{pr}</Badge>)}
+                {selApi.subscriptionRequired
+                  ? <Badge color="warning" appearance="tint">subscription required</Badge>
+                  : <Badge color="success" appearance="tint">open</Badge>}
+              </div>
+            </div>
+            <Button
+              appearance="primary" icon={<Add20Regular />}
+              onClick={() => openSubscribe({ kind: 'api', id: selApi.name || selApi.id, name: selApi.displayName || selApi.name })}
+            >
+              Subscribe to this API
+            </Button>
           </div>
-          {subs.loading && <Spinner label="Loading subscriptions…" labelPosition="after" />}
+
+          <TabList selectedValue={detailTab} onTabSelect={(_, d) => setDetailTab(d.value as 'overview' | 'operations' | 'spec' | 'tryit')}>
+            <Tab value="overview">Overview</Tab>
+            <Tab value="operations">Operations</Tab>
+            <Tab value="spec">OpenAPI</Tab>
+            <Tab value="tryit" icon={<Play20Regular />}>Try it</Tab>
+          </TabList>
+
+          {detailTab === 'overview' && (
+            <div className={s.overviewGrid}>
+              <div className={s.fieldBlock}>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Path</Caption1>
+                <Body1><code>/{selApi.path}</code></Body1>
+              </div>
+              <div className={s.fieldBlock}>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Gateway base URL</Caption1>
+                <Body1><code>{service?.gatewayUrl ? `${service.gatewayUrl}/${selApi.path}` : '(gateway unavailable)'}</code></Body1>
+              </div>
+              {selApi.serviceUrl && (
+                <div className={s.fieldBlock}>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Backend service URL</Caption1>
+                  <Body1><code>{selApi.serviceUrl}</code></Body1>
+                </div>
+              )}
+            </div>
+          )}
+
+          {detailTab === 'operations' && (
+            <div className={s.tabBody}>
+              {ops.loading && <Spinner size="tiny" label="Loading operations…" labelPosition="after" />}
+              {ops.error && <MessageBar intent="warning"><MessageBarBody>{ops.error}</MessageBarBody></MessageBar>}
+              {!ops.loading && !ops.error && (
+                <LoomDataTable<Operation>
+                  ariaLabel="Operations"
+                  columns={[
+                    { key: 'method', label: 'Method', width: 110, getValue: (r) => r.method || '', render: (r) => <Badge appearance="tint">{r.method}</Badge> },
+                    { key: 'name', label: 'Name', width: 240, getValue: (r) => r.displayName || r.name, render: (r) => r.displayName || r.name },
+                    { key: 'url', label: 'URL template', width: 280, getValue: (r) => r.urlTemplate || '', render: (r) => <code>{r.urlTemplate}</code> },
+                    {
+                      key: 'try', label: 'Try', width: 90, sortable: false, filterable: false,
+                      render: (r) => (
+                        <Button
+                          size="small" icon={<Play20Regular />}
+                          onClick={(e) => { e.stopPropagation(); setTMethod(r.method || 'GET'); setTTemplate(r.urlTemplate || ''); setDetailTab('tryit'); }}
+                        >
+                          Use
+                        </Button>
+                      ),
+                    },
+                  ]}
+                  rows={ops.data}
+                  getRowId={(r) => r.id || r.name}
+                  empty="No operations defined."
+                />
+              )}
+            </div>
+          )}
+
+          {detailTab === 'spec' && (
+            <div className={s.tabBody}>
+              <div className={s.metaRow}>
+                <Subtitle2>OpenAPI spec</Subtitle2>
+                <Badge appearance="outline">{spec.format || 'openapi+json'}</Badge>
+                <Button size="small" icon={<Copy20Regular />} disabled={!spec.value} onClick={() => spec.value && copy(spec.value)}>Copy</Button>
+                <Button size="small" icon={<ArrowSync20Regular />} onClick={() => loadSpec(selApi.name || selApi.id)}>Refresh</Button>
+              </div>
+              {spec.loading && <Spinner size="tiny" label="Exporting spec from APIM…" labelPosition="after" />}
+              {spec.error && <Caption1>Spec unavailable: {spec.error}</Caption1>}
+              {!spec.loading && !spec.error && (
+                <div className={s.code} role="region" aria-label="OpenAPI spec">
+                  {spec.value || '(no spec attached to this API)'}
+                </div>
+              )}
+            </div>
+          )}
+
+          {detailTab === 'tryit' && (
+            <div className={s.tabBody}>
+              <Body1>Sends a real request through the APIM gateway. The all-access subscription key is attached server-side; it never reaches the browser.</Body1>
+              <div className={s.tryGrid}>
+                <Field label="Method">
+                  <Dropdown value={tMethod} selectedOptions={[tMethod]} onOptionSelect={(_, d) => d.optionValue && setTMethod(d.optionValue)}>
+                    {HTTP_METHODS.map((m) => <Option key={m} value={m}>{m}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="URL template (appended to the API path)">
+                  <Input value={tTemplate} onChange={(_, d) => setTTemplate(d.value)} placeholder="/orders/{id}" />
+                </Field>
+                <Field label="Request headers (one per line, Name: value)" style={{ gridColumn: '1 / -1' }}>
+                  <Textarea value={tHeaders} onChange={(_, d) => setTHeaders(d.value)} rows={2} placeholder={'Accept: application/json'} />
+                </Field>
+                {!['GET', 'HEAD'].includes(tMethod) && (
+                  <Field label="Request body" style={{ gridColumn: '1 / -1' }}>
+                    <Textarea value={tBody} onChange={(_, d) => setTBody(d.value)} rows={4} placeholder={'{ "name": "value" }'} />
+                  </Field>
+                )}
+              </div>
+              <Button appearance="primary" icon={<Play20Regular />} onClick={sendTest} disabled={tBusy} style={{ alignSelf: 'flex-start' }}>
+                {tBusy ? 'Sending…' : 'Send'}
+              </Button>
+              {tErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Request failed</MessageBarTitle>{tErr}</MessageBarBody></MessageBar>}
+              {tResp && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                  <div className={s.metaRow}>
+                    <Badge appearance="filled" color={tResp.status < 400 ? 'success' : tResp.status < 500 ? 'warning' : 'danger'}>
+                      {tResp.status} {tResp.statusText}
+                    </Badge>
+                    <Caption1>{tResp.headers['content-type'] || ''}</Caption1>
+                  </div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response body</Caption1>
+                  <div className={s.code}>{tResp.body || '(empty)'}</div>
+                </div>
+              )}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {view === 'subscriptions' && (
+        <Section
+          title="My subscriptions"
+          actions={<Button icon={<ArrowSync20Regular />} onClick={loadSubscriptions}>Refresh</Button>}
+        >
           {subs.error && <MessageBar intent="warning"><MessageBarBody>{subs.error}</MessageBarBody></MessageBar>}
-          {!subs.loading && !subs.error && subs.data.length === 0 && (
-            <Body1 style={{ color: tokens.colorNeutralForeground3 }}>No subscriptions yet. Subscribe to a product or API from the Catalog tab.</Body1>
+          {!subs.error && (
+            <LoomDataTable<SubscriptionSummary>
+              ariaLabel="Subscriptions"
+              columns={subColumns}
+              rows={subs.data}
+              getRowId={(r) => r.id}
+              loading={subs.loading}
+              empty="No subscriptions yet. Subscribe to a product or API from the Catalog tab."
+            />
           )}
-          {!subs.loading && subs.data.length > 0 && (
-            <Table aria-label="Subscriptions">
-              <TableHeader><TableRow>
-                <TableHeaderCell>Name</TableHeaderCell>
-                <TableHeaderCell>Scope</TableHeaderCell>
-                <TableHeaderCell>State</TableHeaderCell>
-                <TableHeaderCell>Created</TableHeaderCell>
-                <TableHeaderCell>Keys</TableHeaderCell>
-              </TableRow></TableHeader>
-              <TableBody>
-                {subs.data.map((sub) => {
-                  const keys = keyCache[sub.name];
-                  return (
-                    <TableRow key={sub.id}>
-                      <TableCell>{sub.displayName || sub.name}</TableCell>
-                      <TableCell><Caption1><code>{(sub.scope || '').replace(/^.*\/service\/[^/]+/, '')}</code></Caption1></TableCell>
-                      <TableCell>{stateBadge(sub.state)}</TableCell>
-                      <TableCell><Caption1>{sub.createdDate ? new Date(sub.createdDate).toLocaleDateString() : '—'}</Caption1></TableCell>
-                      <TableCell>
-                        {!keys && <Button size="small" icon={<Key20Regular />} onClick={() => revealKeys(sub.name)}>Show keys</Button>}
-                        {keys && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                              <Caption1><code>{keys.primaryKey ? `${keys.primaryKey.slice(0, 8)}…` : '(none)'}</code></Caption1>
-                              {keys.primaryKey && <Button size="small" icon={<Copy20Regular />} onClick={() => copy(keys.primaryKey!)}>Copy primary</Button>}
-                            </div>
-                            {keys.secondaryKey && <Button size="small" icon={<Copy20Regular />} onClick={() => copy(keys.secondaryKey!)}>Copy secondary</Button>}
-                          </div>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </div>
+        </Section>
       )}
 
       {/* Subscribe dialog */}
@@ -603,7 +686,7 @@ export function ApiMarketplace() {
           <DialogBody>
             <DialogTitle>{subTarget?.kind === 'product' ? 'Subscribe to product' : 'Subscribe to API'}</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 <Body1>
                   Request access to <strong>{subTarget?.name}</strong>. This creates an APIM subscription scoped to the
                   {subTarget?.kind === 'product' ? ' product' : ' API'}. If approval is required, the request stays pending until an administrator approves it; otherwise it activates immediately and the subscription key is available under <em>My subscriptions</em>.

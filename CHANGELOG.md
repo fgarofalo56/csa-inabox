@@ -25,6 +25,76 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.23.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.22.0...csa-inabox-v0.23.0) (2026-06-02)
+
+
+### Features
+
+* **csa-loom:** complete backlog — studio parity, DAB, Foundry project, MIP/DLP, deploy-planner bicep ([#578](https://github.com/fgarofalo56/csa-inabox/issues/578)) ([62f2fbf](https://github.com/fgarofalo56/csa-inabox/commit/62f2fbf6b7a42bca986b62fc8e9e298eb2730afb))
+
+
+### Bug Fixes
+
+* **ci:** wait for ACR public-access propagation before build matrix ([#576](https://github.com/fgarofalo56/csa-inabox/issues/576)) ([6a75bf7](https://github.com/fgarofalo56/csa-inabox/commit/6a75bf72ee07cd857d54838531b97edc0081bb83))
+
+## [0.22.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.21.0...csa-inabox-v0.22.0) (2026-06-01)
+
+
+### Features
+
+* **csa-loom:** ADX database policies in the Kusto navigator (read-only, real .show) ([#536](https://github.com/fgarofalo56/csa-inabox/issues/536)) ([63b1f8a](https://github.com/fgarofalo56/csa-inabox/commit/63b1f8a6d08db477c497369557264dc370ed1945))
+* **csa-loom:** compact, breadcrumb-led page header (reclaim vertical space) ([#564](https://github.com/fgarofalo56/csa-inabox/issues/564)) ([6283d2e](https://github.com/fgarofalo56/csa-inabox/commit/6283d2e4f5c845e81a2726bbb07550ceb0acf56f))
+* **csa-loom:** Cosmos surface to Data Explorer STUDIO parity (not portal chrome) ([#563](https://github.com/fgarofalo56/csa-inabox/issues/563)) ([64893fd](https://github.com/fgarofalo56/csa-inabox/commit/64893fd263a4529ff206960e64ac930a1c56950e))
+* **csa-loom:** grant Cosmos data-plane role for the Items Data Explorer ([#546](https://github.com/fgarofalo56/csa-inabox/issues/546)) ([957af3a](https://github.com/fgarofalo56/csa-inabox/commit/957af3a60154471442bbebb65626d793b88b8622))
+* **csa-loom:** Learn portal redesign + Loom-docs-first link model ([#572](https://github.com/fgarofalo56/csa-inabox/issues/572)) ([8cec00f](https://github.com/fgarofalo56/csa-inabox/commit/8cec00fa783856cdda0cb15b1955b05af91e172a))
+* **csa-loom:** parity batch 2 — Event Hubs Send / Foundry Agents / APIM operations + build-marker fix ([#552](https://github.com/fgarofalo56/csa-inabox/issues/552)) ([3625019](https://github.com/fgarofalo56/csa-inabox/commit/3625019f5a1c1ee7255a8eadb91f99134830973a))
+* **csa-loom:** parity batch 3 — Power BI governance + Power Platform env lifecycle ([#556](https://github.com/fgarofalo56/csa-inabox/issues/556)) ([8f3fae3](https://github.com/fgarofalo56/csa-inabox/commit/8f3fae3978e722a9ff856a12ca8b204c769767e3))
+* **csa-loom:** parity build batch 1 — Databricks/SQL/Cosmos/AI Search/ADX/APIM (6 features) ([#545](https://github.com/fgarofalo56/csa-inabox/issues/545)) ([b4b3bd0](https://github.com/fgarofalo56/csa-inabox/commit/b4b3bd0958a00ee14df7653fd6278f22123a429d))
+* **csa-loom:** Power BI item governance — workspace ACL, endorsement, gateway binding ([#554](https://github.com/fgarofalo56/csa-inabox/issues/554)) ([6e2315d](https://github.com/fgarofalo56/csa-inabox/commit/6e2315dc5a04b54c0f2f9c672d7ad0f527211608))
+* **csa-loom:** Purview classic Data Map wiring + wave-3 Web3 surfaces ([#575](https://github.com/fgarofalo56/csa-inabox/issues/575)) ([66d6f5e](https://github.com/fgarofalo56/csa-inabox/commit/66d6f5e75e9a491b230fbf5bdca8bbe5fc89eb6f))
+* **csa-loom:** ship Lakehouse Shortcuts — Azure-native, no Fabric, day-one default ([#568](https://github.com/fgarofalo56/csa-inabox/issues/568)) ([13dd1cf](https://github.com/fgarofalo56/csa-inabox/commit/13dd1cf250539bd4aaee748d057f2e8841718916))
+* **csa-loom:** UI A+ sweep wave 1 — 15 editors (RTI, Databricks, APIM, SQL, Lakehouse, Notebook) ([#562](https://github.com/fgarofalo56/csa-inabox/issues/562)) ([0a059b1](https://github.com/fgarofalo56/csa-inabox/commit/0a059b11d27bbdd0dc854a54e9402de1696f42d8))
+* **csa-loom:** Web 3.0 redesign wave 1 — Browse, OneLake catalog, Unified catalog ([#566](https://github.com/fgarofalo56/csa-inabox/issues/566)) ([5716ac5](https://github.com/fgarofalo56/csa-inabox/commit/5716ac5b125c896def08db76563d085617e8efd4))
+* **csa-loom:** Web 3.0 redesign wave 2 — Governance, Workload Hub, API Marketplace, Copilot ([#567](https://github.com/fgarofalo56/csa-inabox/issues/567)) ([ca324d0](https://github.com/fgarofalo56/csa-inabox/commit/ca324d0e840fcf66a78220da11c655df9179efb2))
+* **csa-loom:** Web 3.0 UI foundation primitives (shared data-table/tiles/sections) ([#565](https://github.com/fgarofalo56/csa-inabox/issues/565)) ([60a3bee](https://github.com/fgarofalo56/csa-inabox/commit/60a3beeb6adc4ebd31d4b56bb73b9d848ce5f1fa))
+
+
+### Bug Fixes
+
+* **csa-loom:** auto-wire Cosmos vector endpoint + cross-sub Purview discovery ([#561](https://github.com/fgarofalo56/csa-inabox/issues/561)) ([d771036](https://github.com/fgarofalo56/csa-inabox/commit/d771036ec1846910f43dc67b88b006c261b2539a))
+* **csa-loom:** force a fresh container revision on every roll (--revision-suffix) ([#558](https://github.com/fgarofalo56/csa-inabox/issues/558)) ([61e8aad](https://github.com/fgarofalo56/csa-inabox/commit/61e8aad1e6c07a55c9812234cc7863fe7c1733d9))
+* **csa-loom:** Lakehouse shortcuts reach the TARGET storage account (not Loom's) ([#571](https://github.com/fgarofalo56/csa-inabox/issues/571)) ([59c9986](https://github.com/fgarofalo56/csa-inabox/commit/59c9986e6ae1917f5983906d228f7481792be574))
+* **csa-loom:** nav icons (OneLake/Unified/Copilot) + FOUC on navigation ([#570](https://github.com/fgarofalo56/csa-inabox/issues/570)) ([dd3c1e7](https://github.com/fgarofalo56/csa-inabox/commit/dd3c1e760e784731f52a10cfa9d619ca9af86107))
+* **csa-loom:** shortcut storage authorization = RBAC + VNet service-endpoint rule ([#573](https://github.com/fgarofalo56/csa-inabox/issues/573)) ([0eec197](https://github.com/fgarofalo56/csa-inabox/commit/0eec197841847927678da2ebf8fd9a4944b46e15))
+* **csa-loom:** shortcuts work for PE-locked storage too — managed PE + CAE subnet SE in bicep ([#574](https://github.com/fgarofalo56/csa-inabox/issues/574)) ([a8b3424](https://github.com/fgarofalo56/csa-inabox/commit/a8b342425d6965b4d47154e03d1507091d4b8a06))
+* **csa-loom:** stamp LOOM_BUILD_SHA in full-app-deploy so build-marker matches ([#549](https://github.com/fgarofalo56/csa-inabox/issues/549)) ([bc155e0](https://github.com/fgarofalo56/csa-inabox/commit/bc155e0bf85e540e67ddfd313a1ce8a4d0e94016))
+* **csa-loom:** stop Front Door WAF from blocking BFF query bodies (every query editor was 403) ([#560](https://github.com/fgarofalo56/csa-inabox/issues/560)) ([954cc58](https://github.com/fgarofalo56/csa-inabox/commit/954cc582cf978ef06d10a2aebfc027f21a257209))
+
+
+### Documentation
+
+* **csa-loom:** correct stale ai-search parity doc — field designer + search explorer are BUILT ([#557](https://github.com/fgarofalo56/csa-inabox/issues/557)) ([895e5b4](https://github.com/fgarofalo56/csa-inabox/commit/895e5b4ce2b514e70ecc7236db606e8db21b71d3))
+* **csa-loom:** honest 1:1 Azure parity audit — scorecard + 12 per-service gap docs ([#539](https://github.com/fgarofalo56/csa-inabox/issues/539)) ([f6d63ee](https://github.com/fgarofalo56/csa-inabox/commit/f6d63ee69426f102808842fe36f71cc68ea99f8c))
+* **csa-loom:** rev.2 parity re-audit — correct 12 service docs + scorecard against current code ([#559](https://github.com/fgarofalo56/csa-inabox/issues/559)) ([4ff85bf](https://github.com/fgarofalo56/csa-inabox/commit/4ff85bfdb8cc3093edd999f2d533badeb1f9e0a2))
+
+## [0.21.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.20.0...csa-inabox-v0.21.0) (2026-05-31)
+
+
+### Features
+
+* **csa-loom:** bring-your-own-or-new service parameterization + fix push-button param file ([#533](https://github.com/fgarofalo56/csa-inabox/issues/533)) ([fca53b3](https://github.com/fgarofalo56/csa-inabox/commit/fca53b336ca0ba984a4e3b6c8fc6e06d93ab3d61))
+* **csa-loom:** data-agent run-steps inspector (closes the last parity ❌) ([#535](https://github.com/fgarofalo56/csa-inabox/issues/535)) ([ee15a76](https://github.com/fgarofalo56/csa-inabox/commit/ee15a76bb22f6d45c8d9d20fba95fe183ca473dd))
+
+
+### Bug Fixes
+
+* **csa-loom:** honest empty-state for tier/version-gated navigator sub-tabs ([#531](https://github.com/fgarofalo56/csa-inabox/issues/531)) ([33d9e3d](https://github.com/fgarofalo56/csa-inabox/commit/33d9e3dca78c55be3947f2215d630988f35fba1c))
+
+
+### Miscellaneous
+
+* gitignore all tsconfig.tsbuildinfo + untrack the tracked ones ([#530](https://github.com/fgarofalo56/csa-inabox/issues/530)) ([1a0a205](https://github.com/fgarofalo56/csa-inabox/commit/1a0a205a0d8bf805b24b11b44d2423146ec56a5a))
+
 ## [0.20.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.19.0...csa-inabox-v0.20.0) (2026-05-31)
 
 

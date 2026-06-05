@@ -326,6 +326,233 @@ export async function getEnvironment(name: string): Promise<PpEnvironment> {
   return mapEnvironment(j);
 }
 
+// ------------------------------------------------------------
+// Environment lifecycle (create / update / delete) — real BAP REST.
+//
+// Grounded in Microsoft Learn. The Power Platform BAP admin control plane
+// exposes the same operations the `Microsoft.PowerApps.Administration.PowerShell`
+// module wraps (New-/Set-/Remove-AdminPowerAppEnvironment) and the admin-centre
+// New/Edit/Delete commands:
+//
+//   - Create : POST  https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01
+//              body { properties: { displayName, environmentSku, ... linkedEnvironmentMetadata } }
+//              (New-AdminPowerAppEnvironment — -DisplayName/-Location/-EnvironmentSku
+//               /-ProvisionDatabase/-CurrencyName/-LanguageName/-Templates/-SecurityGroupId).
+//              The env GUID is server-assigned, so the BAP control plane uses POST
+//              (not PUT-by-id). Returns 202 Accepted with an `Operation-Location`
+//              (or `Location`) header for the async lifecycle operation to poll.
+//   - Update : PATCH .../scopes/admin/environments/{id}?api-version=2021-04-01
+//              body { properties: { displayName, ... } }  (Set-AdminPowerAppEnvironmentDisplayName etc.)
+//   - Delete : DELETE .../scopes/admin/environments/{id}?api-version=2021-04-01
+//              (Remove-AdminPowerAppEnvironment) — async; 202 + Location header, or 404
+//              once the soft-delete completes. Soft-deletes (recoverable window).
+//   - Poll   : GET <operation url> — terminal state when status ∈ {Succeeded, Failed, Canceled}.
+//
+// Refs (Learn):
+//   power-platform/admin/list-environments (host/path/api-version)
+//   powershell/.../new-adminpowerappenvironment (create params → properties)
+//   powershell/.../remove-adminpowerappenvironment (delete is async)
+//   power-platform/admin/delete-environment (soft-delete + recovery window)
+// ------------------------------------------------------------
+
+/** Modern stable BAP control-plane api-version for lifecycle ops. */
+const ENV_LIFECYCLE_API_VERSION = process.env.LOOM_BAP_LIFECYCLE_API_VERSION || '2021-04-01';
+
+export interface CreateEnvironmentSpec {
+  displayName: string;
+  /** Trial | Sandbox | Production | SubscriptionBasedTrial | Teams | Developer */
+  environmentSku: string;
+  /** Power Platform location, e.g. "unitedstates", "europe". Get-AdminPowerAppEnvironmentLocations. */
+  location: string;
+  description?: string;
+  /** When provided, a Dataverse database is provisioned with the given metadata. */
+  dataverse?: {
+    /** LCID for the base language, e.g. 1033 (en-US). */
+    baseLanguage?: number;
+    /** ISO currency code, e.g. "USD". */
+    currency?: string;
+    /** Provisioning template ids, e.g. ["D365_Sales"]. */
+    templates?: string[];
+    /** Entra security group object id restricting Dataverse membership. */
+    securityGroupId?: string;
+  };
+}
+
+export interface EnvironmentLifecycleOperation {
+  /** Operation status: Running / NotStarted / Succeeded / Failed / Canceled (when reported). */
+  status?: string;
+  /** URL to poll for the async operation (Operation-Location or Location header). */
+  operationUrl?: string;
+  /** Raw response body (env doc or operation doc) for surfacing detail. */
+  body?: any;
+  /** Set when the operation has reached a terminal state. */
+  done: boolean;
+  /** Optional error detail when status === 'Failed'. */
+  error?: { code?: string; message?: string };
+}
+
+const TERMINAL_OP_STATES = new Set(['succeeded', 'failed', 'canceled', 'cancelled']);
+
+function isTerminalOpStatus(status?: string): boolean {
+  return !!status && TERMINAL_OP_STATES.has(status.toLowerCase());
+}
+
+/**
+ * Issue a BAP control-plane call and return the parsed body PLUS the async
+ * operation URL from the response headers (the standard `call()` helper drops
+ * headers; lifecycle ops need them to poll). Mirrors `call()`'s auth + error
+ * handling so 401/403/4xx surface as a PowerPlatformError with the same hint.
+ */
+async function bapCallWithHeaders<T = any>(
+  url: string,
+  opts: CallOpts = {},
+): Promise<{ body: T; status: number; operationUrl?: string }> {
+  const method = opts.method ?? 'GET';
+  const token = await getToken(BAP_SCOPE);
+  let full = url;
+  if (opts.query) {
+    const qs = new URLSearchParams();
+    Object.entries(opts.query).forEach(([k, v]) => { if (v !== undefined && v !== null) qs.append(k, String(v)); });
+    const s = qs.toString();
+    if (s) full += (full.includes('?') ? '&' : '?') + s;
+  }
+  const res = await fetch(full, {
+    method,
+    headers: {
+      'authorization': `Bearer ${token}`,
+      'content-type': 'application/json',
+      'accept': 'application/json',
+      ...(opts.headers || {}),
+    },
+    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
+  if (!res.ok) {
+    const msg = (json?.error?.message || json?.message || text || `${method} ${url} failed`).toString();
+    let hint: string | undefined;
+    if (res.status === 401 || res.status === 403) {
+      hint = 'Confirm the Console UAMI SP is added to the "Service principals can use Power Platform APIs" allow group in Power Platform admin centre, and that it holds the Power Platform Administrator role required to create/edit/delete environments.';
+    }
+    throw new PowerPlatformError(msg, res.status, json || text, full, hint);
+  }
+  const operationUrl = res.headers.get('operation-location')
+    || res.headers.get('location')
+    || res.headers.get('azure-asyncoperation')
+    || undefined;
+  return { body: (json as T) ?? ({} as T), status: res.status, operationUrl };
+}
+
+/**
+ * Create a Power Platform environment via the BAP admin control plane.
+ *
+ * POST .../scopes/admin/environments?api-version=2021-04-01 with a
+ * `{ properties: {...} }` body. When `spec.dataverse` is set a Dataverse
+ * database is provisioned (linkedEnvironmentMetadata) — currency + base
+ * language are required by the platform in that case. Returns the async
+ * lifecycle operation handle (202 + Operation-Location header).
+ */
+export async function createEnvironment(spec: CreateEnvironmentSpec): Promise<EnvironmentLifecycleOperation> {
+  const properties: Record<string, any> = {
+    displayName: spec.displayName,
+    environmentSku: spec.environmentSku,
+  };
+  if (spec.description) properties.description = spec.description;
+  if (spec.dataverse) {
+    const linked: Record<string, any> = {};
+    if (spec.dataverse.baseLanguage !== undefined) linked.baseLanguage = spec.dataverse.baseLanguage;
+    if (spec.dataverse.currency) linked.currency = { code: spec.dataverse.currency };
+    if (spec.dataverse.templates && spec.dataverse.templates.length) linked.templates = spec.dataverse.templates;
+    if (spec.dataverse.securityGroupId) linked.securityGroupId = spec.dataverse.securityGroupId;
+    properties.linkedEnvironmentMetadata = linked;
+  }
+  const { body, operationUrl } = await bapCallWithHeaders<any>(
+    `${BAP_BASE}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments`,
+    {
+      method: 'POST',
+      query: { 'api-version': ENV_LIFECYCLE_API_VERSION, location: spec.location },
+      body: { properties },
+    },
+  );
+  const status = body?.properties?.provisioningState || body?.status;
+  return {
+    status,
+    operationUrl,
+    body,
+    done: isTerminalOpStatus(status),
+    error: body?.error ? { code: body.error.code, message: body.error.message } : undefined,
+  };
+}
+
+/**
+ * Update an existing environment's mutable properties (rename, description,
+ * security group). PATCH .../environments/{id}?api-version=2021-04-01 with a
+ * `{ properties: {...} }` body. Wraps the admin-centre "Edit" command.
+ */
+export async function updateEnvironment(
+  id: string,
+  patch: { displayName?: string; description?: string; securityGroupId?: string },
+): Promise<EnvironmentLifecycleOperation> {
+  const properties: Record<string, any> = {};
+  if (patch.displayName !== undefined) properties.displayName = patch.displayName;
+  if (patch.description !== undefined) properties.description = patch.description;
+  if (patch.securityGroupId !== undefined) {
+    properties.linkedEnvironmentMetadata = { securityGroupId: patch.securityGroupId };
+  }
+  const { body, operationUrl } = await bapCallWithHeaders<any>(
+    `${BAP_BASE}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      query: { 'api-version': ENV_LIFECYCLE_API_VERSION },
+      body: { properties },
+    },
+  );
+  const status = body?.properties?.provisioningState || body?.status || 'Succeeded';
+  return { status, operationUrl, body, done: isTerminalOpStatus(status) };
+}
+
+/**
+ * Delete (soft-delete) an environment. DELETE .../environments/{id}?api-version=2021-04-01.
+ * Async — returns a 202 + Location header for the lifecycle operation to poll
+ * (or completes synchronously). The default environment can't be deleted
+ * (the platform returns a 4xx, surfaced as a PowerPlatformError).
+ */
+export async function deleteEnvironment(id: string): Promise<EnvironmentLifecycleOperation> {
+  const { body, operationUrl, status: httpStatus } = await bapCallWithHeaders<any>(
+    `${BAP_BASE}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${encodeURIComponent(id)}`,
+    { method: 'DELETE', query: { 'api-version': ENV_LIFECYCLE_API_VERSION } },
+  );
+  const status = body?.properties?.provisioningState || body?.status || (httpStatus === 202 ? 'Running' : 'Succeeded');
+  return { status, operationUrl, body, done: isTerminalOpStatus(status) };
+}
+
+/**
+ * Poll an async environment lifecycle operation (create/delete) by its
+ * Operation-Location URL. GET the operation; terminal when status ∈
+ * {Succeeded, Failed, Canceled}. A 404 from a delete-op URL means the
+ * environment was fully removed — treated as a terminal Succeeded.
+ */
+export async function getEnvironmentLifecycleOperation(operationUrl: string): Promise<EnvironmentLifecycleOperation> {
+  try {
+    const { body } = await bapCallWithHeaders<any>(operationUrl, { method: 'GET' });
+    const status = body?.status || body?.properties?.provisioningState;
+    return {
+      status,
+      operationUrl,
+      body,
+      done: isTerminalOpStatus(status),
+      error: body?.error ? { code: body.error.code, message: body.error.message } : undefined,
+    };
+  } catch (e) {
+    if (e instanceof PowerPlatformError && e.status === 404) {
+      return { status: 'Succeeded', operationUrl, done: true };
+    }
+    throw e;
+  }
+}
+
 function mapEnvironment(e: any): PpEnvironment {
   const props = e.properties || {};
   const linkedEnv = props.linkedEnvironmentMetadata || {};

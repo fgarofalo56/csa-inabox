@@ -204,6 +204,15 @@ function summarizeIndex(raw: any): IndexSummary {
   };
 }
 
+// Visual field-designer shaping also lives in the server-free module so the
+// editor and the data-plane client agree on the exact field wire shape.
+export type { FieldRow } from './search-field-shapes';
+export {
+  isVectorFieldType, fieldRowToApiField, apiFieldToRow, applyFieldRows,
+  FIELD_TYPES, ANALYZERS, semanticConfigNames, vectorProfileNames,
+  scoringProfileNames, facetableFieldNames,
+} from './search-field-shapes';
+
 /** GET /indexes — list every index on the service (summary form). */
 export async function listIndexes(service?: string): Promise<IndexSummary[]> {
   const res = await call('/indexes', { service, query: { $select: 'name,fields,vectorSearch' } });
@@ -280,31 +289,18 @@ export async function getIndexStats(name: string, service?: string): Promise<Ind
 // Documents — search
 // ----------------------------------------------------------------------------
 
-export interface SearchRequest {
-  search?: string;
-  filter?: string;
-  top?: number;
-  select?: string;
-  orderby?: string;
-  facets?: string[];
-  /** Vector queries (k-NN / hybrid). */
-  vectorQueries?: Array<{ kind: 'vector' | 'text'; vector?: number[]; text?: string; fields: string; k?: number; exhaustive?: boolean }>;
-  queryType?: 'simple' | 'full' | 'semantic';
-  count?: boolean;
-}
+// Search request + body shaping live in the server-free `search-field-shapes`
+// module so the `'use client'` editor can share the exact wire contract. Re-
+// exported here so existing imports (`SearchRequest`, `buildSearchBody`, …) from
+// the data-plane client keep working.
+export type { SearchRequest, VectorQuery } from './search-field-shapes';
+export { buildSearchBody } from './search-field-shapes';
+import type { SearchRequest } from './search-field-shapes';
+import { buildSearchBody } from './search-field-shapes';
 
 /** POST /indexes/{name}/docs/search — run a query. Returns the raw response (value, facets, count). */
 export async function searchDocuments(name: string, req: SearchRequest, service?: string): Promise<any> {
-  const body: any = {};
-  body.search = req.search && req.search.length ? req.search : '*';
-  if (req.filter) body.filter = req.filter;
-  if (typeof req.top === 'number') body.top = req.top;
-  if (req.select) body.select = req.select;
-  if (req.orderby) body.orderby = req.orderby;
-  if (req.facets?.length) body.facets = req.facets;
-  if (req.queryType) body.queryType = req.queryType;
-  if (req.count !== undefined) body.count = req.count;
-  if (req.vectorQueries?.length) body.vectorQueries = req.vectorQueries;
+  const body = buildSearchBody(req);
   const res = await call(`/indexes/${encodeURIComponent(name)}/docs/search`, { service, method: 'POST', body });
   return readJsonGuarded(res, `search ${name}`);
 }

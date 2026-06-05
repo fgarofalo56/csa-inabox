@@ -16,6 +16,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
+import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
+import type { LakehouseContent } from '@/lib/apps/content-bundles/types';
 import {
   Badge, Body1, Button, Caption1, Spinner, Subtitle2,
   Tree, TreeItem, TreeItemLayout,
@@ -32,6 +35,7 @@ import {
   DocumentTable20Regular, Eye20Regular, Folder20Regular, FolderAdd20Regular, Play20Regular,
   BookOpen20Regular, TableSimple20Regular,
   ArrowDownload20Regular, Info20Regular, LinkMultiple20Regular,
+  Add20Regular, CloudLink20Regular, CheckmarkCircle20Filled, ErrorCircle20Filled, Clock20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -144,6 +148,27 @@ interface Props { item: FabricItemType; id: string }
 export function LakehouseEditor({ item, id }: Props) {
   const s = useStyles();
   const router = useRouter();
+
+  // Bundle-installed lakehouses stamp their rich definition (folder tree,
+  // Delta tables, shortcuts) into the Cosmos item's state.content
+  // (LakehouseContent). The live ADLS account / Synapse Serverless endpoint may
+  // not be provisioned yet, in which case the Files/Tables/Shortcuts listings
+  // come back empty. Read the persisted content from the React Query cache the
+  // host page primes at ['item','lakehouse',id] so the editor opens FULLY
+  // built-out — showing the planned folders, Delta tables, and shortcuts — even
+  // before the live backend exists. Browse / preview / SQL still hit live ADLS.
+  const isNewItem = id === 'new';
+  const itemQ = useQuery<WorkspaceItem>({
+    queryKey: ['item', 'lakehouse', id],
+    queryFn: () => getItem('lakehouse', id),
+    enabled: !isNewItem,
+  });
+  const lhContentRaw = (itemQ.data?.state as any)?.content as LakehouseContent | undefined;
+  const lhContent = lhContentRaw?.kind === 'lakehouse' ? lhContentRaw : undefined;
+  const bundleFolders = lhContent?.folders ?? [];
+  const bundleDeltaTables = lhContent?.deltaTables ?? [];
+  const bundleShortcuts = lhContent?.shortcuts ?? [];
+  const hasBundle = bundleFolders.length > 0 || bundleDeltaTables.length > 0 || bundleShortcuts.length > 0;
   const [containers, setContainers] = useState<ContainerInfo[] | null>(null);
   const [containerError, setContainerError] = useState<string | null>(null);
   const [activeContainer, setActiveContainer] = useState<string | null>(null);
@@ -190,6 +215,9 @@ export function LakehouseEditor({ item, id }: Props) {
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [settingsSparkConfText, setSettingsSparkConfText] = useState('');
+  // Real deployed Synapse Spark pools — bind the "Default Spark pool" field to
+  // an enumerated picker (no freeform compute input) per the UI-parity rule.
+  const [sparkPools, setSparkPools] = useState<{ name: string }[] | null>(null);
 
   // ---- Fabric-style context menu (right-click on tree / table nodes) ----
   // Anchored at the cursor via a virtual positioning target, mirroring the
@@ -206,116 +234,187 @@ export function LakehouseEditor({ item, id }: Props) {
     setCtxOpen(true);
   }, []);
 
-  // ---- Shortcuts (OneLake virtualization) state ----
-  interface ShortcutTarget { type?: string; adlsGen2?: any; amazonS3?: any; oneLake?: any }
-  interface ShortcutRow { name: string; path: string; target?: ShortcutTarget }
-  // The Fabric OneLake shortcuts REST needs a Fabric workspaceId + lakehouse
-  // itemId. An ADLS-backed Loom lakehouse has no native Fabric binding, so the
-  // operator supplies them (persisted in localStorage per item) — and the full
-  // create dialog still renders even before they're set.
-  const [scWorkspaceId, setScWorkspaceId] = useState('');
-  const [scItemId, setScItemId] = useState('');
+  // ---- Shortcuts tab (Azure-native, NO Fabric dependency) ----
+  // A shortcut is a named, zero-copy pointer that surfaces external data as a
+  // folder under Files or a table under Tables. ADLS Gen2 + internal Loom
+  // lakehouse resolve on the Console UAMI; Tables register a real external table
+  // (Synapse Serverless preferred, Databricks UC otherwise). S3/GCS/Dataverse
+  // render the create form and honest-gate on submit. Registry is the Cosmos
+  // `lakehouse-shortcuts` container. See docs/fiab/design/lakehouse-shortcuts.md.
+  type ShortcutTargetType = 'adls' | 'internal' | 's3' | 'gcs' | 'dataverse';
+  type ShortcutKind = 'files' | 'tables';
+  interface ShortcutRow {
+    id: string; lakehouseId: string; name: string; kind: ShortcutKind;
+    parentPath: string; fullPath: string; targetType: ShortcutTargetType;
+    targetUri: string; abfssUri?: string; engine?: 'synapse' | 'databricks' | 'none';
+    engineObject?: string; format?: string; status: 'active' | 'pending' | 'error';
+    statusDetail?: string; createdBy: string; createdAt: string;
+  }
+  const SHORTCUT_SOURCES: { type: ShortcutTargetType; label: string; ready: boolean }[] = [
+    { type: 'internal', label: 'Internal Loom lakehouse', ready: true },
+    { type: 'adls', label: 'ADLS Gen2 / Azure Blob', ready: true },
+    { type: 's3', label: 'Amazon S3', ready: true },
+    { type: 'gcs', label: 'Google Cloud Storage', ready: true },
+    { type: 'dataverse', label: 'Dataverse', ready: true },
+  ];
+  // In-tenant ADLS/Blob account picker (vs typing the abfss URI) + external SAS.
+  const [scAdlsMode, setScAdlsMode] = useState<'picker' | 'external'>('picker');
+  const [storageAccts, setStorageAccts] = useState<Array<{ name: string; dfsHost?: string; blobHost?: string; isHns: boolean; resourceGroup?: string }>>([]);
+  const [storageAcctsLoading, setStorageAcctsLoading] = useState(false);
+  const [scAcctHost, setScAcctHost] = useState(''); // selected dfs/blob host
+  const [scAdlsContainer, setScAdlsContainer] = useState('');
+  const [scAdlsPath, setScAdlsPath] = useState('');
   const [shortcuts, setShortcuts] = useState<ShortcutRow[] | null>(null);
-  const [scBusy, setScBusy] = useState(false);
-  const [scError, setScError] = useState<string | null>(null);
-  const [scStatus, setScStatus] = useState<string | null>(null);
-  // create-shortcut dialog
-  const [scDialogOpen, setScDialogOpen] = useState(false);
-  const [scTargetType, setScTargetType] = useState<'adlsGen2' | 'amazonS3' | 'oneLake'>('adlsGen2');
+  const [shortcutsBusy, setShortcutsBusy] = useState(false);
+  const [shortcutsError, setShortcutsError] = useState<string | null>(null);
+  const [scWizardOpen, setScWizardOpen] = useState(false);
+  const [scStep, setScStep] = useState<1 | 2 | 3>(1);
+  const [scType, setScType] = useState<ShortcutTargetType>('internal');
+  const [scTargetUri, setScTargetUri] = useState('');
+  const [scInternalContainer, setScInternalContainer] = useState('');
+  const [scInternalPath, setScInternalPath] = useState('');
+  const [scKvSecret, setScKvSecret] = useState('');
   const [scName, setScName] = useState('');
-  const [scPath, setScPath] = useState<'Files' | 'Tables'>('Files');
-  const [scSubfolder, setScSubfolder] = useState('');
-  const [scLocation, setScLocation] = useState('');
-  const [scSubpath, setScSubpath] = useState('');
-  const [scConnectionId, setScConnectionId] = useState('');
-  const [scOlWorkspaceId, setScOlWorkspaceId] = useState('');
-  const [scOlItemId, setScOlItemId] = useState('');
-  const [scOlPath, setScOlPath] = useState('');
+  const [scKind, setScKind] = useState<ShortcutKind>('files');
+  const [scParentPath, setScParentPath] = useState('');
+  const [scFormat, setScFormat] = useState<'delta' | 'parquet' | 'csv' | 'json'>('delta');
+  const [scSubmitting, setScSubmitting] = useState(false);
+  const [scSubmitError, setScSubmitError] = useState<string | null>(null);
 
-  // Restore any previously-saved Fabric binding for this lakehouse item.
+  // Discover in-tenant storage accounts for the ADLS picker when the wizard is
+  // on the ADLS source in picker mode.
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(`loom.lakehouse.fabricBinding.${id}`);
-      if (raw) {
-        const b = JSON.parse(raw);
-        if (b.workspaceId) setScWorkspaceId(b.workspaceId);
-        if (b.itemId) setScItemId(b.itemId);
-      }
-    } catch { /* ignore */ }
-  }, [id]);
+    if (!scWizardOpen || scType !== 'adls' || scAdlsMode !== 'picker' || storageAccts.length) return;
+    setStorageAcctsLoading(true);
+    fetch('/api/storage/accounts').then((r) => r.json()).then((j) => {
+      if (j?.ok && Array.isArray(j.accounts)) setStorageAccts(j.accounts);
+    }).catch(() => {}).finally(() => setStorageAcctsLoading(false));
+  }, [scWizardOpen, scType, scAdlsMode, storageAccts.length]);
 
-  const persistBinding = useCallback((ws: string, it: string) => {
-    try {
-      localStorage.setItem(`loom.lakehouse.fabricBinding.${id}`, JSON.stringify({ workspaceId: ws, itemId: it }));
-    } catch { /* ignore */ }
-  }, [id]);
+  // The lakehouse identity for the registry = the selected ADLS container
+  // (the Loom "lakehouse" is a medallion container). Falls back to the item id.
+  const shortcutLakehouseId = activeContainer || id;
 
   const loadShortcuts = useCallback(async () => {
-    if (!scWorkspaceId.trim() || !scItemId.trim()) { setShortcuts(null); return; }
-    setScBusy(true); setScError(null);
+    if (!shortcutLakehouseId) return;
+    setShortcutsBusy(true); setShortcutsError(null);
     try {
-      const qs = new URLSearchParams({ workspaceId: scWorkspaceId.trim(), itemId: scItemId.trim() });
-      const r = await fetch(`/api/catalog/shortcut?${qs.toString()}`);
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; shortcuts?: ShortcutRow[] }>(r, 'List shortcuts');
-      if (!j.ok) throw new Error((j.error || `HTTP ${r.status}`) + ((j as any).hint ? ` — ${(j as any).hint}` : ''));
-      setShortcuts(j.shortcuts || []);
-    } catch (e: any) { setScError(e?.message || String(e)); setShortcuts(null); }
-    finally { setScBusy(false); }
-  }, [scWorkspaceId, scItemId]);
+      const r = await fetch(`/api/lakehouse/shortcuts?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}`);
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; data?: ShortcutRow[] }>(r, 'List shortcuts');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setShortcuts(j.data || []);
+    } catch (e: any) { setShortcutsError(e?.message || String(e)); setShortcuts([]); }
+    finally { setShortcutsBusy(false); }
+  }, [shortcutLakehouseId]);
 
-  const createShortcut = useCallback(async () => {
-    if (!scWorkspaceId.trim() || !scItemId.trim() || !scName.trim()) return;
-    setScBusy(true); setScError(null); setScStatus(null);
+  const resetWizard = useCallback((presetKind?: ShortcutKind, presetParent?: string) => {
+    setScStep(1); setScType('internal'); setScTargetUri('');
+    setScInternalContainer(''); setScInternalPath(''); setScKvSecret('');
+    setScName(''); setScKind(presetKind || 'files'); setScParentPath(presetParent || '');
+    setScFormat('delta'); setScSubmitError(null);
+  }, []);
+
+  const openShortcutWizard = useCallback((presetKind?: ShortcutKind, presetParent?: string) => {
+    resetWizard(presetKind, presetParent);
+    setScWizardOpen(true);
+  }, [resetWizard]);
+
+  const submitShortcut = useCallback(async () => {
+    if (!shortcutLakehouseId || !scName.trim()) return;
+    setScSubmitting(true); setScSubmitError(null);
+    // Resolve targetUri from the per-source fields.
+    let targetUri = scTargetUri.trim();
+    if (scType === 'internal') {
+      const c = scInternalContainer.trim();
+      const p = scInternalPath.trim().replace(/^\/+/, '');
+      targetUri = `internal://${c}${p ? `/${p}` : ''}`;
+    } else if (scType === 'adls' && scAdlsMode === 'picker' && scAcctHost) {
+      // Build abfss from the picked account + container + path (no typed URI).
+      const c = scAdlsContainer.trim();
+      const p = scAdlsPath.trim().replace(/^\/+/, '');
+      targetUri = `abfss://${c}@${scAcctHost}/${p}`;
+    }
+    const credentialRef = scKvSecret.trim()
+      ? { kind: scType === 's3' ? 'awsKeys' : scType === 'gcs' ? 'gcsServiceAccount' : 'sas', keyVaultSecret: scKvSecret.trim() }
+      : undefined;
     try {
-      let target: ShortcutTarget;
-      if (scTargetType === 'oneLake') {
-        if (!scOlWorkspaceId.trim() || !scOlItemId.trim() || !scOlPath.trim()) {
-          throw new Error('OneLake target requires source workspace id, item id, and path.');
-        }
-        target = { oneLake: { workspaceId: scOlWorkspaceId.trim(), itemId: scOlItemId.trim(), path: scOlPath.trim() } };
-      } else {
-        if (!scLocation.trim() || !scSubpath.trim()) {
-          throw new Error(`${scTargetType === 'amazonS3' ? 'S3' : 'ADLS Gen2'} target requires location and subpath.`);
-        }
-        if (!scConnectionId.trim()) {
-          throw new Error('A cloud connection id is required for external targets. Create the connection in Fabric → Manage connections, then paste its GUID.');
-        }
-        const inner = { location: scLocation.trim(), subpath: scSubpath.trim(), connectionId: scConnectionId.trim() };
-        target = scTargetType === 'amazonS3' ? { amazonS3: inner } : { adlsGen2: inner };
-      }
-      const fullPath = scSubfolder.trim() ? `${scPath}/${scSubfolder.trim().replace(/^\/+|\/+$/g, '')}` : scPath;
-      const r = await fetch('/api/catalog/shortcut', {
+      const r = await fetch('/api/lakehouse/shortcuts', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ workspaceId: scWorkspaceId.trim(), itemId: scItemId.trim(), name: scName.trim(), path: fullPath, target }),
+        body: JSON.stringify({
+          lakehouseId: shortcutLakehouseId, name: scName.trim(), kind: scKind,
+          parentPath: scParentPath.trim(), targetType: scType, targetUri,
+          format: scKind === 'tables' ? scFormat : undefined, credentialRef,
+        }),
       });
-      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string; shortcut?: ShortcutRow }>(r, 'Create shortcut');
-      if (!j.ok) throw new Error((j.error || `HTTP ${r.status}`) + ((j as any).hint ? ` — ${(j as any).hint}` : ''));
-      persistBinding(scWorkspaceId.trim(), scItemId.trim());
-      setScStatus(`Shortcut ${scName.trim()} created at ${new Date().toLocaleTimeString()}`);
-      setScDialogOpen(false);
-      setScName(''); setScSubfolder(''); setScLocation(''); setScSubpath(''); setScConnectionId('');
-      setScOlWorkspaceId(''); setScOlItemId(''); setScOlPath('');
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Create shortcut');
+      if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
+      setScWizardOpen(false);
       await loadShortcuts();
-    } catch (e: any) { setScError(e?.message || String(e)); }
-    finally { setScBusy(false); }
-  }, [scWorkspaceId, scItemId, scName, scPath, scSubfolder, scTargetType, scLocation, scSubpath, scConnectionId, scOlWorkspaceId, scOlItemId, scOlPath, persistBinding, loadShortcuts]);
+    } catch (e: any) { setScSubmitError(e?.message || String(e)); }
+    finally { setScSubmitting(false); }
+  }, [shortcutLakehouseId, scName, scTargetUri, scType, scAdlsMode, scAcctHost, scAdlsContainer, scAdlsPath, scInternalContainer, scInternalPath, scKvSecret, scKind, scParentPath, scFormat, loadShortcuts]);
 
-  const deleteShortcut = useCallback(async (sc: ShortcutRow) => {
-    if (!scWorkspaceId.trim() || !scItemId.trim()) return;
-    // eslint-disable-next-line no-alert
-    const ok = typeof window !== 'undefined' ? window.confirm(`Delete shortcut ${sc.name}?`) : false;
-    if (!ok) return;
-    setScBusy(true); setScError(null); setScStatus(null);
+  // Register a PLANNED bundle shortcut into the live registry (one click) — the
+  // bundle only carries metadata, so this materializes it against the real
+  // backend (resolves the "shows in the tree but 'no shortcuts registered'"
+  // contradiction). Bundle targets are abfss ADLS Gen2 URIs (Console UAMI auth).
+  const [regBusy, setRegBusy] = useState<string | null>(null);
+  const registerBundleShortcut = useCallback(async (sc: any) => {
+    if (!shortcutLakehouseId) return;
+    setRegBusy(sc.name); setShortcutsError(null);
     try {
-      const qs = new URLSearchParams({ workspaceId: scWorkspaceId.trim(), itemId: scItemId.trim(), path: sc.path, name: sc.name });
-      const r = await fetch(`/api/catalog/shortcut?${qs.toString()}`, { method: 'DELETE' });
+      const r = await fetch('/api/lakehouse/shortcuts', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          lakehouseId: shortcutLakehouseId, name: sc.name,
+          kind: sc.kind || 'files', parentPath: sc.parentPath || '',
+          targetType: 'adls', targetUri: sc.target,
+        }),
+      });
+      const j = await parseJsonOrError<{ ok: boolean; error?: string; hint?: string }>(r, 'Register shortcut');
+      if (!j.ok) throw new Error(j.hint || j.error || `HTTP ${r.status}`);
+      await loadShortcuts();
+    } catch (e: any) { setShortcutsError(e?.message || String(e)); }
+    finally { setRegBusy(null); }
+  }, [shortcutLakehouseId, loadShortcuts]);
+  const registerAllBundleShortcuts = useCallback(async () => {
+    for (const sc of bundleShortcuts) await registerBundleShortcut(sc);
+  }, [bundleShortcuts, registerBundleShortcut]);
+
+  const testShortcut = useCallback(async (row: ShortcutRow) => {
+    setShortcutsBusy(true); setShortcutsError(null);
+    try {
+      const r = await fetch('/api/lakehouse/shortcuts/test', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lakehouseId: row.lakehouseId, id: row.id }),
+      });
+      await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Test shortcut');
+      await loadShortcuts();
+    } catch (e: any) { setShortcutsError(e?.message || String(e)); }
+    finally { setShortcutsBusy(false); }
+  }, [loadShortcuts]);
+
+  const deleteShortcutRow = useCallback(async (row: ShortcutRow) => {
+    // eslint-disable-next-line no-alert
+    const ok = typeof window !== 'undefined'
+      ? window.confirm(`Delete shortcut "${row.name}"? This drops the registry pointer and any external table — it never deletes the underlying source data.`)
+      : false;
+    if (!ok) return;
+    setShortcutsBusy(true); setShortcutsError(null);
+    try {
+      const r = await fetch(`/api/lakehouse/shortcuts?lakehouseId=${encodeURIComponent(row.lakehouseId)}&id=${encodeURIComponent(row.id)}`, { method: 'DELETE' });
       const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Delete shortcut');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      setScStatus(`Shortcut ${sc.name} deleted at ${new Date().toLocaleTimeString()}`);
       await loadShortcuts();
-    } catch (e: any) { setScError(e?.message || String(e)); }
-    finally { setScBusy(false); }
-  }, [scWorkspaceId, scItemId, loadShortcuts]);
+    } catch (e: any) { setShortcutsError(e?.message || String(e)); }
+    finally { setShortcutsBusy(false); }
+  }, [loadShortcuts]);
+
+  // Load shortcuts when the tab is opened or the container changes.
+  useEffect(() => {
+    if (tab === 'shortcuts' && shortcutLakehouseId) loadShortcuts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, shortcutLakehouseId]);
 
   const loadPerms = useCallback(async () => {
     if (!activeContainer) return;
@@ -381,10 +480,27 @@ export function LakehouseEditor({ item, id }: Props) {
     finally { setSettingsBusy(false); }
   }, [activeContainer]);
 
+  const loadSparkPools = useCallback(async () => {
+    try {
+      const r = await fetch('/api/loom/compute-targets');
+      const j = await parseJsonOrError<{ ok: boolean; computes?: { name: string; kind: string }[] }>(r, 'List compute');
+      if (j.ok && Array.isArray(j.computes)) {
+        setSparkPools(
+          j.computes
+            .filter((c) => c.kind === 'synapse-spark')
+            .map((c) => ({ name: c.name.replace(/\s*\(Synapse Spark\)\s*$/, '') })),
+        );
+      } else {
+        setSparkPools([]);
+      }
+    } catch { setSparkPools([]); }
+  }, []);
+
   const openSettings = useCallback(() => {
     setSettingsOpen(true);
     loadSettings();
-  }, [loadSettings]);
+    if (sparkPools === null) loadSparkPools();
+  }, [loadSettings, loadSparkPools, sparkPools]);
 
   const saveSettings = useCallback(async () => {
     if (!activeContainer) return;
@@ -695,7 +811,7 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [openPrefixes, activeContainer, currentPrefix, cacheKey]);
 
   // ---- tree renderer --------------------------------------------------
-  function renderTreeChildren(container: string, prefix: string): JSX.Element {
+  function renderTreeChildren(container: string, prefix: string): React.ReactElement {
     const state = openPrefixes[cacheKey(container, prefix)];
     if (state === undefined) {
       return (
@@ -809,6 +925,66 @@ export function LakehouseEditor({ item, id }: Props) {
                   <Tree>{renderTreeChildren(c.name, '')}</Tree>
                 </TreeItem>
               ))}
+            </Tree>
+          )}
+          {hasBundle && (
+            <Tree
+              aria-label="Planned lakehouse structure from app bundle"
+              defaultOpenItems={['bundle', 'bundle-folders', 'bundle-tables', 'bundle-shortcuts']}
+              style={{ marginTop: 12 }}
+            >
+              <TreeItem itemType="branch" value="bundle">
+                <TreeItemLayout iconBefore={<Database20Regular />}>Starter structure (app bundle)</TreeItemLayout>
+                <Tree>
+                  {bundleFolders.length > 0 && (
+                    <TreeItem itemType="branch" value="bundle-folders">
+                      <TreeItemLayout iconBefore={<Folder20Regular />}>Folders ({bundleFolders.length})</TreeItemLayout>
+                      <Tree>
+                        {bundleFolders.map((f) => (
+                          <TreeItem key={f.path} itemType="leaf" value={`bf-${f.path}`} title={f.description}>
+                            <TreeItemLayout iconBefore={<Folder20Regular />}>{f.path}</TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  )}
+                  {bundleDeltaTables.length > 0 && (
+                    <TreeItem itemType="branch" value="bundle-tables">
+                      <TreeItemLayout iconBefore={<TableSimple20Regular />}>Delta tables ({bundleDeltaTables.length})</TreeItemLayout>
+                      <Tree>
+                        {bundleDeltaTables.map((t) => (
+                          <TreeItem
+                            key={t.name}
+                            itemType="leaf"
+                            value={`bt-${t.name}`}
+                            onClick={() => setTab('tables')}
+                          >
+                            <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{t.name}</TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  )}
+                  {bundleShortcuts.length > 0 && (
+                    <TreeItem itemType="branch" value="bundle-shortcuts">
+                      <TreeItemLayout iconBefore={<LinkMultiple20Regular />}>Shortcuts ({bundleShortcuts.length})</TreeItemLayout>
+                      <Tree>
+                        {bundleShortcuts.map((sc) => (
+                          <TreeItem
+                            key={sc.name}
+                            itemType="leaf"
+                            value={`bs-${sc.name}`}
+                            title={sc.target}
+                            onClick={() => setTab('shortcuts')}
+                          >
+                            <TreeItemLayout iconBefore={<CloudLink20Regular />}>{sc.name}</TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  )}
+                </Tree>
+              </TreeItem>
             </Tree>
           )}
         </div>
@@ -962,7 +1138,9 @@ export function LakehouseEditor({ item, id }: Props) {
                       <Button onClick={() => loadPaths(activeContainer, 'Tables')}>Load tables</Button>
                     );
                   }
-                  if ('error' in tableListing) {
+                  // Tables/ directory may not exist yet (404 during first provision). Gracefully fall through to bundled content.
+                  const isTablesNotFound = 'error' in tableListing && tableListing.error.toLowerCase().includes('path does not exist');
+                  if ('error' in tableListing && !isTablesNotFound) {
                     return (
                       <MessageBar intent="error">
                         <MessageBarBody>
@@ -972,15 +1150,55 @@ export function LakehouseEditor({ item, id }: Props) {
                       </MessageBar>
                     );
                   }
-                  const tables = (tableListing as PathEntry[]).filter(e => e.isDirectory);
+                  const tables = (tableListing && !('error' in tableListing) ? (tableListing as PathEntry[]).filter(e => e.isDirectory) : []);
                   if (tables.length === 0) {
                     return (
-                      <MessageBar intent="info">
-                        <MessageBarBody>
-                          No Delta tables yet. From the Files tab, right-click a Parquet / CSV / JSON
-                          file and choose <strong>Load to Tables (Delta)</strong> to create one.
-                        </MessageBarBody>
-                      </MessageBar>
+                      <>
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            No Delta tables materialized in ADLS yet. From the Files tab, right-click a
+                            Parquet / CSV / JSON file and choose <strong>Load to Tables (Delta)</strong> to create one.
+                          </MessageBarBody>
+                        </MessageBar>
+                        {bundleDeltaTables.length > 0 && (
+                          <>
+                            <Caption1 style={{ display: 'block', marginTop: 12 }}>
+                              <strong>Planned tables from the installed app bundle</strong> — run the load/DDL in a
+                              notebook against the live lakehouse to materialize these.
+                            </Caption1>
+                            <div className={s.tableWrap}>
+                              <Table aria-label="Planned Delta tables" size="small">
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHeaderCell>Table</TableHeaderCell>
+                                    <TableHeaderCell>DDL</TableHeaderCell>
+                                    <TableHeaderCell>Sample rows</TableHeaderCell>
+                                    <TableHeaderCell></TableHeaderCell>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {bundleDeltaTables.map((t) => (
+                                    <TableRow key={t.name}>
+                                      <TableCell><strong>{t.name}</strong></TableCell>
+                                      <TableCell><code style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>{t.ddl}</code></TableCell>
+                                      <TableCell className={s.cell}>{t.sampleRows?.length ?? 0}</TableCell>
+                                      <TableCell>
+                                        <Button size="small" appearance="primary"
+                                          onClick={() => {
+                                            setSqlText(`-- Read Delta table (once materialized under Tables/${t.name})\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer || '<container>'}/Tables/${t.name}', FORMAT='DELTA') AS r;`);
+                                            setTab('sql');
+                                          }}>
+                                          Query template
+                                        </Button>
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          </>
+                        )}
+                      </>
                     );
                   }
                   return (
@@ -1023,84 +1241,137 @@ export function LakehouseEditor({ item, id }: Props) {
             {tab === 'shortcuts' && (
               <>
                 <div className={s.toolbar}>
-                  <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
-                  <Caption1>OneLake shortcuts — virtualize external storage into the lakehouse without copying data</Caption1>
-                  <Button appearance="primary" icon={<LinkMultiple20Regular />}
-                    style={{ marginLeft: 'auto' }}
-                    disabled={!scWorkspaceId.trim() || !scItemId.trim()}
-                    onClick={() => { setScError(null); setScStatus(null); setScDialogOpen(true); }}>
+                  <Badge appearance="filled" color="brand">{shortcutLakehouseId || 'no lakehouse'}</Badge>
+                  <Caption1>Shortcuts — virtualize external storage into the lakehouse without copying data (zero-copy)</Caption1>
+                  <Button appearance="primary" icon={<Add20Regular />} disabled={!shortcutLakehouseId}
+                    onClick={() => openShortcutWizard()} style={{ marginLeft: 'auto' }}>
                     New shortcut
                   </Button>
-                  <Button appearance="outline" icon={<ArrowSync20Regular />}
-                    disabled={!scWorkspaceId.trim() || !scItemId.trim() || scBusy}
+                  <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={!shortcutLakehouseId || shortcutsBusy}
                     onClick={loadShortcuts}>
                     Refresh
                   </Button>
                 </div>
 
-                {/* Fabric binding — the OneLake shortcuts REST keys off a Fabric
-                    workspaceId + lakehouse itemId. An ADLS-backed Loom lakehouse
-                    has no native Fabric binding, so the operator supplies them
-                    once (persisted per item). The full surface renders either way. */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, maxWidth: 720 }}>
-                  <Field label="Fabric workspace id" hint="GUID of the Fabric workspace hosting the lakehouse">
-                    <Input value={scWorkspaceId} placeholder="cfafbeb1-8037-4d0c-896e-a46fb27ff222"
-                      onChange={(_, d) => setScWorkspaceId(d.value)}
-                      onBlur={() => { if (scWorkspaceId.trim() && scItemId.trim()) { persistBinding(scWorkspaceId.trim(), scItemId.trim()); loadShortcuts(); } }} />
-                  </Field>
-                  <Field label="Fabric lakehouse item id" hint="GUID of the Lakehouse item in that workspace">
-                    <Input value={scItemId} placeholder="25bac802-080d-4f73-8a42-1b406eb1fceb"
-                      onChange={(_, d) => setScItemId(d.value)}
-                      onBlur={() => { if (scWorkspaceId.trim() && scItemId.trim()) { persistBinding(scWorkspaceId.trim(), scItemId.trim()); loadShortcuts(); } }} />
-                  </Field>
-                </div>
+                {shortcutsError && (
+                  <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Shortcuts error</MessageBarTitle>{shortcutsError}</MessageBarBody></MessageBar>
+                )}
+                {shortcutsBusy && shortcuts === null && <Spinner size="small" label="Loading shortcuts…" labelPosition="after" />}
 
-                {(!scWorkspaceId.trim() || !scItemId.trim()) && (
-                  <MessageBar intent="warning">
-                    <MessageBarBody>
-                      <MessageBarTitle>Bind a Fabric lakehouse to manage shortcuts</MessageBarTitle>
-                      Enter the Fabric workspace id and lakehouse item id above. Shortcuts are created
-                      via the real Fabric OneLake Shortcuts REST API
-                      (<code>POST /v1/workspaces/&#123;ws&#125;/items/&#123;lakehouse&#125;/shortcuts</code>),
-                      which requires the Console UAMI added as Member/Admin on that workspace and the
-                      tenant setting <em>“Service principals can use Fabric APIs”</em> enabled.
-                    </MessageBarBody>
-                  </MessageBar>
+                {shortcuts !== null && shortcuts.length === 0 && !shortcutsBusy && (
+                  <>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        <MessageBarTitle>No shortcuts registered yet</MessageBarTitle>
+                        Click <strong>New shortcut</strong> to virtualize an ADLS Gen2 path, another
+                        Loom lakehouse, S3, GCS, or Dataverse into this lakehouse — without copying data.
+                        ADLS Gen2 and internal Loom lakehouse work today on the Console UAMI;
+                        external clouds prompt for a Key Vault credential.
+                      </MessageBarBody>
+                    </MessageBar>
+                    {bundleShortcuts.length > 0 && (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                          <Caption1 style={{ display: 'block' }}>
+                            <strong>Planned shortcuts from the installed app bundle</strong> — register each into the live backend.
+                          </Caption1>
+                          <Button size="small" appearance="primary" style={{ marginLeft: 'auto' }}
+                            onClick={registerAllBundleShortcuts} disabled={!!regBusy}>
+                            {regBusy ? 'Registering…' : 'Register all'}
+                          </Button>
+                        </div>
+                        <div className={s.tableWrap}>
+                          <Table aria-label="Planned shortcuts" size="small">
+                            <TableHeader>
+                              <TableRow>
+                                <TableHeaderCell>Name</TableHeaderCell>
+                                <TableHeaderCell>Target</TableHeaderCell>
+                                <TableHeaderCell>Description</TableHeaderCell>
+                                <TableHeaderCell></TableHeaderCell>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {bundleShortcuts.map((sc) => {
+                                const live = (shortcuts || []).some((x) => x.name === sc.name);
+                                return (
+                                  <TableRow key={sc.name}>
+                                    <TableCell>
+                                      <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                                      <strong>{sc.name}</strong>
+                                    </TableCell>
+                                    <TableCell><code style={{ fontSize: 11 }}>{sc.target}</code></TableCell>
+                                    <TableCell>{sc.description || '—'}</TableCell>
+                                    <TableCell>
+                                      {live ? (
+                                        <Badge appearance="tint" color="success">Registered</Badge>
+                                      ) : (
+                                        <Button size="small" appearance="outline" onClick={() => registerBundleShortcut(sc)} disabled={regBusy === sc.name}>
+                                          {regBusy === sc.name ? 'Registering…' : 'Register'}
+                                        </Button>
+                                      )}
+                                    </TableCell>
+                                  </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </>
+                    )}
+                  </>
                 )}
 
-                {scError && (
-                  <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Shortcuts error</MessageBarTitle>{scError}</MessageBarBody></MessageBar>
-                )}
-                {scStatus && !scError && (
-                  <MessageBar intent="success"><MessageBarBody>{scStatus}</MessageBarBody></MessageBar>
-                )}
-                {scBusy && <Spinner size="small" label="Calling Fabric REST…" labelPosition="after" />}
-
-                {scWorkspaceId.trim() && scItemId.trim() && shortcuts && (
+                {shortcuts !== null && shortcuts.length > 0 && (
                   <div className={s.tableWrap}>
-                    <Table aria-label="OneLake shortcuts" size="small">
+                    <Table aria-label="Lakehouse shortcuts" size="small">
                       <TableHeader>
                         <TableRow>
                           <TableHeaderCell>Name</TableHeaderCell>
                           <TableHeaderCell>Path</TableHeaderCell>
-                          <TableHeaderCell>Target</TableHeaderCell>
-                          <TableHeaderCell>Action</TableHeaderCell>
+                          <TableHeaderCell>Source</TableHeaderCell>
+                          <TableHeaderCell>Engine</TableHeaderCell>
+                          <TableHeaderCell>Status</TableHeaderCell>
+                          <TableHeaderCell>Actions</TableHeaderCell>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {shortcuts.length === 0 && (
-                          <TableRow><TableCell colSpan={4}>
-                            <div style={{ padding: 16 }}>
-                              <Caption1>No shortcuts on this lakehouse yet. Click <b>New shortcut</b> to virtualize an ADLS Gen2 / S3 / OneLake source.</Caption1>
-                            </div>
-                          </TableCell></TableRow>
-                        )}
                         {shortcuts.map((sc) => (
-                          <TableRow key={`${sc.path}/${sc.name}`}>
-                            <TableCell><strong>{sc.name}</strong></TableCell>
-                            <TableCell className={s.cell}>{sc.path}</TableCell>
-                            <TableCell>{sc.target?.type || (sc.target?.adlsGen2 ? 'AdlsGen2' : sc.target?.amazonS3 ? 'AmazonS3' : sc.target?.oneLake ? 'OneLake' : '—')}</TableCell>
-                            <TableCell><Button size="small" appearance="subtle" disabled={scBusy} onClick={() => deleteShortcut(sc)}>Delete</Button></TableCell>
+                          <TableRow key={sc.id}>
+                            <TableCell>
+                              <CloudLink20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                              <strong>{sc.name}</strong>
+                            </TableCell>
+                            <TableCell><code style={{ fontSize: 11 }}>{sc.fullPath}</code></TableCell>
+                            <TableCell>
+                              <Badge appearance="outline" color={sc.targetType === 'adls' || sc.targetType === 'internal' ? 'brand' : 'warning'}>
+                                {sc.targetType}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>{sc.engine && sc.engine !== 'none' ? sc.engine : '—'}</TableCell>
+                            <TableCell>
+                              {sc.status === 'active' && <Badge appearance="tint" color="success" icon={<CheckmarkCircle20Filled />}>active</Badge>}
+                              {sc.status === 'pending' && <Badge appearance="tint" color="warning" icon={<Clock20Regular />} title={sc.statusDetail}>pending</Badge>}
+                              {sc.status === 'error' && <Badge appearance="tint" color="danger" icon={<ErrorCircle20Filled />} title={sc.statusDetail}>error</Badge>}
+                            </TableCell>
+                            <TableCell>
+                              <Menu>
+                                <MenuTrigger disableButtonEnhancement>
+                                  <Button appearance="subtle" size="small">…</Button>
+                                </MenuTrigger>
+                                <MenuPopover>
+                                  <MenuList>
+                                    {sc.kind === 'tables' && sc.engineObject && (
+                                      <MenuItem icon={<Play20Regular />} onClick={() => {
+                                        setSqlText(`SELECT TOP 100 * FROM ${sc.engineObject};`);
+                                        setTab('sql');
+                                      }}>Query (SQL)</MenuItem>
+                                    )}
+                                    <MenuItem icon={<ArrowSync20Regular />} onClick={() => testShortcut(sc)}>Test</MenuItem>
+                                    <MenuItem icon={<Delete20Regular />} onClick={() => deleteShortcutRow(sc)}>Delete</MenuItem>
+                                  </MenuList>
+                                </MenuPopover>
+                              </Menu>
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -1248,7 +1519,16 @@ export function LakehouseEditor({ item, id }: Props) {
                 {ctxEntry && ctxEntry.isDirectory && (
                   <>
                     <MenuItem icon={<Folder20Regular />} onClick={() => { if (ctxEntry && activeContainer) loadPaths(activeContainer, ctxEntry.name); setCtxOpen(false); }}>Open</MenuItem>
-                    <MenuItem icon={<LinkMultiple20Regular />} onClick={() => { setTab('shortcuts'); setScError(null); setScStatus(null); setScDialogOpen(!!(scWorkspaceId.trim() && scItemId.trim())); setCtxOpen(false); }}>New shortcut…</MenuItem>
+                    <MenuItem icon={<LinkMultiple20Regular />} onClick={() => {
+                      // Pre-fill section + sub-path from the right-clicked folder, mirroring
+                      // the Fabric Explorer "New shortcut…" entry, then open the wizard.
+                      const folder = ctxEntry?.name || '';
+                      const isTables = /(^|\/)Tables(\/|$)/i.test(folder);
+                      const parent = folder.replace(/^Tables\/?|^Files\/?/i, '').replace(/\/+$/, '');
+                      setTab('shortcuts');
+                      openShortcutWizard(isTables ? 'tables' : 'files', parent);
+                      setCtxOpen(false);
+                    }}>New shortcut…</MenuItem>
                     <MenuItem icon={<ArrowSync20Regular />} onClick={() => { if (ctxEntry && activeContainer) loadPaths(activeContainer, ctxEntry.name); setCtxOpen(false); }}>Refresh</MenuItem>
                   </>
                 )}
@@ -1257,6 +1537,185 @@ export function LakehouseEditor({ item, id }: Props) {
               </MenuList>
             </MenuPopover>
           </Menu>
+
+          {/* New shortcut wizard — 3 steps mirroring Fabric (source → connection → name/place). */}
+          <Dialog open={scWizardOpen} onOpenChange={(_, d) => setScWizardOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: '720px', width: '90vw' }}>
+              <DialogBody>
+                <DialogTitle>New shortcut — step {scStep} of 3</DialogTitle>
+                <DialogContent>
+                  {scStep === 1 && (
+                    <>
+                      <Caption1>Choose the source to virtualize into <strong>{shortcutLakehouseId}</strong>. ADLS Gen2 and internal Loom lakehouse work on the Console UAMI; external clouds need a Key Vault credential.</Caption1>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
+                        {SHORTCUT_SOURCES.map((src) => (
+                          <Button
+                            key={src.type}
+                            appearance={scType === src.type ? 'primary' : 'outline'}
+                            icon={<CloudLink20Regular />}
+                            onClick={() => setScType(src.type)}
+                            style={{ justifyContent: 'flex-start', height: 'auto', padding: '10px 12px' }}
+                          >
+                            <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+                              <span>{src.label}</span>
+                              <Badge appearance="tint" color={src.ready ? 'success' : 'warning'} size="small">
+                                {src.ready ? 'UAMI-ready' : 'Needs credential'}
+                              </Badge>
+                            </span>
+                          </Button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {scStep === 2 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {scType === 'internal' && (
+                        <>
+                          <Field label="Source container (Loom lakehouse)" required>
+                            <Dropdown
+                              selectedOptions={scInternalContainer ? [scInternalContainer] : []}
+                              value={scInternalContainer}
+                              placeholder="Select a container"
+                              onOptionSelect={(_, d) => setScInternalContainer(d.optionValue || '')}
+                            >
+                              {(containers || []).map((c) => <Option key={c.name} value={c.name}>{c.name}</Option>)}
+                            </Dropdown>
+                          </Field>
+                          <Field label="Source sub-path" hint="Relative to the container root, e.g. silver/partner_products">
+                            <Input value={scInternalPath} onChange={(_, d) => setScInternalPath(d.value)} placeholder="folder/subfolder" />
+                          </Field>
+                        </>
+                      )}
+                      {scType === 'adls' && (
+                        <>
+                          <Field label="Source">
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <Button size="small" appearance={scAdlsMode === 'picker' ? 'primary' : 'outline'} onClick={() => setScAdlsMode('picker')}>In-tenant account</Button>
+                              <Button size="small" appearance={scAdlsMode === 'external' ? 'primary' : 'outline'} onClick={() => setScAdlsMode('external')}>External (URI + SAS/key)</Button>
+                            </div>
+                          </Field>
+                          {scAdlsMode === 'picker' ? (
+                            <>
+                              <Field label="Storage account" required hint={storageAcctsLoading ? 'Discovering accounts…' : 'ADLS Gen2 / Blob accounts you can access across the tenant'}>
+                                <Dropdown
+                                  value={scAcctHost ? (storageAccts.find((a) => (a.dfsHost || a.blobHost) === scAcctHost)?.name || scAcctHost) : ''}
+                                  selectedOptions={scAcctHost ? [scAcctHost] : []}
+                                  placeholder={storageAcctsLoading ? 'Loading…' : 'Select a storage account'}
+                                  onOptionSelect={(_, d) => setScAcctHost(d.optionValue || '')}>
+                                  {storageAccts.map((a) => {
+                                    const host = a.dfsHost || a.blobHost || '';
+                                    return <Option key={a.name} value={host} text={a.name}>{a.name}{a.isHns ? ' (ADLS Gen2)' : ' (Blob)'}{a.resourceGroup ? ` · ${a.resourceGroup}` : ''}</Option>;
+                                  })}
+                                </Dropdown>
+                              </Field>
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <Field label="Container / filesystem" required style={{ flex: 1 }}>
+                                  <Input value={scAdlsContainer} onChange={(_, d) => setScAdlsContainer(d.value)} placeholder="landing" />
+                                </Field>
+                                <Field label="Path" hint="folder under the container (optional)" style={{ flex: 1 }}>
+                                  <Input value={scAdlsPath} onChange={(_, d) => setScAdlsPath(d.value)} placeholder="eventhub-capture" />
+                                </Field>
+                              </div>
+                              {scAcctHost && scAdlsContainer && (
+                                <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
+                                  abfss://{scAdlsContainer}@{scAcctHost}/{scAdlsPath.replace(/^\/+/, '')}
+                                </Caption1>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <Field label="Target URI" required
+                                hint="abfss://<container>@<account>.dfs.core.windows.net/<path>">
+                                <Input value={scTargetUri} onChange={(_, d) => setScTargetUri(d.value)}
+                                  placeholder="abfss://data@acct.dfs.core.windows.net/partner/exports" />
+                              </Field>
+                              <Field label="Key Vault secret (SAS token or storage key)" hint="admin-plane Key Vault secret name holding the external account's SAS/key">
+                                <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)} placeholder="shortcut-ext-adls-sas" />
+                              </Field>
+                            </>
+                          )}
+                        </>
+                      )}
+                      {(scType === 's3' || scType === 'gcs' || scType === 'dataverse') && (
+                        <>
+                          <MessageBar intent="warning">
+                            <MessageBarBody>
+                              {scType === 's3' && 'Amazon S3 requires AWS credentials. '}
+                              {scType === 'gcs' && 'Google Cloud Storage requires a service-account JSON. '}
+                              {scType === 'dataverse' && 'Dataverse reads via its Synapse-Link export storage. '}
+                              Store the secret in Key Vault and name it below; create will save the reference and
+                              honest-gate the read-through until the credential wiring lands.
+                            </MessageBarBody>
+                          </MessageBar>
+                          <Field label="Target URI" required
+                            hint={scType === 's3' ? 's3://<bucket>/<path>' : scType === 'gcs' ? 'gs://<bucket>/<path>' : 'Dataverse export ADLS path'}>
+                            <Input value={scTargetUri} onChange={(_, d) => setScTargetUri(d.value)}
+                              placeholder={scType === 's3' ? 's3://my-bucket/data' : scType === 'gcs' ? 'gs://my-bucket/data' : 'abfss://dataverse@…'} />
+                          </Field>
+                          <Field label="Key Vault secret name" hint="The admin-plane Key Vault secret holding the credential.">
+                            <Input value={scKvSecret} onChange={(_, d) => setScKvSecret(d.value)} placeholder="shortcut-s3-creds" />
+                          </Field>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {scStep === 3 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <Field label="Section" required>
+                        <Dropdown
+                          selectedOptions={[scKind]}
+                          value={scKind === 'tables' ? 'Tables' : 'Files'}
+                          onOptionSelect={(_, d) => setScKind((d.optionValue as ShortcutKind) || 'files')}
+                        >
+                          <Option value="files">Files</Option>
+                          <Option value="tables">Tables</Option>
+                        </Dropdown>
+                      </Field>
+                      <Field label="Sub-folder" hint="Folder under the section, blank for top-level.">
+                        <Input value={scParentPath} onChange={(_, d) => setScParentPath(d.value)} placeholder="optional/subfolder" />
+                      </Field>
+                      <Field label="Shortcut name" required>
+                        <Input value={scName} onChange={(_, d) => setScName(d.value)} placeholder="partner_products" />
+                      </Field>
+                      {scKind === 'tables' && (
+                        <Field label="Format" hint="Tables shortcuts register a real external table on Synapse Serverless or Databricks UC.">
+                          <Dropdown selectedOptions={[scFormat]} value={scFormat}
+                            onOptionSelect={(_, d) => setScFormat((d.optionValue as typeof scFormat) || 'delta')}>
+                            <Option value="delta">Delta</Option>
+                            <Option value="parquet">Parquet</Option>
+                            <Option value="csv">CSV</Option>
+                            <Option value="json">JSON</Option>
+                          </Dropdown>
+                        </Field>
+                      )}
+                      <MessageBar intent="info">
+                        <MessageBarBody>
+                          Will create <strong>{scKind === 'tables' ? 'Tables' : 'Files'}/{[scParentPath.trim(), scName.trim()].filter(Boolean).join('/')}</strong>
+                          {' '}pointing at <code>{scType === 'internal' ? `internal://${scInternalContainer}${scInternalPath ? `/${scInternalPath.replace(/^\/+/, '')}` : ''}` : (scTargetUri || '(set the target)')}</code>.
+                          {scKind === 'tables' && ' A real external table is registered and queryable from the SQL tab.'}
+                        </MessageBarBody>
+                      </MessageBar>
+                      {scSubmitError && (
+                        <MessageBar intent="error"><MessageBarBody>{scSubmitError}</MessageBarBody></MessageBar>
+                      )}
+                    </div>
+                  )}
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setScWizardOpen(false)} disabled={scSubmitting}>Cancel</Button>
+                  {scStep > 1 && <Button appearance="outline" onClick={() => setScStep((scStep - 1) as 1 | 2 | 3)} disabled={scSubmitting}>Back</Button>}
+                  {scStep < 3 && <Button appearance="primary" onClick={() => setScStep((scStep + 1) as 1 | 2 | 3)}>Next</Button>}
+                  {scStep === 3 && (
+                    <Button appearance="primary" onClick={submitShortcut} disabled={scSubmitting || !scName.trim()}>
+                      {scSubmitting ? 'Creating…' : 'Create'}
+                    </Button>
+                  )}
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           {/* Properties dialog — real ADLS metadata already in hand. */}
           <Dialog open={!!propsEntry} onOpenChange={(_, d) => { if (!d.open) setPropsEntry(null); }}>
@@ -1280,93 +1739,6 @@ export function LakehouseEditor({ item, id }: Props) {
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setPropsEntry(null)}>Close</Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
-
-          {/* Create-shortcut dialog — Fabric-like New shortcut wizard, wired to
-              the real Fabric OneLake Shortcuts REST API via /api/catalog/shortcut. */}
-          <Dialog open={scDialogOpen} onOpenChange={(_, d) => setScDialogOpen(d.open)}>
-            <DialogSurface style={{ maxWidth: 640, width: '90vw' }}>
-              <DialogBody>
-                <DialogTitle>New shortcut</DialogTitle>
-                <DialogContent>
-                  <Caption1>
-                    Create a OneLake shortcut — a virtualized pointer to an external
-                    or internal data source. No bytes are copied; the source appears
-                    in the lakehouse explorer and is queryable like native data.
-                  </Caption1>
-                  {scError && (
-                    <MessageBar intent="error"><MessageBarBody>{scError}</MessageBarBody></MessageBar>
-                  )}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
-                    <Field label="Source type" required>
-                      <Dropdown
-                        selectedOptions={[scTargetType]}
-                        value={scTargetType === 'adlsGen2' ? 'ADLS Gen2' : scTargetType === 'amazonS3' ? 'Amazon S3' : 'OneLake (Fabric)'}
-                        onOptionSelect={(_, d) => setScTargetType((d.optionValue as any) || 'adlsGen2')}
-                      >
-                        <Option value="adlsGen2">ADLS Gen2</Option>
-                        <Option value="amazonS3">Amazon S3</Option>
-                        <Option value="oneLake">OneLake (Fabric)</Option>
-                      </Dropdown>
-                    </Field>
-                    <Field label="Section" required hint="Tables = Delta auto-registered; Files = any format">
-                      <Dropdown
-                        selectedOptions={[scPath]}
-                        value={scPath}
-                        onOptionSelect={(_, d) => setScPath((d.optionValue as 'Files' | 'Tables') || 'Files')}
-                      >
-                        <Option value="Files">Files</Option>
-                        <Option value="Tables">Tables</Option>
-                      </Dropdown>
-                    </Field>
-                  </div>
-                  <Field label="Shortcut name" required>
-                    <Input value={scName} onChange={(_, d) => setScName(d.value)} placeholder="partner-products" />
-                  </Field>
-                  <Field label="Subfolder under section (optional)" hint={`Created at ${scPath}/<subfolder>`}>
-                    <Input value={scSubfolder} onChange={(_, d) => setScSubfolder(d.value)} placeholder="bronze" />
-                  </Field>
-
-                  {scTargetType !== 'oneLake' && (
-                    <>
-                      <Field label={scTargetType === 'amazonS3' ? 'S3 bucket URL' : 'ADLS Gen2 account URL'} required>
-                        <Input value={scLocation} onChange={(_, d) => setScLocation(d.value)}
-                          placeholder={scTargetType === 'amazonS3' ? 'https://my-bucket.s3.us-west-2.amazonaws.com' : 'https://contosoadls.dfs.core.windows.net'} />
-                      </Field>
-                      <Field label="Subpath" required hint={scTargetType === 'amazonS3' ? '/folder within bucket' : '/container/subfolder'}>
-                        <Input value={scSubpath} onChange={(_, d) => setScSubpath(d.value)}
-                          placeholder={scTargetType === 'amazonS3' ? '/data/ContosoEmployees' : '/mycontainer/data/ContosoProducts'} />
-                      </Field>
-                      <Field label="Cloud connection id (GUID)" required
-                        hint="Create in Fabric → Manage connections; paste the connection GUID here.">
-                        <Input value={scConnectionId} onChange={(_, d) => setScConnectionId(d.value)}
-                          placeholder="91324db9-8dc4-4730-a1e5-bafabf1fb91e" />
-                      </Field>
-                    </>
-                  )}
-
-                  {scTargetType === 'oneLake' && (
-                    <>
-                      <Field label="Source workspace id" required>
-                        <Input value={scOlWorkspaceId} onChange={(_, d) => setScOlWorkspaceId(d.value)} placeholder="acafbeb1-…" />
-                      </Field>
-                      <Field label="Source item id" required hint="Lakehouse / Warehouse / KQL DB">
-                        <Input value={scOlItemId} onChange={(_, d) => setScOlItemId(d.value)} placeholder="56bac802-…" />
-                      </Field>
-                      <Field label="Source path" required>
-                        <Input value={scOlPath} onChange={(_, d) => setScOlPath(d.value)} placeholder="Tables/myTablesFolder" />
-                      </Field>
-                    </>
-                  )}
-                </DialogContent>
-                <DialogActions>
-                  <Button appearance="secondary" onClick={() => setScDialogOpen(false)} disabled={scBusy}>Cancel</Button>
-                  <Button appearance="primary" onClick={createShortcut} disabled={scBusy || !scName.trim()}>
-                    {scBusy ? 'Creating…' : 'Create'}
-                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
@@ -1462,8 +1834,27 @@ export function LakehouseEditor({ item, id }: Props) {
                   <Field label="Description">
                     <Textarea value={settings.description || ''} onChange={(_, d) => setSettings((s) => ({ ...s, description: d.value }))} />
                   </Field>
-                  <Field label="Default Spark pool (Synapse)">
-                    <Input value={settings.defaultSparkPool || ''} onChange={(_, d) => setSettings((s) => ({ ...s, defaultSparkPool: d.value }))} placeholder="loomspark" />
+                  <Field
+                    label="Default Spark pool (Synapse)"
+                    hint={sparkPools !== null && sparkPools.length === 0
+                      ? 'No Synapse Spark pools discovered. Provision a pool in the Synapse workspace (LOOM_SYNAPSE_WORKSPACE) to populate this list.'
+                      : 'Notebooks attached to this lakehouse default to this pool.'}
+                  >
+                    {sparkPools === null ? (
+                      <Spinner size="tiny" label="Loading pools…" labelPosition="after" />
+                    ) : (
+                      <Dropdown
+                        selectedOptions={settings.defaultSparkPool ? [settings.defaultSparkPool] : []}
+                        value={settings.defaultSparkPool || ''}
+                        placeholder={sparkPools.length === 0 ? 'No Spark pools deployed' : 'Select a Spark pool'}
+                        disabled={sparkPools.length === 0}
+                        onOptionSelect={(_, d) => setSettings((s) => ({ ...s, defaultSparkPool: d.optionValue || '' }))}
+                      >
+                        {sparkPools.map((p) => (
+                          <Option key={p.name} value={p.name}>{p.name}</Option>
+                        ))}
+                      </Dropdown>
+                    )}
                   </Field>
                   <Field label="Time-travel retention (days)">
                     <Input type="number" min={0} value={String(settings.timeTravelDays ?? 7)} onChange={(_, d) => setSettings((s) => ({ ...s, timeTravelDays: Math.max(0, Number(d.value) || 0) }))} />
