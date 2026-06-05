@@ -137,6 +137,9 @@ export async function POST(req: NextRequest) {
             deploymentMode: 'github-workflow-dispatch',
             workflowFile,
             inputs: dispatchInputs,
+            // The wizard threads this back into /api/setup/workflow-run-status
+            // so it streams THIS run's status, not a stale prior one.
+            dispatchedAt: new Date().toISOString(),
             message: `Deployment queued on GitHub Actions (${workflowFile})`,
             monitorUrl: `https://github.com/${repoOwner}/${repoName}/actions/workflows/${workflowFile}`,
           },
