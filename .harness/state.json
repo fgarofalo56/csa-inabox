@@ -69,7 +69,7 @@
       "id": "task-008",
       "title": "Phase 3 \u2014 data-agent EXECUTES its generated query (grounded on real rows)",
       "feature": "DataAgents",
-      "status": "todo",
+      "status": "done",
       "task_order": 78,
       "assignee": "harness-coder",
       "description": "## Goal\nRun the per-source generated query read-only under caller identity (warehouse/lakehouse/kql/semantic), re-prompt the model with real rows, attach rows+count to tools metadata; honest gate per unreachable source. No mocks.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-001"

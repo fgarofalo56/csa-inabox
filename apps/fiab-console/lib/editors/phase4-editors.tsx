@@ -2731,7 +2731,12 @@ const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n
 // `_family-utils` (vitest coverage at lib/editors/__tests__/family-utils.test.ts)
 // so the legacy-string migration is unit-tested without the Fluent UI bundle.
 
-interface DaTool { source: string; type?: string; action: string; query?: string }
+interface DaTool {
+  source: string; type?: string; action: string; query?: string;
+  // Real-execution metadata (task-008): the query was run read-only on the
+  // Azure-native backend; these are the actual results or an honest gate.
+  executed?: boolean; rowCount?: number; columns?: string[]; rows?: unknown[][]; gate?: string;
+}
 interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[] }
 
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -3092,8 +3097,37 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                           <div key={ti} style={{ marginTop: 4 }}>
                             <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
                               <strong>{t.source}</strong>{t.type ? ` · ${t.type}` : ''} · {t.action}
+                              {t.executed && (
+                                <Badge appearance="tint" color="success" size="extra-small" style={{ marginLeft: 6 }}>
+                                  ✓ ran · {t.rowCount ?? 0} row{t.rowCount === 1 ? '' : 's'}
+                                </Badge>
+                              )}
                             </Caption1>
                             {t.query && <pre className={s.chatSource}>{t.query}</pre>}
+                            {t.executed && t.columns && t.columns.length > 0 && t.rows && t.rows.length > 0 && (
+                              <div style={{ overflowX: 'auto', marginTop: 2 }}>
+                                <table style={{ fontSize: 11, borderCollapse: 'collapse' }}>
+                                  <thead>
+                                    <tr>{t.columns.map((c, ci) => (
+                                      <th key={ci} style={{ textAlign: 'left', padding: '1px 8px 1px 0', color: tokens.colorNeutralForeground3, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>{c}</th>
+                                    ))}</tr>
+                                  </thead>
+                                  <tbody>
+                                    {t.rows.slice(0, 8).map((row, ri) => (
+                                      <tr key={ri}>{(Array.isArray(row) ? row : [row]).map((cell, ci) => (
+                                        <td key={ci} style={{ padding: '1px 8px 1px 0', whiteSpace: 'nowrap' }}>{cell == null ? '' : String(cell)}</td>
+                                      ))}</tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                                {(t.rowCount ?? 0) > 8 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>…showing 8 of {t.rowCount}</Caption1>}
+                              </div>
+                            )}
+                            {!t.executed && t.gate && (
+                              <Caption1 style={{ color: tokens.colorPaletteYellowForeground1, display: 'block', marginTop: 2 }}>
+                                ⚠ {t.gate}
+                              </Caption1>
+                            )}
                           </div>
                         ))}
                       </details>

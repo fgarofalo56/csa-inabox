@@ -19,6 +19,7 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from './copilot-orchestrator';
+import { executeSourceQuery, executionToText, type SourceExecution } from './data-agent-execute';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -119,6 +120,14 @@ export interface DataAgentTool {
   type?: string;
   action: string;   // query | search | traverse | retrieve
   query?: string;
+  /** Real-execution metadata (task-008): the query was run read-only on the
+   * Azure-native backend and these are the actual results (or an honest gate). */
+  executed?: boolean;
+  rowCount?: number;
+  columns?: string[];
+  rows?: unknown[][];
+  /** Honest gate when the query was shown but not executed (unreachable source). */
+  gate?: string;
 }
 
 export interface DataAgentAnswer {
@@ -199,38 +208,95 @@ function parseAnswer(content: string, sources: DataAgentSource[]): DataAgentAnsw
 export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], question: string): Promise<DataAgentAnswer> {
   const target = await resolveAoaiTarget();
   const token = await aoaiToken();
-  const messages = [
+  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
+
+  // One AOAI round-trip with the reasoning-model temperature fallback.
+  const runChat = async (messages: Array<{ role: string; content: string }>): Promise<{ content: string; usage: any }> => {
+    const base: Record<string, unknown> = { messages, max_tokens: 1200 };
+    const send = async (withTemp: boolean) => fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(withTemp ? { ...base, temperature: 0.2 } : base),
+    });
+    let res = await send(true);
+    if (res.status === 400) {
+      const t = await res.text();
+      if (/unsupported_value|does not support|Only the default \(1\) value is supported/i.test(t) && /temperature|top_p/i.test(t)) {
+        res = await send(false);
+      } else {
+        throw new Error(`Data agent chat failed (400): ${t.slice(0, 400)}`);
+      }
+    }
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`Data agent chat failed (${res.status}): ${t.slice(0, 400)}`);
+    }
+    const j: any = await res.json();
+    return { content: j?.choices?.[0]?.message?.content || '', usage: j?.usage || {} };
+  };
+
+  // ── Phase 1: model proposes an answer + the per-source query it would run ──
+  const phase1Messages = [
     { role: 'system', content: composeSystemPrompt(cfg) },
     ...history.map((h) => ({ role: h.role, content: h.content })),
     { role: 'user', content: question },
   ];
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const base: Record<string, unknown> = { messages, max_tokens: 1200 };
-  // Newer reasoning models reject a non-default temperature; retry without it.
-  const send = async (withTemp: boolean) => fetch(url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(withTemp ? { ...base, temperature: 0.2 } : base),
-  });
-  let res = await send(true);
-  if (res.status === 400) {
-    const t = await res.text();
-    if (/unsupported_value|does not support|Only the default \(1\) value is supported/i.test(t) && /temperature|top_p/i.test(t)) {
-      res = await send(false);
-    } else {
-      throw new Error(`Data agent chat failed (400): ${t.slice(0, 400)}`);
+  const first = await runChat(phase1Messages);
+  const parsed = parseAnswer(first.content, cfg.sources);
+
+  // ── Phase 2: actually RUN each generated query read-only on the real backend ──
+  let usage = first.usage;
+  let finalAnswer = parsed.answer;
+  if (parsed.tools && parsed.tools.length > 0) {
+    const groundingBlocks: string[] = [];
+    for (const tool of parsed.tools) {
+      if (!tool.query) continue;
+      // Resolve the typed source for this tool (by name, else synthesise from the tool).
+      const src = cfg.sources.find((s) => s.name && tool.source && s.name.toLowerCase() === tool.source.toLowerCase())
+        || (tool.type ? { id: tool.source, type: tool.type as DataAgentSource['type'], name: tool.source } : undefined);
+      if (!src) { tool.executed = false; tool.gate = 'Source not found on this agent.'; continue; }
+      const exec: SourceExecution = await executeSourceQuery(src, tool.query);
+      tool.executed = exec.executed;
+      tool.rowCount = exec.rowCount;
+      tool.columns = exec.columns;
+      tool.rows = exec.rows;
+      tool.gate = exec.gate;
+      groundingBlocks.push(executionToText(tool.source || src.name, exec));
+    }
+
+    // If at least one query actually returned rows, re-prompt the model to give a
+    // final answer grounded ONLY in those real rows (no fabricated numbers).
+    const anyExecuted = parsed.tools.some((t) => t.executed && (t.rowCount ?? 0) >= 0);
+    if (anyExecuted && groundingBlocks.length > 0) {
+      const phase2 = [
+        { role: 'system', content: composeSystemPrompt(cfg) },
+        ...history.map((h) => ({ role: h.role, content: h.content })),
+        { role: 'user', content: question },
+        { role: 'assistant', content: first.content },
+        {
+          role: 'user',
+          content:
+            'Here are the ACTUAL results of running those queries against the live data:\n\n' +
+            groundingBlocks.join('\n\n') +
+            '\n\nUsing ONLY these real results, give the final answer to my question. ' +
+            'Cite concrete numbers from the rows. If a source was NOT executed, say so honestly and do not invent its data. ' +
+            'Return prose only — do NOT include the tools JSON block this time.',
+        },
+      ];
+      try {
+        const second = await runChat(phase2);
+        finalAnswer = parseAnswer(second.content, cfg.sources).answer || second.content;
+        usage = second.usage; // last turn's usage
+      } catch {
+        /* keep phase-1 answer if the re-ground call fails */
+      }
     }
   }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Data agent chat failed (${res.status}): ${t.slice(0, 400)}`);
-  }
-  const j: any = await res.json();
-  const content = j?.choices?.[0]?.message?.content || '';
-  const parsed = parseAnswer(content, cfg.sources);
-  const u = j?.usage || {};
+
+  const u = usage || {};
   return {
     ...parsed,
+    answer: finalAnswer,
     usage: (u.total_tokens != null)
       ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0, totalTokens: u.total_tokens ?? 0 }
       : undefined,
