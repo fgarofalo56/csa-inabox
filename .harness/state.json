@@ -96,7 +96,7 @@
       "id": "task-011",
       "title": "Phase 4 \u2014 non-ADLS access-policy enforcement (warehouse/KQL)",
       "feature": "Governance",
-      "status": "todo",
+      "status": "done",
       "task_order": 68,
       "assignee": "harness-coder",
       "description": "## Goal\nExtend access-policy-client to enforce warehouse (Synapse SQL GRANT) + kql (ADX .add database role) scopes; remove the honest-gate for those once wired.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-001"

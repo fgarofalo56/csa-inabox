@@ -286,3 +286,31 @@ task-010+ (Purview web-3.0, access-policy enforcement, catalog detail…).
 
 **Next:** task-011 (non-ADLS access-policy enforcement: warehouse Synapse SQL
 GRANT + kql ADX role) or continue Thread. Then task-012 (catalog detail).
+
+### task-011 — non-ADLS access-policy enforcement (warehouse + KQL) ✅ (PR # pending)
+- access-policy-client now enforces 3 real Azure-native scopes (was ADLS-only):
+  - **warehouse** → Synapse dedicated SQL: `CREATE USER [upn] FROM EXTERNAL
+    PROVIDER` (if absent) + `ALTER ROLE db_datareader|db_datawriter|db_owner ADD
+    MEMBER` via synapse-sql-client. Honest pending-gate if pool env unset.
+  - **kql-database** → ADX `.add database ["db"] viewers|users|admins ('<aad
+    token>')` via kusto-client executeMgmtCommand. aaduser=UPN (no tenant) or
+    aaduser/aadgroup/aadapp=oid;AZURE_TENANT_ID; honest gate if tenant missing
+    for group/SP. Honest pending-gate if ADX env unset.
+  - SQL identifiers bracket-escaped, literals quote-escaped (no injection); role
+    names from fixed maps only.
+- Symmetric revoke: new `revokeStructuredGrant` (ALTER ROLE DROP MEMBER /
+  `.drop database` role); DELETE route calls it for warehouse/kql (ADLS still
+  revokes by roleAssignmentId). Best-effort, never blocks the delete.
+- policies route: scopeType enum + validation extended; passes principalName;
+  DELETE wired. UI (/governance/policies Access form): new "Scope (data plane)"
+  dropdown (ADLS container / Warehouse / KQL database) + conditional target
+  (container input · kql-database dropdown from by-type · warehouse caption).
+  Passes UPN as principalName. All dropdowns (loom-no-freeform-config).
+- parity doc governance.md Access row updated. tsc clean on touched files (only
+  pre-existing px noise at lines 29-33 in the untouched useStyles block).
+- LIVE-VERIFY (operator): needs Synapse pool + ADX cluster reachable and the
+  Console UAMI as a SQL db_owner / ADX AllDatabasesAdmin to run the grants;
+  errors surface verbatim as enforcement status 'error'.
+
+**Next:** task-012 (Data Catalog detail + request-access + lineage), then 013+
+(kill deferred-v3 TDS-via-PE), or continue Thread PR2.
