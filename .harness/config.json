@@ -1,0 +1,19 @@
+{
+  "project_name": "csa-loom",
+  "language": "TypeScript",
+  "framework": "Next.js (apps/fiab-console) + Azure Bicep (platform/fiab)",
+  "spec_path": ".harness/spec.md",
+  "test_command": "cd apps/fiab-console && npx tsc --noEmit -p tsconfig.json 2>&1 | grep -vE \"Type '[0-9]+' is not assignable\" | grep -i error | head",
+  "build_command": "cd apps/fiab-console && npm run build",
+  "notes": [
+    "MONOREPO. The CSA Loom console is apps/fiab-console (Next.js app router, Fluent v9).",
+    "CI required check is 'next build (node 20)'. next.config has typescript.ignoreBuildErrors:true, so pre-existing makeStyles numeric-px tsc errors are TOLERATED — filter them when typechecking; only NEW errors in touched files matter.",
+    "The repo-wide vitest harness is broken (env node, no setupFiles) — DO NOT gate on unit tests. Gate each feature on: (1) tsc --noEmit clean for touched files, (2) the required 'next build (node 20)' CI check.",
+    "Per-feature dev loop: implement -> tsc -> focused branch+commit+PR -> merge -> console auto-rolls -> live-verify.",
+    "MERGE GOTCHAS: branch off origin/main; PRs that are BEHIND main show 'GraphQL: 12 of 12 required status checks are expected' — run 'gh pr update-branch <n>' then 'gh pr merge <n> --squash --admin' once 'next build' re-runs green. Bicep-touching PRs add a slow 'Bicep Lint' required check. Merge one PR at a time so siblings don't fall behind.",
+    "GIT BASH PATH MANGLING: az/gh args starting with /subscriptions/... get mangled to 'C:/Program Files/Git/subscriptions/...'. Prefix az commands with: MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'. For diagnostic-settings verification use 'az rest --method get' not 'az monitor diagnostic-settings list --resource' (the latter false-empties).",
+    "LIVE: single sub 363ef5d1-0e77-4594-a530-f51af23dbf8c (FedCiv ATU FFL - DLZ). Console = loom-console in rg-csa-loom-admin-eastus2. DLZ RG = rg-csa-loom-dlz-single-eastus2. LAW = law-csa-loom-eastus2. Console UAMI principal e61f3eb3-c646-4183-8198-4c4a34cd9a01 / client c6272de5-3c4e-4b72-8b57-71b2e950209b. Deploy SP limitlessdata_deploy appId 95ca491e-f841-43ba-93f2-3315804f55e7.",
+    "BLOCKING RULES (.claude/rules/): no-vaporware (real backend or honest Fluent MessageBar gate), no-fabric-dependency (Azure-native default; Fabric opt-in only), ui-parity (one-for-one with Azure/Fabric UIs, full functionality), loom-design-standards (Fluent v9 + Loom tokens, cards, icons), loom-no-freeform-config (dropdowns/wizards, never raw JSON except 1:1 ADF expression builders), docs-source-of-truth (update docs/fiab every feature batch), no-questions-in-product (never bake clarifying questions into UI).",
+    "EXCLUDED this run (operator decision): #17 image-gen (MAI-Image-2.5/-Flash) — do NOT build."
+  ]
+}
