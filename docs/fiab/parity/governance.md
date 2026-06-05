@@ -37,7 +37,7 @@ sensitivity, insights, policies) work today with no Purview at all.
 | Data Map — scans + run history + trigger | `/governance/scans` (drawer) | `/api/governance/scans` → `listScansForSource` / `listScanRuns` / `triggerScanRun` | ⚠️ GATED |
 | Lineage (column/asset graph) | `/governance/lineage` | `/api/governance/lineage` (Cosmos) + `getLineageSubgraph` (Atlas) when bound | ✅ BUILT |
 | Access policies (DLP/masking/RLS/retention/access) | `/governance/policies` | `/api/governance/policies` (Cosmos, CRUD + toggle) | ✅ BUILT |
-| Health management — insights & reports (coverage, DQ) | `/governance/insights` | `/api/governance/insights` (Cosmos KPIs) + `listDataQualityRules` when bound | ✅ BUILT |
+| Health management — insights & reports (coverage, DQ) | `/governance/insights` | `/api/governance/insights` (Cosmos KPIs) + `listDataQualityRules` when bound | ✅ BUILT — KPIs now cover **compliance score** (composite), sensitivity, classification, **ownership** (`state.owner`), **endorsement** (`state.endorsement` Certified/Promoted / `state.certified`), active policies, audit-30d; per-type coverage table adds Owned + Endorsed columns; a **policy-effectiveness** sortable table lists active policies (type/scope/status/updated). All derived live from Cosmos — no sample data. |
 | Microsoft Purview portal launch + connection status | `/governance/purview` | `/api/governance/purview/status` probe + deep-link | ✅ BUILT |
 
 **Legend:** ✅ BUILT = live against a real backend today. ⚠️ GATED = full UI

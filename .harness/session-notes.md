@@ -180,3 +180,18 @@ is template boilerplate that doesn't apply to a verification-only Phase-0 task).
 - parity doc data-agent.md row 7 + backend table updated.
 
 **Next:** task-009 (Governance Insights redesign — real content, sortable UI).
+
+### task-009 — Governance Insights redesign (real content, sortable UI) ✅ (PR # pending)
+- /api/governance/insights now computes (live Cosmos, no sample data):
+  ownership coverage (state.owner/ownerUpn/contact/steward), endorsement coverage
+  (state.endorsement Certified/Promoted || state.certified), a composite
+  compliance score (mean of the 4 coverage dims), and an active-policies list.
+- /governance/insights page: 8 KPI cards (compliance score headline + ownership +
+  endorsement added), per-type coverage table gains Owned + Endorsed sortable
+  columns, new Policy-effectiveness sortable LoomDataTable (type/scope/status/updated).
+- Branch was accidentally cut before #714 merged → rebased onto origin/main (task-008)
+  so it carries data-agent-execute; ahead-by-1, not behind.
+- parity doc governance.md insights row updated. tsc clean (only pre-existing
+  makeStyles numeric-px errors in the untouched useStyles block).
+
+**Next:** task-010 (Purview portal page web-3.0 cleanup).
