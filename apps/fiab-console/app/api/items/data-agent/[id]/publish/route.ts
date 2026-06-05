@@ -63,6 +63,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json({ ok: false, error: 'Attach at least one data source before publishing.' }, { status: 400 });
   }
   const description = String(body?.description || state.description || `Loom data agent: ${item.displayName}`).slice(0, 512);
+  // Custom display alias (editor's "Agent name / alias"); falls back to the item name.
+  const alias = String(body?.alias || state.alias || item.displayName || '').slice(0, 128);
 
   const agentName = foundryAgentName(item.id);
   // The NL2SQL/NL2DAX orchestration model defaults to the resolved hub AOAI
@@ -80,6 +82,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       loomItemType: ITEM_TYPE,
       loomWorkspaceId: item.workspaceId,
       loomSourceCount: String(sources.length),
+      ...(alias ? { loomAlias: alias } : {}),
     },
     kind: 'prompt',
   };
