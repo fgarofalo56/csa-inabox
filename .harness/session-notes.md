@@ -195,3 +195,42 @@ is template boilerplate that doesn't apply to a verification-only Phase-0 task).
   makeStyles numeric-px errors in the untouched useStyles block).
 
 **Next:** task-010 (Purview portal page web-3.0 cleanup).
+
+## Session 3 — 2026-06-05 — Loom Thread roadmap (backlog item #1) — continuous
+
+Working the Thread roadmap (highest-value cross-service "Weave" fabric) ahead of
+the numbered tasks 010–022, per the operator's drain order.
+
+### Thread PR5 (headline) — *Build a Power BI model* edge ✅ (PR # pending)
+- New Thread edge `build-powerbi-model` on warehouse / synapse-dedicated-sql-pool:
+  gold table → a REAL Power BI **push dataset** (the supported REST authoring
+  path — no XMLA needed for push models). All-dropdown wizard:
+  - workspace ← `/api/powerbi/workspaces` (real `listWorkspaces`, honest SP gate)
+  - table ← new `/api/thread/powerbi-model/tables?fromType=&fromId=`
+    (`sql-objects-client.listTables` over the Azure-native Synapse dedicated pool;
+    honest gate if LOOM_SYNAPSE_WORKSPACE/_DEDICATED_POOL unset)
+  - model name (text) + "push sample rows" (toggle, default on)
+- New `/api/thread/build-powerbi-model`: reads catalog columns (`listColumns`) →
+  maps SQL→push types (`lib/thread/sql-to-pushdataset.ts`) → `createPushDataset`
+  → `SELECT TOP 500` (read-only, bracket-quoted catalog identifiers) →
+  `postPushRows`; deep-links to the model in the Power BI service. Owner-scoped.
+  401/403 from PBI surfaced verbatim + the exact SP-authorization remediation.
+- Wizard machinery generalized: `optionsRoute` now supports `{fromId}`/`{fromType}`
+  tokens (substituted from the source item) and surfaces a route's honest
+  `ok:false` gate in the field validation message. Benefits all future edges.
+- no-fabric-dependency: Power BI is the explicitly-chosen Weave *target*, not a
+  default item dependency; the source warehouse is Azure-native Synapse.
+- Docs: new `docs/fiab/thread/thread-edges.md` (edge catalog); PRP delivery plan
+  PR5 row updated. tsc clean on all touched files (only pre-existing px noise in
+  untouched powerbi-tree.tsx remains).
+- LIVE-VERIFY is the operator step: needs a Power BI workspace the Console SP is a
+  Member of + the tenant "Service principals can use Fabric APIs" setting; and a
+  populated Synapse dedicated pool. Both are operator-side; honest gates cover the
+  unconfigured paths.
+
+**Deferred to next Thread PRs (noted, not stubbed):** lakehouse/KQL/azure-sql →
+PBI model (needs the per-backend schema adapter, PR4); report build + embedded
+report in Loom; data-agent semantic-model (DAX) execution via `executeQueries`.
+
+**Next:** Thread PR5 deepening (data-agent DAX via executeQueries) or PR3 (table →
+API), then down the numbered ledger from task-010.

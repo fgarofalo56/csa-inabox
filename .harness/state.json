@@ -204,8 +204,8 @@
   "meta": {
     "created_at": "2026-06-05T00:00:00Z",
     "last_updated": "2026-06-05T00:00:00Z",
-    "last_agent": "manual-init",
-    "current_session": 1,
+    "last_agent": "harness-coder",
+    "current_session": 3,
     "progress": {
       "done": 0,
       "total": 22,
