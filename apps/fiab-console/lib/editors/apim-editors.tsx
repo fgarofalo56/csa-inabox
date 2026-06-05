@@ -1913,6 +1913,16 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const [dsType, setDsType] = useState('fabric_lakehouse');
   const [dsQName, setDsQName] = useState('');
   const [dsClass, setDsClass] = useState('');
+  // Governance label taxonomy (/api/governance/classification-types) so dataset
+  // classifications are PICKED from the tenant's standard set, not free-typed.
+  const [classTypes, setClassTypes] = useState<string[]>([]);
+  useEffect(() => {
+    fetch('/api/governance/classification-types')
+      .then((r) => r.json())
+      .then((j) => { if (j?.ok) setClassTypes((j.types || []).map((t: any) => t.name).filter(Boolean)); })
+      .catch(() => {});
+  }, []);
+  const dsClassSelected = dsClass.split(',').map((c) => c.trim()).filter(Boolean);
   const [dsBusy, setDsBusy] = useState(false);
   const [dsMsg, setDsMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
@@ -2381,8 +2391,16 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               <Field label="Qualified name (unique asset id)" style={{ gridColumn: '1 / -1' }}>
                 <Input value={dsQName} onChange={(_, d) => setDsQName(d.value)} placeholder="https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>.Lakehouse/Tables/silver_revenue" />
               </Field>
-              <Field label="Classifications (comma-separated)" style={{ gridColumn: '1 / -1' }}>
-                <Input value={dsClass} onChange={(_, d) => setDsClass(d.value)} placeholder="MICROSOFT.PERSONAL.EMAIL, MICROSOFT.FINANCIAL" />
+              <Field label="Classifications" hint="Pick from the tenant label taxonomy (manage in Governance → Classifications)." style={{ gridColumn: '1 / -1' }}>
+                {classTypes.length > 0 ? (
+                  <Dropdown multiselect placeholder="Select labels…"
+                    value={dsClassSelected.join(', ')} selectedOptions={dsClassSelected}
+                    onOptionSelect={(_, d) => setDsClass((d.selectedOptions || []).join(', '))}>
+                    {classTypes.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                  </Dropdown>
+                ) : (
+                  <Input value={dsClass} onChange={(_, d) => setDsClass(d.value)} placeholder="PII, Confidential (comma-separated)" />
+                )}
               </Field>
             </div>
             <Button appearance="primary" icon={<Add20Regular />} onClick={registerDataset} disabled={dsBusy} style={{ alignSelf: 'flex-start' }}>
