@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Tab, TabList, Button, Input, Field, Dropdown, Option, Textarea,
+  Tab, TabList, Button, Input, Field, Dropdown, Option, Switch,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Badge, Caption1, Subtitle2, Spinner,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -99,8 +99,21 @@ const LS_FORMS: LsForm[] = [
 ];
 
 const DS_TYPES = [
-  'DelimitedText', 'Json', 'Parquet', 'Binary', 'AzureSqlTable', 'AzureBlobStorageLocation',
+  'DelimitedText', 'Json', 'Parquet', 'Avro', 'Orc', 'Binary', 'AzureSqlTable', 'AzureSqlDWTable',
 ];
+const FILE_DS_TYPES = new Set(['DelimitedText', 'Json', 'Parquet', 'Avro', 'Orc', 'Binary']);
+const TABLE_DS_TYPES = new Set(['AzureSqlTable', 'AzureSqlDWTable']);
+
+/** Map a linked-service connector type → the ADF dataset location `type`. */
+function locationTypeFor(lsType?: string): string {
+  switch (lsType) {
+    case 'AzureBlobFS': return 'AzureBlobFSLocation';
+    case 'AmazonS3': return 'AmazonS3Location';
+    case 'AzureFileStorage': return 'AzureFileStorageLocation';
+    case 'AzureBlobStorage':
+    default: return 'AzureBlobStorageLocation';
+  }
+}
 
 async function readJson(res: Response): Promise<any> {
   const text = await res.text();
@@ -138,7 +151,17 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
   const [dsName, setDsName] = useState('');
   const [dsType, setDsType] = useState('DelimitedText');
   const [dsLinkedService, setDsLinkedService] = useState('');
-  const [dsTypeProps, setDsTypeProps] = useState('{}');
+  // Guided dataset config (no raw typeProperties JSON — loom_no_freeform_config).
+  const [dsContainer, setDsContainer] = useState('');
+  const [dsFolder, setDsFolder] = useState('');
+  const [dsFile, setDsFile] = useState('');
+  const [dsColumnDelimiter, setDsColumnDelimiter] = useState(',');
+  const [dsFirstRowHeader, setDsFirstRowHeader] = useState(true);
+  const [dsQuoteChar, setDsQuoteChar] = useState('"');
+  const [dsEscapeChar, setDsEscapeChar] = useState('\\');
+  const [dsCompression, setDsCompression] = useState('none');
+  const [dsSchema, setDsSchema] = useState('');
+  const [dsTable, setDsTable] = useState('');
   const [dsBusy, setDsBusy] = useState(false);
 
   // ---- Integration runtimes ----
@@ -276,10 +299,33 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
     if (!dsName.trim() || !dsLinkedService) { setDsError('Name and a linked service are required.'); return; }
     setDsBusy(true); setDsError(null);
     try {
+      // Build typeProperties from the guided fields — never raw JSON.
       let typeProperties: any = {};
-      if (dsTypeProps.trim()) {
-        try { typeProperties = JSON.parse(dsTypeProps); }
-        catch (e: any) { setDsError(`typeProperties JSON invalid: ${e?.message || e}`); setDsBusy(false); return; }
+      if (FILE_DS_TYPES.has(dsType)) {
+        const lsType = lsList.find((l) => l.name === dsLinkedService)?.type;
+        const locType = locationTypeFor(lsType);
+        const containerKey = locType === 'AzureBlobFSLocation' ? 'fileSystem'
+          : locType === 'AmazonS3Location' ? 'bucketName' : 'container';
+        const location: any = { type: locType };
+        if (dsContainer.trim()) location[containerKey] = dsContainer.trim();
+        if (dsFolder.trim()) location.folderPath = dsFolder.trim();
+        if (dsFile.trim()) location.fileName = dsFile.trim();
+        typeProperties.location = location;
+        if (dsCompression !== 'none') {
+          typeProperties.compressionCodec = dsCompression; // parquet/avro/orc/delimited
+          if (dsType === 'Json' || dsType === 'DelimitedText') {
+            typeProperties.compression = { type: dsCompression };
+          }
+        }
+        if (dsType === 'DelimitedText') {
+          typeProperties.columnDelimiter = dsColumnDelimiter || ',';
+          typeProperties.firstRowAsHeader = dsFirstRowHeader;
+          if (dsQuoteChar) typeProperties.quoteChar = dsQuoteChar;
+          if (dsEscapeChar) typeProperties.escapeChar = dsEscapeChar;
+        }
+      } else if (TABLE_DS_TYPES.has(dsType)) {
+        if (dsSchema.trim()) typeProperties.schema = dsSchema.trim();
+        if (dsTable.trim()) typeProperties.table = dsTable.trim();
       }
       const properties = {
         type: dsType,
@@ -293,11 +339,12 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
       const body = await readJson(res);
       if (applyGate(body)) return;
       if (!body.ok) { setDsError(body.error || 'create failed'); return; }
-      setDsName(''); setDsTypeProps('{}');
+      setDsName(''); setDsContainer(''); setDsFolder(''); setDsFile('');
       await loadDs();
     } catch (e: any) { setDsError(e?.message || String(e)); }
     finally { setDsBusy(false); }
-  }, [dsName, dsType, dsLinkedService, dsTypeProps, loadDs]);
+  }, [dsName, dsType, dsLinkedService, lsList, dsContainer, dsFolder, dsFile,
+      dsColumnDelimiter, dsFirstRowHeader, dsQuoteChar, dsEscapeChar, dsCompression, dsSchema, dsTable, loadDs]);
 
   const deleteDs = useCallback(async (name: string) => {
     setDsBusy(true); setDsError(null);
@@ -560,11 +607,58 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                     </Dropdown>
                   </Field>
                 </div>
-                <Field label="typeProperties JSON (location/format, optional)" style={{ marginTop: 8 }}>
-                  <Textarea value={dsTypeProps} onChange={(_, d) => setDsTypeProps(d.value)} rows={4}
-                    style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
-                    placeholder='{ "location": { "type": "AzureBlobStorageLocation", "container": "raw" } }' />
-                </Field>
+                {FILE_DS_TYPES.has(dsType) && (
+                  <>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                      <Field label="Container / file system" hint="Top-level container or ADLS file system.">
+                        <Input value={dsContainer} onChange={(_, d) => setDsContainer(d.value)} placeholder="raw" />
+                      </Field>
+                      <Field label="Folder path" hint="Directory within the container (optional).">
+                        <Input value={dsFolder} onChange={(_, d) => setDsFolder(d.value)} placeholder="orders/2026" />
+                      </Field>
+                      <Field label="File name" hint="Single file, or blank for a folder dataset.">
+                        <Input value={dsFile} onChange={(_, d) => setDsFile(d.value)} placeholder="orders.csv" />
+                      </Field>
+                    </div>
+                    {dsType === 'DelimitedText' && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 8, alignItems: 'end' }}>
+                        <Field label="Column delimiter">
+                          <Dropdown value={dsColumnDelimiter} selectedOptions={[dsColumnDelimiter]}
+                            onOptionSelect={(_, d) => d.optionValue && setDsColumnDelimiter(d.optionValue)}>
+                            <Option value=",">Comma (,)</Option>
+                            <Option value={'\t'}>Tab</Option>
+                            <Option value="|">Pipe (|)</Option>
+                            <Option value=";">Semicolon (;)</Option>
+                          </Dropdown>
+                        </Field>
+                        <Field label="Quote char"><Input value={dsQuoteChar} onChange={(_, d) => setDsQuoteChar(d.value)} /></Field>
+                        <Field label="Escape char"><Input value={dsEscapeChar} onChange={(_, d) => setDsEscapeChar(d.value)} /></Field>
+                        <Switch label="First row as header" checked={dsFirstRowHeader}
+                          onChange={(_, d) => setDsFirstRowHeader(d.checked)} />
+                      </div>
+                    )}
+                    <Field label="Compression" style={{ marginTop: 8, maxWidth: 240 }}>
+                      <Dropdown value={dsCompression} selectedOptions={[dsCompression]}
+                        onOptionSelect={(_, d) => d.optionValue && setDsCompression(d.optionValue)}>
+                        <Option value="none">None</Option>
+                        <Option value="gzip">gzip</Option>
+                        <Option value="snappy">snappy</Option>
+                        <Option value="bzip2">bzip2</Option>
+                        <Option value="deflate">deflate</Option>
+                      </Dropdown>
+                    </Field>
+                  </>
+                )}
+                {TABLE_DS_TYPES.has(dsType) && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                    <Field label="Schema" hint="Database schema (e.g. dbo).">
+                      <Input value={dsSchema} onChange={(_, d) => setDsSchema(d.value)} placeholder="dbo" />
+                    </Field>
+                    <Field label="Table">
+                      <Input value={dsTable} onChange={(_, d) => setDsTable(d.value)} placeholder="orders" />
+                    </Field>
+                  </div>
+                )}
                 <div style={{ marginTop: 8 }}>
                   <Button appearance="primary" icon={<Add20Regular />} disabled={dsBusy || !dsName.trim() || !dsLinkedService} onClick={createDs}>
                     {dsBusy ? 'Saving…' : 'Create dataset'}
