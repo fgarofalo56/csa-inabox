@@ -6,7 +6,7 @@
       "id": "task-001",
       "title": "Phase 0 \u2014 repo hygiene + live baseline + smoke-test shipped surfaces",
       "feature": "Hygiene",
-      "status": "todo",
+      "status": "done",
       "task_order": 99,
       "assignee": "harness-coder",
       "description": "## Goal\nConfirm main clean+pushed, 0 open PRs/issues stragglers, prune merged remote feat/fix/loom-* branches, confirm live console runs latest main (loom-roll-and-validate green for HEAD; trigger roll if not), smoke-test Monitor KQL/Diagnostics/Cost, data-agent tools panel, Copilot usage+build-assist, Governance Access-policy+Classifications.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated."

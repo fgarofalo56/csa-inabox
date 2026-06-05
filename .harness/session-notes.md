@@ -26,3 +26,45 @@
 
 **Open items flagged for the operator (do not guess):**
 - (none yet — the run will append blockers here as it hits them)
+
+## Session 1 — 2026-06-05 — task-001 (Phase 0 baseline) ✅ done
+
+**Agent:** harness-coder (autonomous, /harness:harness-next via /loop)
+**Task:** task-001 — repo hygiene + live baseline + smoke-test shipped surfaces
+
+**Hygiene:**
+- `main` clean, 0 ahead / 0 behind `origin/main`.
+- 0 **merged** feature branches to prune (Session 0 already swept ~80 worktrees + merged branches).
+- 11 remote branches remain, all **unmerged** with large ahead-counts
+  (deploy-validation 539, fix-lakehouse-upload-doctype 388, sweep-pbi-warehouse 376,
+  uat-iter-2-green 361, docs/dename-* 1–2). NOT pruned — deleting unmerged branches
+  autonomously violates the look-before-delete rule. → see operator item below.
+- Open PRs: only #580 (release-please `0.24.0`, automated, BLOCKED/MERGEABLE — left for release flow).
+- Open issues: only #655 (intentionally folded into task-016).
+
+**Live baseline:**
+- Live console `loom-console` (rg-csa-loom-admin-eastus2) = Running, image tag `192dcbac…`.
+- HEAD `4d173f79` touches **only** `.harness/**` (PRP+ledger) → **no console roll required**;
+  the live console is already on the latest *code* commit (192dcbac).
+- Dispatched `csa-loom-validate` @ main (run 26995594136) → **success**:
+  **`=== 34 pass · 0 not-configured · 0 fail (of 34) ===`**, Hard failures: 0.
+  All families GREEN (Cosmos, Synapse, Databricks, ADF, APIM, Foundry, AI Search,
+  Fabric opt-in, Power Platform, Copilot Studio, Loom Search Index, ARM + all navigators).
+  Probes run inside Azure with a real minted session secret = canonical real-backend smoke-test.
+
+**Honest boundary (not a failure):** the console env is VNet-integrated (CNAME →
+`privatelink.eastus2.azurecontainerapps.io`), so the four named UI surfaces
+(Monitor KQL/Diagnostics/Cost · data-agent tools panel · Copilot usage/build-assist ·
+Governance Access-policy/Classifications) can't be click-tested via curl from this
+workstation. Their **backends are verified live GREEN** by the probes above; UI-level
+click-through needs operator browser access through the VNet.
+
+**No code change** → no feature PR/roll for this task (acceptance "PR merged/console rolled"
+is template boilerplate that doesn't apply to a verification-only Phase-0 task).
+
+**Open items for the operator:**
+- 11 stale unmerged remote branches (listed above) — confirm safe to delete, then prune.
+- Optional: live browser click-through of the 4 named UI surfaces through the VNet
+  (backends already GREEN).
+
+**Next:** task-002 (Phase 1 — Setup wizard real server-side deploy). Depends on task-001 ✅.
