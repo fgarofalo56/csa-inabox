@@ -2731,7 +2731,8 @@ const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n
 // `_family-utils` (vitest coverage at lib/editors/__tests__/family-utils.test.ts)
 // so the legacy-string migration is unit-tested without the Fluent UI bundle.
 
-interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean; usage?: { totalTokens?: number }; model?: string }
+interface DaTool { source: string; type?: string; action: string; query?: string }
+interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[] }
 
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -2849,10 +2850,10 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       });
       // Content-type guard: a 404/500 returns an HTML page, not JSON — calling
       // r.json() on that throws "Unexpected token <" and the answer is lost.
-      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string; usage?: { totalTokens?: number }; model?: string }>(r);
+      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[] }>(r);
       const j = res.data;
       if (res.ok && j) {
-        assistantTurn = { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed, usage: j.usage, model: j.model };
+        assistantTurn = { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed, usage: j.usage, model: j.model, tools: j.tools };
       } else {
         const detail = res.error || j?.error || `HTTP ${res.status}`;
         const hint = j?.hint ? `\n\n${j.hint}` : '';
@@ -3071,20 +3072,35 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     <Caption1>e.g. “What was total revenue by region last quarter?”</Caption1>
                   </div>
                 )}
-                {chat.map((m, i) => (
+                {chat.map((m, i) => {
+                  const tools = m.tools && m.tools.length ? m.tools : (m.query || m.sourceUsed ? [{ source: m.sourceUsed || 'source', action: 'query', query: m.query } as DaTool] : []);
+                  const srcLabel = !m.error
+                    ? (tools.length > 1 ? ` · ${tools.length} sources` : m.sourceUsed ? ` · source: ${m.sourceUsed}` : '')
+                    : '';
+                  return (
                   <div key={i} className={m.role === 'user' ? s.chatRowUser : s.chatRowBot}>
-                    <span className={s.chatMeta}>{m.role === 'user' ? 'You' : m.error ? 'Agent · error' : 'Agent'}{m.sourceUsed && !m.error ? ` · source: ${m.sourceUsed}` : ''}{m.model && !m.error ? ` · ${m.model}` : ''}{m.usage?.totalTokens && !m.error ? ` · ${m.usage.totalTokens} tokens` : ''}</span>
+                    <span className={s.chatMeta}>{m.role === 'user' ? 'You' : m.error ? 'Agent · error' : 'Agent'}{srcLabel}{m.model && !m.error ? ` · ${m.model}` : ''}{m.usage?.totalTokens && !m.error ? ` · ${m.usage.totalTokens} tokens` : ''}</span>
                     <div className={m.role === 'user' ? s.bubbleUser : m.error ? s.bubbleErr : s.bubbleBot}>
                       {m.content || (m.error ? 'Unknown error' : '')}
                     </div>
-                    {m.query && (
-                      <details style={{ marginTop: 2 }}>
-                        <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground2 }}>Generated query{m.sourceUsed ? ` · ${m.sourceUsed}` : ''}</summary>
-                        <pre className={s.chatSource}>{m.query}</pre>
+                    {m.role === 'assistant' && !m.error && tools.length > 0 && (
+                      <details style={{ marginTop: 2 }} open={tools.length > 1}>
+                        <summary style={{ cursor: 'pointer', fontSize: 12, color: tokens.colorNeutralForeground2 }}>
+                          🛠 Tools used ({tools.length})
+                        </summary>
+                        {tools.map((t, ti) => (
+                          <div key={ti} style={{ marginTop: 4 }}>
+                            <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
+                              <strong>{t.source}</strong>{t.type ? ` · ${t.type}` : ''} · {t.action}
+                            </Caption1>
+                            {t.query && <pre className={s.chatSource}>{t.query}</pre>}
+                          </div>
+                        ))}
                       </details>
                     )}
                   </div>
-                ))}
+                  );
+                })}
                 {asking && (
                   <div className={s.chatRowBot}>
                     <span className={s.chatMeta}>Agent</span>
