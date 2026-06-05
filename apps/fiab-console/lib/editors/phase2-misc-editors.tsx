@@ -31,7 +31,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
-import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { ComputePicker } from '@/lib/components/compute-picker';
 
 const useStyles = makeStyles({
@@ -343,8 +343,10 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
             placeholder={'--input gold/sales\n--output gold/sales_agg'} />
         </div>
         <div className={styles.field}>
-          <Caption1>Spark conf (JSON: {`{ "spark.sql.shuffle.partitions": "200" }`})</Caption1>
-          <MonacoTextarea value={confText} onChange={(v) => { setConfText(v); setDirty(true); }} language="json" height={140} minHeight={100} ariaLabel="Spark conf JSON" />
+          <Caption1>Spark configuration</Caption1>
+          <KeyValueGrid value={confText} onChange={(v) => { setConfText(v); setDirty(true); }}
+            keyLabel="Conf key" valueLabel="Value"
+            keyPlaceholder="spark.sql.shuffle.partitions" valuePlaceholder="200" addLabel="Add Spark conf" />
         </div>
         {saveMsg && <MessageBar intent="success"><MessageBarBody>{saveMsg}</MessageBarBody></MessageBar>}
         <div className={styles.toolbar}>
@@ -550,8 +552,11 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
           )}
           {tab === 'conf' && (
             <>
-              <Subtitle2>Spark configuration (JSON map)</Subtitle2>
-              <MonacoTextarea value={confText} onChange={(v) => { setConfText(v); setDirty(true); }} language="json" height={240} minHeight={180} ariaLabel="Spark conf JSON" />
+              <Subtitle2>Spark configuration</Subtitle2>
+              <Caption1>Key/value pairs passed to the Spark session (spark.conf).</Caption1>
+              <KeyValueGrid value={confText} onChange={(v) => { setConfText(v); setDirty(true); }}
+                keyLabel="Conf key" valueLabel="Value"
+                keyPlaceholder="spark.sql.shuffle.partitions" valuePlaceholder="200" addLabel="Add Spark conf" />
             </>
           )}
           {tab === 'jars' && (
@@ -818,8 +823,11 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
         </div>
 
         <Subtitle2 style={{ marginTop: 8 }}>Column mappings</Subtitle2>
-        <Caption1>JSON array of {`{ "source": "...", "sink": "..." }`}</Caption1>
-        <MonacoTextarea value={mappingsText} onChange={(v) => { setMappingsText(v); setDirty(true); }} language="json" height={180} minHeight={140} ariaLabel="Column mappings JSON" />
+        <Caption1>Map each source column to its sink column. Leave empty to copy all columns.</Caption1>
+        <KeyValueGrid value={mappingsText} onChange={(v) => { setMappingsText(v); setDirty(true); }}
+          keyLabel="Source column" valueLabel="Sink column"
+          keyPlaceholder="OrderId" valuePlaceholder="order_id" addLabel="Add mapping"
+          arrayMode={{ keyField: 'source', valueField: 'sink' }} />
 
         {saveMsg && <MessageBar intent="success"><MessageBarBody>{saveMsg}</MessageBarBody></MessageBar>}
         <div className={styles.toolbar}>
