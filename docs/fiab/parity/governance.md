@@ -30,7 +30,7 @@ sensitivity, insights, policies) work today with no Purview at all.
 | Governance domains (create/list/delete) | `/catalog/domains` | `/api/catalog/domains` → `listBusinessDomains` / `createBusinessDomain` / `deleteBusinessDomain` (`/datagovernance/businessdomains`) | ⚠️ GATED (Purview REST) |
 | Data products (list/detail/register) | data-product editor + `register-purview` | `registerDataProduct` (`/datagovernance/catalog/dataProducts`) | ⚠️ GATED |
 | Glossary terms | admin Purview panel | `listGlossaryTerms` / `createGlossaryTerm` (`/catalog/api/atlas/v2/glossary`) | ⚠️ GATED |
-| Data catalog (asset inventory) | `/governance/catalog` | `/api/governance/catalog` (Cosmos; merges Purview classifications when bound) | ✅ BUILT |
+| Data catalog (asset inventory) | `/governance/catalog` | `/api/governance/catalog` (Cosmos; merges Purview classifications when bound) | ✅ BUILT — click (or right-click) an asset → **detail drawer** (type, workspace, owner, classifications, sensitivity, **endorsement/certified**, rows, size, updated, description) with **Open in editor**, **View lineage**, and a real **Request access** action (`/api/catalog/request-access` → durable audit-log entry on the asset + requester notification; owner grants via Policies). |
 | Classifications | `/governance/classifications` | `/api/governance/classifications` (Cosmos) | ✅ BUILT |
 | Sensitivity labels (MIP) | `/governance/sensitivity` | `/api/governance/sensitivity` (Cosmos) | ✅ BUILT |
 | Data Map — sources (register/list/delete) | `/governance/scans` | `/api/governance/scans` → `listDataSources` / `registerDataSource` / `deleteDataSource` (`/scan/datasources`) | ⚠️ GATED (Purview REST) |

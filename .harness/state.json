@@ -105,7 +105,7 @@
       "id": "task-012",
       "title": "Phase 4 \u2014 Data Catalog object detail + request-access + lineage",
       "feature": "Governance",
-      "status": "todo",
+      "status": "done",
       "task_order": 66,
       "assignee": "harness-coder",
       "description": "## Goal\nClick asset \u2192 full metadata (owner/certified/classifications), request-access action, open-in-native, right-click \u2192 object lineage.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-001"

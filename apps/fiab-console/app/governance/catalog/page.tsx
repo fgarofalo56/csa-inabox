@@ -12,12 +12,18 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Input, Button, Subtitle2,
+  Spinner, Badge, Caption1, Body1, Input, Button, Subtitle2, Title3,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
+  Field, Dropdown, Option, Textarea, Divider,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Search24Regular, ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
+import {
+  Search24Regular, ArrowSync24Regular, Open16Regular, Dismiss24Regular,
+  ShieldCheckmark16Regular, BranchFork16Regular, Key16Regular, Open20Regular,
+} from '@fluentui/react-icons';
+import { useRouter } from 'next/navigation';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 
 interface Asset {
@@ -27,8 +33,11 @@ interface Asset {
   workspaceId: string;
   workspaceName: string;
   owner: string;
+  ownerUpn?: string | null;
   classifications: string[];
   sensitivity: string | null;
+  endorsement?: string | null;
+  description?: string | null;
   updatedAt: string;
   rowCount?: number;
   sizeBytes?: number;
@@ -63,6 +72,13 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: 8, overflow: 'auto',
   },
+  clickRow: { cursor: 'pointer' },
+  drawer: { width: '440px', maxWidth: '94vw' },
+  drawerBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, paddingBottom: tokens.spacingVerticalXXL },
+  metaGrid: { display: 'grid', gridTemplateColumns: '120px 1fr', rowGap: tokens.spacingVerticalS, columnGap: tokens.spacingHorizontalM, alignItems: 'center' },
+  metaLabel: { color: tokens.colorNeutralForeground3 },
+  actions: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  actionRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
 });
 
 const TYPE_ORDER = ['lakehouse', 'warehouse', 'semantic-model', 'kql-database', 'eventhouse', 'mirrored-database', 'data-product', 'vector-store'];
@@ -80,12 +96,41 @@ function fmtBytes(b?: number): string {
 
 export default function GovernanceCatalogPage() {
   const s = useStyles();
+  const router = useRouter();
   const [q, setQ] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [assets, setAssets] = useState<Asset[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState('');
+  // Asset detail drawer + request-access form.
+  const [selected, setSelected] = useState<Asset | null>(null);
+  const [reqPerm, setReqPerm] = useState<'read' | 'write' | 'admin'>('read');
+  const [reqJustify, setReqJustify] = useState('');
+  const [reqBusy, setReqBusy] = useState(false);
+  const [reqResult, setReqResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const openAsset = useCallback((a: Asset) => {
+    setSelected(a); setReqPerm('read'); setReqJustify(''); setReqResult(null);
+  }, []);
+
+  const requestAccess = useCallback(async () => {
+    if (!selected) return;
+    setReqBusy(true); setReqResult(null);
+    try {
+      const r = await fetch('/api/catalog/request-access', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          assetId: selected.id, assetName: selected.displayName, itemType: selected.itemType,
+          ownerUpn: selected.ownerUpn || selected.owner, permission: reqPerm, justification: reqJustify,
+        }),
+      });
+      const j = await r.json();
+      setReqResult({ ok: !!j.ok, message: j.ok ? j.message : (j.error || `HTTP ${r.status}`) });
+    } catch (e: any) {
+      setReqResult({ ok: false, message: e?.message || String(e) });
+    } finally { setReqBusy(false); }
+  }, [selected, reqPerm, reqJustify]);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -203,7 +248,9 @@ export default function GovernanceCatalogPage() {
             </TableHeader>
             <TableBody>
               {(assets || []).map((a) => (
-                <TableRow key={a.id}>
+                <TableRow key={a.id} className={s.clickRow}
+                  onClick={() => openAsset(a)}
+                  onContextMenu={(e) => { e.preventDefault(); openAsset(a); }}>
                   <TableCell><strong>{a.displayName}</strong></TableCell>
                   <TableCell>{typeLabel(a.itemType)}</TableCell>
                   <TableCell>{a.workspaceName}</TableCell>
@@ -227,6 +274,7 @@ export default function GovernanceCatalogPage() {
                   <TableCell>
                     <a
                       href={`/items/${a.itemType}/${a.id}`}
+                      onClick={(e) => e.stopPropagation()}
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}
                     >
                       Open <Open16Regular />
@@ -238,6 +286,82 @@ export default function GovernanceCatalogPage() {
           </Table>
         </div>
       )}
+
+      <Drawer type="overlay" position="end" open={!!selected} onOpenChange={(_, d) => { if (!d.open) setSelected(null); }} className={s.drawer}>
+        <DrawerHeader>
+          <DrawerHeaderTitle action={<Button appearance="subtle" icon={<Dismiss24Regular />} onClick={() => setSelected(null)} aria-label="Close" />}>
+            {selected?.displayName}
+          </DrawerHeaderTitle>
+        </DrawerHeader>
+        <DrawerBody>
+          {selected && (
+            <div className={s.drawerBody}>
+              <div className={s.actionRow}>
+                <Badge appearance="tint" color="brand">{typeLabel(selected.itemType)}</Badge>
+                {selected.endorsement && (
+                  <Badge appearance="filled" color={selected.endorsement === 'Certified' ? 'success' : 'brand'} icon={<ShieldCheckmark16Regular />}>
+                    {selected.endorsement}
+                  </Badge>
+                )}
+                {selected.sensitivity && (
+                  <Badge appearance="filled" color={selected.sensitivity === 'Highly Confidential' ? 'danger' : selected.sensitivity === 'Confidential' ? 'warning' : 'subtle'}>
+                    {selected.sensitivity}
+                  </Badge>
+                )}
+              </div>
+
+              {selected.description && <Body1 style={{ color: tokens.colorNeutralForeground2 }}>{selected.description}</Body1>}
+
+              <div className={s.metaGrid}>
+                <Caption1 className={s.metaLabel}>Workspace</Caption1><Caption1>{selected.workspaceName}</Caption1>
+                <Caption1 className={s.metaLabel}>Owner</Caption1><Caption1>{selected.ownerUpn || selected.owner}</Caption1>
+                <Caption1 className={s.metaLabel}>Classifications</Caption1>
+                <div className={s.classChips}>
+                  {selected.classifications?.length
+                    ? selected.classifications.map((c) => <span key={c} className={s.classChip}>{c}</span>)
+                    : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>None</Caption1>}
+                </div>
+                <Caption1 className={s.metaLabel}>Rows</Caption1><Caption1>{selected.rowCount != null ? selected.rowCount.toLocaleString() : '—'}</Caption1>
+                <Caption1 className={s.metaLabel}>Size</Caption1><Caption1>{fmtBytes(selected.sizeBytes)}</Caption1>
+                <Caption1 className={s.metaLabel}>Updated</Caption1><Caption1>{selected.updatedAt ? new Date(selected.updatedAt).toLocaleString() : '—'}</Caption1>
+              </div>
+
+              <div className={s.actionRow}>
+                <Button appearance="primary" icon={<Open20Regular />} onClick={() => router.push(`/items/${selected.itemType}/${selected.id}`)}>Open in editor</Button>
+                <Button icon={<BranchFork16Regular />} onClick={() => router.push('/governance/lineage')}>View lineage</Button>
+              </div>
+
+              <Divider />
+
+              <Title3 as="h3" style={{ fontSize: tokens.fontSizeBase400 }}><Key16Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Request access</Title3>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Records a request the owner reviews in the asset activity and grants in Governance → Policies.
+              </Caption1>
+              <Field label="Permission">
+                <Dropdown value={reqPerm[0].toUpperCase() + reqPerm.slice(1)} selectedOptions={[reqPerm]}
+                  onOptionSelect={(_, d) => setReqPerm((d.optionValue as typeof reqPerm) || 'read')}>
+                  <Option value="read">Read</Option>
+                  <Option value="write">Write</Option>
+                  <Option value="admin">Admin</Option>
+                </Dropdown>
+              </Field>
+              <Field label="Justification (optional)">
+                <Textarea value={reqJustify} onChange={(_, d) => setReqJustify(d.value)} placeholder="Why you need access…" resize="vertical" />
+              </Field>
+              {reqResult && (
+                <MessageBar intent={reqResult.ok ? 'success' : 'error'}>
+                  <MessageBarBody>{reqResult.message}</MessageBarBody>
+                </MessageBar>
+              )}
+              <div>
+                <Button appearance="primary" icon={<Key16Regular />} disabled={reqBusy || (reqResult?.ok ?? false)} onClick={requestAccess}>
+                  {reqBusy ? 'Requesting…' : 'Request access'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DrawerBody>
+      </Drawer>
     </GovernanceShell>
   );
 }
