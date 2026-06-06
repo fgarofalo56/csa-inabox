@@ -72,7 +72,7 @@ export function CatalogShell({ sectionTitle, sectionBadge, children }: { section
   return (
     <PageShell
       title="Unified catalog"
-      subtitle="One catalog across Microsoft Purview, Databricks Unity Catalog, and Fabric OneLake — search, govern, and grant access without leaving Loom."
+      subtitle="One catalog across your Loom workspaces, Microsoft Purview, and Databricks Unity Catalog — search, govern, and grant access without leaving Loom. (Fabric OneLake is opt-in.)"
     >
       <div className={s.layout}>
         <nav className={s.sidebar} aria-label="Catalog sections">
