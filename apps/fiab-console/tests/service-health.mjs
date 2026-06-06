@@ -71,6 +71,14 @@ const PROBES = [
 
   ['ARM',       '/api/admin/azure-resources',                'GET'],
 
+  // --- Monitor command-center (cost / security / inventory / health) ---
+  // 200 {ok:true} = real data; 200 {ok:false,gate} = honest gate (still PASS,
+  // the route is reachable + handled); a 401/403/500 = FAIL (RBAC missing).
+  ['Monitor',   '/api/monitor/inventory',                    'GET'],
+  ['Monitor',   '/api/monitor/health',                       'GET'],
+  ['Monitor',   '/api/monitor/cost?timeframe=MonthToDate',   'GET'],
+  ['Monitor',   '/api/monitor/defender',                     'GET'],
+
   // --- Service-navigator control-plane probes (parity program #209) ---
   // Bare list paths: each gates on config first, then lists. 503 = honest
   // not-configured (NOTE); real data = PASS; auth/RBAC error = FAIL.
