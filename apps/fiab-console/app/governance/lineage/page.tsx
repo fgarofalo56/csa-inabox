@@ -11,7 +11,7 @@
  * Purview lineage edges.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   Spinner, Badge, Caption1, Subtitle2, Body1, Input, Button,
@@ -139,7 +139,7 @@ function layout(nodes: Node[], edges: Edge[]): { laid: LayoutNode[]; w: number; 
   return { laid, w: maxX + CANVAS_PAD_X, h: maxY + CANVAS_PAD_Y, ranks };
 }
 
-export default function GovernanceLineagePage() {
+function LineageInner() {
   const s = useStyles();
   const [workspaces, setWorkspaces] = useState<WorkspaceNode[]>([]);
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -395,5 +395,13 @@ export default function GovernanceLineagePage() {
         </>
       )}
     </GovernanceShell>
+  );
+}
+
+export default function GovernanceLineagePage() {
+  return (
+    <Suspense fallback={<Spinner label="Loading lineage…" />}>
+      <LineageInner />
+    </Suspense>
   );
 }
