@@ -32,7 +32,15 @@ vi.mock('@/lib/azure/kusto-client', async () => {
   return { ...actual, executeQuery: vi.fn(), defaultDatabase: vi.fn(() => 'loomdb-default') };
 });
 
+// Azure-native default path uses item-crud (Cosmos) — mock at the boundary.
+vi.mock('@/app/api/items/_lib/item-crud', () => ({
+  createOwnedItem: vi.fn(),
+  listAllOwnedItems: vi.fn(),
+  listOwnedWorkspaces: vi.fn(),
+}));
+
 import { getSession } from '@/lib/auth/session';
+import { createOwnedItem, listAllOwnedItems, listOwnedWorkspaces } from '@/app/api/items/_lib/item-crud';
 import {
   listFabricWorkspaces, listEventstreams, listKqlDatabases, listEventhouses,
   connectEventstreamSource, getEventstreamDefinition, FabricError, buildEventstreamDefinition,
@@ -55,7 +63,7 @@ function urlReq(qs = '') {
 
 beforeEach(() => { vi.resetAllMocks(); });
 
-// ---------------- streams ----------------
+// ---------------- streams (Azure-native default) ----------------
 describe('GET /api/realtime-hub/streams', () => {
   it('401 when unauthenticated', async () => {
     (getSession as any).mockReturnValue(null);
@@ -63,49 +71,34 @@ describe('GET /api/realtime-hub/streams', () => {
     expect(res.status).toBe(401);
   });
 
-  it('aggregates eventstreams (stream) + KQL databases (table) across all workspaces', async () => {
+  it('lists Loom eventstream (stream) + kql-database (table) items, Azure-native', async () => {
     (getSession as any).mockReturnValue(AUTH);
-    (listFabricWorkspaces as any).mockResolvedValue([{ id: 'w1', displayName: 'WS One' }]);
-    (listEventstreams as any).mockResolvedValue([{ id: 'es1', displayName: 'Telemetry ES' }]);
-    (listKqlDatabases as any).mockResolvedValue([{ id: 'db1', displayName: 'Telemetry DB' }]);
+    (listAllOwnedItems as any).mockResolvedValue([
+      { id: 'es1', itemType: 'eventstream', displayName: 'Telemetry ES', workspaceId: 'ws-1' },
+      { id: 'db1', itemType: 'kql-database', displayName: 'Telemetry DB', workspaceId: 'ws-1' },
+      { id: 'lh1', itemType: 'lakehouse', displayName: 'ignored', workspaceId: 'ws-1' },
+    ]);
+    (listOwnedWorkspaces as any).mockResolvedValue([{ id: 'ws-1', name: 'WS One' }]);
     const res = await STREAMS();
     const j = await res.json();
     expect(j.ok).toBe(true);
+    expect(j.backend).toBe('azure-native');
     expect(j.workspaceCount).toBe(1);
     const stream = j.streams.find((s: any) => s.dataType === 'stream');
     const table = j.streams.find((s: any) => s.dataType === 'table');
     expect(stream.name).toBe('Telemetry ES');
     expect(stream.workspace).toBe('WS One');
     expect(table.name).toBe('Telemetry DB');
-  });
-
-  it('passes the Fabric auth gate (403) through verbatim with a hint', async () => {
-    (getSession as any).mockReturnValue(AUTH);
-    (listFabricWorkspaces as any).mockRejectedValue(new FabricError('Forbidden', 403, undefined, 'u', 'enable SP toggle'));
-    const res = await STREAMS();
-    expect(res.status).toBe(403);
-    const j = await res.json();
-    expect(j.ok).toBe(false);
-    expect(j.hint).toContain('SP toggle');
-  });
-
-  it('falls back to eventhouses when kqlDatabases returns 404', async () => {
-    (getSession as any).mockReturnValue(AUTH);
-    (listFabricWorkspaces as any).mockResolvedValue([{ id: 'w1', displayName: 'WS' }]);
-    (listEventstreams as any).mockResolvedValue([]);
-    (listKqlDatabases as any).mockRejectedValue(new FabricError('not found', 404));
-    (listEventhouses as any).mockResolvedValue([{ id: 'eh1', displayName: 'EH' }]);
-    const res = await STREAMS();
-    const j = await res.json();
-    expect(j.streams.find((s: any) => s.name === 'EH')).toBeTruthy();
+    // non-stream item types are excluded
+    expect(j.streams.find((s: any) => s.name === 'ignored')).toBeFalsy();
   });
 });
 
-// ---------------- connect-source ----------------
+// ---------------- connect-source (Azure-native default) ----------------
 describe('POST /api/realtime-hub/connect-source', () => {
   it('401 when unauthenticated', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await CONNECT(jsonReq({ fabricWorkspaceId: 'w', displayName: 'x', sourceType: 'SampleData' }));
+    const res = await CONNECT(jsonReq({ workspaceId: 'w', displayName: 'x', sourceType: 'SampleData' }));
     expect(res.status).toBe(401);
   });
 
@@ -115,41 +108,43 @@ describe('POST /api/realtime-hub/connect-source', () => {
     expect(res.status).toBe(415);
   });
 
-  it('400 when fabricWorkspaceId is missing', async () => {
+  it('400 when workspaceId is missing (Azure-native default)', async () => {
     (getSession as any).mockReturnValue(AUTH);
     const res = await CONNECT(jsonReq({ displayName: 'x', sourceType: 'SampleData' }));
     expect(res.status).toBe(400);
   });
 
-  it('400 when sourceType is not a documented Fabric source enum', async () => {
+  it('400 when sourceType is not a documented source enum', async () => {
     (getSession as any).mockReturnValue(AUTH);
-    const res = await CONNECT(jsonReq({ fabricWorkspaceId: 'w', displayName: 'x', sourceType: 'Bogus' }));
+    const res = await CONNECT(jsonReq({ workspaceId: 'w', displayName: 'x', sourceType: 'Bogus' }));
     expect(res.status).toBe(400);
-    expect(connectEventstreamSource).not.toHaveBeenCalled();
+    expect(createOwnedItem).not.toHaveBeenCalled();
   });
 
-  it('creates a real Fabric eventstream and returns the new id', async () => {
+  it('creates a Loom-native eventstream item carrying the source', async () => {
     (getSession as any).mockReturnValue(AUTH);
-    (connectEventstreamSource as any).mockResolvedValue({ id: 'fes-1' });
+    (createOwnedItem as any).mockResolvedValue({ ok: true, item: { id: 'es-1', displayName: 'Orders' } });
     const res = await CONNECT(jsonReq({
-      fabricWorkspaceId: 'ws-1', displayName: 'Orders', sourceType: 'AzureEventHub', properties: { eventHubName: 'eh' },
+      workspaceId: 'ws-1', displayName: 'Orders', sourceType: 'AzureEventHub', properties: { eventHubName: 'eh' },
     }));
     const j = await res.json();
     expect(j.ok).toBe(true);
-    expect(j.fabricEventstreamId).toBe('fes-1');
-    const [ws, input] = (connectEventstreamSource as any).mock.calls[0];
-    expect(ws).toBe('ws-1');
-    expect(input.sourceType).toBe('AzureEventHub');
-    expect(input.properties.eventHubName).toBe('eh');
+    expect(j.backend).toBe('azure-native');
+    expect(j.eventstreamId).toBe('es-1');
+    const [, itemType, body] = (createOwnedItem as any).mock.calls[0];
+    expect(itemType).toBe('eventstream');
+    expect(body.workspaceId).toBe('ws-1');
+    expect(body.state.source.type).toBe('AzureEventHub');
+    expect(body.state.source.properties.eventHubName).toBe('eh');
   });
 
-  it('passes the Fabric auth gate (403) through verbatim', async () => {
+  it('surfaces createOwnedItem failure verbatim', async () => {
     (getSession as any).mockReturnValue(AUTH);
-    (connectEventstreamSource as any).mockRejectedValue(new FabricError('Forbidden', 403, undefined, 'u', 'add UAMI to workspace'));
-    const res = await CONNECT(jsonReq({ fabricWorkspaceId: 'w', displayName: 'x', sourceType: 'SampleData' }));
-    expect(res.status).toBe(403);
+    (createOwnedItem as any).mockResolvedValue({ ok: false, status: 404, error: 'workspace not found' });
+    const res = await CONNECT(jsonReq({ workspaceId: 'bad', displayName: 'x', sourceType: 'SampleData' }));
+    expect(res.status).toBe(404);
     const j = await res.json();
-    expect(j.hint).toContain('UAMI');
+    expect(j.error).toContain('workspace not found');
   });
 });
 
