@@ -83,11 +83,18 @@ export interface PropertiesPanelProps {
   onDelete: () => void;
   /** 'rail' = right-side panel (legacy); 'dock' = bottom dock (ADF parity). */
   layout?: 'rail' | 'dock';
+  /**
+   * The container activity this activity is nested inside (ForEach, IfCondition,
+   * Switch, Until), or null/undefined at the top pipeline level. Used to warn
+   * when a SetVariable / AppendVariable sits inside a parallel (non-sequential)
+   * ForEach, where concurrent variable writes are not thread-safe.
+   */
+  parentActivity?: PipelineActivity | null;
 }
 
 type TabId = 'general' | 'source-sink' | 'settings' | 'parameters' | 'user-props';
 
-export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail' }: PropertiesPanelProps) {
+export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail', parentActivity = null }: PropertiesPanelProps) {
   const s = useStyles();
   const rootClass = layout === 'dock' ? s.dockRoot : s.root;
   const [tab, setTab] = useState<TabId>('general');
@@ -153,6 +160,27 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
             <MessageBarBody>
               <MessageBarTitle>Activity will not execute on this backing</MessageBarTitle>
               {def.remediation}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {/* Thread-safety warning: SetVariable / AppendVariable inside a parallel
+            (non-sequential) ForEach. ADF evaluates iterations concurrently when
+            isSequential is false — concurrent writes to a pipeline-scoped
+            variable are not atomic and the last write wins (non-deterministic). */}
+        {(activity.type === 'SetVariable' || activity.type === 'AppendVariable')
+          && parentActivity?.type === 'ForEach'
+          && (parentActivity.typeProperties as Record<string, unknown> | undefined)?.isSequential === false && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Thread-safety risk — parallel ForEach</MessageBarTitle>
+              {activity.type} inside the non-sequential ForEach{' '}
+              <strong>{parentActivity.name}</strong> may produce non-deterministic
+              results. ADF runs each ForEach iteration concurrently when{' '}
+              <strong>isSequential</strong> is <code>false</code> — concurrent writes
+              to the same pipeline-scoped variable are not atomic, so the last write
+              wins. To fix: turn the parent ForEach&apos;s <strong>Sequential</strong>{' '}
+              toggle on, or accumulate results in an external store (SQL table,
+              Cosmos container) instead of a pipeline variable.
             </MessageBarBody>
           </MessageBar>
         )}

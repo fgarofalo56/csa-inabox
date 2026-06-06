@@ -296,6 +296,171 @@ export async function listPipelineRuns(
 }
 
 // ============================================================
+// Log Analytics fallback — queries the typed ADFPipelineRun /
+// ADFActivityRun tables when LOOM_ADF_LOG_ANALYTICS_WORKSPACE is set.
+//
+// ADF's native monitoring API (queryPipelineRuns / queryActivityruns,
+// used above) enforces a 45-day maximum retention window — a run older
+// than that returns ZERO rows even though it happened. Log Analytics keeps
+// the diagnostic logs for the full workspace retention (90 days default,
+// up to 730), so this is the Output-pane fallback for "where did my older
+// runs go?".
+//
+// The query endpoint is cloud-aware via LOOM_LOG_ANALYTICS_ENDPOINT:
+//   Commercial / GCC: https://api.loganalytics.azure.com  (default)
+//   GCC-High / IL5  : https://api.loganalytics.us         (Azure Government)
+// (Note: ods.opinsights.azure.us is the *ingestion* host — the query API
+//  is api.loganalytics.us.) Same credential chain as the ARM calls above.
+//
+// Requires adf.bicep's diagnosticSettings to run in Dedicated
+// (logAnalyticsDestinationType: 'Dedicated') mode so logs land in the typed
+// tables rather than the legacy AzureDiagnostics catch-all.
+// ============================================================
+
+const LA_ENDPOINT_ADF =
+  process.env.LOOM_LOG_ANALYTICS_ENDPOINT || 'https://api.loganalytics.azure.com';
+const LA_SCOPE_ADF = `${LA_ENDPOINT_ADF}/.default`;
+
+/**
+ * Honest config gate for the LA fallback. Returns the workspace GUID when
+ * LOOM_ADF_LOG_ANALYTICS_WORKSPACE is set, or null so the route can skip the
+ * fallback (and the native ADF result — possibly empty — stands) instead of
+ * erroring.
+ */
+export function adfLogAnalyticsWorkspace(): string | null {
+  const v = process.env.LOOM_ADF_LOG_ANALYTICS_WORKSPACE;
+  return v && v.trim() ? v.trim() : null;
+}
+
+interface LaTable {
+  name?: string;
+  columns?: Array<{ name: string; type?: string }>;
+  rows?: unknown[][];
+}
+interface LaQueryResponse { tables?: LaTable[]; error?: { message?: string } }
+
+/** Escape a single-quoted KQL string literal (double the quote). */
+function kqlStr(v: string): string {
+  return v.replace(/'/g, "''");
+}
+
+async function laQuery(workspaceGuid: string, kql: string): Promise<LaQueryResponse> {
+  const tok = await credential.getToken(LA_SCOPE_ADF);
+  if (!tok?.token) throw new Error('Failed to acquire Log Analytics token');
+  const url = `${LA_ENDPOINT_ADF}/v1/workspaces/${encodeURIComponent(workspaceGuid)}/query`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${tok.token}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      prefer: 'wait=60',
+    },
+    body: JSON.stringify({ query: kql }),
+  });
+  const text = await r.text();
+  let json: LaQueryResponse | null = null;
+  try { json = text ? (JSON.parse(text) as LaQueryResponse) : null; } catch { /* non-JSON */ }
+  if (!r.ok) {
+    throw new Error(`Log Analytics query failed ${r.status}: ${json?.error?.message || text}`);
+  }
+  return json || {};
+}
+
+/** Build a {columnName -> rowIndex} accessor from the first table. */
+function laAccessor(json: LaQueryResponse): { rows: unknown[][]; idx: (name: string) => number } {
+  const table = (json.tables || [])[0];
+  const cols = (table?.columns || []).map((c) => c.name);
+  return {
+    rows: table?.rows || [],
+    idx: (name: string) => cols.indexOf(name),
+  };
+}
+
+/**
+ * List recent pipeline runs from Log Analytics (ADFPipelineRun table).
+ * Backs the Output-pane fallback when ADF's native 45-day window is empty.
+ */
+export async function listPipelineRunsFromLA(
+  workspaceGuid: string,
+  pipelineName: string,
+): Promise<AdfPipelineRun[]> {
+  const kql = `
+ADFPipelineRun
+| where PipelineName == '${kqlStr(pipelineName)}'
+| summarize arg_max(TimeGenerated, *) by RunId
+| order by Start desc
+| take 50
+| project RunId, PipelineName, Status, Start, End, ErrorCode, ErrorMessage, Parameters
+`.trim();
+  const json = await laQuery(workspaceGuid, kql);
+  const { rows, idx } = laAccessor(json);
+  return rows.map((row) => {
+    const startStr = (row[idx('Start')] as string | null) || undefined;
+    const endStr = (row[idx('End')] as string | null) || undefined;
+    const startMs = startStr ? new Date(startStr).getTime() : 0;
+    const endMs = endStr ? new Date(endStr).getTime() : 0;
+    const errMsg = (row[idx('ErrorMessage')] as string | null) || undefined;
+    return {
+      runId: row[idx('RunId')] as string,
+      pipelineName: row[idx('PipelineName')] as string,
+      status: (row[idx('Status')] || undefined) as AdfPipelineRun['status'],
+      runStart: startStr,
+      runEnd: endStr,
+      durationInMs: startMs && endMs ? endMs - startMs : undefined,
+      message: errMsg,
+      // invokedBy is not exposed in the resource-specific ADFPipelineRun table.
+      invokedBy: undefined,
+    } as AdfPipelineRun;
+  });
+}
+
+/**
+ * List per-activity output for a single run from Log Analytics
+ * (ADFActivityRun table). Backs the Output-pane drill-down fallback for
+ * runs older than ADF's 45-day native window.
+ */
+export async function listActivityRunsFromLA(
+  workspaceGuid: string,
+  runId: string,
+): Promise<AdfActivityRun[]> {
+  const kql = `
+ADFActivityRun
+| where PipelineRunId == '${kqlStr(runId)}'
+| summarize arg_max(TimeGenerated, *) by ActivityRunId
+| order by Start desc
+| project ActivityRunId, ActivityName, ActivityType, Status, Start, End, ErrorCode, ErrorMessage, Input, Output
+`.trim();
+  const json = await laQuery(workspaceGuid, kql);
+  const { rows, idx } = laAccessor(json);
+  const parseJson = (v: unknown): unknown => {
+    if (!v || typeof v !== 'string') return undefined;
+    try { return JSON.parse(v); } catch { return v; }
+  };
+  return rows.map((row) => {
+    const startStr = (row[idx('Start')] as string | null) || undefined;
+    const endStr = (row[idx('End')] as string | null) || undefined;
+    const startMs = startStr ? new Date(startStr).getTime() : 0;
+    const endMs = endStr ? new Date(endStr).getTime() : 0;
+    const errCode = (row[idx('ErrorCode')] as string | null) || undefined;
+    const errMsg = (row[idx('ErrorMessage')] as string | null) || undefined;
+    return {
+      activityRunId: row[idx('ActivityRunId')] as string,
+      activityName: row[idx('ActivityName')] as string,
+      activityType: row[idx('ActivityType')] as string,
+      pipelineRunId: runId,
+      status: (row[idx('Status')] || undefined) as AdfActivityRun['status'],
+      activityRunStart: startStr,
+      activityRunEnd: endStr,
+      durationInMs: startMs && endMs ? endMs - startMs : undefined,
+      input: parseJson(row[idx('Input')]),
+      output: parseJson(row[idx('Output')]),
+      error: errCode || errMsg ? { errorCode: errCode, message: errMsg } : undefined,
+    } as AdfActivityRun;
+  });
+}
+
+// ============================================================
 // Datasets
 // ============================================================
 

@@ -651,6 +651,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // on the sub for metrics/activity/health/alerts.
             { name: 'LOOM_LOG_ANALYTICS_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
             { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
+            // ADF Output-pane Log Analytics fallback — runs older than ADF's
+            // 45-day native monitoring window are queried from the typed
+            // ADFPipelineRun / ADFActivityRun tables in this workspace. Separate
+            // env var (same workspace GUID) so operators can repoint the ADF
+            // history fallback at a dedicated operational workspace without
+            // touching the /monitor Logs (KQL) tab.
+            { name: 'LOOM_ADF_LOG_ANALYTICS_WORKSPACE', value: monitoring.outputs.lawCustomerId }
+            // Cloud-aware Log Analytics QUERY endpoint. Commercial/GCC use the
+            // public host; GCC-High / IL5 (Azure Government) use api.loganalytics.us.
+            // Read by adf-client.ts (ADF fallback) + monitor-client.ts (Logs tab).
+            { name: 'LOOM_LOG_ANALYTICS_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://api.loganalytics.us' : 'https://api.loganalytics.azure.com' }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
