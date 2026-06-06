@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Field, Dropdown, Option, Divider,
   Tree, TreeItem, TreeItemLayout, Select,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -27,20 +27,26 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Play20Regular, Pause20Regular, Database20Regular,
+  PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
-const SOURCES = [
-  { id: 'AzureSqlDatabase', name: 'Azure SQL Database' },
-  { id: 'AzureSqlMI', name: 'Azure SQL Managed Instance' },
-  { id: 'AzurePostgreSql', name: 'Azure Database for PostgreSQL' },
-  { id: 'CosmosDb', name: 'Azure Cosmos DB' },
-  { id: 'Snowflake', name: 'Snowflake' },
-  { id: 'SqlServer2025', name: 'SQL Server 2025' },
-  { id: 'MSSQL', name: 'SQL Server 2016-2022' },
-  { id: 'GenericMirror', name: 'Open mirroring' },
+/**
+ * Mirroring source types → display name, an accent color, and the Loom
+ * Connection types that can back them. Each gets its own card in the wizard.
+ */
+const SOURCES: { id: string; name: string; accent: string; connTypes: string[] }[] = [
+  { id: 'AzureSqlDatabase', name: 'Azure SQL Database', accent: '#0078d4', connTypes: ['azure-sql', 'generic-sql'] },
+  { id: 'AzureSqlMI', name: 'Azure SQL Managed Instance', accent: '#0063b1', connTypes: ['azure-sql', 'generic-sql'] },
+  { id: 'AzurePostgreSql', name: 'Azure Database for PostgreSQL', accent: '#336791', connTypes: ['postgres'] },
+  { id: 'CosmosDb', name: 'Azure Cosmos DB', accent: '#3999c6', connTypes: ['cosmos'] },
+  { id: 'Snowflake', name: 'Snowflake', accent: '#29b5e8', connTypes: ['generic-sql', 'connection-string' as string] },
+  { id: 'SqlServer2025', name: 'SQL Server 2025', accent: '#a4262c', connTypes: ['generic-sql'] },
+  { id: 'MSSQL', name: 'SQL Server 2016-2022', accent: '#a4262c', connTypes: ['generic-sql'] },
+  { id: 'GenericMirror', name: 'Open mirroring', accent: '#5c2d91', connTypes: ['azure-sql', 'postgres', 'cosmos', 'storage-adls', 'generic-sql'] },
 ];
 
 const useStyles = makeStyles({
@@ -49,9 +55,24 @@ const useStyles = makeStyles({
   treePad: { padding: 8 },
   tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
   cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8 },
-  card: { padding: 10, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, cursor: 'pointer', backgroundColor: tokens.colorNeutralBackground1 },
-  cardActive: { borderColor: tokens.colorBrandStroke1, backgroundColor: tokens.colorBrandBackground2 },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: tokens.spacingHorizontalS },
+  // Web-3.0 source cards: left accent bar, icon tile, hover lift, selected ring.
+  card: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, cursor: 'pointer',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px',
+    backgroundColor: tokens.colorNeutralBackground1,
+    transitionProperty: 'transform, box-shadow', transitionDuration: tokens.durationFaster,
+    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow8 },
+  },
+  cardActive: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-1px', backgroundColor: tokens.colorBrandBackground2 },
+  cardIcon: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '34px', height: '34px', flexShrink: 0, borderRadius: tokens.borderRadiusMedium, color: '#fff' },
+  wizard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '560px', maxWidth: '640px' },
+  stepHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  stepNum: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, fontSize: tokens.fontSizeBase200, fontWeight: tokens.fontWeightSemibold },
+  connRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  summary: { display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalM, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2 },
+  sumKey: { color: tokens.colorNeutralForeground3 },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -113,6 +134,32 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [verify, setVerify] = useState<{ status: 'idle' | 'busy' | 'ok' | 'warn' | 'err'; msg?: string }>({ status: 'idle' });
+  // Loom Connections (Key Vault-backed creds) for the wizard's auth step.
+  const [connections, setConnections] = useState<ConnectionView[]>([]);
+  const [connId, setConnId] = useState('');
+  const [connBuilderOpen, setConnBuilderOpen] = useState(false);
+  const srcDef = useMemo(() => SOURCES.find((x) => x.id === createSrc) || SOURCES[0], [createSrc]);
+  const loadConnections = useCallback(async () => {
+    try {
+      const r = await fetch('/api/connections');
+      const j = await r.json();
+      if (j.ok) setConnections(j.connections || []);
+    } catch { /* honest empty */ }
+  }, []);
+  useEffect(() => { if (createOpen) void loadConnections(); }, [createOpen, loadConnections]);
+  // Compatible connections for the chosen source type.
+  const compatibleConns = useMemo(
+    () => connections.filter((c) => srcDef.connTypes.includes(c.type)),
+    [connections, srcDef],
+  );
+  const pickedConn = useMemo(() => connections.find((c) => c.id === connId) || null, [connections, connId]);
+  // When a connection is picked, prefill server/database from it.
+  useEffect(() => {
+    if (pickedConn) {
+      if (pickedConn.host) setCreateServer(pickedConn.host);
+      if (pickedConn.database) setCreateDb(pickedConn.database);
+    }
+  }, [pickedConn]);
   const runVerify = useCallback(async () => {
     if (!createServer.trim() || !createDb.trim()) { setVerify({ status: 'err', msg: 'Enter the server and database first.' }); return; }
     setVerify({ status: 'busy' });
@@ -189,15 +236,17 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       };
       const r = await fetch(`/api/items/mirrored-database?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ displayName: createName.trim(), definition }),
+        // connectionId binds the Key Vault-backed creds so the source accepts
+        // the connection (avoids the Entra-token-only "Login failed" error).
+        body: JSON.stringify({ displayName: createName.trim(), definition, sourceType: createSrc, connectionId: connId || undefined }),
       });
       const j = await r.json();
       if (!j.ok) { setCreateErr(j.error || 'create failed'); return; }
-      setCreateOpen(false); setCreateName(''); setCreateServer(''); setCreateDb('');
+      setCreateOpen(false); setCreateName(''); setCreateServer(''); setCreateDb(''); setConnId('');
       await loadList(workspaceId);
       if (j.mirroredDatabase?.id) setMirrorId(j.mirroredDatabase.id);
     } finally { setCreateBusy(false); }
-  }, [workspaceId, createName, createSrc, createServer, createDb, loadList]);
+  }, [workspaceId, createName, createSrc, createServer, createDb, connId, loadList]);
 
   const del = useCallback(async () => {
     if (!workspaceId || !mirrorId) return;
@@ -269,42 +318,103 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
               <DialogTrigger disableButtonEnhancement>
                 <Button appearance="outline" icon={<Add20Regular />} disabled={!workspaceId}>New mirror</Button>
               </DialogTrigger>
-              <DialogSurface>
+              <DialogSurface style={{ maxWidth: '680px' }}>
                 <DialogBody>
-                  <DialogTitle>Create mirrored database</DialogTitle>
+                  <DialogTitle><span className={s.connRow}><Database20Regular /> Create mirrored database</span></DialogTitle>
                   <DialogContent>
-                    <Caption1>displayName</Caption1>
-                    <Input value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
-                    <Caption1 style={{ marginTop: 8 }}>Source type</Caption1>
-                    <div className={s.grid}>
-                      {SOURCES.map((src) => (
-                        <div key={src.id} className={`${s.card} ${createSrc === src.id ? s.cardActive : ''}`} onClick={() => setCreateSrc(src.id)}>
-                          <Body1 style={{ fontWeight: 600 }}>{src.name}</Body1>
-                          <Caption1>{src.id}</Caption1>
+                    <div className={s.wizard}>
+                      {/* Step 1 — source type (icon cards) */}
+                      <div>
+                        <div className={s.stepHead}><span className={s.stepNum}>1</span><Subtitle2>Choose a source</Subtitle2></div>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Each source mirrors into ADLS Bronze Delta — no Fabric capacity required.</Caption1>
+                        <div className={s.grid} style={{ marginTop: 8 }}>
+                          {SOURCES.map((src) => (
+                            <div key={src.id} className={`${s.card} ${createSrc === src.id ? s.cardActive : ''}`}
+                              style={{ borderLeftColor: src.accent }}
+                              onClick={() => { setCreateSrc(src.id); setConnId(''); }} role="button" tabIndex={0}>
+                              <span className={s.cardIcon} style={{ backgroundColor: src.accent }}><Database20Regular /></span>
+                              <span><Body1 style={{ fontWeight: 600, display: 'block' }}>{src.name}</Body1></span>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      </div>
+
+                      <Divider />
+
+                      {/* Step 2 — connection (Key Vault-backed auth) */}
+                      <div>
+                        <div className={s.stepHead}><span className={s.stepNum}>2</span><Subtitle2>Connection &amp; authentication</Subtitle2></div>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          Pick a saved connection or create one. Credentials are stored in Key Vault — choose SQL password /
+                          connection string / service principal so the source accepts the login (no “token-identified principal” errors).
+                        </Caption1>
+                        <div className={s.connRow} style={{ marginTop: 8 }}>
+                          <Field style={{ flex: 1 }}>
+                            <Dropdown placeholder={compatibleConns.length ? 'Select a connection' : 'No saved connections for this source'}
+                              value={pickedConn ? pickedConn.name : ''} selectedOptions={connId ? [connId] : []}
+                              onOptionSelect={(_, d) => setConnId(d.optionValue || '')}>
+                              {compatibleConns.map((c) => (
+                                <Option key={c.id} value={c.id} text={c.name}>
+                                  {c.name} · {c.authMethod}{c.hasSecret ? ' · Key Vault' : ''}
+                                </Option>
+                              ))}
+                            </Dropdown>
+                          </Field>
+                          <Button appearance="outline" icon={<PlugConnected20Regular />} onClick={() => setConnBuilderOpen(true)}>New connection</Button>
+                        </div>
+                        {pickedConn && (
+                          <div className={s.connRow} style={{ marginTop: 6 }}>
+                            {pickedConn.hasSecret ? <Key16Regular /> : <CheckmarkCircle16Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />}
+                            <Caption1>Auth: <strong>{pickedConn.authMethod}</strong>{pickedConn.hasSecret ? ' (secret in Key Vault)' : ''}</Caption1>
+                          </div>
+                        )}
+                        {/* Manual server/db (used when no connection, or to confirm) */}
+                        <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                          <Field label="Server / host" style={{ flex: 1 }}>
+                            <Input value={createServer} onChange={(_, d) => setCreateServer(d.value)} placeholder="server.database.windows.net" disabled={!!pickedConn?.host} />
+                          </Field>
+                          <Field label="Database" style={{ flex: 1 }}>
+                            <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="prod" disabled={!!pickedConn?.database} />
+                          </Field>
+                        </div>
+                        <div style={{ marginTop: 10 }}>
+                          <Button size="small" appearance="outline" icon={<CheckmarkCircle16Filled />} disabled={verify.status === 'busy'} onClick={runVerify}>
+                            {verify.status === 'busy' ? 'Verifying…' : 'Verify connection'}
+                          </Button>
+                        </div>
+                        {verify.status === 'ok' && <MessageBar intent="success" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
+                        {verify.status === 'warn' && <MessageBar intent="info" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
+                        {verify.status === 'err' && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
+                      </div>
+
+                      <Divider />
+
+                      {/* Step 3 — name + review */}
+                      <div>
+                        <div className={s.stepHead}><span className={s.stepNum}>3</span><Subtitle2>Name &amp; create</Subtitle2></div>
+                        <Field label="Name" required style={{ marginTop: 8 }}>
+                          <Input value={createName} onChange={(_, d) => setCreateName(d.value)} placeholder="prod-sales-mirror" />
+                        </Field>
+                        <div className={s.summary} style={{ marginTop: 10 }}>
+                          <span className={s.sumKey}>Source</span><span>{srcDef.name}</span>
+                          <span className={s.sumKey}>Connection</span><span>{pickedConn ? `${pickedConn.name} (${pickedConn.authMethod})` : 'manual / managed identity'}</span>
+                          <span className={s.sumKey}>Server</span><span><code>{createServer || '—'}</code></span>
+                          <span className={s.sumKey}>Database</span><span><code>{createDb || '—'}</code></span>
+                          <span className={s.sumKey}>Target</span><span>ADLS Bronze Delta</span>
+                        </div>
+                        {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                      </div>
                     </div>
-                    <Caption1 style={{ marginTop: 8 }}>Server</Caption1>
-                    <Input value={createServer} onChange={(_, d) => setCreateServer(d.value)} placeholder="server.database.windows.net" style={{ width: '100%' }} />
-                    <Caption1 style={{ marginTop: 8 }}>Database</Caption1>
-                    <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="prod" style={{ width: '100%' }} />
-                    <div style={{ marginTop: 10 }}>
-                      <Button size="small" appearance="outline" disabled={verify.status === 'busy'} onClick={runVerify}>
-                        {verify.status === 'busy' ? 'Verifying…' : 'Verify connection'}
-                      </Button>
-                    </div>
-                    {verify.status === 'ok' && <MessageBar intent="success" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
-                    {verify.status === 'warn' && <MessageBar intent="info" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
-                    {verify.status === 'err' && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
-                    {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
                   </DialogContent>
                   <DialogActions>
                     <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
-                    <Button appearance="primary" disabled={createBusy || !createName.trim()} onClick={create}>{createBusy ? 'Creating…' : 'Create mirror'}</Button>
+                    <Button appearance="primary" icon={<Add20Regular />} disabled={createBusy || !createName.trim()} onClick={create}>{createBusy ? 'Creating…' : 'Create mirror'}</Button>
                   </DialogActions>
                 </DialogBody>
               </DialogSurface>
             </Dialog>
+            <ConnectionBuilder open={connBuilderOpen} onClose={() => setConnBuilderOpen(false)}
+              onCreated={(c) => { setConnections((prev) => [...prev.filter((x) => x.id !== c.id), c]); setConnId(c.id); }} />
             <Button appearance="primary" icon={<Play20Regular />} disabled={!mirrorId || acting} onClick={() => act('start')}>Start</Button>
             <Button appearance="outline" icon={<Pause20Regular />} disabled={!mirrorId || acting} onClick={() => act('stop')}>Stop</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!mirrorId} onClick={del}>Delete</Button>
