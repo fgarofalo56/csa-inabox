@@ -1,33 +1,22 @@
 /**
  * POST /api/realtime-hub/connect-source
  *
- * Fabric Real-Time Hub "Connect source" / "Get events" flow. Creates a
- * REAL Fabric Eventstream item carrying the chosen Microsoft / Fabric /
- * Azure streaming source (Azure Event Hubs, IoT Hub, Service Bus, Kafka,
- * SQL/Cosmos/Postgres/MySQL CDC, Blob Storage events, Fabric workspace-
- * item / job / OneLake events, etc.).
+ * Real-Time Hub "Connect source" / "Get events" flow. **Azure-native by
+ * default** (no Microsoft Fabric, per .claude/rules/no-fabric-dependency.md):
+ * creates a Loom-native **eventstream** item carrying the chosen streaming
+ * source. The Loom eventstream runtime is Azure Event Hubs (+ Stream Analytics
+ * for processing); the eventstream editor opens fully built-out on the item.
  *
- * Backend: POST /workspaces/{ws}/eventstreams with a Base64 eventstream.json
- * topology part whose `sources[0].type` is the documented Fabric source
- * enum value — the same definition REST API the Eventstream editor uses.
- * (https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/eventstream-rest-api)
+ * Fabric is opt-in: set `LOOM_EVENTSTREAM_BACKEND=fabric` AND pass a
+ * `fabricWorkspaceId` and the route creates a real Fabric Eventstream instead.
  *
- * No mock success. If the Console UAMI is not authorized in the Fabric
- * tenant, the FabricError (401/403) is surfaced verbatim with a hint.
- *
- * Body:
- *   {
- *     fabricWorkspaceId: string,   // required — Fabric workspace GUID
- *     displayName: string,          // required — new eventstream name
- *     sourceType: RthSourceType,    // required — Fabric source enum
- *     sourceName?: string,
- *     description?: string,
- *     properties?: Record<string, unknown>  // source-specific connection settings
- *   }
+ * Body (Azure-native default):
+ *   { workspaceId, displayName, sourceType, sourceName?, description?, properties? }
+ * Body (Fabric opt-in): adds `fabricWorkspaceId`.
  */
-
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { createOwnedItem } from '../../items/_lib/item-crud';
 import {
   connectEventstreamSource,
   isRthSourceType,
@@ -38,68 +27,82 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const FABRIC_OPT_IN = (process.env.LOOM_EVENTSTREAM_BACKEND || '').toLowerCase() === 'fabric';
+
 export async function POST(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
-  // Content-type guard — reject non-JSON bodies with 415 before parsing.
   const ct = req.headers.get('content-type') || '';
   if (!ct.includes('application/json')) {
-    return NextResponse.json(
-      { ok: false, error: 'Content-Type must be application/json' },
-      { status: 415 },
-    );
+    return NextResponse.json({ ok: false, error: 'Content-Type must be application/json' }, { status: 415 });
   }
-
   const body = await req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 });
   }
 
-  const fabricWorkspaceId = String(body.fabricWorkspaceId || '').trim();
   const displayName = String(body.displayName || '').trim();
   const sourceType = String(body.sourceType || '').trim();
   const sourceName = String(body.sourceName || 'source-1').trim() || 'source-1';
+  const fabricWorkspaceId = String(body.fabricWorkspaceId || '').trim();
+  const properties = (body.properties && typeof body.properties === 'object') ? body.properties : {};
 
-  if (!fabricWorkspaceId) {
-    return NextResponse.json({
-      ok: false,
-      error: 'fabricWorkspaceId is required.',
-      hint: 'Provide the Fabric workspace GUID (app.fabric.microsoft.com → workspace → Settings → copy the workspace ID). The Console UAMI must be a Contributor (or higher) on that workspace.',
-    }, { status: 400 });
-  }
-  if (!displayName) {
-    return NextResponse.json({ ok: false, error: 'displayName is required.' }, { status: 400 });
-  }
+  if (!displayName) return NextResponse.json({ ok: false, error: 'displayName is required.' }, { status: 400 });
   if (!isRthSourceType(sourceType)) {
-    return NextResponse.json({
-      ok: false,
-      error: `Unsupported sourceType "${sourceType}".`,
-      hint: `Allowed source types: ${RTH_SOURCE_TYPES.join(', ')}`,
-    }, { status: 400 });
+    return NextResponse.json({ ok: false, error: `Unsupported sourceType "${sourceType}".`, hint: `Allowed: ${RTH_SOURCE_TYPES.join(', ')}` }, { status: 400 });
   }
 
-  try {
-    const result = await connectEventstreamSource(fabricWorkspaceId, {
-      displayName,
-      description: body.description ? String(body.description) : 'Connected from CSA Loom Real-Time Hub',
-      sourceName,
-      sourceType,
-      properties: (body.properties && typeof body.properties === 'object') ? body.properties : {},
-    });
-    return NextResponse.json({
-      ok: true,
-      connected: true,
-      accepted: (result as any)?._accepted === true,
-      fabricEventstreamId: (result as any)?.id ?? null,
-      fabricWorkspaceId,
-      sourceType,
-      operationLocation: (result as any)?.location,
-    });
-  } catch (e: any) {
-    if (e instanceof FabricError) {
-      return NextResponse.json({ ok: false, error: e.message, hint: e.hint }, { status: e.status });
+  // ---- Fabric opt-in path (only when explicitly enabled + a workspace given) ----
+  if (FABRIC_OPT_IN && fabricWorkspaceId) {
+    try {
+      const result = await connectEventstreamSource(fabricWorkspaceId, {
+        displayName,
+        description: body.description ? String(body.description) : 'Connected from CSA Loom Real-Time Hub',
+        sourceName, sourceType, properties,
+      });
+      return NextResponse.json({
+        ok: true, connected: true, backend: 'fabric',
+        accepted: (result as any)?._accepted === true,
+        fabricEventstreamId: (result as any)?.id ?? null,
+        fabricWorkspaceId, sourceType,
+      });
+    } catch (e: any) {
+      if (e instanceof FabricError) return NextResponse.json({ ok: false, error: e.message, hint: e.hint }, { status: e.status });
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
   }
+
+  // ---- Azure-native default: create a Loom eventstream item ----
+  const workspaceId = String(body.workspaceId || '').trim();
+  if (!workspaceId) {
+    return NextResponse.json({ ok: false, error: 'workspaceId is required.', hint: 'Pick the Loom workspace to create the eventstream in.' }, { status: 400 });
+  }
+  const res = await createOwnedItem(session, 'eventstream', {
+    workspaceId,
+    displayName,
+    description: body.description ? String(body.description) : `Real-Time Hub source: ${sourceType}`,
+    state: {
+      backend: 'azure-native',
+      // The eventstream editor reads this topology: one source node, no
+      // destinations yet (the user wires processing/destinations in the canvas).
+      definition: {
+        sources: [{ name: sourceName, type: sourceType, properties }],
+        operators: [],
+        destinations: [],
+      },
+      source: { name: sourceName, type: sourceType, properties },
+    },
+  });
+  if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: res.status });
+
+  return NextResponse.json({
+    ok: true,
+    connected: true,
+    backend: 'azure-native',
+    eventstreamId: res.item.id,
+    workspaceId,
+    sourceType,
+    link: `/items/eventstream/${res.item.id}`,
+  });
 }
