@@ -41,6 +41,48 @@ import * as fabric from './fabric-client';
 import * as activator from './activator-client';
 import { copilotSessionsContainer } from './cosmos-client';
 import { runSelfAudit, applyFix } from '@/lib/admin/self-audit';
+import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
+
+// ---------- item-type slug normalization (build-assist robustness) ----------
+// The model often guesses item-type slugs with underscores or marketing names
+// (e.g. "synapse_dedicated_sql_pool", "powerbi_semantic_model"). Creating an
+// item with a slug that has no registered editor 404s the item. Normalize to a
+// real catalog slug (hyphenate + alias common synonyms) or reject with the
+// valid list — never silently store a bogus type.
+const VALID_ITEM_SLUGS: ReadonlySet<string> = new Set(FABRIC_ITEM_TYPES.map((t) => t.slug));
+const ITEM_TYPE_ALIASES: Record<string, string> = {
+  'powerbi-semantic-model': 'semantic-model',
+  'power-bi-semantic-model': 'semantic-model',
+  'powerbi-dataset': 'semantic-model',
+  'dataset': 'semantic-model',
+  'powerbi-report': 'report',
+  'power-bi-report': 'report',
+  'powerbi-dashboard': 'dashboard',
+  'sql-dw': 'synapse-dedicated-sql-pool',
+  'sql-data-warehouse': 'synapse-dedicated-sql-pool',
+  'data-warehouse': 'warehouse',
+  'sql-pool': 'synapse-dedicated-sql-pool',
+  'dedicated-sql-pool': 'synapse-dedicated-sql-pool',
+  'databricks-sql': 'databricks-sql-warehouse',
+  'azure-sql': 'azure-sql-database',
+  'sql': 'sql-database',
+  'pipeline': 'data-pipeline',
+  'kql-db': 'kql-database',
+  'notebook-databricks': 'databricks-notebook',
+};
+
+function normalizeItemType(raw: string): { slug: string } | { error: string } {
+  let s = String(raw || '').trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (ITEM_TYPE_ALIASES[s]) s = ITEM_TYPE_ALIASES[s];
+  if (VALID_ITEM_SLUGS.has(s)) return { slug: s };
+  return {
+    error:
+      `Unknown item type "${raw}". Use a hyphenated Loom slug. Common ones: ` +
+      'data-pipeline, lakehouse, warehouse, synapse-dedicated-sql-pool, sql-database, ' +
+      'azure-sql-database, databricks-sql-warehouse, databricks-notebook, notebook, ' +
+      'kql-database, eventstream, semantic-model, report, dashboard, data-agent.',
+  };
+}
 
 // ---------- Credential ----------
 
@@ -488,13 +530,15 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     description: 'Create a new Loom workspace OWNED by the current user. Call this before item_create when the user has no workspace yet. Returns the new workspace id.',
     parameters: obj({ name: S_STRING, description: S_STRING }, ['name']),
     handler: async ({ name, description }, ctx) => {
+      const wsName = String(name ?? '').trim();
+      if (!wsName) throw new Error('A workspace name is required (to list existing workspaces, use workspace_list).');
       const { workspacesContainer } = await import('./cosmos-client');
       const c = await workspacesContainer();
       const now = new Date().toISOString();
       const ws = {
         id: crypto.randomUUID(),
         tenantId: ctx.userOid,
-        name: String(name).trim(),
+        name: wsName,
         description: description ? String(description).trim() : undefined,
         createdBy: ctx.userOid,
         createdAt: now,
@@ -509,17 +553,22 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     service: 'Loom',
     description:
       'Create a new Loom item of a given type inside a workspace, OWNED by the current user. ' +
-      'Optionally pass an initial `state` object to create a PRE-CONFIGURED item — e.g. a data-agent ' +
-      'with {sources:[…], instructions}, a data-pipeline with {activities:[…]}, a lakehouse, warehouse, ' +
-      'notebook, kql-database, eventstream, activator, semantic-model, report, graph-model, etc. ' +
+      'The `type` MUST be a hyphenated Loom slug (NOT underscores). Common slugs: data-pipeline, ' +
+      'lakehouse, warehouse, synapse-dedicated-sql-pool, sql-database, azure-sql-database, ' +
+      'databricks-sql-warehouse, databricks-notebook, notebook, kql-database, eventstream, activator, ' +
+      'semantic-model (Power BI semantic model), report (Power BI report), dashboard, graph-model, ' +
+      'data-agent. Optionally pass an initial `state` object to create a PRE-CONFIGURED item — e.g. a ' +
+      'data-agent with {sources:[…], instructions}, a data-pipeline with {activities:[…]}. ' +
       'Returns the created item id (open it in the editor to continue). This is the primary build-assist tool.',
     parameters: obj({
       workspaceId: S_STRING, type: S_STRING, displayName: S_STRING, description: S_STRING,
       state: { type: 'object', description: 'Initial item state/config (item-type specific). Omit for an empty item.' },
     }, ['workspaceId', 'type', 'displayName']),
     handler: async ({ workspaceId, type, displayName, description, state }, ctx) => {
+      const norm = normalizeItemType(String(type));
+      if ('error' in norm) throw new Error(norm.error);
       const { createOwnedItem } = await import('@/app/api/items/_lib/item-crud');
-      const res = await createOwnedItem(ctx.session as any, String(type), {
+      const res = await createOwnedItem(ctx.session as any, norm.slug, {
         workspaceId: String(workspaceId),
         displayName: String(displayName),
         description: description ? String(description) : undefined,
@@ -554,12 +603,35 @@ export function buildDefaultRegistry(): LoomToolRegistry {
   r.register({
     name: 'item_list',
     service: 'Loom',
-    description: 'List the Loom items of a given type the current user owns (id + displayName + workspace). Use to find an item to configure, or to check what already exists before creating a duplicate.',
-    parameters: obj({ itemType: S_STRING }, ['itemType']),
-    handler: async ({ itemType }, ctx) => {
-      const { listOwnedItems } = await import('@/app/api/items/_lib/item-crud');
-      const items = await listOwnedItems(String(itemType), ctx.userOid);
-      return items.map((it: any) => ({ id: it.id, displayName: it.displayName, workspaceId: it.workspaceId }));
+    description: 'List the Loom items the current user owns (id + type + displayName + workspace). Omit itemType (or pass "all") to list every type; pass a hyphenated slug to filter; optionally pass workspaceId to scope to one workspace. Use to find an item to configure or check for duplicates.',
+    parameters: obj({ itemType: S_STRING, workspaceId: S_STRING }, []),
+    handler: async ({ itemType, workspaceId }, ctx) => {
+      const raw = String(itemType ?? '').trim().toLowerCase();
+      const wid = String(workspaceId ?? '').trim() || undefined;
+      const { listOwnedItems, listAllOwnedItems } = await import('@/app/api/items/_lib/item-crud');
+      // No type, "all"/"*", or a workspace filter → list across all types.
+      let items: any[];
+      if (!raw || raw === 'all' || raw === '*' || wid) {
+        items = await listAllOwnedItems(ctx.userOid, wid);
+        if (raw && raw !== 'all' && raw !== '*') {
+          const norm = normalizeItemType(raw);
+          if (!('error' in norm)) items = items.filter((it) => it.itemType === norm.slug);
+        }
+      } else {
+        const norm = normalizeItemType(raw);
+        items = await listOwnedItems('error' in norm ? raw : norm.slug, ctx.userOid);
+      }
+      return items.map((it: any) => ({ id: it.id, itemType: it.itemType, displayName: it.displayName, workspaceId: it.workspaceId }));
+    },
+  });
+  r.register({
+    name: 'workspace_list',
+    service: 'Loom',
+    description: 'List the Loom workspaces the current user owns (id + name + description). Use this to answer "what workspaces exist" or to find a workspace id before item_create — do NOT call workspace_create to list.',
+    parameters: obj({}),
+    handler: async (_args, ctx) => {
+      const { listOwnedWorkspaces } = await import('@/app/api/items/_lib/item-crud');
+      return listOwnedWorkspaces(ctx.userOid);
     },
   });
 
