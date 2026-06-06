@@ -136,6 +136,11 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   name: 'diag-loom-stdz'
   properties: {
     workspaceId: workspaceId
+    // Resource-specific (Dedicated) mode routes ADF diagnostic logs into the
+    // typed ADFPipelineRun / ADFActivityRun tables instead of the legacy
+    // AzureDiagnostics catch-all. The Output-pane Log Analytics fallback
+    // (runs older than ADF's 45-day native window) queries these typed tables.
+    logAnalyticsDestinationType: 'Dedicated'
     logs: [
       { category: 'ActivityRuns',  enabled: true }
       { category: 'PipelineRuns',  enabled: true }
