@@ -16,7 +16,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Button, Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuGroup, MenuGroupHeader,
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
-  Field, Dropdown, Option, Input, Switch, Spinner, Badge,
+  Field, Dropdown, Option, Input, Textarea, Switch, Spinner, Badge,
   MessageBar, MessageBarBody, MessageBarTitle, Caption1, Body1,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -109,6 +109,18 @@ function ThreadFieldControl({
     return (
       <Field label={field.label} hint={field.hint} required={field.required}>
         <Input value={typeof value === 'string' ? value : ''} onChange={(_, d) => onChange(d.value)} />
+      </Field>
+    );
+  }
+  if (field.kind === 'textarea') {
+    return (
+      <Field label={field.label} hint={field.hint} required={field.required}>
+        <Textarea
+          value={typeof value === 'string' ? value : ''}
+          onChange={(_, d) => onChange(d.value)}
+          resize="vertical"
+          textarea={{ style: { fontFamily: 'Consolas, monospace', minHeight: '120px' } }}
+        />
       </Field>
     );
   }
