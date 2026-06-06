@@ -11,7 +11,9 @@ const useStyles = makeStyles({
 
 export default function CatalogBrowsePage() {
   const s = useStyles();
-  const [source, setSource] = useState<'purview' | 'unity-catalog' | 'onelake'>('unity-catalog');
+  // Default to the Azure-native Loom workspaces (the customer's own data); real
+  // Fabric OneLake is opt-in. Unity Catalog + Purview stay as additional sources.
+  const [source, setSource] = useState<'purview' | 'unity-catalog' | 'onelake'>('onelake');
   return (
     <CatalogShell sectionTitle="Browse">
       <TabList
@@ -19,16 +21,17 @@ export default function CatalogBrowsePage() {
         selectedValue={source}
         onTabSelect={(_, d) => setSource(d.value as any)}
       >
+        <Tab value="onelake">Loom workspaces</Tab>
         <Tab value="unity-catalog">Unity Catalog</Tab>
-        <Tab value="onelake">OneLake (Fabric)</Tab>
         <Tab value="purview">Purview domains</Tab>
       </TabList>
       <TreeBrowser source={source} onSelect={(n, path) => {
         // Open detail page in new tab.
         if (source === 'unity-catalog' && path.length >= 1) {
           window.open(`/catalog/unity-catalog/${encodeURIComponent([...path.slice(1), n.id].join('.'))}?host=${encodeURIComponent(path[0])}`, '_blank');
-        } else if (source === 'onelake' && path.length >= 1) {
-          window.open(`/catalog/onelake/${encodeURIComponent(n.id)}?workspace=${encodeURIComponent(path[0])}`, '_blank');
+        } else if (source === 'onelake') {
+          // Azure-native Loom item → its native editor (node.kind === itemType slug).
+          if (n.kind && n.kind !== 'workspace') window.open(`/items/${encodeURIComponent(n.kind)}/${encodeURIComponent(n.id)}`, '_blank');
         } else if (source === 'purview') {
           window.open(`/catalog/purview/${encodeURIComponent(n.id)}`, '_blank');
         }

@@ -433,6 +433,16 @@ The operator is exercising the live console and forwarding gaps to fix durably:
 **Next:** mirroring wizard (consume Connections), then Purview auto-gov, OneLake-tab
 reframe, Weave/Lineage verification.
 
+### Unified Catalog OneLake (Fabric) tab → Azure-native (no-fabric) ✅ (PR # pending)
+- The catalog "OneLake (Fabric)" Browse tab + federated-search "onelake" source
+  listed REAL Fabric workspaces (fabric-csa-dev). Rebackended both to the
+  caller's OWN Loom workspaces+items (Cosmos, via listOwnedWorkspaces/
+  listAllOwnedItems) as the DEFAULT; real Fabric OneLake is opt-in only
+  (LOOM_LAKEHOUSE_BACKEND=fabric). Relabeled tab "OneLake (Fabric)" → "Loom
+  workspaces" (now first + default tab); federated source label → "Loom
+  workspaces"; shell subtitle reworded (Fabric opt-in). Browse leaf → /items/<slug>/<id>.
+  tsc clean.
+
 ### Mirroring create WIZARD (web-3.0 + Connections) ✅ (PR # pending)
 - Redesigned the "Create mirrored database" dialog (was plain Caption1+Input, "looks
   like shit") into a modern 3-step wizard: (1) source-type **icon cards** w/ per-source
