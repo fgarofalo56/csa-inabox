@@ -433,6 +433,19 @@ The operator is exercising the live console and forwarding gaps to fix durably:
 **Next:** mirroring wizard (consume Connections), then Purview auto-gov, OneLake-tab
 reframe, Weave/Lineage verification.
 
+### Mirroring create WIZARD (web-3.0 + Connections) ✅ (PR # pending)
+- Redesigned the "Create mirrored database" dialog (was plain Caption1+Input, "looks
+  like shit") into a modern 3-step wizard: (1) source-type **icon cards** w/ per-source
+  accent colors + hover lift + selected ring; (2) **Connection & auth** — pick a
+  Loom Connection (filtered to compatible types per source) or **+ New connection**
+  (mounts ConnectionBuilder), KV-backed auth so the source accepts the login (fixes
+  the "token-identified principal" error) + server/db auto-fill from the connection +
+  Verify; (3) name + review summary. create POST now sends sourceType + connectionId.
+- REMAINING: backend consumption (persist connectionId on the item + feed the KV
+  creds into the Fabric mirroring config — Fabric uses its own connection/gateway
+  model, a deeper wiring). The mirrored-database item is still Fabric-based (separate
+  no-fabric reframe). tsc clean.
+
 ### task-016 (slice) — PostgreSQL in-database query LIVE ✅ (PR # pending)
 - Operator approved adding the `pg` driver. Added `pg`@^8.13.1 + `@types/pg` via
   **pnpm** (repo uses pnpm-lock.yaml — `pnpm install --no-frozen-lockfile`; npm
