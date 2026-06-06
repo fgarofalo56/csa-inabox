@@ -320,7 +320,7 @@ export default function GovernanceCatalogPage() {
 
               <div className={s.actionRow}>
                 <Button appearance="primary" icon={<Open20Regular />} onClick={() => router.push(`/items/${selected.itemType}/${selected.id}`)}>Open in editor</Button>
-                <Button icon={<BranchFork16Regular />} onClick={() => router.push('/governance/lineage')}>View lineage</Button>
+                <Button icon={<BranchFork16Regular />} onClick={() => router.push(`/governance/lineage?focusId=${encodeURIComponent(selected.id)}`)}>View lineage</Button>
               </div>
 
               <Divider />

@@ -510,7 +510,7 @@ function ItemDetails({
             </span>
             <span className={styles.metaKey}>Lineage</span>
             <span className={styles.metaVal}>
-              <Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => router.push('/governance/lineage')}>View lineage</Button>
+              <Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => router.push(`/governance/lineage?focusId=${encodeURIComponent(item.id)}`)}>View lineage</Button>
             </span>
           </div>
           <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 8 }}>
