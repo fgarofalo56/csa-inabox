@@ -92,16 +92,23 @@ Example (CPU high sustained):
 
 ### Action surface
 
-| Action type | Binding |
-|---|---|
-| Teams message | Graph API webhook |
-| Email | Azure Communication Services |
-| Power Automate flow | HTTP webhook |
-| Logic App | HTTP webhook |
-| Databricks Job | Databricks Jobs API |
-| ADF Pipeline | ADF REST |
-| User Data Function | Function call |
-| Generic webhook | HTTPS POST |
+Status as of 2026-06-06 (✅ shipped / 🟡 editor-only / ⛔ roadmap, not built):
+
+| Action type | Binding | Status |
+|---|---|---|
+| Teams message | Graph API / webhook | ✅ engine + editor |
+| Email | Azure Communication Services | ✅ engine + editor |
+| Logic App | HTTP webhook | ✅ engine |
+| Generic webhook | HTTPS POST | ✅ engine + editor |
+| ADF Pipeline | ADF REST | 🟡 editor configures it |
+| Notebook run | notebook id | 🟡 editor configures it |
+| Power Automate flow | HTTP trigger | 🟡 editor configures it |
+| Databricks Job | Databricks Jobs API | ⛔ not implemented |
+| User Data Function | Function call | ⛔ not implemented |
+
+The C# engine (`ActionDispatcher.cs`) dispatches the four ✅ rows; the Console
+activator editor (`phase3-editors.tsx`) additionally configures the three 🟡
+rows. The ⛔ rows are roadmap.
 
 ## Per-boundary behavior
 

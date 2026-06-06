@@ -15,6 +15,16 @@
     documentation before making decisions.
 
 
+!!! warning "Shipped reality vs. design (2026-06-06)"
+    The **shipped** Loom mirror is the Azure-native engine in
+    `apps/fiab-console/lib/azure/mirror-engine.ts`: **Start** enables the source
+    change feed and **snapshots each table to ADLS Bronze as CSV**, queryable via
+    Synapse Serverless / notebook / lakehouse shortcut (see
+    [`mirrored-database.md`](mirrored-database.md)). The **Debezium + Spark
+    Structured Streaming + Delta-MERGE** pipeline in the "CSA Loom parity design"
+    section below is the **target design** (`apps/fiab-mirroring-engine` is not
+    wired to the Console editor) — roadmap, not the current path.
+
 ## What Fabric does
 
 Zero-ETL near-real-time CDC into OneLake as Delta tables. GA sources
