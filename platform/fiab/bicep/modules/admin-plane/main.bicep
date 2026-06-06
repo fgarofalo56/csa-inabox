@@ -370,6 +370,7 @@ module keyvault 'keyvault.bicep' = {
     location: location
     hsmIsolated: keyVaultHsmIsolated
     adminEntraGroupId: adminEntraGroupId
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     privateDnsZoneVaultId: network.outputs.privateDnsZoneIds.keyvault
@@ -653,6 +654,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
+            { name: 'LOOM_KEY_VAULT_URI', value: keyvault.outputs.keyVaultUri }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
             { name: 'LOOM_ADF_RG', value: !empty(loomAdfRg) ? loomAdfRg : loomDlzRg }
             { name: 'LOOM_SHIR_VMSS_NAME', value: loomShirVmssName }
