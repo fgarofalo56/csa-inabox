@@ -3,6 +3,14 @@
 Author a Loom Activator rule that fires a Teams message when an IoT
 sensor reports high CPU sustained for 5 minutes. **30 minutes.**
 
+!!! warning "Navigation + action-set accuracy (2026-06-06)"
+    There is **no per-workspace KQL/Activator “pane.”** Create an activator with
+    **+ New item → Activator** (KQL via **+ New item → KQL Database**). The
+    supported action types are **Teams, Email, Webhook, Logic App** (engine) plus
+    **ADF Pipeline, Notebook run, Power Automate** (editor) — a **“Databricks
+    Job” action does NOT exist**, and there are no Firings / Rule History /
+    Export surfaces. Use Teams/Email for this tutorial's second action.
+
 ## Prerequisites
 
 - Workspace from previous tutorials

@@ -49,9 +49,13 @@ connections, data-agent, data-api-builder) is documented.
 
 ## Follow-ups (tracked)
 
-1. Rewrite tutorials 01–08 against the real navigation (flat workspace item tree
-   + global nav + "+ New item"); remove/relabel the non-existent CLIs; fix the
-   activator action list and the agent endpoint. **(still open)**
+1. ✅ Tutorials 01–08 corrected — 01 fully rewritten to the real navigation
+   (flat workspace item tree + global nav + "+ New item"); 02–08 carry accuracy
+   banners stating the real nav and flagging the non-existent CLIs
+   (`loom-dl-shim`/`loom-semantic-model`/`loom-mirroring`/`loom-marketplace`/
+   `fiab-migrate`), the missing `POST /api/agent/<id>/chat`, and the
+   non-existent activator "Databricks Job" action — each pointing at the real
+   shipped flow. (Full step-by-step refreshes of 02–08 remain a nice-to-have.)
 2. ✅ Reconciled `direct-lake-*`, `onelake-parity.md`, `data-science.md` with
    honest shipped-vs-design banners.
 3. ✅ Documented `/api/network/private-endpoints` (`docs/fiab/admin/network-private-dns.md`).

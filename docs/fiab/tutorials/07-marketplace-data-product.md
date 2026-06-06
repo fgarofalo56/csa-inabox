@@ -4,9 +4,14 @@ Publish your Silver-tier Delta table as a data product to the org-
 internal Marketplace so other workspaces / DLZs can request access.
 **15 minutes.**
 
-> **Note:** Org-internal Marketplace pane lands in **v1.1**. For v1,
-> data product publishing is via Loom CLI + Console catalog. This
-> tutorial covers both paths.
+!!! warning "Shipped vs. roadmap (2026-06-06)"
+    The **`loom-marketplace` CLI does not exist**, and the data-product
+    Request-Access / Pending-Requests / Revoke approval flow shown here is **not
+    implemented**. What *is* shipped: the **API marketplace** (`/api-marketplace`)
+    for publishing/subscribing to APIM products & APIs (with keys, Try-it, Use-as-
+    source, mini-app builder), the **Unified catalog** (`/catalog`) for data-asset
+    discovery + request-access, and **publishing a table as an API** via the
+    item's **Weave → “Publish as an API.”** Treat the CLI steps below as roadmap.
 
 ## Prerequisites
 

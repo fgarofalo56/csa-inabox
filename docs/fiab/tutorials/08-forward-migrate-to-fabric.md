@@ -4,6 +4,12 @@ When Microsoft Fabric reaches your audit boundary, migrate your
 Loom lakehouse forward via OneLake shortcut. **30 minutes** (demo only
 — real migrations span weeks).
 
+!!! warning "Roadmap — not shipped (2026-06-06)"
+    The **`fiab-migrate` CLI does not exist**; this forward-migration flow is
+    **roadmap**, not a shipped capability. The conceptual content (ADLS data
+    stays in place, Fabric reads it via OneLake shortcut) is sound, but there is
+    no Loom migration tool today. Don't expect the commands below to run.
+
 ## Prerequisites
 
 - Loom lakehouse with Bronze / Silver / Gold tables (from previous

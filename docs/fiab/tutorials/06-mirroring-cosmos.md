@@ -3,6 +3,15 @@
 Configure Loom Mirroring to ingest CDC changes from a Cosmos DB
 container into a Bronze Delta table. **30 minutes.**
 
+!!! warning "Shipped vs. roadmap (2026-06-06)"
+    The **`loom-mirroring` CLI does not exist.** Use the **Mirrored database**
+    item: **+ New item → Mirrored database** → the create wizard (source +
+    Key-Vault connection) → **Start**. Today the Azure-native engine snapshots
+    **SQL-family sources** (Azure SQL DB/MI, SQL Server) to ADLS Bronze; the
+    Cosmos copy runtime (ADF/Synapse Link) is a disclosed follow-up. See
+    [`mirrored-database`](../workloads/mirrored-database.md) for the real flow +
+    the **Weave** downstream (notebook / lakehouse / SQL).
+
 ## Prerequisites
 
 - Workspace from previous tutorials
