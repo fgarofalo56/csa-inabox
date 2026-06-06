@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Field, Dropdown, Option, Divider,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Field, Dropdown, Option, Divider, Checkbox,
   Tree, TreeItem, TreeItemLayout, Select,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -142,6 +142,28 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [connections, setConnections] = useState<ConnectionView[]>([]);
   const [connId, setConnId] = useState('');
   const [connBuilderOpen, setConnBuilderOpen] = useState(false);
+  // Table/container selection (optional subset; empty = mirror everything).
+  const [availTables, setAvailTables] = useState<{ schema: string; table: string }[] | null>(null);
+  const [tablesLoading, setTablesLoading] = useState(false);
+  const [tablesMsg, setTablesMsg] = useState<string | null>(null);
+  const [selTables, setSelTables] = useState<Set<string>>(new Set());
+  const tkey = (t: { schema: string; table: string }) => `${t.schema}.${t.table}`;
+  const loadSourceTables = useCallback(async () => {
+    if (!createServer.trim() && createSrc !== 'CosmosDb') { setTablesMsg('Enter the server/host and database first.'); return; }
+    if (!createDb.trim()) { setTablesMsg('Enter the database first.'); return; }
+    setTablesLoading(true); setTablesMsg(null); setAvailTables(null);
+    try {
+      const r = await fetch('/api/items/mirrored-database/source-tables', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sourceType: createSrc, server: createServer.trim(), database: createDb.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setTablesMsg(j.error || 'Could not list tables.'); setAvailTables([]); return; }
+      setAvailTables(j.tables || []);
+      if (!(j.tables || []).length) setTablesMsg('No tables found.');
+    } catch (e: any) { setTablesMsg(e?.message || String(e)); setAvailTables([]); }
+    finally { setTablesLoading(false); }
+  }, [createSrc, createServer, createDb]);
   const srcDef = useMemo(() => SOURCES.find((x) => x.id === createSrc) || SOURCES[0], [createSrc]);
   const loadConnections = useCallback(async () => {
     try {
@@ -245,6 +267,8 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
         displayName: createName.trim(), definition, sourceType: createSrc,
         server: createServer.trim(), database: createDb.trim(),
         connectionId: connId || undefined,
+        // Selected subset (empty = mirror everything the engine discovers).
+        tables: (availTables || []).filter((t) => selTables.has(tkey(t))),
       };
       // Edit an existing mirror (PATCH) vs. create a new one (POST).
       const r = editing && mirrorId
@@ -262,7 +286,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       if (newId) setMirrorId(newId);
       if (editing && workspaceId && mirrorId) loadDetail(workspaceId, mirrorId);
     } finally { setCreateBusy(false); }
-  }, [workspaceId, createName, createSrc, createServer, createDb, connId, editing, mirrorId, loadList, loadDetail]);
+  }, [workspaceId, createName, createSrc, createServer, createDb, connId, editing, mirrorId, availTables, selTables, loadList, loadDetail]);
 
   // Open the wizard pre-filled to EDIT the selected mirror's config.
   const openEdit = useCallback(() => {
@@ -274,6 +298,10 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     setCreateDb(sc.database || '');
     setConnId(sc.connectionId || '');
     setCreateErr(null);
+    // Prefill the stored table subset so re-loading shows them checked.
+    const stored = Array.isArray(sc.tables) ? sc.tables : [];
+    setSelTables(new Set(stored.map((t: any) => `${t.schema}.${t.table}`)));
+    setAvailTables(null); setTablesMsg(null);
     setCreateOpen(true);
   }, [detail, mirrors, mirrorId]);
 
@@ -365,7 +393,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
               </Select>
             </div>
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh list</Button>
-            <Button appearance="outline" icon={<Add20Regular />} disabled={!workspaceId} onClick={() => { setEditing(false); setCreateName(''); setCreateServer(''); setCreateDb(''); setConnId(''); setCreateErr(null); setCreateOpen(true); }}>New mirror</Button>
+            <Button appearance="outline" icon={<Add20Regular />} disabled={!workspaceId} onClick={() => { setEditing(false); setCreateName(''); setCreateServer(''); setCreateDb(''); setConnId(''); setCreateErr(null); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); setCreateOpen(true); }}>New mirror</Button>
             {mirrorId && detail && <Button appearance="outline" icon={<PlugConnected20Regular />} onClick={openEdit}>Edit</Button>}
             {mirrorId && detail && <Button appearance="outline" icon={<CheckmarkCircle16Filled />} disabled={testing} onClick={testConnection}>{testing ? 'Testing…' : 'Test connection'}</Button>}
             <Dialog open={createOpen} onOpenChange={(_, d) => { setCreateOpen(d.open); if (!d.open) setEditing(false); }}>
@@ -382,7 +410,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                           {SOURCES.map((src) => (
                             <div key={src.id} className={`${s.card} ${createSrc === src.id ? s.cardActive : ''}`}
                               style={{ borderLeftColor: src.accent }}
-                              onClick={() => { setCreateSrc(src.id); setConnId(''); }} role="button" tabIndex={0}>
+                              onClick={() => { setCreateSrc(src.id); setConnId(''); setAvailTables(null); setSelTables(new Set()); setTablesMsg(null); }} role="button" tabIndex={0}>
                               <span className={s.cardIcon} style={{ backgroundColor: src.accent }}><Database20Regular /></span>
                               <span><Body1 style={{ fontWeight: 600, display: 'block' }}>{src.name}</Body1></span>
                             </div>
@@ -440,9 +468,51 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
 
                       <Divider />
 
-                      {/* Step 3 — name + review */}
+                      {/* Step 3 — tables to mirror (optional subset) */}
                       <div>
-                        <div className={s.stepHead}><span className={s.stepNum}>3</span><Subtitle2>Name &amp; create</Subtitle2></div>
+                        <div className={s.stepHead}><span className={s.stepNum}>3</span><Subtitle2>Tables to mirror</Subtitle2></div>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          Optional — leave all unchecked to mirror <strong>every</strong> table the engine discovers. Or load + pick a subset.
+                        </Caption1>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                          <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} disabled={tablesLoading} onClick={loadSourceTables}>
+                            {tablesLoading ? 'Loading…' : 'Load tables'}
+                          </Button>
+                          {availTables && availTables.length > 0 && (
+                            <>
+                              <Caption1>{selTables.size} of {availTables.length} selected</Caption1>
+                              <Button size="small" appearance="subtle" onClick={() => setSelTables(new Set(availTables.map(tkey)))}>All</Button>
+                              <Button size="small" appearance="subtle" onClick={() => setSelTables(new Set())}>None</Button>
+                            </>
+                          )}
+                        </div>
+                        {tablesMsg && <Caption1 style={{ display: 'block', marginTop: 6, color: tokens.colorNeutralForeground3 }}>{tablesMsg}</Caption1>}
+                        {availTables && availTables.length > 0 && (
+                          <div className={s.tableWrap} style={{ maxHeight: 180, marginTop: 8 }}>
+                            <Table size="small" aria-label="Source tables">
+                              <TableBody>
+                                {availTables.map((t) => {
+                                  const k = tkey(t);
+                                  return (
+                                    <TableRow key={k}>
+                                      <TableCell style={{ width: 36 }}>
+                                        <Checkbox checked={selTables.has(k)} onChange={(_, d) => setSelTables((prev) => { const n = new Set(prev); if (d.checked) n.add(k); else n.delete(k); return n; })} />
+                                      </TableCell>
+                                      <TableCell className={s.cell}>{t.schema}.{t.table}</TableCell>
+                                    </TableRow>
+                                  );
+                                })}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        )}
+                      </div>
+
+                      <Divider />
+
+                      {/* Step 4 — name + review */}
+                      <div>
+                        <div className={s.stepHead}><span className={s.stepNum}>4</span><Subtitle2>Name &amp; create</Subtitle2></div>
                         <Field label="Name" required style={{ marginTop: 8 }}>
                           <Input value={createName} onChange={(_, d) => setCreateName(d.value)} placeholder="prod-sales-mirror" />
                         </Field>
