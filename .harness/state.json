@@ -4,7 +4,7 @@
   "tasks": [
     {
       "id": "task-001",
-      "title": "Phase 0 \u2014 repo hygiene + live baseline + smoke-test shipped surfaces",
+      "title": "Phase 0 — repo hygiene + live baseline + smoke-test shipped surfaces",
       "feature": "Hygiene",
       "status": "done",
       "task_order": 99,
@@ -13,7 +13,7 @@
     },
     {
       "id": "task-002",
-      "title": "Phase 1 \u2014 Setup wizard real server-side deploy (no az printout)",
+      "title": "Phase 1 — Setup wizard real server-side deploy (no az printout)",
       "feature": "Setup/Deploy",
       "status": "done",
       "task_order": 90,
@@ -22,7 +22,7 @@
     },
     {
       "id": "task-003",
-      "title": "Phase 1 \u2014 deploy-dlz Feature-Permission gate",
+      "title": "Phase 1 — deploy-dlz Feature-Permission gate",
       "feature": "Setup/Deploy",
       "status": "done",
       "task_order": 89,
@@ -31,7 +31,7 @@
     },
     {
       "id": "task-004",
-      "title": "Phase 1 \u2014 capacity-sizing clarity (F-SKU \u2194 DBU/ADX/Spark)",
+      "title": "Phase 1 — capacity-sizing clarity (F-SKU ↔ DBU/ADX/Spark)",
       "feature": "Setup/Deploy",
       "status": "done",
       "task_order": 88,
@@ -40,7 +40,7 @@
     },
     {
       "id": "task-005",
-      "title": "Phase 1 \u2014 WYSIWYG deploy/Git/infra wizards on Deployment page",
+      "title": "Phase 1 — WYSIWYG deploy/Git/infra wizards on Deployment page",
       "feature": "Setup/Deploy",
       "status": "done",
       "task_order": 87,
@@ -49,7 +49,7 @@
     },
     {
       "id": "task-006",
-      "title": "Phase 2 \u2014 Functions-hosted MCP tool server (bicep + REST)",
+      "title": "Phase 2 — Functions-hosted MCP tool server (bicep + REST)",
       "feature": "MCP",
       "status": "done",
       "task_order": 84,
@@ -58,16 +58,16 @@
     },
     {
       "id": "task-007",
-      "title": "Phase 2 \u2014 Connect MCP tools agent panel",
+      "title": "Phase 2 — Connect MCP tools agent panel",
       "feature": "MCP",
       "status": "done",
       "task_order": 83,
       "assignee": "harness-coder",
-      "description": "## Goal\nUI panel to register an MCP server (URL + KV secretRef), list its tools, enable/disable; the agent loop already supports external MCP tools \u2014 surface it.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-006"
+      "description": "## Goal\nUI panel to register an MCP server (URL + KV secretRef), list its tools, enable/disable; the agent loop already supports external MCP tools — surface it.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-006"
     },
     {
       "id": "task-008",
-      "title": "Phase 3 \u2014 data-agent EXECUTES its generated query (grounded on real rows)",
+      "title": "Phase 3 — data-agent EXECUTES its generated query (grounded on real rows)",
       "feature": "DataAgents",
       "status": "done",
       "task_order": 78,
@@ -76,7 +76,7 @@
     },
     {
       "id": "task-009",
-      "title": "Phase 4 \u2014 Governance Insights redesign (real content, sortable UI)",
+      "title": "Phase 4 — Governance Insights redesign (real content, sortable UI)",
       "feature": "Governance",
       "status": "done",
       "task_order": 72,
@@ -85,7 +85,7 @@
     },
     {
       "id": "task-010",
-      "title": "Phase 4 \u2014 Purview portal page web-3.0 cleanup",
+      "title": "Phase 4 — Purview portal page web-3.0 cleanup",
       "feature": "Governance",
       "status": "done",
       "task_order": 70,
@@ -94,7 +94,7 @@
     },
     {
       "id": "task-011",
-      "title": "Phase 4 \u2014 non-ADLS access-policy enforcement (warehouse/KQL)",
+      "title": "Phase 4 — non-ADLS access-policy enforcement (warehouse/KQL)",
       "feature": "Governance",
       "status": "done",
       "task_order": 68,
@@ -103,16 +103,16 @@
     },
     {
       "id": "task-012",
-      "title": "Phase 4 \u2014 Data Catalog object detail + request-access + lineage",
+      "title": "Phase 4 — Data Catalog object detail + request-access + lineage",
       "feature": "Governance",
       "status": "done",
       "task_order": 66,
       "assignee": "harness-coder",
-      "description": "## Goal\nClick asset \u2192 full metadata (owner/certified/classifications), request-access action, open-in-native, right-click \u2192 object lineage.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-001"
+      "description": "## Goal\nClick asset → full metadata (owner/certified/classifications), request-access action, open-in-native, right-click → object lineage.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-001"
     },
     {
       "id": "task-013",
-      "title": "Phase 5 \u2014 kill deferred-v3 in fabric-item-types (TDS-via-PE reads, Azure-native)",
+      "title": "Phase 5 — kill deferred-v3 in fabric-item-types (TDS-via-PE reads, Azure-native)",
       "feature": "A+ edges",
       "status": "done",
       "task_order": 60,
@@ -121,7 +121,7 @@
     },
     {
       "id": "task-014",
-      "title": "Phase 5 \u2014 Azure SQL mirroring Azure-native (replace Fabric-mirror gate)",
+      "title": "Phase 5 — Azure SQL mirroring Azure-native (replace Fabric-mirror gate)",
       "feature": "A+ edges",
       "status": "done",
       "task_order": 58,
@@ -130,7 +130,7 @@
     },
     {
       "id": "task-015",
-      "title": "Phase 5 \u2014 Power BI / Power Platform follow-up navigators + import/export",
+      "title": "Phase 5 — Power BI / Power Platform follow-up navigators + import/export",
       "feature": "A+ edges",
       "status": "todo",
       "task_order": 56,
@@ -139,7 +139,7 @@
     },
     {
       "id": "task-016",
-      "title": "Phase 5 \u2014 geo/graph deferred edges + postgres query driver + #655 notebook auto-mount",
+      "title": "Phase 5 — geo/graph deferred edges + postgres query driver + #655 notebook auto-mount",
       "feature": "A+ edges",
       "status": "todo",
       "task_order": 54,
@@ -148,7 +148,7 @@
     },
     {
       "id": "task-017",
-      "title": "Phase 6 \u2014 light/dark theme full readability sweep (ALL pages)",
+      "title": "Phase 6 — light/dark theme full readability sweep (ALL pages)",
       "feature": "Theme",
       "status": "todo",
       "task_order": 48,
@@ -157,7 +157,7 @@
     },
     {
       "id": "task-018",
-      "title": "Phase 7 \u2014 web-3.0 beautify pass (high-traffic pages first)",
+      "title": "Phase 7 — web-3.0 beautify pass (high-traffic pages first)",
       "feature": "Beautify",
       "status": "todo",
       "task_order": 40,
@@ -166,16 +166,16 @@
     },
     {
       "id": "task-019",
-      "title": "Phase 8 \u2014 install all 21 use-case apps via BFF + fix every failure",
+      "title": "Phase 8 — install all 21 use-case apps via BFF + fix every failure",
       "feature": "Live-verify",
       "status": "todo",
       "task_order": 32,
       "assignee": "harness-coder",
-      "description": "## Goal\nInstall each app; fix provisioner failures (dedicated-pool SQL, validation race, missing sibling kql-database for fedramp-tracker/finops-cost); each \u2192 working or honest gate.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-001"
+      "description": "## Goal\nInstall each app; fix provisioner failures (dedicated-pool SQL, validation race, missing sibling kql-database for fedramp-tracker/finops-cost); each → working or honest gate.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-001"
     },
     {
       "id": "task-020",
-      "title": "Phase 8 \u2014 Scale-by-SKU: verify EVERY resource scales (or honest-gate)",
+      "title": "Phase 8 — Scale-by-SKU: verify EVERY resource scales (or honest-gate)",
       "feature": "Live-verify",
       "status": "todo",
       "task_order": 30,
@@ -184,7 +184,7 @@
     },
     {
       "id": "task-021",
-      "title": "Phase 8 \u2014 RTI Real-Time dashboard: install creates+seeds its ADX tables",
+      "title": "Phase 8 — RTI Real-Time dashboard: install creates+seeds its ADX tables",
       "feature": "Live-verify",
       "status": "todo",
       "task_order": 28,
@@ -193,9 +193,9 @@
     },
     {
       "id": "task-022",
-      "title": "Phase 9 \u2014 docs + loom-feature-backlog + parity docs + memory sync",
+      "title": "Phase 9 — docs + loom-feature-backlog + parity docs + memory sync",
       "feature": "Docs",
-      "status": "todo",
+      "status": "done",
       "task_order": 12,
       "assignee": "harness-coder",
       "description": "## Goal\nUpdate docs/fiab/** for every batch; refresh loom-feature-backlog.md statuses; add/refresh docs/fiab/parity/*; update Learn popups + memory files.\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-001"
@@ -207,13 +207,14 @@
     "last_agent": "harness-coder",
     "current_session": 3,
     "progress": {
-      "done": 0,
+      "done": 15,
       "total": 22,
-      "percent": 0
+      "percent": 68
     },
     "excluded": [
-      "#17 image-gen (MAI-Image-2.5/-Flash) \u2014 operator excluded"
+      "#17 image-gen (MAI-Image-2.5/-Flash) — operator excluded"
     ],
-    "rules": "BLOCKING: no-vaporware, no-fabric-dependency, ui-parity, loom-design-standards, loom-no-freeform-config, docs-source-of-truth, no-questions-in-product"
+    "rules": "BLOCKING: no-vaporware, no-fabric-dependency, ui-parity, loom-design-standards, loom-no-freeform-config, docs-source-of-truth, no-questions-in-product",
+    "drain_note": "2026-06-06: drained all codeable+verifiable items. DONE: 010-014, 022. PARTIAL (slice shipped, remainder needs live env/dep): 015 (PBI pipelines done; PP solution import/export needs live PP env), 016 (postgres done; geo/graph honest-gated; #655 Spark auto-mount needs live Spark), 018 (all simple tables -> LoomDataTable; bespoke Home/Browse/Monitor remain). 017 theme: already token-based, no real bugs. OPERATOR-GATED (live Azure): 019 install-21-apps, 020 scale-by-SKU verify, 021 RTI ADX seeding. BLOCKED on info: Self-Modification Pipeline promote error (need surface/URL)."
   }
 }
