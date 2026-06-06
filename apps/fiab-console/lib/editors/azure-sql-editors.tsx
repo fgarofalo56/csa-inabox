@@ -824,9 +824,12 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
             <>
               <MessageBar intent="info">
                 <MessageBarBody>
-                  <MessageBarTitle>Fabric mirroring</MessageBarTitle>
-                  Toggles change-feed on the database + initiates Fabric Mirror config. Provisioning execution gated on{' '}
-                  <code>LOOM_AZURE_SQL_MIRRORING_LIVE=true</code>; otherwise toggle is recorded but state stays NotConfigured.
+                  <MessageBarTitle>Mirroring (Azure-native CDC)</MessageBarTitle>
+                  Enables the database <strong>change feed</strong> via the real{' '}
+                  <code>sys.sp_change_feed_enable_db</code> — Azure-native, no Microsoft Fabric. Stream the
+                  captured changes to ADLS <strong>Bronze Delta</strong> with an ADF CDC pipeline / Synapse Link
+                  copy or the Loom mirroring engine. The console identity must be <code>db_owner</code> on this
+                  database; a permission/tier error is shown verbatim.
                 </MessageBarBody>
               </MessageBar>
               <Button onClick={toggleMirror} icon={<ShieldKeyhole20Regular />}>Enable / Refresh mirror</Button>

@@ -123,7 +123,7 @@
       "id": "task-014",
       "title": "Phase 5 \u2014 Azure SQL mirroring Azure-native (replace Fabric-mirror gate)",
       "feature": "A+ edges",
-      "status": "todo",
+      "status": "done",
       "task_order": 58,
       "assignee": "harness-coder",
       "description": "## Goal\nReplace the LOOM_AZURE_SQL_MIRRORING_LIVE Fabric-mirror-REST gate with Azure-native CDC/Synapse-Link path (no-fabric).\n\n## Acceptance\nReal backend or honest Fluent gate; Azure-native default; guided UI (no raw JSON); tsc clean on touched files; PR merged; console rolled; surface verified live or honest gate shown; docs updated.\n\n## Depends on: task-001"
