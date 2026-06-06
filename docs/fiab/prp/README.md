@@ -29,7 +29,13 @@ prompt in **[`UNLEASH-KICKOFF.md`](./UNLEASH-KICKOFF.md)** into Claude Code.
 | 4 | Data Science | [`data-science.md`](./data-science.md) | 19 | **D+** — 37% complete; strong honest-gate discipline and a clear roadmap, but significant feature gaps remain for production data-science use | Full Fabric Data Science parity on Azure-native + OSS (no Fabric dependency): 16-row parity table, 19 sequenced no-stub tasks, 4-agent dev-loop, whole-experience DoD. |
 | 5 | Governance & Security | [`governance-security.md`](./governance-security.md) | 21 (Task 0–20) | _TBD_ | Full Governance & Security parity, Azure-native (no Fabric dependency): 22-feature parity table, all-4-cloud architecture, 21 sequenced tasks, per-task dev-loop, whole-experience DoD. |
 | 6 | Data Products & API (Data Marketplace) | [`data-marketplace.md`](./data-marketplace.md) | 18 | _TBD_ | Full Purview-Unified-Catalog / Fabric parity for the Data Products & API (Data Marketplace) experience, Azure-native with no Fabric dependency: 18 sequenced no-stub tasks. |
-| | **Total** | | **126** | | |
+| 7 | OneLake | [`onelake.md`](./onelake.md) | 11 | _TBD_ | OneLake parity on ADLS Gen2 + Synapse + in-Console shortcuts, all 4 clouds: catalog, shortcuts (ADLS/S3/GCS/Dataverse), OneLake security/roles, file explorer. |
+| 8 | Data Warehouse | [`data-warehouse.md`](./data-warehouse.md) | 18 | _TBD_ | Full Warehouse parity on Synapse dedicated SQL (T-SQL, COPY INTO, cross-DB, query/visual editor, modeling, RLS/CLS/DDM, clone, time travel). |
+| 9 | Power BI / BI | [`power-bi.md`](./power-bi.md) | 28 | _TBD_ | Semantic models (Direct Lake/import/composite, TMDL, measures, RLS, calc groups), Reports, Paginated, Dashboards, Metrics, Datamarts, deployment pipelines — Azure-native, Power BI opt-in. |
+| 10 | Databases | [`databases.md`](./databases.md) | 22 | _TBD_ | Fabric SQL Database, Cosmos DB, Mirrored databases (Azure SQL/MI, Cosmos, Snowflake, PostgreSQL, open mirroring) + replication monitoring, Azure-native. |
+| 11 | Copilot & AI | [`copilot-ai.md`](./copilot-ai.md) | 28 | _TBD_ | Copilot across experiences + Fabric Data Agents (AI skills) on Azure OpenAI / Foundry, copilot governance, AI capacity. |
+| 12 | Platform & Admin | [`platform.md`](./platform.md) | 21 | _TBD_ | Workspaces, capacities (scale/throttle/monitor), Git integration + deployment pipelines, Monitoring hub, admin/tenant settings, REST APIs + automation. |
+| | **Total** | | **254** | | |
 
 > **Grade legend** (from `no-vaporware.md`): **F** vaporware · **D** stubbed ·
 > **C** functional but rough · **B** production-grade · **A** production-grade +
