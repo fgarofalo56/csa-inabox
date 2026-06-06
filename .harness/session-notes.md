@@ -393,6 +393,19 @@ heavy item (pg driver / CDC mirroring / live app-install tasks 019-021).
 **Next:** task-015 (Power BI/PP navigators + import/export) or task-016 remainder
 (geo/graph + #655), then 017/018 UI, 019-021 live, 022 docs.
 
+### task-015 (slice) — Power BI Deployment Pipelines navigator ✅ (PR # pending)
+- Built the deferred powerbi-tree "Deployment pipelines" node (was a static
+  "coming" gate): real Power BI REST — `listPipelines` + `getPipelineStages` +
+  `deployPipelineAll` in powerbi-client; new tenant-scoped route
+  `/api/powerbi/pipelines` (GET list+stages, POST deployAll). Tree node
+  lazy-loads on expand, lists pipelines → Dev/Test/Prod stages (+ bound
+  workspace), with a Promote (deployAll 0→1 / 1→2) action per stage; honest SP
+  gate / verbatim 401-403. tsc clean.
+- task-015 stays `todo`: the Power Platform **import/export** (solution
+  import/export vs maker-portal hand-off) remains.
+
+**Next:** task-015 PP import/export, task-016 remainder, 017/018 UI, 022 docs.
+
 ### task-016 (slice) — PostgreSQL in-database query LIVE ✅ (PR # pending)
 - Operator approved adding the `pg` driver. Added `pg`@^8.13.1 + `@types/pg` via
   **pnpm** (repo uses pnpm-lock.yaml — `pnpm install --no-frozen-lockfile`; npm
