@@ -4,6 +4,7 @@ import {
   readBranchActivities, writeBranchActivities,
   getLevelActivities, setLevelActivities, containerAt,
   pathHasLoop, pathHasConditional, canAddTypeAtLevel,
+  popDrill, miniPreviewSections,
   type DrillPath,
 } from '../drill-path';
 import type { PipelineActivity } from '../types';
@@ -175,5 +176,75 @@ describe('nesting limits (ADF concepts-nested-activities)', () => {
     for (const t of ['ForEach', 'Until', 'IfCondition', 'Switch']) {
       expect(canAddTypeAtLevel(root, [], t).allowed).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Drill-back (Backspace) + inline nested mini-preview (N toggle) — Fabric
+// "updated canvas experience" (Learn: data-factory/pipeline-canvas-experience
+// + data-factory/keyboard-shortcuts).
+// ---------------------------------------------------------------------------
+describe('popDrill (Backspace = return to previous canvas)', () => {
+  it('is a no-op on an empty path', () => {
+    expect(popDrill([])).toEqual([]);
+  });
+
+  it('pops a single step back to the top level', () => {
+    expect(popDrill([{ name: 'ForEach1' }])).toEqual([]);
+  });
+
+  it('pops only the last step of a deeper path', () => {
+    const path: DrillPath = [{ name: 'ForEach1' }, { name: 'If1', branch: 'ifTrue' }];
+    expect(popDrill(path)).toEqual([{ name: 'ForEach1' }]);
+  });
+
+  it('does not mutate the input path', () => {
+    const path: DrillPath = [{ name: 'ForEach1' }];
+    popDrill(path);
+    expect(path).toEqual([{ name: 'ForEach1' }]);
+  });
+});
+
+describe('miniPreviewSections (inline container preview)', () => {
+  it('ForEach yields one "Activities" section with the inner tiles', () => {
+    const [fe] = tree();
+    const secs = miniPreviewSections(fe);
+    expect(secs).toHaveLength(1);
+    expect(secs[0].label).toBe('Activities');
+    expect(secs[0].totalCount).toBe(1);
+    expect(secs[0].activities.map((a) => a.name)).toEqual(['If1']);
+  });
+
+  it('IfCondition yields True + False sections', () => {
+    const [fe] = tree();
+    const ifAct = readBranchActivities(fe)[0];
+    const secs = miniPreviewSections(ifAct);
+    expect(secs.map((s) => [s.label, s.totalCount])).toEqual([['True', 1], ['False', 0]]);
+    expect(secs[0].activities.map((a) => a.name)).toEqual(['WaitT']);
+    expect(secs[1].activities).toEqual([]);
+  });
+
+  it('Switch yields Default + each named case section', () => {
+    const [, sw] = tree();
+    const secs = miniPreviewSections(sw);
+    expect(secs.map((s) => [s.label, s.totalCount])).toEqual([['Default', 1], ["Case 'a'", 1]]);
+  });
+
+  it('caps each branch at the limit and reports the true total', () => {
+    const fe: PipelineActivity = {
+      name: 'FE', type: 'ForEach', dependsOn: [],
+      typeProperties: {
+        activities: Array.from({ length: 5 }, (_, i) => ({
+          name: `W${i}`, type: 'Wait', typeProperties: {},
+        })),
+      },
+    };
+    const secs = miniPreviewSections(fe, 3);
+    expect(secs[0].activities).toHaveLength(3);
+    expect(secs[0].totalCount).toBe(5);
+  });
+
+  it('non-container activities yield no sections', () => {
+    expect(miniPreviewSections({ name: 'C', type: 'Copy', typeProperties: {} })).toEqual([]);
   });
 });
