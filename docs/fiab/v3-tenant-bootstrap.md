@@ -251,3 +251,24 @@ override the token audience with `LOOM_POSTGRES_AAD_SCOPE` if needed.
 - `LOOM_POSTGRES_AAD_USER`: `platform/fiab/bicep/modules/admin-plane/main.bicep`
   (`loomPostgresAadUser` param). The in-engine `pgaadauth_create_principal` call
   is a data-plane grant and intentionally cannot be expressed in ARM/bicep.
+
+## Cost Management + Diagnostics (Console UAMI subscription grants)
+
+Two subscription-scoped grants the admin console needs (the RG-scoped admin-plane
+bicep can't express them):
+
+- **Cost Management Reader** — the `/monitor` Cost surface queries
+  `Microsoft.CostManagement` across every CSA Loom subscription. Without it a sub
+  returns 403 and the Cost UI honest-gates it.
+- **Monitoring Contributor** — the "diagnostics on by default" sweep writes
+  `microsoft.insights/diagnosticSettings` on resources across the estate. Without
+  it the sweep 403s per resource.
+
+Run once per subscription the console should see:
+
+```bash
+scripts/csa-loom/grant-cost-monitoring-rbac.sh [subscriptionId ...]   # default: current az sub
+```
+
+Idempotent; requires az logged in as Owner / User Access Administrator on the sub.
+(Granted live on 363ef5d1-…-bf8c 2026-06-06.)
