@@ -288,6 +288,7 @@ module adf 'adf.bicep' = if (adfEnabled && !empty(consolePrincipalId) && !empty(
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    adlsAccountName: storage.outputs.storageAccountName
   }
 }
 

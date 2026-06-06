@@ -498,6 +498,7 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
             allActivities={levelActivities}
             parameters={parameters}
             variables={variables}
+            parentActivity={currentContainer || null}
             onPatch={(patch) => { if (selected) patchActivity(selected.name, patch); }}
             onDelete={() => { if (selected) deleteActivity(selected.name); }}
           />
