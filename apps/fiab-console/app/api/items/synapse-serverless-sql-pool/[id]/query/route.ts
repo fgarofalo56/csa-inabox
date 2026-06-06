@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { serverlessTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
+import { serverlessTarget, serverlessEndpoint, executeQuery } from '@/lib/azure/synapse-sql-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,10 +24,15 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
 
   try {
     const result = await executeQuery(serverlessTarget(database), sqlText);
+    // DDL (CREATE/ALTER/DROP VIEW|PROC|FUNCTION) and other non-SELECT statements
+    // return no columns. Flag isDdl so the editor switches to the Messages pane
+    // and shows "Command(s) completed successfully." instead of an empty grid.
+    const isDdl = result.columns.length === 0;
     return NextResponse.json({
       ok: true,
       ...result,
-      endpoint: `${process.env.LOOM_SYNAPSE_WORKSPACE}-ondemand.sql.azuresynapse.net`,
+      isDdl,
+      endpoint: serverlessEndpoint(),
       database,
       executedBy: session.claims.upn,
     });

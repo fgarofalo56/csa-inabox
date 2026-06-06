@@ -68,7 +68,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // v2.0 — Synapse Dedicated + Serverless are real-REST wired (TDS over PE + AAD MI)
   // v2.1 — Synapse Spark pool + Pipeline + Warehouse alias real-REST wired (ARM + dev endpoint)
   'synapse-dedicated-sql-pool':  reg(() => import('./synapse-sql-editors'),    'SynapseDedicatedSqlPoolEditor'),
-  'synapse-serverless-sql-pool': reg(() => import('./synapse-sql-editors'),    'SynapseServerlessSqlPoolEditor'),
+  'synapse-serverless-sql-pool': reg(() => import('./synapse-serverless-sql-editor'), 'SynapseServerlessSqlEditor'),
   'synapse-spark-pool':          reg(() => import('./azure-services-editors'), 'SynapseSparkPoolEditor'),
   'synapse-pipeline':            reg(() => import('./azure-services-editors'), 'SynapsePipelineEditor'),
   'synapse-notebook':            reg(() => import('./synapse-notebook-editor'), 'SynapseNotebookEditor'),

@@ -653,6 +653,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
+            // Synapse SQL endpoint cloud portability (serverless + dedicated TDS).
+            // Commercial / GCC reach Azure public Synapse (azuresynapse.net,
+            // database.windows.net); GCC-High / IL5 use the US-Gov endpoints.
+            { name: 'LOOM_SYNAPSE_SQL_SUFFIX', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'azuresynapse.usgovcloudapi.net' : 'azuresynapse.net' }
+            { name: 'LOOM_SYNAPSE_SQL_TOKEN_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'database.usgovcloudapi.net' : 'database.windows.net' }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
             { name: 'LOOM_KEY_VAULT_URI', value: keyvault.outputs.keyVaultUri }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
