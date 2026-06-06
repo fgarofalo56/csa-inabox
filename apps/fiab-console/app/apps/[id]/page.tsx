@@ -74,6 +74,33 @@ const useStyles = makeStyles({
   },
 });
 
+/**
+ * Read an install response as JSON, but tolerate a non-JSON body — a long
+ * deploy (8 real Azure resources) can exceed the edge gateway timeout, which
+ * returns an HTML 502/504 page. `r.json()` on that throws the cryptic
+ * "Unexpected token '<'". Instead we read text-first and, when it isn't JSON,
+ * return an honest gate explaining the install is still running server-side.
+ */
+async function readJsonOrGate(r: Response, deploy: boolean): Promise<any> {
+  const text = await r.text().catch(() => '');
+  try {
+    return text ? JSON.parse(text) : { ok: false, error: `Empty response (HTTP ${r.status}).` };
+  } catch {
+    const looksHtml = /^\s*<(?:!doctype|html)/i.test(text);
+    if (looksHtml || r.status === 502 || r.status === 504) {
+      return {
+        ok: false,
+        error:
+          `The install request exceeded the gateway timeout (HTTP ${r.status})` +
+          (deploy
+            ? ' while provisioning live Azure services. The items were created in the workspace and provisioning may still be finishing server-side — refresh the workspace in a minute to see them. Tip: install with "Deploy artifacts" OFF first, then provision items individually to avoid the timeout.'
+            : '. Refresh the workspace in a moment to see the installed items.'),
+      };
+    }
+    return { ok: false, error: `Unexpected non-JSON response (HTTP ${r.status}): ${text.slice(0, 200)}` };
+  }
+}
+
 export default function AppDetailPage() {
   const styles = useStyles();
   const params = useParams<{ id: string }>();
@@ -149,7 +176,7 @@ export default function AppDetailPage() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId: pickedWs, deploy, mode, folderId }),
       });
-      const j = await r.json();
+      const j = await readJsonOrGate(r, deploy);
       if (!r.ok || !j.ok) {
         setInstallErr(j?.error || `HTTP ${r.status}`);
       } else {
@@ -172,7 +199,7 @@ export default function AppDetailPage() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId: pickedWs, deploy: true, mode }),
       });
-      const j = await r.json();
+      const j = await readJsonOrGate(r, true);
       if (r.ok && j.ok && j.provision) {
         setProvisionReport(j.provision);
       }
