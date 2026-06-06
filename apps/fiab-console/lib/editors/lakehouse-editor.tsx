@@ -41,6 +41,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { DeltaPreviewGrid, type ColStat } from './components/delta-preview-grid';
 
 const useStyles = makeStyles({
   treePad: { padding: 8 },
@@ -77,6 +78,8 @@ interface PreviewResponse {
   rowCount?: number;
   executionMs?: number;
   truncated?: boolean;
+  previewable?: boolean;
+  message?: string;
   error?: string;
   code?: string;
 }
@@ -177,6 +180,17 @@ export function LakehouseEditor({ item, id }: Props) {
   const [tab, setTab] = useState<string>('files');
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  // F3 — Fluent DataGrid preview: File/Table mode toggle + async column stats.
+  const [previewMode, setPreviewMode] = useState<'file' | 'table'>('file');
+  const [columnStats, setColumnStats] = useState<Record<string, ColStat> | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const [statsJobId, setStatsJobId] = useState<string | null>(null);
+  // The container+path the stats job is for — passed on every poll so the BFF
+  // can (re)submit the Spark statement statelessly once the pool warms.
+  const statsTargetRef = useRef<{ container: string; path: string } | null>(null);
+  // Deep-link restore target captured on first mount (?tab=preview&container=&path=).
+  const deepLinkRef = useRef<{ container: string; path: string } | null>(null);
   const [sqlText, setSqlText] = useState<string>(
     `-- Select a file in the Files tab and click "Query this file"\n-- to populate this editor with a Synapse Serverless OPENROWSET.`,
   );
@@ -585,6 +599,59 @@ export function LakehouseEditor({ item, id }: Props) {
     loadPaths(activeContainer, '');
   }, [activeContainer, activePath, loadPaths]);
 
+  // ---- column-stats polling ------------------------------------------
+  // Poll the async Spark summary job every 3s, following whatever jobId the
+  // route hands back (it changes once a warming pool becomes idle and the
+  // statement is submitted). Stops on available / error / unmount.
+  useEffect(() => {
+    if (!statsJobId) return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      const target = statsTargetRef.current;
+      const qs = new URLSearchParams({ jobId: statsJobId });
+      if (target) { qs.set('container', target.container); qs.set('path', target.path); }
+      try {
+        const r = await fetch(`/api/lakehouse/table-stats?${qs.toString()}`);
+        const j = await parseJsonOrError<{ ok: boolean; status?: string; error?: string; jobId?: string; stats?: Record<string, ColStat> }>(r, 'Column stats');
+        if (cancelled) return;
+        if (j.status === 'available' && j.stats) {
+          setColumnStats(j.stats);
+          setStatsLoading(false);
+          setStatsJobId(null);
+        } else if (!j.ok || j.status === 'error') {
+          setStatsError(j.error || 'Column statistics job failed.');
+          setStatsLoading(false);
+          setStatsJobId(null);
+        } else if (j.jobId && j.jobId !== statsJobId) {
+          // Pool warmed up — follow the new jobId (statement now running).
+          setStatsJobId(j.jobId);
+        }
+        // status 'running' / 'warming' with same jobId → keep polling.
+      } catch (e: any) {
+        if (cancelled) return;
+        setStatsError(e?.message || String(e));
+        setStatsLoading(false);
+        setStatsJobId(null);
+      }
+    }, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [statsJobId]);
+
+  // ---- deep-link restore ---------------------------------------------
+  // On first mount, if ?tab=preview&container=&path= is present, capture it and
+  // jump to the Preview tab. The selection is restored once containers settle.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const sp = new URLSearchParams(window.location.search);
+    const dCont = sp.get('container');
+    const dPath = sp.get('path');
+    if (sp.get('tab') === 'preview' && dCont && dPath) {
+      deepLinkRef.current = { container: dCont, path: dPath };
+      setTab('preview');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ---- selection / preview -------------------------------------------
   const selectFile = useCallback(async (entry: PathEntry) => {
     setActivePath(entry);
@@ -603,6 +670,19 @@ export function LakehouseEditor({ item, id }: Props) {
     // load preview
     setPreview(null);
     setPreviewLoading(true);
+    setColumnStats(null);
+    setStatsError(null);
+    setStatsLoading(false);
+    setStatsJobId(null);
+    // Deep-link: reflect the current selection in the URL so the table can be
+    // re-opened directly. history.replaceState avoids a Next navigation/refetch.
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      sp.set('tab', 'preview');
+      sp.set('container', activeContainer);
+      sp.set('path', entry.name);
+      window.history.replaceState(null, '', `${window.location.pathname}?${sp.toString()}`);
+    } catch { /* non-browser / no history — ignore */ }
     try {
       const qs = new URLSearchParams({ container: activeContainer, path: entry.name });
       const r = await fetch(`/api/lakehouse/preview?${qs.toString()}`);
@@ -611,12 +691,44 @@ export function LakehouseEditor({ item, id }: Props) {
       if (j.sql) {
         setSqlText(j.sql);
       }
+      // Kick off the async column-summary Spark job (non-blocking). Only for
+      // tabular previews that actually returned columns.
+      if (j.ok && (j.columns?.length ?? 0) > 0) {
+        statsTargetRef.current = { container: activeContainer, path: entry.name };
+        setStatsLoading(true);
+        try {
+          const sQs = new URLSearchParams({ container: activeContainer, path: entry.name });
+          const sr = await fetch(`/api/lakehouse/table-stats?${sQs.toString()}`);
+          const sj = await parseJsonOrError<{ ok: boolean; error?: string; jobId?: string; code?: string }>(sr, 'Column stats');
+          if (sj.ok && sj.jobId) {
+            setStatsJobId(sj.jobId);
+          } else {
+            setStatsLoading(false);
+            setStatsError(sj.error || 'Stats job could not start.');
+          }
+        } catch (e: any) {
+          setStatsLoading(false);
+          setStatsError(e?.message || String(e));
+        }
+      }
     } catch (e: any) {
       setPreview({ ok: false, error: e?.message || String(e) });
     } finally {
       setPreviewLoading(false);
     }
   }, [activeContainer, loadPaths]);
+
+  // Once the deep-linked container is active, load its preview + stats.
+  useEffect(() => {
+    const dl = deepLinkRef.current;
+    if (!dl || containers === null) return;
+    if (activeContainer !== dl.container) {
+      if ((containers || []).some((c) => c.name === dl.container)) setActiveContainer(dl.container);
+      return;
+    }
+    deepLinkRef.current = null;
+    void selectFile({ name: dl.path, isDirectory: false, size: 0 });
+  }, [containers, activeContainer, selectFile]);
 
   // ---- file actions ---------------------------------------------------
   const onUploadClick = useCallback(() => fileInputRef.current?.click(), []);
@@ -1405,28 +1517,27 @@ export function LakehouseEditor({ item, id }: Props) {
                         </MessageBarBody>
                       </MessageBar>
                     )}
-                    {!previewLoading && preview?.ok && (
+                    {!previewLoading && preview?.ok && preview.previewable === false && (
+                      <MessageBar intent="info">
+                        <MessageBarBody>{preview.message || 'This file type is not tabular — use Download to view it.'}</MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {!previewLoading && preview?.ok && preview.previewable !== false && (
                       (preview.columns?.length ?? 0) === 0 ? (
                         <Caption1>Query returned no rows.</Caption1>
                       ) : (
-                        <div className={s.tableWrap}>
-                          <Table aria-label="Preview rows" size="small">
-                            <TableHeader>
-                              <TableRow>
-                                {(preview.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {(preview.rows || []).map((row, i) => (
-                                <TableRow key={i}>
-                                  {(preview.columns || []).map((_, j) => (
-                                    <TableCell key={j} className={s.cell}>{formatCell((row as unknown[])[j])}</TableCell>
-                                  ))}
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
+                        <DeltaPreviewGrid
+                          columns={preview.columns || []}
+                          rows={(preview.rows as unknown[][]) || []}
+                          rowCount={preview.rowCount ?? (preview.rows?.length ?? 0)}
+                          executionMs={preview.executionMs}
+                          truncated={preview.truncated}
+                          columnStats={columnStats}
+                          statsLoading={statsLoading}
+                          statsError={statsError}
+                          mode={previewMode}
+                          onModeChange={setPreviewMode}
+                        />
                       )
                     )}
                   </>

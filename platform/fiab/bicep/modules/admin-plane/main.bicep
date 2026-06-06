@@ -139,6 +139,9 @@ param loomSynapseWorkspace string = 'syn-loom-default-${location}'
 @description('Loom Synapse Dedicated SQL pool name.')
 param loomSynapseDedicatedPool string = 'loompool'
 
+@description('Loom Synapse Spark (Big Data) pool name — backs the Lakehouse column-summary stats job + notebook/spark editors. Defaults to the loompool Spark pool the landing-zone Synapse module deploys.')
+param loomSynapseSparkPool string = 'loompool'
+
 @description('Entra principal name the console identity is registered under in PostgreSQL (pgaadauth_create_principal). Empty = the PG Query tab shows an honest setup gate.')
 param loomPostgresAadUser string = ''
 
@@ -653,6 +656,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: loomSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_DEDICATED_POOL', value: loomSynapseDedicatedPool }
+            { name: 'LOOM_SPARK_POOL', value: loomSynapseSparkPool }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
             { name: 'LOOM_KEY_VAULT_URI', value: keyvault.outputs.keyVaultUri }
             { name: 'LOOM_ADF_NAME', value: loomAdfName }
