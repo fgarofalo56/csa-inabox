@@ -377,6 +377,22 @@ postgres + #655 auto-mount) or task-017/018 UI. Continue down the ledger.
 **Next:** more task-018 page slices (Home/Browse/Monitor), or operator picks a
 heavy item (pg driver / CDC mirroring / live app-install tasks 019-021).
 
+### task-014 — Azure SQL mirroring Azure-native (replace Fabric-mirror gate) ✅ (PR # pending)
+- `enableMirroring` (azure-sql-client) rewritten Azure-native: dropped the
+  `LOOM_AZURE_SQL_MIRRORING_LIVE` Fabric-mirror gate + "Fabric deferred" framing;
+  now runs the REAL `sys.sp_change_feed_enable_db` (Azure-native CDC) on the
+  explicit toggle, idempotent, honest real error if not db_owner/unsupported tier.
+  MirroringConfig gains backend:'azure-native-cdc' + note (downstream → ADLS
+  Bronze Delta via ADF CDC / Synapse Link / Loom mirroring engine, no Fabric).
+- mirroring route doc reframed; dead AzureSqlDatabaseEditor mirroring text fixed.
+- The LIVE editor (UnifiedSqlDatabaseEditor) had NO mirroring surface — added a
+  **Mirroring tab** (azure-sql family) that POSTs the route + shows the config.
+- tsc clean on touched code (pre-existing untyped-`mssql`-import error tolerated by
+  ignoreBuildErrors; not mine).
+
+**Next:** task-015 (Power BI/PP navigators + import/export) or task-016 remainder
+(geo/graph + #655), then 017/018 UI, 019-021 live, 022 docs.
+
 ### task-016 (slice) — PostgreSQL in-database query LIVE ✅ (PR # pending)
 - Operator approved adding the `pg` driver. Added `pg`@^8.13.1 + `@types/pg` via
   **pnpm** (repo uses pnpm-lock.yaml — `pnpm install --no-frozen-lockfile`; npm

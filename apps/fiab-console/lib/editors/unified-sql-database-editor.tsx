@@ -548,7 +548,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, [id, family, server, database]);
 
   // ---- query ----
-  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'catalog'>('connect');
+  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'schema' | 'admin' | 'catalog' | 'mirroring'>('connect');
   const dialect = family === 'postgres' ? 'sql' : 'tsql';
   const [sqlText, setSqlText] = useState(
     `-- ${family === 'postgres' ? 'PostgreSQL' : 'Azure SQL'} smoke query\nSELECT 1 AS smoke;`,
@@ -580,6 +580,19 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
     setSqlText(sql);
     setTab('query');
   }, []);
+
+  // Azure-native mirroring (change feed → ADLS Bronze Delta; no Fabric).
+  const [mirror, setMirror] = useState<any>(null);
+  const [mirrorBusy, setMirrorBusy] = useState(false);
+  const toggleMirror = useCallback(async () => {
+    if (!server || !database) { setMirror({ ok: false, error: 'select a server + database first' }); return; }
+    setMirrorBusy(true); setMirror(null);
+    const j = await fetchJson(`/api/items/azure-sql-database/${encodeURIComponent(id)}/mirroring`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ server, database }),
+    });
+    setMirror(j); setMirrorBusy(false);
+  }, [server, database, id]);
 
   // ---- schema browser (INFORMATION_SCHEMA via the live query path) ----
   const [schema, setSchema] = useState<QueryResponse | null>(null);
@@ -760,6 +773,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             <Tab value="schema" icon={<Table20Regular />}>Schema</Tab>
             <Tab value="admin" icon={<ShieldKeyhole20Regular />}>Server admin</Tab>
             <Tab value="catalog" icon={<BookDatabase20Regular />}>Catalog</Tab>
+            {family === 'azure-sql' && <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>}
           </TabList>
 
           {/* ---------------- Connect ---------------- */}
@@ -1020,6 +1034,39 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                     <MessageBarBody>
                       <MessageBarTitle>{catMsg.ok ? 'Registered' : 'Catalog gate'}</MessageBarTitle>
                       {catMsg.text}{catMsg.link && <> · <a href={catMsg.link} target="_blank" rel="noreferrer">Open in Purview</a></>}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+              </div>
+            </>
+          )}
+
+          {tab === 'mirroring' && (
+            <>
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Mirroring — Azure-native CDC (no Microsoft Fabric)</MessageBarTitle>
+                  Enables the database <strong>change feed</strong> via the real{' '}
+                  <code>sys.sp_change_feed_enable_db</code>. Stream the captured changes to ADLS{' '}
+                  <strong>Bronze Delta</strong> with an ADF CDC pipeline / Synapse Link copy or the Loom
+                  mirroring engine. The console identity must be <code>db_owner</code> on this database; a
+                  permission / tier error is shown verbatim (no Fabric workspace required).
+                </MessageBarBody>
+              </MessageBar>
+              <div className={s.card}>
+                <Caption1>Selected: <code>{serverFqdn || 'no server'}</code>{database && <> / <code>{database}</code></>}</Caption1>
+                <Button appearance="primary" icon={<ShieldKeyhole20Regular />} disabled={mirrorBusy || !server || !database} onClick={toggleMirror}>
+                  {mirrorBusy ? 'Enabling…' : 'Enable / refresh mirroring'}
+                </Button>
+                {mirror && (
+                  <MessageBar intent={mirror.ok && mirror.config?.state !== 'Error' ? 'success' : 'warning'}>
+                    <MessageBarBody>
+                      <MessageBarTitle>
+                        {mirror.ok ? `Change feed: ${mirror.config?.state || 'updated'}` : 'Could not enable'}
+                      </MessageBarTitle>
+                      {mirror.ok
+                        ? (mirror.config?.lastError || mirror.config?.note || 'Change feed enabled.')
+                        : (mirror.error || 'request failed')}
                     </MessageBarBody>
                   </MessageBar>
                 )}

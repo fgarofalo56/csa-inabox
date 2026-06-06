@@ -343,39 +343,56 @@ export async function executeParameterized<T = Record<string, unknown>>(
 
 export interface MirroringConfig {
   enabled: boolean;
+  /** Azure-native by default; legacy optional field kept for back-compat. */
   fabricMirrorEndpoint?: string;
+  backend?: 'azure-native-cdc';
   state?: 'Disabled' | 'Initializing' | 'Running' | 'Stopped' | 'Error' | 'NotConfigured';
   lastError?: string;
+  /** Honest disclosure of the downstream Azure-native sink (no Fabric). */
+  note?: string;
   deferredReason?: string;
 }
 
 /**
- * Toggle Fabric mirroring on an Azure SQL database. Live execution
- * (sys.sp_change_feed_enable_db + Fabric Mirror REST) is gated on the
- * `LOOM_AZURE_SQL_MIRRORING_LIVE` env var; otherwise we persist the
- * desired state and return `NotConfigured` so the UI can surface the
- * "deferred" MessageBar.
+ * Enable Azure-native change replication ("mirroring") on an Azure SQL database.
+ *
+ * Per .claude/rules/no-fabric-dependency.md this is **Azure-native, no Microsoft
+ * Fabric**: it turns on the database **change feed** via the real
+ * `sys.sp_change_feed_enable_db` primitive (the same CDC engine Fabric mirroring
+ * consumes under the hood, but it is an Azure SQL feature). The captured changes
+ * are streamed to ADLS **Bronze Delta** by an ADF CDC / Synapse Link copy or the
+ * Loom mirroring engine — wired by the mirrored-database item, not Fabric.
+ *
+ * This runs REAL DDL (the toggle is an explicit user action). The console
+ * identity must be `db_owner` (or have `ALTER DATABASE`) on the target DB; a
+ * permission/feature failure surfaces verbatim as `state:'Error'` (no fake
+ * success, no Fabric gate) per no-vaporware.md.
  */
 export async function enableMirroring(
   server: string,
   database: string,
-  fabricMirrorEndpoint?: string,
+  _legacyFabricMirrorEndpoint?: string,
 ): Promise<MirroringConfig> {
-  if (process.env.LOOM_AZURE_SQL_MIRRORING_LIVE !== 'true') {
-    return {
-      enabled: false,
-      fabricMirrorEndpoint,
-      state: 'NotConfigured',
-      deferredReason: 'Fabric Mirror provisioning deferred to v3.x. Set LOOM_AZURE_SQL_MIRRORING_LIVE=true once the Fabric workspace mirror REST endpoint is wired.',
-    };
-  }
-  // Live path — kick off CDC + Fabric Mirror config. The Fabric REST call
-  // is a separate workspace-scoped POST out of scope of this v3 cut.
+  const note =
+    'Change feed enabled (Azure-native CDC). Stream the captured changes to ADLS ' +
+    'Bronze Delta via an ADF CDC pipeline / Synapse Link copy or the Loom mirroring ' +
+    'engine — no Microsoft Fabric workspace required.';
   try {
     await executeQuery(server, database, 'EXEC sys.sp_change_feed_enable_db @max_concurrent_workers = 4;');
-    return { enabled: true, fabricMirrorEndpoint, state: 'Initializing' };
+    return { enabled: true, backend: 'azure-native-cdc', state: 'Initializing', note };
   } catch (e: any) {
-    return { enabled: false, state: 'Error', lastError: e?.message || String(e) };
+    const msg = (e?.message || String(e));
+    // Idempotent: already enabled is success.
+    if (/already enabled|already exists/i.test(msg)) {
+      return { enabled: true, backend: 'azure-native-cdc', state: 'Running', note };
+    }
+    return {
+      enabled: false,
+      backend: 'azure-native-cdc',
+      state: 'Error',
+      lastError: msg,
+      note: 'Enabling the change feed needs the console identity to be db_owner (or have ALTER DATABASE) on this database, and the change feed must be supported on this SQL tier.',
+    };
   }
 }
 
