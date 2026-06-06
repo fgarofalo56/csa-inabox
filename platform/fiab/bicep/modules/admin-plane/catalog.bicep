@@ -27,6 +27,9 @@ param atlasOnAksEnabled bool
 @description('Admin Entra group object ID')
 param adminEntraGroupId string
 
+@description('Console UAMI principal (object) id. Used post-deploy to grant the Console its Purview Data Map "Data Reader" role on the root collection so the lakehouse download proxy can read the MIP sensitivity label scanned onto an ADLS path (F5). Classic Data Map roles are data-plane (collection metadata policy), NOT ARM RBAC, so the grant runs in csa-loom-post-deploy-bootstrap.yml via scripts/csa-loom/grant-purview-datamap-role.sh — this param only flows the principal id through for that step.')
+param consolePrincipalId string = ''
+
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
@@ -108,4 +111,13 @@ output purviewEndpoint string = purviewEnabled
 // once the deployment completes
 output atlasEndpoint string = atlasOnAksEnabled
   ? 'https://atlas.csa-loom-aks.${location}.internal'
+  : ''
+
+// Post-deploy reminder: the Console UAMI (consolePrincipalId) must hold a
+// Purview Data Map "Data Reader" role on the root collection for the F5
+// MIP-label-on-download lookup. Surfaced as an output because classic Data Map
+// roles cannot be assigned in ARM/Bicep (they are collection metadata-policy /
+// data-plane). The bootstrap workflow performs the grant.
+output consolePurviewRoleGrant string = purviewEnabled && !empty(consolePrincipalId)
+  ? 'Post-deploy: ROLE=data-reader CONSOLE_UAMI_PRINCIPAL=${consolePrincipalId} PURVIEW_ACCOUNT=${purview.name} bash scripts/csa-loom/grant-purview-datamap-role.sh'
   : ''

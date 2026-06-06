@@ -22,7 +22,7 @@
 #
 # USAGE:
 #   ./scripts/csa-loom/grant-purview-datamap-role.sh                 # Data Curator (default)
-#   ROLE=data-reader ./scripts/csa-loom/grant-purview-datamap-role.sh
+#   ROLE=data-reader ./scripts/csa-loom/grant-purview-datamap-role.sh # MIP label-on-download (F5) read role
 #   PURVIEW_ACCOUNT=purview-csa-loom-eastus2 UAMI_PRINCIPAL=<oid> ./...sh
 #
 # REQUIRES: az CLI logged in as a Collection Admin on the Purview account

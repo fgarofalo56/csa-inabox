@@ -554,6 +554,7 @@ module catalog 'catalog.bicep' = {
     purviewEnabled: purviewEnabled
     atlasOnAksEnabled: atlasOnAksEnabled
     adminEntraGroupId: adminEntraGroupId
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     aksClusterId: containerPlatform == 'aks' ? containerPlatformModule.outputs.aksId : ''
