@@ -41,6 +41,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { useJobsStore } from '@/lib/state/jobs-store';
 
 const useStyles = makeStyles({
   treePad: { padding: 8 },
@@ -182,7 +183,17 @@ export function LakehouseEditor({ item, id }: Props) {
   );
   const [sqlResult, setSqlResult] = useState<PreviewResponse | null>(null);
   const [sqlLoading, setSqlLoading] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  // F10 — upload jobs live in the module-scope jobs-store so they survive item
+  // tab switches (component unmount). `uploading` is DERIVED from the store's
+  // running jobs for the active container, not local state — subscribing to
+  // `jobs` keeps the ribbon/badge live across navigations.
+  const jobs = useJobsStore((st) => st.jobs);
+  const startUpload = useJobsStore((st) => st.startUpload);
+  const recordLoadToTable = useJobsStore((st) => st.recordLoadToTable);
+  const runningUploads = activeContainer
+    ? jobs.filter((j) => j.kind === 'upload' && j.status === 'running' && j.container === activeContainer)
+    : [];
+  const uploading = runningUploads.length > 0;
   const [actionError, setActionError] = useState<string | null>(null);
   // Phase 4.5 — positive feedback for upload / mkdir / delete so the user
   // can tell the operation actually hit ADLS. Mirrors the "Saved at HH:MM:SS"
@@ -218,6 +229,16 @@ export function LakehouseEditor({ item, id }: Props) {
   // Real deployed Synapse Spark pools — bind the "Default Spark pool" field to
   // an enumerated picker (no freeform compute input) per the UI-parity rule.
   const [sparkPools, setSparkPools] = useState<{ name: string }[] | null>(null);
+
+  // F10 — human-readable lakehouse name for background-job toasts + a11y labels.
+  // Priority: WorkspaceItem.displayName (Cosmos) > LakehouseSettings.displayName
+  // (Settings dialog) > active medallion container key > item id. Computed every
+  // render so the toast names the lakehouse the user is actually looking at.
+  const lakehouseName: string =
+    (itemQ.data?.displayName)
+    || (settings.displayName)
+    || activeContainer
+    || id;
 
   // ---- Fabric-style context menu (right-click on tree / table nodes) ----
   // Anchored at the cursor via a virtual positioning target, mirroring the
@@ -662,8 +683,11 @@ export function LakehouseEditor({ item, id }: Props) {
         source: 'lakehouse-load-to-tables', container: activeContainer, path: entry.name, tableName, code,
       }));
     } catch {}
+    // F10 — record the load-to-table hand-off so the global toaster raises a
+    // lakehouse-named notification as the notebook opens (survives tab switch).
+    recordLoadToTable({ lakehouseName, container: activeContainer, tableName });
     router.push(`/items/notebook/new?lakehouse=${encodeURIComponent(activeContainer)}&loadToTable=${encodeURIComponent(tableName)}`);
-  }, [activeContainer, router]);
+  }, [activeContainer, router, recordLoadToTable, lakehouseName]);
 
   const onUploadChange = useCallback(async (ev: React.ChangeEvent<HTMLInputElement>) => {
     const file = ev.target.files?.[0];
@@ -671,48 +695,26 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!file || !activeContainer) return;
     const prefix = activePath?.isDirectory ? activePath.name : '';
     const targetPath = prefix ? `${prefix.replace(/\/+$/, '')}/${file.name}` : file.name;
-    setUploading(true);
     setActionError(null);
-    setActionStatus(null);
-    try {
-      const fd = new FormData();
-      fd.set('container', activeContainer);
-      fd.set('path', targetPath);
-      fd.set('file', file);
-      const r = await fetch('/api/lakehouse/upload', { method: 'POST', body: fd });
-      // Defensive JSON parse — if the gateway / Container App / WAF returns
-      // an HTML error page (5xx, 413, 502), JSON.parse blows up with
-      // "Unexpected token '<'". Sniff the Content-Type first and only call
-      // .json() when the response is actually JSON; otherwise surface the
-      // status + a trimmed text body to the user.
-      const ct = r.headers.get('content-type') || '';
-      let j: any = null;
-      let bodyText: string | null = null;
-      if (ct.includes('application/json')) {
-        try { j = await r.json(); } catch { /* fall through to text */ }
-      }
-      if (!j) {
-        try { bodyText = (await r.text()).slice(0, 240); } catch { /* ignore */ }
-      }
-      if (!r.ok || j?.ok === false) {
-        const msg = j?.error
-          || (r.status === 413 ? `File too large (${file.size.toLocaleString()} bytes). Max 4 GB.`
-          : r.status === 502 ? `Upstream storage error (502). Check ADLS network/role assignments.`
-          : r.status === 401 ? `Sign in expired. Reload and re-authenticate.`
-          : `Upload failed (HTTP ${r.status}).${bodyText ? ` Server said: ${bodyText}` : ''}`);
-        setActionError(msg);
-      } else {
-        const fmt = j.sparkFormat;
-        const fmtLabel = fmt?.label ? ` — detected ${fmt.label}` : '';
-        setActionStatus(`Uploaded ${file.name}${fmtLabel} at ${new Date().toLocaleTimeString()}`);
-      }
-    } catch (e: any) {
-      setActionError(e?.message || String(e));
-    } finally {
-      setUploading(false);
-      refreshActive();
-    }
-  }, [activeContainer, activePath, refreshActive]);
+
+    // F10 — hand the upload to the module-scope jobs-store. The fetch is owned
+    // there (not in this component), so switching item tabs mid-upload does NOT
+    // cancel it; the global toaster raises a lakehouse-named confirmation on
+    // completion regardless of which tab is active when it finishes.
+    startUpload({
+      lakehouseName,
+      container: activeContainer,
+      path: targetPath,
+      file,
+      onDone: ({ ok, error }) => {
+        if (ok) refreshActive();
+        else if (error) setActionError(error);
+      },
+    });
+    // Refresh the listing optimistically once the ADLS append+flush has likely
+    // propagated (P99 ~200ms) so the new file appears without a manual refresh.
+    setTimeout(refreshActive, 500);
+  }, [activeContainer, activePath, startUpload, lakehouseName, refreshActive]);
 
   const onNewFolder = useCallback(async () => {
     if (!activeContainer) return;
@@ -875,7 +877,9 @@ export function LakehouseEditor({ item, id }: Props) {
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Files', actions: [
-        { label: uploading ? 'Uploading…' : 'Upload file', onClick: canFileAction && !uploading ? onUploadClick : undefined, disabled: !canFileAction || uploading },
+        // F10 — NOT disabled during upload: the jobs-store allows concurrent
+        // uploads, so the user can queue another file while one is in flight.
+        { label: uploading ? `Uploading (${runningUploads.length})…` : 'Upload file', onClick: canFileAction ? onUploadClick : undefined, disabled: !canFileAction },
         { label: 'New folder', onClick: canFileAction ? onNewFolder : undefined, disabled: !canFileAction },
         { label: 'Refresh', onClick: canFileAction ? refreshActive : undefined, disabled: !canFileAction },
       ]},
@@ -888,7 +892,7 @@ export function LakehouseEditor({ item, id }: Props) {
         { label: 'Settings', onClick: activeContainer ? openSettings : undefined, disabled: !activeContainer, title: !activeContainer ? 'Select a container first' : undefined },
       ]},
     ]},
-  ], [canFileAction, uploading, onUploadClick, onNewFolder, refreshActive, hasFile, activePath, selectFile, activeContainer, openPerms, openSettings]);
+  ], [canFileAction, uploading, runningUploads.length, onUploadClick, onNewFolder, refreshActive, hasFile, activePath, selectFile, activeContainer, openPerms, openSettings]);
 
   // ---- render ---------------------------------------------------------
   return (
@@ -1003,13 +1007,30 @@ export function LakehouseEditor({ item, id }: Props) {
           <div className={s.pad}>
             {tab === 'files' && (
               <>
+                {/* F10 — visually-hidden live region so screen readers announce
+                    background upload progress to the active lakehouse, polled
+                    independent of which tab the sighted user is on. */}
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0,0,0,0)', clipPath: 'inset(50%)' }}
+                >
+                  {uploading ? `Uploading ${runningUploads.length} file${runningUploads.length === 1 ? '' : 's'} to ${lakehouseName} lakehouse, please wait…` : ''}
+                </div>
                 <div className={s.toolbar}>
                   <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
                   <Caption1>path: <strong>/{currentPrefix || ''}</strong></Caption1>
-                  <Button appearance="primary" icon={<ArrowUpload20Regular />} disabled={!activeContainer || uploading} onClick={onUploadClick}>
-                    {uploading ? 'Uploading…' : 'Upload file'}
+                  <Button appearance="primary" icon={<ArrowUpload20Regular />} disabled={!activeContainer} onClick={onUploadClick}>
+                    {uploading ? `Uploading (${runningUploads.length})…` : 'Upload file'}
                   </Button>
-                  <input ref={fileInputRef} type="file" hidden onChange={onUploadChange} />
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    hidden
+                    onChange={onUploadChange}
+                    aria-label={`Upload file to ${lakehouseName} lakehouse`}
+                  />
                   <Button appearance="outline" icon={<FolderAdd20Regular />} disabled={!activeContainer} onClick={onNewFolder}>
                     New folder
                   </Button>
@@ -1349,9 +1370,9 @@ export function LakehouseEditor({ item, id }: Props) {
                             </TableCell>
                             <TableCell>{sc.engine && sc.engine !== 'none' ? sc.engine : '—'}</TableCell>
                             <TableCell>
-                              {sc.status === 'active' && <Badge appearance="tint" color="success" icon={<CheckmarkCircle20Filled />}>active</Badge>}
-                              {sc.status === 'pending' && <Badge appearance="tint" color="warning" icon={<Clock20Regular />} title={sc.statusDetail}>pending</Badge>}
-                              {sc.status === 'error' && <Badge appearance="tint" color="danger" icon={<ErrorCircle20Filled />} title={sc.statusDetail}>error</Badge>}
+                              {sc.status === 'active' && <Badge appearance="tint" color="success" icon={<CheckmarkCircle20Filled aria-hidden="true" />}>active</Badge>}
+                              {sc.status === 'pending' && <Badge appearance="tint" color="warning" icon={<Clock20Regular aria-hidden="true" />} title={sc.statusDetail}>pending</Badge>}
+                              {sc.status === 'error' && <Badge appearance="tint" color="danger" icon={<ErrorCircle20Filled aria-hidden="true" />} title={sc.statusDetail}>error</Badge>}
                             </TableCell>
                             <TableCell>
                               <Menu>
