@@ -86,13 +86,19 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
   },
   {
     key: 'DataflowGen2', label: 'Dataflow Gen2',
-    description: 'Run a published Fabric Dataflow Gen2 (Power Query M).',
-    category: 'move-transform', type: 'RefreshDataflow', namePrefix: 'Dataflow',
-    color: '#7719aa', fg: '#fff', runnable: false,
-    remediation: 'Dataflow Gen2 refresh is a Fabric-native activity. ADF backing exposes ExecuteDataFlow (mapping data flow) instead — drag that.',
+    description:
+      'Run a Power Query (M) dataflow on ADF Spark via ExecuteWranglingDataflow. ' +
+      'On the Azure-native path Loom publishes a WranglingDataFlow resource and ' +
+      'runs it; set LOOM_DATAFLOW_BACKEND=fabric + bind a workspace for the Fabric path.',
+    category: 'move-transform', type: 'ExecuteWranglingDataflow', namePrefix: 'Dataflow',
+    color: '#7719aa', fg: '#fff', runnable: true,
     build: (name) => ({
-      name, type: 'RefreshDataflow', dependsOn: [],
-      typeProperties: { dataflow: { referenceName: '', type: 'DataflowReference' } },
+      name, type: 'ExecuteWranglingDataflow', dependsOn: [],
+      typeProperties: {
+        dataFlow: { referenceName: '', type: 'DataFlowReference' },
+        integrationRuntime: { referenceName: 'AutoResolveIntegrationRuntime', type: 'IntegrationRuntimeReference' },
+        compute: { computeType: 'General', coreCount: 8 },
+      },
     }),
   },
   {
@@ -378,7 +384,11 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
 /** Lookup by ADF type string. */
 export function findByType(type?: string): ActivityTypeDef | undefined {
   if (!type) return undefined;
-  return ACTIVITY_CATALOG.find((a) => a.type === type);
+  // Migrate Fabric-era `RefreshDataflow` tiles (saved before the Azure-native
+  // Dataflow Gen2 backend landed) onto the real ADF `ExecuteWranglingDataflow`
+  // type so existing pipelines keep resolving + stay runnable.
+  const normalised = type === 'RefreshDataflow' ? 'ExecuteWranglingDataflow' : type;
+  return ACTIVITY_CATALOG.find((a) => a.type === normalised);
 }
 
 /** Lookup by palette key. */
