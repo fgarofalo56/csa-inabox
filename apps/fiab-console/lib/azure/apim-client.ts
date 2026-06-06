@@ -830,6 +830,43 @@ export async function deleteSubscription(sid: string): Promise<void> {
   await readJson<unknown>(res);
 }
 
+/**
+ * PATCH /subscriptions/{sid} — edit a subscription's display name and/or state.
+ * State transitions (active ⇄ suspended, → cancelled) mirror the portal's
+ * subscription management. Returns the updated subscription.
+ */
+export async function updateSubscription(
+  sid: string,
+  patch: { displayName?: string; state?: 'active' | 'suspended' | 'cancelled' },
+): Promise<ApimSubscriptionSummary> {
+  const properties: any = {};
+  if (patch.displayName) properties.displayName = patch.displayName;
+  if (patch.state) properties.state = patch.state;
+  const res = await apimFetch(`/subscriptions/${encodeURIComponent(sid)}`, {
+    method: 'PATCH',
+    headers: { 'If-Match': '*' },
+    body: JSON.stringify({ properties }),
+  });
+  const j = await readJson<any>(res);
+  if (j) return shapeSubscription(j);
+  // PATCH can return 204 No Content — re-read for the updated entity.
+  const got = await getSubscription(sid);
+  if (got) return got;
+  throw new ApimError(res.status, null, 'PATCH apim subscription returned no entity');
+}
+
+/**
+ * Regenerate a subscription's primary or secondary key.
+ *   POST .../subscriptions/{sid}/regeneratePrimaryKey | regenerateSecondaryKey
+ * Keys are not returned by this call — re-fetch via getSubscriptionKeys.
+ */
+export async function regenerateSubscriptionKey(sid: string, which: 'primary' | 'secondary'): Promise<void> {
+  const op = which === 'secondary' ? 'regenerateSecondaryKey' : 'regeneratePrimaryKey';
+  const res = await apimFetch(`/subscriptions/${encodeURIComponent(sid)}/${op}`, { method: 'POST' });
+  if (res.ok || res.status === 204) return;
+  await readJson<unknown>(res);
+}
+
 // ---------------- API revisions + releases ----------------
 
 export interface ApimApiRevision {
