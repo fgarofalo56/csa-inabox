@@ -219,6 +219,44 @@ export function LakehouseEditor({ item, id }: Props) {
   // an enumerated picker (no freeform compute input) per the UI-parity rule.
   const [sparkPools, setSparkPools] = useState<{ name: string }[] | null>(null);
 
+  // ---- Live Delta catalog (Tables tab) ----------------------------------
+  // The Tables tree is the REAL physical Delta catalog: an ADLS Gen2 scan of
+  // the active container's Tables/ directory + a _delta_log read for status /
+  // version, with optional Serverless OPENROWSET COUNT(*) row counts. Azure-
+  // native, NO Fabric dependency. Source: GET /api/lakehouse/tables.
+  interface LiveCatalogTable {
+    schema: string; name: string; adlsPath: string; bulkUrl: string;
+    format: 'delta' | 'parquet' | 'unknown';
+    status: 'ok' | 'empty' | 'broken';
+    latestVersion: number | null;
+    rowCount: number | null; sizeBytes: number | null;
+    lastModified: string | null;
+  }
+  const [liveTables, setLiveTables] = useState<LiveCatalogTable[] | null>(null);
+  const [liveTablesLoading, setLiveTablesLoading] = useState(false);
+  const [liveTablesError, setLiveTablesError] = useState<string | null>(null);
+  const [liveTablesGate, setLiveTablesGate] = useState<string | null>(null);
+
+  const loadLiveTables = useCallback(async () => {
+    if (!activeContainer) return;
+    setLiveTablesLoading(true); setLiveTablesError(null); setLiveTablesGate(null);
+    try {
+      const r = await fetch(
+        `/api/lakehouse/tables?containers=${encodeURIComponent(activeContainer)}&rowCounts=true`,
+      );
+      const j = await parseJsonOrError<{ ok: boolean; tables?: LiveCatalogTable[]; gate?: string; error?: string }>(r, 'List tables');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setLiveTables(j.tables || []);
+      setLiveTablesGate(j.gate || null);
+    } catch (e: any) { setLiveTablesError(e?.message || String(e)); }
+    finally { setLiveTablesLoading(false); }
+  }, [activeContainer]);
+
+  useEffect(() => {
+    if (tab === 'tables' && activeContainer) loadLiveTables();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, activeContainer]);
+
   // ---- Fabric-style context menu (right-click on tree / table nodes) ----
   // Anchored at the cursor via a virtual positioning target, mirroring the
   // Fabric lakehouse explorer right-click menu. Each item invokes the SAME
@@ -927,6 +965,72 @@ export function LakehouseEditor({ item, id }: Props) {
               ))}
             </Tree>
           )}
+          {/* Live Delta catalog tree — real ADLS scan of the active container's
+              Tables/ dir, grouped by schema, with Delta/non-Delta icons and
+              loading / broken / empty badges. Shown once a container is picked. */}
+          {activeContainer && (liveTables !== null || liveTablesLoading || liveTablesError) && (
+            <Tree aria-label="Live Delta catalog" defaultOpenItems={['live-tables', `live-schema-${activeContainer}`]} style={{ marginTop: 12 }}>
+              <TreeItem itemType="branch" value="live-tables">
+                <TreeItemLayout
+                  iconBefore={<TableSimple20Regular />}
+                  aside={liveTablesLoading ? <Spinner size="extra-tiny" /> : (
+                    <Button appearance="subtle" size="small" icon={<ArrowSync20Regular />}
+                      aria-label="Refresh live tables"
+                      onClick={(e) => { e.stopPropagation(); loadLiveTables(); }} />
+                  )}
+                >
+                  Tables (live)
+                </TreeItemLayout>
+                <Tree>
+                  {liveTablesError && (
+                    <TreeItem itemType="leaf" value="live-tables-error">
+                      <TreeItemLayout iconBefore={<ErrorCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />}>
+                        {liveTablesError}
+                      </TreeItemLayout>
+                    </TreeItem>
+                  )}
+                  {!liveTablesError && liveTables !== null && liveTables.length === 0 && (
+                    <TreeItem itemType="leaf" value="live-tables-empty">
+                      <TreeItemLayout iconBefore={<Info20Regular />}>
+                        No Delta tables in /{activeContainer}/Tables/ yet
+                      </TreeItemLayout>
+                    </TreeItem>
+                  )}
+                  {Object.entries(
+                    (liveTables || []).reduce<Record<string, LiveCatalogTable[]>>((acc, t) => {
+                      (acc[t.schema] ??= []).push(t); return acc;
+                    }, {}),
+                  ).map(([schema, schemaTables]) => (
+                    <TreeItem key={schema} itemType="branch" value={`live-schema-${schema}`}>
+                      <TreeItemLayout iconBefore={<Database20Regular />}>{schema} ({schemaTables.length})</TreeItemLayout>
+                      <Tree>
+                        {schemaTables.map((t) => (
+                          <TreeItem key={t.adlsPath} itemType="leaf" value={`live-tbl-${t.adlsPath}`}
+                            title={`${t.format} · ${t.status}${typeof t.latestVersion === 'number' ? ` · v${t.latestVersion}` : ''}`}
+                            onClick={() => setTab('tables')}>
+                            <TreeItemLayout
+                              iconBefore={t.format === 'delta' ? <DocumentTable20Regular /> : <Folder20Regular />}
+                              aside={
+                                t.status === 'broken'
+                                  ? <Badge appearance="tint" color="danger" size="small">broken</Badge>
+                                  : t.status === 'empty'
+                                  ? <Badge appearance="tint" color="warning" size="small">empty</Badge>
+                                  : t.format !== 'delta'
+                                  ? <Badge appearance="outline" size="small">{t.format}</Badge>
+                                  : null
+                              }
+                            >
+                              {t.name}
+                            </TreeItemLayout>
+                          </TreeItem>
+                        ))}
+                      </Tree>
+                    </TreeItem>
+                  ))}
+                </Tree>
+              </TreeItem>
+            </Tree>
+          )}
           {hasBundle && (
             <Tree
               aria-label="Planned lakehouse structure from app bundle"
@@ -1122,42 +1226,49 @@ export function LakehouseEditor({ item, id }: Props) {
               <>
                 <div className={s.toolbar}>
                   <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
-                  <Caption1>Delta tables under <code>/Tables/</code></Caption1>
+                  <Caption1>Live Delta catalog — real <code>_delta_log</code> scan of <code>/Tables/</code></Caption1>
                   <Button appearance="outline" icon={<ArrowSync20Regular />}
-                    disabled={!activeContainer}
-                    onClick={() => activeContainer && loadPaths(activeContainer, 'Tables')}>
+                    disabled={!activeContainer || liveTablesLoading}
+                    onClick={() => loadLiveTables()}>
                     Refresh
                   </Button>
                 </div>
                 {(() => {
                   if (!activeContainer) return <Caption1>Select a container.</Caption1>;
-                  const tableListing = openPrefixes[cacheKey(activeContainer, 'Tables')];
-                  if (tableListing === 'loading') return <Spinner size="small" label="Listing tables…" labelPosition="after" />;
-                  if (!tableListing) {
-                    return (
-                      <Button onClick={() => loadPaths(activeContainer, 'Tables')}>Load tables</Button>
-                    );
+                  if (liveTablesLoading && liveTables === null) {
+                    return <Spinner size="small" label="Scanning Delta catalog…" labelPosition="after" />;
                   }
-                  // Tables/ directory may not exist yet (404 during first provision). Gracefully fall through to bundled content.
-                  const isTablesNotFound = 'error' in tableListing && tableListing.error.toLowerCase().includes('path does not exist');
-                  if ('error' in tableListing && !isTablesNotFound) {
+                  if (liveTablesError) {
                     return (
                       <MessageBar intent="error">
                         <MessageBarBody>
-                          <MessageBarTitle>Could not list tables</MessageBarTitle>
-                          {tableListing.error}
+                          <MessageBarTitle>Could not scan tables</MessageBarTitle>
+                          {liveTablesError}
                         </MessageBarBody>
                       </MessageBar>
                     );
                   }
-                  const tables = (tableListing && !('error' in tableListing) ? (tableListing as PathEntry[]).filter(e => e.isDirectory) : []);
+                  if (liveTablesGate) {
+                    return (
+                      <MessageBar intent="warning">
+                        <MessageBarBody>
+                          <MessageBarTitle>Lakehouse storage not configured</MessageBarTitle>
+                          {liveTablesGate}
+                        </MessageBarBody>
+                      </MessageBar>
+                    );
+                  }
+                  const tables = liveTables ?? [];
                   if (tables.length === 0) {
+                    // Honest empty — no fabricated rows. Offer the bundle's planned
+                    // tables (if any) as a "what to materialize" reference only.
                     return (
                       <>
                         <MessageBar intent="info">
                           <MessageBarBody>
-                            No Delta tables materialized in ADLS yet. From the Files tab, right-click a
-                            Parquet / CSV / JSON file and choose <strong>Load to Tables (Delta)</strong> to create one.
+                            No Delta tables found under <strong>/{activeContainer}/Tables/</strong>. From the
+                            Files tab, right-click a Parquet / CSV / JSON file and choose
+                            <strong> Load to Tables (Delta)</strong> to materialize one, then Refresh.
                           </MessageBarBody>
                         </MessageBar>
                         {bundleDeltaTables.length > 0 && (
@@ -1201,38 +1312,72 @@ export function LakehouseEditor({ item, id }: Props) {
                       </>
                     );
                   }
+                  // Group by schema (container) for a Fabric-explorer-style layout.
+                  const bySchema = tables.reduce<Record<string, LiveCatalogTable[]>>((acc, t) => {
+                    (acc[t.schema] ??= []).push(t); return acc;
+                  }, {});
+                  const statusIcon = (st: LiveCatalogTable['status']) =>
+                    st === 'ok' ? <CheckmarkCircle20Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />
+                    : st === 'broken' ? <ErrorCircle20Filled style={{ color: tokens.colorPaletteRedForeground1 }} />
+                    : <Clock20Regular style={{ color: tokens.colorPaletteYellowForeground1 }} />;
                   return (
-                    <Table aria-label="Tables">
-                      <TableHeader>
-                        <TableRow>
-                          <TableHeaderCell>Table</TableHeaderCell>
-                          <TableHeaderCell>Path</TableHeaderCell>
-                          <TableHeaderCell>Last modified</TableHeaderCell>
-                          <TableHeaderCell></TableHeaderCell>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {tables.map((t) => {
-                          const tableName = leafName(t.name);
-                          return (
-                            <TableRow key={t.name}>
-                              <TableCell><strong>{tableName}</strong></TableCell>
-                              <TableCell><code style={{ fontSize: 11 }}>/{t.name}</code></TableCell>
-                              <TableCell>{t.lastModified ? new Date(t.lastModified).toLocaleString() : '—'}</TableCell>
-                              <TableCell>
-                                <Button size="small" appearance="primary"
-                                  onClick={() => {
-                                    setSqlText(`-- Read Delta table\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
-                                    setTab('sql');
-                                  }}>
-                                  Query
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      {Object.entries(bySchema).map(([schema, schemaTables]) => (
+                        <div key={schema}>
+                          <Subtitle2 style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                            <Database20Regular /> {schema} <Caption1>({schemaTables.length})</Caption1>
+                          </Subtitle2>
+                          <div className={s.tableWrap}>
+                            <Table aria-label={`Tables in ${schema}`} size="small">
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHeaderCell>Table</TableHeaderCell>
+                                  <TableHeaderCell>Format</TableHeaderCell>
+                                  <TableHeaderCell>Status</TableHeaderCell>
+                                  <TableHeaderCell>Version</TableHeaderCell>
+                                  <TableHeaderCell>Rows</TableHeaderCell>
+                                  <TableHeaderCell>Size</TableHeaderCell>
+                                  <TableHeaderCell>Modified</TableHeaderCell>
+                                  <TableHeaderCell></TableHeaderCell>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {schemaTables.map((t) => (
+                                  <TableRow key={t.adlsPath}>
+                                    <TableCell>
+                                      {t.format === 'delta' ? <DocumentTable20Regular /> : <Folder20Regular />}{' '}
+                                      <strong>{t.name}</strong>
+                                    </TableCell>
+                                    <TableCell>
+                                      <Badge appearance={t.format === 'delta' ? 'filled' : 'outline'}
+                                        color={t.format === 'delta' ? 'brand' : 'informative'} size="small">
+                                        {t.format}
+                                      </Badge>
+                                    </TableCell>
+                                    <TableCell title={t.status}>{statusIcon(t.status)}</TableCell>
+                                    <TableCell className={s.cell}>{typeof t.latestVersion === 'number' ? `v${t.latestVersion}` : '—'}</TableCell>
+                                    <TableCell className={s.cell}>{typeof t.rowCount === 'number' ? t.rowCount.toLocaleString() : '—'}</TableCell>
+                                    <TableCell className={s.cell}>{typeof t.sizeBytes === 'number' ? formatBytes(t.sizeBytes) : '—'}</TableCell>
+                                    <TableCell className={s.cell}>{t.lastModified ? new Date(t.lastModified).toLocaleString() : '—'}</TableCell>
+                                    <TableCell>
+                                      <Button size="small" appearance="primary"
+                                        disabled={t.format !== 'delta'}
+                                        title={t.format !== 'delta' ? 'OPENROWSET DELTA query available for Delta tables' : undefined}
+                                        onClick={() => {
+                                          setSqlText(`-- Read Delta table ${t.schema}.${t.name}\nSELECT TOP 100 *\nFROM OPENROWSET(BULK '${t.bulkUrl}', FORMAT='DELTA') AS r;`);
+                                          setTab('sql');
+                                        }}>
+                                        Query
+                                      </Button>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   );
                 })()}
               </>
