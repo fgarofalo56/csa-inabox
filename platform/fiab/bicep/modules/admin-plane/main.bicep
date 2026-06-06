@@ -184,6 +184,9 @@ param loomCosmosAccountRg string = ''
 @description('Loom Databricks workspace hostname (e.g. adb-1234567890123456.7.azuredatabricks.net) backing the Databricks navigator (jobs/clusters/notebooks/SQL warehouses + Unity Catalog). The real hostname embeds a non-deterministic workspace id, so it is NOT hard-coded — it is patched onto the Console post-deploy from the DLZ databricks workspaceUrl output (scripts/csa-loom/patch-navigator-env.sh). Empty surfaces the navigator config gate.')
 param loomDatabricksHostname string = ''
 
+@description('Optional Databricks SQL Warehouse id used for lakehouse ALTER TABLE … CLUSTER BY (liquid clustering). When blank, the lakehouse settings route auto-selects the first RUNNING warehouse in the workspace. Empty by default so existing deployments are unaffected.')
+param loomDatabricksSqlWarehouseId string = ''
+
 // =====================================================================
 // Bring-your-own existing services (reuse instead of provision-new).
 //
@@ -681,6 +684,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // value embeds a non-deterministic workspace id so it is patched
             // post-deploy from the DLZ workspaceUrl (see loomDatabricksHostname).
             { name: 'LOOM_DATABRICKS_HOSTNAME', value: loomDatabricksHostname }
+            // Optional warehouse pin for lakehouse liquid-clustering DDL
+            // (ALTER TABLE … CLUSTER BY). Blank → route auto-selects the first
+            // RUNNING SQL Warehouse.
+            { name: 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID', value: loomDatabricksSqlWarehouseId }
             // ADX / Kusto navigator + KQL editors. bicep formerly set only the
             // bare LOOM_KUSTO_CLUSTER (read nowhere); the client reads the URI,
             // name, RG, location, and default database.
