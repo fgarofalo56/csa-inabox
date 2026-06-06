@@ -796,8 +796,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           !empty(loomMsalClientId) ? [
             { name: 'LOOM_MSAL_CLIENT_ID', value: loomMsalClientId }
             { name: 'LOOM_MSAL_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
-            // Back-compat alias for legacy code paths still reading AZURE_*
-            { name: 'AZURE_CLIENT_SECRET', secretRef: 'loom-msal-client-secret' }
+            // NOTE: do NOT map this secret to AZURE_CLIENT_SECRET — the Console
+            // authenticates to Azure with its MANAGED IDENTITY (AZURE_CLIENT_ID /
+            // LOOM_UAMI_CLIENT_ID below). Setting AZURE_CLIENT_SECRET makes
+            // @azure/identity's EnvironmentCredential attempt a client-secret
+            // login with the UAMI client id → AADSTS7000232 (MSI can't use a
+            // secret), which breaks Cost/Monitor/Defender calls. MSAL + Dataverse
+            // read LOOM_MSAL_CLIENT_SECRET / LOOM_DATAVERSE_CLIENT_SECRET instead.
             { name: 'SESSION_SECRET', secretRef: 'session-secret' }
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             // Microsoft Graph user enrichment — flipped ON by default so

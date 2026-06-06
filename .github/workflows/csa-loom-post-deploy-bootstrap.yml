@@ -67,6 +67,31 @@ jobs:
               || echo "::warning::Purview '$ROLE' grant failed — the deploy SP may not be Collection Admin on $PURVIEW_ACCOUNT (add it once in the Purview portal, then re-run)."
           done
 
+      - name: Grant Console UAMI subscription RBAC (Monitor / Cost / Security)
+        run: |
+          set -uo pipefail
+          # Security Reader (Defender reads), Resource Policy Contributor
+          # (Defender "Fix via Loom" remediations), Cost Management Reader
+          # (Monitor → Cost), Monitoring Contributor (diagnostics-on), Reader.
+          # Baked in here so a fresh deploy's Monitor surfaces work without the
+          # operator hunting for grants. Idempotent.
+          chmod +x scripts/csa-loom/grant-console-rbac.sh
+          CONSOLE_UAMI_PRINCIPAL="$CONSOLE_UAMI_PRINCIPAL" SUBS="$SUB" \
+            bash scripts/csa-loom/grant-console-rbac.sh \
+            || echo "::warning::Some Console UAMI RBAC grants failed — the deploy SP needs Owner / User Access Administrator on the subscription."
+
+      - name: Fix Synapse Spark storage access (Hive metastore abfss)
+        run: |
+          set -uo pipefail
+          # Grant the Synapse workspace MSI Storage Blob Data Contributor on the
+          # default ADLS account + create/approve the managed private endpoints
+          # so Spark notebooks can initialize the Hive metastore (otherwise
+          # SHOW NAMESPACES fails with InvalidAbfsRestOperationException -1).
+          chmod +x scripts/csa-loom/fix-synapse-spark-storage-access.sh
+          SYNAPSE_WS="$SYNAPSE_WS" SYNAPSE_RG="$DLZ_RG" SUBSCRIPTION="$SUB" \
+            bash scripts/csa-loom/fix-synapse-spark-storage-access.sh \
+            || echo "::warning::Synapse Spark storage fix incomplete — check the deploy SP's rights on the default storage account."
+
       - name: Enable Synapse public access (temp)
         run: |
           set -e
