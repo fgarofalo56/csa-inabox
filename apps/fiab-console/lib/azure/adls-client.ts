@@ -252,6 +252,27 @@ export function pathToHttpsUrl(container: string, path: string): string {
   return `https://${account}.dfs.core.windows.net/${container}/${clean}`;
 }
 
+/**
+ * Build the canonical `abfss://<container>@<dfsHost>/<rootPath>` URI for a
+ * known DLZ container. Used as the LOCATION of a Synapse Serverless external
+ * data source pointing at a lakehouse's ADLS Gen2 root.
+ *
+ * The DFS host is parsed straight from the configured LOOM_{container}_URL
+ * (set by the DLZ Bicep deploy with `environment().suffixes.storage`), so the
+ * result is sovereign-cloud-correct automatically — `dfs.core.windows.net` in
+ * Commercial/GCC, `dfs.core.usgovcloudapi.net` in GCC-High/IL5 — with no
+ * hard-coded domain. Returns null when the container URL isn't configured.
+ */
+export function resolveAbfssRoot(container: KnownContainer, rootPath: string): string | null {
+  const url = containerUrl(container);
+  if (!url) return null;
+  const m = url.match(/^https:\/\/([^/]+)/i);
+  const dfsHost = m?.[1];
+  if (!dfsHost) return null;
+  const clean = rootPath.replace(/^\/+|\/+$/g, '');
+  return `abfss://${container}@${dfsHost}/${clean}`;
+}
+
 // Re-export to suppress unused-import warning when tree-shaken.
 export type { PathAccessControlItem };
 
