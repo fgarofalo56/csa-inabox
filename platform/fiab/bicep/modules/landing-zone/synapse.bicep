@@ -71,6 +71,12 @@ param deployDedicatedPool bool = true
 
 // Spark pool — required for Notebook editor (Loom-native notebook execution
 // dispatches to either this Spark pool via Livy or to a Databricks cluster).
+// Also powers the Lakehouse "Load to Table" wizard (F6): it submits a PySpark
+// Livy job that reads a CSV/Parquet/JSON file and writes a managed Delta table
+// under the container's Tables/ folder. That job runs under the Synapse
+// workspace MSI, which the synapseStorageRbac module below grants Storage Blob
+// Data Contributor on the default ADLS (the Hive metastore warehouse path).
+// Keep deploySparkPool=true for the wizard to have a compute target.
 // Auto-pause keeps idle cost low.
 @description('Deploy the loompool Spark pool used by notebook + spark-job editors.')
 param deploySparkPool bool = true
