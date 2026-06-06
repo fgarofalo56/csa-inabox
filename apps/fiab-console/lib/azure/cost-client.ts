@@ -211,9 +211,13 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
   // Query each subscription independently; one sub failing (e.g. no Cost
   // Management Reader) is folded into subscriptionErrors, not fatal.
   await Promise.all(subs.map(async (sub) => {
-    try {
-      // 1) RG × Service (totals, byRg, bySvc, bySub).
-      const grouped = await costQuery(sub, {
+    // Fire all six CostManagement calls for this sub CONCURRENTLY. They are
+    // independent groupings of the same period, so the wall-clock cost is the
+    // slowest single query — not the sum — which keeps the aggregate under the
+    // gateway timeout (the sequential version reliably 504'd on multi-grouping).
+    const [groupedR, dailyR, resR, locR, prevR, budgetsR] = await Promise.allSettled([
+      // 1) RG × Service (totals, byRg, bySvc, bySub) — the only REQUIRED query.
+      costQuery(sub, {
         type: 'ActualCost', timeframe,
         dataset: {
           granularity: 'None',
@@ -223,32 +227,72 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
             { type: 'Dimension', name: 'ServiceName' },
           ],
         },
-      });
-      const gCols = grouped?.properties?.columns || [];
-      const gRows: any[][] = grouped?.properties?.rows || [];
-      const iCost = colIndex(gCols, 'Cost'), iRg = colIndex(gCols, 'ResourceGroupName');
-      const iSvc = colIndex(gCols, 'ServiceName'), iCur = colIndex(gCols, 'Currency');
-      if (iCur >= 0 && gRows[0]) currency = String(gRows[0][iCur]) || currency;
-      for (const row of gRows) {
-        if (!inLoom(String(row[iRg] ?? ''), loomRgs)) continue;
-        const cost = Number(row[iCost]) || 0;
-        total += cost;
-        addTo(byRg, String(row[iRg] ?? 'unknown'), cost);
-        addTo(bySvc, String(row[iSvc] ?? 'Other'), cost);
-        addTo(bySub, sub, cost);
-      }
-
+      }),
       // 2) Daily series (run-rate forecast).
-      const dailyQ = await costQuery(sub, {
+      costQuery(sub, {
         type: 'ActualCost', timeframe,
         dataset: {
           granularity: 'Daily',
           aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
           grouping: [{ type: 'Dimension', name: 'ResourceGroupName' }],
         },
-      });
-      const dCols = dailyQ?.properties?.columns || [];
-      const dRows: any[][] = dailyQ?.properties?.rows || [];
+      }),
+      // 3) Top resources (best-effort; separate dim).
+      costQuery(sub, {
+        type: 'ActualCost', timeframe,
+        dataset: {
+          granularity: 'None',
+          aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
+          grouping: [
+            { type: 'Dimension', name: 'ResourceGroupName' },
+            { type: 'Dimension', name: 'ResourceId' },
+          ],
+        },
+      }),
+      // 4) By location (best-effort).
+      costQuery(sub, {
+        type: 'ActualCost', timeframe,
+        dataset: {
+          granularity: 'None',
+          aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
+          grouping: [
+            { type: 'Dimension', name: 'ResourceGroupName' },
+            { type: 'Dimension', name: 'ResourceLocation' },
+          ],
+        },
+      }),
+      // 5) Previous period total (for trend).
+      prevTf ? periodTotal(sub, prevTf, loomRgs) : Promise.resolve(null),
+      // 6) Budgets.
+      listBudgets(sub),
+    ]);
+
+    // The grouped query is the gate: if it failed (e.g. no Cost Management
+    // Reader on this sub), record the sub error and skip — exactly the old
+    // outer-catch behaviour. The other five are best-effort.
+    if (groupedR.status === 'rejected') {
+      subscriptionErrors.push({ subscription: sub, error: (groupedR.reason as Error)?.message || String(groupedR.reason) });
+      return;
+    }
+
+    const grouped = groupedR.value;
+    const gCols = grouped?.properties?.columns || [];
+    const gRows: any[][] = grouped?.properties?.rows || [];
+    const iCost = colIndex(gCols, 'Cost'), iRg = colIndex(gCols, 'ResourceGroupName');
+    const iSvc = colIndex(gCols, 'ServiceName'), iCur = colIndex(gCols, 'Currency');
+    if (iCur >= 0 && gRows[0]) currency = String(gRows[0][iCur]) || currency;
+    for (const row of gRows) {
+      if (!inLoom(String(row[iRg] ?? ''), loomRgs)) continue;
+      const cost = Number(row[iCost]) || 0;
+      total += cost;
+      addTo(byRg, String(row[iRg] ?? 'unknown'), cost);
+      addTo(bySvc, String(row[iSvc] ?? 'Other'), cost);
+      addTo(bySub, sub, cost);
+    }
+
+    if (dailyR.status === 'fulfilled') {
+      const dCols = dailyR.value?.properties?.columns || [];
+      const dRows: any[][] = dailyR.value?.properties?.rows || [];
       const dCost = colIndex(dCols, 'Cost'), dDate = colIndex(dCols, 'UsageDate'), dRg = colIndex(dCols, 'ResourceGroupName');
       for (const row of dRows) {
         if (!inLoom(String(row[dRg] ?? ''), loomRgs)) continue;
@@ -256,64 +300,35 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
         const date = raw.length === 8 ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}` : raw;
         addTo(dailyMap, date, Number(row[dCost]) || 0);
       }
+    }
 
-      // 3) Top resources (best-effort; separate dim).
-      try {
-        const resQ = await costQuery(sub, {
-          type: 'ActualCost', timeframe,
-          dataset: {
-            granularity: 'None',
-            aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
-            grouping: [
-              { type: 'Dimension', name: 'ResourceGroupName' },
-              { type: 'Dimension', name: 'ResourceId' },
-            ],
-          },
-        });
-        const rCols = resQ?.properties?.columns || [];
-        const rRows: any[][] = resQ?.properties?.rows || [];
-        const rCost = colIndex(rCols, 'Cost'), rRg = colIndex(rCols, 'ResourceGroupName'), rId = colIndex(rCols, 'ResourceId');
-        for (const row of rRows) {
-          if (!inLoom(String(row[rRg] ?? ''), loomRgs)) continue;
-          const id = String(row[rId] ?? '');
-          addTo(byResource, id ? id.split('/').pop() || id : 'unknown', Number(row[rCost]) || 0);
-        }
-      } catch { /* resource breakdown optional */ }
-
-      // 4) By location (best-effort).
-      try {
-        const locQ = await costQuery(sub, {
-          type: 'ActualCost', timeframe,
-          dataset: {
-            granularity: 'None',
-            aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
-            grouping: [
-              { type: 'Dimension', name: 'ResourceGroupName' },
-              { type: 'Dimension', name: 'ResourceLocation' },
-            ],
-          },
-        });
-        const lCols = locQ?.properties?.columns || [];
-        const lRows: any[][] = locQ?.properties?.rows || [];
-        const lCost = colIndex(lCols, 'Cost'), lRg = colIndex(lCols, 'ResourceGroupName'), lLoc = colIndex(lCols, 'ResourceLocation');
-        for (const row of lRows) {
-          if (!inLoom(String(row[lRg] ?? ''), loomRgs)) continue;
-          addTo(byLocation, String(row[lLoc] ?? 'global') || 'global', Number(row[lCost]) || 0);
-        }
-      } catch { /* location breakdown optional */ }
-
-      // 5) Previous period total (for trend).
-      if (prevTf) {
-        try {
-          const prev = await periodTotal(sub, prevTf, loomRgs);
-          previousPeriod = (previousPeriod || 0) + prev;
-        } catch { /* trend optional */ }
+    if (resR.status === 'fulfilled') {
+      const rCols = resR.value?.properties?.columns || [];
+      const rRows: any[][] = resR.value?.properties?.rows || [];
+      const rCost = colIndex(rCols, 'Cost'), rRg = colIndex(rCols, 'ResourceGroupName'), rId = colIndex(rCols, 'ResourceId');
+      for (const row of rRows) {
+        if (!inLoom(String(row[rRg] ?? ''), loomRgs)) continue;
+        const id = String(row[rId] ?? '');
+        addTo(byResource, id ? id.split('/').pop() || id : 'unknown', Number(row[rCost]) || 0);
       }
+    }
 
-      // 6) Budgets.
-      budgets.push(...(await listBudgets(sub)));
-    } catch (e: any) {
-      subscriptionErrors.push({ subscription: sub, error: (e as Error).message });
+    if (locR.status === 'fulfilled') {
+      const lCols = locR.value?.properties?.columns || [];
+      const lRows: any[][] = locR.value?.properties?.rows || [];
+      const lCost = colIndex(lCols, 'Cost'), lRg = colIndex(lCols, 'ResourceGroupName'), lLoc = colIndex(lCols, 'ResourceLocation');
+      for (const row of lRows) {
+        if (!inLoom(String(row[lRg] ?? ''), loomRgs)) continue;
+        addTo(byLocation, String(row[lLoc] ?? 'global') || 'global', Number(row[lCost]) || 0);
+      }
+    }
+
+    if (prevR.status === 'fulfilled' && prevR.value != null) {
+      previousPeriod = (previousPeriod || 0) + (prevR.value as number);
+    }
+
+    if (budgetsR.status === 'fulfilled') {
+      budgets.push(...budgetsR.value);
     }
   }));
 

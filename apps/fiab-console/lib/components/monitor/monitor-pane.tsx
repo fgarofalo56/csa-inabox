@@ -1067,7 +1067,21 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
     fetch(`/api/monitor/cost?timeframe=${encodeURIComponent(timeframe)}`).then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setData(null); return; }
-      const j = await r.json();
+      // Read text first: a gateway 502/504 returns an HTML error page, not JSON,
+      // so r.json() would throw the cryptic "Unexpected token '<'". Surface an
+      // honest, actionable message instead.
+      const body = await r.text();
+      let j: any;
+      try { j = JSON.parse(body); }
+      catch {
+        if (r.status === 504 || r.status === 502 || r.status === 503) {
+          setErr('The Cost Management query timed out at the gateway. Azure cost queries can be slow under throttling across multiple subscriptions — wait a moment and retry, or narrow the timeframe (e.g. Last 7 days).');
+        } else {
+          setErr(`Cost service returned a non-JSON response (HTTP ${r.status}).`);
+        }
+        setData(null);
+        return;
+      }
       if (j.gate) { setGate(j.gate); setData(null); return; }
       if (!j.ok) { setErr(j.error || 'Failed to load cost'); setData(null); return; }
       setData(j.data as CostSummary);
