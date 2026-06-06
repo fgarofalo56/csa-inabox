@@ -1,88 +1,100 @@
 # Tutorial 02 — First lakehouse + Delta tables
 
-Create a Bronze Delta table from sample data and run a Spark transform
-into Silver. **30 minutes.**
-
-!!! warning "Navigation accuracy (2026-06-06)"
-    Loom uses **top-level left-nav surfaces + a flat workspace item tree**;
-    create items with **“+ New item”** (each opens at `/items/<type>/<id>`).
-    **Lakehouse / Notebook / Warehouse are item editors (or global pages), not
-    per-workspace “panes.”** Where this tutorial says “click the Lakehouse pane in
-    the workspace left rail,” instead open the lakehouse item from the workspace
-    tree (or **+ New item → Lakehouse**). A full step refresh is tracked.
+Upload sample data into a lakehouse, query it with Synapse Serverless,
+and write a Silver Delta table from a notebook. **30 minutes.**
 
 ## Prerequisites
 
 - Workspace from [Tutorial 01](01-first-workspace.md)
 - Console open on the workspace home
 
+## How navigation works
+
+Loom uses **top-level left-nav surfaces** (Home, Workspaces, Browse,
+OneLake catalog, Unified catalog, Lineage, Data agents, Monitor, …) plus
+a **flat item tree inside each workspace**. Item types are not
+per-workspace "panes" — you create them with the workspace's **New item**
+button, and each one opens as an editor at `/items/<type>/<id>`.
+
 ## Steps
 
-### 1. Open the Lakehouse pane
+### 1. Open your workspace
 
-Click **Lakehouse** in the workspace left rail. You see an empty
-Files + Tables panes.
+Left nav → **Workspaces** → click your workspace row. You land on
+`/workspaces/<id>` with a flat item tree (folders first, then items,
+sorted alphabetically). It's empty for a new workspace.
 
-### 2. Upload sample data
+### 2. Create a lakehouse
 
-Click **Files → Upload**. Choose a CSV or Parquet sample file (e.g.,
-NOAA daily weather sample from
-`examples/fiab-quickstart/data/noaa-daily-2025-01.csv`).
+Workspace header → **New item** → category **Data Engineering** →
+**Lakehouse**. Give it a name and click **Create**. You land on the
+Lakehouse editor at `/items/lakehouse/<id>`.
 
-File appears in `Files/` panel. Path: `<workspace>/<lakehouse>/Files/noaa-daily-2025-01.csv`.
+### 3. Pick a container
 
-### 3. Open a notebook
+The editor's left panel shows the ADLS Gen2 container tree (loaded from
+`/api/lakehouse/containers`). Pick a container — this is the Azure-native
+Delta store backing the lakehouse. No Fabric/OneLake workspace is
+required.
 
-Click **Notebook** in left rail. Click **+ New Notebook**:
-- Name: `bronze-ingest`
-- Language: PySpark
-- Cluster: select default cluster (Loom Console pre-configured)
+### 4. Upload sample data
 
-The notebook opens in an iframe (Databricks UI).
+Toolbar → **Upload file**. Choose a CSV or Parquet sample (e.g. the NOAA
+daily weather sample from
+`examples/fiab-quickstart/data/noaa-daily-2025-01.csv`). The file appears
+in the tree and a success toast shows `Uploaded <name> at HH:MM:SS`.
 
-### 4. Create a Bronze table
+### 5. Preview the file
 
-In the first cell:
+Click the uploaded file. The editor auto-populates the **SQL** tab with a
+Synapse Serverless `OPENROWSET` template for that file. Switch to the
+**Preview** tab to render the first 100 rows (served by
+`/api/lakehouse/preview`).
+
+### 6. Query it with Serverless SQL
+
+Switch to the **SQL** tab. Adjust the generated `OPENROWSET` query if
+needed and click **Run** (calls `POST /api/items/lakehouse/<id>/query`,
+which executes against Synapse Serverless). Results render in the grid.
+
+### 7. Open the file in a notebook
+
+Right-click the uploaded file → **Open in notebook**. This opens a new
+Notebook editor (`/items/notebook/new?lakehouse=…&path=…`) prefilled with
+Spark code that loads the file and writes a Delta table. A representative
+Bronze cell:
 
 ```python
-# Read the uploaded CSV
 df = spark.read.csv(
   "abfss://<container>@<storage-account>.dfs.core.windows.net/Files/noaa-daily-2025-01.csv",
   header=True,
-  inferSchema=True
+  inferSchema=True,
 )
 
-# Write as Bronze Delta table
-df.write.format("delta") \
-  .mode("overwrite") \
-  .saveAsTable("noaa_bronze_daily")
-
+df.write.format("delta").mode("overwrite").saveAsTable("noaa_bronze_daily")
 print(f"Bronze table created with {df.count()} rows")
 ```
 
-Run the cell (Shift+Enter). After ~30 s, table appears in the
-Lakehouse Tables panel.
+Run the cell (the notebook executes against the compute backend via
+`POST /api/items/notebook/<id>/run-cell`). The Delta table lands in the
+lakehouse `Tables/` prefix.
 
-### 5. Verify in Console
+### 8. Verify the Bronze table
 
-Navigate back to **Lakehouse** pane. Refresh. You see
-`noaa_bronze_daily` in the Tables list with:
-- Row count
-- Schema
-- Sample 10 rows
-- Sensitivity labels (none yet)
+Return to the Lakehouse editor and open the **Tables** tab (it lists the
+`Tables/` prefix via `/api/lakehouse/paths`). `noaa_bronze_daily` appears.
 
-### 6. Transform Bronze → Silver
+### 9. Transform Bronze → Silver
 
-Back in the notebook, add a second cell:
+Back in the notebook, add a second cell to clean and partition the data:
 
 ```python
-from pyspark.sql.functions import col, to_date, when
+from pyspark.sql.functions import col, to_date
 
 silver_df = (
   spark.table("noaa_bronze_daily")
   .withColumn("date", to_date("date_str"))
-  .withColumn("temperature_c", col("temp_f") - 32) * 5/9)
+  .withColumn("temperature_c", (col("temp_f") - 32) * 5 / 9)
   .filter(col("temp_f").isNotNull())
 )
 
@@ -94,14 +106,13 @@ silver_df.write.format("delta") \
 print(f"Silver table: {silver_df.count()} rows, partitioned by date")
 ```
 
-Run the cell. ~20-60 s depending on data size.
+Run the cell. The Silver table appears in the lakehouse **Tables** tab.
 
-### 7. Query via SQL Analytics Endpoint
+### 10. Aggregate over Silver
 
-Navigate to the **Warehouse** pane. The newly created tables appear
-in the schema explorer (refresh if needed).
+In the Lakehouse **SQL** tab, `OPENROWSET` (or `SELECT` against the
+registered table) the Silver data for a monthly rollup:
 
-Run:
 ```sql
 SELECT
   YEAR(date) AS year,
@@ -113,34 +124,33 @@ GROUP BY YEAR(date), MONTH(date)
 ORDER BY year, month
 ```
 
-Results appear in the bottom pane.
+Click **Run**. Results render in the grid. There is no separate
+"Warehouse" surface to switch to — Serverless SQL is built into the
+lakehouse editor.
 
-### 8. Catalog the tables
+### 11. Catalog the tables
 
-Navigate to **Catalog** pane. You see both tables. Click
-`noaa_silver_daily`:
-- Add description: "NOAA daily weather, Silver layer"
-- Add tag: `domain: weather`
-- Add column descriptions
-
-The Console writes to UC (Commercial) or Purview (Gov) — same UX.
+Left nav → **Unified catalog**. Find both tables. Open
+`noaa_silver_daily` and add a description, tags (e.g. `domain: weather`),
+and column descriptions. The catalog writes to UC (Commercial) or Purview
+(Gov) — same UX.
 
 ## What's next
 
 - [Tutorial 03 — Direct Lake parity](03-direct-lake-parity.md) —
-  build a semantic model over your Silver table
+  build a Power BI model over your Silver table
 - [Tutorial 04 — Activator rules](04-activator-rules.md) — alert on
   weather extremes
 
 ## Cleanup
 
-- In the notebook: `DROP TABLE noaa_bronze_daily;`
-- In the notebook: `DROP TABLE noaa_silver_daily;`
+- In the notebook: `spark.sql("DROP TABLE noaa_bronze_daily")`
+- In the notebook: `spark.sql("DROP TABLE noaa_silver_daily")`
 - Or delete the workspace per [Tutorial 01](01-first-workspace.md) §6
 
 ## Troubleshooting
 
-- Notebook can't read CSV path: verify Databricks workspace identity
-  has Storage Blob Data Contributor on the workspace ADLS account
-- Slow query in Warehouse pane: cluster cold-start; try again after
-  30 s
+- Notebook can't read the path: verify the compute identity has Storage
+  Blob Data Contributor on the workspace ADLS account
+- Empty container tree: confirm the Console UAMI has Storage Blob Data
+  Reader on the storage account behind the lakehouse

@@ -1,144 +1,128 @@
 # Tutorial 06 — Mirroring from Cosmos DB
 
-Configure Loom Mirroring to ingest CDC changes from a Cosmos DB
-container into a Bronze Delta table. **30 minutes.**
-
-!!! warning "Shipped vs. roadmap (2026-06-06)"
-    The **`loom-mirroring` CLI does not exist.** Use the **Mirrored database**
-    item: **+ New item → Mirrored database** → the create wizard (source +
-    Key-Vault connection) → **Start**. Today the Azure-native engine snapshots
-    **SQL-family sources** (Azure SQL DB/MI, SQL Server) to ADLS Bronze; the
-    Cosmos copy runtime (ADF/Synapse Link) is a disclosed follow-up. See
-    [`mirrored-database`](../workloads/mirrored-database.md) for the real flow +
-    the **Weave** downstream (notebook / lakehouse / SQL).
+Create a Mirrored database item that snapshots a Cosmos DB container into
+an ADLS Bronze layer, then explore it downstream with **Weave**.
+**30 minutes.**
 
 ## Prerequisites
 
 - Workspace from previous tutorials
-- Cosmos DB account + database + container (or use the test container
-  in `examples/fiab-quickstart/cosmos-seed/`)
-- Cosmos DB connection string saved in workspace Key Vault
+- A Cosmos DB account + database + container (or the test container in
+  `examples/fiab-quickstart/cosmos-seed/`)
+- A connection (Key Vault-backed) to that Cosmos account — you can create
+  one inline in the wizard
+
+The Azure-native mirror engine copies to ADLS Bronze; no real Fabric
+mirroring is required.
+
+## How the Mirrored database editor works
+
+You create a Mirrored database item with a guided wizard (source card →
+Key-Vault connection → optional table subset → Start). The engine
+snapshots source tables to ADLS Bronze CSV and exposes per-table metrics
+plus ready-to-paste `OPENROWSET` SQL. Start/Stop is a single
+`/state` call. There is no mirroring CLI and no per-workspace
+"Mirroring pane".
 
 ## Steps
 
-### 1. Verify source Cosmos DB has change feed enabled
+### 1. Create a Mirrored database
 
-Change feed is on by default. Verify:
+Left nav → **Workspaces** → open your workspace → **New item** → category
+**Data Engineering** → **Mirrored database**. The Mirrored database editor
+opens with its create wizard.
 
-```bash
-az cosmosdb sql container show \
-  --resource-group <cosmos-rg> \
-  --account-name <cosmos-account> \
-  --database-name <db> \
-  --name <container> \
-  --query "resource.{name:id, changeFeedEnabled:'always-on'}"
-```
+### 2. Choose the source
 
-### 2. Create the mirroring config
+In the wizard, pick a source card. The available sources are **Azure SQL
+Database, Azure SQL MI, Azure Database for PostgreSQL, Cosmos DB,
+Snowflake, SQL Server 2025, SQL Server 2016-2022,** and **Open
+mirroring**. Choose **Azure Cosmos DB**.
 
-Open Loom Console **Mirroring** pane (v1.1) OR CLI (v1):
+### 3. Workspace, name, connection
 
-```bash
-loom-mirroring create \
-  --workspace <your-workspace-id> \
-  --name "transactions-cosmos-mirror" \
-  --source-type cosmos-nosql \
-  --source-account <cosmos-account-name> \
-  --source-database <db> \
-  --source-container <container> \
-  --credential-kv-ref "https://<kv>.vault.azure.us/secrets/cosmos-conn" \
-  --target-lakehouse <workspace>-loom-bronze \
-  --target-table-prefix "raw_transactions_" \
-  --trigger-interval-seconds 30
-```
+Pick the workspace (loaded from `GET /api/loom/workspaces`), enter a mirror
+display name, and choose a connection. The connection picker uses the Loom
+**ConnectionBuilder** — select an existing Key Vault-backed credential or
+create one inline (it POSTs to `/api/loom/connections`).
 
-This:
-- Configures the Cosmos Spark connector to read the change feed
-- Lands changes in Event Hubs (Kafka protocol)
-- Spark Structured Streaming job MERGEs into Delta in your Bronze
-  container
+### 4. (Optional) Pick a table/container subset
 
-### 3. Watch the initial snapshot
+The wizard can list source tables/containers
+(`GET /api/items/mirrored-database/new/tables?…`). Leave the selection
+empty to mirror everything, or check specific containers.
 
-```bash
-loom-mirroring status --mirror "transactions-cosmos-mirror"
-```
+### 5. Create
 
-You should see:
-- `phase: initial-snapshot` for the first ~minutes
-- Then `phase: streaming-cdc` for ongoing change capture
+Review the summary and click **Create** (POSTs to
+`/api/items/mirrored-database`). The item lands in the workspace tree.
 
-### 4. Verify Bronze table appears
+### 6. Start the mirror
 
-Console **Lakehouse** pane → refresh:
-- `raw_transactions_<containerName>` Delta table appears with the
-  initial snapshot rows
+In the editor, click **Start** (POSTs `{ action: 'start' }` to
+`/api/items/mirrored-database/<id>/state`). The engine snapshots the
+source to ADLS Bronze CSV at
+`LOOM_BRONZE_URL/mirrors/<wsId>/<mirrorId>/<schema>.<table>/snapshot.csv`.
+For Cosmos DB it reads each container with a data-plane `SELECT * FROM c`
+via the Cosmos SDK (SQL-family sources use TDS plus change-feed enablement).
 
-### 5. Test CDC propagation
+### 7. Inspect the per-table metrics
 
-Insert a row in the source Cosmos container:
-
-```bash
-az cosmosdb sql item create \
-  --resource-group <cosmos-rg> \
-  --account-name <cosmos-account> \
-  --database-name <db> \
-  --container-name <container> \
-  --body '{"id": "test-001", "amount": 100.50, "ts": "2026-05-22T10:00:00Z"}'
-```
-
-Wait 30-60 seconds (one Spark Streaming trigger cycle).
-
-Query the Bronze table:
+The per-table grid refreshes from the run result: row count, bytes, last
+sync, truncation flag, and a copyable `OPENROWSET` query. Click **Copy
+SQL** for a table to get a Synapse Serverless query ready to paste into a
+lakehouse SQL tab or a notebook:
 
 ```sql
-SELECT * FROM raw_transactions_<containerName>
-WHERE id = 'test-001'
+SELECT TOP 100 *
+FROM OPENROWSET(
+  BULK 'abfss://.../mirrors/<wsId>/<mirrorId>/<schema>.<table>/snapshot.csv',
+  FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE
+) AS rows
 ```
 
-Row appears with `__rowMarker__ = 1` (INSERT).
+### 8. Explore downstream (Weave)
 
-### 6. Test UPDATE
+Use the item's **Weave** edges to go further:
 
-```bash
-az cosmosdb sql item update \
-  --resource-group <cosmos-rg> \
-  --account-name <cosmos-account> \
-  --database-name <db> \
-  --container-name <container> \
-  --item-id "test-001" \
-  --body '{"id": "test-001", "amount": 200.75, "ts": "2026-05-22T10:00:00Z"}'
-```
+- **Explore in Notebook** (`POST /api/thread/mirror-to-notebook`) opens a
+  notebook prefilled with a Spark cell per table reading its `abfss` path.
+- **Add to Lakehouse** (`POST /api/thread/mirror-to-lakehouse`) creates a
+  file shortcut per table into a lakehouse you choose.
 
-Wait 30-60s. Query — `amount` updated to 200.75.
+From there you can transform Bronze → Silver with the
+[Tutorial 02 pattern](02-first-lakehouse.md).
 
-### 7. Monitor lag
+### 9. Stop the mirror
 
-Console **Monitoring → Mirroring**:
-- Per-mirror CDC lag (target < 60s steady-state)
-- Throughput (rows/sec)
-- Error rate (target < 0.1%)
+Click **Stop** (POSTs `{ action: 'stop' }` to the `/state` endpoint).
+
+## The honest gap
+
+Today the engine does a **snapshot** copy. Ongoing Cosmos CDC, plus the
+Azure-native copy runtime (ADF / Synapse Link) for **Snowflake** and **Open
+mirroring**, are disclosed follow-ups: choosing those source cards shows an
+honest gate on Submit rather than silently stubbing. See
+[`mirrored-database`](../workloads/mirrored-database.md).
 
 ## What's next
 
-- Transform Bronze → Silver via [Tutorial 02 pattern](02-first-lakehouse.md)
-- Wire Activator rules on the CDC stream per [Tutorial 04](04-activator-rules.md)
+- Transform Bronze → Silver via the [Tutorial 02 pattern](02-first-lakehouse.md)
+- Wire Activator rules on the data per [Tutorial 04](04-activator-rules.md)
 - [Mirroring parity workload](../workloads/mirroring-parity.md)
 - [Mirroring Engine service docs](../services/mirroring-engine.md)
 
 ## Cleanup
 
-```bash
-loom-mirroring delete --mirror "transactions-cosmos-mirror"
-```
-
-Removes the Debezium / Spark Streaming job. Existing Bronze data
-remains (drop manually if desired).
+- Editor: **Stop** the mirror, then delete the item from the workspace
+  tree (right-click → Delete)
+- The Bronze CSV in ADLS remains; remove it manually if desired
 
 ## Troubleshooting
 
-- High CDC lag: see [Mirroring CDC lag runbook](../runbooks/mirroring-cdc-lag.md)
-- Cosmos connector errors: verify connection string + Cosmos read
-  permissions
-- Schema-evolution issue (new column appears in source): Loom
-  auto-unions; verify by querying the Bronze table
+- Empty table list: verify the connection has read permission on the
+  Cosmos account
+- Snapshot fails for Snowflake / Open mirroring: those are gated follow-ups
+  — use a SQL-family or Cosmos source for now
+- Schema differs from source: the snapshot reflects the source at copy
+  time; re-run **Start** to refresh
