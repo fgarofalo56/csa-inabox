@@ -613,6 +613,18 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
                         <TableCell>{t.sourceTableName || '—'}</TableCell>
                         <TableCell>
                           {t.status || '—'}
+                          {t.mode && (
+                            <Badge
+                              appearance="tint"
+                              color={t.mode === 'incremental' ? 'success' : 'informative'}
+                              size="small"
+                              style={{ marginLeft: 6 }}
+                              title={t.syncVersion != null ? `Change-tracking watermark: v${t.syncVersion}` : undefined}
+                            >
+                              {t.mode === 'incremental' ? 'Incremental' : 'Snapshot'}
+                            </Badge>
+                          )}
+                          {t.note && <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{t.note}</Caption1>}
                           {t.error && <Caption1 style={{ display: 'block', color: tokens.colorPaletteRedForeground1 }}>{t.error}</Caption1>}
                         </TableCell>
                         <TableCell className={s.cell}>{t.metrics?.processedRows ?? '—'}{t.truncated ? ' (capped)' : ''}</TableCell>
